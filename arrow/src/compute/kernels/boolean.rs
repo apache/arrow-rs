@@ -26,7 +26,7 @@ use std::ops::Not;
 
 use crate::array::{Array, ArrayData, BooleanArray, PrimitiveArray};
 use crate::buffer::{
-    bitwise_bin_op_helper, bitwise_ternary_op_helper, buffer_bin_and, buffer_bin_or,
+    bitwise_bin_op_helper, bitwise_quaternary_op_helper, buffer_bin_and, buffer_bin_or,
     buffer_unary_not, Buffer, MutableBuffer,
 };
 use crate::datatypes::{ArrowNumericType, DataType};
@@ -178,34 +178,65 @@ where
 /// in boolean AND kernel. In short, because for AND kernel, null AND false results false.
 /// So we cannot simply AND two null buffers. This function updates null buffer of one side
 /// if other side is a false value.
-pub(crate) fn null_buffer_bin_and(
-    null_buffer: &Buffer,
-    null_buffer_offset_in_bits: usize,
-    data_buffer: &Buffer,
-    data_buffer_offset_in_bits: usize,
-    data_null_buffer: Option<&Buffer>,
+pub(crate) fn build_null_buffer_for_and(
+    left_data: &ArrayData,
+    left_offset: usize,
+    right_data: &ArrayData,
+    right_offset: usize,
     len_in_bits: usize,
-) -> Buffer {
-    if let Some(data_null_buffer) = data_null_buffer {
-        bitwise_ternary_op_helper(
-            null_buffer,
-            null_buffer_offset_in_bits,
-            data_buffer,
-            data_buffer_offset_in_bits,
-            data_null_buffer,
-            data_buffer_offset_in_bits,
-            len_in_bits,
-            |a, b, c| a | (!b & c),
-        )
-    } else {
-        bitwise_bin_op_helper(
-            null_buffer,
-            null_buffer_offset_in_bits,
-            data_buffer,
-            data_buffer_offset_in_bits,
-            len_in_bits,
-            |a, b| a | !b,
-        )
+) -> Option<Buffer> {
+    let left_buffer = &left_data.buffers()[0];
+    let right_buffer = &right_data.buffers()[0];
+
+    let left_null_buffer = left_data.null_buffer();
+    let right_null_buffer = right_data.null_buffer();
+
+    match (left_null_buffer, right_null_buffer) {
+        (None, None) => None,
+        (Some(left_null_buffer), None) => {
+            // The right side has no null values.
+            // The final null bit is set only if:
+            // 1. left null bit is set, or
+            // 2. right data bit is false (because null AND false = false).
+            Some(bitwise_bin_op_helper(
+                left_null_buffer,
+                left_offset,
+                right_buffer,
+                right_offset,
+                len_in_bits,
+                |a, b| a | !b,
+            ))
+        }
+        (None, Some(right_null_buffer)) => {
+            // Same as above
+            Some(bitwise_bin_op_helper(
+                right_null_buffer,
+                right_offset,
+                left_buffer,
+                left_offset,
+                len_in_bits,
+                |a, b| a | !b,
+            ))
+        }
+        (Some(left_null_buffer), Some(right_null_buffer)) => {
+            // Follow the same logic above. Both sides have null values.
+            // Assume a is left null bits, b is left data bits, c is right null bits,
+            // d is right data bits.
+            // The final null bits are:
+            // (a | (c & !d)) & (c | (a & !b))
+            Some(bitwise_quaternary_op_helper(
+                left_null_buffer,
+                left_offset,
+                left_buffer,
+                left_offset,
+                right_null_buffer,
+                right_offset,
+                right_buffer,
+                right_offset,
+                len_in_bits,
+                |a, b, c, d| (a | (c & !d)) & (c | (a & !b)),
+            ))
+        }
     }
 }
 
@@ -213,34 +244,65 @@ pub(crate) fn null_buffer_bin_and(
 /// in boolean OR kernel. In short, because for OR kernel, null OR true results true.
 /// So we cannot simply AND two null buffers. This function updates null buffer of one side
 /// if other side is a true value.
-pub(crate) fn null_buffer_bin_or(
-    null_buffer: &Buffer,
-    null_buffer_offset_in_bits: usize,
-    data_buffer: &Buffer,
-    data_buffer_offset_in_bits: usize,
-    data_null_buffer: Option<&Buffer>,
+pub(crate) fn build_null_buffer_for_or(
+    left_data: &ArrayData,
+    left_offset: usize,
+    right_data: &ArrayData,
+    right_offset: usize,
     len_in_bits: usize,
-) -> Buffer {
-    if let Some(data_null_buffer) = data_null_buffer {
-        bitwise_ternary_op_helper(
-            null_buffer,
-            null_buffer_offset_in_bits,
-            data_buffer,
-            data_buffer_offset_in_bits,
-            data_null_buffer,
-            data_buffer_offset_in_bits,
-            len_in_bits,
-            |a, b, c| a | (b & c),
-        )
-    } else {
-        bitwise_bin_op_helper(
-            null_buffer,
-            null_buffer_offset_in_bits,
-            data_buffer,
-            data_buffer_offset_in_bits,
-            len_in_bits,
-            |a, b| a | b,
-        )
+) -> Option<Buffer> {
+    let left_buffer = &left_data.buffers()[0];
+    let right_buffer = &right_data.buffers()[0];
+
+    let left_null_buffer = left_data.null_buffer();
+    let right_null_buffer = right_data.null_buffer();
+
+    match (left_null_buffer, right_null_buffer) {
+        (None, None) => None,
+        (Some(left_null_buffer), None) => {
+            // The right side has no null values.
+            // The final null bit is set only if:
+            // 1. left null bit is set, or
+            // 2. right data bit is true (because null OR true = true).
+            Some(bitwise_bin_op_helper(
+                left_null_buffer,
+                left_offset,
+                right_buffer,
+                right_offset,
+                len_in_bits,
+                |a, b| a | b,
+            ))
+        }
+        (None, Some(right_null_buffer)) => {
+            // Same as above
+            Some(bitwise_bin_op_helper(
+                right_null_buffer,
+                right_offset,
+                left_buffer,
+                left_offset,
+                len_in_bits,
+                |a, b| a | b,
+            ))
+        }
+        (Some(left_null_buffer), Some(right_null_buffer)) => {
+            // Follow the same logic above. Both sides have null values.
+            // Assume a is left null bits, b is left data bits, c is right null bits,
+            // d is right data bits.
+            // The final null bits are:
+            // (a | (c & d)) & (c | (a & b))
+            Some(bitwise_quaternary_op_helper(
+                left_null_buffer,
+                left_offset,
+                left_buffer,
+                left_offset,
+                right_null_buffer,
+                right_offset,
+                right_buffer,
+                right_offset,
+                len_in_bits,
+                |a, b, c, d| (a | (c & d)) & (c | (a & b)),
+            ))
+        }
     }
 }
 
@@ -253,7 +315,7 @@ pub(crate) fn binary_boolean_kernel<F, U>(
 ) -> Result<BooleanArray>
 where
     F: Fn(&Buffer, usize, &Buffer, usize, usize) -> Buffer,
-    U: Fn(&Buffer, usize, &Buffer, usize, Option<&Buffer>, usize) -> Buffer,
+    U: Fn(&ArrayData, usize, &ArrayData, usize, usize) -> Option<Buffer>,
 {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
@@ -271,49 +333,7 @@ where
     let left_offset = left.offset();
     let right_offset = right.offset();
 
-    // Updates null buffer for left/right.
-    let left_null_buffer = match left_data.null_buffer() {
-        None => None,
-        Some(null_buffer) => {
-            let updated_null_buffer = null_op(
-                null_buffer,
-                left_data.offset(),
-                right_buffer,
-                right_offset,
-                right_data.null_buffer(),
-                len,
-            );
-            Some(updated_null_buffer)
-        }
-    };
-
-    let right_null_buffer = match right_data.null_buffer() {
-        None => None,
-        Some(null_buffer) => {
-            let updated_null_buffer = null_op(
-                null_buffer,
-                right_data.offset(),
-                left_buffer,
-                left_offset,
-                left_data.null_buffer(),
-                len,
-            );
-            Some(updated_null_buffer)
-        }
-    };
-
-    let null_bit_buffer = match (left_null_buffer, right_null_buffer) {
-        (None, None) => None,
-        (Some(left_null_buffer), None) => Some(left_null_buffer),
-        (None, Some(right_null_buffer)) => Some(right_null_buffer),
-        (Some(left_null_buffer), Some(right_null_buffer)) => Some(buffer_bin_and(
-            &left_null_buffer,
-            0,
-            &right_null_buffer,
-            0,
-            len,
-        )),
-    };
+    let null_bit_buffer = null_op(left_data, left_offset, right_data, right_offset, len);
 
     let values = op(left_buffer, left_offset, right_buffer, right_offset, len);
 
@@ -349,7 +369,7 @@ where
 /// # }
 /// ```
 pub fn and(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
-    binary_boolean_kernel(left, right, buffer_bin_and, null_buffer_bin_and)
+    binary_boolean_kernel(left, right, buffer_bin_and, build_null_buffer_for_and)
 }
 
 /// Logical 'and' boolean values with Kleene logic
@@ -419,7 +439,7 @@ pub fn and_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanAr
 /// # }
 /// ```
 pub fn or(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
-    binary_boolean_kernel(left, right, buffer_bin_or, null_buffer_bin_or)
+    binary_boolean_kernel(left, right, buffer_bin_or, build_null_buffer_for_or)
 }
 
 /// Logical 'or' boolean values with Kleene logic
