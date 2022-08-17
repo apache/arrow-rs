@@ -39,7 +39,7 @@ use crate::file::reader::{ChunkReader, FileReader, SerializedFileReader};
 use crate::file::serialized_reader::ReadOptionsBuilder;
 use crate::schema::types::SchemaDescriptor;
 
-mod filter;
+pub mod filter;
 mod selection;
 
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
