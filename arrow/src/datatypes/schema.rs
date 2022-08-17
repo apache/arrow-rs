@@ -49,7 +49,7 @@ impl Schema {
         }
     }
 
-    /// Creates a new `Schema` from a sequence of `Field` values.
+    /// Creates a new [`Schema`] from a sequence of [`Field`] values.
     ///
     /// # Example
     ///
@@ -64,7 +64,7 @@ impl Schema {
         Self::new_with_metadata(fields, HashMap::new())
     }
 
-    /// Creates a new `Schema` from a sequence of `Field` values
+    /// Creates a new [`Schema`] from a sequence of [`Field`] values
     /// and adds additional metadata in form of key value pairs.
     ///
     /// # Example
@@ -160,17 +160,12 @@ impl Schema {
                 }
                 // merge fields
                 for field in fields.into_iter() {
-                    let mut new_field = true;
-                    for merged_field in &mut merged.fields {
-                        if field.name() != merged_field.name() {
-                            continue;
-                        }
-                        new_field = false;
-                        merged_field.try_merge(&field)?
-                    }
-                    // found a new field, add to field list
-                    if new_field {
-                        merged.fields.push(field);
+                    let merged_field =
+                        merged.fields.iter_mut().find(|f| f.name() == field.name());
+                    match merged_field {
+                        Some(merged_field) => merged_field.try_merge(&field)?,
+                        // found a new field, add to field list
+                        None => merged.fields.push(field),
                     }
                 }
                 Ok(merged)
@@ -189,18 +184,18 @@ impl Schema {
         self.fields.iter().flat_map(|f| f.fields()).collect()
     }
 
-    /// Returns an immutable reference of a specific `Field` instance selected using an
+    /// Returns an immutable reference of a specific [`Field`] instance selected using an
     /// offset within the internal `fields` vector.
     pub fn field(&self, i: usize) -> &Field {
         &self.fields[i]
     }
 
-    /// Returns an immutable reference of a specific `Field` instance selected by name.
+    /// Returns an immutable reference of a specific [`Field`] instance selected by name.
     pub fn field_with_name(&self, name: &str) -> Result<&Field> {
         Ok(&self.fields[self.index_of(name)?])
     }
 
-    /// Returns a vector of immutable references to all `Field` instances selected by
+    /// Returns a vector of immutable references to all [`Field`] instances selected by
     /// the dictionary ID they use.
     pub fn fields_with_dict_id(&self, dict_id: i64) -> Vec<&Field> {
         self.fields
@@ -211,17 +206,16 @@ impl Schema {
 
     /// Find the index of the column with the given name.
     pub fn index_of(&self, name: &str) -> Result<usize> {
-        for i in 0..self.fields.len() {
-            if self.fields[i].name() == name {
-                return Ok(i);
-            }
-        }
-        let valid_fields: Vec<String> =
-            self.fields.iter().map(|f| f.name().clone()).collect();
-        Err(ArrowError::InvalidArgumentError(format!(
-            "Unable to get field named \"{}\". Valid fields: {:?}",
-            name, valid_fields
-        )))
+        (0..self.fields.len())
+            .find(|idx| self.fields[*idx].name() == name)
+            .ok_or_else(|| {
+                let valid_fields: Vec<String> =
+                    self.fields.iter().map(|f| f.name().clone()).collect();
+                ArrowError::InvalidArgumentError(format!(
+                    "Unable to get field named \"{}\". Valid fields: {:?}",
+                    name, valid_fields
+                ))
+            })
     }
 
     /// Returns an immutable reference to the Map of custom metadata key-value pairs.
@@ -317,31 +311,13 @@ impl Schema {
     ///
     /// In other words, any record conforms to `other` should also conform to `self`.
     pub fn contains(&self, other: &Schema) -> bool {
-        if self.fields.len() != other.fields.len() {
-            return false;
-        }
-
-        for (i, field) in other.fields.iter().enumerate() {
-            if !self.fields[i].contains(field) {
-                return false;
-            }
-        }
-
+        self.fields.len() == other.fields.len()
+        && self.fields.iter().zip(other.fields.iter()).all(|(f1, f2)| f1.contains(f2))
         // make sure self.metadata is a superset of other.metadata
-        for (k, v) in &other.metadata {
-            match self.metadata.get(k) {
-                Some(s) => {
-                    if s != v {
-                        return false;
-                    }
-                }
-                None => {
-                    return false;
-                }
-            }
-        }
-
-        true
+        && other.metadata.iter().all(|(k, v1)| match self.metadata.get(k) {
+            Some(v2) => v1 == v2,
+            _ => false,
+        })
     }
 }
 
@@ -450,5 +426,35 @@ mod tests {
                 "Schema error: project index 3 out of bounds, max field 3".to_string()
             )
         }
+    }
+
+    #[test]
+    fn test_schema_contains() {
+        let mut metadata1 = HashMap::new();
+        metadata1.insert("meta".to_string(), "data".to_string());
+
+        let schema1 = Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("address", DataType::Utf8, false),
+            Field::new("priority", DataType::UInt8, false),
+        ])
+        .with_metadata(metadata1.clone());
+
+        let mut metadata2 = HashMap::new();
+        metadata2.insert("meta".to_string(), "data".to_string());
+        metadata2.insert("meta2".to_string(), "data".to_string());
+        let schema2 = Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("address", DataType::Utf8, false),
+            Field::new("priority", DataType::UInt8, false),
+        ])
+        .with_metadata(metadata2);
+
+        // reflexivity
+        assert!(schema1.contains(&schema1));
+        assert!(schema2.contains(&schema2));
+
+        assert!(!schema1.contains(&schema2));
+        assert!(schema2.contains(&schema1));
     }
 }

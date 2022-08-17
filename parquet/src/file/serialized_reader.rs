@@ -18,14 +18,15 @@
 //! Contains implementations of the reader traits FileReader, RowGroupReader and PageReader
 //! Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)
 
-use bytes::{Buf, Bytes};
 use std::collections::VecDeque;
+use std::io::Cursor;
 use std::{convert::TryFrom, fs::File, io::Read, path::Path, sync::Arc};
 
+use bytes::{Buf, Bytes};
 use parquet_format::{PageHeader, PageLocation, PageType};
 use thrift::protocol::TCompactInputProtocol;
 
-use crate::basic::{Compression, Encoding, Type};
+use crate::basic::{Encoding, Type};
 use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
 use crate::errors::{ParquetError, Result};
@@ -34,9 +35,7 @@ use crate::file::{footer, metadata::*, reader::*, statistics};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
-use crate::util::page_util::{calculate_row_count, get_pages_readable_slices};
 use crate::util::{io::TryClone, memory::ByteBufferPtr};
-
 // export `SliceableCursor` and `FileSource` publically so clients can
 // re-use the logic in their own ParquetFileWriter wrappers
 pub use crate::util::io::FileSource;
@@ -80,8 +79,12 @@ impl ChunkReader for Bytes {
     type T = bytes::buf::Reader<Bytes>;
 
     fn get_read(&self, start: u64, length: usize) -> Result<Self::T> {
+        Ok(self.get_bytes(start, length)?.reader())
+    }
+
+    fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
         let start = start as usize;
-        Ok(self.slice(start..start + length).reader())
+        Ok(self.slice(start..start + length))
     }
 }
 
@@ -335,33 +338,19 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
     // TODO: fix PARQUET-816
     fn get_column_page_reader(&self, i: usize) -> Result<Box<dyn PageReader>> {
         let col = self.metadata.column(i);
-        let (col_start, col_length) = col.byte_range();
-        let page_reader = if let Some(offset_index) = self.metadata.page_offset_index() {
-            let col_chunk_offset_index = &offset_index[i];
-            let (page_bufs, has_dict) = get_pages_readable_slices(
-                col_chunk_offset_index,
-                col_start,
-                self.chunk_reader.clone(),
-            )?;
-            SerializedPageReader::new_with_page_offsets(
-                col.num_values(),
-                col.compression(),
-                col.column_descr().physical_type(),
-                col_chunk_offset_index.clone(),
-                has_dict,
-                page_bufs,
-            )?
-        } else {
-            let file_chunk =
-                self.chunk_reader.get_read(col_start, col_length as usize)?;
-            SerializedPageReader::new(
-                file_chunk,
-                col.num_values(),
-                col.compression(),
-                col.column_descr().physical_type(),
-            )?
-        };
-        Ok(Box::new(page_reader))
+
+        let page_locations = self
+            .metadata
+            .page_offset_index()
+            .as_ref()
+            .map(|x| x[i].clone());
+
+        Ok(Box::new(SerializedPageReader::new(
+            Arc::clone(&self.chunk_reader),
+            col,
+            self.metadata.num_rows() as usize,
+            page_locations,
+        )?))
     }
 
     fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter> {
@@ -374,6 +363,30 @@ pub(crate) fn read_page_header<T: Read>(input: &mut T) -> Result<PageHeader> {
     let mut prot = TCompactInputProtocol::new(input);
     let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
     Ok(page_header)
+}
+
+/// Reads a [`PageHeader`] from the provided [`Read`] returning the number of bytes read
+fn read_page_header_len<T: Read>(input: &mut T) -> Result<(usize, PageHeader)> {
+    /// A wrapper around a [`std::io::Read`] that keeps track of the bytes read
+    struct TrackedRead<R> {
+        inner: R,
+        bytes_read: usize,
+    }
+
+    impl<R: Read> Read for TrackedRead<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let v = self.inner.read(buf)?;
+            self.bytes_read += v;
+            Ok(v)
+        }
+    }
+
+    let mut tracked = TrackedRead {
+        inner: input,
+        bytes_read: 0,
+    };
+    let header = read_page_header(&mut tracked)?;
+    Ok((tracked.bytes_read, header))
 }
 
 /// Decodes a [`Page`] from the provided `buffer`
@@ -471,83 +484,85 @@ pub(crate) fn decode_page(
     Ok(result)
 }
 
-enum SerializedPages<T: Read> {
-    /// Read entire chunk
-    Chunk { buf: T },
-    /// Read operate pages which can skip.
+enum SerializedPageReaderState {
+    Values {
+        /// The current byte offset in the reader
+        offset: usize,
+
+        /// The length of the chunk in bytes
+        remaining_bytes: usize,
+    },
     Pages {
-        offset_index: Vec<PageLocation>,
-        seen_num_data_pages: usize,
-        has_dictionary_page_to_read: bool,
-        page_bufs: VecDeque<T>,
+        /// Remaining page locations
+        page_locations: VecDeque<PageLocation>,
+        /// Remaining dictionary location if any
+        dictionary_page: Option<PageLocation>,
+        /// The total number of rows in this column chunk
+        total_rows: usize,
     },
 }
 
 /// A serialized implementation for Parquet [`PageReader`].
-pub struct SerializedPageReader<T: Read> {
-    // The file source buffer which references exactly the bytes for the column trunk
-    // to be read by this page reader.
-    buf: SerializedPages<T>,
+pub struct SerializedPageReader<R: ChunkReader> {
+    /// The chunk reader
+    reader: Arc<R>,
 
-    // The compression codec for this column chunk. Only set for non-PLAIN codec.
+    /// The compression codec for this column chunk. Only set for non-PLAIN codec.
     decompressor: Option<Box<dyn Codec>>,
 
-    // The number of values we have seen so far.
-    seen_num_values: i64,
-
-    // The number of total values in this column chunk.
-    total_num_values: i64,
-
-    // Column chunk type.
+    /// Column chunk type.
     physical_type: Type,
+
+    state: SerializedPageReaderState,
 }
 
-impl<T: Read> SerializedPageReader<T> {
-    /// Creates a new serialized page reader from file source.
+impl<R: ChunkReader> SerializedPageReader<R> {
+    /// Creates a new serialized page reader from a chunk reader and metadata
     pub fn new(
-        buf: T,
-        total_num_values: i64,
-        compression: Compression,
-        physical_type: Type,
+        reader: Arc<R>,
+        meta: &ColumnChunkMetaData,
+        total_rows: usize,
+        page_locations: Option<Vec<PageLocation>>,
     ) -> Result<Self> {
-        let decompressor = create_codec(compression)?;
-        let result = Self {
-            buf: SerializedPages::Chunk { buf },
-            total_num_values,
-            seen_num_values: 0,
-            decompressor,
-            physical_type,
-        };
-        Ok(result)
-    }
+        let decompressor = create_codec(meta.compression())?;
+        let (start, len) = meta.byte_range();
 
-    /// Creates a new serialized page reader from file source.
-    pub fn new_with_page_offsets(
-        total_num_values: i64,
-        compression: Compression,
-        physical_type: Type,
-        offset_index: Vec<PageLocation>,
-        has_dictionary_page_to_read: bool,
-        page_bufs: VecDeque<T>,
-    ) -> Result<Self> {
-        let decompressor = create_codec(compression)?;
-        let result = Self {
-            buf: SerializedPages::Pages {
-                offset_index,
-                seen_num_data_pages: 0,
-                has_dictionary_page_to_read,
-                page_bufs,
+        let state = match page_locations {
+            Some(locations) => {
+                let dictionary_page = match locations.first() {
+                    Some(dict_offset) if dict_offset.offset as u64 != start => {
+                        Some(PageLocation {
+                            offset: start as i64,
+                            compressed_page_size: (dict_offset.offset as u64 - start)
+                                as i32,
+                            first_row_index: 0,
+                        })
+                    }
+                    _ => None,
+                };
+
+                SerializedPageReaderState::Pages {
+                    page_locations: locations.into(),
+                    dictionary_page,
+                    total_rows,
+                }
+            }
+            None => SerializedPageReaderState::Values {
+                offset: start as usize,
+                remaining_bytes: len as usize,
             },
-            total_num_values,
-            seen_num_values: 0,
-            decompressor,
-            physical_type,
         };
-        Ok(result)
+
+        Ok(Self {
+            reader,
+            decompressor,
+            state,
+            physical_type: meta.column_type(),
+        })
     }
 }
 
-impl<T: Read + Send> Iterator for SerializedPageReader<T> {
+impl<R: ChunkReader> Iterator for SerializedPageReader<R> {
     type Item = Result<Page>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -555,133 +570,113 @@ impl<T: Read + Send> Iterator for SerializedPageReader<T> {
     }
 }
 
-impl<T: Read + Send> PageReader for SerializedPageReader<T> {
+impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
     fn get_next_page(&mut self) -> Result<Option<Page>> {
-        let mut cursor;
-        let mut dictionary_cursor;
-        while self.seen_num_values < self.total_num_values {
-            match &mut self.buf {
-                SerializedPages::Chunk { buf } => {
-                    cursor = buf;
-                }
-                SerializedPages::Pages {
-                    offset_index,
-                    seen_num_data_pages,
-                    has_dictionary_page_to_read,
-                    page_bufs,
+        loop {
+            let page = match &mut self.state {
+                SerializedPageReaderState::Values {
+                    offset,
+                    remaining_bytes: remaining,
+                    ..
                 } => {
-                    if offset_index.len() <= *seen_num_data_pages {
+                    if *remaining == 0 {
                         return Ok(None);
-                    } else if *seen_num_data_pages == 0 && *has_dictionary_page_to_read {
-                        dictionary_cursor = page_bufs.pop_front().unwrap();
-                        cursor = &mut dictionary_cursor;
-                    } else {
-                        cursor = page_bufs.get_mut(*seen_num_data_pages).unwrap();
                     }
-                }
-            }
 
-            let page_header = read_page_header(cursor)?;
+                    let mut read = self.reader.get_read(*offset as u64, *remaining)?;
 
-            let to_read = page_header.compressed_page_size as usize;
-            let mut buffer = Vec::with_capacity(to_read);
-            let read = cursor.take(to_read as u64).read_to_end(&mut buffer)?;
+                    let (header_len, header) = read_page_header_len(&mut read)?;
+                    let data_len = header.compressed_page_size as usize;
+                    *offset += header_len + data_len;
+                    *remaining -= header_len + data_len;
 
-            if read != to_read {
-                return Err(eof_err!(
-                    "Expected to read {} bytes of page, read only {}",
-                    to_read,
-                    read
-                ));
-            }
-
-            let buffer = ByteBufferPtr::new(buffer);
-            let result = match page_header.type_ {
-                PageType::DataPage | PageType::DataPageV2 => {
-                    let decoded = decode_page(
-                        page_header,
-                        buffer,
-                        self.physical_type,
-                        self.decompressor.as_mut(),
-                    )?;
-                    self.seen_num_values += decoded.num_values() as i64;
-                    if let SerializedPages::Pages {
-                        seen_num_data_pages,
-                        ..
-                    } = &mut self.buf
-                    {
-                        *seen_num_data_pages += 1;
+                    if header.type_ == PageType::IndexPage {
+                        continue;
                     }
-                    decoded
-                }
-                PageType::DictionaryPage => {
-                    if let SerializedPages::Pages {
-                        has_dictionary_page_to_read,
-                        ..
-                    } = &mut self.buf
-                    {
-                        *has_dictionary_page_to_read = false;
+
+                    let mut buffer = Vec::with_capacity(data_len);
+                    let read = read.take(data_len as u64).read_to_end(&mut buffer)?;
+
+                    if read != data_len {
+                        return Err(eof_err!(
+                            "Expected to read {} bytes of page, read only {}",
+                            data_len,
+                            read
+                        ));
                     }
+
                     decode_page(
-                        page_header,
-                        buffer,
+                        header,
+                        ByteBufferPtr::new(buffer),
                         self.physical_type,
                         self.decompressor.as_mut(),
                     )?
                 }
-                _ => {
-                    // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-                    continue;
+                SerializedPageReaderState::Pages {
+                    page_locations,
+                    dictionary_page,
+                    ..
+                } => {
+                    let front = match dictionary_page
+                        .take()
+                        .or_else(|| page_locations.pop_front())
+                    {
+                        Some(front) => front,
+                        None => return Ok(None),
+                    };
+
+                    let page_len = front.compressed_page_size as usize;
+
+                    let buffer = self.reader.get_bytes(front.offset as u64, page_len)?;
+
+                    let mut cursor = Cursor::new(buffer.as_ref());
+                    let header = read_page_header(&mut cursor)?;
+                    let offset = cursor.position();
+
+                    let bytes = buffer.slice(offset as usize..);
+                    decode_page(
+                        header,
+                        bytes.into(),
+                        self.physical_type,
+                        self.decompressor.as_mut(),
+                    )?
                 }
             };
-            return Ok(Some(result));
-        }
 
-        // We are at the end of this column chunk and no more page left. Return None.
-        Ok(None)
+            return Ok(Some(page));
+        }
     }
 
     fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
-        match &mut self.buf {
-            SerializedPages::Chunk { .. } => { Err(general_err!("Must set page_offset_index when using peek_next_page in SerializedPageReader.")) }
-            SerializedPages::Pages { offset_index, seen_num_data_pages, has_dictionary_page_to_read, .. } => {
-                if *seen_num_data_pages >= offset_index.len() {
-                    Ok(None)
-                } else if *seen_num_data_pages == 0 && *has_dictionary_page_to_read {
-                    // Will set `has_dictionary_page_to_read` false in `get_next_page`,
-                    // assume dictionary page must be read and cannot be skipped.
-                    Ok(Some(PageMetadata {
-                        num_rows: usize::MIN,
-                        is_dict: true,
+        match &self.state {
+            SerializedPageReaderState::Values {..} => Err(general_err!("Must set page_offset_index when using peek_next_page in SerializedPageReader.")),
+            SerializedPageReaderState::Pages { page_locations, dictionary_page, total_rows } => {
+                if dictionary_page.is_some() {
+                    Ok(Some(PageMetadata{
+                        num_rows: 0,
+                        is_dict: true
+                    }))
+                } else if let Some(page) = page_locations.front() {
+                    let next_rows = page_locations.get(1).map(|x| x.first_row_index as usize).unwrap_or(*total_rows);
+
+                    Ok(Some(PageMetadata{
+                        num_rows: next_rows - page.first_row_index as usize,
+                        is_dict: false
                     }))
                 } else {
-                    let row_count = calculate_row_count(
-                        offset_index,
-                        *seen_num_data_pages,
-                        self.total_num_values,
-                    )?;
-                    Ok(Some(PageMetadata {
-                        num_rows: row_count,
-                        is_dict: false,
-                    }))
+                    Ok(None)
                 }
             }
         }
     }
 
     fn skip_next_page(&mut self) -> Result<()> {
-        match &mut self.buf {
-            SerializedPages::Chunk { .. } => { Err(general_err!("Must set page_offset_index when using skip_next_page in SerializedPageReader.")) }
-            SerializedPages::Pages { offset_index, seen_num_data_pages, .. } => {
-                if offset_index.len() <= *seen_num_data_pages {
-                    Err(general_err!(
-                    "seen_num_data_pages is out of bound in SerializedPageReader."
-                ))
-                } else {
-                    *seen_num_data_pages += 1;
-                    // Notice: maybe need 'self.seen_num_values += xxx', for now we can not get skip values in skip_next_page.
-                    Ok(())
-                }
+        match &mut self.state {
+            SerializedPageReaderState::Values {..} =>{ Err(general_err!("Must set page_offset_index when using skip_next_page in SerializedPageReader.")) },
+            SerializedPageReaderState::Pages { page_locations, .. } => {
+                page_locations.pop_front();
+
+                Ok(())
             }
         }
     }
@@ -689,7 +684,10 @@ impl<T: Read + Send> PageReader for SerializedPageReader<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
+
+    use parquet_format::BoundaryOrder;
+
     use crate::basic::{self, ColumnOrder};
     use crate::data_type::private::ParquetValueType;
     use crate::file::page_index::index::{ByteArrayIndex, Index, NativeIndex};
@@ -697,8 +695,8 @@ mod tests {
     use crate::schema::parser::parse_message_type;
     use crate::util::bit_util::from_le_slice;
     use crate::util::test_common::file_util::{get_test_file, get_test_path};
-    use parquet_format::BoundaryOrder;
-    use std::sync::Arc;
+
+    use super::*;
 
     #[test]
     fn test_cursor_and_file_has_the_same_behaviour() {

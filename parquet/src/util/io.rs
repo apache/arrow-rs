@@ -38,14 +38,6 @@ impl<T: Read + Seek + Length + TryClone> ParquetReader for T {}
 
 // Read/Write wrappers for `File`.
 
-/// Position trait returns the current position in the stream.
-/// Should be viewed as a lighter version of `Seek` that does not allow seek operations,
-/// and does not require mutable reference for the current position.
-pub trait Position {
-    /// Returns position in the stream.
-    fn pos(&self) -> u64;
-}
-
 /// Struct that represents a slice of a file data with independent start position and
 /// length. Internally clones provided file handle, wraps with a custom implementation
 /// of BufReader that resets position before any read.
@@ -142,22 +134,9 @@ impl<R: ParquetReader> Read for FileSource<R> {
     }
 }
 
-impl<R: ParquetReader> Position for FileSource<R> {
-    fn pos(&self) -> u64 {
-        self.start
-    }
-}
-
 impl<R: ParquetReader> Length for FileSource<R> {
     fn len(&self) -> u64 {
         self.end - self.start
-    }
-}
-
-// Position implementation for Cursor to use in various tests.
-impl<'a> Position for Cursor<&'a mut Vec<u8>> {
-    fn pos(&self) -> u64 {
-        self.position()
     }
 }
 
@@ -196,10 +175,10 @@ mod tests {
         let mut src = FileSource::new(&get_test_file("alltypes_plain.parquet"), 0, 4);
 
         let _ = src.read(&mut [0; 1]).unwrap();
-        assert_eq!(src.pos(), 1);
+        assert_eq!(src.start, 1);
 
         let _ = src.read(&mut [0; 4]).unwrap();
-        assert_eq!(src.pos(), 4);
+        assert_eq!(src.start, 4);
     }
 
     #[test]
@@ -208,12 +187,12 @@ mod tests {
 
         // Read all bytes from source
         let _ = src.read(&mut [0; 128]).unwrap();
-        assert_eq!(src.pos(), 4);
+        assert_eq!(src.start, 4);
 
         // Try reading again, should return 0 bytes.
         let bytes_read = src.read(&mut [0; 128]).unwrap();
         assert_eq!(bytes_read, 0);
-        assert_eq!(src.pos(), 4);
+        assert_eq!(src.start, 4);
     }
 
     #[test]
