@@ -1630,7 +1630,7 @@ mod tests {
         let array1 = StringArray::from(vec!["foo", "bar", "baz"]);
         let array2 = BooleanArray::from(vec![true, false, true]);
 
-        let mut union_builder = UnionBuilder::new_dense(3);
+        let mut union_builder = UnionBuilder::new_dense();
         union_builder.append::<Int32Type>("a", 1).unwrap();
         union_builder.append::<Float64Type>("b", 10.1).unwrap();
         union_builder.append_null::<Float64Type>("b").unwrap();
@@ -1879,12 +1879,12 @@ mod tests {
 
     #[test]
     fn test_roundtrip_dense_union() {
-        check_union_with_builder(UnionBuilder::new_dense(6));
+        check_union_with_builder(UnionBuilder::new_dense());
     }
 
     #[test]
     fn test_roundtrip_sparse_union() {
-        check_union_with_builder(UnionBuilder::new_sparse(6));
+        check_union_with_builder(UnionBuilder::new_sparse());
     }
 
     /// Read gzipped JSON file
