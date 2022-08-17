@@ -199,14 +199,11 @@ pub(crate) use self::data::BufferSpec;
 pub use self::array_binary::BinaryArray;
 pub use self::array_binary::LargeBinaryArray;
 pub use self::array_boolean::BooleanArray;
-pub use self::array_decimal::BasicDecimalArray;
 pub use self::array_decimal::Decimal128Array;
 pub use self::array_decimal::Decimal256Array;
+pub use self::array_decimal::DecimalArray;
 pub use self::array_fixed_size_binary::FixedSizeBinaryArray;
 pub use self::array_fixed_size_list::FixedSizeListArray;
-
-#[deprecated(note = "Please use `Decimal128Array` instead")]
-pub type DecimalArray = Decimal128Array;
 
 pub use self::array_dictionary::{DictionaryArray, TypedDictionaryArray};
 pub use self::array_list::LargeListArray;

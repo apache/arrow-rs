@@ -365,7 +365,7 @@ mod tests {
             .expect("should not validate invalid value at builder");
 
         let array = builder.finish();
-        let array_data = array_decimal::BasicDecimalArray::data(&array);
+        let array_data = array_decimal::DecimalArray::data(&array);
         array_data.validate_values().unwrap();
     }
 }
