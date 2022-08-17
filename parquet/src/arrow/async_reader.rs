@@ -628,10 +628,14 @@ impl ChunkReader for ColumnChunkData {
     type T = bytes::buf::Reader<Bytes>;
 
     fn get_read(&self, start: u64, length: usize) -> Result<Self::T> {
+        Ok(self.get_bytes(start, length)?.reader())
+    }
+
+    fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
         match &self {
             ColumnChunkData::Sparse { data, .. } => data
                 .binary_search_by_key(&start, |(offset, _)| *offset as u64)
-                .map(|idx| data[idx].1.slice(0..length).reader())
+                .map(|idx| data[idx].1.slice(0..length))
                 .map_err(|_| {
                     ParquetError::General(format!(
                         "Invalid offset in sparse column chunk data: {}",
@@ -641,7 +645,7 @@ impl ChunkReader for ColumnChunkData {
             ColumnChunkData::Dense { offset, data } => {
                 let start = start as usize - *offset;
                 let end = start + length;
-                Ok(data.slice(start..end).reader())
+                Ok(data.slice(start..end))
             }
         }
     }
