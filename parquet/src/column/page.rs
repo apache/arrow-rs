@@ -195,6 +195,7 @@ impl PageWriteSpec {
 }
 
 /// Contains metadata for a page
+#[derive(Clone)]
 pub struct PageMetadata {
     /// The number of rows in this page
     pub num_rows: usize,

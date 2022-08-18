@@ -2591,12 +2591,12 @@ mod tests {
     }
 
     fn create_decimal_array(
-        array: &[Option<i128>],
+        array: Vec<Option<i128>>,
         precision: usize,
         scale: usize,
     ) -> Result<Decimal128Array> {
         array
-            .iter()
+            .into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(precision, scale)
     }
@@ -2618,7 +2618,7 @@ mod tests {
         let output_type = DataType::Decimal128(20, 4);
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
-        let input_decimal_array = create_decimal_array(&array, 20, 3).unwrap();
+        let input_decimal_array = create_decimal_array(array, 20, 3).unwrap();
         let array = Arc::new(input_decimal_array) as ArrayRef;
         generate_cast_test_case!(
             &array,
@@ -2633,7 +2633,7 @@ mod tests {
         );
         // negative test
         let array = vec![Some(123456), None];
-        let input_decimal_array = create_decimal_array(&array, 10, 0).unwrap();
+        let input_decimal_array = create_decimal_array(array, 10, 0).unwrap();
         let array = Arc::new(input_decimal_array) as ArrayRef;
         let result = cast(&array, &DataType::Decimal128(2, 2));
         assert!(result.is_err());
@@ -2647,7 +2647,7 @@ mod tests {
         let output_type = DataType::Decimal256(20, 4);
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
-        let input_decimal_array = create_decimal_array(&array, 20, 3).unwrap();
+        let input_decimal_array = create_decimal_array(array, 20, 3).unwrap();
         let array = Arc::new(input_decimal_array) as ArrayRef;
         generate_cast_test_case!(
             &array,
@@ -2739,7 +2739,7 @@ mod tests {
         assert!(!can_cast_types(&decimal_type, &DataType::UInt8));
         let value_array: Vec<Option<i128>> =
             vec![Some(125), Some(225), Some(325), None, Some(525)];
-        let decimal_array = create_decimal_array(&value_array, 38, 2).unwrap();
+        let decimal_array = create_decimal_array(value_array, 38, 2).unwrap();
         let array = Arc::new(decimal_array) as ArrayRef;
         // i8
         generate_cast_test_case!(
@@ -2786,7 +2786,7 @@ mod tests {
 
         // overflow test: out of range of max i8
         let value_array: Vec<Option<i128>> = vec![Some(24400)];
-        let decimal_array = create_decimal_array(&value_array, 38, 2).unwrap();
+        let decimal_array = create_decimal_array(value_array, 38, 2).unwrap();
         let array = Arc::new(decimal_array) as ArrayRef;
         let casted_array = cast(&array, &DataType::Int8);
         assert_eq!(
@@ -2806,7 +2806,7 @@ mod tests {
             Some(112345678),
             Some(112345679),
         ];
-        let decimal_array = create_decimal_array(&value_array, 38, 2).unwrap();
+        let decimal_array = create_decimal_array(value_array, 38, 2).unwrap();
         let array = Arc::new(decimal_array) as ArrayRef;
         generate_cast_test_case!(
             &array,
@@ -2834,7 +2834,7 @@ mod tests {
             Some(112345678901234568),
             Some(112345678901234560),
         ];
-        let decimal_array = create_decimal_array(&value_array, 38, 2).unwrap();
+        let decimal_array = create_decimal_array(value_array, 38, 2).unwrap();
         let array = Arc::new(decimal_array) as ArrayRef;
         generate_cast_test_case!(
             &array,
@@ -5280,7 +5280,8 @@ mod tests {
             Arc::new(DurationMicrosecondArray::from(vec![1000, 2000])),
             Arc::new(DurationNanosecondArray::from(vec![1000, 2000])),
             Arc::new(
-                create_decimal_array(&[Some(1), Some(2), Some(3), None], 38, 0).unwrap(),
+                create_decimal_array(vec![Some(1), Some(2), Some(3), None], 38, 0)
+                    .unwrap(),
             ),
         ]
     }
