@@ -595,7 +595,6 @@ pub(crate) fn evaluate_predicate(
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
     use std::cmp::min;
     use std::collections::VecDeque;
     use std::fmt::Formatter;
@@ -604,6 +603,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use bytes::Bytes;
     use rand::{thread_rng, Rng, RngCore};
     use tempfile::tempfile;
 
@@ -1289,12 +1289,19 @@ mod tests {
             // Test with nulls and row filter
             TestOptions::new(2, 256, 93)
                 .with_null_percent(25)
+                .with_max_data_page_size(10)
                 .with_row_filter(),
-            // Test with nulls and row filter
+            // Test with nulls and row filter and small pages
             TestOptions::new(2, 256, 93)
                 .with_null_percent(25)
+                .with_max_data_page_size(10)
                 .with_row_selections()
                 .with_row_filter(),
+            // Test with row selection and no offset index and small pages
+            TestOptions::new(2, 256, 93)
+                .with_enabled_statistics(EnabledStatistics::None)
+                .with_max_data_page_size(10)
+                .with_row_selections(),
         ];
 
         all_options.into_iter().for_each(|opts| {
@@ -1407,7 +1414,6 @@ mod tests {
 
         file.rewind().unwrap();
 
-        // TODO: Should be able to always enable page index (#2434)
         let options = ArrowReaderOptions::new()
             .with_page_index(opts.enabled_statistics == EnabledStatistics::Page);
 
