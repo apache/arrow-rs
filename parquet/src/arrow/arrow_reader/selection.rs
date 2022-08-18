@@ -119,6 +119,7 @@ impl RowSelection {
     }
 
     /// Given an offset index, return the offset ranges for all data pages selected by `self`
+    #[allow(unused)]
     pub(crate) fn scan_ranges(
         &self,
         page_locations: &[PageLocation],

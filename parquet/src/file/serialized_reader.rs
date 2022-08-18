@@ -1610,4 +1610,46 @@ mod tests {
 
         assert_eq!(vec.len(), 352);
     }
+
+    #[test]
+    fn test_peek_page_with_dictionary_page_without_offset_index() {
+        let test_file = get_test_file("alltypes_tiny_pages.parquet");
+
+        let reader_result = SerializedFileReader::new(test_file);
+        let reader = reader_result.unwrap();
+        let row_group_reader = reader.get_row_group(0).unwrap();
+
+        //use 'string_col', Boundary order: UNORDERED, total 352 data ages and 1 dictionary page.
+        let mut column_page_reader = row_group_reader.get_column_page_reader(9).unwrap();
+
+        let mut vec = vec![];
+
+        let meta = column_page_reader.peek_next_page().unwrap().unwrap();
+        assert!(meta.is_dict);
+        let page = column_page_reader.get_next_page().unwrap().unwrap();
+        assert!(matches!(page.page_type(), basic::PageType::DICTIONARY_PAGE));
+
+        for i in 0..352 {
+            let meta = column_page_reader.peek_next_page().unwrap().unwrap();
+            // have checked with `parquet-tools column-index   -c string_col  ./alltypes_tiny_pages.parquet`
+            // page meta has two scenarios(21, 20) of num_rows expect last page has 11 rows.
+            if i != 351 {
+                assert!((meta.num_rows == 21) || (meta.num_rows == 20));
+            } else {
+                // last page first row index is 7290, total row count is 7300
+                // because first row start with zero, last page row count should be 10.
+                assert_eq!(meta.num_rows, 10);
+            }
+            assert!(!meta.is_dict);
+            vec.push(meta);
+            let page = column_page_reader.get_next_page().unwrap().unwrap();
+            assert!(matches!(page.page_type(), basic::PageType::DATA_PAGE));
+        }
+
+        //check read all pages.
+        assert!(column_page_reader.peek_next_page().unwrap().is_none());
+        assert!(column_page_reader.get_next_page().unwrap().is_none());
+
+        assert_eq!(vec.len(), 352);
+    }
 }
