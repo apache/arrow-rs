@@ -596,7 +596,6 @@ pub(crate) fn evaluate_predicate(
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use std::any::Any;
     use std::cmp::min;
     use std::collections::VecDeque;
     use std::fmt::Formatter;
