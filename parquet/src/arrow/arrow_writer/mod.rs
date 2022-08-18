@@ -223,7 +223,7 @@ impl<W: Write> ArrowWriter<W> {
         Ok(())
     }
 
-    /// Returns the underlying writer.
+    /// Flushes any outstanding data and returns the underlying writer.
     pub fn into_inner(mut self) -> Result<W> {
         self.flush()?;
         self.writer.into_inner()

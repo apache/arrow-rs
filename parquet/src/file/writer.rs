@@ -312,7 +312,7 @@ impl<W: Write> SerializedFileWriter<W> {
         }
     }
 
-    /// Returns the underlying writer.
+    /// Writes the file footer and returns the underlying writer.
     pub fn into_inner(mut self) -> Result<W> {
         self.assert_previous_writer_closed()?;
         let _ = self.write_metadata()?;
