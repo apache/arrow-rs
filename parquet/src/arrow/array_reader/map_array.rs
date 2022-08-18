@@ -29,6 +29,8 @@ pub struct MapArrayReader {
 }
 
 impl MapArrayReader {
+    /// Creates a new [`MapArrayReader`] with a `def_level`, `rep_level` and `nullable`
+    /// as defined on [`ParquetField`][crate::arrow::schema::ParquetField]
     pub fn new(
         key_reader: Box<dyn ArrayReader>,
         value_reader: Box<dyn ArrayReader>,
@@ -46,7 +48,9 @@ impl MapArrayReader {
         let element = match &data_type {
             ArrowType::Map(element, _) => match element.data_type() {
                 ArrowType::Struct(fields) if fields.len() == 2 => {
-                    // The inner map field must always non-nullable (#1697)
+                    // Parquet cannot represent nullability at this level (#1697)
+                    // and so encountering nullability here indicates some manner
+                    // of schema inconsistency / inference bug
                     assert!(!element.is_nullable(), "map struct cannot be nullable");
                     element
                 }
@@ -94,6 +98,10 @@ impl ArrayReader for MapArrayReader {
         let array = self.reader.consume_batch().unwrap();
         let data = array.data().clone();
         let builder = data.into_builder().data_type(self.data_type.clone());
+
+        // SAFETY - we can assume that ListArrayReader produces valid ListArray
+        // of the expected type, and as such its output can be reinterpreted as
+        // a MapArray without validation
         Ok(Arc::new(MapArray::from(unsafe {
             builder.build_unchecked()
         })))
@@ -193,6 +201,8 @@ mod tests {
         for maybe_record_batch in record_batch_reader {
             let record_batch = maybe_record_batch.expect("Getting current batch");
             let col = record_batch.column(0);
+            assert!(col.is_null(0));
+            assert!(col.is_null(1));
             let map_entry = array::as_map_array(col).value(2);
             let struct_col = array::as_struct_array(&map_entry);
             let key_col = array::as_string_array(struct_col.column(0)); // Key column
