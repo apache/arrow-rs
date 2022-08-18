@@ -223,6 +223,11 @@ impl<W: Write> ArrowWriter<W> {
         Ok(())
     }
 
+    /// Returns the underlying writer.
+    pub fn into_inner(self) -> W {
+        self.writer.into_inner()
+    }
+
     /// Close and finalize the underlying Parquet writer
     pub fn close(mut self) -> Result<parquet_format::FileMetaData> {
         self.flush()?;

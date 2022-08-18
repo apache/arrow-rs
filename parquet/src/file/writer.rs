@@ -60,6 +60,11 @@ impl<W: Write> TrackedWrite<W> {
     pub fn bytes_written(&self) -> usize {
         self.bytes_written
     }
+
+    /// Returns the underlying writer.
+    pub fn into_inner(self) -> W {
+        self.inner
+    }
 }
 
 impl<W: Write> Write for TrackedWrite<W> {
@@ -305,6 +310,11 @@ impl<W: Write> SerializedFileWriter<W> {
         } else {
             Ok(())
         }
+    }
+
+    /// Returns the underlying writer.
+    pub fn into_inner(self) -> W {
+        self.buf.into_inner()
     }
 }
 
