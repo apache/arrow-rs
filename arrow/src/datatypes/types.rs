@@ -478,7 +478,15 @@ impl<const N: usize> NativeDecimalType for [u8; N] {
     }
 }
 
-/// A decimal type
+/// A trait over the decimal types, used by [`DecimalArray`] to provide a generic
+/// implementation across the various decimal types
+///
+/// Implemented by [`Decimal128Type`] and [`Decimal256Type`] for [`Decimal128Array`]
+/// and [`Decimal256Array`] respectively
+///
+/// [`DecimalArray`]: [crate::array::DecimalArray]
+/// [`Decimal128Array`]: [crate::array::Decimal128Array]
+/// [`Decimal256Array`]: [crate::array::Decimal256Array]
 pub trait DecimalType:
     'static + std::fmt::Debug + Send + Sync + private::DecimalTypeSealed
 {

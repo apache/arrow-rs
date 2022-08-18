@@ -71,8 +71,13 @@ use crate::util::decimal::{Decimal, Decimal256};
 ///
 pub type Decimal128Array = DecimalArray<Decimal128Type>;
 
+/// `Decimal256Array` stores fixed width decimal numbers,
+/// with a fixed precision and scale
 pub type Decimal256Array = DecimalArray<Decimal256Type>;
 
+/// A generic [`Array`] for fixed width decimal numbers
+///
+/// See [`Decimal128Array`] and [`Decimal256Array`]
 pub struct DecimalArray<T: DecimalType> {
     data: ArrayData,
     value_data: RawPtrBox<u8>,

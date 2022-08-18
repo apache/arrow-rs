@@ -26,6 +26,13 @@ use num::bigint::BigInt;
 use num::Signed;
 use std::cmp::{min, Ordering};
 
+/// [`Decimal`] is the generic representation of a single decimal value
+///
+/// See [`Decimal128`] and [`Decimal256`] for the value types of [`Decimal128Array`]
+/// and [`Decimal256Array`] respectively
+///
+/// [`Decimal128Array`]: [crate::array::Decimal128Array]
+/// [`Decimal256Array`]: [crate::array::Decimal256Array]
 #[derive(Debug, Clone, Copy)]
 pub struct Decimal<T: DecimalType> {
     precision: usize,
