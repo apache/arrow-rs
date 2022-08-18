@@ -25,7 +25,7 @@
 
 **Breaking changes:**
 
-- Return structured ColumnCloseResult \(\#2465\) [\#2466](https://github.com/apache/arrow-rs/pull/2466) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
+- Return structured `ColumnCloseResult` \(\#2465\) [\#2466](https://github.com/apache/arrow-rs/pull/2466) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
 - Push `ChunkReader` into `SerializedPageReader` \(\#2463\) [\#2464](https://github.com/apache/arrow-rs/pull/2464) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
 - Revise FromIterator for Decimal128Array to use Into instead of Borrow [\#2442](https://github.com/apache/arrow-rs/pull/2442) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
 - Use Fixed-Length Array in BasicDecimal new and raw\_value [\#2405](https://github.com/apache/arrow-rs/pull/2405) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
@@ -34,13 +34,13 @@
 
 **Implemented enhancements:**
 
-- add into\_inner method to ArrowWriter [\#2491](https://github.com/apache/arrow-rs/issues/2491)
-- Remove byteorder dependency [\#2472](https://github.com/apache/arrow-rs/issues/2472)
-- Return Structured ColumnCloseResult from GenericColumnWriter::close [\#2465](https://github.com/apache/arrow-rs/issues/2465)
+- add into\_inner method to ArrowWriter [\#2491](https://github.com/apache/arrow-rs/issues/2491) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Remove byteorder dependency [\#2472](https://github.com/apache/arrow-rs/issues/2472) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Return Structured ColumnCloseResult from GenericColumnWriter::close [\#2465](https://github.com/apache/arrow-rs/issues/2465) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Push `ChunkReader` into `SerializedPageReader` [\#2463](https://github.com/apache/arrow-rs/issues/2463) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Support SerializedPageReader::skip\_page without OffsetIndex [\#2459](https://github.com/apache/arrow-rs/issues/2459)
+- Support SerializedPageReader::skip\_page without OffsetIndex [\#2459](https://github.com/apache/arrow-rs/issues/2459) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Support Time64/Time32 comparison [\#2457](https://github.com/apache/arrow-rs/issues/2457) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Revise FromIterator for Decimal128Array to use Into instead of Borrow [\#2441](https://github.com/apache/arrow-rs/issues/2441)
+- Revise FromIterator for Decimal128Array to use Into instead of Borrow [\#2441](https://github.com/apache/arrow-rs/issues/2441) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Support `RowFilter` within`ParquetRecordBatchReader` [\#2431](https://github.com/apache/arrow-rs/issues/2431) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Remove the field `StructBuilder::len` [\#2429](https://github.com/apache/arrow-rs/issues/2429) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Standardize creation and configuration of parquet --\> Arrow readers \( `ParquetRecordBatchReaderBuilder`\) [\#2427](https://github.com/apache/arrow-rs/issues/2427) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
@@ -59,12 +59,12 @@
 
 **Fixed bugs:**
 
-- Panic in SerializedPageReader without offset index [\#2503](https://github.com/apache/arrow-rs/issues/2503)
-- MapArray columns don't handle null values correctly [\#2484](https://github.com/apache/arrow-rs/issues/2484)
-- There is no compiler error when using an invalid Decimal type. [\#2440](https://github.com/apache/arrow-rs/issues/2440)
+- Panic in SerializedPageReader without offset index [\#2503](https://github.com/apache/arrow-rs/issues/2503) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- MapArray columns don't handle null values correctly [\#2484](https://github.com/apache/arrow-rs/issues/2484) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- There is no compiler error when using an invalid Decimal type. [\#2440](https://github.com/apache/arrow-rs/issues/2440) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Flight SQL Server sends incorrect response for `DoPutUpdateResult` [\#2403](https://github.com/apache/arrow-rs/issues/2403) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
 - `AsyncFileReader`No Longer Object-Safe [\#2372](https://github.com/apache/arrow-rs/issues/2372) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- StructBuilder Does not Verify Child Lengths [\#2252](https://github.com/apache/arrow-rs/issues/2252)
+- StructBuilder Does not Verify Child Lengths [\#2252](https://github.com/apache/arrow-rs/issues/2252) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Closed issues:**
 
