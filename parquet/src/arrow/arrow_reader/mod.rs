@@ -602,6 +602,7 @@ pub(crate) fn evaluate_predicate(
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
+    use std::any::Any;
     use std::cmp::min;
     use std::collections::VecDeque;
     use std::fmt::Formatter;
@@ -739,12 +740,93 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_unsigned_primitive_single_column_reader_test() {
+        run_single_column_reader_tests::<Int32Type, _, Int32Type>(
+            2,
+            ConvertedType::UINT_32,
+            Some(ArrowDataType::UInt32),
+            |vals| {
+                Arc::new(UInt32Array::from_iter(
+                    vals.iter().map(|x| x.map(|x| x as u32)),
+                ))
+            },
+            &[
+                Encoding::PLAIN,
+                Encoding::RLE_DICTIONARY,
+                Encoding::DELTA_BINARY_PACKED,
+            ],
+        );
+        run_single_column_reader_tests::<Int64Type, _, Int64Type>(
+            2,
+            ConvertedType::UINT_64,
+            Some(ArrowDataType::UInt64),
+            |vals| {
+                Arc::new(UInt64Array::from_iter(
+                    vals.iter().map(|x| x.map(|x| x as u64)),
+                ))
+            },
+            &[
+                Encoding::PLAIN,
+                Encoding::RLE_DICTIONARY,
+                Encoding::DELTA_BINARY_PACKED,
+            ],
+        );
+    }
+
+    #[test]
+    fn test_unsigned_roundtrip() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("uint32", ArrowDataType::UInt32, true),
+            Field::new("uint64", ArrowDataType::UInt64, true),
+        ]));
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), None).unwrap();
+
+        let original = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(UInt32Array::from_iter_values([
+                    0,
+                    i32::MAX as u32,
+                    u32::MAX,
+                ])),
+                Arc::new(UInt64Array::from_iter_values([
+                    0,
+                    i64::MAX as u64,
+                    u64::MAX,
+                ])),
+            ],
+        )
+        .unwrap();
+
+        writer.write(&original).unwrap();
+        writer.close().unwrap();
+
+        let mut reader =
+            ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024).unwrap();
+        let ret = reader.next().unwrap().unwrap();
+        assert_eq!(ret, original);
+
+        // Check they can be downcast to the correct type
+        ret.column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+
+        ret.column(1)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+    }
+
     struct RandFixedLenGen {}
 
     impl RandGen<FixedLenByteArrayType> for RandFixedLenGen {
         fn gen(len: i32) -> FixedLenByteArray {
             let mut v = vec![0u8; len as usize];
-            rand::thread_rng().fill_bytes(&mut v);
+            thread_rng().fill_bytes(&mut v);
             ByteArray::from(v).into()
         }
     }
@@ -1494,6 +1576,11 @@ mod tests {
 
                 assert_eq!(a.data_type(), b.data_type());
                 assert_eq!(a.data(), b.data(), "{:#?} vs {:#?}", a.data(), b.data());
+                assert_eq!(
+                    a.as_any().type_id(),
+                    b.as_any().type_id(),
+                    "incorrect type ids"
+                );
 
                 total_read = end;
             } else {
