@@ -80,6 +80,7 @@ fn decimal128_array_from_vec(array: &[Option<i128>]) {
     criterion::black_box(
         array
             .iter()
+            .copied()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(34, 2)
             .unwrap(),
