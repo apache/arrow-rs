@@ -313,8 +313,11 @@ impl<W: Write> SerializedFileWriter<W> {
     }
 
     /// Returns the underlying writer.
-    pub fn into_inner(self) -> W {
-        self.buf.into_inner()
+    pub fn into_inner(mut self) -> Result<W> {
+        self.assert_previous_writer_closed()?;
+        let _ = self.write_metadata()?;
+
+        Ok(self.buf.into_inner())
     }
 }
 
