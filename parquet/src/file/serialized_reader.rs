@@ -494,7 +494,7 @@ enum SerializedPageReaderState {
         remaining_bytes: usize,
 
         // If the next page header has already been "peeked", we will cache it and it`s length here
-        next_page_header: Option<PageHeader>,
+        next_page_header: Option<Box<PageHeader>>,
     },
     Pages {
         /// Remaining page locations
@@ -590,7 +590,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
                     let mut read = self.reader.get_read(*offset as u64, *remaining)?;
                     let header = if let Some(header) = next_page_header.take() {
-                        header
+                        *header
                     } else {
                         let (header_len, header) = read_page_header_len(&mut read)?;
                         *offset += header_len;
@@ -669,8 +669,8 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     if *remaining_bytes == 0 {
                         return Ok(None);
                     }
-                    return if let Some(header) = next_page_header.take() {
-                        if let Ok(page_meta) = (&header).try_into() {
+                    return if let Some(header) = next_page_header.as_ref() {
+                        if let Ok(page_meta) = (&**header).try_into() {
                             Ok(Some(page_meta))
                         } else {
                             // For unknown page type (e.g., INDEX_PAGE), skip and read next.
@@ -689,7 +689,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                             // For unknown page type (e.g., INDEX_PAGE), skip and read next.
                             continue;
                         };
-                        *next_page_header = Some(header);
+                        *next_page_header = Some(Box::new(header));
                         page_meta
                     };
                 }
