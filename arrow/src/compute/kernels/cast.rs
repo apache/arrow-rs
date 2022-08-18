@@ -36,6 +36,7 @@
 //! ```
 
 use chrono::Timelike;
+use std::ops::{Div, Mul};
 use std::str;
 use std::sync::Arc;
 
@@ -53,7 +54,7 @@ use crate::temporal_conversions::{
 use crate::{array::*, compute::take};
 use crate::{buffer::Buffer, util::serialization::lexical_to_string};
 use num::cast::AsPrimitive;
-use num::{NumCast, ToPrimitive};
+use num::{BigInt, NumCast, ToPrimitive};
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug)]
@@ -78,6 +79,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         // TODO UTF8/unsigned numeric to decimal
         // cast one decimal type to another decimal type
         (Decimal128(_, _), Decimal128(_, _)) => true,
+        (Decimal256(_, _), Decimal256(_, _)) => true,
+        (Decimal128(_, _), Decimal256(_, _)) => true,
+        (Decimal256(_, _), Decimal128(_, _)) => true,
         // signed numeric to decimal
         (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal128(_, _)) |
         // decimal to signed numeric
@@ -142,7 +146,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Utf8, LargeUtf8) => true,
         (LargeUtf8, Utf8) => true,
         (Utf8,
-            Date32
+            Binary
+            | Date32
             | Date64
             | Time32(TimeUnit::Second)
             | Time32(TimeUnit::Millisecond)
@@ -152,7 +157,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         ) => true,
         (Utf8, _) => DataType::is_numeric(to_type),
         (LargeUtf8,
-            Date32
+            LargeBinary
+            | Date32
             | Date64
             | Time32(TimeUnit::Second)
             | Time32(TimeUnit::Millisecond)
@@ -432,7 +438,16 @@ pub fn cast_with_options(
     }
     match (from_type, to_type) {
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
-            cast_decimal_to_decimal(array, s1, p2, s2)
+            cast_decimal_to_decimal::<16, 16>(array, s1, p2, s2)
+        }
+        (Decimal256(_, s1), Decimal256(p2, s2)) => {
+            cast_decimal_to_decimal::<32, 32>(array, s1, p2, s2)
+        }
+        (Decimal128(_, s1), Decimal256(p2, s2)) => {
+            cast_decimal_to_decimal::<16, 32>(array, s1, p2, s2)
+        }
+        (Decimal256(_, s1), Decimal128(p2, s2)) => {
+            cast_decimal_to_decimal::<32, 16>(array, s1, p2, s2)
         }
         (Decimal128(_, scale), _) => {
             // cast decimal to other type
@@ -680,6 +695,7 @@ pub fn cast_with_options(
             Float64 => cast_string_to_numeric::<Float64Type, i32>(array, cast_options),
             Date32 => cast_string_to_date32::<i32>(&**array, cast_options),
             Date64 => cast_string_to_date64::<i32>(&**array, cast_options),
+            Binary => cast_string_to_binary(array),
             Time32(TimeUnit::Second) => {
                 cast_string_to_time32second::<i32>(&**array, cast_options)
             }
@@ -826,6 +842,7 @@ pub fn cast_with_options(
             Float64 => cast_string_to_numeric::<Float64Type, i64>(array, cast_options),
             Date32 => cast_string_to_date32::<i64>(&**array, cast_options),
             Date64 => cast_string_to_date64::<i64>(&**array, cast_options),
+            LargeBinary => cast_string_to_binary(array),
             Time32(TimeUnit::Second) => {
                 cast_string_to_time32second::<i64>(&**array, cast_options)
             }
@@ -1241,6 +1258,41 @@ pub fn cast_with_options(
     }
 }
 
+/// Cast to string array to binary array
+fn cast_string_to_binary(array: &ArrayRef) -> Result<ArrayRef> {
+    let from_type = array.data_type();
+    match *from_type {
+        DataType::Utf8 => {
+            let data = unsafe {
+                array
+                    .data()
+                    .clone()
+                    .into_builder()
+                    .data_type(DataType::Binary)
+                    .build_unchecked()
+            };
+
+            Ok(Arc::new(BinaryArray::from(data)) as ArrayRef)
+        }
+        DataType::LargeUtf8 => {
+            let data = unsafe {
+                array
+                    .data()
+                    .clone()
+                    .into_builder()
+                    .data_type(DataType::LargeBinary)
+                    .build_unchecked()
+            };
+
+            Ok(Arc::new(LargeBinaryArray::from(data)) as ArrayRef)
+        }
+        _ => Err(ArrowError::InvalidArgumentError(format!(
+            "{:?} cannot be converted to binary array",
+            from_type
+        ))),
+    }
+}
+
 /// Get the time unit as a multiple of a second
 const fn time_unit_multiple(unit: &TimeUnit) -> i64 {
     match unit {
@@ -1252,34 +1304,123 @@ const fn time_unit_multiple(unit: &TimeUnit) -> i64 {
 }
 
 /// Cast one type of decimal array to another type of decimal array
-fn cast_decimal_to_decimal(
+fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
     array: &ArrayRef,
     input_scale: &usize,
     output_precision: &usize,
     output_scale: &usize,
 ) -> Result<ArrayRef> {
-    let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
-
-    let output_array = if input_scale > output_scale {
+    if input_scale > output_scale {
         // For example, input_scale is 4 and output_scale is 3;
         // Original value is 11234_i128, and will be cast to 1123_i128.
         let div = 10_i128.pow((input_scale - output_scale) as u32);
-        array
-            .iter()
-            .map(|v| v.map(|v| v.as_i128() / div))
-            .collect::<Decimal128Array>()
+        if BYTE_WIDTH1 == 16 {
+            let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            let iter = array.iter().map(|v| v.map(|v| v.as_i128() / div));
+            if BYTE_WIDTH2 == 16 {
+                let output_array = iter
+                    .collect::<Decimal128Array>()
+                    .with_precision_and_scale(*output_precision, *output_scale)?;
+
+                Ok(Arc::new(output_array))
+            } else {
+                let output_array = iter
+                    .map(|v| v.map(BigInt::from))
+                    .collect::<Decimal256Array>()
+                    .with_precision_and_scale(*output_precision, *output_scale)?;
+
+                Ok(Arc::new(output_array))
+            }
+        } else {
+            let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
+            let iter = array.iter().map(|v| v.map(|v| v.to_big_int().div(div)));
+            if BYTE_WIDTH2 == 16 {
+                let values = iter
+                    .map(|v| {
+                        if v.is_none() {
+                            Ok(None)
+                        } else {
+                            v.as_ref().and_then(|v| v.to_i128())
+                                .ok_or_else(|| {
+                                    ArrowError::InvalidArgumentError(
+                                    format!("{:?} cannot be casted to 128-bit integer for Decimal128", v),
+                                )
+                                })
+                                .map(Some)
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let output_array = values
+                    .into_iter()
+                    .collect::<Decimal128Array>()
+                    .with_precision_and_scale(*output_precision, *output_scale)?;
+
+                Ok(Arc::new(output_array))
+            } else {
+                let output_array = iter
+                    .collect::<Decimal256Array>()
+                    .with_precision_and_scale(*output_precision, *output_scale)?;
+
+                Ok(Arc::new(output_array))
+            }
+        }
     } else {
         // For example, input_scale is 3 and output_scale is 4;
         // Original value is 1123_i128, and will be cast to 11230_i128.
         let mul = 10_i128.pow((output_scale - input_scale) as u32);
-        array
-            .iter()
-            .map(|v| v.map(|v| v.as_i128() * mul))
-            .collect::<Decimal128Array>()
-    }
-    .with_precision_and_scale(*output_precision, *output_scale)?;
+        if BYTE_WIDTH1 == 16 {
+            let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            let iter = array.iter().map(|v| v.map(|v| v.as_i128() * mul));
+            if BYTE_WIDTH2 == 16 {
+                let output_array = iter
+                    .collect::<Decimal128Array>()
+                    .with_precision_and_scale(*output_precision, *output_scale)?;
 
-    Ok(Arc::new(output_array))
+                Ok(Arc::new(output_array))
+            } else {
+                let output_array = iter
+                    .map(|v| v.map(BigInt::from))
+                    .collect::<Decimal256Array>()
+                    .with_precision_and_scale(*output_precision, *output_scale)?;
+
+                Ok(Arc::new(output_array))
+            }
+        } else {
+            let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
+            let iter = array.iter().map(|v| v.map(|v| v.to_big_int().mul(mul)));
+            if BYTE_WIDTH2 == 16 {
+                let values = iter
+                    .map(|v| {
+                        if v.is_none() {
+                            Ok(None)
+                        } else {
+                            v.as_ref().and_then(|v| v.to_i128())
+                                .ok_or_else(|| {
+                                    ArrowError::InvalidArgumentError(
+                                    format!("{:?} cannot be casted to 128-bit integer for Decimal128", v),
+                                )
+                                })
+                                .map(Some)
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let output_array = values
+                    .into_iter()
+                    .collect::<Decimal128Array>()
+                    .with_precision_and_scale(*output_precision, *output_scale)?;
+
+                Ok(Arc::new(output_array))
+            } else {
+                let output_array = iter
+                    .collect::<Decimal256Array>()
+                    .with_precision_and_scale(*output_precision, *output_scale)?;
+
+                Ok(Arc::new(output_array))
+            }
+        }
+    }
 }
 
 /// Cast an array by changing its array_data type to the desired type
@@ -2420,9 +2561,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::BasicDecimalArray;
     use crate::datatypes::TimeUnit;
-    use crate::util::decimal::Decimal128;
+    use crate::util::decimal::{Decimal128, Decimal256};
     use crate::{buffer::Buffer, util::display::array_value_to_string};
 
     macro_rules! generate_cast_test_case {
@@ -2451,23 +2591,34 @@ mod tests {
     }
 
     fn create_decimal_array(
-        array: &[Option<i128>],
+        array: Vec<Option<i128>>,
         precision: usize,
         scale: usize,
     ) -> Result<Decimal128Array> {
         array
-            .iter()
+            .into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(precision, scale)
     }
 
+    fn create_decimal256_array(
+        array: Vec<Option<BigInt>>,
+        precision: usize,
+        scale: usize,
+    ) -> Result<Decimal256Array> {
+        array
+            .into_iter()
+            .collect::<Decimal256Array>()
+            .with_precision_and_scale(precision, scale)
+    }
+
     #[test]
-    fn test_cast_decimal_to_decimal() {
+    fn test_cast_decimal128_to_decimal128() {
         let input_type = DataType::Decimal128(20, 3);
         let output_type = DataType::Decimal128(20, 4);
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
-        let input_decimal_array = create_decimal_array(&array, 20, 3).unwrap();
+        let input_decimal_array = create_decimal_array(array, 20, 3).unwrap();
         let array = Arc::new(input_decimal_array) as ArrayRef;
         generate_cast_test_case!(
             &array,
@@ -2482,12 +2633,103 @@ mod tests {
         );
         // negative test
         let array = vec![Some(123456), None];
-        let input_decimal_array = create_decimal_array(&array, 10, 0).unwrap();
+        let input_decimal_array = create_decimal_array(array, 10, 0).unwrap();
         let array = Arc::new(input_decimal_array) as ArrayRef;
         let result = cast(&array, &DataType::Decimal128(2, 2));
         assert!(result.is_err());
         assert_eq!("Invalid argument error: 12345600 is too large to store in a Decimal128 of precision 2. Max is 99",
                    result.unwrap_err().to_string());
+    }
+
+    #[test]
+    fn test_cast_decimal128_to_decimal256() {
+        let input_type = DataType::Decimal128(20, 3);
+        let output_type = DataType::Decimal256(20, 4);
+        assert!(can_cast_types(&input_type, &output_type));
+        let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
+        let input_decimal_array = create_decimal_array(array, 20, 3).unwrap();
+        let array = Arc::new(input_decimal_array) as ArrayRef;
+        generate_cast_test_case!(
+            &array,
+            Decimal256Array,
+            &output_type,
+            vec![
+                Some(
+                    Decimal256::from_big_int(&BigInt::from(11234560_i128), 20, 4)
+                        .unwrap()
+                ),
+                Some(
+                    Decimal256::from_big_int(&BigInt::from(21234560_i128), 20, 4)
+                        .unwrap()
+                ),
+                Some(
+                    Decimal256::from_big_int(&BigInt::from(31234560_i128), 20, 4)
+                        .unwrap()
+                ),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cast_decimal256_to_decimal128() {
+        let input_type = DataType::Decimal256(20, 3);
+        let output_type = DataType::Decimal128(20, 4);
+        assert!(can_cast_types(&input_type, &output_type));
+        let array = vec![
+            Some(BigInt::from(1123456)),
+            Some(BigInt::from(2123456)),
+            Some(BigInt::from(3123456)),
+            None,
+        ];
+        let input_decimal_array = create_decimal256_array(array, 20, 3).unwrap();
+        let array = Arc::new(input_decimal_array) as ArrayRef;
+        generate_cast_test_case!(
+            &array,
+            Decimal128Array,
+            &output_type,
+            vec![
+                Some(Decimal128::new_from_i128(20, 4, 11234560_i128)),
+                Some(Decimal128::new_from_i128(20, 4, 21234560_i128)),
+                Some(Decimal128::new_from_i128(20, 4, 31234560_i128)),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cast_decimal256_to_decimal256() {
+        let input_type = DataType::Decimal256(20, 3);
+        let output_type = DataType::Decimal256(20, 4);
+        assert!(can_cast_types(&input_type, &output_type));
+        let array = vec![
+            Some(BigInt::from(1123456)),
+            Some(BigInt::from(2123456)),
+            Some(BigInt::from(3123456)),
+            None,
+        ];
+        let input_decimal_array = create_decimal256_array(array, 20, 3).unwrap();
+        let array = Arc::new(input_decimal_array) as ArrayRef;
+        generate_cast_test_case!(
+            &array,
+            Decimal256Array,
+            &output_type,
+            vec![
+                Some(
+                    Decimal256::from_big_int(&BigInt::from(11234560_i128), 20, 4)
+                        .unwrap()
+                ),
+                Some(
+                    Decimal256::from_big_int(&BigInt::from(21234560_i128), 20, 4)
+                        .unwrap()
+                ),
+                Some(
+                    Decimal256::from_big_int(&BigInt::from(31234560_i128), 20, 4)
+                        .unwrap()
+                ),
+                None
+            ]
+        );
     }
 
     #[test]
@@ -2497,7 +2739,7 @@ mod tests {
         assert!(!can_cast_types(&decimal_type, &DataType::UInt8));
         let value_array: Vec<Option<i128>> =
             vec![Some(125), Some(225), Some(325), None, Some(525)];
-        let decimal_array = create_decimal_array(&value_array, 38, 2).unwrap();
+        let decimal_array = create_decimal_array(value_array, 38, 2).unwrap();
         let array = Arc::new(decimal_array) as ArrayRef;
         // i8
         generate_cast_test_case!(
@@ -2544,7 +2786,7 @@ mod tests {
 
         // overflow test: out of range of max i8
         let value_array: Vec<Option<i128>> = vec![Some(24400)];
-        let decimal_array = create_decimal_array(&value_array, 38, 2).unwrap();
+        let decimal_array = create_decimal_array(value_array, 38, 2).unwrap();
         let array = Arc::new(decimal_array) as ArrayRef;
         let casted_array = cast(&array, &DataType::Int8);
         assert_eq!(
@@ -2564,7 +2806,7 @@ mod tests {
             Some(112345678),
             Some(112345679),
         ];
-        let decimal_array = create_decimal_array(&value_array, 38, 2).unwrap();
+        let decimal_array = create_decimal_array(value_array, 38, 2).unwrap();
         let array = Arc::new(decimal_array) as ArrayRef;
         generate_cast_test_case!(
             &array,
@@ -2592,7 +2834,7 @@ mod tests {
             Some(112345678901234568),
             Some(112345678901234560),
         ];
-        let decimal_array = create_decimal_array(&value_array, 38, 2).unwrap();
+        let decimal_array = create_decimal_array(value_array, 38, 2).unwrap();
         let array = Arc::new(decimal_array) as ArrayRef;
         generate_cast_test_case!(
             &array,
@@ -3269,6 +3511,34 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_string_to_binary() {
+        let string_1 = "Hi";
+        let string_2 = "Hello";
+
+        let bytes_1 = string_1.as_bytes();
+        let bytes_2 = string_2.as_bytes();
+
+        let string_data = vec![Some(string_1), Some(string_2), None];
+        let a1 = Arc::new(StringArray::from(string_data.clone())) as ArrayRef;
+        let a2 = Arc::new(LargeStringArray::from(string_data)) as ArrayRef;
+
+        let mut array_ref = cast(&a1, &DataType::Binary).unwrap();
+        let down_cast = array_ref.as_any().downcast_ref::<BinaryArray>().unwrap();
+        assert_eq!(bytes_1, down_cast.value(0));
+        assert_eq!(bytes_2, down_cast.value(1));
+        assert!(down_cast.is_null(2));
+
+        array_ref = cast(&a2, &DataType::LargeBinary).unwrap();
+        let down_cast = array_ref
+            .as_any()
+            .downcast_ref::<LargeBinaryArray>()
+            .unwrap();
+        assert_eq!(bytes_1, down_cast.value(0));
+        assert_eq!(bytes_2, down_cast.value(1));
+        assert!(down_cast.is_null(2));
+    }
+
+    #[test]
     fn test_cast_date32_to_int32() {
         let a = Date32Array::from(vec![10000, 17890]);
         let array = Arc::new(a) as ArrayRef;
@@ -3485,15 +3755,15 @@ mod tests {
     #[test]
     fn test_cast_from_f64() {
         let f64_values: Vec<f64> = vec![
-            std::i64::MIN as f64,
-            std::i32::MIN as f64,
-            std::i16::MIN as f64,
-            std::i8::MIN as f64,
+            i64::MIN as f64,
+            i32::MIN as f64,
+            i16::MIN as f64,
+            i8::MIN as f64,
             0_f64,
-            std::u8::MAX as f64,
-            std::u16::MAX as f64,
-            std::u32::MAX as f64,
-            std::u64::MAX as f64,
+            u8::MAX as f64,
+            u16::MAX as f64,
+            u32::MAX as f64,
+            u64::MAX as f64,
         ];
         let f64_array: ArrayRef = Arc::new(Float64Array::from(f64_values));
 
@@ -3635,15 +3905,15 @@ mod tests {
     #[test]
     fn test_cast_from_f32() {
         let f32_values: Vec<f32> = vec![
-            std::i32::MIN as f32,
-            std::i32::MIN as f32,
-            std::i16::MIN as f32,
-            std::i8::MIN as f32,
+            i32::MIN as f32,
+            i32::MIN as f32,
+            i16::MIN as f32,
+            i8::MIN as f32,
             0_f32,
-            std::u8::MAX as f32,
-            std::u16::MAX as f32,
-            std::u32::MAX as f32,
-            std::u32::MAX as f32,
+            u8::MAX as f32,
+            u16::MAX as f32,
+            u32::MAX as f32,
+            u32::MAX as f32,
         ];
         let f32_array: ArrayRef = Arc::new(Float32Array::from(f32_values));
 
@@ -3772,10 +4042,10 @@ mod tests {
     fn test_cast_from_uint64() {
         let u64_values: Vec<u64> = vec![
             0,
-            std::u8::MAX as u64,
-            std::u16::MAX as u64,
-            std::u32::MAX as u64,
-            std::u64::MAX,
+            u8::MAX as u64,
+            u16::MAX as u64,
+            u32::MAX as u64,
+            u64::MAX,
         ];
         let u64_array: ArrayRef = Arc::new(UInt64Array::from(u64_values));
 
@@ -3851,12 +4121,8 @@ mod tests {
 
     #[test]
     fn test_cast_from_uint32() {
-        let u32_values: Vec<u32> = vec![
-            0,
-            std::u8::MAX as u32,
-            std::u16::MAX as u32,
-            std::u32::MAX as u32,
-        ];
+        let u32_values: Vec<u32> =
+            vec![0, u8::MAX as u32, u16::MAX as u32, u32::MAX as u32];
         let u32_array: ArrayRef = Arc::new(UInt32Array::from(u32_values));
 
         let f64_expected = vec!["0.0", "255.0", "65535.0", "4294967295.0"];
@@ -3922,7 +4188,7 @@ mod tests {
 
     #[test]
     fn test_cast_from_uint16() {
-        let u16_values: Vec<u16> = vec![0, std::u8::MAX as u16, std::u16::MAX as u16];
+        let u16_values: Vec<u16> = vec![0, u8::MAX as u16, u16::MAX as u16];
         let u16_array: ArrayRef = Arc::new(UInt16Array::from(u16_values));
 
         let f64_expected = vec!["0.0", "255.0", "65535.0"];
@@ -3988,7 +4254,7 @@ mod tests {
 
     #[test]
     fn test_cast_from_uint8() {
-        let u8_values: Vec<u8> = vec![0, std::u8::MAX];
+        let u8_values: Vec<u8> = vec![0, u8::MAX];
         let u8_array: ArrayRef = Arc::new(UInt8Array::from(u8_values));
 
         let f64_expected = vec!["0.0", "255.0"];
@@ -4055,15 +4321,15 @@ mod tests {
     #[test]
     fn test_cast_from_int64() {
         let i64_values: Vec<i64> = vec![
-            std::i64::MIN,
-            std::i32::MIN as i64,
-            std::i16::MIN as i64,
-            std::i8::MIN as i64,
+            i64::MIN,
+            i32::MIN as i64,
+            i16::MIN as i64,
+            i8::MIN as i64,
             0,
-            std::i8::MAX as i64,
-            std::i16::MAX as i64,
-            std::i32::MAX as i64,
-            std::i64::MAX,
+            i8::MAX as i64,
+            i16::MAX as i64,
+            i32::MAX as i64,
+            i64::MAX,
         ];
         let i64_array: ArrayRef = Arc::new(Int64Array::from(i64_values));
 
@@ -4210,13 +4476,13 @@ mod tests {
     #[test]
     fn test_cast_from_int32() {
         let i32_values: Vec<i32> = vec![
-            std::i32::MIN as i32,
-            std::i16::MIN as i32,
-            std::i8::MIN as i32,
+            i32::MIN as i32,
+            i16::MIN as i32,
+            i8::MIN as i32,
             0,
-            std::i8::MAX as i32,
-            std::i16::MAX as i32,
-            std::i32::MAX as i32,
+            i8::MAX as i32,
+            i16::MAX as i32,
+            i32::MAX as i32,
         ];
         let i32_array: ArrayRef = Arc::new(Int32Array::from(i32_values));
 
@@ -4304,13 +4570,8 @@ mod tests {
 
     #[test]
     fn test_cast_from_int16() {
-        let i16_values: Vec<i16> = vec![
-            std::i16::MIN,
-            std::i8::MIN as i16,
-            0,
-            std::i8::MAX as i16,
-            std::i16::MAX,
-        ];
+        let i16_values: Vec<i16> =
+            vec![i16::MIN, i8::MIN as i16, 0, i8::MAX as i16, i16::MAX];
         let i16_array: ArrayRef = Arc::new(Int16Array::from(i16_values));
 
         let f64_expected = vec!["-32768.0", "-128.0", "0.0", "127.0", "32767.0"];
@@ -4377,13 +4638,13 @@ mod tests {
     #[test]
     fn test_cast_from_date32() {
         let i32_values: Vec<i32> = vec![
-            std::i32::MIN as i32,
-            std::i16::MIN as i32,
-            std::i8::MIN as i32,
+            i32::MIN as i32,
+            i16::MIN as i32,
+            i8::MIN as i32,
             0,
-            std::i8::MAX as i32,
-            std::i16::MAX as i32,
-            std::i32::MAX as i32,
+            i8::MAX as i32,
+            i16::MAX as i32,
+            i32::MAX as i32,
         ];
         let date32_array: ArrayRef = Arc::new(Date32Array::from(i32_values));
 
@@ -4404,7 +4665,7 @@ mod tests {
 
     #[test]
     fn test_cast_from_int8() {
-        let i8_values: Vec<i8> = vec![std::i8::MIN, 0, std::i8::MAX];
+        let i8_values: Vec<i8> = vec![i8::MIN, 0, i8::MAX];
         let i8_array: ArrayRef = Arc::new(Int8Array::from(i8_values));
 
         let f64_expected = vec!["-128.0", "0.0", "127.0"];
@@ -5019,7 +5280,8 @@ mod tests {
             Arc::new(DurationMicrosecondArray::from(vec![1000, 2000])),
             Arc::new(DurationNanosecondArray::from(vec![1000, 2000])),
             Arc::new(
-                create_decimal_array(&[Some(1), Some(2), Some(3), None], 38, 0).unwrap(),
+                create_decimal_array(vec![Some(1), Some(2), Some(3), None], 38, 0)
+                    .unwrap(),
             ),
         ]
     }

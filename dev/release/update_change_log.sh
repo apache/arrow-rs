@@ -29,8 +29,8 @@
 
 set -e
 
-SINCE_TAG="19.0.0"
-FUTURE_RELEASE="20.0.0"
+SINCE_TAG="20.0.0"
+FUTURE_RELEASE="21.0.0"
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
@@ -40,6 +40,8 @@ OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG.md"
 # remove license header so github-changelog-generator has a clean base to append
 sed -i.bak '1,18d' "${OUTPUT_PATH}"
 
+# use exclude-tags-regex to filter out tags used for object_store
+# crates and only only look at tags that DO NOT begin with `object_store_`
 pushd "${SOURCE_TOP_DIR}"
 docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$CHANGELOG_GITHUB_TOKEN" -v "$(pwd)":/usr/local/src/your-app githubchangeloggenerator/github-changelog-generator \
     --user apache \
@@ -48,6 +50,7 @@ docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$CHANGELOG_GITHUB_TOKEN" -v "$(pw
     --cache-log=.githubchangeloggenerator.cache.log \
     --http-cache \
     --max-issues=300 \
+    --exclude-tags-regex "^object_store_\d+\.\d+\.\d+$" \
     --since-tag ${SINCE_TAG} \
     --future-release ${FUTURE_RELEASE}
 

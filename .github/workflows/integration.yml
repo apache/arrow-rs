@@ -34,26 +34,74 @@ jobs:
   integration:
     name: Archery test With other arrows
     runs-on: ubuntu-latest
+    container:
+      image: apache/arrow-dev:amd64-conda-integration
+    env:
+      ARROW_USE_CCACHE: OFF
+      ARROW_CPP_EXE_PATH: /build/cpp/debug
+      BUILD_DOCS_CPP: OFF
+      # These are necessary because the github runner overrides $HOME
+      # https://github.com/actions/runner/issues/863
+      RUSTUP_HOME: /root/.rustup
+      CARGO_HOME: /root/.cargo
+    defaults:
+      run:
+        shell: bash
     steps:
+      # This is necessary so that actions/checkout can find git
+      - name: Export conda path
+        run: echo "/opt/conda/envs/arrow/bin" >> $GITHUB_PATH
+      # This is necessary so that Rust can find cargo
+      - name: Export cargo path
+        run: echo "/root/.cargo/bin" >> $GITHUB_PATH
+      - name: Check rustup
+        run: which rustup
+      - name: Check cmake
+        run: which cmake
       - name: Checkout Arrow
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: apache/arrow
           submodules: true
           fetch-depth: 0
       - name: Checkout Arrow Rust
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           path: rust
           fetch-depth: 0
-      - name: Setup Python
-        uses: actions/setup-python@v3
-        with:
-          python-version: 3.8
-      - name: Setup Archery
-        run: pip install -e dev/archery[docker]
-      - name: Execute Docker Build
-        run: archery docker run -e ARCHERY_INTEGRATION_WITH_RUST=1 conda-integration
+      - name: Make build directory
+        run: mkdir /build
+      - name: Build Rust
+        run: conda run --no-capture-output ci/scripts/rust_build.sh $PWD /build
+      - name: Build C++
+        run: conda run --no-capture-output ci/scripts/cpp_build.sh $PWD /build
+      - name: Build C#
+        run: conda run --no-capture-output ci/scripts/csharp_build.sh $PWD /build
+      - name: Build Go
+        run: conda run --no-capture-output ci/scripts/go_build.sh $PWD
+      - name: Build Java
+        run: conda run --no-capture-output ci/scripts/java_build.sh $PWD /build
+      # Temporarily disable JS https://issues.apache.org/jira/browse/ARROW-17410
+      # - name: Build JS
+      #   run: conda run --no-capture-output ci/scripts/js_build.sh $PWD /build
+      - name: Install archery
+        run: conda run --no-capture-output pip install -e dev/archery
+      - name: Run integration tests
+        run: |
+          conda run --no-capture-output archery integration \
+            --run-flight \
+            --with-cpp=1 \
+            --with-csharp=1 \
+            --with-java=1 \
+            --with-js=0 \
+            --with-go=1 \
+            --with-rust=1 \
+            --gold-dirs=testing/data/arrow-ipc-stream/integration/0.14.1 \
+            --gold-dirs=testing/data/arrow-ipc-stream/integration/0.17.1 \
+            --gold-dirs=testing/data/arrow-ipc-stream/integration/1.0.0-bigendian \
+            --gold-dirs=testing/data/arrow-ipc-stream/integration/1.0.0-littleendian \
+            --gold-dirs=testing/data/arrow-ipc-stream/integration/2.0.0-compression \
+            --gold-dirs=testing/data/arrow-ipc-stream/integration/4.0.0-shareddict
 
   # test FFI against the C-Data interface exposed by pyarrow
   pyarrow-integration-test:
@@ -61,9 +109,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        rust: [stable]
+        rust: [ stable ]
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -82,7 +130,7 @@ jobs:
           path: /home/runner/target
           # this key is not equal because maturin uses different compilation flags.
           key: ${{ runner.os }}-${{ matrix.arch }}-target-maturin-cache-${{ matrix.rust }}-
-      - uses: actions/setup-python@v3
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.7'
       - name: Upgrade pip and setuptools

@@ -17,6 +17,10 @@
 
 use super::{ArrowPrimitiveType, DataType, IntervalUnit, TimeUnit};
 use crate::datatypes::delta::shift_months;
+use crate::datatypes::{
+    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
+    DECIMAL256_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
+};
 use chrono::{Duration, NaiveDate};
 use half::f16;
 use std::ops::{Add, Sub};
@@ -453,6 +457,74 @@ impl Date64Type {
         let res = res.add(Duration::nanoseconds(nanos));
         Date64Type::from_naive_date(res)
     }
+}
+
+mod private {
+    use super::*;
+
+    pub trait DecimalTypeSealed {}
+    impl DecimalTypeSealed for Decimal128Type {}
+    impl DecimalTypeSealed for Decimal256Type {}
+}
+
+/// Trait representing the in-memory layout of a decimal type
+pub trait NativeDecimalType: Send + Sync + Copy + AsRef<[u8]> {
+    fn from_slice(slice: &[u8]) -> Self;
+}
+
+impl<const N: usize> NativeDecimalType for [u8; N] {
+    fn from_slice(slice: &[u8]) -> Self {
+        slice.try_into().unwrap()
+    }
+}
+
+/// A trait over the decimal types, used by [`DecimalArray`] to provide a generic
+/// implementation across the various decimal types
+///
+/// Implemented by [`Decimal128Type`] and [`Decimal256Type`] for [`Decimal128Array`]
+/// and [`Decimal256Array`] respectively
+///
+/// [`DecimalArray`]: [crate::array::DecimalArray]
+/// [`Decimal128Array`]: [crate::array::Decimal128Array]
+/// [`Decimal256Array`]: [crate::array::Decimal256Array]
+pub trait DecimalType: 'static + Send + Sync + private::DecimalTypeSealed {
+    type Native: NativeDecimalType;
+
+    const BYTE_LENGTH: usize;
+    const MAX_PRECISION: usize;
+    const MAX_SCALE: usize;
+    const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType;
+    const DEFAULT_TYPE: DataType;
+}
+
+/// The decimal type for a Decimal128Array
+#[derive(Debug)]
+pub struct Decimal128Type {}
+
+impl DecimalType for Decimal128Type {
+    type Native = [u8; 16];
+
+    const BYTE_LENGTH: usize = 16;
+    const MAX_PRECISION: usize = DECIMAL128_MAX_PRECISION;
+    const MAX_SCALE: usize = DECIMAL128_MAX_SCALE;
+    const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType = DataType::Decimal128;
+    const DEFAULT_TYPE: DataType =
+        DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
+}
+
+/// The decimal type for a Decimal256Array
+#[derive(Debug)]
+pub struct Decimal256Type {}
+
+impl DecimalType for Decimal256Type {
+    type Native = [u8; 32];
+
+    const BYTE_LENGTH: usize = 32;
+    const MAX_PRECISION: usize = DECIMAL256_MAX_PRECISION;
+    const MAX_SCALE: usize = DECIMAL256_MAX_SCALE;
+    const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType = DataType::Decimal256;
+    const DEFAULT_TYPE: DataType =
+        DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
 }
 
 #[cfg(test)]

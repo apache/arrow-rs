@@ -17,7 +17,6 @@
 
 //! Defines sort kernel for `ArrayRef`
 
-use crate::array::BasicDecimalArray;
 use crate::array::*;
 use crate::buffer::MutableBuffer;
 use crate::compute::take;
@@ -1063,8 +1062,8 @@ mod tests {
     use std::convert::TryFrom;
     use std::sync::Arc;
 
-    fn create_decimal_array(data: &[Option<i128>]) -> Decimal128Array {
-        data.iter()
+    fn create_decimal_array(data: Vec<Option<i128>>) -> Decimal128Array {
+        data.into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap()
@@ -1076,7 +1075,7 @@ mod tests {
         limit: Option<usize>,
         expected_data: Vec<u32>,
     ) {
-        let output = create_decimal_array(&data);
+        let output = create_decimal_array(data);
         let expected = UInt32Array::from(expected_data);
         let output =
             sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
@@ -1089,8 +1088,8 @@ mod tests {
         limit: Option<usize>,
         expected_data: Vec<Option<i128>>,
     ) {
-        let output = create_decimal_array(&data);
-        let expected = Arc::new(create_decimal_array(&expected_data)) as ArrayRef;
+        let output = create_decimal_array(data);
+        let expected = Arc::new(create_decimal_array(expected_data)) as ArrayRef;
         let output = match limit {
             Some(_) => {
                 sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap()

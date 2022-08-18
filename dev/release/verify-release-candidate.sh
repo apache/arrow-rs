@@ -72,24 +72,6 @@ fetch_archive() {
   ${sha512_verify} ${dist_name}.tar.gz.sha512
 }
 
-verify_dir_artifact_signatures() {
-  # verify the signature and the checksums of each artifact
-  find $1 -name '*.asc' | while read sigfile; do
-    artifact=${sigfile/.asc/}
-    gpg --verify $sigfile $artifact || exit 1
-
-    # go into the directory because the checksum files contain only the
-    # basename of the artifact
-    pushd $(dirname $artifact)
-    base_artifact=$(basename $artifact)
-    if [ -f $base_artifact.sha256 ]; then
-      ${sha256_verify} $base_artifact.sha256 || exit 1
-    fi
-    ${sha512_verify} $base_artifact.sha512 || exit 1
-    popd
-  done
-}
-
 setup_tempdir() {
   cleanup() {
     if [ "${TEST_SUCCESS}" = "yes" ]; then

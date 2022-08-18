@@ -22,9 +22,11 @@ extern crate rand;
 use std::mem::size_of;
 
 use criterion::*;
+use num::BigInt;
 use rand::distributions::Standard;
 
 use arrow::array::*;
+use arrow::util::decimal::Decimal256;
 use arrow::util::test_util::seedable_rng;
 use rand::Rng;
 
@@ -106,11 +108,45 @@ fn bench_string(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_decimal128(c: &mut Criterion) {
+    c.bench_function("bench_decimal128_builder", |b| {
+        b.iter(|| {
+            let mut rng = rand::thread_rng();
+            let mut decimal_builder = Decimal128Builder::new(BATCH_SIZE, 38, 0);
+            for _ in 0..BATCH_SIZE {
+                decimal_builder
+                    .append_value(rng.gen_range::<i128, _>(0..9999999999))
+                    .unwrap();
+            }
+            black_box(decimal_builder.finish());
+        })
+    });
+}
+
+fn bench_decimal256(c: &mut Criterion) {
+    c.bench_function("bench_decimal128_builder", |b| {
+        b.iter(|| {
+            let mut rng = rand::thread_rng();
+            let mut decimal_builder = Decimal256Builder::new(BATCH_SIZE, 76, 10);
+            for _ in 0..BATCH_SIZE {
+                decimal_builder
+                    .append_value(&Decimal256::from(BigInt::from(
+                        rng.gen_range::<i128, _>(0..99999999999),
+                    )))
+                    .unwrap()
+            }
+            black_box(decimal_builder.finish());
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_primitive,
     bench_primitive_nulls,
     bench_bool,
-    bench_string
+    bench_string,
+    bench_decimal128,
+    bench_decimal256,
 );
 criterion_main!(benches);

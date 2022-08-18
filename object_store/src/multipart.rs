@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use futures::{future::BoxFuture, stream::FuturesUnordered, Future, StreamExt};
+use async_trait::async_trait;
+use futures::{stream::FuturesUnordered, Future, StreamExt};
 use std::{io, pin::Pin, sync::Arc, task::Poll};
 use tokio::io::AsyncWrite;
 
@@ -26,23 +27,19 @@ type BoxedTryFuture<T> = Pin<Box<dyn Future<Output = Result<T, io::Error>> + Sen
 /// A trait that can be implemented by cloud-based object stores
 /// and used in combination with [`CloudMultiPartUpload`] to provide
 /// multipart upload support
-///
-/// Note: this does not use AsyncTrait as the lifetimes are difficult to manage
-pub(crate) trait CloudMultiPartUploadImpl {
+#[async_trait]
+pub(crate) trait CloudMultiPartUploadImpl: 'static {
     /// Upload a single part
-    fn put_multipart_part(
+    async fn put_multipart_part(
         &self,
         buf: Vec<u8>,
         part_idx: usize,
-    ) -> BoxFuture<'static, Result<(usize, UploadPart), io::Error>>;
+    ) -> Result<UploadPart, io::Error>;
 
     /// Complete the upload with the provided parts
     ///
     /// `completed_parts` is in order of part number
-    fn complete(
-        &self,
-        completed_parts: Vec<Option<UploadPart>>,
-    ) -> BoxFuture<'static, Result<(), io::Error>>;
+    async fn complete(&self, completed_parts: Vec<UploadPart>) -> Result<(), io::Error>;
 }
 
 #[derive(Debug, Clone)]
@@ -128,10 +125,12 @@ where
             self.current_buffer.extend_from_slice(buf);
 
             let out_buffer = std::mem::take(&mut self.current_buffer);
-            let task = self
-                .inner
-                .put_multipart_part(out_buffer, self.current_part_idx);
-            self.tasks.push(task);
+            let inner = Arc::clone(&self.inner);
+            let part_idx = self.current_part_idx;
+            self.tasks.push(Box::pin(async move {
+                let upload_part = inner.put_multipart_part(out_buffer, part_idx).await?;
+                Ok((part_idx, upload_part))
+            }));
             self.current_part_idx += 1;
 
             // We need to poll immediately after adding to setup waker
@@ -157,10 +156,12 @@ where
         // If current_buffer is not empty, see if it can be submitted
         if !self.current_buffer.is_empty() && self.tasks.len() < self.max_concurrency {
             let out_buffer: Vec<u8> = std::mem::take(&mut self.current_buffer);
-            let task = self
-                .inner
-                .put_multipart_part(out_buffer, self.current_part_idx);
-            self.tasks.push(task);
+            let inner = Arc::clone(&self.inner);
+            let part_idx = self.current_part_idx;
+            self.tasks.push(Box::pin(async move {
+                let upload_part = inner.put_multipart_part(out_buffer, part_idx).await?;
+                Ok((part_idx, upload_part))
+            }));
         }
 
         self.as_mut().poll_tasks(cx)?;
@@ -185,10 +186,26 @@ where
 
         // If shutdown task is not set, set it
         let parts = std::mem::take(&mut self.completed_parts);
+        let parts = parts
+            .into_iter()
+            .enumerate()
+            .map(|(idx, part)| {
+                part.ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Missing information for upload part {}", idx),
+                    )
+                })
+            })
+            .collect::<Result<_, _>>()?;
+
         let inner = Arc::clone(&self.inner);
-        let completion_task = self
-            .completion_task
-            .get_or_insert_with(|| inner.complete(parts));
+        let completion_task = self.completion_task.get_or_insert_with(|| {
+            Box::pin(async move {
+                inner.complete(parts).await?;
+                Ok(())
+            })
+        });
 
         Pin::new(completion_task).poll(cx)
     }

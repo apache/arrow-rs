@@ -18,6 +18,7 @@
 //! Contains file reader API and provides methods to access file metadata, row group
 //! readers to read individual column chunks, or access record iterator.
 
+use bytes::Bytes;
 use std::{boxed::Box, io::Read, sync::Arc};
 
 use crate::column::page::PageIterator;
@@ -45,9 +46,25 @@ pub trait Length {
 /// For an object store reader, each read can be mapped to a range request.
 pub trait ChunkReader: Length + Send + Sync {
     type T: Read + Send;
-    /// get a serialy readeable slice of the current reader
+    /// Get a serially readable slice of the current reader
     /// This should fail if the slice exceeds the current bounds
     fn get_read(&self, start: u64, length: usize) -> Result<Self::T>;
+
+    /// Get a range as bytes
+    /// This should fail if the exact number of bytes cannot be read
+    fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
+        let mut buffer = Vec::with_capacity(length);
+        let read = self.get_read(start, length)?.read_to_end(&mut buffer)?;
+
+        if read != length {
+            return Err(eof_err!(
+                "Expected to read {} bytes, read only {}",
+                length,
+                read
+            ));
+        }
+        Ok(buffer.into())
+    }
 }
 
 // ----------------------------------------------------------------------

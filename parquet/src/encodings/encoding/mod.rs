@@ -24,7 +24,6 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
-use crate::schema::types::ColumnDescPtr;
 use crate::util::{
     bit_util::{self, num_required_bits, BitWriter},
     memory::ByteBufferPtr,
@@ -76,12 +75,9 @@ pub trait Encoder<T: DataType> {
 
 /// Gets a encoder for the particular data type `T` and encoding `encoding`. Memory usage
 /// for the encoder instance is tracked by `mem_tracker`.
-pub fn get_encoder<T: DataType>(
-    desc: ColumnDescPtr,
-    encoding: Encoding,
-) -> Result<Box<dyn Encoder<T>>> {
+pub fn get_encoder<T: DataType>(encoding: Encoding) -> Result<Box<dyn Encoder<T>>> {
     let encoder: Box<dyn Encoder<T>> = match encoding {
-        Encoding::PLAIN => Box::new(PlainEncoder::new(desc, vec![])),
+        Encoding::PLAIN => Box::new(PlainEncoder::new()),
         Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
             return Err(general_err!(
                 "Cannot initialize this encoding through this function"
@@ -113,17 +109,21 @@ pub fn get_encoder<T: DataType>(
 pub struct PlainEncoder<T: DataType> {
     buffer: Vec<u8>,
     bit_writer: BitWriter,
-    desc: ColumnDescPtr,
     _phantom: PhantomData<T>,
+}
+
+impl<T: DataType> Default for PlainEncoder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T: DataType> PlainEncoder<T> {
     /// Creates new plain encoder.
-    pub fn new(desc: ColumnDescPtr, buffer: Vec<u8>) -> Self {
+    pub fn new() -> Self {
         Self {
-            buffer,
+            buffer: vec![],
             bit_writer: BitWriter::new(256),
-            desc,
             _phantom: PhantomData,
         }
     }
@@ -169,6 +169,12 @@ pub struct RleValueEncoder<T: DataType> {
     // when flushing buffer they are encoded using RLE encoder
     encoder: Option<RleEncoder>,
     _phantom: PhantomData<T>,
+}
+
+impl<T: DataType> Default for RleValueEncoder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T: DataType> RleValueEncoder<T> {
@@ -278,6 +284,12 @@ pub struct DeltaBitPackEncoder<T: DataType> {
     values_in_block: usize,
     deltas: Vec<i64>,
     _phantom: PhantomData<T>,
+}
+
+impl<T: DataType> Default for DeltaBitPackEncoder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T: DataType> DeltaBitPackEncoder<T> {
@@ -531,6 +543,12 @@ pub struct DeltaLengthByteArrayEncoder<T: DataType> {
     _phantom: PhantomData<T>,
 }
 
+impl<T: DataType> Default for DeltaLengthByteArrayEncoder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: DataType> DeltaLengthByteArrayEncoder<T> {
     /// Creates new delta length byte array encoder.
     pub fn new() -> Self {
@@ -608,6 +626,12 @@ pub struct DeltaByteArrayEncoder<T: DataType> {
     suffix_writer: DeltaLengthByteArrayEncoder<ByteArrayType>,
     previous: Vec<u8>,
     _phantom: PhantomData<T>,
+}
+
+impl<T: DataType> Default for DeltaByteArrayEncoder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T: DataType> DeltaByteArrayEncoder<T> {
@@ -705,7 +729,7 @@ mod tests {
     use crate::schema::types::{
         ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType,
     };
-    use crate::util::test_common::{random_bytes, RandGen};
+    use crate::util::test_common::rand_gen::{random_bytes, RandGen};
 
     const TEST_SET_SIZE: usize = 1024;
 
@@ -819,7 +843,7 @@ mod tests {
         run_test::<Int96Type>(
             -1,
             &[Int96::from(vec![1, 2, 3]), Int96::from(vec![2, 3, 4])],
-            32,
+            24,
         );
         run_test::<ByteArrayType>(
             -1,
@@ -847,7 +871,7 @@ mod tests {
                 Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY => {
                     Box::new(create_test_dict_encoder::<T>(type_length))
                 }
-                _ => create_test_encoder::<T>(type_length, encoding),
+                _ => create_test_encoder::<T>(encoding),
             };
             assert_eq!(encoder.estimated_data_encoded_size(), initial_size);
 
@@ -900,7 +924,7 @@ mod tests {
     #[test]
     fn test_issue_47() {
         let mut encoder =
-            create_test_encoder::<ByteArrayType>(0, Encoding::DELTA_BYTE_ARRAY);
+            create_test_encoder::<ByteArrayType>(Encoding::DELTA_BYTE_ARRAY);
         let mut decoder =
             create_test_decoder::<ByteArrayType>(0, Encoding::DELTA_BYTE_ARRAY);
 
@@ -952,7 +976,7 @@ mod tests {
 
     impl<T: DataType + RandGen<T>> EncodingTester<T> for T {
         fn test_internal(enc: Encoding, total: usize, type_length: i32) -> Result<()> {
-            let mut encoder = create_test_encoder::<T>(type_length, enc);
+            let mut encoder = create_test_encoder::<T>(enc);
             let mut decoder = create_test_decoder::<T>(type_length, enc);
             let mut values = <T as RandGen<T>>::gen_vec(type_length, total);
             let mut result_data = vec![T::T::default(); total];
@@ -1054,8 +1078,7 @@ mod tests {
         encoding: Encoding,
         err: Option<ParquetError>,
     ) {
-        let descr = create_test_col_desc_ptr(-1, T::get_physical_type());
-        let encoder = get_encoder::<T>(descr, encoding);
+        let encoder = get_encoder::<T>(encoding);
         match err {
             Some(parquet_error) => {
                 assert!(encoder.is_err());
@@ -1082,12 +1105,8 @@ mod tests {
         ))
     }
 
-    fn create_test_encoder<T: DataType>(
-        type_len: i32,
-        enc: Encoding,
-    ) -> Box<dyn Encoder<T>> {
-        let desc = create_test_col_desc_ptr(type_len, T::get_physical_type());
-        get_encoder(desc, enc).unwrap()
+    fn create_test_encoder<T: DataType>(enc: Encoding) -> Box<dyn Encoder<T>> {
+        get_encoder(enc).unwrap()
     }
 
     fn create_test_decoder<T: DataType>(

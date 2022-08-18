@@ -670,8 +670,6 @@ mod tests {
     use std::{convert::TryFrom, sync::Arc};
 
     use super::*;
-
-    use crate::array::BasicDecimalArray;
     use crate::array::Decimal128Array;
     use crate::{
         array::{
@@ -689,12 +687,12 @@ mod tests {
     };
 
     fn create_decimal_array(
-        array: &[Option<i128>],
+        array: Vec<Option<i128>>,
         precision: usize,
         scale: usize,
     ) -> Decimal128Array {
         array
-            .iter()
+            .into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(precision, scale)
             .unwrap()
@@ -704,28 +702,28 @@ mod tests {
     #[cfg(not(feature = "force_validate"))]
     fn test_decimal() {
         let decimal_array =
-            create_decimal_array(&[Some(1), Some(2), None, Some(3)], 10, 3);
+            create_decimal_array(vec![Some(1), Some(2), None, Some(3)], 10, 3);
         let arrays = vec![Array::data(&decimal_array)];
         let mut a = MutableArrayData::new(arrays, true, 3);
         a.extend(0, 0, 3);
         a.extend(0, 2, 3);
         let result = a.freeze();
         let array = Decimal128Array::from(result);
-        let expected = create_decimal_array(&[Some(1), Some(2), None, None], 10, 3);
+        let expected = create_decimal_array(vec![Some(1), Some(2), None, None], 10, 3);
         assert_eq!(array, expected);
     }
     #[test]
     #[cfg(not(feature = "force_validate"))]
     fn test_decimal_offset() {
         let decimal_array =
-            create_decimal_array(&[Some(1), Some(2), None, Some(3)], 10, 3);
+            create_decimal_array(vec![Some(1), Some(2), None, Some(3)], 10, 3);
         let decimal_array = decimal_array.slice(1, 3); // 2, null, 3
         let arrays = vec![decimal_array.data()];
         let mut a = MutableArrayData::new(arrays, true, 2);
         a.extend(0, 0, 2); // 2, null
         let result = a.freeze();
         let array = Decimal128Array::from(result);
-        let expected = create_decimal_array(&[Some(2), None], 10, 3);
+        let expected = create_decimal_array(vec![Some(2), None], 10, 3);
         assert_eq!(array, expected);
     }
 
@@ -733,7 +731,7 @@ mod tests {
     #[cfg(not(feature = "force_validate"))]
     fn test_decimal_null_offset_nulls() {
         let decimal_array =
-            create_decimal_array(&[Some(1), Some(2), None, Some(3)], 10, 3);
+            create_decimal_array(vec![Some(1), Some(2), None, Some(3)], 10, 3);
         let decimal_array = decimal_array.slice(1, 3); // 2, null, 3
         let arrays = vec![decimal_array.data()];
         let mut a = MutableArrayData::new(arrays, true, 2);
@@ -743,7 +741,7 @@ mod tests {
         let result = a.freeze();
         let array = Decimal128Array::from(result);
         let expected = create_decimal_array(
-            &[Some(2), None, None, None, None, None, Some(3)],
+            vec![Some(2), None, None, None, None, None, Some(3)],
             10,
             3,
         );

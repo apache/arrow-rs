@@ -20,13 +20,14 @@
 
 use std::{io::Write, sync::Arc};
 
-use byteorder::{ByteOrder, LittleEndian};
 use parquet_format as parquet;
 use parquet_format::{ColumnIndex, OffsetIndex, RowGroup};
 use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol};
 
 use crate::basic::PageType;
-use crate::column::writer::{get_typed_column_writer_mut, ColumnWriterImpl};
+use crate::column::writer::{
+    get_typed_column_writer_mut, ColumnCloseResult, ColumnWriterImpl,
+};
 use crate::column::{
     page::{CompressedPage, Page, PageWriteSpec, PageWriter},
     writer::{get_column_writer, ColumnWriter},
@@ -35,12 +36,11 @@ use crate::data_type::DataType;
 use crate::errors::{ParquetError, Result};
 use crate::file::{
     metadata::*, properties::WriterPropertiesPtr,
-    statistics::to_thrift as statistics_to_thrift, FOOTER_SIZE, PARQUET_MAGIC,
+    statistics::to_thrift as statistics_to_thrift, PARQUET_MAGIC,
 };
 use crate::schema::types::{
     self, ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr,
 };
-use crate::util::io::TryClone;
 
 /// A wrapper around a [`Write`] that keeps track of the number
 /// of bytes that have been written
@@ -62,6 +62,11 @@ impl<W: Write> TrackedWrite<W> {
     pub fn bytes_written(&self) -> usize {
         self.bytes_written
     }
+
+    /// Returns the underlying writer.
+    pub fn into_inner(self) -> W {
+        self.inner
+    }
 }
 
 impl<W: Write> Write for TrackedWrite<W> {
@@ -76,24 +81,8 @@ impl<W: Write> Write for TrackedWrite<W> {
     }
 }
 
-/// Callback invoked on closing a column chunk, arguments are:
-///
-/// - the number of bytes written
-/// - the number of rows written
-/// - the column chunk metadata
-/// - the column index
-/// - the offset index
-///
-pub type OnCloseColumnChunk<'a> = Box<
-    dyn FnOnce(
-            u64,
-            u64,
-            ColumnChunkMetaData,
-            Option<ColumnIndex>,
-            Option<OffsetIndex>,
-        ) -> Result<()>
-        + 'a,
->;
+/// Callback invoked on closing a column chunk
+pub type OnCloseColumnChunk<'a> = Box<dyn FnOnce(ColumnCloseResult) -> Result<()> + 'a>;
 
 /// Callback invoked on closing a row group, arguments are:
 ///
@@ -108,11 +97,6 @@ pub type OnCloseRowGroup<'a> = Box<
         ) -> Result<()>
         + 'a,
 >;
-
-#[deprecated = "use std::io::Write"]
-pub trait ParquetWriter: Write + std::io::Seek + TryClone {}
-#[allow(deprecated)]
-impl<T: Write + std::io::Seek + TryClone> ParquetWriter for T {}
 
 // ----------------------------------------------------------------------
 // Serialized impl for file & row group writers
@@ -298,11 +282,10 @@ impl<W: Write> SerializedFileWriter<W> {
         let end_pos = self.buf.bytes_written();
 
         // Write footer
-        let mut footer_buffer: [u8; FOOTER_SIZE] = [0; FOOTER_SIZE];
         let metadata_len = (end_pos - start_pos) as i32;
-        LittleEndian::write_i32(&mut footer_buffer, metadata_len);
-        (&mut footer_buffer[4..]).write_all(&PARQUET_MAGIC)?;
-        self.buf.write_all(&footer_buffer)?;
+
+        self.buf.write_all(&metadata_len.to_le_bytes())?;
+        self.buf.write_all(&PARQUET_MAGIC)?;
         Ok(file_metadata)
     }
 
@@ -313,6 +296,14 @@ impl<W: Write> SerializedFileWriter<W> {
         } else {
             Ok(())
         }
+    }
+
+    /// Writes the file footer and returns the underlying writer.
+    pub fn into_inner(mut self) -> Result<W> {
+        self.assert_previous_writer_closed()?;
+        let _ = self.write_metadata()?;
+
+        Ok(self.buf.into_inner())
     }
 }
 
@@ -396,28 +387,27 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
         let column_indexes = &mut self.column_indexes;
         let offset_indexes = &mut self.offset_indexes;
 
-        let on_close =
-            |bytes_written, rows_written, metadata, column_index, offset_index| {
-                // Update row group writer metrics
-                *total_bytes_written += bytes_written;
-                column_chunks.push(metadata);
-                column_indexes.push(column_index);
-                offset_indexes.push(offset_index);
+        let on_close = |r: ColumnCloseResult| {
+            // Update row group writer metrics
+            *total_bytes_written += r.bytes_written;
+            column_chunks.push(r.metadata);
+            column_indexes.push(r.column_index);
+            offset_indexes.push(r.offset_index);
 
-                if let Some(rows) = *total_rows_written {
-                    if rows != rows_written {
-                        return Err(general_err!(
-                            "Incorrect number of rows, expected {} != {} rows",
-                            rows,
-                            rows_written
-                        ));
-                    }
-                } else {
-                    *total_rows_written = Some(rows_written);
+            if let Some(rows) = *total_rows_written {
+                if rows != r.rows_written {
+                    return Err(general_err!(
+                        "Incorrect number of rows, expected {} != {} rows",
+                        rows,
+                        r.rows_written
+                    ));
                 }
+            } else {
+                *total_rows_written = Some(r.rows_written);
+            }
 
-                Ok(())
-            };
+            Ok(())
+        };
 
         let column = self.descr.column(self.column_index);
         self.column_index += 1;
@@ -510,26 +500,19 @@ impl<'a> SerializedColumnWriter<'a> {
 
     /// Close this [`SerializedColumnWriter]
     pub fn close(mut self) -> Result<()> {
-        let (bytes_written, rows_written, metadata, column_index, offset_index) =
-            match self.inner {
-                ColumnWriter::BoolColumnWriter(typed) => typed.close()?,
-                ColumnWriter::Int32ColumnWriter(typed) => typed.close()?,
-                ColumnWriter::Int64ColumnWriter(typed) => typed.close()?,
-                ColumnWriter::Int96ColumnWriter(typed) => typed.close()?,
-                ColumnWriter::FloatColumnWriter(typed) => typed.close()?,
-                ColumnWriter::DoubleColumnWriter(typed) => typed.close()?,
-                ColumnWriter::ByteArrayColumnWriter(typed) => typed.close()?,
-                ColumnWriter::FixedLenByteArrayColumnWriter(typed) => typed.close()?,
-            };
+        let r = match self.inner {
+            ColumnWriter::BoolColumnWriter(typed) => typed.close()?,
+            ColumnWriter::Int32ColumnWriter(typed) => typed.close()?,
+            ColumnWriter::Int64ColumnWriter(typed) => typed.close()?,
+            ColumnWriter::Int96ColumnWriter(typed) => typed.close()?,
+            ColumnWriter::FloatColumnWriter(typed) => typed.close()?,
+            ColumnWriter::DoubleColumnWriter(typed) => typed.close()?,
+            ColumnWriter::ByteArrayColumnWriter(typed) => typed.close()?,
+            ColumnWriter::FixedLenByteArrayColumnWriter(typed) => typed.close()?,
+        };
 
         if let Some(on_close) = self.on_close.take() {
-            on_close(
-                bytes_written,
-                rows_written,
-                metadata,
-                column_index,
-                offset_index,
-            )?
+            on_close(r)?
         }
 
         Ok(())
@@ -669,7 +652,7 @@ mod tests {
     use super::*;
 
     use bytes::Bytes;
-    use std::{fs::File, io::Cursor};
+    use std::fs::File;
 
     use crate::basic::{Compression, Encoding, LogicalType, Repetition, Type};
     use crate::column::page::PageReader;
@@ -681,6 +664,7 @@ mod tests {
         statistics::{from_thrift, to_thrift, Statistics},
     };
     use crate::record::RowAccessor;
+    use crate::schema::types::{ColumnDescriptor, ColumnPath};
     use crate::util::memory::ByteBufferPtr;
 
     #[test]
@@ -1068,11 +1052,25 @@ mod tests {
             page_writer.close().unwrap();
         }
         {
+            let reader = bytes::Bytes::from(buffer);
+
+            let t = types::Type::primitive_type_builder("t", physical_type)
+                .build()
+                .unwrap();
+
+            let desc = ColumnDescriptor::new(Arc::new(t), 0, 0, ColumnPath::new(vec![]));
+            let meta = ColumnChunkMetaData::builder(Arc::new(desc))
+                .set_compression(codec)
+                .set_total_compressed_size(reader.len() as i64)
+                .set_num_values(total_num_values)
+                .build()
+                .unwrap();
+
             let mut page_reader = SerializedPageReader::new(
-                Cursor::new(&buffer),
-                total_num_values,
-                codec,
-                physical_type,
+                Arc::new(reader),
+                &meta,
+                total_num_values as usize,
+                None,
             )
             .unwrap();
 

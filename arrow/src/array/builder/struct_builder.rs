@@ -34,7 +34,6 @@ pub struct StructBuilder {
     fields: Vec<Field>,
     field_builders: Vec<Box<dyn ArrayBuilder>>,
     null_buffer_builder: NullBufferBuilder,
-    len: usize,
 }
 
 impl fmt::Debug for StructBuilder {
@@ -42,7 +41,7 @@ impl fmt::Debug for StructBuilder {
         f.debug_struct("StructBuilder")
             .field("fields", &self.fields)
             .field("bitmap_builder", &self.null_buffer_builder)
-            .field("len", &self.len)
+            .field("len", &self.len())
             .finish()
     }
 }
@@ -54,12 +53,12 @@ impl ArrayBuilder for StructBuilder {
     /// the caller's responsibility to maintain the consistency that all the child field
     /// builder should have the equal number of elements.
     fn len(&self) -> usize {
-        self.len
+        self.null_buffer_builder.len()
     }
 
     /// Returns whether the number of array slots is zero
     fn is_empty(&self) -> bool {
-        self.len == 0
+        self.len() == 0
     }
 
     /// Builds the array.
@@ -176,7 +175,6 @@ impl StructBuilder {
             fields,
             field_builders,
             null_buffer_builder: NullBufferBuilder::new(0),
-            len: 0,
         }
     }
 
@@ -205,7 +203,6 @@ impl StructBuilder {
     #[inline]
     pub fn append(&mut self, is_valid: bool) {
         self.null_buffer_builder.append(is_valid);
-        self.len += 1;
     }
 
     /// Appends a null element to the struct.
@@ -216,22 +213,35 @@ impl StructBuilder {
 
     /// Builds the `StructArray` and reset this builder.
     pub fn finish(&mut self) -> StructArray {
+        self.validate_content();
+
         let mut child_data = Vec::with_capacity(self.field_builders.len());
         for f in &mut self.field_builders {
             let arr = f.finish();
             child_data.push(arr.into_data());
         }
-
+        let length = self.len();
         let null_bit_buffer = self.null_buffer_builder.finish();
+
         let builder = ArrayData::builder(DataType::Struct(self.fields.clone()))
-            .len(self.len)
+            .len(length)
             .child_data(child_data)
             .null_bit_buffer(null_bit_buffer);
 
-        self.len = 0;
-
         let array_data = unsafe { builder.build_unchecked() };
         StructArray::from(array_data)
+    }
+
+    /// Constructs and validates contents in the builder to ensure that
+    /// - fields and field_builders are of equal length
+    /// - the number of items in individual field_builders are equal to self.len()
+    fn validate_content(&self) {
+        if self.fields.len() != self.field_builders.len() {
+            panic!("Number of fields is not equal to the number of field_builders.");
+        }
+        if !self.field_builders.iter().all(|x| x.len() == self.len()) {
+            panic!("StructBuilder and field_builders are of unequal lengths.");
+        }
     }
 }
 
@@ -410,5 +420,45 @@ mod tests {
 
         let mut builder = StructBuilder::new(fields, field_builders);
         assert!(builder.field_builder::<BinaryBuilder>(0).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "StructBuilder and field_builders are of unequal lengths.")]
+    fn test_struct_array_builder_unequal_field_builders_lengths() {
+        let mut int_builder = Int32Builder::new(10);
+        let mut bool_builder = BooleanBuilder::new(10);
+
+        int_builder.append_value(1);
+        int_builder.append_value(2);
+        bool_builder.append_value(true);
+
+        let mut fields = Vec::new();
+        let mut field_builders = Vec::new();
+        fields.push(Field::new("f1", DataType::Int32, false));
+        field_builders.push(Box::new(int_builder) as Box<dyn ArrayBuilder>);
+        fields.push(Field::new("f2", DataType::Boolean, false));
+        field_builders.push(Box::new(bool_builder) as Box<dyn ArrayBuilder>);
+
+        let mut builder = StructBuilder::new(fields, field_builders);
+        builder.append(true);
+        builder.append(true);
+        builder.finish();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Number of fields is not equal to the number of field_builders."
+    )]
+    fn test_struct_array_builder_unequal_field_field_builders() {
+        let int_builder = Int32Builder::new(10);
+
+        let mut fields = Vec::new();
+        let mut field_builders = Vec::new();
+        fields.push(Field::new("f1", DataType::Int32, false));
+        field_builders.push(Box::new(int_builder) as Box<dyn ArrayBuilder>);
+        fields.push(Field::new("f2", DataType::Boolean, false));
+
+        let mut builder = StructBuilder::new(fields, field_builders);
+        builder.finish();
     }
 }

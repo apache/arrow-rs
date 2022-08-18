@@ -126,7 +126,6 @@ pub enum Error {
 /// Path::parse("..").unwrap_err();
 /// Path::parse("/foo//").unwrap_err();
 /// Path::parse("😀").unwrap_err();
-/// Path::parse("%Q").unwrap_err();
 /// ```
 ///
 /// [RFC 1738]: https://www.ietf.org/rfc/rfc1738.txt
@@ -163,23 +162,38 @@ impl Path {
 
     /// Convert a filesystem path to a [`Path`] relative to the filesystem root
     ///
-    /// This will return an error if the path contains illegal
-    /// character sequences as defined by [`Path::parse`]
+    /// This will return an error if the path contains illegal character sequences
+    /// as defined by [`Path::parse`] or does not exist
+    ///
+    /// Note: this will canonicalize the provided path, resolving any symlinks
     pub fn from_filesystem_path(
         path: impl AsRef<std::path::Path>,
     ) -> Result<Self, Error> {
-        Self::from_filesystem_path_with_base(path, None)
+        let absolute = std::fs::canonicalize(&path).context(CanonicalizeSnafu {
+            path: path.as_ref(),
+        })?;
+
+        Self::from_absolute_path(absolute)
+    }
+
+    /// Convert an absolute filesystem path to a [`Path`] relative to the filesystem root
+    ///
+    /// This will return an error if the path contains illegal character sequences
+    /// as defined by [`Path::parse`], or `base` is not an absolute path
+    pub fn from_absolute_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
+        Self::from_absolute_path_with_base(path, None)
     }
 
     /// Convert a filesystem path to a [`Path`] relative to the provided base
     ///
     /// This will return an error if the path contains illegal character sequences
-    /// as defined by [`Path::parse`], or `base` does not refer to a parent path of `path`
-    pub(crate) fn from_filesystem_path_with_base(
+    /// as defined by [`Path::parse`], or `base` does not refer to a parent path of `path`,
+    /// or `base` is not an absolute path
+    pub(crate) fn from_absolute_path_with_base(
         path: impl AsRef<std::path::Path>,
         base: Option<&Url>,
     ) -> Result<Self, Error> {
-        let url = filesystem_path_to_url(path)?;
+        let url = absolute_path_to_url(path)?;
         let path = match base {
             Some(prefix) => url.path().strip_prefix(prefix.path()).ok_or_else(|| {
                 Error::PrefixMismatch {
@@ -294,8 +308,8 @@ where
     }
 }
 
-/// Given a filesystem path convert it to a URL representation
-pub(crate) fn filesystem_path_to_url(
+/// Given an absolute filesystem path convert it to a URL representation without canonicalization
+pub(crate) fn absolute_path_to_url(
     path: impl AsRef<std::path::Path>,
 ) -> Result<Url, Error> {
     Url::from_file_path(&path).map_err(|_| Error::InvalidPath {

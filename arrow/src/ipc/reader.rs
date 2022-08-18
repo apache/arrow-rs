@@ -21,6 +21,7 @@
 //! however the `FileReader` expects a reader that supports `Seek`ing
 
 use std::collections::HashMap;
+use std::fmt;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
@@ -32,15 +33,35 @@ use crate::error::{ArrowError, Result};
 use crate::ipc;
 use crate::record_batch::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 
+use crate::ipc::compression::CompressionCodec;
 use ipc::CONTINUATION_MARKER;
 use DataType::*;
 
 /// Read a buffer based on offset and length
-fn read_buffer(buf: &ipc::Buffer, a_data: &[u8]) -> Buffer {
+/// From <https://github.com/apache/arrow/blob/6a936c4ff5007045e86f65f1a6b6c3c955ad5103/format/Message.fbs#L58>
+/// Each constituent buffer is first compressed with the indicated
+/// compressor, and then written with the uncompressed length in the first 8
+/// bytes as a 64-bit little-endian signed integer followed by the compressed
+/// buffer bytes (and then padding as required by the protocol). The
+/// uncompressed length may be set to -1 to indicate that the data that
+/// follows is not compressed, which can be useful for cases where
+/// compression does not yield appreciable savings.
+fn read_buffer(
+    buf: &ipc::Buffer,
+    a_data: &[u8],
+    compression_codec: &Option<CompressionCodec>,
+) -> Result<Buffer> {
     let start_offset = buf.offset() as usize;
     let end_offset = start_offset + buf.length() as usize;
     let buf_data = &a_data[start_offset..end_offset];
-    Buffer::from(&buf_data)
+    // corner case: empty buffer
+    if buf_data.is_empty() {
+        return Ok(Buffer::from(buf_data));
+    }
+    match compression_codec {
+        Some(decompressor) => decompressor.decompress_to_buffer(buf_data),
+        None => Ok(Buffer::from(buf_data)),
+    }
 }
 
 /// Coordinates reading arrays based on data types.
@@ -61,6 +82,7 @@ fn create_array(
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     mut node_index: usize,
     mut buffer_index: usize,
+    compression_codec: &Option<CompressionCodec>,
     metadata: &ipc::MetadataVersion,
 ) -> Result<(ArrayRef, usize, usize)> {
     use DataType::*;
@@ -72,8 +94,8 @@ fn create_array(
                 data_type,
                 buffers[buffer_index..buffer_index + 3]
                     .iter()
-                    .map(|buf| read_buffer(buf, data))
-                    .collect(),
+                    .map(|buf| read_buffer(buf, data, compression_codec))
+                    .collect::<Result<_>>()?,
             );
             node_index += 1;
             buffer_index += 3;
@@ -85,8 +107,8 @@ fn create_array(
                 data_type,
                 buffers[buffer_index..buffer_index + 2]
                     .iter()
-                    .map(|buf| read_buffer(buf, data))
-                    .collect(),
+                    .map(|buf| read_buffer(buf, data, compression_codec))
+                    .collect::<Result<_>>()?,
             );
             node_index += 1;
             buffer_index += 2;
@@ -96,8 +118,8 @@ fn create_array(
             let list_node = &nodes[node_index];
             let list_buffers: Vec<Buffer> = buffers[buffer_index..buffer_index + 2]
                 .iter()
-                .map(|buf| read_buffer(buf, data))
-                .collect();
+                .map(|buf| read_buffer(buf, data, compression_codec))
+                .collect::<Result<_>>()?;
             node_index += 1;
             buffer_index += 2;
             let triple = create_array(
@@ -108,6 +130,7 @@ fn create_array(
                 dictionaries_by_id,
                 node_index,
                 buffer_index,
+                compression_codec,
                 metadata,
             )?;
             node_index = triple.1;
@@ -119,8 +142,8 @@ fn create_array(
             let list_node = &nodes[node_index];
             let list_buffers: Vec<Buffer> = buffers[buffer_index..=buffer_index]
                 .iter()
-                .map(|buf| read_buffer(buf, data))
-                .collect();
+                .map(|buf| read_buffer(buf, data, compression_codec))
+                .collect::<Result<_>>()?;
             node_index += 1;
             buffer_index += 1;
             let triple = create_array(
@@ -131,6 +154,7 @@ fn create_array(
                 dictionaries_by_id,
                 node_index,
                 buffer_index,
+                compression_codec,
                 metadata,
             )?;
             node_index = triple.1;
@@ -140,7 +164,8 @@ fn create_array(
         }
         Struct(struct_fields) => {
             let struct_node = &nodes[node_index];
-            let null_buffer: Buffer = read_buffer(&buffers[buffer_index], data);
+            let null_buffer: Buffer =
+                read_buffer(&buffers[buffer_index], data, compression_codec)?;
             node_index += 1;
             buffer_index += 1;
 
@@ -157,6 +182,7 @@ fn create_array(
                     dictionaries_by_id,
                     node_index,
                     buffer_index,
+                    compression_codec,
                     metadata,
                 )?;
                 node_index = triple.1;
@@ -177,8 +203,8 @@ fn create_array(
             let index_node = &nodes[node_index];
             let index_buffers: Vec<Buffer> = buffers[buffer_index..buffer_index + 2]
                 .iter()
-                .map(|buf| read_buffer(buf, data))
-                .collect();
+                .map(|buf| read_buffer(buf, data, compression_codec))
+                .collect::<Result<_>>()?;
 
             let dict_id = field.dict_id().ok_or_else(|| {
                 ArrowError::IoError(format!("Field {} does not have dict id", field))
@@ -209,18 +235,20 @@ fn create_array(
             // In V4, union types has validity bitmap
             // In V5 and later, union types have no validity bitmap
             if metadata < &ipc::MetadataVersion::V5 {
-                read_buffer(&buffers[buffer_index], data);
+                read_buffer(&buffers[buffer_index], data, compression_codec)?;
                 buffer_index += 1;
             }
 
             let type_ids: Buffer =
-                read_buffer(&buffers[buffer_index], data)[..len].into();
+                read_buffer(&buffers[buffer_index], data, compression_codec)?[..len]
+                    .into();
 
             buffer_index += 1;
 
             let value_offsets = match mode {
                 UnionMode::Dense => {
-                    let buffer = read_buffer(&buffers[buffer_index], data);
+                    let buffer =
+                        read_buffer(&buffers[buffer_index], data, compression_codec)?;
                     buffer_index += 1;
                     Some(buffer[..len * 4].into())
                 }
@@ -238,6 +266,7 @@ fn create_array(
                     dictionaries_by_id,
                     node_index,
                     buffer_index,
+                    compression_codec,
                     metadata,
                 )?;
 
@@ -277,8 +306,8 @@ fn create_array(
                 data_type,
                 buffers[buffer_index..buffer_index + 2]
                     .iter()
-                    .map(|buf| read_buffer(buf, data))
-                    .collect(),
+                    .map(|buf| read_buffer(buf, data, compression_codec))
+                    .collect::<Result<_>>()?,
             );
             node_index += 1;
             buffer_index += 2;
@@ -603,6 +632,11 @@ pub fn read_record_batch(
     let field_nodes = batch.nodes().ok_or_else(|| {
         ArrowError::IoError("Unable to get field nodes from IPC RecordBatch".to_string())
     })?;
+    let batch_compression = batch.compression();
+    let compression_codec: Option<CompressionCodec> = batch_compression
+        .map(|batch_compression| batch_compression.codec().try_into())
+        .transpose()?;
+
     // keep track of buffer and node index, the functions that create arrays mutate these
     let mut buffer_index = 0;
     let mut node_index = 0;
@@ -626,6 +660,7 @@ pub fn read_record_batch(
                     dictionaries_by_id,
                     node_index,
                     buffer_index,
+                    &compression_codec,
                     metadata,
                 )?;
                 node_index = triple.1;
@@ -664,6 +699,7 @@ pub fn read_record_batch(
                 dictionaries_by_id,
                 node_index,
                 buffer_index,
+                &compression_codec,
                 metadata,
             )?;
             node_index = triple.1;
@@ -759,6 +795,21 @@ pub struct FileReader<R: Read + Seek> {
 
     /// Optional projection and projected_schema
     projection: Option<(Vec<usize>, Schema)>,
+}
+
+impl<R: Read + Seek> fmt::Debug for FileReader<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::result::Result<(), fmt::Error> {
+        f.debug_struct("FileReader<R>")
+            .field("reader", &"BufReader<..>")
+            .field("schema", &self.schema)
+            .field("blocks", &self.blocks)
+            .field("current_block", &self.current_block)
+            .field("total_blocks", &self.total_blocks)
+            .field("dictionaries_by_id", &self.dictionaries_by_id)
+            .field("metadata_version", &self.metadata_version)
+            .field("projection", &self.projection)
+            .finish()
+    }
 }
 
 impl<R: Read + Seek> FileReader<R> {
@@ -921,7 +972,6 @@ impl<R: Read + Seek> FileReader<R> {
 
         let mut block_data = vec![0; meta_len as usize];
         self.reader.read_exact(&mut block_data)?;
-
         let message = ipc::root_as_message(&block_data[..]).map_err(|err| {
             ArrowError::IoError(format!("Unable to get root as footer: {:?}", err))
         })?;
@@ -1011,6 +1061,18 @@ pub struct StreamReader<R: Read> {
 
     /// Optional projection
     projection: Option<(Vec<usize>, Schema)>,
+}
+
+impl<R: Read> fmt::Debug for StreamReader<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::result::Result<(), fmt::Error> {
+        f.debug_struct("StreamReader<R>")
+            .field("reader", &"BufReader<..>")
+            .field("schema", &self.schema)
+            .field("dictionaries_by_id", &self.dictionaries_by_id)
+            .field("finished", &self.finished)
+            .field("projection", &self.projection)
+            .finish()
+    }
 }
 
 impl<R: Read> StreamReader<R> {
@@ -1411,6 +1473,105 @@ mod tests {
             assert!(reader.next().is_none());
             // the stream must indicate that it's finished
             assert!(reader.is_finished());
+        });
+    }
+
+    #[test]
+    #[cfg(feature = "ipc_compression")]
+    fn read_generated_streams_200() {
+        let testdata = crate::util::test_util::arrow_test_data();
+        let version = "2.0.0-compression";
+
+        // the test is repetitive, thus we can read all supported files at once
+        let paths = vec!["generated_lz4", "generated_zstd"];
+        paths.iter().for_each(|path| {
+            let file = File::open(format!(
+                "{}/arrow-ipc-stream/integration/{}/{}.stream",
+                testdata, version, path
+            ))
+            .unwrap();
+
+            let mut reader = StreamReader::try_new(file, None).unwrap();
+
+            // read expected JSON output
+            let arrow_json = read_gzip_json(version, path);
+            assert!(arrow_json.equals_reader(&mut reader).unwrap());
+            // the next batch must be empty
+            assert!(reader.next().is_none());
+            // the stream must indicate that it's finished
+            assert!(reader.is_finished());
+        });
+    }
+
+    #[test]
+    #[cfg(not(feature = "ipc_compression"))]
+    fn read_generated_streams_200_negative() {
+        let testdata = crate::util::test_util::arrow_test_data();
+        let version = "2.0.0-compression";
+
+        // the test is repetitive, thus we can read all supported files at once
+        let cases = vec![("generated_lz4", "LZ4_FRAME"), ("generated_zstd", "ZSTD")];
+        cases.iter().for_each(|(path, compression_name)| {
+            let file = File::open(format!(
+                "{}/arrow-ipc-stream/integration/{}/{}.stream",
+                testdata, version, path
+            ))
+            .unwrap();
+
+            let mut reader = StreamReader::try_new(file, None).unwrap();
+            let err = reader.next().unwrap().unwrap_err();
+            let expected_error = format!(
+                "Invalid argument error: compression type {} not supported because arrow was not compiled with the ipc_compression feature",
+                compression_name
+            );
+            assert_eq!(err.to_string(), expected_error);
+        });
+    }
+
+    #[test]
+    #[cfg(feature = "ipc_compression")]
+    fn read_generated_files_200() {
+        let testdata = crate::util::test_util::arrow_test_data();
+        let version = "2.0.0-compression";
+        // the test is repetitive, thus we can read all supported files at once
+        let paths = vec!["generated_lz4", "generated_zstd"];
+        paths.iter().for_each(|path| {
+            let file = File::open(format!(
+                "{}/arrow-ipc-stream/integration/{}/{}.arrow_file",
+                testdata, version, path
+            ))
+            .unwrap();
+
+            let mut reader = FileReader::try_new(file, None).unwrap();
+
+            // read expected JSON output
+            let arrow_json = read_gzip_json(version, path);
+            assert!(arrow_json.equals_reader(&mut reader).unwrap());
+        });
+    }
+
+    #[test]
+    #[cfg(not(feature = "ipc_compression"))]
+    fn read_generated_files_200_negative() {
+        let testdata = crate::util::test_util::arrow_test_data();
+        let version = "2.0.0-compression";
+        // the test is repetitive, thus we can read all supported files at once
+        let cases = vec![("generated_lz4", "LZ4_FRAME"), ("generated_zstd", "ZSTD")];
+        cases.iter().for_each(|(path, compression_name)| {
+            let file = File::open(format!(
+                "{}/arrow-ipc-stream/integration/{}/{}.arrow_file",
+                testdata, version, path
+            ))
+            .unwrap();
+
+            let mut reader = FileReader::try_new(file, None).unwrap();
+
+            let err = reader.next().unwrap().unwrap_err();
+            let expected_error = format!(
+                "Invalid argument error: compression type {} not supported because arrow was not compiled with the ipc_compression feature",
+                compression_name
+            );
+            assert_eq!(err.to_string(), expected_error);
         });
     }
 

@@ -68,7 +68,8 @@ const DEFAULT_CREATED_BY: &str = env!("PARQUET_CREATED_BY");
 /// Parquet writer version.
 ///
 /// Basic constant, which is not part of the Thrift definition.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum WriterVersion {
     PARQUET_1_0,
     PARQUET_2_0,
@@ -360,7 +361,7 @@ impl WriterPropertiesBuilder {
     fn get_mut_props(&mut self, col: ColumnPath) -> &mut ColumnProperties {
         self.column_properties
             .entry(col)
-            .or_insert(ColumnProperties::new())
+            .or_insert_with(ColumnProperties::new)
     }
 
     /// Sets encoding for a column.

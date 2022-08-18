@@ -262,7 +262,6 @@ mod tests {
     use std::convert::TryFrom;
     use std::sync::Arc;
 
-    use crate::array::BasicDecimalArray;
     use crate::array::{
         array::Array, ArrayData, ArrayDataBuilder, ArrayRef, BooleanArray,
         FixedSizeBinaryBuilder, FixedSizeListBuilder, GenericBinaryArray, Int32Builder,
@@ -842,8 +841,8 @@ mod tests {
         test_equal(&a_slice, &b_slice, false);
     }
 
-    fn create_decimal_array(data: &[Option<i128>]) -> ArrayData {
-        data.iter()
+    fn create_decimal_array(data: Vec<Option<i128>>) -> ArrayData {
+        data.into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap()
@@ -852,32 +851,36 @@ mod tests {
 
     #[test]
     fn test_decimal_equal() {
-        let a = create_decimal_array(&[Some(8_887_000_000), Some(-8_887_000_000)]);
-        let b = create_decimal_array(&[Some(8_887_000_000), Some(-8_887_000_000)]);
+        let a = create_decimal_array(vec![Some(8_887_000_000), Some(-8_887_000_000)]);
+        let b = create_decimal_array(vec![Some(8_887_000_000), Some(-8_887_000_000)]);
         test_equal(&a, &b, true);
 
-        let b = create_decimal_array(&[Some(15_887_000_000), Some(-8_887_000_000)]);
+        let b = create_decimal_array(vec![Some(15_887_000_000), Some(-8_887_000_000)]);
         test_equal(&a, &b, false);
     }
 
     // Test the case where null_count > 0
     #[test]
     fn test_decimal_null() {
-        let a = create_decimal_array(&[Some(8_887_000_000), None, Some(-8_887_000_000)]);
-        let b = create_decimal_array(&[Some(8_887_000_000), None, Some(-8_887_000_000)]);
+        let a =
+            create_decimal_array(vec![Some(8_887_000_000), None, Some(-8_887_000_000)]);
+        let b =
+            create_decimal_array(vec![Some(8_887_000_000), None, Some(-8_887_000_000)]);
         test_equal(&a, &b, true);
 
-        let b = create_decimal_array(&[Some(8_887_000_000), Some(-8_887_000_000), None]);
+        let b =
+            create_decimal_array(vec![Some(8_887_000_000), Some(-8_887_000_000), None]);
         test_equal(&a, &b, false);
 
-        let b = create_decimal_array(&[Some(15_887_000_000), None, Some(-8_887_000_000)]);
+        let b =
+            create_decimal_array(vec![Some(15_887_000_000), None, Some(-8_887_000_000)]);
         test_equal(&a, &b, false);
     }
 
     #[test]
     fn test_decimal_offsets() {
         // Test the case where offset != 0
-        let a = create_decimal_array(&[
+        let a = create_decimal_array(vec![
             Some(8_887_000_000),
             None,
             None,
@@ -885,7 +888,7 @@ mod tests {
             None,
             None,
         ]);
-        let b = create_decimal_array(&[
+        let b = create_decimal_array(vec![
             None,
             Some(8_887_000_000),
             None,
@@ -915,7 +918,7 @@ mod tests {
         let b_slice = b.slice(2, 3);
         test_equal(&a_slice, &b_slice, false);
 
-        let b = create_decimal_array(&[
+        let b = create_decimal_array(vec![
             None,
             None,
             None,

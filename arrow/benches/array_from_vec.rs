@@ -17,11 +17,15 @@
 
 #[macro_use]
 extern crate criterion;
+
 use criterion::Criterion;
 
 extern crate arrow;
 
 use arrow::array::*;
+use arrow::util::decimal::Decimal256;
+use num::BigInt;
+use rand::Rng;
 use std::{convert::TryFrom, sync::Arc};
 
 fn array_from_vec(n: usize) {
@@ -72,6 +76,58 @@ fn struct_array_from_vec(
     );
 }
 
+fn decimal128_array_from_vec(array: &[Option<i128>]) {
+    criterion::black_box(
+        array
+            .iter()
+            .copied()
+            .collect::<Decimal128Array>()
+            .with_precision_and_scale(34, 2)
+            .unwrap(),
+    );
+}
+
+fn decimal256_array_from_vec(array: &[Option<Decimal256>]) {
+    criterion::black_box(
+        array
+            .iter()
+            .copied()
+            .collect::<Decimal256Array>()
+            .with_precision_and_scale(70, 2)
+            .unwrap(),
+    );
+}
+
+fn decimal_benchmark(c: &mut Criterion) {
+    // bench decimal128 array
+    // create option<i128> array
+    let size: usize = 1 << 15;
+    let mut rng = rand::thread_rng();
+    let mut array = vec![];
+    for _ in 0..size {
+        array.push(Some(rng.gen_range::<i128, _>(0..9999999999)));
+    }
+    c.bench_function("decimal128_array_from_vec 32768", |b| {
+        b.iter(|| decimal128_array_from_vec(array.as_slice()))
+    });
+
+    // bench decimal256array
+    // create option<into<decimal256>> array
+    let size = 1 << 10;
+    let mut array = vec![];
+    let mut rng = rand::thread_rng();
+    for _ in 0..size {
+        let decimal =
+            Decimal256::from(BigInt::from(rng.gen_range::<i128, _>(0..9999999999999)));
+        array.push(Some(decimal));
+    }
+
+    // bench decimal256 array
+    c.bench_function("decimal256_array_from_vec 32768", |b| {
+        b.iter(|| decimal256_array_from_vec(array.as_slice()))
+    });
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("array_from_vec 128", |b| b.iter(|| array_from_vec(128)));
     c.bench_function("array_from_vec 256", |b| b.iter(|| array_from_vec(256)));
@@ -108,5 +164,5 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, criterion_benchmark);
+criterion_group!(benches, criterion_benchmark, decimal_benchmark);
 criterion_main!(benches);

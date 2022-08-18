@@ -776,8 +776,14 @@ fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Resu
         if negative {
             result = result.neg();
         }
-        validate_decimal_precision(result, precision)
-            .map_err(|e| ArrowError::ParseError(format!("parse decimal overflow: {}", e)))
+
+        match validate_decimal_precision(result, precision) {
+            Ok(_) => Ok(result),
+            Err(e) => Err(ArrowError::ParseError(format!(
+                "parse decimal overflow: {}",
+                e
+            ))),
+        }
     } else {
         Err(ArrowError::ParseError(format!(
             "can't parse the string value {} to decimal",
@@ -1116,7 +1122,6 @@ mod tests {
     use std::io::{Cursor, Write};
     use tempfile::NamedTempFile;
 
-    use crate::array::BasicDecimalArray;
     use crate::array::*;
     use crate::compute::cast;
     use crate::datatypes::Field;

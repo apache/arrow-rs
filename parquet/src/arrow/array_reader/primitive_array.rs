@@ -25,8 +25,8 @@ use crate::data_type::DataType;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow::array::{
-    ArrayDataBuilder, ArrayRef, BasicDecimalArray, BooleanArray, BooleanBufferBuilder,
-    Decimal128Array, Float32Array, Float64Array, Int32Array, Int64Array,
+    ArrayDataBuilder, ArrayRef, BooleanArray, BooleanBufferBuilder, Decimal128Array,
+    Float32Array, Float64Array, Int32Array, Int64Array,
 };
 use arrow::buffer::Buffer;
 use arrow::datatypes::DataType as ArrowType;
@@ -44,7 +44,6 @@ where
     pages: Box<dyn PageIterator>,
     def_levels_buffer: Option<Buffer>,
     rep_levels_buffer: Option<Buffer>,
-    column_desc: ColumnDescPtr,
     record_reader: RecordReader<T>,
 }
 
@@ -67,14 +66,13 @@ where
                 .clone(),
         };
 
-        let record_reader = RecordReader::<T>::new(column_desc.clone());
+        let record_reader = RecordReader::<T>::new(column_desc);
 
         Ok(Self {
             data_type,
             pages,
             def_levels_buffer: None,
             rep_levels_buffer: None,
-            column_desc,
             record_reader,
         })
     }
@@ -178,6 +176,7 @@ where
         // are datatypes which we must convert explicitly.
         // These are:
         // - date64: we should cast int32 to date32, then date32 to date64.
+        // - decimal: cast in32 to decimal, int64 to decimal
         let array = match target_type {
             ArrowType::Date64 => {
                 // this is cheap as it internally reinterprets the data
@@ -191,7 +190,7 @@ where
                         .downcast_ref::<Int32Array>()
                         .unwrap()
                         .iter()
-                        .map(|v| v.map(|v| v.into()))
+                        .map(|v| v.map(|v| v as i128))
                         .collect::<Decimal128Array>(),
 
                     ArrowType::Int64 => array
@@ -199,13 +198,13 @@ where
                         .downcast_ref::<Int64Array>()
                         .unwrap()
                         .iter()
-                        .map(|v| v.map(|v| v.into()))
+                        .map(|v| v.map(|v| v as i128))
                         .collect::<Decimal128Array>(),
                     _ => {
                         return Err(arrow_err!(
                             "Cannot convert {:?} to decimal",
                             array.data_type()
-                        ))
+                        ));
                     }
                 }
                 .with_precision_and_scale(p, s)?;
@@ -241,17 +240,19 @@ mod tests {
     use crate::arrow::array_reader::test_util::EmptyPageIterator;
     use crate::basic::Encoding;
     use crate::column::page::Page;
-    use crate::data_type::Int32Type;
+    use crate::data_type::{Int32Type, Int64Type};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
-    use crate::util::test_common::make_pages;
+    use crate::util::test_common::rand_gen::make_pages;
     use crate::util::InMemoryPageIterator;
-    use arrow::array::PrimitiveArray;
+    use arrow::array::{Array, PrimitiveArray};
     use arrow::datatypes::ArrowPrimitiveType;
 
+    use arrow::datatypes::DataType::Decimal128;
     use rand::distributions::uniform::SampleUniform;
     use std::collections::VecDeque;
 
+    #[allow(clippy::too_many_arguments)]
     fn make_column_chunks<T: DataType>(
         column_desc: ColumnDescPtr,
         encoding: Encoding,
@@ -601,6 +602,135 @@ mod tests {
                 Some(&rep_levels[accu_len..(accu_len + array.len())]),
                 array_reader.get_rep_levels()
             );
+        }
+    }
+
+    #[test]
+    fn test_primitive_array_reader_decimal_types() {
+        // parquet `INT32` to decimal
+        let message_type = "
+            message test_schema {
+                REQUIRED INT32 decimal1 (DECIMAL(8,2));
+        }
+        ";
+        let schema = parse_message_type(message_type)
+            .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
+            .unwrap();
+        let column_desc = schema.column(0);
+
+        // create the array reader
+        {
+            let mut data = Vec::new();
+            let mut page_lists = Vec::new();
+            make_column_chunks::<Int32Type>(
+                column_desc.clone(),
+                Encoding::PLAIN,
+                100,
+                -99999999,
+                99999999,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut data,
+                &mut page_lists,
+                true,
+                2,
+            );
+            let page_iterator =
+                InMemoryPageIterator::new(schema, column_desc.clone(), page_lists);
+
+            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+            )
+            .unwrap();
+
+            // read data from the reader
+            // the data type is decimal(8,2)
+            let array = array_reader.next_batch(50).unwrap();
+            assert_eq!(array.data_type(), &Decimal128(8, 2));
+            let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            let data_decimal_array = data[0..50]
+                .iter()
+                .copied()
+                .map(|v| Some(v as i128))
+                .collect::<Decimal128Array>()
+                .with_precision_and_scale(8, 2)
+                .unwrap();
+            assert_eq!(array, &data_decimal_array);
+
+            // not equal with different data type(precision and scale)
+            let data_decimal_array = data[0..50]
+                .iter()
+                .copied()
+                .map(|v| Some(v as i128))
+                .collect::<Decimal128Array>()
+                .with_precision_and_scale(9, 0)
+                .unwrap();
+            assert_ne!(array, &data_decimal_array)
+        }
+
+        // parquet `INT64` to decimal
+        let message_type = "
+            message test_schema {
+                REQUIRED INT64 decimal1 (DECIMAL(18,4));
+        }
+        ";
+        let schema = parse_message_type(message_type)
+            .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
+            .unwrap();
+        let column_desc = schema.column(0);
+
+        // create the array reader
+        {
+            let mut data = Vec::new();
+            let mut page_lists = Vec::new();
+            make_column_chunks::<Int64Type>(
+                column_desc.clone(),
+                Encoding::PLAIN,
+                100,
+                -999999999999999999,
+                999999999999999999,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut data,
+                &mut page_lists,
+                true,
+                2,
+            );
+            let page_iterator =
+                InMemoryPageIterator::new(schema, column_desc.clone(), page_lists);
+
+            let mut array_reader = PrimitiveArrayReader::<Int64Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+            )
+            .unwrap();
+
+            // read data from the reader
+            // the data type is decimal(18,4)
+            let array = array_reader.next_batch(50).unwrap();
+            assert_eq!(array.data_type(), &Decimal128(18, 4));
+            let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            let data_decimal_array = data[0..50]
+                .iter()
+                .copied()
+                .map(|v| Some(v as i128))
+                .collect::<Decimal128Array>()
+                .with_precision_and_scale(18, 4)
+                .unwrap();
+            assert_eq!(array, &data_decimal_array);
+
+            // not equal with different data type(precision and scale)
+            let data_decimal_array = data[0..50]
+                .iter()
+                .copied()
+                .map(|v| Some(v as i128))
+                .collect::<Decimal128Array>()
+                .with_precision_and_scale(34, 0)
+                .unwrap();
+            assert_ne!(array, &data_decimal_array)
         }
     }
 }

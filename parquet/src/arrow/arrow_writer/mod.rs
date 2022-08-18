@@ -23,7 +23,6 @@ use std::sync::Arc;
 
 use arrow::array as arrow_array;
 use arrow::array::ArrayRef;
-use arrow::array::BasicDecimalArray;
 use arrow::datatypes::{DataType as ArrowDataType, IntervalUnit, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::Array;
@@ -222,6 +221,12 @@ impl<W: Write> ArrowWriter<W> {
         self.buffered_rows -= num_rows;
 
         Ok(())
+    }
+
+    /// Flushes any outstanding data and returns the underlying writer.
+    pub fn into_inner(mut self) -> Result<W> {
+        self.flush()?;
+        self.writer.into_inner()
     }
 
     /// Close and finalize the underlying Parquet writer
@@ -607,6 +612,9 @@ mod tests {
     use std::fs::File;
     use std::sync::Arc;
 
+    use crate::arrow::arrow_reader::{
+        ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
+    };
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Field, Schema, UInt32Type, UInt8Type};
     use arrow::error::Result as ArrowResult;
@@ -614,7 +622,6 @@ mod tests {
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
 
-    use crate::arrow::{ArrowReader, ParquetFileArrowReader};
     use crate::basic::Encoding;
     use crate::file::metadata::ParquetMetaData;
     use crate::file::properties::WriterVersion;
@@ -643,6 +650,25 @@ mod tests {
         roundtrip(batch, Some(SMALL_SIZE / 2));
     }
 
+    fn get_bytes_after_close(schema: SchemaRef, expected_batch: &RecordBatch) -> Vec<u8> {
+        let mut buffer = vec![];
+
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema, None).unwrap();
+        writer.write(expected_batch).unwrap();
+        writer.close().unwrap();
+
+        buffer
+    }
+
+    fn get_bytes_by_into_inner(
+        schema: SchemaRef,
+        expected_batch: &RecordBatch,
+    ) -> Vec<u8> {
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, None).unwrap();
+        writer.write(expected_batch).unwrap();
+        writer.into_inner().unwrap()
+    }
+
     #[test]
     fn roundtrip_bytes() {
         // define schema
@@ -659,31 +685,28 @@ mod tests {
         let expected_batch =
             RecordBatch::try_new(schema.clone(), vec![Arc::new(a), Arc::new(b)]).unwrap();
 
-        let mut buffer = vec![];
+        for buffer in vec![
+            get_bytes_after_close(schema.clone(), &expected_batch),
+            get_bytes_by_into_inner(schema, &expected_batch),
+        ] {
+            let cursor = Bytes::from(buffer);
+            let mut record_batch_reader =
+                ParquetRecordBatchReader::try_new(cursor, 1024).unwrap();
 
-        {
-            let mut writer = ArrowWriter::try_new(&mut buffer, schema, None).unwrap();
-            writer.write(&expected_batch).unwrap();
-            writer.close().unwrap();
-        }
+            let actual_batch = record_batch_reader
+                .next()
+                .expect("No batch found")
+                .expect("Unable to get batch");
 
-        let cursor = Bytes::from(buffer);
-        let mut arrow_reader = ParquetFileArrowReader::try_new(cursor).unwrap();
-        let mut record_batch_reader = arrow_reader.get_record_reader(1024).unwrap();
+            assert_eq!(expected_batch.schema(), actual_batch.schema());
+            assert_eq!(expected_batch.num_columns(), actual_batch.num_columns());
+            assert_eq!(expected_batch.num_rows(), actual_batch.num_rows());
+            for i in 0..expected_batch.num_columns() {
+                let expected_data = expected_batch.column(i).data().clone();
+                let actual_data = actual_batch.column(i).data().clone();
 
-        let actual_batch = record_batch_reader
-            .next()
-            .expect("No batch found")
-            .expect("Unable to get batch");
-
-        assert_eq!(expected_batch.schema(), actual_batch.schema());
-        assert_eq!(expected_batch.num_columns(), actual_batch.num_columns());
-        assert_eq!(expected_batch.num_rows(), actual_batch.num_rows());
-        for i in 0..expected_batch.num_columns() {
-            let expected_data = expected_batch.column(i).data().clone();
-            let actual_data = actual_batch.column(i).data().clone();
-
-            assert_eq!(expected_data, actual_data);
+                assert_eq!(expected_data, actual_data);
+            }
         }
     }
 
@@ -1117,9 +1140,8 @@ mod tests {
         writer.write(expected_batch).unwrap();
         writer.close().unwrap();
 
-        let mut arrow_reader =
-            ParquetFileArrowReader::try_new(file.try_clone().unwrap()).unwrap();
-        let mut record_batch_reader = arrow_reader.get_record_reader(1024).unwrap();
+        let mut record_batch_reader =
+            ParquetRecordBatchReader::try_new(file.try_clone().unwrap(), 1024).unwrap();
 
         let actual_batch = record_batch_reader
             .next()
@@ -1890,11 +1912,12 @@ mod tests {
 
         writer.close().unwrap();
 
-        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-        assert_eq!(&row_group_sizes(arrow_reader.metadata()), &[200, 200, 50]);
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        assert_eq!(&row_group_sizes(builder.metadata()), &[200, 200, 50]);
 
-        let batches = arrow_reader
-            .get_record_reader(100)
+        let batches = builder
+            .with_batch_size(100)
+            .build()
             .unwrap()
             .collect::<ArrowResult<Vec<_>>>()
             .unwrap();
@@ -2035,11 +2058,12 @@ mod tests {
         // Should have written entire first batch and first row of second to the first row group
         // leaving a single row in the second row group
 
-        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-        assert_eq!(&row_group_sizes(arrow_reader.metadata()), &[6, 1]);
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        assert_eq!(&row_group_sizes(builder.metadata()), &[6, 1]);
 
-        let batches = arrow_reader
-            .get_record_reader(2)
+        let batches = builder
+            .with_batch_size(2)
+            .build()
             .unwrap()
             .collect::<ArrowResult<Vec<_>>>()
             .unwrap();

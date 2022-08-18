@@ -7,3 +7,9 @@ updates:
     open-pull-requests-limit: 10
     target-branch: master
     labels: [auto-dependencies]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+    labels: [auto-dependencies]

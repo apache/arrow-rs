@@ -41,7 +41,7 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -51,9 +51,9 @@ jobs:
       - name: Test
         run: |
           cargo test -p arrow
-      - name: Test --features=force_validate,prettyprint,ffi
+      - name: Test --features=force_validate,prettyprint,ipc_compression,ffi
         run: |
-          cargo test -p arrow --features=force_validate,prettyprint,ffi
+          cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi
       - name: Run examples
         run: |
           # Test arrow examples
@@ -73,7 +73,7 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -107,7 +107,7 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -136,7 +136,7 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: true
       - name: Cache Cargo
@@ -162,7 +162,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -172,4 +172,4 @@ jobs:
           rustup component add clippy
       - name: Run clippy
         run: |
-          cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi --all-targets -- -D warnings
+          cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression --all-targets -- -D warnings
