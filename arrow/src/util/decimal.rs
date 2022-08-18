@@ -247,7 +247,7 @@ impl Decimal256 {
     }
 
     /// Constructs a `BigInt` from this `Decimal256` value.
-    pub(crate) fn to_big_int(&self) -> BigInt {
+    pub(crate) fn to_big_int(self) -> BigInt {
         BigInt::from_signed_bytes_le(&self.value)
     }
 }
