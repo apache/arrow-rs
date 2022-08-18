@@ -94,9 +94,9 @@ struct TokenClaims<'a> {
 }
 
 #[derive(serde::Deserialize, Debug)]
-struct TokenResponse {
-    access_token: String,
-    expires_in: u64,
+pub(crate) struct TokenResponse {
+    pub(crate) access_token: String,
+    pub(crate) expires_in: u64,
 }
 
 /// Encapsulates the logic to perform an OAuth token challenge

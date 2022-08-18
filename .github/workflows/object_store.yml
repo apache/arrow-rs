@@ -123,4 +123,4 @@ jobs:
       - name: Run object_store tests
         run: |
           # run tests
-          cargo test -p object_store --features=aws,azure,azure_test,gcp
+          cargo test -p object_store --features=aws,azure,gcp
