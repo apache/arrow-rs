@@ -19,19 +19,25 @@
 
 # Changelog
 
-## [21.0.0](https://github.com/apache/arrow-rs/tree/21.0.0) (2022-08-17)
+## [21.0.0](https://github.com/apache/arrow-rs/tree/21.0.0) (2022-08-18)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/20.0.0...21.0.0)
 
 **Breaking changes:**
 
 - Push `ChunkReader` into `SerializedPageReader` \(\#2463\) [\#2464](https://github.com/apache/arrow-rs/pull/2464) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
-- Make the API of `fn Decimal:new` be consistent with `fn Decimal:try_new_bytes` and add length bound for `Decimal::raw_value` [\#2405](https://github.com/apache/arrow-rs/pull/2405) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
+- Revise FromIterator for Decimal128Array to use Into instead of Borrow [\#2442](https://github.com/apache/arrow-rs/pull/2442) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Use Fixed-Length Array in BasicDecimal new and raw\_value [\#2405](https://github.com/apache/arrow-rs/pull/2405) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
+- Remove deprecated ParquetWriter [\#2380](https://github.com/apache/arrow-rs/pull/2380) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
+- Remove deprecated SliceableCursor and InMemoryWriteableCursor [\#2378](https://github.com/apache/arrow-rs/pull/2378) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
 
 **Implemented enhancements:**
 
+- Remove byteorder dependency [\#2472](https://github.com/apache/arrow-rs/issues/2472)
 - Push `ChunkReader` into `SerializedPageReader` [\#2463](https://github.com/apache/arrow-rs/issues/2463) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Support SerializedPageReader::skip\_page without OffsetIndex [\#2459](https://github.com/apache/arrow-rs/issues/2459)
 - Support Time64/Time32 comparison [\#2457](https://github.com/apache/arrow-rs/issues/2457) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Revise FromIterator for Decimal128Array to use Into instead of Borrow [\#2441](https://github.com/apache/arrow-rs/issues/2441)
 - Support `RowFilter` within`ParquetRecordBatchReader` [\#2431](https://github.com/apache/arrow-rs/issues/2431) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Remove the field `StructBuilder::len` [\#2429](https://github.com/apache/arrow-rs/issues/2429) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Standardize creation and configuration of parquet --\> Arrow readers \( `ParquetRecordBatchReaderBuilder`\) [\#2427](https://github.com/apache/arrow-rs/issues/2427) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
@@ -50,10 +56,8 @@
 
 **Fixed bugs:**
 
-- Incorrect null handling in boolean kernels [\#2469](https://github.com/apache/arrow-rs/issues/2469) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Flight SQL Server sends incorrect response for `DoPutUpdateResult` [\#2403](https://github.com/apache/arrow-rs/issues/2403) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
 - `AsyncFileReader`No Longer Object-Safe [\#2372](https://github.com/apache/arrow-rs/issues/2372) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Skip values assert row\_count fail [\#2316](https://github.com/apache/arrow-rs/issues/2316) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - StructBuilder Does not Verify Child Lengths [\#2252](https://github.com/apache/arrow-rs/issues/2252)
 
 **Closed issues:**
@@ -62,17 +66,21 @@
 
 **Merged pull requests:**
 
-- Use OffsetIndex to prune IO with RowSelection [\#2473](https://github.com/apache/arrow-rs/pull/2473) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([thinkharderdev](https://github.com/thinkharderdev))
+- remove byteorder dependency from parquet [\#2486](https://github.com/apache/arrow-rs/pull/2486) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([psvri](https://github.com/psvri))
+- Remove Position trait \(\#1163\) [\#2479](https://github.com/apache/arrow-rs/pull/2479) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
+- Add ChunkReader::get\_bytes [\#2478](https://github.com/apache/arrow-rs/pull/2478) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
+- Use Parquet OffsetIndex to prune IO with RowSelection [\#2473](https://github.com/apache/arrow-rs/pull/2473) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([thinkharderdev](https://github.com/thinkharderdev))
+- Remove unnecessary Option from Int96 [\#2471](https://github.com/apache/arrow-rs/pull/2471) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
 - remove len field from StructBuilder [\#2468](https://github.com/apache/arrow-rs/pull/2468) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([psvri](https://github.com/psvri))
+- Make Parquet reader filter APIs public \(\#1792\) [\#2467](https://github.com/apache/arrow-rs/pull/2467) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
 - enable ipc compression feature for integration test [\#2462](https://github.com/apache/arrow-rs/pull/2462) ([liukun4515](https://github.com/liukun4515))
-- MINOR: Clean the `Schema` [\#2461](https://github.com/apache/arrow-rs/pull/2461) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
+- Simplify implementation of Schema [\#2461](https://github.com/apache/arrow-rs/pull/2461) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
+- Support skip\_page missing OffsetIndex Fallback in SerializedPageReader [\#2460](https://github.com/apache/arrow-rs/pull/2460) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([Ted-Jiang](https://github.com/Ted-Jiang))
 - support time32/time64 comparison [\#2458](https://github.com/apache/arrow-rs/pull/2458) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([waitingkuo](https://github.com/waitingkuo))
 - Utf8array casting [\#2456](https://github.com/apache/arrow-rs/pull/2456) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([psvri](https://github.com/psvri))
 - Remove outdated license text [\#2455](https://github.com/apache/arrow-rs/pull/2455) ([alamb](https://github.com/alamb))
 - Support RowFilter within ParquetRecordBatchReader \(\#2431\) [\#2452](https://github.com/apache/arrow-rs/pull/2452) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
-- Bump actions/labeler from 4.0.0 to 4.0.1 [\#2451](https://github.com/apache/arrow-rs/pull/2451) ([dependabot[bot]](https://github.com/apps/dependabot))
 - benchmark: decimal builder and vec to decimal array [\#2450](https://github.com/apache/arrow-rs/pull/2450) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([liukun4515](https://github.com/liukun4515))
-- Simplify archery integration and disable JS temporarily [\#2449](https://github.com/apache/arrow-rs/pull/2449) ([tustvold](https://github.com/tustvold))
 - Collocate Decimal Array Validation Logic [\#2446](https://github.com/apache/arrow-rs/pull/2446) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([liukun4515](https://github.com/liukun4515))
 - Minor: Move From trait for Decimal256 impl to decimal.rs [\#2443](https://github.com/apache/arrow-rs/pull/2443) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([liukun4515](https://github.com/liukun4515))
 - decimal benchmark: arrow reader decimal from parquet int32 and int64 [\#2438](https://github.com/apache/arrow-rs/pull/2438) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([liukun4515](https://github.com/liukun4515))
@@ -81,10 +89,6 @@
 - refactor: refine validation for decimal128 array [\#2428](https://github.com/apache/arrow-rs/pull/2428) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([liukun4515](https://github.com/liukun4515))
 - Benchmark of casting decimal arrays [\#2424](https://github.com/apache/arrow-rs/pull/2424) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
 - Test non-annotated repeated fields \(\#2394\) [\#2422](https://github.com/apache/arrow-rs/pull/2422) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
-- Bump actions/checkout from 2 to 3 [\#2421](https://github.com/apache/arrow-rs/pull/2421) ([dependabot[bot]](https://github.com/apps/dependabot))
-- Bump actions/labeler from 2.2.0 to 4.0.0 [\#2420](https://github.com/apache/arrow-rs/pull/2420) ([dependabot[bot]](https://github.com/apps/dependabot))
-- Bump actions/setup-python from 1 to 4 [\#2419](https://github.com/apache/arrow-rs/pull/2419) ([dependabot[bot]](https://github.com/apps/dependabot))
-- Bump actions/setup-node from 2 to 3 [\#2418](https://github.com/apache/arrow-rs/pull/2418) ([dependabot[bot]](https://github.com/apps/dependabot))
 - Fix \#2416 Automatic version updates for github actions with dependabot [\#2417](https://github.com/apache/arrow-rs/pull/2417) ([iemejia](https://github.com/iemejia))
 - Add validation logic for StructBuilder::finish [\#2413](https://github.com/apache/arrow-rs/pull/2413) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([psvri](https://github.com/psvri))
 - test: add test for reading decimal value from primitive array reader [\#2411](https://github.com/apache/arrow-rs/pull/2411) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([liukun4515](https://github.com/liukun4515))
@@ -97,8 +101,6 @@
 - Decouple parquet fuzz tests from converter \(\#1661\) [\#2386](https://github.com/apache/arrow-rs/pull/2386) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
 - Rewrite `Decimal` and `DecimalArray` using `const_generic` [\#2383](https://github.com/apache/arrow-rs/pull/2383) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
 - Simplify BitReader \(~5-10% faster\) [\#2381](https://github.com/apache/arrow-rs/pull/2381) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
-- Remove deprecated ParquetWriter [\#2380](https://github.com/apache/arrow-rs/pull/2380) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
-- Remove deprecated SliceableCursor and InMemoryWriteableCursor [\#2378](https://github.com/apache/arrow-rs/pull/2378) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
 - Fix parquet clippy lints \(\#1254\) [\#2377](https://github.com/apache/arrow-rs/pull/2377) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
 - Cast between `Decimal128` and `Decimal256` arrays [\#2376](https://github.com/apache/arrow-rs/pull/2376) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
 - support compression for IPC with revamped feature flags [\#2369](https://github.com/apache/arrow-rs/pull/2369) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
