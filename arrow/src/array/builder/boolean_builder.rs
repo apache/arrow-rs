@@ -68,6 +68,7 @@ pub struct BooleanBuilder {
 
 impl BooleanBuilder {
     /// Creates a new boolean builder
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self::with_capacity(1024)
     }
