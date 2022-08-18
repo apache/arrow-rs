@@ -121,8 +121,10 @@ test_source_distribution() {
     -e 's/^parquet = "([^"]*)"/parquet = { version = "\1", path = "..\/parquet" }/g' \
     */Cargo.toml
 
-  cargo build
-  cargo test --all
+  (cd arrow && cargo build && cargo test)
+  (cd arrow-flight && cargo build && cargo test)
+  (cd parquet && cargo build && cargo test)
+  (cd parquet_derive && cargo build && cargo test)
 
   # verify that the crates can be published to crates.io
   pushd arrow
