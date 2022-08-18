@@ -73,7 +73,7 @@ impl BooleanBuilder {
         Self::with_capacity(1024)
     }
 
-    /// Creates a new boolean builder builder with capacity
+    /// Creates a new boolean builder with capacity
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             values_builder: BooleanBufferBuilder::new(capacity),
