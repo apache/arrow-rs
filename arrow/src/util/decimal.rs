@@ -33,12 +33,36 @@ use std::cmp::{min, Ordering};
 ///
 /// [`Decimal128Array`]: [crate::array::Decimal128Array]
 /// [`Decimal256Array`]: [crate::array::Decimal256Array]
-#[derive(Debug, Clone, Copy)]
 pub struct Decimal<T: DecimalType> {
     precision: usize,
     scale: usize,
     value: T::Native,
 }
+
+/// Manually implement to avoid `T: Debug` bound
+impl<T: DecimalType> std::fmt::Debug for Decimal<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Decimal")
+            .field("scale", &self.precision)
+            .field("precision", &self.precision)
+            // TODO: Could format this better
+            .field("value", &self.value.as_ref())
+            .finish()
+    }
+}
+
+/// Manually implement to avoid `T: Debug` bound
+impl<T: DecimalType> Clone for Decimal<T> {
+    fn clone(&self) -> Self {
+        Self {
+            precision: self.precision,
+            scale: self.scale,
+            value: self.value,
+        }
+    }
+}
+
+impl<T: DecimalType> Copy for Decimal<T> {}
 
 impl<T: DecimalType> Decimal<T> {
     pub const MAX_PRECISION: usize = T::MAX_PRECISION;

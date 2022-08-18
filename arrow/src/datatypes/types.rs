@@ -487,9 +487,7 @@ impl<const N: usize> NativeDecimalType for [u8; N] {
 /// [`DecimalArray`]: [crate::array::DecimalArray]
 /// [`Decimal128Array`]: [crate::array::Decimal128Array]
 /// [`Decimal256Array`]: [crate::array::Decimal256Array]
-pub trait DecimalType:
-    'static + std::fmt::Debug + Send + Sync + private::DecimalTypeSealed
-{
+pub trait DecimalType: 'static + Send + Sync + private::DecimalTypeSealed {
     type Native: NativeDecimalType;
 
     const BYTE_LENGTH: usize;
