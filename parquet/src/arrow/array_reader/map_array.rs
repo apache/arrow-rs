@@ -89,6 +89,8 @@ impl ArrayReader for MapArrayReader {
     }
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
+        // A MapArray is just a ListArray with a StructArray child
+        // we can therefore just alter the ArrayData
         let array = self.reader.consume_batch().unwrap();
         let data = array.data().clone();
         let builder = data.into_builder().data_type(self.data_type.clone());
@@ -134,8 +136,6 @@ mod tests {
     // It then attempts to read the data back and checks that the third record
     // contains the expected values.
     fn read_map_array_column() {
-        // Make sure generated parquet file is removed whether test passes or not
-
         // Schema for single map of string to int32
         let schema = Schema::new(vec![Field::new(
             "map",
