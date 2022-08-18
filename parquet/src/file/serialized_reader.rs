@@ -730,6 +730,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 if let Some(buffered_header) = next_page_header.take() {
                     // The next page header has already been peeked, so just advance the offset
                     *offset += buffered_header.compressed_page_size as usize;
+                    *remaining_bytes -= buffered_header.compressed_page_size as usize;
                 } else {
                     let mut read =
                         self.reader.get_read(*offset as u64, *remaining_bytes)?;
@@ -1556,6 +1557,7 @@ mod tests {
             if i % 2 == 0 {
                 vec.push(column_page_reader.get_next_page().unwrap().unwrap());
             } else {
+                column_page_reader.peek_next_page().unwrap().unwrap();
                 column_page_reader.skip_next_page().unwrap();
             }
         }
