@@ -80,26 +80,18 @@ fn decimal128_array_from_vec(array: &[Option<i128>]) {
     criterion::black_box(
         array
             .iter()
+            .copied()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(34, 2)
             .unwrap(),
     );
 }
 
-fn decimal256_array_from_vec() {
-    // bench decimal256array
-    // create option<into<decimal256>> array
-    let size = 1 << 10;
-    let mut array = vec![];
-    let mut rng = rand::thread_rng();
-    for _ in 0..size {
-        let decimal =
-            Decimal256::from(BigInt::from(rng.gen_range::<i128, _>(0..9999999999999)));
-        array.push(Some(decimal));
-    }
+fn decimal256_array_from_vec(array: &[Option<Decimal256>]) {
     criterion::black_box(
         array
-            .into_iter()
+            .iter()
+            .copied()
             .collect::<Decimal256Array>()
             .with_precision_and_scale(70, 2)
             .unwrap(),
@@ -119,9 +111,20 @@ fn decimal_benchmark(c: &mut Criterion) {
         b.iter(|| decimal128_array_from_vec(array.as_slice()))
     });
 
+    // bench decimal256array
+    // create option<into<decimal256>> array
+    let size = 1 << 10;
+    let mut array = vec![];
+    let mut rng = rand::thread_rng();
+    for _ in 0..size {
+        let decimal =
+            Decimal256::from(BigInt::from(rng.gen_range::<i128, _>(0..9999999999999)));
+        array.push(Some(decimal));
+    }
+
     // bench decimal256 array
     c.bench_function("decimal256_array_from_vec 32768", |b| {
-        b.iter(|| decimal256_array_from_vec)
+        b.iter(|| decimal256_array_from_vec(array.as_slice()))
     });
 }
 
