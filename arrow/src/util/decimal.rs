@@ -26,7 +26,7 @@ use num::bigint::BigInt;
 use num::Signed;
 use std::cmp::{min, Ordering};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct BasicDecimal<const BYTE_WIDTH: usize> {
     precision: usize,
     scale: usize,
