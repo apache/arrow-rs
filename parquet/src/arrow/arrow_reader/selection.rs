@@ -297,6 +297,7 @@ impl From<RowSelection> for VecDeque<RowSelector> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use parquet_format::PageLocation;
     use rand::{thread_rng, Rng};
 
     #[test]
