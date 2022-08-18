@@ -17,7 +17,6 @@
 
 use std::{io::Read, sync::Arc};
 
-use byteorder::{ByteOrder, LittleEndian};
 use parquet_format::{ColumnOrder as TColumnOrder, FileMetaData as TFileMetaData};
 use thrift::protocol::TCompactInputProtocol;
 
@@ -101,7 +100,7 @@ pub fn decode_footer(slice: &[u8; FOOTER_SIZE]) -> Result<usize> {
     }
 
     // get the metadata length from the footer
-    let metadata_len = LittleEndian::read_i32(&slice[..4]);
+    let metadata_len = i32::from_le_bytes(slice[..4].try_into().unwrap());
     metadata_len.try_into().map_err(|_| {
         general_err!(
             "Invalid Parquet file. Metadata length is less than zero ({})",

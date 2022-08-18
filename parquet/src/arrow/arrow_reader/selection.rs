@@ -17,7 +17,6 @@
 
 use arrow::array::{Array, BooleanArray};
 use arrow::compute::SlicesIterator;
-use parquet_format::PageLocation;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::Range;
@@ -119,9 +118,10 @@ impl RowSelection {
     }
 
     /// Given an offset index, return the offset ranges for all data pages selected by `self`
+    #[cfg(any(test, feature = "async"))]
     pub(crate) fn scan_ranges(
         &self,
-        page_locations: &[PageLocation],
+        page_locations: &[parquet_format::PageLocation],
     ) -> Vec<Range<usize>> {
         let mut ranges = vec![];
         let mut row_offset = 0;

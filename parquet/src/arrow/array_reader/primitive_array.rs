@@ -25,9 +25,8 @@ use crate::data_type::{DataType, Int96};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow::array::{
-    Array, ArrayDataBuilder, ArrayRef, BooleanArray, BooleanBufferBuilder,
-    Decimal128Array, Float32Array, Float64Array, Int32Array, Int64Array,
-    TimestampNanosecondArray, TimestampNanosecondBufferBuilder,
+    ArrayDataBuilder, ArrayRef, BooleanArray, BooleanBufferBuilder, Decimal128Array,
+    Float32Array, Float64Array, Int32Array, Int64Array,TimestampNanosecondArray, TimestampNanosecondBufferBuilder,
 };
 use arrow::buffer::Buffer;
 use arrow::datatypes::{DataType as ArrowType, TimeUnit};
@@ -209,7 +208,7 @@ where
                         .downcast_ref::<Int32Array>()
                         .unwrap()
                         .iter()
-                        .map(|v| v.map(|v| v.into()))
+                        .map(|v| v.map(|v| v as i128))
                         .collect::<Decimal128Array>(),
 
                     ArrowType::Int64 => array
@@ -217,7 +216,7 @@ where
                         .downcast_ref::<Int64Array>()
                         .unwrap()
                         .iter()
-                        .map(|v| v.map(|v| v.into()))
+                        .map(|v| v.map(|v| v as i128))
                         .collect::<Decimal128Array>(),
                     _ => {
                         return Err(arrow_err!(
