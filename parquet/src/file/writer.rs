@@ -20,7 +20,6 @@
 
 use std::{io::Write, sync::Arc};
 
-use byteorder::{ByteOrder, LittleEndian};
 use parquet_format as parquet;
 use parquet_format::{ColumnIndex, OffsetIndex, RowGroup};
 use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol};
@@ -37,7 +36,7 @@ use crate::data_type::DataType;
 use crate::errors::{ParquetError, Result};
 use crate::file::{
     metadata::*, properties::WriterPropertiesPtr,
-    statistics::to_thrift as statistics_to_thrift, FOOTER_SIZE, PARQUET_MAGIC,
+    statistics::to_thrift as statistics_to_thrift, PARQUET_MAGIC,
 };
 use crate::schema::types::{
     self, ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr,
@@ -278,11 +277,10 @@ impl<W: Write> SerializedFileWriter<W> {
         let end_pos = self.buf.bytes_written();
 
         // Write footer
-        let mut footer_buffer: [u8; FOOTER_SIZE] = [0; FOOTER_SIZE];
         let metadata_len = (end_pos - start_pos) as i32;
-        LittleEndian::write_i32(&mut footer_buffer, metadata_len);
-        (&mut footer_buffer[4..]).write_all(&PARQUET_MAGIC)?;
-        self.buf.write_all(&footer_buffer)?;
+
+        self.buf.write_all(&metadata_len.to_le_bytes())?;
+        self.buf.write_all(&PARQUET_MAGIC)?;
         Ok(file_metadata)
     }
 
