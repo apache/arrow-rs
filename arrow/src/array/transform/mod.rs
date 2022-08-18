@@ -807,7 +807,7 @@ mod tests {
 
     #[test]
     fn test_list_null_offset() {
-        let int_builder = Int64Builder::new(24);
+        let int_builder = Int64Builder::with_capacity(24);
         let mut builder = ListBuilder::<Int64Builder>::new(int_builder);
         builder.values().append_slice(&[1, 2, 3]);
         builder.append(true);
@@ -824,7 +824,7 @@ mod tests {
         let result = mutable.freeze();
         let array = ListArray::from(result);
 
-        let int_builder = Int64Builder::new(24);
+        let int_builder = Int64Builder::with_capacity(24);
         let mut builder = ListBuilder::<Int64Builder>::new(int_builder);
         builder.values().append_slice(&[1, 2, 3]);
         builder.append(true);
@@ -964,7 +964,7 @@ mod tests {
     fn create_dictionary_array(values: &[&str], keys: &[Option<&str>]) -> ArrayData {
         let values = StringArray::from(values.to_vec());
         let mut builder = StringDictionaryBuilder::new_with_dictionary(
-            PrimitiveBuilder::<Int16Type>::new(3),
+            PrimitiveBuilder::<Int16Type>::with_capacity(3),
             &values,
         )
         .unwrap();
@@ -1175,7 +1175,8 @@ mod tests {
 
     #[test]
     fn test_list_append() {
-        let mut builder = ListBuilder::<Int64Builder>::new(Int64Builder::new(24));
+        let mut builder =
+            ListBuilder::<Int64Builder>::new(Int64Builder::with_capacity(24));
         builder.values().append_slice(&[1, 2, 3]);
         builder.append(true);
         builder.values().append_slice(&[4, 5]);
@@ -1185,7 +1186,7 @@ mod tests {
         builder.append(true);
         let a = builder.finish();
 
-        let a_builder = Int64Builder::new(24);
+        let a_builder = Int64Builder::with_capacity(24);
         let mut a_builder = ListBuilder::<Int64Builder>::new(a_builder);
         a_builder.values().append_slice(&[12, 13]);
         a_builder.append(true);
@@ -1241,7 +1242,8 @@ mod tests {
 
     #[test]
     fn test_list_nulls_append() -> Result<()> {
-        let mut builder = ListBuilder::<Int64Builder>::new(Int64Builder::new(32));
+        let mut builder =
+            ListBuilder::<Int64Builder>::new(Int64Builder::with_capacity(32));
         builder.values().append_slice(&[1, 2, 3]);
         builder.append(true);
         builder.values().append_slice(&[4, 5]);
@@ -1255,7 +1257,8 @@ mod tests {
         let a = builder.finish();
         let a = a.data();
 
-        let mut builder = ListBuilder::<Int64Builder>::new(Int64Builder::new(32));
+        let mut builder =
+            ListBuilder::<Int64Builder>::new(Int64Builder::with_capacity(32));
         builder.values().append_slice(&[12, 13]);
         builder.append(true);
         builder.append(false);
@@ -1322,7 +1325,8 @@ mod tests {
 
     #[test]
     fn test_list_append_with_capacities() {
-        let mut builder = ListBuilder::<Int64Builder>::new(Int64Builder::new(24));
+        let mut builder =
+            ListBuilder::<Int64Builder>::new(Int64Builder::with_capacity(24));
         builder.values().append_slice(&[1, 2, 3]);
         builder.append(true);
         builder.values().append_slice(&[4, 5]);
@@ -1332,7 +1336,7 @@ mod tests {
         builder.append(true);
         let a = builder.finish();
 
-        let a_builder = Int64Builder::new(24);
+        let a_builder = Int64Builder::with_capacity(24);
         let mut a_builder = ListBuilder::<Int64Builder>::new(a_builder);
         a_builder.values().append_slice(&[12, 13]);
         a_builder.append(true);
@@ -1356,8 +1360,8 @@ mod tests {
     fn test_map_nulls_append() -> Result<()> {
         let mut builder = MapBuilder::<Int64Builder, Int64Builder>::new(
             None,
-            Int64Builder::new(32),
-            Int64Builder::new(32),
+            Int64Builder::with_capacity(32),
+            Int64Builder::with_capacity(32),
         );
         builder.keys().append_slice(&[1, 2, 3]);
         builder.values().append_slice(&[1, 2, 3]);
@@ -1378,8 +1382,8 @@ mod tests {
 
         let mut builder = MapBuilder::<Int64Builder, Int64Builder>::new(
             None,
-            Int64Builder::new(32),
-            Int64Builder::new(32),
+            Int64Builder::with_capacity(32),
+            Int64Builder::with_capacity(32),
         );
 
         builder.keys().append_slice(&[12, 13]);

@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_list_array_builder() {
-        let values_builder = Int32Builder::new(10);
+        let values_builder = Int32Builder::new();
         let mut builder = FixedSizeListBuilder::new(values_builder, 3);
 
         //  [[0, 1, 2], null, [3, null, 5], [6, 7, null]]

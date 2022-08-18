@@ -66,7 +66,13 @@ impl<T: ArrowPrimitiveType> ArrayBuilder for PrimitiveBuilder<T> {
 
 impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Creates a new primitive array builder
-    pub fn new(capacity: usize) -> Self {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self::with_capacity(1024)
+    }
+
+    /// Creates a new primitive array builder with capacity
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
             values_builder: BufferBuilder::<T::Native>::new(capacity),
             null_buffer_builder: NullBufferBuilder::new(capacity),
@@ -355,7 +361,7 @@ mod tests {
 
     #[test]
     fn test_primitive_array_builder_finish() {
-        let mut builder = Int32Builder::new(5);
+        let mut builder = Int32Builder::new();
         builder.append_slice(&[2, 4, 6, 8]);
         let mut arr = builder.finish();
         assert_eq!(4, arr.len());

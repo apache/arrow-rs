@@ -329,7 +329,7 @@ impl<'a, T: ArrowDictionaryKeyType> FromIterator<Option<&'a str>> for Dictionary
     fn from_iter<I: IntoIterator<Item = Option<&'a str>>>(iter: I) -> Self {
         let it = iter.into_iter();
         let (lower, _) = it.size_hint();
-        let key_builder = PrimitiveBuilder::<T>::new(lower);
+        let key_builder = PrimitiveBuilder::<T>::with_capacity(lower);
         let value_builder = StringBuilder::new(256);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         it.for_each(|i| {
@@ -367,7 +367,7 @@ impl<'a, T: ArrowDictionaryKeyType> FromIterator<&'a str> for DictionaryArray<T>
     fn from_iter<I: IntoIterator<Item = &'a str>>(iter: I) -> Self {
         let it = iter.into_iter();
         let (lower, _) = it.size_hint();
-        let key_builder = PrimitiveBuilder::<T>::new(lower);
+        let key_builder = PrimitiveBuilder::<T>::with_capacity(lower);
         let value_builder = StringBuilder::new(256);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         it.for_each(|i| {
@@ -581,8 +581,8 @@ mod tests {
 
     #[test]
     fn test_dictionary_array_fmt_debug() {
-        let key_builder = PrimitiveBuilder::<UInt8Type>::new(3);
-        let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
+        let key_builder = PrimitiveBuilder::<UInt8Type>::with_capacity(3);
+        let value_builder = PrimitiveBuilder::<UInt32Type>::with_capacity(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(12345678).unwrap();
         builder.append_null();
@@ -593,8 +593,8 @@ mod tests {
             format!("{:?}", array)
         );
 
-        let key_builder = PrimitiveBuilder::<UInt8Type>::new(20);
-        let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
+        let key_builder = PrimitiveBuilder::<UInt8Type>::with_capacity(20);
+        let value_builder = PrimitiveBuilder::<UInt32Type>::with_capacity(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         for _ in 0..20 {
             builder.append(1).unwrap();

@@ -161,7 +161,7 @@ mod tests {
     use crate::datatypes::DataType;
 
     fn _test_generic_list_array_builder<O: OffsetSizeTrait>() {
-        let values_builder = Int32Builder::new(10);
+        let values_builder = Int32Builder::with_capacity(10);
         let mut builder = GenericListBuilder::<O, _>::new(values_builder);
 
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
@@ -206,7 +206,7 @@ mod tests {
     }
 
     fn _test_generic_list_array_builder_nulls<O: OffsetSizeTrait>() {
-        let values_builder = Int32Builder::new(10);
+        let values_builder = Int32Builder::with_capacity(10);
         let mut builder = GenericListBuilder::<O, _>::new(values_builder);
 
         //  [[0, 1, 2], null, [3, null, 5], [6, 7]]
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_list_list_array_builder() {
-        let primitive_builder = Int32Builder::new(10);
+        let primitive_builder = Int32Builder::with_capacity(10);
         let values_builder = ListBuilder::new(primitive_builder);
         let mut builder = ListBuilder::new(values_builder);
 

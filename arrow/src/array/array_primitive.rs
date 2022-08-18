@@ -91,7 +91,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
     // Returns a new primitive array builder
     pub fn builder(capacity: usize) -> PrimitiveBuilder<T> {
-        PrimitiveBuilder::<T>::new(capacity)
+        PrimitiveBuilder::<T>::with_capacity(capacity)
     }
 
     /// Returns the primitive value at index `i`.
