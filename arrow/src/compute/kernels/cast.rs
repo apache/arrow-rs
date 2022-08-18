@@ -2072,7 +2072,7 @@ fn numeric_to_bool_cast<T>(from: &PrimitiveArray<T>) -> Result<BooleanArray>
 where
     T: ArrowPrimitiveType + ArrowNumericType,
 {
-    let mut b = BooleanBuilder::new(from.len());
+    let mut b = BooleanBuilder::with_capacity(from.len());
 
     for i in 0..from.len() {
         if from.is_null(i) {

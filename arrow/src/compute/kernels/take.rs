@@ -1083,7 +1083,7 @@ mod tests {
                 Field::new("b", DataType::Int32, true),
             ],
             vec![
-                Box::new(BooleanBuilder::new(values.len())),
+                Box::new(BooleanBuilder::with_capacity(values.len())),
                 Box::new(Int32Builder::new(values.len())),
             ],
         );

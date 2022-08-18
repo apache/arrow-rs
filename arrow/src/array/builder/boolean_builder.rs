@@ -39,7 +39,7 @@ use super::NullBufferBuilder;
 /// ```
 ///     use arrow::array::{Array, BooleanArray, BooleanBuilder};
 ///
-///     let mut b = BooleanBuilder::new(4);
+///     let mut b = BooleanBuilder::new();
 ///     b.append_value(true);
 ///     b.append_null();
 ///     b.append_value(false);
@@ -67,8 +67,13 @@ pub struct BooleanBuilder {
 }
 
 impl BooleanBuilder {
-    /// Creates a new primitive array builder
-    pub fn new(capacity: usize) -> Self {
+    /// Creates a new boolean builder
+    pub fn new() -> Self {
+        Self::with_capacity(1024)
+    }
+
+    /// Creates a new boolean builder builder with capacity
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
             values_builder: BooleanBufferBuilder::new(capacity),
             null_buffer_builder: NullBufferBuilder::new(capacity),

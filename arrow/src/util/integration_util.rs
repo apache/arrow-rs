@@ -284,7 +284,7 @@ pub fn array_from_json(
     match field.data_type() {
         DataType::Null => Ok(Arc::new(NullArray::new(json_col.count))),
         DataType::Boolean => {
-            let mut b = BooleanBuilder::new(json_col.count);
+            let mut b = BooleanBuilder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
