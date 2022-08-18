@@ -39,7 +39,6 @@
 
 use std::fmt;
 
-use byteorder::{ByteOrder, LittleEndian};
 use parquet_format::Statistics as TStatistics;
 
 use crate::basic::Type;
@@ -163,15 +162,15 @@ pub fn from_thrift(
                     old_format,
                 ),
                 Type::INT32 => Statistics::int32(
-                    min.map(|data| LittleEndian::read_i32(&data)),
-                    max.map(|data| LittleEndian::read_i32(&data)),
+                    min.map(|data| i32::from_le_bytes(data[..4].try_into().unwrap())),
+                    max.map(|data| i32::from_le_bytes(data[..4].try_into().unwrap())),
                     distinct_count,
                     null_count,
                     old_format,
                 ),
                 Type::INT64 => Statistics::int64(
-                    min.map(|data| LittleEndian::read_i64(&data)),
-                    max.map(|data| LittleEndian::read_i64(&data)),
+                    min.map(|data| i64::from_le_bytes(data[..8].try_into().unwrap())),
+                    max.map(|data| i64::from_le_bytes(data[..8].try_into().unwrap())),
                     distinct_count,
                     null_count,
                     old_format,
@@ -191,15 +190,15 @@ pub fn from_thrift(
                     Statistics::int96(min, max, distinct_count, null_count, old_format)
                 }
                 Type::FLOAT => Statistics::float(
-                    min.map(|data| LittleEndian::read_f32(&data)),
-                    max.map(|data| LittleEndian::read_f32(&data)),
+                    min.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
+                    max.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
                     distinct_count,
                     null_count,
                     old_format,
                 ),
                 Type::DOUBLE => Statistics::double(
-                    min.map(|data| LittleEndian::read_f64(&data)),
-                    max.map(|data| LittleEndian::read_f64(&data)),
+                    min.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
+                    max.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
                     distinct_count,
                     null_count,
                     old_format,

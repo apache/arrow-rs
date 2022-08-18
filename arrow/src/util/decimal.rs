@@ -26,7 +26,7 @@ use num::bigint::BigInt;
 use num::Signed;
 use std::cmp::{min, Ordering};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Decimal<T: DecimalType> {
     precision: usize,
     scale: usize,
@@ -218,7 +218,7 @@ impl Decimal256 {
     }
 
     /// Constructs a `BigInt` from this `Decimal256` value.
-    pub(crate) fn to_big_int(&self) -> BigInt {
+    pub(crate) fn to_big_int(self) -> BigInt {
         BigInt::from_signed_bytes_le(&self.value)
     }
 }

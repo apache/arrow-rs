@@ -25,11 +25,12 @@ Welcome to the implementation of Arrow, the popular in-memory columnar format, i
 
 This repo contains the following main components:
 
-| Crate        | Description                                                        | Documentation              |
-| ------------ | ------------------------------------------------------------------ | -------------------------- |
-| arrow        | Core functionality (memory layout, arrays, low level computations) | [(README)][arrow-readme]   |
-| parquet      | Support for Parquet columnar file format                           | [(README)][parquet-readme] |
-| arrow-flight | Support for Arrow-Flight IPC protocol                              | [(README)][flight-readme]  |
+| Crate        | Description                                                               | Documentation                  |
+| ------------ | ------------------------------------------------------------------------- | ------------------------------ |
+| arrow        | Core functionality (memory layout, arrays, low level computations)        | [(README)][arrow-readme]       |
+| parquet      | Support for Parquet columnar file format                                  | [(README)][parquet-readme]     |
+| arrow-flight | Support for Arrow-Flight IPC protocol                                     | [(README)][flight-readme]      |
+| object-store | Support for object store interactions (aws, azure, gcp, local, in-memory) | [(README)][objectstore-readme] |
 
 There are two related crates in a different repository
 
@@ -71,5 +72,6 @@ There is more information in the [contributing] guide.
 [flight-readme]: arrow-flight/README.md
 [datafusion-readme]: https://github.com/apache/arrow-datafusion/blob/master/README.md
 [ballista-readme]: https://github.com/apache/arrow-ballista/blob/master/README.md
+[objectstore-readme]: https://github.com/apache/arrow-rs/blob/master/object_store/README.md
 [issues]: https://github.com/apache/arrow-rs/issues
 [discussions]: https://github.com/apache/arrow-rs/discussions
