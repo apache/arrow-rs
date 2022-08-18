@@ -410,7 +410,7 @@ impl<T: DecimalType> From<ArrayData> for DecimalArray<T> {
             "DecimalArray data should contain 1 buffer only (values)"
         );
         let values = data.buffers()[0].as_ptr();
-        let (precision, scale) = match (data.data_type(), T::BYTE_LENGTH) {
+        let (precision, scale) = match (data.data_type(), Self::VALUE_LENGTH) {
             (DataType::Decimal128(precision, scale), 16)
             | (DataType::Decimal256(precision, scale), 32) => (*precision, *scale),
             _ => panic!("Expected data type to be Decimal"),
