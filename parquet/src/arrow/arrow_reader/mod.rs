@@ -1972,7 +1972,8 @@ mod tests {
         )
         .unwrap();
         for _ in 0..2 {
-            let mut list_builder = ListBuilder::new(Int32Builder::new(batch_size));
+            let mut list_builder =
+                ListBuilder::new(Int32Builder::with_capacity(batch_size));
             for _ in 0..(batch_size) {
                 list_builder.append(true);
             }
