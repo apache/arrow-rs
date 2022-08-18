@@ -241,7 +241,7 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
 
-        let keys_builder = PrimitiveBuilder::<Int32Type>::new(10);
+        let keys_builder = PrimitiveBuilder::<Int32Type>::with_capacity(10);
         let values_builder = StringBuilder::new(10);
         let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
 
