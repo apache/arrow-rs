@@ -119,7 +119,7 @@
 //!}
 //! ```
 
-experimental!(mod array_reader);
+mod array_reader;
 pub mod arrow_reader;
 pub mod arrow_writer;
 mod buffer;
@@ -128,7 +128,7 @@ mod buffer;
 pub mod async_reader;
 
 mod record_reader;
-experimental!(mod schema);
+mod schema;
 
 #[allow(deprecated)]
 pub use self::arrow_reader::{ArrowReader, ParquetFileArrowReader};
