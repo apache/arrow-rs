@@ -122,7 +122,7 @@
 experimental!(mod array_reader);
 pub mod arrow_reader;
 pub mod arrow_writer;
-mod buffer;
+experimental!(mod buffer);
 
 #[cfg(feature = "async")]
 pub mod async_reader;
