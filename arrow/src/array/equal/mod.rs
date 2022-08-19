@@ -768,7 +768,7 @@ mod tests {
     fn create_fixed_size_binary_array<U: AsRef<[u8]>, T: AsRef<[Option<U>]>>(
         data: T,
     ) -> ArrayData {
-        let mut builder = FixedSizeBinaryBuilder::new(15, 5);
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(15, 5);
 
         for d in data.as_ref() {
             if let Some(v) = d {

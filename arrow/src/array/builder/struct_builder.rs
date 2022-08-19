@@ -109,7 +109,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Float64 => Box::new(Float64Builder::new(capacity)),
         DataType::Binary => Box::new(BinaryBuilder::new(capacity)),
         DataType::FixedSizeBinary(len) => {
-            Box::new(FixedSizeBinaryBuilder::new(capacity, *len))
+            Box::new(FixedSizeBinaryBuilder::with_capacity(capacity, *len))
         }
         DataType::Decimal128(precision, scale) => {
             Box::new(Decimal128Builder::new(capacity, *precision, *scale))

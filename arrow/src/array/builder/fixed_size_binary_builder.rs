@@ -33,9 +33,14 @@ pub struct FixedSizeBinaryBuilder {
 }
 
 impl FixedSizeBinaryBuilder {
+    /// Creates a new [`FixedSizeBinaryBuilder`]
+    pub fn new(byte_width: i32) -> Self {
+        Self::with_capacity(1024, byte_width)
+    }
+
     /// Creates a new [`FixedSizeBinaryBuilder`], `capacity` is the number of bytes in the values
     /// buffer
-    pub fn new(capacity: usize, byte_width: i32) -> Self {
+    pub fn with_capacity(capacity: usize, byte_width: i32) -> Self {
         assert!(
             byte_width >= 0,
             "value length ({}) of the array must >= 0",
@@ -132,7 +137,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_builder() {
-        let mut builder = FixedSizeBinaryBuilder::new(15, 5);
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(15, 5);
 
         //  [b"hello", null, "arrow"]
         builder.append_value(b"hello").unwrap();
@@ -149,7 +154,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_builder_with_zero_value_length() {
-        let mut builder = FixedSizeBinaryBuilder::new(0, 0);
+        let mut builder = FixedSizeBinaryBuilder::new(0);
 
         builder.append_value(b"").unwrap();
         builder.append_null();
@@ -171,12 +176,12 @@ mod tests {
         expected = "Byte slice does not have the same length as FixedSizeBinaryBuilder value lengths"
     )]
     fn test_fixed_size_binary_builder_with_inconsistent_value_length() {
-        let mut builder = FixedSizeBinaryBuilder::new(15, 4);
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(15, 4);
         builder.append_value(b"hello").unwrap();
     }
     #[test]
     fn test_fixed_size_binary_builder_empty() {
-        let mut builder = FixedSizeBinaryBuilder::new(15, 5);
+        let mut builder = FixedSizeBinaryBuilder::new(5);
         assert!(builder.is_empty());
 
         let fixed_size_binary_array = builder.finish();
@@ -190,6 +195,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "value length (-1) of the array must >= 0")]
     fn test_fixed_size_binary_builder_invalid_value_length() {
-        let _ = FixedSizeBinaryBuilder::new(15, -1);
+        let _ = FixedSizeBinaryBuilder::with_capacity(15, -1);
     }
 }
