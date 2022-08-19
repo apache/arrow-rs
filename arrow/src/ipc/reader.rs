@@ -53,14 +53,11 @@ fn read_buffer(
 ) -> Result<Buffer> {
     let start_offset = buf.offset() as usize;
     let end_offset = start_offset + buf.length() as usize;
-    let buf_data = &a_data[start_offset..end_offset];
+    let buf_data = Buffer::from(&a_data[start_offset..end_offset]);
     // corner case: empty buffer
-    if buf_data.is_empty() {
-        return Ok(Buffer::from(buf_data));
-    }
-    match compression_codec {
-        Some(decompressor) => decompressor.decompress_to_buffer(buf_data),
-        None => Ok(Buffer::from(buf_data)),
+    match (buf_data.is_empty(), compression_codec) {
+        (true, _) | (_, None) => Ok(buf_data),
+        (false, Some(decompressor)) => decompressor.decompress_to_buffer(&buf_data),
     }
 }
 
@@ -1560,7 +1557,7 @@ mod tests {
         let array1 = StringArray::from(vec!["foo", "bar", "baz"]);
         let array2 = BooleanArray::from(vec![true, false, true]);
 
-        let mut union_builder = UnionBuilder::new_dense(3);
+        let mut union_builder = UnionBuilder::new_dense();
         union_builder.append::<Int32Type>("a", 1).unwrap();
         union_builder.append::<Float64Type>("b", 10.1).unwrap();
         union_builder.append_null::<Float64Type>("b").unwrap();
@@ -1809,12 +1806,12 @@ mod tests {
 
     #[test]
     fn test_roundtrip_dense_union() {
-        check_union_with_builder(UnionBuilder::new_dense(6));
+        check_union_with_builder(UnionBuilder::new_dense());
     }
 
     #[test]
     fn test_roundtrip_sparse_union() {
-        check_union_with_builder(UnionBuilder::new_sparse(6));
+        check_union_with_builder(UnionBuilder::new_sparse());
     }
 
     /// Read gzipped JSON file
