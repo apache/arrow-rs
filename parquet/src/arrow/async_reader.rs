@@ -300,7 +300,7 @@ impl<T: AsyncFileReader + Send + 'static> ArrowReaderBuilder<AsyncReader<T>> {
     pub async fn new_with_options(mut input: T, options: ReadOptions) -> Result<Self> {
         let mut metadata = input.get_metadata().await?;
 
-        let mut row_groups = metadata.row_groups().clone().to_vec();
+        let mut row_groups = metadata.row_groups().to_vec();
 
         if options.enable_page_index {
             let mut columns_indexes = vec![];
@@ -749,10 +749,9 @@ impl ChunkReader for ColumnChunkData {
                 .binary_search_by_key(&start, |(offset, _)| *offset as u64)
                 .map(|idx| data[idx].1.slice(0..length))
                 .map_err(|_| {
-                    let valid_offsets: Vec<usize> = data.iter().map(|(offset,_)| *offset).collect();
                     ParquetError::General(format!(
-                        "Invalid offset in sparse column chunk data: {}. Valid offset are {:?}. Total pages {}",
-                        start, valid_offsets, valid_offsets.len()
+                        "Invalid offset in sparse column chunk data: {}",
+                        start
                     ))
                 }),
             ColumnChunkData::Dense { offset, data } => {
