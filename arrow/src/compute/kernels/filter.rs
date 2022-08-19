@@ -1039,7 +1039,7 @@ mod tests {
     #[test]
     fn test_filter_string_array_with_negated_boolean_array() {
         let a = StringArray::from(vec!["hello", " ", "world", "!"]);
-        let mut bb = BooleanBuilder::new(2);
+        let mut bb = BooleanBuilder::with_capacity(2);
         bb.append_value(false);
         bb.append_value(true);
         bb.append_value(false);
