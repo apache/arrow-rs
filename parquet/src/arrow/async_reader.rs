@@ -78,7 +78,7 @@
 use std::collections::VecDeque;
 use std::fmt::Formatter;
 
-use std::io::SeekFrom;
+use std::io::{Cursor, SeekFrom};
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -88,6 +88,8 @@ use bytes::{Buf, Bytes};
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;
 use futures::stream::Stream;
+use parquet_format::{OffsetIndex, PageLocation};
+use thrift::protocol::TCompactInputProtocol;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
@@ -96,8 +98,8 @@ use arrow::record_batch::RecordBatch;
 
 use crate::arrow::array_reader::{build_array_reader, RowGroupCollection};
 use crate::arrow::arrow_reader::{
-    evaluate_predicate, selects_any, ArrowReaderBuilder, ParquetRecordBatchReader,
-    RowFilter, RowSelection,
+    evaluate_predicate, selects_any, ArrowReaderBuilder, ArrowReaderOptions,
+    ParquetRecordBatchReader, RowFilter, RowSelection,
 };
 use crate::arrow::ProjectionMask;
 
@@ -108,6 +110,9 @@ use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 
+use crate::file::page_index::index::Index;
+use crate::file::page_index::index_reader;
+use crate::file::serialized_reader::ReadOptions;
 use crate::file::FOOTER_SIZE;
 
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
@@ -139,6 +144,80 @@ pub trait AsyncFileReader: Send {
     /// allowing fine-grained control over how metadata is sourced, in particular allowing
     /// for caching, pre-fetching, catalog metadata, etc...
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>>;
+
+    /// Provides asynchronous access to the the page index for each column chunk in a
+    /// row group. Will panic if `row_group_idx` is greater than or equal to `num_row_groups`
+    fn get_column_indexes(
+        &mut self,
+        metadata: Arc<ParquetMetaData>,
+        row_group_idx: usize,
+    ) -> BoxFuture<'_, Result<Vec<Index>>> {
+        async move {
+            let chunks = metadata.row_group(row_group_idx).columns();
+
+            let (offset, lengths) = index_reader::get_index_offset_and_lengths(chunks)?;
+            let length = lengths.iter().sum::<usize>();
+
+            if length == 0 {
+                return Ok(vec![Index::NONE; chunks.len()]);
+            }
+
+            //read all need data into buffer
+            let data = self
+                .get_bytes(offset as usize..offset as usize + length)
+                .await?;
+
+            let mut start = 0;
+            let data = lengths.into_iter().map(|length| {
+                let r = data.slice(start..start + length);
+                start += length;
+                r
+            });
+
+            chunks
+                .iter()
+                .zip(data)
+                .map(|(chunk, data)| {
+                    let column_type = chunk.column_type();
+                    index_reader::deserialize_column_index(&data, column_type)
+                })
+                .collect()
+        }
+        .boxed()
+    }
+
+    /// Provides asynchronous access to the the offset index for each column chunk in a
+    /// row group. Will panic if `row_group_idx` is greater than or equal to `num_row_groups`
+    fn get_page_locations(
+        &mut self,
+        metadata: Arc<ParquetMetaData>,
+        row_group_idx: usize,
+    ) -> BoxFuture<'_, Result<Option<Vec<Vec<PageLocation>>>>> {
+        async move {
+            let chunks = metadata.row_group(row_group_idx).columns();
+
+            let (offset, total_length) =
+                index_reader::get_location_offset_and_total_length(chunks)?;
+
+            if total_length == 0 {
+                return Ok(None);
+            }
+
+            let data = self
+                .get_bytes(offset as usize..offset as usize + total_length)
+                .await?;
+            let mut d = Cursor::new(data);
+            let mut result = vec![];
+
+            for _ in 0..chunks.len() {
+                let mut prot = TCompactInputProtocol::new(&mut d);
+                let offset = OffsetIndex::read_from_in_protocol(&mut prot)?;
+                result.push(offset.page_locations);
+            }
+            Ok(Some(result))
+        }
+        .boxed()
+    }
 }
 
 impl AsyncFileReader for Box<dyn AsyncFileReader> {
@@ -216,6 +295,39 @@ impl<T: AsyncFileReader + Send + 'static> ArrowReaderBuilder<AsyncReader<T>> {
     pub async fn new(mut input: T) -> Result<Self> {
         let metadata = input.get_metadata().await?;
         Self::new_builder(AsyncReader(input), metadata, Default::default())
+    }
+
+    pub async fn new_with_options(mut input: T, options: ReadOptions) -> Result<Self> {
+        let mut metadata = input.get_metadata().await?;
+
+        let mut row_groups = metadata.row_groups().clone().to_vec();
+
+        if options.enable_page_index {
+            let mut columns_indexes = vec![];
+            let mut offset_indexes = vec![];
+
+            for (idx, rg) in row_groups.iter_mut().enumerate() {
+                let column_index =
+                    input.get_column_indexes(metadata.clone(), idx).await?;
+
+                columns_indexes.push(column_index);
+                if let Some(offset_index) =
+                    input.get_page_locations(metadata.clone(), idx).await?
+                {
+                    rg.set_page_offset(offset_index.clone());
+                    offset_indexes.push(offset_index);
+                }
+            }
+
+            metadata = Arc::new(ParquetMetaData::new_with_page_index(
+                metadata.file_metadata().clone(),
+                row_groups,
+                Some(columns_indexes),
+                Some(offset_indexes),
+            ))
+        }
+
+        Self::new_builder(AsyncReader(input), metadata, ArrowReaderOptions::new())
     }
 
     /// Build a new [`ParquetRecordBatchStream`]
@@ -637,9 +749,10 @@ impl ChunkReader for ColumnChunkData {
                 .binary_search_by_key(&start, |(offset, _)| *offset as u64)
                 .map(|idx| data[idx].1.slice(0..length))
                 .map_err(|_| {
+                    let valid_offsets: Vec<usize> = data.iter().map(|(offset,_)| *offset).collect();
                     ParquetError::General(format!(
-                        "Invalid offset in sparse column chunk data: {}",
-                        start
+                        "Invalid offset in sparse column chunk data: {}. Valid offset are {:?}. Total pages {}",
+                        start, valid_offsets, valid_offsets.len()
                     ))
                 }),
             ColumnChunkData::Dense { offset, data } => {
@@ -688,6 +801,7 @@ mod tests {
     use arrow::array::{Array, ArrayRef, Int32Array, StringArray};
     use arrow::error::Result as ArrowResult;
 
+    use crate::file::serialized_reader::ReadOptionsBuilder;
     use futures::TryStreamExt;
     use std::sync::Mutex;
 
@@ -764,6 +878,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_async_reader_with_index() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let data = Bytes::from(std::fs::read(path).unwrap());
+
+        let metadata = parse_metadata(&data).unwrap();
+        let metadata = Arc::new(metadata);
+
+        assert_eq!(metadata.num_row_groups(), 1);
+
+        let async_reader = TestReader {
+            data: data.clone(),
+            metadata: metadata.clone(),
+            requests: Default::default(),
+        };
+
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let builder =
+            ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
+                .await
+                .unwrap();
+
+        // The builder should have page and offset indexes loaded now
+        let metadata_with_index = builder.metadata();
+
+        // Check offset indexes are present for all columns
+        for rg in metadata_with_index.row_groups() {
+            let page_locations = rg
+                .page_offset_index()
+                .as_ref()
+                .expect("expected page offset index");
+            assert_eq!(page_locations.len(), rg.columns().len())
+        }
+
+        // Check page indexes are present for all columns
+        let page_indexes = metadata_with_index
+            .page_indexes()
+            .expect("expected page indexes");
+        for (idx, rg) in metadata_with_index.row_groups().iter().enumerate() {
+            assert_eq!(page_indexes[idx].len(), rg.columns().len())
+        }
+
+        let mask = ProjectionMask::leaves(builder.parquet_schema(), vec![1, 2]);
+        let stream = builder
+            .with_projection(mask.clone())
+            .with_batch_size(1024)
+            .build()
+            .unwrap();
+
+        let async_batches: Vec<_> = stream.try_collect().await.unwrap();
+
+        let sync_batches = ParquetRecordBatchReaderBuilder::try_new(data)
+            .unwrap()
+            .with_projection(mask)
+            .with_batch_size(1024)
+            .build()
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+
+        assert_eq!(async_batches, sync_batches);
+    }
+
+    #[tokio::test]
     async fn test_row_filter() {
         let a = StringArray::from_iter_values(["a", "b", "b", "b", "c", "c"]);
         let b = StringArray::from_iter_values(["1", "2", "3", "4", "5", "6"]);
@@ -833,6 +1011,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_row_filter_with_index() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let data = Bytes::from(std::fs::read(path).unwrap());
+
+        let metadata = parse_metadata(&data).unwrap();
+        let parquet_schema = metadata.file_metadata().schema_descr_ptr();
+        let metadata = Arc::new(metadata);
+
+        assert_eq!(metadata.num_row_groups(), 1);
+
+        let async_reader = TestReader {
+            data: data.clone(),
+            metadata: metadata.clone(),
+            requests: Default::default(),
+        };
+
+        let a_filter = ArrowPredicateFn::new(
+            ProjectionMask::leaves(&parquet_schema, vec![1]),
+            |batch| arrow::compute::eq_dyn_bool_scalar(batch.column(0), true),
+        );
+
+        let b_filter = ArrowPredicateFn::new(
+            ProjectionMask::leaves(&parquet_schema, vec![2]),
+            |batch| arrow::compute::eq_dyn_scalar(batch.column(0), 2_i32),
+        );
+
+        let filter = RowFilter::new(vec![Box::new(a_filter), Box::new(b_filter)]);
+
+        let mask = ProjectionMask::leaves(&parquet_schema, vec![0, 2]);
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+
+        let stream =
+            ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
+                .await
+                .unwrap()
+                .with_projection(mask.clone())
+                .with_batch_size(1024)
+                .with_row_filter(filter)
+                .build()
+                .unwrap();
+
+        let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+
+        assert_eq!(total_rows, 730);
+    }
+
+    #[tokio::test]
     async fn test_in_memory_row_group_sparse() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{}/alltypes_tiny_pages.parquet", testdata);
@@ -882,7 +1110,7 @@ mod tests {
         let mut skip = true;
         let mut pages = offset_index[0].iter().peekable();
 
-        // Setup `RowSelection` so that we can skip every other page
+        // Setup `RowSelection` so that we can skip every other page, selecting the last page
         let mut selectors = vec![];
         let mut expected_page_requests: Vec<Range<usize>> = vec![];
         while let Some(page) = pages.next() {
@@ -906,7 +1134,7 @@ mod tests {
         let selection = RowSelection::from(selectors);
 
         let (_factory, _reader) = reader_factory
-            .read_row_group(0, Some(selection), projection, 48)
+            .read_row_group(0, Some(selection), projection.clone(), 48)
             .await
             .expect("reading row group");
 
