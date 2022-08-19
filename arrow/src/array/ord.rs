@@ -300,8 +300,8 @@ pub mod tests {
 
     #[test]
     fn test_decimal() -> Result<()> {
-        let array = vec![Some(5), Some(2), Some(3)]
-            .iter()
+        let array = vec![Some(5_i128), Some(2_i128), Some(3_i128)]
+            .into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap();

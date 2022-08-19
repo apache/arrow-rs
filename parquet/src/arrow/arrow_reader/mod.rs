@@ -28,7 +28,7 @@ use arrow::record_batch::{RecordBatch, RecordBatchReader};
 use arrow::{array::StructArray, error::ArrowError};
 
 use crate::arrow::array_reader::{
-    build_array_reader, ArrayReader, FileReaderRowGroupCollection,
+    build_array_reader, ArrayReader, FileReaderRowGroupCollection, RowGroupCollection,
 };
 use crate::arrow::schema::parquet_to_arrow_schema;
 use crate::arrow::schema::parquet_to_arrow_schema_by_columns;
@@ -39,16 +39,11 @@ use crate::file::reader::{ChunkReader, FileReader, SerializedFileReader};
 use crate::file::serialized_reader::ReadOptionsBuilder;
 use crate::schema::types::SchemaDescriptor;
 
-#[allow(unused)]
 mod filter;
-#[allow(unused)]
 mod selection;
 
-// TODO: Make these public once stable (#1792)
-#[allow(unused_imports)]
-pub(crate) use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
-#[allow(unused_imports)]
-pub(crate) use selection::{RowSelection, RowSelector};
+pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
+pub use selection::{RowSelection, RowSelector};
 
 /// A generic builder for constructing sync or async arrow parquet readers. This is not intended
 /// to be used directly, instead you should use the specialization for the type of reader
@@ -140,15 +135,17 @@ impl<T> ArrowReaderBuilder<T> {
         }
     }
 
-    /// Provide a [`RowSelection] to filter out rows, and avoid fetching their
-    /// data into memory
+    /// Provide a [`RowSelection`] to filter out rows, and avoid fetching their
+    /// data into memory.
     ///
-    /// Row group filtering is applied prior to this, and rows from skipped
+    /// Row group filtering is applied prior to this, and therefore rows from skipped
     /// row groups should not be included in the [`RowSelection`]
     ///
-    /// TODO: Make public once stable (#1792)
-    #[allow(unused)]
-    pub(crate) fn with_row_selection(self, selection: RowSelection) -> Self {
+    /// An example use case of this would be applying a selection determined by
+    /// evaluating predicates against the [`Index`]
+    ///
+    /// [`Index`]: [parquet::file::page_index::index::Index]
+    pub fn with_row_selection(self, selection: RowSelection) -> Self {
         Self {
             selection: Some(selection),
             ..self
@@ -158,10 +155,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// Provide a [`RowFilter`] to skip decoding rows
     ///
     /// Row filters are applied after row group selection and row selection
-    ///
-    /// TODO: Make public once stable (#1792)
-    #[allow(unused)]
-    pub(crate) fn with_row_filter(self, filter: RowFilter) -> Self {
+    pub fn with_row_filter(self, filter: RowFilter) -> Self {
         Self {
             filter: Some(filter),
             ..self
@@ -288,6 +282,8 @@ impl ArrowReader for ParquetFileArrowReader {
         let array_reader =
             build_array_reader(Arc::new(self.get_schema()?), mask, &self.file_reader)?;
 
+        // Try to avoid allocate large buffer
+        let batch_size = self.file_reader.num_rows().min(batch_size);
         Ok(ParquetRecordBatchReader::new(
             batch_size,
             array_reader,
@@ -410,6 +406,10 @@ impl<T: ChunkReader + 'static> ArrowReaderBuilder<SyncReader<T>> {
         let mut filter = self.filter;
         let mut selection = self.selection;
 
+        // Try to avoid allocate large buffer
+        let batch_size = self
+            .batch_size
+            .min(self.metadata.file_metadata().num_rows() as usize);
         if let Some(filter) = filter.as_mut() {
             for predicate in filter.predicates.iter_mut() {
                 if !selects_any(selection.as_ref()) {
@@ -421,7 +421,7 @@ impl<T: ChunkReader + 'static> ArrowReaderBuilder<SyncReader<T>> {
                     build_array_reader(Arc::clone(&self.schema), projection, &reader)?;
 
                 selection = Some(evaluate_predicate(
-                    self.batch_size,
+                    batch_size,
                     array_reader,
                     selection,
                     predicate.as_mut(),
@@ -437,7 +437,7 @@ impl<T: ChunkReader + 'static> ArrowReaderBuilder<SyncReader<T>> {
         }
 
         Ok(ParquetRecordBatchReader::new(
-            self.batch_size,
+            batch_size,
             array_reader,
             selection,
         ))
@@ -2157,5 +2157,23 @@ mod tests {
                 .build()
                 .unwrap()
         }
+    }
+
+    #[test]
+    fn test_batch_size_overallocate() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        // `alltypes_plain.parquet` only have 8 rows
+        let path = format!("{}/alltypes_plain.parquet", testdata);
+        let test_file = File::open(&path).unwrap();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(test_file).unwrap();
+        let num_rows = builder.metadata.file_metadata().num_rows();
+        let reader = builder
+            .with_batch_size(1024)
+            .with_projection(ProjectionMask::all())
+            .build()
+            .unwrap();
+        assert_ne!(1024, num_rows);
+        assert_eq!(reader.batch_size, num_rows as usize);
     }
 }
