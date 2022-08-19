@@ -288,32 +288,3 @@ impl ClientSecretOAuthProvider {
         Ok(token)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::client::retry::RetryConfig;
-    use std::env;
-
-    #[tokio::test]
-    async fn test_client_creds() {
-        dotenv::dotenv().ok();
-
-        let oauth = ClientSecretOAuthProvider::new_azure(
-            env::var("MLFUSION_AZURE_CLIENT_ID")
-                .expect("already checked MLFUSION_AZURE_CLIENT_ID"),
-            env::var("MLFUSION_AZURE_CLIENT_SECRET")
-                .expect("already checked MLFUSION_AZURE_CLIENT_SECRET"),
-            env::var("MLFUSION_TENANT_ID").expect("already checked MLFUSION_TENANT_ID"),
-            None,
-        );
-
-        let client = reqwest::ClientBuilder::new()
-            .https_only(false)
-            .build()
-            .unwrap();
-
-        let token = oauth.fetch_token(&client, &RetryConfig::default()).await;
-        println!("{:?}", token)
-    }
-}
