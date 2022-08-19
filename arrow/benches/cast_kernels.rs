@@ -94,7 +94,7 @@ fn build_decimal128_array(size: usize, precision: usize, scale: usize) -> ArrayR
 
 fn build_decimal256_array(size: usize, precision: usize, scale: usize) -> ArrayRef {
     let mut rng = seedable_rng();
-    let mut builder = Decimal256Builder::new(size, precision, scale);
+    let mut builder = Decimal256Builder::with_capacity(size, precision, scale);
     let mut bytes = [0; 32];
     for _ in 0..size {
         let num = rng.gen_range::<i128, _>(0..1000000000);

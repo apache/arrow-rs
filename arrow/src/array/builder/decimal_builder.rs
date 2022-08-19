@@ -160,9 +160,14 @@ impl ArrayBuilder for Decimal128Builder {
 
 impl Decimal256Builder {
     const BYTE_LENGTH: i32 = 32;
+    /// Creates a new [`Decimal256Builder`]
+    pub fn new(precision: usize, scale: usize) -> Self {
+        Self::with_capacity(1024, precision, scale)
+    }
+
     /// Creates a new [`Decimal256Builder`], `capacity` is the number of bytes in the values
     /// array
-    pub fn new(capacity: usize, precision: usize, scale: usize) -> Self {
+    pub fn with_capacity(capacity: usize, precision: usize, scale: usize) -> Self {
         Self {
             builder: FixedSizeBinaryBuilder::new(capacity, Self::BYTE_LENGTH),
             precision,
@@ -288,7 +293,7 @@ mod tests {
 
     #[test]
     fn test_decimal256_builder() {
-        let mut builder = Decimal256Builder::new(30, 40, 6);
+        let mut builder = Decimal256Builder::new(40, 6);
 
         let mut bytes = [0_u8; 32];
         bytes[0..16].clone_from_slice(&8_887_000_000_i128.to_le_bytes());
@@ -332,7 +337,7 @@ mod tests {
         expected = "Decimal value does not have the same precision or scale as Decimal256Builder"
     )]
     fn test_decimal256_builder_unmatched_precision_scale() {
-        let mut builder = Decimal256Builder::new(30, 10, 6);
+        let mut builder = Decimal256Builder::with_capacity(30, 10, 6);
 
         let mut bytes = [0_u8; 32];
         bytes[0..16].clone_from_slice(&8_887_000_000_i128.to_le_bytes());
@@ -345,7 +350,7 @@ mod tests {
         expected = "9999999999999999999999999999999999999999999999999999999999999999999999999999 is too large to store in a Decimal256 of precision 75. Max is 999999999999999999999999999999999999999999999999999999999999999999999999999"
     )]
     fn test_decimal256_builder_out_of_range_precision_scale() {
-        let mut builder = Decimal256Builder::new(30, 75, 6);
+        let mut builder = Decimal256Builder::new(75, 6);
 
         let big_value = BigInt::from_str_radix("9999999999999999999999999999999999999999999999999999999999999999999999999999", 10).unwrap();
         let value = Decimal256::from_big_int(&big_value, 75, 6).unwrap();
@@ -357,7 +362,7 @@ mod tests {
         expected = "9999999999999999999999999999999999999999999999999999999999999999999999999999 is too large to store in a Decimal256 of precision 75. Max is 999999999999999999999999999999999999999999999999999999999999999999999999999"
     )]
     fn test_decimal256_data_validation() {
-        let mut builder = Decimal256Builder::new(30, 75, 6);
+        let mut builder = Decimal256Builder::new(75, 6);
         // Disable validation at builder
         unsafe {
             builder.disable_value_validation();

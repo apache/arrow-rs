@@ -884,7 +884,7 @@ mod tests {
 
     #[test]
     fn test_decimal256_iter() {
-        let mut builder = Decimal256Builder::new(30, 76, 6);
+        let mut builder = Decimal256Builder::with_capacity(30, 76, 6);
         let value = BigInt::from_str_radix("12345", 10).unwrap();
         let decimal1 = Decimal256::from_big_int(&value, 76, 6).unwrap();
         builder.append_value(&decimal1).unwrap();
