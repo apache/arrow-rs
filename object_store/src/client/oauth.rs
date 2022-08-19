@@ -261,12 +261,10 @@ impl ClientSecretOAuthProvider {
         retry: &RetryConfig,
     ) -> Result<String> {
         self.cache
-            .get_or_insert_with(|| {
-                self.fetch_token_inner(client, retry)
-            })
+            .get_or_insert_with(|| self.fetch_token_inner(client, retry))
             .await
     }
-    
+
     /// Fetch a fresh token
     async fn fetch_token_inner(
         &self,
