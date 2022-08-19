@@ -649,7 +649,7 @@ mod tests {
 
     #[test]
     fn test_pretty_format_dense_union() -> Result<()> {
-        let mut builder = UnionBuilder::new_dense(4);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Float64Type>("b", 3.2234).unwrap();
         builder.append_null::<Float64Type>("b").unwrap();
@@ -690,7 +690,7 @@ mod tests {
 
     #[test]
     fn test_pretty_format_sparse_union() -> Result<()> {
-        let mut builder = UnionBuilder::new_sparse(4);
+        let mut builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Float64Type>("b", 3.2234).unwrap();
         builder.append_null::<Float64Type>("b").unwrap();
@@ -732,7 +732,7 @@ mod tests {
     #[test]
     fn test_pretty_format_nested_union() -> Result<()> {
         //Inner UnionArray
-        let mut builder = UnionBuilder::new_dense(5);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("b", 1).unwrap();
         builder.append::<Float64Type>("c", 3.2234).unwrap();
         builder.append_null::<Float64Type>("c").unwrap();

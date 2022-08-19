@@ -2040,7 +2040,7 @@ mod tests {
             ),
             true,
         )]);
-        let mut builder = UnionBuilder::new_sparse(5);
+        let mut builder = UnionBuilder::with_capacity_sparse(5);
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append_null::<Int32Type>("a").unwrap();
         builder.append::<Float64Type>("c", 3.0).unwrap();
