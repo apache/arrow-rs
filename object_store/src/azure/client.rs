@@ -352,7 +352,9 @@ impl AzureClient {
                 let token = cred.get_token().await.context(AuthorizationSnafu)?;
                 Ok(AzureCredential::BearerToken(token.token))
             }
-            CredentialProvider::SASToken(sas) => todo!(),
+            CredentialProvider::SASToken(sas) => {
+                Ok(AzureCredential::SASToken(sas.clone()))
+            }
         }
     }
 

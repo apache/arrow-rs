@@ -34,9 +34,9 @@ use std::str;
 use std::time::Instant;
 use url::Url;
 
-pub(crate) static STORAGE_TOKEN_SCOPE: &str = "https://storage.azure.com/";
-pub(crate) static AZURE_VERSION: HeaderValue = HeaderValue::from_static("2021-08-06");
-pub(crate) static VERSION: HeaderName = HeaderName::from_static("x-ms-version");
+const STORAGE_TOKEN_SCOPE: &str = "https://storage.azure.com/";
+static AZURE_VERSION: HeaderValue = HeaderValue::from_static("2021-08-06");
+static VERSION: HeaderName = HeaderName::from_static("x-ms-version");
 pub(crate) static RANGE_GET_CONTENT_CRC64: HeaderName =
     HeaderName::from_static("x-ms-range-get-content-crc64");
 pub(crate) static MS_RANGE: HeaderName = HeaderName::from_static("x-ms-range");
@@ -78,13 +78,13 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Debug)]
 pub enum CredentialProvider {
     AccessKey(String),
-    SASToken(String),
+    SASToken(Vec<(String, String)>),
     ClientSecret(ClientSecretCredential),
 }
 
 pub enum AzureCredential {
     AccessKey(String),
-    SASToken(String),
+    SASToken(Vec<(String, String)>),
     BearerToken(String),
 }
 
@@ -276,7 +276,9 @@ impl CredentialExt for RequestBuilder {
                         HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
                     );
             }
-            AzureCredential::SASToken(_sas) => todo!(),
+            AzureCredential::SASToken(query_pairs) => {
+                self = self.query(&query_pairs);
+            }
         };
 
         self

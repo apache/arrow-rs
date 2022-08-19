@@ -49,11 +49,11 @@ mod client;
 mod credential;
 
 /// The well-known account used by Azurite and the legacy Azure Storage Emulator.
-/// https://docs.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key
+/// <https://docs.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key>
 pub const EMULATOR_ACCOUNT: &str = "devstoreaccount1";
 
 /// The well-known account key used by Azurite and the legacy Azure Storage Emulator.
-/// https://docs.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key
+/// <https://docs.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key>
 pub const EMULATOR_ACCOUNT_KEY: &str =
     "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
 
@@ -117,7 +117,7 @@ enum Error {
 impl From<Error> for super::Error {
     fn from(source: Error) -> Self {
         Self::Generic {
-            store: "Azure Blob Storage",
+            store: "MicrosoftAzure",
             source: Box::new(source),
         }
     }
@@ -127,15 +127,16 @@ impl From<Error> for super::Error {
 #[derive(Debug)]
 pub struct MicrosoftAzure {
     client: Arc<client::AzureClient>,
-    container_name: String,
 }
 
 impl std::fmt::Display for MicrosoftAzure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.client.config().is_emulator {
-            true => write!(f, "MicrosoftAzureEmulator({})", self.container_name),
-            false => write!(f, "MicrosoftAzure({})", self.container_name),
-        }
+        write!(
+            f,
+            "MicrosoftAzure {{ account: {}, container: {} }}",
+            self.client.config().account,
+            self.client.config().container
+        )
     }
 }
 
@@ -357,7 +358,7 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
 /// # use object_store::azure::MicrosoftAzureBuilder;
 /// let azure = MicrosoftAzureBuilder::new()
 ///  .with_account(ACCOUNT)
-///  .with_access_key(ACCESS_KEY)
+///  .with_access_key_authorization(ACCESS_KEY)
 ///  .with_container_name(BUCKET_NAME)
 ///  .build();
 /// ```
@@ -370,6 +371,7 @@ pub struct MicrosoftAzureBuilder {
     client_id: Option<String>,
     client_secret: Option<String>,
     tenant_id: Option<String>,
+    sas_query_pairs: Option<Vec<(String, String)>>,
     use_emulator: bool,
     retry_config: RetryConfig,
     allow_http: bool,
@@ -397,27 +399,31 @@ impl MicrosoftAzureBuilder {
         self
     }
 
-    /// Set the Azure Access Key (required - one of access key, bearer token, or client credentials)
-    pub fn with_access_key(mut self, access_key: impl Into<String>) -> Self {
-        self.access_key = Some(access_key.into());
-        self
-    }
-
-    /// Set a static bearer token to be used for authorizing requests
-    /// (required - one of access key, bearer token, or client credentials)
-    pub fn with_bearer_token(mut self, bearer_token: impl Into<String>) -> Self {
-        self.bearer_token = Some(bearer_token.into());
-        self
-    }
-
     /// Set the Azure Container Name (required)
     pub fn with_container_name(mut self, container_name: impl Into<String>) -> Self {
         self.container_name = Some(container_name.into());
         self
     }
 
+    /// Set the Azure Access Key (required - one of access key, bearer token, or client credentials)
+    pub fn with_access_key_authorization(
+        mut self,
+        access_key: impl Into<String>,
+    ) -> Self {
+        self.access_key = Some(access_key.into());
+        self
+    }
+
+    /// Set a static bearer token to be used for authorizing requests
+    pub fn with_bearer_token_authorization(
+        mut self,
+        bearer_token: impl Into<String>,
+    ) -> Self {
+        self.bearer_token = Some(bearer_token.into());
+        self
+    }
+
     /// Set a client secret used for client secret authorization
-    /// (required - one of access key, bearer token, or client credentials)
     pub fn with_client_secret_authorization(
         mut self,
         client_id: impl Into<String>,
@@ -427,6 +433,15 @@ impl MicrosoftAzureBuilder {
         self.client_id = Some(client_id.into());
         self.client_secret = Some(client_secret.into());
         self.tenant_id = Some(tenant_id.into());
+        self
+    }
+
+    /// Set query pairs appended to the url for shared access signature authorization
+    pub fn with_sas_authorization(
+        mut self,
+        query_pairs: impl Into<Vec<(String, String)>>,
+    ) -> Self {
+        self.sas_query_pairs = Some(query_pairs.into());
         self
     }
 
@@ -461,6 +476,7 @@ impl MicrosoftAzureBuilder {
             client_id,
             client_secret,
             tenant_id,
+            sas_query_pairs,
             use_emulator,
             retry_config,
             allow_http,
@@ -499,6 +515,8 @@ impl MicrosoftAzureBuilder {
                 Ok(credential::CredentialProvider::ClientSecret(
                     client_credential,
                 ))
+            } else if let Some(query_pairs) = sas_query_pairs {
+                Ok(credential::CredentialProvider::SASToken(query_pairs))
             } else {
                 Err(Error::MissingCredentials {})
             }?;
@@ -516,17 +534,14 @@ impl MicrosoftAzureBuilder {
             allow_http,
             retry_config,
             service: blob_base_url,
-            container: container.clone(),
+            container,
             credentials: auth,
             is_emulator,
         };
 
         let client = Arc::new(client::AzureClient::new(config));
 
-        Ok(MicrosoftAzure {
-            client,
-            container_name: container,
-        })
+        Ok(MicrosoftAzure { client })
     }
 }
 
@@ -600,7 +615,7 @@ mod tests {
                         .with_account(
                             env::var("AZURE_STORAGE_ACCOUNT").unwrap_or_default(),
                         )
-                        .with_access_key(
+                        .with_access_key_authorization(
                             env::var("AZURE_STORAGE_ACCESS_KEY").unwrap_or_default(),
                         )
                 } else {
