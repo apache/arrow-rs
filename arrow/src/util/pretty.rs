@@ -317,7 +317,7 @@ mod tests {
         let field_type = DataType::FixedSizeBinary(3);
         let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
 
-        let mut builder = FixedSizeBinaryBuilder::new(3, 3);
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 3);
 
         builder.append_value(&[1, 2, 3]).unwrap();
         builder.append_null();
