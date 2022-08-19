@@ -66,14 +66,19 @@ pub struct BooleanBuilder {
     null_buffer_builder: NullBufferBuilder,
 }
 
+impl Default for BooleanBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BooleanBuilder {
     /// Creates a new boolean builder
-    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self::with_capacity(1024)
     }
 
-    /// Creates a new boolean builder with capacity
+    /// Creates a new boolean builder with space for `capacity` elements without re-allocating
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             values_builder: BooleanBufferBuilder::new(capacity),
