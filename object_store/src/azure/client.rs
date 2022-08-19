@@ -16,30 +16,22 @@
 // under the License.
 
 use super::credential::{AzureCredential, CredentialProvider, Error as CredentialError};
-use crate::azure::credential::CredentialExt;
+use crate::azure::credential::*;
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
 use crate::path::DELIMITER;
 use crate::util::{encode_path, format_http_range, format_prefix};
 use crate::{BoxStream, ListResult, ObjectMeta, Path, Result, RetryConfig, StreamExt};
 use bytes::{Buf, Bytes};
-use chrono::{DateTime, Utc};
-use httpdate::parse_http_date;
+use chrono::{DateTime, TimeZone, Utc};
 use reqwest::{
-    header::{HeaderName, HeaderValue, CONTENT_LENGTH, IF_NONE_MATCH},
+    header::{HeaderValue, CONTENT_LENGTH, IF_NONE_MATCH},
     Client as ReqwestClient, Method, Response, StatusCode,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::collections::HashMap;
 use std::ops::Range;
-
-const RANGE_GET_CONTENT_CRC64: HeaderName =
-    HeaderName::from_static("x-ms-range-get-content-crc64");
-const MS_RANGE: HeaderName = HeaderName::from_static("x-ms-range");
-const BLOB_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-type");
-const DELETE_SNAPSHOTS: HeaderName = HeaderName::from_static("x-ms-delete-snapshots");
-const COPY_SOURCE: HeaderName = HeaderName::from_static("x-ms-copy-source");
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -123,9 +115,9 @@ where
     D: Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    Ok(DateTime::from(
-        parse_http_date(&s).map_err(serde::de::Error::custom)?,
-    ))
+    Ok(Utc
+        .datetime_from_str(&s, RFC1123_FMT)
+        .map_err(serde::de::Error::custom)?)
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

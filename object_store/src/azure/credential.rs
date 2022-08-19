@@ -34,9 +34,17 @@ use std::str;
 use std::time::Instant;
 use url::Url;
 
-const STORAGE_TOKEN_SCOPE: &str = "https://storage.azure.com/";
-const AZURE_VERSION: HeaderValue = HeaderValue::from_static("2021-08-06");
-const VERSION: HeaderName = HeaderName::from_static("x-ms-version");
+pub(crate) const STORAGE_TOKEN_SCOPE: &str = "https://storage.azure.com/";
+pub(crate) const AZURE_VERSION: HeaderValue = HeaderValue::from_static("2021-08-06");
+pub(crate) const VERSION: HeaderName = HeaderName::from_static("x-ms-version");
+pub(crate) const RANGE_GET_CONTENT_CRC64: HeaderName =
+    HeaderName::from_static("x-ms-range-get-content-crc64");
+pub(crate) const MS_RANGE: HeaderName = HeaderName::from_static("x-ms-range");
+pub(crate) const BLOB_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-type");
+pub(crate) const DELETE_SNAPSHOTS: HeaderName =
+    HeaderName::from_static("x-ms-delete-snapshots");
+pub(crate) const COPY_SOURCE: HeaderName = HeaderName::from_static("x-ms-copy-source");
+pub(crate) const RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -122,16 +130,6 @@ pub mod authority_hosts {
     pub const AZURE_GOVERNMENT: &str = "https://login.microsoftonline.us";
     /// Public Cloud Azure Authority Host
     pub const AZURE_PUBLIC_CLOUD: &str = "https://login.microsoftonline.com";
-}
-
-/// A list of tenant IDs
-pub mod tenant_ids {
-    /// The tenant ID for multi-tenant apps
-    ///
-    /// <https://docs.microsoft.com/azure/active-directory/develop/howto-convert-app-to-be-multi-tenant>
-    pub const TENANT_ID_COMMON: &str = "common";
-    /// The tenant ID for Active Directory Federated Services
-    pub const TENANT_ID_ADFS: &str = "adfs";
 }
 
 /// Enables authentication to Azure Active Directory using a client secret that was generated for an App Registration.
@@ -240,7 +238,7 @@ impl CredentialExt for RequestBuilder {
         account: &str,
     ) -> Self {
         let date = Utc::now();
-        let date_str = date.format("%a, %d %h %Y %T GMT").to_string();
+        let date_str = date.format(RFC1123_FMT).to_string();
         let date_val = HeaderValue::from_str(&date_str).unwrap();
 
         // Hack around lack of access to underlying request
@@ -278,7 +276,7 @@ impl CredentialExt for RequestBuilder {
                         HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
                     );
             }
-            AzureCredential::SASToken(sas) => todo!(),
+            AzureCredential::SASToken(_sas) => todo!(),
         };
 
         self

@@ -34,7 +34,6 @@ async-trait = "0.1.53"
 bytes = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 oauth2 = { version = "4", default-features = false, features = ["reqwest"], optional = true }
-httpdate = { version = "1.0.2", optional = true }
 # Google Cloud Storage integration
 futures = "0.3"
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
@@ -56,7 +55,7 @@ url = "2.2"
 walkdir = "2"
 
 [features]
-azure = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "rustls-pemfile", "base64", "rand", "ring", "httpdate", "oauth2"]
+azure = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "rustls-pemfile", "base64", "rand", "ring", "oauth2"]
 gcp = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "rustls-pemfile", "base64", "rand", "ring"]
 aws = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "rustls-pemfile", "base64", "rand", "ring"]
 

@@ -26,6 +26,7 @@
 //! [ObjectStore::abort_multipart] is a no-op, since Azure Blob Store doesn't provide
 //! a way to drop old blocks. Instead unused blocks are automatically cleaned up
 //! after 7 days.
+use self::client::{BlobBlockType, BlockId, BlockList};
 use crate::{
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::Path,
@@ -33,9 +34,8 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use chrono::DateTime;
+use chrono::{TimeZone, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
-use httpdate::parse_http_date;
 use snafu::{ResultExt, Snafu};
 use std::collections::BTreeSet;
 use std::fmt::{Debug, Formatter};
@@ -44,8 +44,6 @@ use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
 use url::Url;
-
-use self::client::{BlobBlockType, BlockId, BlockList};
 
 mod client;
 mod credential;
@@ -72,7 +70,7 @@ enum Error {
     #[snafu(display("Invalid last modified '{}': {}", last_modified, source))]
     InvalidLastModified {
         last_modified: String,
-        source: httpdate::Error,
+        source: chrono::ParseError,
     },
 
     #[snafu(display("Invalid content length '{}': {}", content_length, source))]
@@ -213,10 +211,9 @@ impl ObjectStore for MicrosoftAzure {
             .ok_or(Error::MissingContentLength)?;
 
         let last_modified = last_modified.to_str().context(BadHeaderSnafu)?;
-        let last_modified = DateTime::from(
-            parse_http_date(last_modified)
-                .context(InvalidLastModifiedSnafu { last_modified })?,
-        );
+        let last_modified = Utc
+            .datetime_from_str(&last_modified, credential::RFC1123_FMT)
+            .context(InvalidLastModifiedSnafu { last_modified })?;
 
         let content_length = content_length.to_str().context(BadHeaderSnafu)?;
         let content_length = content_length
@@ -469,19 +466,21 @@ impl MicrosoftAzureBuilder {
             allow_http,
         } = self;
 
-        let account = account.ok_or(Error::MissingAccount {})?;
         let container = container_name.ok_or(Error::MissingContainerName {})?;
 
-        let (is_emulator, allow_http, storage_url, auth) = if use_emulator {
+        let (is_emulator, allow_http, storage_url, auth, account) = if use_emulator {
+            let account = account.unwrap_or_else(|| EMULATOR_ACCOUNT.to_string());
             // Allow overriding defaults. Values taken from
             // from https://docs.rs/azure_storage/0.2.0/src/azure_storage/core/clients/storage_account_client.rs.html#129-141
             let url = url_from_env("AZURITE_BLOB_STORAGE_URL", "http://127.0.0.1:10000")?;
-            let account_key = access_key.unwrap_or_else(|| EMULATOR_ACCOUNT_KEY.to_string());
+            let account_key =
+                access_key.unwrap_or_else(|| EMULATOR_ACCOUNT_KEY.to_string());
             let credential = credential::CredentialProvider::AccessKey(account_key);
-            (true, true, url, credential)
+            (true, true, url, credential, account)
         } else {
             // TODO support other clouds
             let _url = "if let Some()";
+            let account = account.ok_or(Error::MissingAccount {})?;
             let url = get_endpoint_uri(None, &account)?;
             let credential = if let Some(bearer_token) = bearer_token {
                 Ok(credential::CredentialProvider::AccessKey(bearer_token))
@@ -503,7 +502,7 @@ impl MicrosoftAzureBuilder {
             } else {
                 Err(Error::MissingCredentials {})
             }?;
-            (false, allow_http, url, credential)
+            (false, allow_http, url, credential, account)
         };
 
         let blob_base_url = storage_url
@@ -590,16 +589,23 @@ mod tests {
                 );
                 return;
             } else {
-                MicrosoftAzureBuilder::new()
-                    .with_account(env::var("AZURE_STORAGE_ACCOUNT").unwrap_or_default())
-                    .with_access_key(
-                        env::var("AZURE_STORAGE_ACCESS_KEY").unwrap_or_default(),
-                    )
+                let builder = MicrosoftAzureBuilder::new()
                     .with_container_name(
                         env::var("OBJECT_STORE_BUCKET")
                             .expect("already checked OBJECT_STORE_BUCKET"),
                     )
-                    .with_use_emulator(use_emulator)
+                    .with_use_emulator(use_emulator);
+                if !use_emulator {
+                    builder
+                        .with_account(
+                            env::var("AZURE_STORAGE_ACCOUNT").unwrap_or_default(),
+                        )
+                        .with_access_key(
+                            env::var("AZURE_STORAGE_ACCESS_KEY").unwrap_or_default(),
+                        )
+                } else {
+                    builder
+                }
             }
         }};
     }
