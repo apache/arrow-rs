@@ -111,7 +111,7 @@ impl FieldData {
 /// use arrow::array::UnionBuilder;
 /// use arrow::datatypes::{Float64Type, Int32Type};
 ///
-/// let mut builder = UnionBuilder::new_dense(3);
+/// let mut builder = UnionBuilder::new_dense();
 /// builder.append::<Int32Type>("a", 1).unwrap();
 /// builder.append::<Float64Type>("b", 3.0).unwrap();
 /// builder.append::<Int32Type>("a", 4).unwrap();
@@ -131,7 +131,7 @@ impl FieldData {
 /// use arrow::array::UnionBuilder;
 /// use arrow::datatypes::{Float64Type, Int32Type};
 ///
-/// let mut builder = UnionBuilder::new_sparse(3);
+/// let mut builder = UnionBuilder::new_sparse();
 /// builder.append::<Int32Type>("a", 1).unwrap();
 /// builder.append::<Float64Type>("b", 3.0).unwrap();
 /// builder.append::<Int32Type>("a", 4).unwrap();
@@ -159,7 +159,17 @@ pub struct UnionBuilder {
 
 impl UnionBuilder {
     /// Creates a new dense array builder.
-    pub fn new_dense(capacity: usize) -> Self {
+    pub fn new_dense() -> Self {
+        Self::with_capacity_dense(1024)
+    }
+
+    /// Creates a new sparse array builder.
+    pub fn new_sparse() -> Self {
+        Self::with_capacity_sparse(1024)
+    }
+
+    /// Creates a new dense array builder with capacity.
+    pub fn with_capacity_dense(capacity: usize) -> Self {
         Self {
             len: 0,
             fields: HashMap::default(),
@@ -168,8 +178,8 @@ impl UnionBuilder {
         }
     }
 
-    /// Creates a new sparse array builder.
-    pub fn new_sparse(capacity: usize) -> Self {
+    /// Creates a new sparse array builder  with capacity.
+    pub fn with_capacity_sparse(capacity: usize) -> Self {
         Self {
             len: 0,
             fields: HashMap::default(),

@@ -263,8 +263,20 @@ pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
         // fast path, can use ends_with
         let ends_with = &right[1..];
+
         for i in 0..left.len() {
             if left.value(i).ends_with(ends_with) {
+                bit_util::set_bit(bool_slice, i);
+            }
+        }
+    } else if right.starts_with('%')
+        && right.ends_with('%')
+        && !right[1..right.len() - 1].contains(is_like_pattern)
+    {
+        // fast path, can use contains
+        let contains = &right[1..right.len() - 1];
+        for i in 0..left.len() {
+            if left.value(i).contains(contains) {
                 bit_util::set_bit(bool_slice, i);
             }
         }
@@ -382,6 +394,15 @@ pub fn nlike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
         // fast path, can use starts_with
         for i in 0..left.len() {
             result.append(!left.value(i).ends_with(&right[1..]));
+        }
+    } else if right.starts_with('%')
+        && right.ends_with('%')
+        && !right[1..right.len() - 1].contains(is_like_pattern)
+    {
+        // fast path, can use contains
+        let contains = &right[1..right.len() - 1];
+        for i in 0..left.len() {
+            result.append(!left.value(i).contains(contains));
         }
     } else {
         let re_pattern = replace_like_wildcards(right)?;

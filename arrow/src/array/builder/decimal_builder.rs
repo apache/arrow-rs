@@ -70,7 +70,7 @@ impl Decimal128Builder {
     /// array
     pub fn with_capacity(capacity: usize, precision: usize, scale: usize) -> Self {
         Self {
-            builder: FixedSizeBinaryBuilder::new(capacity, Self::BYTE_LENGTH),
+            builder: FixedSizeBinaryBuilder::with_capacity(capacity, Self::BYTE_LENGTH),
             precision,
             scale,
             value_validation: true,
@@ -169,7 +169,7 @@ impl Decimal256Builder {
     /// array
     pub fn with_capacity(capacity: usize, precision: usize, scale: usize) -> Self {
         Self {
-            builder: FixedSizeBinaryBuilder::new(capacity, Self::BYTE_LENGTH),
+            builder: FixedSizeBinaryBuilder::with_capacity(capacity, Self::BYTE_LENGTH),
             precision,
             scale,
             value_validation: true,
