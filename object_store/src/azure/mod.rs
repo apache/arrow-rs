@@ -454,7 +454,7 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Sets what protocol is allowed. If `allow_http` is :
-    /// * false (default):  Only HTTPS are allowed
+    /// * false (default):  Only HTTPS is allowed
     /// * true:  HTTP and HTTPS are allowed
     pub fn with_allow_http(mut self, allow_http: bool) -> Self {
         self.allow_http = allow_http;
@@ -463,7 +463,7 @@ impl MicrosoftAzureBuilder {
 
     /// Sets an alternative authority host for OAuth based authorization
     /// common hosts for azure clouds are defined in [authority_hosts].
-    /// Defaults to 'https://login.microsoftonline.com'
+    /// Defaults to <https://login.microsoftonline.com>
     pub fn with_authority_host(mut self, authority_host: String) -> Self {
         self.authority_host = Some(authority_host);
         self
@@ -505,8 +505,6 @@ impl MicrosoftAzureBuilder {
             let credential = credential::CredentialProvider::AccessKey(account_key);
             (true, true, url, credential, account)
         } else {
-            // TODO support other clouds
-            let _url = "if let Some()";
             let account = account.ok_or(Error::MissingAccount {})?;
             let url = get_endpoint_uri(None, &account)?;
             let credential = if let Some(bearer_token) = bearer_token {
@@ -514,14 +512,15 @@ impl MicrosoftAzureBuilder {
             } else if let Some(access_key) = access_key {
                 Ok(credential::CredentialProvider::AccessKey(access_key))
             } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
-                (tenant_id, client_id, client_secret)
+                (client_id, client_secret, tenant_id)
             {
-                let client_credential = credential::ClientSecretCredential::new(
-                    tenant_id,
-                    client_id,
-                    client_secret,
-                    authority_host,
-                );
+                let client_credential =
+                    crate::client::oauth::ClientSecretOAuthProvider::new_azure(
+                        client_id,
+                        client_secret,
+                        tenant_id,
+                        authority_host,
+                    );
                 Ok(credential::CredentialProvider::ClientSecret(
                     client_credential,
                 ))
@@ -644,7 +643,37 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
-        // TODO find out whats wrong in stream test - maybe emty pagination string again?
+        // TODO find out whats wrong in stream test - maybe empty pagination string again?
+        // stream_get(&integration).await;
+    }
+
+    // test for running integration test against actual blob service with service principal
+    // credentials. To run make sure all environment variables are set and remove the ignore
+    #[tokio::test]
+    #[ignore]
+    async fn azure_blob_test_sp() {
+        dotenv::dotenv().ok();
+        let builder = MicrosoftAzureBuilder::new()
+            .with_account(
+                env::var("AZURE_STORAGE_ACCOUNT")
+                    .expect("must be set AZURE_STORAGE_ACCOUNT"),
+            )
+            .with_container_name(
+                env::var("OBJECT_STORE_BUCKET").expect("must be set OBJECT_STORE_BUCKET"),
+            )
+            .with_client_secret_authorization(
+                env::var("AZURE_CLIENT_ID").expect("must be set AZURE_CLIENT_ID"),
+                env::var("AZURE_CLIENT_SECRET").expect("must be set AZURE_CLIENT_SECRET"),
+                env::var("AZURE_TENANT_ID").expect("must be set AZURE_TENANT_ID"),
+            );
+        let integration = builder.build().unwrap();
+
+        put_get_delete_list(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
+        // TODO find out whats wrong in stream test - maybe empty pagination string again?
         // stream_get(&integration).await;
     }
 }

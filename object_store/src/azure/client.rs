@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::credential::{AzureCredential, CredentialProvider, Error as CredentialError};
+use super::credential::{AzureCredential, CredentialProvider};
 use crate::azure::credential::*;
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
@@ -24,6 +24,7 @@ use crate::util::{encode_path, format_http_range, format_prefix};
 use crate::{BoxStream, ListResult, ObjectMeta, Path, Result, RetryConfig, StreamExt};
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, TimeZone, Utc};
+use itertools::Itertools;
 use reqwest::{
     header::{HeaderValue, CONTENT_LENGTH, IF_NONE_MATCH},
     Client as ReqwestClient, Method, Response, StatusCode,
@@ -77,7 +78,7 @@ pub(crate) enum Error {
     InvalidMultipartResponse { source: quick_xml::de::DeError },
 
     #[snafu(display("Error authorizing request: {}", source))]
-    Authorization { source: CredentialError },
+    Authorization { source: crate::client::oauth::Error },
 }
 
 impl From<Error> for crate::Error {
@@ -145,7 +146,11 @@ impl TryFrom<ListBlobsResponse> for ListResult {
             .blobs
             .blobs
             .into_iter()
-            .map(TryFrom::try_from)
+            .map(ObjectMeta::try_from)
+            // Note: workaround for gen2 accounts with hierarchical namespaces. These accounts also
+            // return path segments as "directories". When we cant directories, its always via
+            // the BlobPrefix mechanics.
+            .filter_map_ok(|obj| if obj.size > 0 { Some(obj) } else { None })
             .collect::<Result<_>>()?;
 
         Ok(Self {
@@ -316,7 +321,10 @@ impl AzureClient {
                 Ok(AzureCredential::AccessKey(key.to_owned()))
             }
             CredentialProvider::ClientSecret(cred) => {
-                let token = cred.get_token().await.context(AuthorizationSnafu)?;
+                let token = cred
+                    .fetch_token(&self.client, &self.config.retry_config)
+                    .await
+                    .context(AuthorizationSnafu)?;
                 Ok(AzureCredential::BearerToken(token.token))
             }
             CredentialProvider::SASToken(sas) => {
@@ -448,7 +456,8 @@ impl AzureClient {
         let mut builder = self
             .client
             .request(Method::PUT, url)
-            .header(&COPY_SOURCE, source);
+            .header(&COPY_SOURCE, source)
+            .header(CONTENT_LENGTH, HeaderValue::from_static("0"));
 
         if !overwrite {
             builder = builder.header(IF_NONE_MATCH, "*");
@@ -479,8 +488,7 @@ impl AzureClient {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(&Path::from(""));
 
-        let mut query = Vec::with_capacity(4);
-
+        let mut query = Vec::with_capacity(5);
         query.push(("restype", "container"));
         query.push(("comp", "list"));
 

@@ -14,12 +14,9 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use crate::client::token::TemporaryToken;
+use crate::client::oauth::ClientSecretOAuthProvider;
 use crate::util::hmac_sha256;
 use chrono::Utc;
-use oauth2::{
-    basic::BasicClient, reqwest::async_http_client, AuthType, AuthUrl, Scope, TokenUrl,
-};
 use reqwest::{
     header::{
         HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_ENCODING,
@@ -28,13 +25,10 @@ use reqwest::{
     },
     Method, RequestBuilder,
 };
-use snafu::{ResultExt, Snafu};
 use std::borrow::Cow;
 use std::str;
-use std::time::Instant;
 use url::Url;
 
-const STORAGE_TOKEN_SCOPE: &str = "https://storage.azure.com/";
 static AZURE_VERSION: HeaderValue = HeaderValue::from_static("2021-08-06");
 static VERSION: HeaderName = HeaderName::from_static("x-ms-version");
 pub(crate) static RANGE_GET_CONTENT_CRC64: HeaderName =
@@ -46,40 +40,12 @@ pub(crate) static DELETE_SNAPSHOTS: HeaderName =
 pub(crate) static COPY_SOURCE: HeaderName = HeaderName::from_static("x-ms-copy-source");
 pub(crate) static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
 
-#[derive(Debug, Snafu)]
-pub enum Error {
-    #[snafu(display("No RSA key found in pem file"))]
-    MissingKey,
-
-    #[snafu(display("Invalid RSA key: {}", source), context(false))]
-    InvalidKey { source: ring::error::KeyRejected },
-
-    #[snafu(display("Error signing jwt: {}", source))]
-    Sign { source: ring::error::Unspecified },
-
-    #[snafu(display("Error encoding jwt payload: {}", source))]
-    Encode { source: serde_json::Error },
-
-    #[snafu(display("Error parsing token endpoint: {}", source))]
-    Parse { source: url::ParseError },
-
-    #[snafu(display("Unsupported key encoding: {}", encoding))]
-    UnsupportedKey { encoding: String },
-
-    #[snafu(display("Error performing token request: {}", source))]
-    TokenRequest {
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-}
-
-pub type Result<T, E = Error> = std::result::Result<T, E>;
-
 /// Provides credentials for use when signing requests
 #[derive(Debug)]
 pub enum CredentialProvider {
     AccessKey(String),
     SASToken(Vec<(String, String)>),
-    ClientSecret(ClientSecretCredential),
+    ClientSecret(ClientSecretOAuthProvider),
 }
 
 pub enum AzureCredential {
@@ -98,90 +64,6 @@ pub mod authority_hosts {
     pub const AZURE_GOVERNMENT: &str = "https://login.microsoftonline.us";
     /// Public Cloud Azure Authority Host
     pub const AZURE_PUBLIC_CLOUD: &str = "https://login.microsoftonline.com";
-}
-
-/// Enables authentication to Azure Active Directory using a client secret that was generated for an App Registration.
-///
-/// More information on how to configure a client secret can be found here:
-/// <https://docs.microsoft.com/azure/active-directory/develop/quickstart-configure-app-access-web-apis#add-credentials-to-your-web-application>
-pub struct ClientSecretCredential {
-    tenant_id: String,
-    client_id: oauth2::ClientId,
-    client_secret: Option<oauth2::ClientSecret>,
-    authority_host: String,
-}
-
-impl std::fmt::Debug for ClientSecretCredential {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "ClientSecretCredential{{ client_id: {}, tenant_id: {} }}",
-            self.client_id.as_str(),
-            self.tenant_id
-        )
-    }
-}
-
-impl ClientSecretCredential {
-    /// Create a new ClientSecretCredential
-    pub fn new(
-        tenant_id: String,
-        client_id: String,
-        client_secret: String,
-        authority_host: Option<String>,
-    ) -> Self {
-        Self {
-            tenant_id,
-            client_id: oauth2::ClientId::new(client_id),
-            client_secret: Some(oauth2::ClientSecret::new(client_secret)),
-            authority_host: authority_host
-                .unwrap_or_else(|| authority_hosts::AZURE_PUBLIC_CLOUD.to_owned()),
-        }
-    }
-
-    pub async fn get_token(&self) -> Result<TemporaryToken<String>> {
-        let token_url = TokenUrl::from_url(
-            Url::parse(&format!(
-                "{}/{}/oauth2/v2.0/token",
-                self.authority_host, self.tenant_id
-            ))
-            .context(ParseSnafu)?,
-        );
-
-        let auth_url = AuthUrl::from_url(
-            Url::parse(&format!(
-                "{}/{}/oauth2/v2.0/authorize",
-                self.authority_host, self.tenant_id
-            ))
-            .context(ParseSnafu)?,
-        );
-
-        let client = BasicClient::new(
-            self.client_id.clone(),
-            self.client_secret.clone(),
-            auth_url,
-            Some(token_url),
-        )
-        .set_auth_type(AuthType::RequestBody);
-
-        let token_result = client
-            .exchange_client_credentials()
-            .add_scope(Scope::new(format!("{}/.default", STORAGE_TOKEN_SCOPE)))
-            .request_async(async_http_client)
-            .await
-            .map(|r| {
-                use oauth2::TokenResponse as _;
-                TemporaryToken {
-                    token: r.access_token().secret().to_owned(),
-                    expiry: Instant::now() + r.expires_in().unwrap_or_default(),
-                }
-            })
-            .map_err(|err| Error::TokenRequest {
-                source: Box::new(err),
-            })?;
-
-        Ok(token_result)
-    }
 }
 
 pub trait CredentialExt {
