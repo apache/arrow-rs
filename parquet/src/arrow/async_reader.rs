@@ -601,13 +601,26 @@ impl<'a> InMemoryRowGroup<'a> {
             let fetch_ranges = self
                 .column_chunks
                 .iter()
+                .zip(self.metadata.columns())
                 .enumerate()
                 .into_iter()
-                .filter_map(|(idx, chunk)| {
+                .filter_map(|(idx, (chunk, chunk_meta))| {
                     (chunk.is_none() && projection.leaf_included(idx)).then(|| {
-                        let ranges = selection.scan_ranges(&page_locations[idx]);
+                        // If the first page does not start at the beginning of the column,
+                        // then we need to also fetch a dictionary page.
+                        let mut ranges = vec![];
+                        let (start, _len) = chunk_meta.byte_range();
+                        match page_locations[idx].first() {
+                            Some(first) if first.offset as u64 != start => {
+                                ranges.push(start as usize..first.offset as usize);
+                            }
+                            _ => (),
+                        }
+
+                        ranges.extend(selection.scan_ranges(&page_locations[idx]));
                         page_start_offsets
                             .push(ranges.iter().map(|range| range.start).collect());
+
                         ranges
                     })
                 })
