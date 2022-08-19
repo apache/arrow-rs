@@ -85,7 +85,6 @@ fn create_array(
     compression_codec: &Option<CompressionCodec>,
     metadata: &ipc::MetadataVersion,
 ) -> Result<(ArrayRef, usize, usize)> {
-    use DataType::*;
     let data_type = field.data_type();
     let array = match data_type {
         Utf8 | Binary | LargeBinary | LargeUtf8 => {
@@ -321,16 +320,10 @@ fn create_array(
 /// This function should be called when doing projection in fn `read_record_batch`.
 /// The advancement logic references fn `create_array`.
 fn skip_field(
-    nodes: &[ipc::FieldNode],
-    field: &Field,
-    data: &[u8],
-    buffers: &[ipc::Buffer],
-    dictionaries_by_id: &HashMap<i64, ArrayRef>,
+    data_type: &DataType,
     mut node_index: usize,
     mut buffer_index: usize,
 ) -> Result<(usize, usize)> {
-    use DataType::*;
-    let data_type = field.data_type();
     match data_type {
         Utf8 | Binary | LargeBinary | LargeUtf8 => {
             node_index += 1;
@@ -343,30 +336,14 @@ fn skip_field(
         List(ref list_field) | LargeList(ref list_field) | Map(ref list_field, _) => {
             node_index += 1;
             buffer_index += 2;
-            let tuple = skip_field(
-                nodes,
-                list_field,
-                data,
-                buffers,
-                dictionaries_by_id,
-                node_index,
-                buffer_index,
-            )?;
+            let tuple = skip_field(list_field.data_type(), node_index, buffer_index)?;
             node_index = tuple.0;
             buffer_index = tuple.1;
         }
         FixedSizeList(ref list_field, _) => {
             node_index += 1;
             buffer_index += 1;
-            let tuple = skip_field(
-                nodes,
-                list_field,
-                data,
-                buffers,
-                dictionaries_by_id,
-                node_index,
-                buffer_index,
-            )?;
+            let tuple = skip_field(list_field.data_type(), node_index, buffer_index)?;
             node_index = tuple.0;
             buffer_index = tuple.1;
         }
@@ -376,15 +353,8 @@ fn skip_field(
 
             // skip for each field
             for struct_field in struct_fields {
-                let tuple = skip_field(
-                    nodes,
-                    struct_field,
-                    data,
-                    buffers,
-                    dictionaries_by_id,
-                    node_index,
-                    buffer_index,
-                )?;
+                let tuple =
+                    skip_field(struct_field.data_type(), node_index, buffer_index)?;
                 node_index = tuple.0;
                 buffer_index = tuple.1;
             }
@@ -405,15 +375,7 @@ fn skip_field(
             };
 
             for field in fields {
-                let tuple = skip_field(
-                    nodes,
-                    field,
-                    data,
-                    buffers,
-                    dictionaries_by_id,
-                    node_index,
-                    buffer_index,
-                )?;
+                let tuple = skip_field(field.data_type(), node_index, buffer_index)?;
 
                 node_index = tuple.0;
                 buffer_index = tuple.1;
@@ -645,15 +607,7 @@ pub fn read_record_batch(
             } else {
                 // Skip field.
                 // This must be called to advance `node_index` and `buffer_index`.
-                let tuple = skip_field(
-                    field_nodes,
-                    field,
-                    buf,
-                    buffers,
-                    dictionaries_by_id,
-                    node_index,
-                    buffer_index,
-                )?;
+                let tuple = skip_field(field.data_type(), node_index, buffer_index)?;
                 node_index = tuple.0;
                 buffer_index = tuple.1;
             }
