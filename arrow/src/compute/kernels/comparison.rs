@@ -402,9 +402,7 @@ pub fn nlike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
         // fast path, can use contains
         let contains = &right[1..right.len() - 1];
         for i in 0..left.len() {
-            if left.value(i).contains(contains) {
-                result.append(!left.value(i).contains(contains));
-            }
+            result.append(!left.value(i).contains(contains));
         }
     } else {
         let re_pattern = replace_like_wildcards(right)?;
