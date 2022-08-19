@@ -53,14 +53,11 @@ fn read_buffer(
 ) -> Result<Buffer> {
     let start_offset = buf.offset() as usize;
     let end_offset = start_offset + buf.length() as usize;
-    let buf_data = &a_data[start_offset..end_offset];
+    let buf_data = Buffer::from(&a_data[start_offset..end_offset]);
     // corner case: empty buffer
-    if buf_data.is_empty() {
-        return Ok(Buffer::from(buf_data));
-    }
-    match compression_codec {
-        Some(decompressor) => decompressor.decompress_to_buffer(buf_data),
-        None => Ok(Buffer::from(buf_data)),
+    match (buf_data.is_empty(), compression_codec) {
+        (true, _) | (_, None) => Ok(buf_data),
+        (false, Some(decompressor)) => decompressor.decompress_to_buffer(&buf_data),
     }
 }
 
