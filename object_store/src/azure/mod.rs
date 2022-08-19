@@ -212,7 +212,7 @@ impl ObjectStore for MicrosoftAzure {
 
         let last_modified = last_modified.to_str().context(BadHeaderSnafu)?;
         let last_modified = Utc
-            .datetime_from_str(&last_modified, credential::RFC1123_FMT)
+            .datetime_from_str(last_modified, credential::RFC1123_FMT)
             .context(InvalidLastModifiedSnafu { last_modified })?;
 
         let content_length = content_length.to_str().context(BadHeaderSnafu)?;

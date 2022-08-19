@@ -115,9 +115,8 @@ where
     D: Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    Ok(Utc
-        .datetime_from_str(&s, RFC1123_FMT)
-        .map_err(serde::de::Error::custom)?)
+    Utc.datetime_from_str(&s, RFC1123_FMT)
+        .map_err(serde::de::Error::custom)
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -241,7 +240,7 @@ impl From<BlockId> for String {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlobBlockType {
     Committed(BlockId),
     Uncommitted(BlockId),
@@ -262,7 +261,7 @@ impl BlobBlockType {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct BlockList {
     pub blocks: Vec<BlobBlockType>,
 }
@@ -370,7 +369,7 @@ impl AzureClient {
         let mut builder = self
             .client
             .request(Method::PUT, url)
-            .header(BLOB_TYPE, "BlockBlob");
+            .header(&BLOB_TYPE, "BlockBlob");
         if let Some(bytes) = bytes {
             builder = builder
                 .header(CONTENT_LENGTH, HeaderValue::from(bytes.len()))
@@ -419,9 +418,9 @@ impl AzureClient {
             // Note: Azurite emulator does not support crc64 headers
             if !self.config.is_emulator && range.end - range.start < 1024 * 1024 * 4 {
                 builder = builder
-                    .header(RANGE_GET_CONTENT_CRC64, HeaderValue::from_static("true"));
+                    .header(&RANGE_GET_CONTENT_CRC64, HeaderValue::from_static("true"));
             }
-            builder = builder.header(MS_RANGE, format_http_range(range));
+            builder = builder.header(&MS_RANGE, format_http_range(range));
         }
 
         let response = builder
@@ -451,7 +450,7 @@ impl AzureClient {
         self.client
             .request(Method::DELETE, url)
             .query(query)
-            .header(DELETE_SNAPSHOTS, "include")
+            .header(&DELETE_SNAPSHOTS, "include")
             .with_azure_authorization(&credential, &self.config.account)
             .send_retry(&self.config.retry_config)
             .await
@@ -480,7 +479,7 @@ impl AzureClient {
         let mut builder = self
             .client
             .request(Method::PUT, url)
-            .header(COPY_SOURCE, source);
+            .header(&COPY_SOURCE, source);
 
         if !overwrite {
             builder = builder.header(IF_NONE_MATCH, "*");

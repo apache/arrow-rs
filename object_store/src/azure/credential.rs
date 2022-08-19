@@ -34,17 +34,17 @@ use std::str;
 use std::time::Instant;
 use url::Url;
 
-pub(crate) const STORAGE_TOKEN_SCOPE: &str = "https://storage.azure.com/";
-pub(crate) const AZURE_VERSION: HeaderValue = HeaderValue::from_static("2021-08-06");
-pub(crate) const VERSION: HeaderName = HeaderName::from_static("x-ms-version");
-pub(crate) const RANGE_GET_CONTENT_CRC64: HeaderName =
+pub(crate) static STORAGE_TOKEN_SCOPE: &str = "https://storage.azure.com/";
+pub(crate) static AZURE_VERSION: HeaderValue = HeaderValue::from_static("2021-08-06");
+pub(crate) static VERSION: HeaderName = HeaderName::from_static("x-ms-version");
+pub(crate) static RANGE_GET_CONTENT_CRC64: HeaderName =
     HeaderName::from_static("x-ms-range-get-content-crc64");
-pub(crate) const MS_RANGE: HeaderName = HeaderName::from_static("x-ms-range");
-pub(crate) const BLOB_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-type");
-pub(crate) const DELETE_SNAPSHOTS: HeaderName =
+pub(crate) static MS_RANGE: HeaderName = HeaderName::from_static("x-ms-range");
+pub(crate) static BLOB_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-type");
+pub(crate) static DELETE_SNAPSHOTS: HeaderName =
     HeaderName::from_static("x-ms-delete-snapshots");
-pub(crate) const COPY_SOURCE: HeaderName = HeaderName::from_static("x-ms-copy-source");
-pub(crate) const RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
+pub(crate) static COPY_SOURCE: HeaderName = HeaderName::from_static("x-ms-copy-source");
+pub(crate) static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -247,13 +247,13 @@ impl CredentialExt for RequestBuilder {
             .try_clone()
             .expect("not stream")
             .header("x-ms-date", &date_val)
-            .header(VERSION, AZURE_VERSION)
+            .header(&VERSION, &AZURE_VERSION)
             .build()
             .expect("request valid");
 
         self = self
             .header("x-ms-date", &date_val)
-            .header(VERSION, AZURE_VERSION);
+            .header(&VERSION, &AZURE_VERSION);
 
         match credential {
             AzureCredential::AccessKey(key) => {
@@ -305,7 +305,7 @@ fn add_if_exists<'a>(h: &'a HeaderMap, key: &HeaderName) -> &'a str {
         .unwrap_or_default()
 }
 
-const CONTENT_MD5: HeaderName = HeaderName::from_static("content-md5");
+static CONTENT_MD5: HeaderName = HeaderName::from_static("content-md5");
 
 fn string_to_sign(h: &HeaderMap, u: &Url, method: &Method, account: &str) -> String {
     // content length must only be specified if != 0
