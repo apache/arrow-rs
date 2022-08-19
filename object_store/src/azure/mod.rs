@@ -26,7 +26,7 @@
 //! [ObjectStore::abort_multipart] is a no-op, since Azure Blob Store doesn't provide
 //! a way to drop old blocks. Instead unused blocks are automatically cleaned up
 //! after 7 days.
-use self::client::{BlobBlockType, BlockId, BlockList};
+use self::client::{BlockId, BlockList};
 use crate::{
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::Path,
@@ -35,6 +35,7 @@ use crate::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
+pub use credential::authority_hosts;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use snafu::{ResultExt, Snafu};
 use std::collections::BTreeSet;
@@ -329,7 +330,7 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
     async fn complete(&self, completed_parts: Vec<UploadPart>) -> Result<(), io::Error> {
         let blocks = completed_parts
             .into_iter()
-            .map(|part| BlobBlockType::Uncommitted(BlockId::from(part.content_id)))
+            .map(|part| BlockId::from(part.content_id))
             .collect();
 
         let block_list = BlockList { blocks };
@@ -372,6 +373,7 @@ pub struct MicrosoftAzureBuilder {
     client_secret: Option<String>,
     tenant_id: Option<String>,
     sas_query_pairs: Option<Vec<(String, String)>>,
+    authority_host: Option<String>,
     use_emulator: bool,
     retry_config: RetryConfig,
     allow_http: bool,
@@ -459,6 +461,14 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// Sets an alternative authority host for OAuth based authorization
+    /// common hosts for azure clouds are defined in [authority_hosts].
+    /// Defaults to 'https://login.microsoftonline.com'
+    pub fn with_authority_host(mut self, authority_host: String) -> Self {
+        self.authority_host = Some(authority_host);
+        self
+    }
+
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
         self.retry_config = retry_config;
@@ -480,6 +490,7 @@ impl MicrosoftAzureBuilder {
             use_emulator,
             retry_config,
             allow_http,
+            authority_host,
         } = self;
 
         let container = container_name.ok_or(Error::MissingContainerName {})?;
@@ -505,12 +516,11 @@ impl MicrosoftAzureBuilder {
             } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
                 (tenant_id, client_id, client_secret)
             {
-                let options = credential::TokenCredentialOptions::default();
                 let client_credential = credential::ClientSecretCredential::new(
                     tenant_id,
                     client_id,
                     client_secret,
-                    options,
+                    authority_host,
                 );
                 Ok(credential::CredentialProvider::ClientSecret(
                     client_credential,

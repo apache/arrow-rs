@@ -240,53 +240,20 @@ impl From<BlockId> for String {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BlobBlockType {
-    Committed(BlockId),
-    Uncommitted(BlockId),
-    Latest(BlockId),
-}
-
-impl BlobBlockType {
-    pub fn new_committed(b: impl Into<BlockId>) -> Self {
-        Self::Committed(b.into())
-    }
-
-    pub fn new_uncommitted(b: impl Into<BlockId>) -> Self {
-        Self::Uncommitted(b.into())
-    }
-
-    pub fn new_latest(b: impl Into<BlockId>) -> Self {
-        Self::Latest(b.into())
-    }
-}
-
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct BlockList {
-    pub blocks: Vec<BlobBlockType>,
+    pub blocks: Vec<BlockId>,
 }
 
 impl BlockList {
     pub fn to_xml(&self) -> String {
         let mut s = String::new();
         s.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<BlockList>\n");
-        for bl in &self.blocks {
-            let node = match bl {
-                BlobBlockType::Committed(content) => {
-                    format!(
-                        "\t<Committed>{}</Committed>\n",
-                        base64::encode(content.as_ref())
-                    )
-                }
-                BlobBlockType::Uncommitted(content) => format!(
-                    "\t<Uncommitted>{}</Uncommitted>\n",
-                    base64::encode(content.as_ref())
-                ),
-                BlobBlockType::Latest(content) => {
-                    format!("\t<Latest>{}</Latest>\n", base64::encode(content.as_ref()))
-                }
-            };
-
+        for block_id in &self.blocks {
+            let node = format!(
+                "\t<Uncommitted>{}</Uncommitted>\n",
+                base64::encode(block_id.as_ref())
+            );
             s.push_str(&node);
         }
 
@@ -735,22 +702,14 @@ mod tests {
     fn to_xml() {
         const S: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <BlockList>
-\t<Committed>bnVtZXJvMQ==</Committed>
+\t<Uncommitted>bnVtZXJvMQ==</Uncommitted>
 \t<Uncommitted>bnVtZXJvMg==</Uncommitted>
 \t<Uncommitted>bnVtZXJvMw==</Uncommitted>
-\t<Latest>bnVtZXJvNA==</Latest>
 </BlockList>";
         let mut blocks = BlockList { blocks: Vec::new() };
-        blocks
-            .blocks
-            .push(BlobBlockType::new_committed(Bytes::from_static(b"numero1")));
-        blocks
-            .blocks
-            .push(BlobBlockType::new_uncommitted("numero2"));
-        blocks
-            .blocks
-            .push(BlobBlockType::new_uncommitted("numero3"));
-        blocks.blocks.push(BlobBlockType::new_latest("numero4"));
+        blocks.blocks.push(Bytes::from_static(b"numero1").into());
+        blocks.blocks.push("numero2".into());
+        blocks.blocks.push("numero3".into());
 
         let res: &str = &blocks.to_xml();
 

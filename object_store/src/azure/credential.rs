@@ -88,38 +88,6 @@ pub enum AzureCredential {
     BearerToken(String),
 }
 
-/// Provides options to configure how the Identity library makes authentication
-/// requests to Azure Active Directory.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TokenCredentialOptions {
-    authority_host: String,
-}
-
-impl Default for TokenCredentialOptions {
-    fn default() -> Self {
-        Self {
-            authority_host: authority_hosts::AZURE_PUBLIC_CLOUD.to_owned(),
-        }
-    }
-}
-
-impl TokenCredentialOptions {
-    /// Create a new TokenCredentialsOptions. `default()` may also be used.
-    pub fn new(authority_host: String) -> Self {
-        Self { authority_host }
-    }
-    /// Set the authority host for authentication requests.
-    pub fn set_authority_host(&mut self, authority_host: String) {
-        self.authority_host = authority_host
-    }
-
-    /// The authority host to use for authentication requests.  The default is
-    /// `https://login.microsoftonline.com`.
-    pub fn authority_host(&self) -> &str {
-        &self.authority_host
-    }
-}
-
 /// A list of known Azure authority hosts
 pub mod authority_hosts {
     /// China-based Azure Authority Host
@@ -140,7 +108,7 @@ pub struct ClientSecretCredential {
     tenant_id: String,
     client_id: oauth2::ClientId,
     client_secret: Option<oauth2::ClientSecret>,
-    options: TokenCredentialOptions,
+    authority_host: String,
 }
 
 impl std::fmt::Debug for ClientSecretCredential {
@@ -160,28 +128,22 @@ impl ClientSecretCredential {
         tenant_id: String,
         client_id: String,
         client_secret: String,
-        options: TokenCredentialOptions,
+        authority_host: Option<String>,
     ) -> Self {
         Self {
             tenant_id,
             client_id: oauth2::ClientId::new(client_id),
             client_secret: Some(oauth2::ClientSecret::new(client_secret)),
-            options,
+            authority_host: authority_host
+                .unwrap_or_else(|| authority_hosts::AZURE_PUBLIC_CLOUD.to_owned()),
         }
     }
 
-    fn options(&self) -> &TokenCredentialOptions {
-        &self.options
-    }
-
     pub async fn get_token(&self) -> Result<TemporaryToken<String>> {
-        let options = self.options();
-        let authority_host = options.authority_host();
-
         let token_url = TokenUrl::from_url(
             Url::parse(&format!(
                 "{}/{}/oauth2/v2.0/token",
-                authority_host, self.tenant_id
+                self.authority_host, self.tenant_id
             ))
             .context(ParseSnafu)?,
         );
@@ -189,7 +151,7 @@ impl ClientSecretCredential {
         let auth_url = AuthUrl::from_url(
             Url::parse(&format!(
                 "{}/{}/oauth2/v2.0/authorize",
-                authority_host, self.tenant_id
+                self.authority_host, self.tenant_id
             ))
             .context(ParseSnafu)?,
         );
