@@ -220,8 +220,7 @@ fn build_primitive_reader(
             Some(DataType::Decimal128(precision, scale)) => {
                 // read decimal data from parquet binary physical type
                 let convert = DecimalByteArrayConvert::new(DecimalArrayConverter::new(
-                    precision as i32,
-                    scale as i32,
+                    precision, scale,
                 ));
                 Ok(Box::new(ComplexObjectArrayReader::<
                     ByteArrayType,
@@ -235,7 +234,7 @@ fn build_primitive_reader(
         PhysicalType::FIXED_LEN_BYTE_ARRAY => match field.arrow_type {
             DataType::Decimal128(precision, scale) => {
                 let converter = DecimalFixedLengthByteArrayConverter::new(
-                    DecimalArrayConverter::new(precision as i32, scale as i32),
+                    DecimalArrayConverter::new(precision, scale),
                 );
                 Ok(Box::new(ComplexObjectArrayReader::<
                     FixedLenByteArrayType,

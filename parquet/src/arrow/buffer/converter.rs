@@ -68,12 +68,12 @@ impl Converter<Vec<Option<FixedLenByteArray>>, FixedSizeBinaryArray>
 }
 
 pub struct DecimalArrayConverter {
-    precision: i32,
-    scale: i32,
+    precision: u8,
+    scale: u8,
 }
 
 impl DecimalArrayConverter {
-    pub fn new(precision: i32, scale: i32) -> Self {
+    pub fn new(precision: u8, scale: u8) -> Self {
         Self { precision, scale }
     }
 }
@@ -86,7 +86,7 @@ impl Converter<Vec<Option<FixedLenByteArray>>, Decimal128Array>
             .into_iter()
             .map(|array| array.map(|array| from_bytes_to_i128(array.data())))
             .collect::<Decimal128Array>()
-            .with_precision_and_scale(self.precision as usize, self.scale as usize)?;
+            .with_precision_and_scale(self.precision, self.scale)?;
 
         Ok(array)
     }
@@ -98,7 +98,7 @@ impl Converter<Vec<Option<ByteArray>>, Decimal128Array> for DecimalArrayConverte
             .into_iter()
             .map(|array| array.map(|array| from_bytes_to_i128(array.data())))
             .collect::<Decimal128Array>()
-            .with_precision_and_scale(self.precision as usize, self.scale as usize)?;
+            .with_precision_and_scale(self.precision, self.scale)?;
 
         Ok(array)
     }

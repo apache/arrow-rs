@@ -37,8 +37,8 @@ use crate::util::decimal::Decimal256;
 #[derive(Debug)]
 pub struct Decimal128Builder {
     builder: FixedSizeBinaryBuilder,
-    precision: usize,
-    scale: usize,
+    precision: u8,
+    scale: u8,
 
     /// Should i128 values be validated for compatibility with scale and precision?
     /// defaults to true
@@ -51,8 +51,8 @@ pub struct Decimal128Builder {
 #[derive(Debug)]
 pub struct Decimal256Builder {
     builder: FixedSizeBinaryBuilder,
-    precision: usize,
-    scale: usize,
+    precision: u8,
+    scale: u8,
 
     /// Should decimal values be validated for compatibility with scale and precision?
     /// defaults to true
@@ -63,7 +63,7 @@ impl Decimal128Builder {
     const BYTE_LENGTH: i32 = 16;
     /// Creates a new [`Decimal128Builder`], `capacity` is the number of bytes in the values
     /// array
-    pub fn new(capacity: usize, precision: usize, scale: usize) -> Self {
+    pub fn new(capacity: usize, precision: u8, scale: u8) -> Self {
         Self {
             builder: FixedSizeBinaryBuilder::new(capacity, Self::BYTE_LENGTH),
             precision,
@@ -157,7 +157,7 @@ impl Decimal256Builder {
     const BYTE_LENGTH: i32 = 32;
     /// Creates a new [`Decimal256Builder`], `capacity` is the number of bytes in the values
     /// array
-    pub fn new(capacity: usize, precision: usize, scale: usize) -> Self {
+    pub fn new(capacity: usize, precision: u8, scale: u8) -> Self {
         Self {
             builder: FixedSizeBinaryBuilder::new(capacity, Self::BYTE_LENGTH),
             precision,

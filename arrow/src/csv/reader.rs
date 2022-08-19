@@ -696,8 +696,8 @@ fn build_decimal_array(
     _line_number: usize,
     rows: &[StringRecord],
     col_idx: usize,
-    precision: usize,
-    scale: usize,
+    precision: u8,
+    scale: u8,
 ) -> Result<ArrayRef> {
     let mut decimal_builder = Decimal128Builder::new(rows.len(), precision, scale);
     for row in rows {
@@ -731,11 +731,12 @@ fn build_decimal_array(
 
 // Parse the string format decimal value to i128 format and checking the precision and scale.
 // The result i128 value can't be out of bounds.
-fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Result<i128> {
+fn parse_decimal_with_parameter(s: &str, precision: u8, scale: u8) -> Result<i128> {
     if PARSE_DECIMAL_RE.is_match(s) {
         let mut offset = s.len();
         let len = s.len();
         let mut base = 1;
+        let scale_usize = usize::from(scale);
 
         // handle the value after the '.' and meet the scale
         let delimiter_position = s.find('.');
@@ -746,12 +747,12 @@ fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Resu
             }
             Some(mid) => {
                 // there is the '.'
-                if len - mid >= scale + 1 {
+                if len - mid >= scale_usize + 1 {
                     // If the string value is "123.12345" and the scale is 2, we should just remain '.12' and drop the '345' value.
-                    offset -= len - mid - 1 - scale;
+                    offset -= len - mid - 1 - scale_usize;
                 } else {
                     // If the string value is "123.12" and the scale is 4, we should append '00' to the tail.
-                    base = 10_i128.pow((scale + 1 + mid - len) as u32);
+                    base = 10_i128.pow((scale_usize + 1 + mid - len) as u32);
                 }
             }
         };
