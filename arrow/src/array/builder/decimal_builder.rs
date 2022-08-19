@@ -61,9 +61,14 @@ pub struct Decimal256Builder {
 
 impl Decimal128Builder {
     const BYTE_LENGTH: i32 = 16;
+    /// Creates a new [`Decimal128Builder`]
+    pub fn new(precision: usize, scale: usize) -> Self {
+        Self::with_capacity(1024, precision, scale)
+    }
+
     /// Creates a new [`Decimal128Builder`], `capacity` is the number of bytes in the values
     /// array
-    pub fn new(capacity: usize, precision: usize, scale: usize) -> Self {
+    pub fn with_capacity(capacity: usize, precision: usize, scale: usize) -> Self {
         Self {
             builder: FixedSizeBinaryBuilder::new(capacity, Self::BYTE_LENGTH),
             precision,
@@ -245,7 +250,7 @@ mod tests {
 
     #[test]
     fn test_decimal_builder() {
-        let mut builder = Decimal128Builder::new(30, 38, 6);
+        let mut builder = Decimal128Builder::new(38, 6);
 
         builder.append_value(8_887_000_000_i128).unwrap();
         builder.append_null();
@@ -263,7 +268,7 @@ mod tests {
 
     #[test]
     fn test_decimal_builder_with_decimal128() {
-        let mut builder = Decimal128Builder::new(30, 38, 6);
+        let mut builder = Decimal128Builder::new(38, 6);
 
         builder
             .append_value(Decimal128::new_from_i128(30, 38, 8_887_000_000_i128))

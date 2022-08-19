@@ -699,7 +699,7 @@ fn build_decimal_array(
     precision: usize,
     scale: usize,
 ) -> Result<ArrayRef> {
-    let mut decimal_builder = Decimal128Builder::new(rows.len(), precision, scale);
+    let mut decimal_builder = Decimal128Builder::with_capacity(rows.len(), precision, scale);
     for row in rows {
         let col_s = row.get(col_idx);
         match col_s {

@@ -571,7 +571,7 @@ mod tests {
     #[test]
     #[cfg(not(feature = "force_validate"))]
     fn test_decimal_append_error_value() {
-        let mut decimal_builder = Decimal128Builder::new(10, 5, 3);
+        let mut decimal_builder = Decimal128Builder::with_capacity(10, 5, 3);
         let mut result = decimal_builder.append_value(123456);
         let mut error = result.unwrap_err();
         assert_eq!(
@@ -588,7 +588,7 @@ mod tests {
         let arr = decimal_builder.finish();
         assert_eq!("12.345", arr.value_as_string(1));
 
-        decimal_builder = Decimal128Builder::new(10, 2, 1);
+        decimal_builder = Decimal128Builder::new(2, 1);
         result = decimal_builder.append_value(100);
         error = result.unwrap_err();
         assert_eq!(
