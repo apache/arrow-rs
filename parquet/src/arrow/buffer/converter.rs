@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::data_type::{ByteArray, FixedLenByteArray, Int96};
+use crate::data_type::{FixedLenByteArray, Int96};
 use arrow::array::{
     Array, ArrayRef, Decimal128Array, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
     IntervalDayTimeArray, IntervalDayTimeBuilder, IntervalYearMonthArray,
@@ -27,6 +27,9 @@ use crate::errors::Result;
 use std::marker::PhantomData;
 
 use crate::arrow::buffer::bit_util::sign_extend_be;
+#[cfg(test)]
+use crate::data_type::ByteArray;
+
 #[cfg(test)]
 use arrow::array::{StringArray, StringBuilder};
 
