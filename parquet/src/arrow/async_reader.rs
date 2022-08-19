@@ -112,7 +112,6 @@ use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 
 use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader;
-use crate::file::serialized_reader::ReadOptions;
 use crate::file::FOOTER_SIZE;
 
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
@@ -297,35 +296,32 @@ impl<T: AsyncFileReader + Send + 'static> ArrowReaderBuilder<AsyncReader<T>> {
         Self::new_builder(AsyncReader(input), metadata, Default::default())
     }
 
-    pub async fn new_with_options(mut input: T, options: ReadOptions) -> Result<Self> {
-        let mut metadata = input.get_metadata().await?;
+    pub async fn new_with_index(mut input: T) -> Result<Self> {
+        let metadata = input.get_metadata().await?;
 
         let mut row_groups = metadata.row_groups().to_vec();
 
-        if options.enable_page_index {
-            let mut columns_indexes = vec![];
-            let mut offset_indexes = vec![];
+        let mut columns_indexes = vec![];
+        let mut offset_indexes = vec![];
 
-            for (idx, rg) in row_groups.iter_mut().enumerate() {
-                let column_index =
-                    input.get_column_indexes(metadata.clone(), idx).await?;
+        for (idx, rg) in row_groups.iter_mut().enumerate() {
+            let column_index = input.get_column_indexes(metadata.clone(), idx).await?;
 
-                columns_indexes.push(column_index);
-                if let Some(offset_index) =
-                    input.get_page_locations(metadata.clone(), idx).await?
-                {
-                    rg.set_page_offset(offset_index.clone());
-                    offset_indexes.push(offset_index);
-                }
+            columns_indexes.push(column_index);
+            if let Some(offset_index) =
+                input.get_page_locations(metadata.clone(), idx).await?
+            {
+                rg.set_page_offset(offset_index.clone());
+                offset_indexes.push(offset_index);
             }
-
-            metadata = Arc::new(ParquetMetaData::new_with_page_index(
-                metadata.file_metadata().clone(),
-                row_groups,
-                Some(columns_indexes),
-                Some(offset_indexes),
-            ))
         }
+
+        let metadata = Arc::new(ParquetMetaData::new_with_page_index(
+            metadata.file_metadata().clone(),
+            row_groups,
+            Some(columns_indexes),
+            Some(offset_indexes),
+        ));
 
         Self::new_builder(AsyncReader(input), metadata, ArrowReaderOptions::new())
     }
@@ -799,8 +795,6 @@ mod tests {
     use crate::file::page_index::index_reader;
     use arrow::array::{Array, ArrayRef, Int32Array, StringArray};
     use arrow::error::Result as ArrowResult;
-
-    use crate::file::serialized_reader::ReadOptionsBuilder;
     use futures::TryStreamExt;
     use std::sync::Mutex;
 
@@ -893,11 +887,9 @@ mod tests {
             requests: Default::default(),
         };
 
-        let options = ReadOptionsBuilder::new().with_page_index().build();
-        let builder =
-            ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
-                .await
-                .unwrap();
+        let builder = ParquetRecordBatchStreamBuilder::new_with_index(async_reader)
+            .await
+            .unwrap();
 
         // The builder should have page and offset indexes loaded now
         let metadata_with_index = builder.metadata();
@@ -1040,17 +1032,15 @@ mod tests {
         let filter = RowFilter::new(vec![Box::new(a_filter), Box::new(b_filter)]);
 
         let mask = ProjectionMask::leaves(&parquet_schema, vec![0, 2]);
-        let options = ReadOptionsBuilder::new().with_page_index().build();
 
-        let stream =
-            ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
-                .await
-                .unwrap()
-                .with_projection(mask.clone())
-                .with_batch_size(1024)
-                .with_row_filter(filter)
-                .build()
-                .unwrap();
+        let stream = ParquetRecordBatchStreamBuilder::new_with_index(async_reader)
+            .await
+            .unwrap()
+            .with_projection(mask.clone())
+            .with_batch_size(1024)
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
 
         let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
 

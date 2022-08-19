@@ -1068,6 +1068,7 @@ mod tests {
         integration.head(&path).await.unwrap();
     }
 
+    #[ignore]
     #[tokio::test]
     async fn test_list_root() {
         let integration = LocalFileSystem::new();
