@@ -127,17 +127,10 @@ impl<'a> ByteArrayWriter<'a> {
     }
 
     pub fn close(self) -> Result<()> {
-        let (bytes_written, rows_written, metadata, column_index, offset_index) =
-            self.writer.close()?;
+        let r = self.writer.close()?;
 
         if let Some(on_close) = self.on_close {
-            on_close(
-                bytes_written,
-                rows_written,
-                metadata,
-                column_index,
-                offset_index,
-            )?;
+            on_close(r)?;
         }
         Ok(())
     }

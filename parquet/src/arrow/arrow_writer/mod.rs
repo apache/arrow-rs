@@ -223,6 +223,12 @@ impl<W: Write> ArrowWriter<W> {
         Ok(())
     }
 
+    /// Flushes any outstanding data and returns the underlying writer.
+    pub fn into_inner(mut self) -> Result<W> {
+        self.flush()?;
+        self.writer.into_inner()
+    }
+
     /// Close and finalize the underlying Parquet writer
     pub fn close(mut self) -> Result<parquet_format::FileMetaData> {
         self.flush()?;
@@ -644,6 +650,25 @@ mod tests {
         roundtrip(batch, Some(SMALL_SIZE / 2));
     }
 
+    fn get_bytes_after_close(schema: SchemaRef, expected_batch: &RecordBatch) -> Vec<u8> {
+        let mut buffer = vec![];
+
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema, None).unwrap();
+        writer.write(expected_batch).unwrap();
+        writer.close().unwrap();
+
+        buffer
+    }
+
+    fn get_bytes_by_into_inner(
+        schema: SchemaRef,
+        expected_batch: &RecordBatch,
+    ) -> Vec<u8> {
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, None).unwrap();
+        writer.write(expected_batch).unwrap();
+        writer.into_inner().unwrap()
+    }
+
     #[test]
     fn roundtrip_bytes() {
         // define schema
@@ -660,31 +685,28 @@ mod tests {
         let expected_batch =
             RecordBatch::try_new(schema.clone(), vec![Arc::new(a), Arc::new(b)]).unwrap();
 
-        let mut buffer = vec![];
+        for buffer in vec![
+            get_bytes_after_close(schema.clone(), &expected_batch),
+            get_bytes_by_into_inner(schema, &expected_batch),
+        ] {
+            let cursor = Bytes::from(buffer);
+            let mut record_batch_reader =
+                ParquetRecordBatchReader::try_new(cursor, 1024).unwrap();
 
-        {
-            let mut writer = ArrowWriter::try_new(&mut buffer, schema, None).unwrap();
-            writer.write(&expected_batch).unwrap();
-            writer.close().unwrap();
-        }
+            let actual_batch = record_batch_reader
+                .next()
+                .expect("No batch found")
+                .expect("Unable to get batch");
 
-        let cursor = Bytes::from(buffer);
-        let mut record_batch_reader =
-            ParquetRecordBatchReader::try_new(cursor, 1024).unwrap();
+            assert_eq!(expected_batch.schema(), actual_batch.schema());
+            assert_eq!(expected_batch.num_columns(), actual_batch.num_columns());
+            assert_eq!(expected_batch.num_rows(), actual_batch.num_rows());
+            for i in 0..expected_batch.num_columns() {
+                let expected_data = expected_batch.column(i).data().clone();
+                let actual_data = actual_batch.column(i).data().clone();
 
-        let actual_batch = record_batch_reader
-            .next()
-            .expect("No batch found")
-            .expect("Unable to get batch");
-
-        assert_eq!(expected_batch.schema(), actual_batch.schema());
-        assert_eq!(expected_batch.num_columns(), actual_batch.num_columns());
-        assert_eq!(expected_batch.num_rows(), actual_batch.num_rows());
-        for i in 0..expected_batch.num_columns() {
-            let expected_data = expected_batch.column(i).data().clone();
-            let actual_data = actual_batch.column(i).data().clone();
-
-            assert_eq!(expected_data, actual_data);
+                assert_eq!(expected_data, actual_data);
+            }
         }
     }
 

@@ -105,7 +105,10 @@ test_source_distribution() {
 
   # raises on any formatting errors
   rustup component add rustfmt --toolchain stable
-  cargo fmt --all -- --check
+  (cd arrow && cargo fmt --check)
+  (cd arrow-flight && cargo fmt --check)
+  (cd parquet && cargo fmt --check)
+  (cd parquet_derive && cargo fmt --check)
 
   # Clone testing repositories if not cloned already
   git clone https://github.com/apache/arrow-testing.git arrow-testing-data
@@ -121,8 +124,10 @@ test_source_distribution() {
     -e 's/^parquet = "([^"]*)"/parquet = { version = "\1", path = "..\/parquet" }/g' \
     */Cargo.toml
 
-  cargo build
-  cargo test --all
+  (cd arrow && cargo build && cargo test)
+  (cd arrow-flight && cargo build && cargo test)
+  (cd parquet && cargo build && cargo test)
+  (cd parquet_derive && cargo build && cargo test)
 
   # verify that the crates can be published to crates.io
   pushd arrow
