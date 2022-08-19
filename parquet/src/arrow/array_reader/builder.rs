@@ -26,7 +26,7 @@ use crate::arrow::array_reader::{
     PrimitiveArrayReader, RowGroupCollection, StructArrayReader,
 };
 use crate::arrow::buffer::converter::{
-    DecimalArrayConverter, DecimalByteArrayConvert, DecimalFixedLengthByteArrayConverter,
+    DecimalArrayConverter, DecimalFixedLengthByteArrayConverter,
     FixedLenBinaryConverter, FixedSizeArrayConverter, Int96ArrayConverter,
     Int96Converter, IntervalDayTimeArrayConverter, IntervalDayTimeConverter,
     IntervalYearMonthArrayConverter, IntervalYearMonthConverter,
@@ -35,7 +35,7 @@ use crate::arrow::schema::{convert_schema, ParquetField, ParquetFieldType};
 use crate::arrow::ProjectionMask;
 use crate::basic::Type as PhysicalType;
 use crate::data_type::{
-    BoolType, ByteArrayType, DoubleType, FixedLenByteArrayType, FloatType, Int32Type,
+    BoolType, DoubleType, FixedLenByteArrayType, FloatType, Int32Type,
     Int64Type, Int96Type,
 };
 use crate::errors::Result;
@@ -216,19 +216,6 @@ fn build_primitive_reader(
         PhysicalType::BYTE_ARRAY => match arrow_type {
             Some(DataType::Dictionary(_, _)) => {
                 make_byte_array_dictionary_reader(page_iterator, column_desc, arrow_type)
-            }
-            Some(DataType::Decimal128(precision, scale)) => {
-                // read decimal data from parquet binary physical type
-                let convert = DecimalByteArrayConvert::new(DecimalArrayConverter::new(
-                    precision as i32,
-                    scale as i32,
-                ));
-                Ok(Box::new(ComplexObjectArrayReader::<
-                    ByteArrayType,
-                    DecimalByteArrayConvert,
-                >::new(
-                    page_iterator, column_desc, convert, arrow_type
-                )?))
             }
             _ => make_byte_array_reader(page_iterator, column_desc, arrow_type),
         },
