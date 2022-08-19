@@ -112,7 +112,7 @@ fn bench_decimal128(c: &mut Criterion) {
     c.bench_function("bench_decimal128_builder", |b| {
         b.iter(|| {
             let mut rng = rand::thread_rng();
-            let mut decimal_builder = Decimal128Builder::new(BATCH_SIZE, 38, 0);
+            let mut decimal_builder = Decimal128Builder::with_capacity(BATCH_SIZE, 38, 0);
             for _ in 0..BATCH_SIZE {
                 decimal_builder
                     .append_value(rng.gen_range::<i128, _>(0..9999999999))
