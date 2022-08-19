@@ -325,7 +325,7 @@ impl AzureClient {
                     .fetch_token(&self.client, &self.config.retry_config)
                     .await
                     .context(AuthorizationSnafu)?;
-                Ok(AzureCredential::BearerToken(token.token))
+                Ok(AzureCredential::BearerToken(token))
             }
             CredentialProvider::SASToken(sas) => {
                 Ok(AzureCredential::SASToken(sas.clone()))

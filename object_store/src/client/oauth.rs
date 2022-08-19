@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::client::retry::RetryExt;
-use crate::client::token::TemporaryToken;
+use crate::client::token::{TemporaryToken, TokenCache};
 use crate::RetryConfig;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT};
 use reqwest::{Client, Method};
@@ -231,6 +231,7 @@ pub struct ClientSecretOAuthProvider {
     token_url: String,
     client_id: String,
     client_secret: String,
+    cache: TokenCache<String>,
 }
 
 impl ClientSecretOAuthProvider {
@@ -249,11 +250,25 @@ impl ClientSecretOAuthProvider {
             token_url: format!("{}/{}/oauth2/v2.0/token", authority_host, tenant_id),
             client_id,
             client_secret,
+            cache: TokenCache::default(),
         }
     }
 
-    /// Fetch a fresh token
+    /// Fetch a token
     pub async fn fetch_token(
+        &self,
+        client: &Client,
+        retry: &RetryConfig,
+    ) -> Result<String> {
+        self.cache
+            .get_or_insert_with(|| {
+                self.fetch_token_inner(client, retry)
+            })
+            .await
+    }
+    
+    /// Fetch a fresh token
+    async fn fetch_token_inner(
         &self,
         client: &Client,
         retry: &RetryConfig,
