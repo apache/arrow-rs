@@ -225,12 +225,10 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     ) -> impl Iterator<Item = Option<&[u8]>> + 'a {
         indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
     }
-}
 
-impl<'a, T: OffsetSizeTrait> GenericBinaryArray<T> {
     /// constructs a new iterator
-    pub fn iter(&'a self) -> GenericBinaryIter<'a, T> {
-        GenericBinaryIter::<'a, T>::new(self)
+    pub fn iter(&self) -> GenericBinaryIter<'_, OffsetSize> {
+        GenericBinaryIter::<'_, OffsetSize>::new(self)
     }
 }
 

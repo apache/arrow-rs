@@ -22,6 +22,7 @@ use std::fmt;
 use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData, FixedSizeListArray,
 };
+use crate::array::{ArrayAccessor, FixedSizeBinaryIter};
 use crate::buffer::Buffer;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
@@ -259,6 +260,11 @@ impl FixedSizeBinaryArray {
     fn value_offset_at(&self, i: usize) -> i32 {
         self.length * i as i32
     }
+
+    /// constructs a new iterator
+    pub fn iter(&self) -> FixedSizeBinaryIter<'_> {
+        FixedSizeBinaryIter::new(self)
+    }
 }
 
 impl From<ArrayData> for FixedSizeBinaryArray {
@@ -359,6 +365,27 @@ impl Array for FixedSizeBinaryArray {
 
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+}
+
+impl<'a> ArrayAccessor for &'a FixedSizeBinaryArray {
+    type Item = &'a [u8];
+
+    fn value(&self, index: usize) -> Self::Item {
+        FixedSizeBinaryArray::value(self, index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        FixedSizeBinaryArray::value_unchecked(self, index)
+    }
+}
+
+impl<'a> IntoIterator for &'a FixedSizeBinaryArray {
+    type Item = Option<&'a [u8]>;
+    type IntoIter = FixedSizeBinaryIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        FixedSizeBinaryIter::<'a>::new(self)
     }
 }
 

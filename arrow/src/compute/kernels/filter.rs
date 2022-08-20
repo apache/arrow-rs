@@ -1039,7 +1039,7 @@ mod tests {
     #[test]
     fn test_filter_string_array_with_negated_boolean_array() {
         let a = StringArray::from(vec!["hello", " ", "world", "!"]);
-        let mut bb = BooleanBuilder::new(2);
+        let mut bb = BooleanBuilder::with_capacity(2);
         bb.append_value(false);
         bb.append_value(true);
         bb.append_value(false);
@@ -1553,7 +1553,7 @@ mod tests {
         let c = filter(&array, &filter_array).unwrap();
         let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
 
-        let mut builder = UnionBuilder::new_dense(1);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("A", 1).unwrap();
         let expected_array = builder.build().unwrap();
 
@@ -1563,7 +1563,7 @@ mod tests {
         let c = filter(&array, &filter_array).unwrap();
         let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
 
-        let mut builder = UnionBuilder::new_dense(2);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("A", 1).unwrap();
         builder.append::<Int32Type>("A", 34).unwrap();
         let expected_array = builder.build().unwrap();
@@ -1574,7 +1574,7 @@ mod tests {
         let c = filter(&array, &filter_array).unwrap();
         let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
 
-        let mut builder = UnionBuilder::new_dense(2);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("A", 1).unwrap();
         builder.append::<Float64Type>("B", 3.2).unwrap();
         let expected_array = builder.build().unwrap();
@@ -1584,7 +1584,7 @@ mod tests {
 
     #[test]
     fn test_filter_union_array_dense() {
-        let mut builder = UnionBuilder::new_dense(3);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("A", 1).unwrap();
         builder.append::<Float64Type>("B", 3.2).unwrap();
         builder.append::<Int32Type>("A", 34).unwrap();
@@ -1595,7 +1595,7 @@ mod tests {
 
     #[test]
     fn test_filter_run_union_array_dense() {
-        let mut builder = UnionBuilder::new_dense(3);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("A", 1).unwrap();
         builder.append::<Int32Type>("A", 3).unwrap();
         builder.append::<Int32Type>("A", 34).unwrap();
@@ -1605,7 +1605,7 @@ mod tests {
         let c = filter(&array, &filter_array).unwrap();
         let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
 
-        let mut builder = UnionBuilder::new_dense(3);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("A", 1).unwrap();
         builder.append::<Int32Type>("A", 3).unwrap();
         let expected = builder.build().unwrap();
@@ -1615,7 +1615,7 @@ mod tests {
 
     #[test]
     fn test_filter_union_array_dense_with_nulls() {
-        let mut builder = UnionBuilder::new_dense(4);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("A", 1).unwrap();
         builder.append::<Float64Type>("B", 3.2).unwrap();
         builder.append_null::<Float64Type>("B").unwrap();
@@ -1626,7 +1626,7 @@ mod tests {
         let c = filter(&array, &filter_array).unwrap();
         let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
 
-        let mut builder = UnionBuilder::new_dense(2);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("A", 1).unwrap();
         builder.append::<Float64Type>("B", 3.2).unwrap();
         let expected_array = builder.build().unwrap();
@@ -1637,7 +1637,7 @@ mod tests {
         let c = filter(&array, &filter_array).unwrap();
         let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
 
-        let mut builder = UnionBuilder::new_dense(2);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("A", 1).unwrap();
         builder.append_null::<Float64Type>("B").unwrap();
         let expected_array = builder.build().unwrap();
@@ -1647,7 +1647,7 @@ mod tests {
 
     #[test]
     fn test_filter_union_array_sparse() {
-        let mut builder = UnionBuilder::new_sparse(3);
+        let mut builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("A", 1).unwrap();
         builder.append::<Float64Type>("B", 3.2).unwrap();
         builder.append::<Int32Type>("A", 34).unwrap();
@@ -1658,7 +1658,7 @@ mod tests {
 
     #[test]
     fn test_filter_union_array_sparse_with_nulls() {
-        let mut builder = UnionBuilder::new_sparse(4);
+        let mut builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("A", 1).unwrap();
         builder.append::<Float64Type>("B", 3.2).unwrap();
         builder.append_null::<Float64Type>("B").unwrap();
@@ -1669,7 +1669,7 @@ mod tests {
         let c = filter(&array, &filter_array).unwrap();
         let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
 
-        let mut builder = UnionBuilder::new_sparse(2);
+        let mut builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("A", 1).unwrap();
         builder.append_null::<Float64Type>("B").unwrap();
         let expected_array = builder.build().unwrap();
