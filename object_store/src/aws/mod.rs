@@ -616,25 +616,34 @@ mod tests {
 
     #[test]
     fn s3_test_config_from_env() {
-        let aws_access_key_id = "object_store:fake_access_key_id";
-        let aws_secret_access_key = "object_store:fake_secret_key";
-        let aws_default_region = "object_store:fake_default_region";
+        let aws_access_key_id = env::var("AWS_ACCESS_KEY_ID")
+            .unwrap_or("object_store:fake_access_key_id".into());
+        let aws_secret_access_key = env::var("AWS_SECRET_ACCESS_KEY")
+            .unwrap_or("object_store:fake_secret_key".into());
 
-        let aws_endpoint = "object_store:fake_endpoint";
-        let aws_session_token = "object_store:fake_session_token";
+        let aws_default_region = env::var("AWS_DEFAULT_REGION")
+            .unwrap_or("object_store:fake_default_region".into());
+
+        let aws_endpoint =
+            env::var("AWS_ENDPOINT").unwrap_or("object_store:fake_endpoint".into());
+        let aws_session_token = env::var("AWS_SESSION_TOKEN")
+            .unwrap_or("object_store:fake_session_token".into());
 
         // required
-        env::set_var("AWS_ACCESS_KEY_ID", aws_access_key_id);
-        env::set_var("AWS_SECRET_ACCESS_KEY", aws_secret_access_key);
-        env::set_var("AWS_DEFAULT_REGION", aws_default_region);
+        env::set_var("AWS_ACCESS_KEY_ID", &aws_access_key_id);
+        env::set_var("AWS_SECRET_ACCESS_KEY", &aws_secret_access_key);
+        env::set_var("AWS_DEFAULT_REGION", &aws_default_region);
 
         // optional
-        env::set_var("AWS_ENDPOINT", aws_endpoint);
-        env::set_var("AWS_SESSION_TOKEN", aws_session_token);
+        env::set_var("AWS_ENDPOINT", &aws_endpoint);
+        env::set_var("AWS_SESSION_TOKEN", &aws_session_token);
 
         let builder = AmazonS3Builder::from_env();
-        assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id);
-        assert_eq!(builder.secret_access_key.unwrap(), aws_secret_access_key);
+        assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
+        assert_eq!(
+            builder.secret_access_key.unwrap(),
+            aws_secret_access_key.as_str()
+        );
         assert_eq!(builder.region.unwrap(), aws_default_region);
 
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
