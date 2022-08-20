@@ -115,7 +115,11 @@ impl<T> ArrowReaderBuilder<T> {
     }
 
     /// Set the size of [`RecordBatch`] to produce. Defaults to 1024
+    /// If the batch_size more than the file row count, use the file row count.
     pub fn with_batch_size(self, batch_size: usize) -> Self {
+        // Try to avoid allocate large buffer
+        let batch_size =
+            batch_size.min(self.metadata.file_metadata().num_rows() as usize);
         Self { batch_size, ..self }
     }
 
