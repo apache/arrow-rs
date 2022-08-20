@@ -402,12 +402,12 @@ fn create_primitive_array(
     let array_data = match data_type {
         Utf8 | Binary | LargeBinary | LargeUtf8 => {
             // read 3 buffers: null buffer (optional), offsets buffer and data buffer
-            let builder = ArrayData::builder(data_type.clone())
+            ArrayData::builder(data_type.clone())
                 .len(length)
                 .buffers(buffers[1..3].to_vec())
-                .null_bit_buffer(null_buffer);
-
-            unsafe { builder.build_unchecked() }
+                .null_bit_buffer(null_buffer)
+                .build()
+                .unwrap()
         }
         FixedSizeBinary(_) => {
             // read 2 buffers: null buffer (optional) and data buffer
