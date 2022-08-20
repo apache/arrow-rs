@@ -40,7 +40,7 @@ fn validate_decimal256_array(array: Decimal256Array) {
 fn validate_decimal128_benchmark(c: &mut Criterion) {
     let mut rng = rand::thread_rng();
     let size: i128 = 20000;
-    let mut decimal_builder = Decimal128Builder::new(size as usize, 38, 0);
+    let mut decimal_builder = Decimal128Builder::with_capacity(size as usize, 38, 0);
     for _ in 0..size {
         decimal_builder
             .append_value(rng.gen_range::<i128, _>(0..999999999999))
@@ -59,7 +59,7 @@ fn validate_decimal128_benchmark(c: &mut Criterion) {
 fn validate_decimal256_benchmark(c: &mut Criterion) {
     let mut rng = rand::thread_rng();
     let size: i128 = 20000;
-    let mut decimal_builder = Decimal256Builder::new(size as usize, 76, 0);
+    let mut decimal_builder = Decimal256Builder::with_capacity(size as usize, 76, 0);
     for _ in 0..size {
         let v = rng.gen_range::<i128, _>(0..999999999999999);
         let decimal = Decimal256::from_big_int(&BigInt::from(v), 76, 0).unwrap();
