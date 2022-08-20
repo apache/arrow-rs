@@ -2455,8 +2455,18 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 #[allow(clippy::bool_comparison)]
 pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
-        DataType::Dictionary(_, _) => {
+        DataType::Dictionary(_, _)
+            if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
+        {
             typed_dict_compares!(left, right, |a, b| a < b, |a, b| a < b)
+        }
+        DataType::Dictionary(_, _)
+            if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
+        {
+            typed_cmp_dict_non_dict!(left, right, |a, b| a < b, |a, b| a < b)
+        }
+        _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
+            typed_cmp_dict_non_dict!(right, left, |a, b| a > b, |a, b| a > b)
         }
         _ => typed_compares!(left, right, |a, b| ((!a) & b), |a, b| a < b),
     }
@@ -2479,8 +2489,18 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// ```
 pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
-        DataType::Dictionary(_, _) => {
+        DataType::Dictionary(_, _)
+            if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
+        {
             typed_dict_compares!(left, right, |a, b| a <= b, |a, b| a <= b)
+        }
+        DataType::Dictionary(_, _)
+            if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
+        {
+            typed_cmp_dict_non_dict!(left, right, |a, b| a <= b, |a, b| a <= b)
+        }
+        _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
+            typed_cmp_dict_non_dict!(right, left, |a, b| a >= b, |a, b| a >= b)
         }
         _ => typed_compares!(left, right, |a, b| !(a & (!b)), |a, b| a <= b),
     }
@@ -2503,8 +2523,18 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 #[allow(clippy::bool_comparison)]
 pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
-        DataType::Dictionary(_, _) => {
+        DataType::Dictionary(_, _)
+            if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
+        {
             typed_dict_compares!(left, right, |a, b| a > b, |a, b| a > b)
+        }
+        DataType::Dictionary(_, _)
+            if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
+        {
+            typed_cmp_dict_non_dict!(left, right, |a, b| a > b, |a, b| a > b)
+        }
+        _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
+            typed_cmp_dict_non_dict!(right, left, |a, b| a < b, |a, b| a < b)
         }
         _ => typed_compares!(left, right, |a, b| (a & (!b)), |a, b| a > b),
     }
@@ -2526,8 +2556,18 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// ```
 pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
-        DataType::Dictionary(_, _) => {
+        DataType::Dictionary(_, _)
+            if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
+        {
             typed_dict_compares!(left, right, |a, b| a >= b, |a, b| a >= b)
+        }
+        DataType::Dictionary(_, _)
+            if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
+        {
+            typed_cmp_dict_non_dict!(left, right, |a, b| a >= b, |a, b| a >= b)
+        }
+        _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
+            typed_cmp_dict_non_dict!(right, left, |a, b| a <= b, |a, b| a <= b)
         }
         _ => typed_compares!(left, right, |a, b| !((!a) & b), |a, b| a >= b),
     }
@@ -5178,6 +5218,64 @@ mod tests {
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, Some(false)])
+        );
+    }
+
+    #[test]
+    fn test_lt_dyn_lt_eq_dyn_gt_dyn_gt_eq_dyn_dictionary_i8_i8_array() {
+        let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
+        let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
+
+        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        let array = Int8Array::from_iter([Some(12_i8), None, Some(11)]);
+
+        let result = lt_dyn(&dict_array, &array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(false), None, Some(false)])
+        );
+
+        let result = lt_dyn(&array, &dict_array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(false), None, Some(true)])
+        );
+
+        let result = lt_eq_dyn(&dict_array, &array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(true), None, Some(false)])
+        );
+
+        let result = lt_eq_dyn(&array, &dict_array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(true), None, Some(true)])
+        );
+
+        let result = gt_dyn(&dict_array, &array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(false), None, Some(true)])
+        );
+
+        let result = gt_dyn(&array, &dict_array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(false), None, Some(false)])
+        );
+
+        let result = gt_eq_dyn(&dict_array, &array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(true), None, Some(true)])
+        );
+
+        let result = gt_eq_dyn(&array, &dict_array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(true), None, Some(false)])
         );
     }
 }
