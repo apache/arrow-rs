@@ -141,7 +141,9 @@ impl std::fmt::Display for MicrosoftAzure {
 #[async_trait]
 impl ObjectStore for MicrosoftAzure {
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.client.put_request(location, Some(bytes), &()).await?;
+        self.client
+            .put_request(location, Some(bytes), false, &())
+            .await?;
         Ok(())
     }
 
@@ -289,25 +291,19 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
         buf: Vec<u8>,
         part_idx: usize,
     ) -> Result<UploadPart, io::Error> {
-        let block_id = format!("{:20}", part_idx);
+        let content_id = format!("{:20}", part_idx);
+        let block_id: BlockId = content_id.clone().into();
 
         self.client
             .put_request(
                 &self.location,
                 Some(buf.into()),
-                &[
-                    ("comp", "block"),
-                    (
-                        "blockid",
-                        String::from(BlockId::from(block_id.clone())).as_ref(),
-                    ),
-                ],
+                true,
+                &[("comp", "block"), ("blockid", &base64::encode(block_id))],
             )
             .await?;
 
-        Ok(UploadPart {
-            content_id: block_id,
-        })
+        Ok(UploadPart { content_id })
     }
 
     async fn complete(&self, completed_parts: Vec<UploadPart>) -> Result<(), io::Error> {
@@ -323,6 +319,7 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
             .put_request(
                 &self.location,
                 Some(block_xml.into()),
+                true,
                 &[("comp", "blocklist")],
             )
             .await?;
@@ -559,7 +556,7 @@ mod tests {
     use super::*;
     use crate::tests::{
         copy_if_not_exists, list_uses_directories_correctly, list_with_delimiter,
-        put_get_delete_list, rename_and_copy,
+        put_get_delete_list, rename_and_copy, stream_get,
     };
     use std::env;
 
@@ -634,8 +631,7 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
-        // TODO find out whats wrong in stream test - maybe empty pagination string again?
-        // stream_get(&integration).await;
+        stream_get(&integration).await;
     }
 
     // test for running integration test against actual blob service with service principal
@@ -664,7 +660,6 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
-        // TODO find out whats wrong in stream test - maybe empty pagination string again?
         // stream_get(&integration).await;
     }
 }

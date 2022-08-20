@@ -193,15 +193,18 @@ impl AzureClient {
         &self,
         path: &Path,
         bytes: Option<Bytes>,
+        is_block_op: bool,
         query: &T,
     ) -> Result<Response> {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(path);
 
-        let mut builder = self
-            .client
-            .request(Method::PUT, url)
-            .header(&BLOB_TYPE, "BlockBlob");
+        let mut builder = self.client.request(Method::PUT, url);
+
+        if !is_block_op {
+            builder = builder.header(&BLOB_TYPE, "BlockBlob");
+        }
+
         if let Some(bytes) = bytes {
             builder = builder
                 .header(CONTENT_LENGTH, HeaderValue::from(bytes.len()))
@@ -509,7 +512,7 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BlockId(Bytes);
+pub(crate) struct BlockId(Bytes);
 
 impl BlockId {
     pub fn new(block_id: impl Into<Bytes>) -> Self {
@@ -532,14 +535,8 @@ impl AsRef<[u8]> for BlockId {
     }
 }
 
-impl From<BlockId> for String {
-    fn from(block: BlockId) -> Self {
-        base64::encode(&block.0)
-    }
-}
-
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
-pub struct BlockList {
+pub(crate) struct BlockList {
     pub blocks: Vec<BlockId>,
 }
 
@@ -550,7 +547,7 @@ impl BlockList {
         for block_id in &self.blocks {
             let node = format!(
                 "\t<Uncommitted>{}</Uncommitted>\n",
-                base64::encode(block_id.as_ref())
+                base64::encode(block_id)
             );
             s.push_str(&node);
         }
