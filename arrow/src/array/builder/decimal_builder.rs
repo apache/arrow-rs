@@ -66,8 +66,8 @@ impl Decimal128Builder {
         Self::with_capacity(1024, precision, scale)
     }
 
-    /// Creates a new [`Decimal128Builder`], `capacity` is the number of bytes in the values
-    /// array
+    /// Creates a new [`Decimal128Builder`], `capacity` is the number of decimal values
+    /// that can be appended without reallocating
     pub fn with_capacity(capacity: usize, precision: usize, scale: usize) -> Self {
         Self {
             builder: FixedSizeBinaryBuilder::with_capacity(capacity, Self::BYTE_LENGTH),
@@ -165,8 +165,8 @@ impl Decimal256Builder {
         Self::with_capacity(1024, precision, scale)
     }
 
-    /// Creates a new [`Decimal256Builder`], `capacity` is the number of bytes in the values
-    /// array
+    /// Creates a new [`Decimal256Builder`], `capacity` is the number of decimal values
+    /// that can be appended without reallocating
     pub fn with_capacity(capacity: usize, precision: usize, scale: usize) -> Self {
         Self {
             builder: FixedSizeBinaryBuilder::with_capacity(capacity, Self::BYTE_LENGTH),
