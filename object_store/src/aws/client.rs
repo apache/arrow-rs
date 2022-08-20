@@ -26,7 +26,6 @@ use crate::{
 };
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
-use percent_encoding::{utf8_percent_encode, AsciiSet, PercentEncode, NON_ALPHANUMERIC};
 use reqwest::{Client as ReqwestClient, Method, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};

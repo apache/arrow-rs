@@ -235,6 +235,7 @@ pub struct ClientSecretOAuthProvider {
 }
 
 impl ClientSecretOAuthProvider {
+    /// Create a new [`ClientSecretOAuthProvider`] for an azure backed store
     pub fn new_azure(
         client_id: String,
         client_secret: String,

@@ -171,7 +171,16 @@ impl AzureClient {
                     .fetch_token(&self.client, &self.config.retry_config)
                     .await
                     .context(AuthorizationSnafu)?;
-                Ok(AzureCredential::BearerToken(token))
+                Ok(AzureCredential::AuthorizationToken(
+                    // we do the conversion to a HeaderValue here, since it is fallible
+                    // and we wna to use it in an infallible function
+                    HeaderValue::from_str(&format!("Bearer {}", token)).map_err(
+                        |err| crate::Error::Generic {
+                            store: "MicrosoftAzure",
+                            source: Box::new(err),
+                        },
+                    )?,
+                ))
             }
             CredentialProvider::SASToken(sas) => {
                 Ok(AzureCredential::SASToken(sas.clone()))

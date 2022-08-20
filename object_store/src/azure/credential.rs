@@ -53,7 +53,7 @@ pub enum CredentialProvider {
 pub(crate) enum AzureCredential {
     AccessKey(String),
     SASToken(Vec<(String, String)>),
-    BearerToken(String),
+    AuthorizationToken(HeaderValue),
 }
 
 /// A list of known Azure authority hosts
@@ -69,7 +69,8 @@ pub mod authority_hosts {
 }
 
 pub(crate) trait CredentialExt {
-    /// Sign a request <https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html>
+    /// Apply authorization to requests against azure storage accounts
+    /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-requests-to-azure-storage>
     fn with_azure_authorization(
         self,
         credential: &AzureCredential,
@@ -85,6 +86,7 @@ impl CredentialExt for RequestBuilder {
     ) -> Self {
         let date = Utc::now();
         let date_str = date.format(RFC1123_FMT).to_string();
+        // we formatted the data string ourselves, so unwrapping should be fine
         let date_val = HeaderValue::from_str(&date_str).unwrap();
 
         // Hack around lack of access to underlying request
@@ -103,7 +105,7 @@ impl CredentialExt for RequestBuilder {
 
         match credential {
             AzureCredential::AccessKey(key) => {
-                let auth = generate_authorization(
+                let signature = generate_authorization(
                     request.headers(),
                     request.url(),
                     request.method(),
@@ -111,16 +113,14 @@ impl CredentialExt for RequestBuilder {
                     key.as_str(),
                 );
                 self = self
-                    // TODO how to handle unwrap? It's b64 so we are fine?
-                    .header(AUTHORIZATION, HeaderValue::from_str(auth.as_str()).unwrap());
-            }
-            AzureCredential::BearerToken(token) => {
-                self = self
-                    // TODO how to handle unwrap? We generated the token, so we are fine?
+                    // "signature" is a base 64 encoded string so it should never contain illegal characters.
                     .header(
                         AUTHORIZATION,
-                        HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
+                        HeaderValue::from_str(signature.as_str()).unwrap(),
                     );
+            }
+            AzureCredential::AuthorizationToken(token) => {
+                self = self.header(AUTHORIZATION, token);
             }
             AzureCredential::SASToken(query_pairs) => {
                 self = self.query(&query_pairs);
