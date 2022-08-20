@@ -96,7 +96,7 @@ impl ArrayBuilder for StructBuilder {
 pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilder> {
     match datatype {
         DataType::Null => unimplemented!(),
-        DataType::Boolean => Box::new(BooleanBuilder::new(capacity)),
+        DataType::Boolean => Box::new(BooleanBuilder::with_capacity(capacity)),
         DataType::Int8 => Box::new(Int8Builder::with_capacity(capacity)),
         DataType::Int16 => Box::new(Int16Builder::with_capacity(capacity)),
         DataType::Int32 => Box::new(Int32Builder::with_capacity(capacity)),
@@ -109,7 +109,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Float64 => Box::new(Float64Builder::with_capacity(capacity)),
         DataType::Binary => Box::new(BinaryBuilder::new(capacity)),
         DataType::FixedSizeBinary(len) => {
-            Box::new(FixedSizeBinaryBuilder::new(capacity, *len))
+            Box::new(FixedSizeBinaryBuilder::with_capacity(capacity, *len))
         }
         DataType::Decimal128(precision, scale) => {
             Box::new(Decimal128Builder::new(capacity, *precision, *scale))
@@ -320,8 +320,9 @@ mod tests {
 
     #[test]
     fn test_struct_array_builder_finish() {
+
         let int_builder = Int32Builder::new();
-        let bool_builder = BooleanBuilder::new(10);
+        let bool_builder = BooleanBuilder::new();
 
         let mut fields = Vec::new();
         let mut field_builders = Vec::new();
@@ -426,7 +427,7 @@ mod tests {
     #[should_panic(expected = "StructBuilder and field_builders are of unequal lengths.")]
     fn test_struct_array_builder_unequal_field_builders_lengths() {
         let mut int_builder = Int32Builder::with_capacity(10);
-        let mut bool_builder = BooleanBuilder::new(10);
+        let mut bool_builder = BooleanBuilder::new();
 
         int_builder.append_value(1);
         int_builder.append_value(2);

@@ -95,7 +95,7 @@ impl BooleanArray {
 
     // Returns a new boolean array builder
     pub fn builder(capacity: usize) -> BooleanBuilder {
-        BooleanBuilder::new(capacity)
+        BooleanBuilder::with_capacity(capacity)
     }
 
     /// Returns a `Buffer` holding all the values of this array.

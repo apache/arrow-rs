@@ -80,7 +80,7 @@ fn bench_bool(c: &mut Criterion) {
     ));
     group.bench_function("bench_bool", |b| {
         b.iter(|| {
-            let mut builder = BooleanBuilder::new(64);
+            let mut builder = BooleanBuilder::with_capacity(64);
             for _ in 0..NUM_BATCHES {
                 builder.append_slice(&data[..]);
             }

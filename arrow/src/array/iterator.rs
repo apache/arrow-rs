@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::array::array::ArrayAccessor;
-use crate::array::DecimalArray;
+use crate::array::{DecimalArray, FixedSizeBinaryArray};
 use crate::datatypes::{Decimal128Type, Decimal256Type};
 
 use super::{
@@ -103,6 +103,7 @@ pub type PrimitiveIter<'a, T> = ArrayIter<&'a PrimitiveArray<T>>;
 pub type BooleanIter<'a> = ArrayIter<&'a BooleanArray>;
 pub type GenericStringIter<'a, T> = ArrayIter<&'a GenericStringArray<T>>;
 pub type GenericBinaryIter<'a, T> = ArrayIter<&'a GenericBinaryArray<T>>;
+pub type FixedSizeBinaryIter<'a> = ArrayIter<&'a FixedSizeBinaryArray>;
 pub type GenericListArrayIter<'a, O> = ArrayIter<&'a GenericListArray<O>>;
 
 pub type DecimalIter<'a, T> = ArrayIter<&'a DecimalArray<T>>;

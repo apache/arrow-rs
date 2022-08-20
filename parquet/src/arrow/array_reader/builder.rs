@@ -88,6 +88,7 @@ fn build_map_reader(
         field.arrow_type.clone(),
         field.def_level,
         field.rep_level,
+        field.nullable,
     )))
 }
 

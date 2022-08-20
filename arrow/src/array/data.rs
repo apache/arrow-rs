@@ -2677,7 +2677,7 @@ mod tests {
             ],
             vec![
                 Box::new(Int32Builder::with_capacity(5)),
-                Box::new(BooleanBuilder::new(5)),
+                Box::new(BooleanBuilder::with_capacity(5)),
             ],
         );
 

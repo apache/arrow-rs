@@ -55,7 +55,8 @@ impl Converter<Vec<Option<FixedLenByteArray>>, FixedSizeBinaryArray>
         &self,
         source: Vec<Option<FixedLenByteArray>>,
     ) -> Result<FixedSizeBinaryArray> {
-        let mut builder = FixedSizeBinaryBuilder::new(source.len(), self.byte_width);
+        let mut builder =
+            FixedSizeBinaryBuilder::with_capacity(source.len(), self.byte_width);
         for v in source {
             match v {
                 Some(array) => builder.append_value(array.data())?,
