@@ -111,162 +111,7 @@ impl From<Error> for crate::Error {
     }
 }
 
-fn deserialize_http_date<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let s = String::deserialize(deserializer)?;
-    Utc.datetime_from_str(&s, RFC1123_FMT)
-        .map_err(serde::de::Error::custom)
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct ListBlobsResponse {
-    pub prefix: Option<String>,
-    pub max_results: Option<u32>,
-    pub delimiter: Option<String>,
-    pub next_marker: Option<String>,
-    pub blobs: Blobs,
-}
-
-impl TryFrom<ListBlobsResponse> for ListResult {
-    type Error = crate::Error;
-
-    fn try_from(value: ListBlobsResponse) -> Result<Self> {
-        let common_prefixes = value
-            .blobs
-            .blob_prefix
-            .unwrap_or_default()
-            .into_iter()
-            .map(|x| Ok(Path::parse(&x.name)?))
-            .collect::<Result<_>>()?;
-
-        let objects = value
-            .blobs
-            .blobs
-            .into_iter()
-            .map(ObjectMeta::try_from)
-            // Note: workaround for gen2 accounts with hierarchical namespaces. These accounts also
-            // return path segments as "directories". When we cant directories, its always via
-            // the BlobPrefix mechanics.
-            .filter_map_ok(|obj| if obj.size > 0 { Some(obj) } else { None })
-            .collect::<Result<_>>()?;
-
-        Ok(Self {
-            common_prefixes,
-            objects,
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct Blobs {
-    pub blob_prefix: Option<Vec<BlobPrefix>>,
-    #[serde(rename = "Blob", default)]
-    pub blobs: Vec<Blob>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct BlobPrefix {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct Blob {
-    pub name: String,
-    // pub snapshot: Option<Snapshot>,
-    pub version_id: Option<String>,
-    pub is_current_version: Option<bool>,
-    pub deleted: Option<bool>,
-    pub properties: BlobProperties,
-    pub metadata: Option<HashMap<String, String>>,
-    // pub tags: Option<Tags>,
-}
-
-impl TryFrom<Blob> for ObjectMeta {
-    type Error = crate::Error;
-
-    fn try_from(value: Blob) -> Result<Self> {
-        Ok(Self {
-            location: Path::parse(value.name)?,
-            last_modified: value.properties.last_modified,
-            size: value.properties.content_length as usize,
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct BlobProperties {
-    #[serde(deserialize_with = "deserialize_http_date", rename = "Last-Modified")]
-    pub last_modified: DateTime<Utc>,
-    pub etag: String,
-    #[serde(rename = "Content-Length")]
-    pub content_length: u64,
-    #[serde(rename = "Content-Type")]
-    pub content_type: String,
-    #[serde(rename = "Content-Encoding")]
-    pub content_encoding: Option<String>,
-    #[serde(rename = "Content-Language")]
-    pub content_language: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BlockId(Bytes);
-
-impl BlockId {
-    pub fn new(block_id: impl Into<Bytes>) -> Self {
-        Self(block_id.into())
-    }
-}
-
-impl<B> From<B> for BlockId
-where
-    B: Into<Bytes>,
-{
-    fn from(v: B) -> Self {
-        Self::new(v)
-    }
-}
-
-impl AsRef<[u8]> for BlockId {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
-    }
-}
-
-impl From<BlockId> for String {
-    fn from(block: BlockId) -> Self {
-        base64::encode(&block.0)
-    }
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
-pub struct BlockList {
-    pub blocks: Vec<BlockId>,
-}
-
-impl BlockList {
-    pub fn to_xml(&self) -> String {
-        let mut s = String::new();
-        s.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<BlockList>\n");
-        for block_id in &self.blocks {
-            let node = format!(
-                "\t<Uncommitted>{}</Uncommitted>\n",
-                base64::encode(block_id.as_ref())
-            );
-            s.push_str(&node);
-        }
-
-        s.push_str("</BlockList>");
-        s
-    }
-}
-
+/// Configuration for [AzureClient]
 #[derive(Debug)]
 pub struct AzureConfig {
     pub account: String,
@@ -301,6 +146,7 @@ pub(crate) struct AzureClient {
 }
 
 impl AzureClient {
+    /// create a new instance of [AzureClient]
     pub fn new(config: AzureConfig) -> Self {
         let client = reqwest::ClientBuilder::new()
             .https_only(!config.allow_http)
@@ -518,7 +364,7 @@ impl AzureClient {
             .await
             .context(ListRequestSnafu)?;
 
-        let mut response: ListBlobsResponse =
+        let mut response: ListResultInternal =
             quick_xml::de::from_reader(response.reader())
                 .context(InvalidListResponseSnafu)?;
         let token = response.next_marker.take();
@@ -540,6 +386,168 @@ impl AzureClient {
             Ok((r, prefix, next_token))
         })
         .boxed()
+    }
+}
+
+/// Raw / internal response from list requests
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ListResultInternal {
+    pub prefix: Option<String>,
+    pub max_results: Option<u32>,
+    pub delimiter: Option<String>,
+    pub next_marker: Option<String>,
+    pub blobs: Blobs,
+}
+
+impl TryFrom<ListResultInternal> for ListResult {
+    type Error = crate::Error;
+
+    fn try_from(value: ListResultInternal) -> Result<Self> {
+        let common_prefixes = value
+            .blobs
+            .blob_prefix
+            .unwrap_or_default()
+            .into_iter()
+            .map(|x| Ok(Path::parse(&x.name)?))
+            .collect::<Result<_>>()?;
+
+        let objects = value
+            .blobs
+            .blobs
+            .into_iter()
+            .map(ObjectMeta::try_from)
+            // Note: workaround for gen2 accounts with hierarchical namespaces. These accounts also
+            // return path segments as "directories". When we cant directories, its always via
+            // the BlobPrefix mechanics.
+            .filter_map_ok(|obj| if obj.size > 0 { Some(obj) } else { None })
+            .collect::<Result<_>>()?;
+
+        Ok(Self {
+            common_prefixes,
+            objects,
+        })
+    }
+}
+
+/// Collection of blobs and potentially shared prefixes returned from list requests.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct Blobs {
+    pub blob_prefix: Option<Vec<BlobPrefix>>,
+    #[serde(rename = "Blob", default)]
+    pub blobs: Vec<Blob>,
+}
+
+/// Common prefix in list blobs response
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct BlobPrefix {
+    pub name: String,
+}
+
+/// Details for a specific blob
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct Blob {
+    pub name: String,
+    pub version_id: Option<String>,
+    pub is_current_version: Option<bool>,
+    pub deleted: Option<bool>,
+    pub properties: BlobProperties,
+    pub metadata: Option<HashMap<String, String>>,
+}
+
+impl TryFrom<Blob> for ObjectMeta {
+    type Error = crate::Error;
+
+    fn try_from(value: Blob) -> Result<Self> {
+        Ok(Self {
+            location: Path::parse(value.name)?,
+            last_modified: value.properties.last_modified,
+            size: value.properties.content_length as usize,
+        })
+    }
+}
+
+/// Properties associated with individual blobs. The actual list
+/// of returned properties is much more exhaustive, but we limit
+/// the parsed fields to the ones relevant in this crate.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct BlobProperties {
+    #[serde(deserialize_with = "deserialize_http_date", rename = "Last-Modified")]
+    pub last_modified: DateTime<Utc>,
+    pub etag: String,
+    #[serde(rename = "Content-Length")]
+    pub content_length: u64,
+    #[serde(rename = "Content-Type")]
+    pub content_type: String,
+    #[serde(rename = "Content-Encoding")]
+    pub content_encoding: Option<String>,
+    #[serde(rename = "Content-Language")]
+    pub content_language: Option<String>,
+}
+
+// deserialize dates used in Azure payloads according to rfc1123
+fn deserialize_http_date<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    Utc.datetime_from_str(&s, RFC1123_FMT)
+        .map_err(serde::de::Error::custom)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockId(Bytes);
+
+impl BlockId {
+    pub fn new(block_id: impl Into<Bytes>) -> Self {
+        Self(block_id.into())
+    }
+}
+
+impl<B> From<B> for BlockId
+where
+    B: Into<Bytes>,
+{
+    fn from(v: B) -> Self {
+        Self::new(v)
+    }
+}
+
+impl AsRef<[u8]> for BlockId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
+impl From<BlockId> for String {
+    fn from(block: BlockId) -> Self {
+        base64::encode(&block.0)
+    }
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub struct BlockList {
+    pub blocks: Vec<BlockId>,
+}
+
+impl BlockList {
+    pub fn to_xml(&self) -> String {
+        let mut s = String::new();
+        s.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<BlockList>\n");
+        for block_id in &self.blocks {
+            let node = format!(
+                "\t<Uncommitted>{}</Uncommitted>\n",
+                base64::encode(block_id.as_ref())
+            );
+            s.push_str(&node);
+        }
+
+        s.push_str("</BlockList>");
+        s
     }
 }
 
@@ -630,7 +638,7 @@ mod tests {
 </EnumerationResults>";
 
         let bytes = Bytes::from(S);
-        let mut _list_blobs_response_internal: ListBlobsResponse =
+        let mut _list_blobs_response_internal: ListResultInternal =
             quick_xml::de::from_slice(bytes.as_ref()).unwrap();
     }
 
@@ -702,7 +710,7 @@ mod tests {
 </EnumerationResults>";
 
         let bytes = Bytes::from(S);
-        let mut _list_blobs_response_internal: ListBlobsResponse =
+        let mut _list_blobs_response_internal: ListResultInternal =
             quick_xml::de::from_slice(bytes.as_ref()).unwrap();
     }
 

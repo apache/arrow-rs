@@ -35,7 +35,6 @@ use crate::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
-pub use credential::authority_hosts;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use snafu::{ResultExt, Snafu};
 use std::collections::BTreeSet;
@@ -46,16 +45,18 @@ use std::sync::Arc;
 use tokio::io::AsyncWrite;
 use url::Url;
 
+pub use credential::authority_hosts;
+
 mod client;
 mod credential;
 
 /// The well-known account used by Azurite and the legacy Azure Storage Emulator.
 /// <https://docs.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key>
-pub const EMULATOR_ACCOUNT: &str = "devstoreaccount1";
+const EMULATOR_ACCOUNT: &str = "devstoreaccount1";
 
 /// The well-known account key used by Azurite and the legacy Azure Storage Emulator.
 /// <https://docs.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key>
-pub const EMULATOR_ACCOUNT_KEY: &str =
+const EMULATOR_ACCOUNT_KEY: &str =
     "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
 
 /// A specialized `Error` for Azure object store-related errors
@@ -83,14 +84,10 @@ enum Error {
     #[snafu(display("Received header containing non-ASCII data"))]
     BadHeader { source: reqwest::header::ToStrError },
 
-    #[snafu(display(
-        "Unable parse source url. Container: {}, Error: {}",
-        container,
-        source
-    ))]
+    #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
     UnableToParseUrl {
         source: url::ParseError,
-        container: String,
+        url: String,
     },
 
     #[snafu(display(
@@ -206,21 +203,22 @@ impl ObjectStore for MicrosoftAzure {
 
         let last_modified = headers
             .get(LAST_MODIFIED)
-            .ok_or(Error::MissingLastModified)?;
-
-        let content_length = headers
-            .get(CONTENT_LENGTH)
-            .ok_or(Error::MissingContentLength)?;
-
-        let last_modified = last_modified.to_str().context(BadHeaderSnafu)?;
+            .ok_or(Error::MissingLastModified)?
+            .to_str()
+            .context(BadHeaderSnafu)?;
         let last_modified = Utc
             .datetime_from_str(last_modified, credential::RFC1123_FMT)
             .context(InvalidLastModifiedSnafu { last_modified })?;
 
-        let content_length = content_length.to_str().context(BadHeaderSnafu)?;
+        let content_length = headers
+            .get(CONTENT_LENGTH)
+            .ok_or(Error::MissingContentLength)?
+            .to_str()
+            .context(BadHeaderSnafu)?;
         let content_length = content_length
             .parse()
             .context(InvalidContentLengthSnafu { content_length })?;
+
         Ok(ObjectMeta {
             location: location.clone(),
             last_modified,
@@ -271,21 +269,6 @@ impl ObjectStore for MicrosoftAzure {
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         self.client.copy_request(from, to, false).await
     }
-}
-
-/// Parses the contents of the environment variable `env_name` as a URL
-/// if present, otherwise falls back to default_url
-fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
-    let url = match std::env::var(env_name) {
-        Ok(env_value) => {
-            Url::parse(&env_value).context(UnableToParseEmulatorUrlSnafu {
-                env_name,
-                env_value,
-            })?
-        }
-        Err(_) => Url::parse(default_url).expect("Failed to parse default URL"),
-    };
-    Ok(url)
 }
 
 // Relevant docs: https://azure.github.io/Storage/docs/application-and-user-data/basics/azure-blob-storage-upload-apis/
@@ -506,7 +489,9 @@ impl MicrosoftAzureBuilder {
             (true, true, url, credential, account)
         } else {
             let account = account.ok_or(Error::MissingAccount {})?;
-            let url = get_endpoint_uri(None, &account)?;
+            let account_url = format!("https://{}.blob.core.windows.net", &account);
+            let url = url::Url::parse(&account_url)
+                .context(UnableToParseUrlSnafu { url: account_url })?;
             let credential = if let Some(bearer_token) = bearer_token {
                 Ok(credential::CredentialProvider::AccessKey(bearer_token))
             } else if let Some(access_key) = access_key {
@@ -554,13 +539,19 @@ impl MicrosoftAzureBuilder {
     }
 }
 
-fn get_endpoint_uri(url: Option<&str>, account: &str) -> Result<url::Url> {
-    Ok(match url {
-        Some(value) => url::Url::parse(value)
-            .context(UnableToParseUrlSnafu { container: account })?,
-        None => url::Url::parse(&format!("https://{}.blob.core.windows.net", account))
-            .context(UnableToParseUrlSnafu { container: account })?,
-    })
+/// Parses the contents of the environment variable `env_name` as a URL
+/// if present, otherwise falls back to default_url
+fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
+    let url = match std::env::var(env_name) {
+        Ok(env_value) => {
+            Url::parse(&env_value).context(UnableToParseEmulatorUrlSnafu {
+                env_name,
+                env_value,
+            })?
+        }
+        Err(_) => Url::parse(default_url).expect("Failed to parse default URL"),
+    };
+    Ok(url)
 }
 
 #[cfg(test)]

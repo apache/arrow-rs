@@ -20,7 +20,7 @@ use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
 use crate::multipart::UploadPart;
 use crate::path::DELIMITER;
-use crate::util::{format_http_range, format_prefix};
+use crate::util::{encode_path, format_http_range, format_prefix};
 use crate::{
     BoxStream, ListResult, MultipartId, ObjectMeta, Path, Result, RetryConfig, StreamExt,
 };
@@ -32,19 +32,6 @@ use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::ops::Range;
 use std::sync::Arc;
-
-// http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
-//
-// Do not URI-encode any of the unreserved characters that RFC 3986 defines:
-// A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
-const STRICT_ENCODE_SET: AsciiSet = NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'.')
-    .remove(b'_')
-    .remove(b'~');
-
-/// This struct is used to maintain the URI path encoding
-const STRICT_PATH_ENCODE_SET: AsciiSet = STRICT_ENCODE_SET.remove(b'/');
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -476,8 +463,4 @@ impl S3Client {
 
         Ok(())
     }
-}
-
-fn encode_path(path: &Path) -> PercentEncode<'_> {
-    utf8_percent_encode(path.as_ref(), &STRICT_PATH_ENCODE_SET)
 }

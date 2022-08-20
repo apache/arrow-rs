@@ -14,6 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 use crate::client::oauth::ClientSecretOAuthProvider;
 use crate::util::hmac_sha256;
 use chrono::Utc;
@@ -38,6 +39,7 @@ pub(crate) static BLOB_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-typ
 pub(crate) static DELETE_SNAPSHOTS: HeaderName =
     HeaderName::from_static("x-ms-delete-snapshots");
 pub(crate) static COPY_SOURCE: HeaderName = HeaderName::from_static("x-ms-copy-source");
+static CONTENT_MD5: HeaderName = HeaderName::from_static("content-md5");
 pub(crate) static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
 
 /// Provides credentials for use when signing requests
@@ -48,7 +50,7 @@ pub enum CredentialProvider {
     ClientSecret(ClientSecretOAuthProvider),
 }
 
-pub enum AzureCredential {
+pub(crate) enum AzureCredential {
     AccessKey(String),
     SASToken(Vec<(String, String)>),
     BearerToken(String),
@@ -66,7 +68,7 @@ pub mod authority_hosts {
     pub const AZURE_PUBLIC_CLOUD: &str = "https://login.microsoftonline.com";
 }
 
-pub trait CredentialExt {
+pub(crate) trait CredentialExt {
     /// Sign a request <https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html>
     fn with_azure_authorization(
         self,
@@ -109,7 +111,7 @@ impl CredentialExt for RequestBuilder {
                     key.as_str(),
                 );
                 self = self
-                    // TODO how to handle unwrap? It's hex so we are fine?
+                    // TODO how to handle unwrap? It's b64 so we are fine?
                     .header(AUTHORIZATION, HeaderValue::from_str(auth.as_str()).unwrap());
             }
             AzureCredential::BearerToken(token) => {
@@ -129,7 +131,8 @@ impl CredentialExt for RequestBuilder {
     }
 }
 
-pub(super) fn generate_authorization(
+// generate signed key for authorization via access keys
+fn generate_authorization(
     h: &HeaderMap,
     u: &Url,
     method: &Method,
@@ -142,7 +145,6 @@ pub(super) fn generate_authorization(
 }
 
 fn add_if_exists<'a>(h: &'a HeaderMap, key: &HeaderName) -> &'a str {
-    // h.get_optional_str(key).unwrap_or_default()
     h.get(key)
         .map(|s| s.to_str())
         .transpose()
@@ -150,8 +152,6 @@ fn add_if_exists<'a>(h: &'a HeaderMap, key: &HeaderName) -> &'a str {
         .unwrap_or(Some(""))
         .unwrap_or_default()
 }
-
-static CONTENT_MD5: HeaderName = HeaderName::from_static("content-md5");
 
 fn string_to_sign(h: &HeaderMap, u: &Url, method: &Method, account: &str) -> String {
     // content length must only be specified if != 0
