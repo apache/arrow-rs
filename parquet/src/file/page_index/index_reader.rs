@@ -34,8 +34,12 @@ pub fn read_columns_indexes<R: ChunkReader>(
     let (offset, lengths) = get_index_offset_and_lengths(chunks)?;
     let length = lengths.iter().sum::<usize>();
 
+    if length == 0 {
+        return Ok(vec![Index::NONE; chunks.len()]);
+    }
+
     //read all need data into buffer
-    let mut reader = reader.get_read(offset, reader.len() as usize)?;
+    let mut reader = reader.get_read(offset, length)?;
     let mut data = vec![0; length];
     reader.read_exact(&mut data)?;
 
@@ -64,6 +68,10 @@ pub fn read_pages_locations<R: ChunkReader>(
 ) -> Result<Vec<Vec<PageLocation>>, ParquetError> {
     let (offset, total_length) = get_location_offset_and_total_length(chunks)?;
 
+    if total_length == 0 {
+        return Ok(vec![]);
+    }
+
     //read all need data into buffer
     let mut reader = reader.get_read(offset, total_length)?;
     let mut data = vec![0; total_length];
@@ -82,7 +90,7 @@ pub fn read_pages_locations<R: ChunkReader>(
 
 //Get File offsets of every ColumnChunk's page_index
 //If there are invalid offset return a zero offset with empty lengths.
-fn get_index_offset_and_lengths(
+pub(crate) fn get_index_offset_and_lengths(
     chunks: &[ColumnChunkMetaData],
 ) -> Result<(u64, Vec<usize>), ParquetError> {
     let first_col_metadata = if let Some(chunk) = chunks.first() {
@@ -111,7 +119,7 @@ fn get_index_offset_and_lengths(
 
 //Get File offset of ColumnChunk's pages_locations
 //If there are invalid offset return a zero offset with zero length.
-fn get_location_offset_and_total_length(
+pub(crate) fn get_location_offset_and_total_length(
     chunks: &[ColumnChunkMetaData],
 ) -> Result<(u64, usize), ParquetError> {
     let metadata = if let Some(chunk) = chunks.first() {
@@ -133,7 +141,7 @@ fn get_location_offset_and_total_length(
     Ok((offset, total_length))
 }
 
-fn deserialize_column_index(
+pub(crate) fn deserialize_column_index(
     data: &[u8],
     column_type: Type,
 ) -> Result<Index, ParquetError> {
