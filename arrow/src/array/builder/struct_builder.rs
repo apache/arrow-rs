@@ -320,7 +320,6 @@ mod tests {
 
     #[test]
     fn test_struct_array_builder_finish() {
-
         let int_builder = Int32Builder::new();
         let bool_builder = BooleanBuilder::new();
 
