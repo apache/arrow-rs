@@ -348,7 +348,6 @@ impl AmazonS3Builder {
     }
 
     /// Fill the [`AmazonS3Builder`] with regular AWS environment variables
-    /// (read: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html)
     ///
     /// Variables extracted from environment:
     /// * AWS_ACCESS_KEY_ID -> access_key_id
