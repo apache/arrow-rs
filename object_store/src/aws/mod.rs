@@ -363,7 +363,7 @@ impl AmazonS3Builder {
     ///     .build();
     /// ```
     pub fn from_env() -> Self {
-        let mut builder: AmazonS3Builder = Default::default();
+        let mut builder: Self = Default::default();
 
         if let Ok(access_key_id) = std::env::var("AWS_ACCESS_KEY_ID") {
             builder.access_key_id = Some(access_key_id);
