@@ -38,8 +38,8 @@ impl FixedSizeBinaryBuilder {
         Self::with_capacity(1024, byte_width)
     }
 
-    /// Creates a new [`FixedSizeBinaryBuilder`], `capacity` is the number of bytes in the values
-    /// buffer
+    /// Creates a new [`FixedSizeBinaryBuilder`], `capacity` is the number of byte slices
+    /// that can be appended without reallocating
     pub fn with_capacity(capacity: usize, byte_width: i32) -> Self {
         assert!(
             byte_width >= 0,
@@ -47,12 +47,8 @@ impl FixedSizeBinaryBuilder {
             byte_width
         );
         Self {
-            values_builder: UInt8BufferBuilder::new(capacity),
-            null_buffer_builder: NullBufferBuilder::new(if byte_width > 0 {
-                capacity / byte_width as usize
-            } else {
-                0
-            }),
+            values_builder: UInt8BufferBuilder::new(capacity * byte_width as usize),
+            null_buffer_builder: NullBufferBuilder::new(capacity),
             value_length: byte_width,
         }
     }
@@ -137,7 +133,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_builder() {
-        let mut builder = FixedSizeBinaryBuilder::with_capacity(15, 5);
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 5);
 
         //  [b"hello", null, "arrow"]
         builder.append_value(b"hello").unwrap();
@@ -176,7 +172,7 @@ mod tests {
         expected = "Byte slice does not have the same length as FixedSizeBinaryBuilder value lengths"
     )]
     fn test_fixed_size_binary_builder_with_inconsistent_value_length() {
-        let mut builder = FixedSizeBinaryBuilder::with_capacity(15, 4);
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(1, 4);
         builder.append_value(b"hello").unwrap();
     }
     #[test]
