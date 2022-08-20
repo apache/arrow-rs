@@ -338,14 +338,14 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
 /// # let ACCESS_KEY = "foo";
 /// # use object_store::azure::MicrosoftAzureBuilder;
 /// let azure = MicrosoftAzureBuilder::new()
-///  .with_account(ACCOUNT)
+///  .with_account_name(ACCOUNT)
 ///  .with_access_key_authorization(ACCESS_KEY)
 ///  .with_container_name(BUCKET_NAME)
 ///  .build();
 /// ```
 #[derive(Default)]
 pub struct MicrosoftAzureBuilder {
-    account: Option<String>,
+    account_name: Option<String>,
     access_key: Option<String>,
     container_name: Option<String>,
     bearer_token: Option<String>,
@@ -364,7 +364,7 @@ impl Debug for MicrosoftAzureBuilder {
         write!(
             f,
             "MicrosoftAzureBuilder {{ account: {:?}, container_name: {:?} }}",
-            self.account, self.container_name
+            self.account_name, self.container_name
         )
     }
 }
@@ -375,9 +375,54 @@ impl MicrosoftAzureBuilder {
         Default::default()
     }
 
+    /// Create an instance of [MicrosoftAzureBuilder] with values pre-populated from environment variables.
+    ///
+    /// Variables extracted from environment:
+    /// * AZURE_STORAGE_ACCOUNT_NAME: storage account name
+    /// * AZURE_STORAGE_ACCOUNT_KEY: storage account master key
+    /// * AZURE_STORAGE_ACCESS_KEY: alias for AZURE_STORAGE_ACCOUNT_KEY
+    /// * AZURE_STORAGE_CLIENT_ID -> client id for service principal authorization
+    /// * AZURE_STORAGE_CLIENT_SECRET -> client secret for service principal authorization
+    /// * AZURE_STORAGE_TENANT_ID -> tenant id used in oauth flows
+    /// # Example
+    /// ```
+    /// use object_store::azure::MicrosoftAzureBuilder;
+    ///
+    /// let azure = MicrosoftAzureBuilder::from_env()
+    ///     .with_container_name("foo")
+    ///     .build();
+    /// ```
+    pub fn from_env() -> Self {
+        let mut builder = Self::default();
+
+        if let Ok(account_name) = std::env::var("AZURE_STORAGE_ACCOUNT_NAME") {
+            builder.account_name = Some(account_name);
+        }
+
+        if let Ok(access_key) = std::env::var("AZURE_STORAGE_ACCOUNT_KEY") {
+            builder.access_key = Some(access_key);
+        } else if let Ok(access_key) = std::env::var("AZURE_STORAGE_ACCESS_KEY") {
+            builder.access_key = Some(access_key);
+        }
+
+        if let Ok(client_id) = std::env::var("AZURE_STORAGE_CLIENT_ID") {
+            builder.client_id = Some(client_id);
+        }
+
+        if let Ok(client_secret) = std::env::var("AZURE_STORAGE_CLIENT_SECRET") {
+            builder.client_secret = Some(client_secret);
+        }
+
+        if let Ok(tenant_id) = std::env::var("AZURE_STORAGE_TENANT_ID") {
+            builder.tenant_id = Some(tenant_id);
+        }
+
+        builder
+    }
+
     /// Set the Azure Account (required)
-    pub fn with_account(mut self, account: impl Into<String>) -> Self {
-        self.account = Some(account.into());
+    pub fn with_account_name(mut self, account: impl Into<String>) -> Self {
+        self.account_name = Some(account.into());
         self
     }
 
@@ -459,7 +504,7 @@ impl MicrosoftAzureBuilder {
     /// Blob store.
     pub fn build(self) -> Result<MicrosoftAzure> {
         let Self {
-            account,
+            account_name,
             access_key,
             container_name,
             bearer_token,
@@ -476,17 +521,18 @@ impl MicrosoftAzureBuilder {
         let container = container_name.ok_or(Error::MissingContainerName {})?;
 
         let (is_emulator, allow_http, storage_url, auth, account) = if use_emulator {
-            let account = account.unwrap_or_else(|| EMULATOR_ACCOUNT.to_string());
+            let account_name =
+                account_name.unwrap_or_else(|| EMULATOR_ACCOUNT.to_string());
             // Allow overriding defaults. Values taken from
             // from https://docs.rs/azure_storage/0.2.0/src/azure_storage/core/clients/storage_account_client.rs.html#129-141
             let url = url_from_env("AZURITE_BLOB_STORAGE_URL", "http://127.0.0.1:10000")?;
             let account_key =
                 access_key.unwrap_or_else(|| EMULATOR_ACCOUNT_KEY.to_string());
             let credential = credential::CredentialProvider::AccessKey(account_key);
-            (true, true, url, credential, account)
+            (true, true, url, credential, account_name)
         } else {
-            let account = account.ok_or(Error::MissingAccount {})?;
-            let account_url = format!("https://{}.blob.core.windows.net", &account);
+            let account_name = account_name.ok_or(Error::MissingAccount {})?;
+            let account_url = format!("https://{}.blob.core.windows.net", &account_name);
             let url = url::Url::parse(&account_url)
                 .context(UnableToParseUrlSnafu { url: account_url })?;
             let credential = if let Some(bearer_token) = bearer_token {
@@ -511,7 +557,7 @@ impl MicrosoftAzureBuilder {
             } else {
                 Err(Error::MissingCredentials {})
             }?;
-            (false, allow_http, url, credential, account)
+            (false, allow_http, url, credential, account_name)
         };
 
         let blob_base_url = storage_url
@@ -609,7 +655,7 @@ mod tests {
                     .with_use_emulator(use_emulator);
                 if !use_emulator {
                     builder
-                        .with_account(
+                        .with_account_name(
                             env::var("AZURE_STORAGE_ACCOUNT").unwrap_or_default(),
                         )
                         .with_access_key_authorization(
@@ -641,7 +687,7 @@ mod tests {
     async fn azure_blob_test_sp() {
         dotenv::dotenv().ok();
         let builder = MicrosoftAzureBuilder::new()
-            .with_account(
+            .with_account_name(
                 env::var("AZURE_STORAGE_ACCOUNT")
                     .expect("must be set AZURE_STORAGE_ACCOUNT"),
             )
@@ -660,6 +706,6 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
-        // stream_get(&integration).await;
+        stream_get(&integration).await;
     }
 }

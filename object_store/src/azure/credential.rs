@@ -88,20 +88,17 @@ impl CredentialExt for RequestBuilder {
         let date_str = date.format(RFC1123_FMT).to_string();
         // we formatted the data string ourselves, so unwrapping should be fine
         let date_val = HeaderValue::from_str(&date_str).unwrap();
+        self = self
+            .header("x-ms-date", &date_val)
+            .header(&VERSION, &AZURE_VERSION);
 
         // Hack around lack of access to underlying request
         // https://github.com/seanmonstar/reqwest/issues/1212
         let request = self
             .try_clone()
             .expect("not stream")
-            .header("x-ms-date", &date_val)
-            .header(&VERSION, &AZURE_VERSION)
             .build()
             .expect("request valid");
-
-        self = self
-            .header("x-ms-date", &date_val)
-            .header(&VERSION, &AZURE_VERSION);
 
         match credential {
             AzureCredential::AccessKey(key) => {
