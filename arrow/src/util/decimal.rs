@@ -34,8 +34,8 @@ use std::cmp::{min, Ordering};
 /// [`Decimal128Array`]: [crate::array::Decimal128Array]
 /// [`Decimal256Array`]: [crate::array::Decimal256Array]
 pub struct Decimal<T: DecimalType> {
-    precision: usize,
-    scale: usize,
+    precision: u8,
+    scale: u8,
     value: T::Native,
 }
 
@@ -65,9 +65,9 @@ impl<T: DecimalType> Clone for Decimal<T> {
 impl<T: DecimalType> Copy for Decimal<T> {}
 
 impl<T: DecimalType> Decimal<T> {
-    pub const MAX_PRECISION: usize = T::MAX_PRECISION;
-    pub const MAX_SCALE: usize = T::MAX_SCALE;
-    pub const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType = T::TYPE_CONSTRUCTOR;
+    pub const MAX_PRECISION: u8 = T::MAX_PRECISION;
+    pub const MAX_SCALE: u8 = T::MAX_SCALE;
+    pub const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType = T::TYPE_CONSTRUCTOR;
     pub const DEFAULT_TYPE: DataType = T::DEFAULT_TYPE;
 
     /// Tries to create a decimal value from precision, scale and bytes.
@@ -76,11 +76,7 @@ impl<T: DecimalType> Decimal<T> {
     /// Safety:
     /// This method doesn't validate if the decimal value represented by the bytes
     /// can be fitted into the specified precision.
-    pub fn try_new_from_bytes(
-        precision: usize,
-        scale: usize,
-        bytes: &T::Native,
-    ) -> Result<Self>
+    pub fn try_new_from_bytes(precision: u8, scale: u8, bytes: &T::Native) -> Result<Self>
     where
         Self: Sized,
     {
@@ -114,7 +110,7 @@ impl<T: DecimalType> Decimal<T> {
     /// Safety:
     /// This method doesn't check if the precision and scale are valid.
     /// Use `try_new_from_bytes` for safe constructor.
-    pub fn new(precision: usize, scale: usize, bytes: &T::Native) -> Self {
+    pub fn new(precision: u8, scale: u8, bytes: &T::Native) -> Self {
         Self {
             precision,
             scale,
@@ -127,12 +123,12 @@ impl<T: DecimalType> Decimal<T> {
     }
 
     /// Returns the precision of the decimal.
-    pub fn precision(&self) -> usize {
+    pub fn precision(&self) -> u8 {
         self.precision
     }
 
     /// Returns the scale of the decimal.
-    pub fn scale(&self) -> usize {
+    pub fn scale(&self) -> u8 {
         self.scale
     }
 
@@ -146,18 +142,19 @@ impl<T: DecimalType> Decimal<T> {
         let value_str = integer.to_string();
         let (sign, rest) =
             value_str.split_at(if integer >= BigInt::from(0) { 0 } else { 1 });
-        let bound = min(self.precision(), rest.len()) + sign.len();
+        let bound = min(usize::from(self.precision()), rest.len()) + sign.len();
         let value_str = &value_str[0..bound];
+        let scale_usize = usize::from(self.scale());
 
         if self.scale() == 0 {
             value_str.to_string()
-        } else if rest.len() > self.scale() {
+        } else if rest.len() > scale_usize {
             // Decimal separator is in the middle of the string
-            let (whole, decimal) = value_str.split_at(value_str.len() - self.scale());
+            let (whole, decimal) = value_str.split_at(value_str.len() - scale_usize);
             format!("{}.{}", whole, decimal)
         } else {
             // String has to be padded
-            format!("{}0.{:0>width$}", sign, rest, width = self.scale())
+            format!("{}0.{:0>width$}", sign, rest, width = scale_usize)
         }
     }
 }
@@ -207,7 +204,7 @@ pub type Decimal128 = Decimal<Decimal128Type>;
 impl Decimal128 {
     /// Creates `Decimal128` from an `i128` value.
     #[allow(dead_code)]
-    pub(crate) fn new_from_i128(precision: usize, scale: usize, value: i128) -> Self {
+    pub(crate) fn new_from_i128(precision: u8, scale: u8, value: i128) -> Self {
         Decimal128 {
             precision,
             scale,
@@ -233,11 +230,7 @@ pub type Decimal256 = Decimal<Decimal256Type>;
 
 impl Decimal256 {
     /// Constructs a `Decimal256` value from a `BigInt`.
-    pub fn from_big_int(
-        num: &BigInt,
-        precision: usize,
-        scale: usize,
-    ) -> Result<Decimal256> {
+    pub fn from_big_int(num: &BigInt, precision: u8, scale: u8) -> Result<Decimal256> {
         let mut bytes = if num.is_negative() {
             [255_u8; 32]
         } else {

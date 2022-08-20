@@ -688,8 +688,8 @@ mod tests {
 
     fn create_decimal_array(
         array: Vec<Option<i128>>,
-        precision: usize,
-        scale: usize,
+        precision: u8,
+        scale: u8,
     ) -> Decimal128Array {
         array
             .into_iter()

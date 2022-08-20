@@ -37,8 +37,8 @@ use crate::util::decimal::Decimal256;
 #[derive(Debug)]
 pub struct Decimal128Builder {
     builder: FixedSizeBinaryBuilder,
-    precision: usize,
-    scale: usize,
+    precision: u8,
+    scale: u8,
 
     /// Should i128 values be validated for compatibility with scale and precision?
     /// defaults to true
@@ -51,8 +51,8 @@ pub struct Decimal128Builder {
 #[derive(Debug)]
 pub struct Decimal256Builder {
     builder: FixedSizeBinaryBuilder,
-    precision: usize,
-    scale: usize,
+    precision: u8,
+    scale: u8,
 
     /// Should decimal values be validated for compatibility with scale and precision?
     /// defaults to true
@@ -61,14 +61,15 @@ pub struct Decimal256Builder {
 
 impl Decimal128Builder {
     const BYTE_LENGTH: i32 = 16;
+
     /// Creates a new [`Decimal128Builder`]
-    pub fn new(precision: usize, scale: usize) -> Self {
+    pub fn new(precision: u8, scale: u8) -> Self {
         Self::with_capacity(1024, precision, scale)
     }
 
     /// Creates a new [`Decimal128Builder`], `capacity` is the number of decimal values
     /// that can be appended without reallocating
-    pub fn with_capacity(capacity: usize, precision: usize, scale: usize) -> Self {
+    pub fn with_capacity(capacity: usize, precision: u8, scale: u8) -> Self {
         Self {
             builder: FixedSizeBinaryBuilder::with_capacity(capacity, Self::BYTE_LENGTH),
             precision,
@@ -160,14 +161,15 @@ impl ArrayBuilder for Decimal128Builder {
 
 impl Decimal256Builder {
     const BYTE_LENGTH: i32 = 32;
+
     /// Creates a new [`Decimal256Builder`]
-    pub fn new(precision: usize, scale: usize) -> Self {
+    pub fn new(precision: u8, scale: u8) -> Self {
         Self::with_capacity(1024, precision, scale)
     }
 
     /// Creates a new [`Decimal256Builder`], `capacity` is the number of decimal values
     /// that can be appended without reallocating
-    pub fn with_capacity(capacity: usize, precision: usize, scale: usize) -> Self {
+    pub fn with_capacity(capacity: usize, precision: u8, scale: u8) -> Self {
         Self {
             builder: FixedSizeBinaryBuilder::with_capacity(capacity, Self::BYTE_LENGTH),
             precision,

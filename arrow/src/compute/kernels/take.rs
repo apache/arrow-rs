@@ -987,8 +987,8 @@ mod tests {
         index: &UInt32Array,
         options: Option<TakeOptions>,
         expected_data: Vec<Option<i128>>,
-        precision: &usize,
-        scale: &usize,
+        precision: &u8,
+        scale: &u8,
     ) -> Result<()> {
         let output = data
             .into_iter()
@@ -1105,8 +1105,8 @@ mod tests {
     #[test]
     fn test_take_decimal128_non_null_indices() {
         let index = UInt32Array::from(vec![0, 5, 3, 1, 4, 2]);
-        let precision: usize = 10;
-        let scale: usize = 5;
+        let precision: u8 = 10;
+        let scale: u8 = 5;
         test_take_decimal_arrays(
             vec![None, Some(3), Some(5), Some(2), Some(3), None],
             &index,
@@ -1121,8 +1121,8 @@ mod tests {
     #[test]
     fn test_take_decimal128() {
         let index = UInt32Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]);
-        let precision: usize = 10;
-        let scale: usize = 5;
+        let precision: u8 = 10;
+        let scale: u8 = 5;
         test_take_decimal_arrays(
             vec![Some(0), Some(1), Some(2), Some(3), Some(4)],
             &index,
