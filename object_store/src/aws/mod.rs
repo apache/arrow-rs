@@ -357,6 +357,8 @@ impl AmazonS3Builder {
     /// * AWS_SESSION_TOKEN -> token
     /// # Example
     /// ```
+    /// use object_store::aws::AmazonS3Builder;
+    ///
     /// let s3 = AmazonS3Builder::from_env()
     ///     .with_bucket_name("foo")
     ///     .build();
