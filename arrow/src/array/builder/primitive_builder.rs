@@ -64,14 +64,19 @@ impl<T: ArrowPrimitiveType> ArrayBuilder for PrimitiveBuilder<T> {
     }
 }
 
+impl<T: ArrowPrimitiveType> Default for PrimitiveBuilder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Creates a new primitive array builder
-    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self::with_capacity(1024)
     }
 
-    /// Creates a new primitive array builder with capacity
+    /// Creates a new primitive array builder with capacity no of items
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             values_builder: BufferBuilder::<T::Native>::new(capacity),
