@@ -347,6 +347,47 @@ impl AmazonS3Builder {
         Default::default()
     }
 
+    /// Fill the [`AmazonS3Builder`] with regular AWS environment variables
+    /// (read: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html)
+    ///
+    /// Variables extracted from environment:
+    /// * AWS_ACCESS_KEY_ID -> access_key_id
+    /// * AWS_SECRET_ACCESS_KEY -> secret_access_key
+    /// * AWS_DEFAULT_REGION -> region
+    /// * AWS_ENDPOINT -> endpoint
+    /// * AWS_SESSION_TOKEN -> token
+    /// # Example
+    /// ```
+    /// let s3 = AmazonS3Builder::from_env()
+    ///     .with_bucket_name("foo")
+    ///     .build();
+    /// ```
+    pub fn from_env() -> Self {
+        let mut builder: AmazonS3Builder = Default::default();
+
+        if let Ok(access_key_id) = std::env::var("AWS_ACCESS_KEY_ID") {
+            builder.access_key_id = Some(access_key_id);
+        }
+
+        if let Ok(secret_access_key) = std::env::var("AWS_SECRET_ACCESS_KEY") {
+            builder.secret_access_key = Some(secret_access_key);
+        }
+
+        if let Ok(secret) = std::env::var("AWS_DEFAULT_REGION") {
+            builder.region = Some(secret);
+        }
+
+        if let Ok(endpoint) = std::env::var("AWS_ENDPOINT") {
+            builder.endpoint = Some(endpoint);
+        }
+
+        if let Ok(token) = std::env::var("AWS_SESSION_TOKEN") {
+            builder.token = Some(token);
+        }
+
+        builder
+    }
+
     /// Set the AWS Access Key (required)
     pub fn with_access_key_id(mut self, access_key_id: impl Into<String>) -> Self {
         self.access_key_id = Some(access_key_id.into());
@@ -572,6 +613,33 @@ mod tests {
                 config
             }
         }};
+    }
+
+    #[test]
+    fn s3_test_config_from_env() {
+        let aws_access_key_id = "object_store:fake_access_key_id";
+        let aws_secret_access_key = "object_store:fake_secret_key";
+        let aws_default_region = "object_store:fake_default_region";
+
+        let aws_endpoint = "object_store:fake_endpoint";
+        let aws_session_token = "object_store:fake_session_token";
+
+        // required
+        env::set_var("AWS_ACCESS_KEY_ID", aws_access_key_id);
+        env::set_var("AWS_SECRET_ACCESS_KEY", aws_secret_access_key);
+        env::set_var("AWS_DEFAULT_REGION", aws_default_region);
+
+        // optional
+        env::set_var("AWS_ENDPOINT", aws_endpoint);
+        env::set_var("AWS_SESSION_TOKEN", aws_session_token);
+
+        let builder = AmazonS3Builder::from_env();
+        assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id);
+        assert_eq!(builder.secret_access_key.unwrap(), aws_secret_access_key);
+        assert_eq!(builder.region.unwrap(), aws_default_region);
+
+        assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
+        assert_eq!(builder.token.unwrap(), aws_session_token);
     }
 
     #[tokio::test]
