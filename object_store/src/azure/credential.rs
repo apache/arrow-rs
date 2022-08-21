@@ -128,7 +128,8 @@ impl CredentialExt for RequestBuilder {
     }
 }
 
-// generate signed key for authorization via access keys
+/// Generate signed key for authorization via access keys
+/// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key>
 fn generate_authorization(
     h: &HeaderMap,
     u: &Url,
@@ -146,10 +147,11 @@ fn add_if_exists<'a>(h: &'a HeaderMap, key: &HeaderName) -> &'a str {
         .map(|s| s.to_str())
         .transpose()
         .ok()
-        .unwrap_or(Some(""))
+        .flatten()
         .unwrap_or_default()
 }
 
+/// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key#constructing-the-signature-string>
 fn string_to_sign(h: &HeaderMap, u: &Url, method: &Method, account: &str) -> String {
     // content length must only be specified if != 0
     // this is valid from 2015-02-21
@@ -180,6 +182,7 @@ fn string_to_sign(h: &HeaderMap, u: &Url, method: &Method, account: &str) -> Str
     )
 }
 
+/// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key#constructing-the-canonicalized-headers-string>
 fn canonicalize_header(headers: &HeaderMap) -> String {
     let mut names = headers
         .iter()
@@ -198,6 +201,7 @@ fn canonicalize_header(headers: &HeaderMap) -> String {
     result
 }
 
+/// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key#constructing-the-canonicalized-resource-string>
 fn canonicalized_resource(account: &str, uri: &Url) -> String {
     let mut can_res: String = String::new();
     can_res += "/";

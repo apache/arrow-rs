@@ -273,11 +273,11 @@ impl ObjectStore for MicrosoftAzure {
     }
 }
 
-// Relevant docs: https://azure.github.io/Storage/docs/application-and-user-data/basics/azure-blob-storage-upload-apis/
-// In Azure Blob Store, parts are "blocks"
-// put_multipart_part -> PUT block
-// complete -> PUT block list
-// abort -> No equivalent; blocks are simply dropped after 7 days
+/// Relevant docs: <https://azure.github.io/Storage/docs/application-and-user-data/basics/azure-blob-storage-upload-apis/>
+/// In Azure Blob Store, parts are "blocks"
+/// put_multipart_part -> PUT block
+/// complete -> PUT block list
+/// abort -> No equivalent; blocks are simply dropped after 7 days
 #[derive(Debug, Clone)]
 struct AzureMultiPartUpload {
     client: Arc<client::AzureClient>,
