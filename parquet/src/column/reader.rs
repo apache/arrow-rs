@@ -312,7 +312,7 @@ where
 
                 // If page has less rows than the remaining records to
                 // be skipped, skip entire page
-                if metadata.num_rows < remaining {
+                if metadata.num_rows <= remaining {
                     self.page_reader.skip_next_page()?;
                     remaining -= metadata.num_rows;
                     continue;

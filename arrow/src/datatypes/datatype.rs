@@ -197,14 +197,14 @@ pub enum DataType {
     /// * scale is the number of digits past the decimal
     ///
     /// For example the number 123.45 has precision 5 and scale 2.
-    Decimal128(usize, usize),
+    Decimal128(u8, u8),
     /// Exact 256-bit width decimal value with precision and scale
     ///
     /// * precision is the total number of digits
     /// * scale is the number of digits past the decimal
     ///
     /// For example the number 123.45 has precision 5 and scale 2.
-    Decimal256(usize, usize),
+    Decimal256(u8, u8),
     /// A Map is a logical nested type that is represented as
     ///
     /// `List<entries: Struct<key: K, value: V>>`
@@ -972,24 +972,24 @@ pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
 ];
 
 /// The maximum precision for [DataType::Decimal128] values
-pub const DECIMAL128_MAX_PRECISION: usize = 38;
+pub const DECIMAL128_MAX_PRECISION: u8 = 38;
 
 /// The maximum scale for [DataType::Decimal128] values
-pub const DECIMAL128_MAX_SCALE: usize = 38;
+pub const DECIMAL128_MAX_SCALE: u8 = 38;
 
 /// The maximum precision for [DataType::Decimal256] values
-pub const DECIMAL256_MAX_PRECISION: usize = 76;
+pub const DECIMAL256_MAX_PRECISION: u8 = 76;
 
 /// The maximum scale for [DataType::Decimal256] values
-pub const DECIMAL256_MAX_SCALE: usize = 76;
+pub const DECIMAL256_MAX_SCALE: u8 = 76;
 
 /// The default scale for [DataType::Decimal128] and [DataType::Decimal256] values
-pub const DECIMAL_DEFAULT_SCALE: usize = 10;
+pub const DECIMAL_DEFAULT_SCALE: u8 = 10;
 
 /// Validates that the specified `i128` value can be properly
 /// interpreted as a Decimal number with precision `precision`
 #[inline]
-pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Result<()> {
+pub(crate) fn validate_decimal_precision(value: i128, precision: u8) -> Result<()> {
     if precision > DECIMAL128_MAX_PRECISION {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Max precision of a Decimal128 is {}, but got {}",
@@ -997,8 +997,8 @@ pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Resul
         )));
     }
 
-    let max = MAX_DECIMAL_FOR_EACH_PRECISION[precision - 1];
-    let min = MIN_DECIMAL_FOR_EACH_PRECISION[precision - 1];
+    let max = MAX_DECIMAL_FOR_EACH_PRECISION[usize::from(precision) - 1];
+    let min = MIN_DECIMAL_FOR_EACH_PRECISION[usize::from(precision) - 1];
 
     if value > max {
         Err(ArrowError::InvalidArgumentError(format!(
@@ -1020,7 +1020,7 @@ pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Resul
 #[inline]
 pub(crate) fn validate_decimal256_precision_with_lt_bytes(
     lt_value: &[u8],
-    precision: usize,
+    precision: u8,
 ) -> Result<()> {
     if precision > DECIMAL256_MAX_PRECISION {
         return Err(ArrowError::InvalidArgumentError(format!(
@@ -1028,8 +1028,8 @@ pub(crate) fn validate_decimal256_precision_with_lt_bytes(
             DECIMAL256_MAX_PRECISION, precision,
         )));
     }
-    let max = MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[precision - 1];
-    let min = MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[precision - 1];
+    let max = MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[usize::from(precision) - 1];
+    let min = MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[usize::from(precision) - 1];
 
     if singed_cmp_le_bytes(lt_value, &max) == Ordering::Greater {
         Err(ArrowError::InvalidArgumentError(format!(
@@ -1075,13 +1075,13 @@ impl DataType {
                 Some(s) if s == "decimal" => {
                     // return a list with any type as its child isn't defined in the map
                     let precision = match map.get("precision") {
-                        Some(p) => Ok(p.as_u64().unwrap() as usize),
+                        Some(p) => Ok(p.as_u64().unwrap().try_into().unwrap()),
                         None => Err(ArrowError::ParseError(
                             "Expecting a precision for decimal".to_string(),
                         )),
                     }?;
                     let scale = match map.get("scale") {
-                        Some(s) => Ok(s.as_u64().unwrap() as usize),
+                        Some(s) => Ok(s.as_u64().unwrap().try_into().unwrap()),
                         _ => Err(ArrowError::ParseError(
                             "Expecting a scale for decimal".to_string(),
                         )),

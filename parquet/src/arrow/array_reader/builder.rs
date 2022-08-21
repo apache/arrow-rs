@@ -222,7 +222,7 @@ fn build_primitive_reader(
         PhysicalType::FIXED_LEN_BYTE_ARRAY => match field.arrow_type {
             DataType::Decimal128(precision, scale) => {
                 let converter = DecimalFixedLengthByteArrayConverter::new(
-                    DecimalArrayConverter::new(precision as i32, scale as i32),
+                    DecimalArrayConverter::new(precision, scale),
                 );
                 Ok(Box::new(ComplexObjectArrayReader::<
                     FixedLenByteArrayType,

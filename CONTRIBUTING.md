@@ -78,7 +78,7 @@ git submodule update --init
 
 This populates data in two git submodules:
 
-- `../parquet_testing/data` (sourced from https://github.com/apache/parquet-testing.git)
+- `../parquet-testing/data` (sourced from https://github.com/apache/parquet-testing.git)
 - `../testing` (sourced from https://github.com/apache/arrow-testing)
 
 By default, `cargo test` will look for these directories at their

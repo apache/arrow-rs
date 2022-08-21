@@ -1477,7 +1477,7 @@ mod tests {
 
     #[test]
     fn fixed_size_binary_single_column() {
-        let mut builder = FixedSizeBinaryBuilder::new(16, 4);
+        let mut builder = FixedSizeBinaryBuilder::new(4);
         builder.append_value(b"0123").unwrap();
         builder.append_null();
         builder.append_value(b"8910").unwrap();

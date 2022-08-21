@@ -301,8 +301,8 @@ pub fn cast(array: &ArrayRef, to_type: &DataType) -> Result<ArrayRef> {
 fn cast_primitive_to_decimal<T: ArrayAccessor, F>(
     array: T,
     op: F,
-    precision: usize,
-    scale: usize,
+    precision: u8,
+    scale: u8,
 ) -> Result<Arc<dyn Array>>
 where
     F: Fn(T::Item) -> i128,
@@ -318,8 +318,8 @@ where
 
 fn cast_integer_to_decimal<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
-    precision: usize,
-    scale: usize,
+    precision: u8,
+    scale: u8,
 ) -> Result<Arc<dyn Array>>
 where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<i128>,
@@ -333,8 +333,8 @@ where
 
 fn cast_floating_point_to_decimal<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
-    precision: usize,
-    scale: usize,
+    precision: u8,
+    scale: u8,
 ) -> Result<Arc<dyn Array>>
 where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<f64>,
@@ -1306,9 +1306,9 @@ const fn time_unit_multiple(unit: &TimeUnit) -> i64 {
 /// Cast one type of decimal array to another type of decimal array
 fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
     array: &ArrayRef,
-    input_scale: &usize,
-    output_precision: &usize,
-    output_scale: &usize,
+    input_scale: &u8,
+    output_precision: &u8,
+    output_scale: &u8,
 ) -> Result<ArrayRef> {
     if input_scale > output_scale {
         // For example, input_scale is 4 and output_scale is 3;
@@ -2072,7 +2072,7 @@ fn numeric_to_bool_cast<T>(from: &PrimitiveArray<T>) -> Result<BooleanArray>
 where
     T: ArrowPrimitiveType + ArrowNumericType,
 {
-    let mut b = BooleanBuilder::new(from.len());
+    let mut b = BooleanBuilder::with_capacity(from.len());
 
     for i in 0..from.len() {
         if from.is_null(i) {
@@ -2592,8 +2592,8 @@ mod tests {
 
     fn create_decimal_array(
         array: Vec<Option<i128>>,
-        precision: usize,
-        scale: usize,
+        precision: u8,
+        scale: u8,
     ) -> Result<Decimal128Array> {
         array
             .into_iter()
@@ -2603,8 +2603,8 @@ mod tests {
 
     fn create_decimal256_array(
         array: Vec<Option<BigInt>>,
-        precision: usize,
-        scale: usize,
+        precision: u8,
+        scale: u8,
     ) -> Result<Decimal256Array> {
         array
             .into_iter()
@@ -5367,7 +5367,7 @@ mod tests {
     }
 
     fn make_union_array() -> UnionArray {
-        let mut builder = UnionBuilder::new_dense(7);
+        let mut builder = UnionBuilder::with_capacity_dense(7);
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int64Type>("b", 2).unwrap();
         builder.build().unwrap()

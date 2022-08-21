@@ -322,9 +322,15 @@ pub(crate) fn get_data_type(field: ipc::Field, may_be_dictionary: bool) -> DataT
             let fsb = field.type_as_decimal().unwrap();
             let bit_width = fsb.bitWidth();
             if bit_width == 128 {
-                DataType::Decimal128(fsb.precision() as usize, fsb.scale() as usize)
+                DataType::Decimal128(
+                    fsb.precision().try_into().unwrap(),
+                    fsb.scale().try_into().unwrap(),
+                )
             } else if bit_width == 256 {
-                DataType::Decimal256(fsb.precision() as usize, fsb.scale() as usize)
+                DataType::Decimal256(
+                    fsb.precision().try_into().unwrap(),
+                    fsb.scale().try_into().unwrap(),
+                )
             } else {
                 panic!("Unexpected decimal bit width {}", bit_width)
             }

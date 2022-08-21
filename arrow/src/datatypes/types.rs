@@ -491,9 +491,9 @@ pub trait DecimalType: 'static + Send + Sync + private::DecimalTypeSealed {
     type Native: NativeDecimalType;
 
     const BYTE_LENGTH: usize;
-    const MAX_PRECISION: usize;
-    const MAX_SCALE: usize;
-    const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType;
+    const MAX_PRECISION: u8;
+    const MAX_SCALE: u8;
+    const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType;
     const DEFAULT_TYPE: DataType;
 }
 
@@ -505,9 +505,9 @@ impl DecimalType for Decimal128Type {
     type Native = [u8; 16];
 
     const BYTE_LENGTH: usize = 16;
-    const MAX_PRECISION: usize = DECIMAL128_MAX_PRECISION;
-    const MAX_SCALE: usize = DECIMAL128_MAX_SCALE;
-    const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType = DataType::Decimal128;
+    const MAX_PRECISION: u8 = DECIMAL128_MAX_PRECISION;
+    const MAX_SCALE: u8 = DECIMAL128_MAX_SCALE;
+    const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType = DataType::Decimal128;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
 }
@@ -520,9 +520,9 @@ impl DecimalType for Decimal256Type {
     type Native = [u8; 32];
 
     const BYTE_LENGTH: usize = 32;
-    const MAX_PRECISION: usize = DECIMAL256_MAX_PRECISION;
-    const MAX_SCALE: usize = DECIMAL256_MAX_SCALE;
-    const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType = DataType::Decimal256;
+    const MAX_PRECISION: u8 = DECIMAL256_MAX_PRECISION;
+    const MAX_SCALE: u8 = DECIMAL256_MAX_SCALE;
+    const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType = DataType::Decimal256;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
 }

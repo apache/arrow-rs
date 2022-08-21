@@ -92,18 +92,16 @@ impl CompressionCodec {
     /// [8 bytes]:         uncompressed length
     /// [remaining bytes]: compressed data stream
     /// ```
-    pub(crate) fn decompress_to_buffer(&self, input: &[u8]) -> Result<Buffer> {
+    pub(crate) fn decompress_to_buffer(&self, input: &Buffer) -> Result<Buffer> {
         // read the first 8 bytes to determine if the data is
         // compressed
         let decompressed_length = read_uncompressed_size(input);
         let buffer = if decompressed_length == 0 {
             // emtpy
-            let empty = Vec::<u8>::new();
-            Buffer::from(empty)
+            Buffer::from([])
         } else if decompressed_length == LENGTH_NO_COMPRESSED_DATA {
             // no compression
-            let data = &input[(LENGTH_OF_PREFIX_DATA as usize)..];
-            Buffer::from(data)
+            input.slice(LENGTH_OF_PREFIX_DATA as usize)
         } else {
             // decompress data using the codec
             let mut uncompressed_buffer =
