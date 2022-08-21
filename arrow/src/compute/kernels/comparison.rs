@@ -468,7 +468,7 @@ pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     if !right.contains(is_like_pattern) {
         // fast path, can use equals
         for i in 0..left.len() {
-            result.append(left.value(i) == right);
+            result.append(left.value(i).to_uppercase() == right.to_uppercase());
         }
     } else if right.ends_with('%')
         && !right.ends_with("\\%")
@@ -551,7 +551,7 @@ pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     if !right.contains(is_like_pattern) {
         // fast path, can use equals
         for i in 0..left.len() {
-            result.append(left.value(i) != right);
+            result.append(left.value(i).to_uppercase() != right.to_uppercase());
         }
     } else if right.ends_with('%')
         && !right.ends_with("\\%")
@@ -4181,7 +4181,7 @@ mod tests {
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar_equals,
         vec!["arrow", "parrow", "arrows", "arr"],
-        "arrow",
+        "Arrow",
         ilike_utf8_scalar,
         vec![true, false, false, false]
     );
@@ -4234,8 +4234,8 @@ mod tests {
 
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar_equals,
-        vec!["arrow", "parrow", "arrows", "arr"],
-        "arrow",
+        vec!["arRow", "parrow", "arrows", "arr"],
+        "Arrow",
         nilike_utf8_scalar,
         vec![false, true, true, true]
     );
