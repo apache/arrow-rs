@@ -23,10 +23,10 @@ use crate::path::DELIMITER;
 use crate::util::{encode_path, format_http_range, format_prefix};
 use crate::{BoxStream, ListResult, ObjectMeta, Path, Result, RetryConfig, StreamExt};
 use bytes::{Buf, Bytes};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use reqwest::{
-    header::{HeaderValue, CONTENT_LENGTH, IF_NONE_MATCH},
+    header::{HeaderValue, CONTENT_LENGTH, IF_NONE_MATCH, RANGE},
     Client as ReqwestClient, Method, Response, StatusCode,
 };
 use serde::{Deserialize, Deserializer, Serialize};
@@ -250,12 +250,7 @@ impl AzureClient {
             .body(Bytes::new());
 
         if let Some(range) = range {
-            // Note: Azurite emulator does not support crc64 headers
-            if !self.config.is_emulator && range.end - range.start < 1024 * 1024 * 4 {
-                builder = builder
-                    .header(&RANGE_GET_CONTENT_CRC64, HeaderValue::from_static("true"));
-            }
-            builder = builder.header(&MS_RANGE, format_http_range(range));
+            builder = builder.header(RANGE, format_http_range(range));
         }
 
         let response = builder
@@ -507,8 +502,9 @@ where
     D: Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    Utc.datetime_from_str(&s, RFC1123_FMT)
-        .map_err(serde::de::Error::custom)
+    Ok(DateTime::parse_from_rfc2822(&s)
+        .map_err(serde::de::Error::custom)?
+        .with_timezone(&Utc))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

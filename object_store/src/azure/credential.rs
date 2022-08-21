@@ -32,15 +32,11 @@ use url::Url;
 
 static AZURE_VERSION: HeaderValue = HeaderValue::from_static("2021-08-06");
 static VERSION: HeaderName = HeaderName::from_static("x-ms-version");
-pub(crate) static RANGE_GET_CONTENT_CRC64: HeaderName =
-    HeaderName::from_static("x-ms-range-get-content-crc64");
-pub(crate) static MS_RANGE: HeaderName = HeaderName::from_static("x-ms-range");
 pub(crate) static BLOB_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-type");
 pub(crate) static DELETE_SNAPSHOTS: HeaderName =
     HeaderName::from_static("x-ms-delete-snapshots");
 pub(crate) static COPY_SOURCE: HeaderName = HeaderName::from_static("x-ms-copy-source");
 static CONTENT_MD5: HeaderName = HeaderName::from_static("content-md5");
-pub(crate) static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
 
 /// Provides credentials for use when signing requests
 #[derive(Debug)]
@@ -84,13 +80,9 @@ impl CredentialExt for RequestBuilder {
         credential: &AzureCredential,
         account: &str,
     ) -> Self {
-        let date = Utc::now();
-        let date_str = date.format(RFC1123_FMT).to_string();
-        // we formatted the data string ourselves, so unwrapping should be fine
-        let date_val = HeaderValue::from_str(&date_str).unwrap();
-        self = self
-            .header("x-ms-date", &date_val)
-            .header(&VERSION, &AZURE_VERSION);
+        // rfc2822 string should never contain illegal characters
+        let date = HeaderValue::from_str(&Utc::now().to_rfc2822()).unwrap();
+        self = self.header(DATE, &date).header(&VERSION, &AZURE_VERSION);
 
         // Hack around lack of access to underlying request
         // https://github.com/seanmonstar/reqwest/issues/1212
@@ -160,7 +152,7 @@ fn string_to_sign(h: &HeaderMap, u: &Url, method: &Method, account: &str) -> Str
         .map(|s| s.to_str())
         .transpose()
         .ok()
-        .unwrap_or(Some(""))
+        .flatten()
         .filter(|&v| v != "0")
         .unwrap_or_default();
     format!(
@@ -196,7 +188,10 @@ fn canonicalize_header(headers: &HeaderMap) -> String {
 
     let mut result = String::new();
     for (name, value) in names {
-        result = format!("{result}{name}:{value}\n");
+        result.push_str(name);
+        result.push(':');
+        result.push_str(value);
+        result.push('\n');
     }
     result
 }
@@ -204,14 +199,10 @@ fn canonicalize_header(headers: &HeaderMap) -> String {
 /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key#constructing-the-canonicalized-resource-string>
 fn canonicalized_resource(account: &str, uri: &Url) -> String {
     let mut can_res: String = String::new();
-    can_res += "/";
-    can_res += account;
-
-    for p in uri.path_segments().into_iter().flatten() {
-        can_res.push('/');
-        can_res.push_str(p);
-    }
-    can_res += "\n";
+    can_res.push('/');
+    can_res.push_str(account);
+    can_res.push_str(uri.path().to_string().as_str());
+    can_res.push('\n');
 
     // query parameters
     let query_pairs = uri.query_pairs();
@@ -233,12 +224,12 @@ fn canonicalized_resource(account: &str, uri: &Url) -> String {
 
             for (i, item) in ret.iter().enumerate() {
                 if i > 0 {
-                    can_res += ","
+                    can_res.push(',');
                 }
-                can_res += item;
+                can_res.push_str(item);
             }
 
-            can_res += "\n";
+            can_res.push('\n');
         }
     };
 

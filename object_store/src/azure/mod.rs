@@ -34,7 +34,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use snafu::{ResultExt, Snafu};
 use std::collections::BTreeSet;
@@ -208,9 +208,9 @@ impl ObjectStore for MicrosoftAzure {
             .ok_or(Error::MissingLastModified)?
             .to_str()
             .context(BadHeaderSnafu)?;
-        let last_modified = Utc
-            .datetime_from_str(last_modified, credential::RFC1123_FMT)
-            .context(InvalidLastModifiedSnafu { last_modified })?;
+        let last_modified = DateTime::parse_from_rfc2822(last_modified)
+            .context(InvalidLastModifiedSnafu { last_modified })?
+            .with_timezone(&Utc);
 
         let content_length = headers
             .get(CONTENT_LENGTH)
@@ -338,8 +338,8 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
 /// # let ACCESS_KEY = "foo";
 /// # use object_store::azure::MicrosoftAzureBuilder;
 /// let azure = MicrosoftAzureBuilder::new()
-///  .with_account_name(ACCOUNT)
-///  .with_access_key_authorization(ACCESS_KEY)
+///  .with_account(ACCOUNT)
+///  .with_access_key(ACCESS_KEY)
 ///  .with_container_name(BUCKET_NAME)
 ///  .build();
 /// ```
@@ -421,7 +421,7 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Set the Azure Account (required)
-    pub fn with_account_name(mut self, account: impl Into<String>) -> Self {
+    pub fn with_account(mut self, account: impl Into<String>) -> Self {
         self.account_name = Some(account.into());
         self
     }
@@ -433,10 +433,7 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Set the Azure Access Key (required - one of access key, bearer token, or client credentials)
-    pub fn with_access_key_authorization(
-        mut self,
-        access_key: impl Into<String>,
-    ) -> Self {
+    pub fn with_access_key(mut self, access_key: impl Into<String>) -> Self {
         self.access_key = Some(access_key.into());
         self
     }
@@ -655,10 +652,10 @@ mod tests {
                     .with_use_emulator(use_emulator);
                 if !use_emulator {
                     builder
-                        .with_account_name(
+                        .with_account(
                             env::var("AZURE_STORAGE_ACCOUNT").unwrap_or_default(),
                         )
-                        .with_access_key_authorization(
+                        .with_access_key(
                             env::var("AZURE_STORAGE_ACCESS_KEY").unwrap_or_default(),
                         )
                 } else {
@@ -687,7 +684,7 @@ mod tests {
     async fn azure_blob_test_sp() {
         dotenv::dotenv().ok();
         let builder = MicrosoftAzureBuilder::new()
-            .with_account_name(
+            .with_account(
                 env::var("AZURE_STORAGE_ACCOUNT")
                     .expect("must be set AZURE_STORAGE_ACCOUNT"),
             )
