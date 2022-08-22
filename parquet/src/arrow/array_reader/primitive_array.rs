@@ -21,15 +21,15 @@ use crate::arrow::record_reader::RecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::Type as PhysicalType;
 use crate::column::page::PageIterator;
-use crate::data_type::DataType;
+use crate::data_type::{DataType, Int96};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow::array::{
     ArrayDataBuilder, ArrayRef, BooleanArray, BooleanBufferBuilder, Decimal128Array,
-    Float32Array, Float64Array, Int32Array, Int64Array,
+    Float32Array, Float64Array, Int32Array, Int64Array,TimestampNanosecondArray, TimestampNanosecondBufferBuilder,
 };
 use arrow::buffer::Buffer;
-use arrow::datatypes::DataType as ArrowType;
+use arrow::datatypes::{DataType as ArrowType, TimeUnit};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -98,7 +98,7 @@ where
     }
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
-        let target_type = self.get_data_type().clone();
+        let target_type = &self.data_type;
         let arrow_data_type = match T::get_physical_type() {
             PhysicalType::BOOLEAN => ArrowType::Boolean,
             PhysicalType::INT32 => {
@@ -123,9 +123,11 @@ where
             }
             PhysicalType::FLOAT => ArrowType::Float32,
             PhysicalType::DOUBLE => ArrowType::Float64,
-            PhysicalType::INT96
-            | PhysicalType::BYTE_ARRAY
-            | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
+            PhysicalType::INT96 => match target_type {
+                ArrowType::Timestamp(TimeUnit::Nanosecond, _) => target_type.clone(),
+                _ => unreachable!("INT96 must be timestamp nanosecond"),
+            },
+            PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
                 unreachable!(
                     "PrimitiveArrayReaders don't support complex physical types"
                 );
@@ -135,16 +137,31 @@ where
         // Convert to arrays by using the Parquet physical type.
         // The physical types are then cast to Arrow types if necessary
 
-        let mut record_data = self.record_reader.consume_record_data();
+        let record_data = self.record_reader.consume_record_data();
+        let record_data = match T::get_physical_type() {
+            PhysicalType::BOOLEAN => {
+                let mut boolean_buffer = BooleanBufferBuilder::new(record_data.len());
 
-        if T::get_physical_type() == PhysicalType::BOOLEAN {
-            let mut boolean_buffer = BooleanBufferBuilder::new(record_data.len());
-
-            for e in record_data.as_slice() {
-                boolean_buffer.append(*e > 0);
+                for e in record_data.as_slice() {
+                    boolean_buffer.append(*e > 0);
+                }
+                boolean_buffer.finish()
             }
-            record_data = boolean_buffer.finish();
-        }
+            PhysicalType::INT96 => {
+                // SAFETY - record_data is an aligned buffer of Int96
+                let (prefix, slice, suffix) =
+                    unsafe { record_data.as_slice().align_to::<Int96>() };
+                assert!(prefix.is_empty() && suffix.is_empty());
+
+                let mut builder = TimestampNanosecondBufferBuilder::new(slice.len());
+                for v in slice {
+                    builder.append(v.to_nanos())
+                }
+
+                builder.finish()
+            }
+            _ => record_data,
+        };
 
         let array_data = ArrayDataBuilder::new(arrow_data_type)
             .len(self.record_reader.num_values())
@@ -158,9 +175,10 @@ where
             PhysicalType::INT64 => Arc::new(Int64Array::from(array_data)) as ArrayRef,
             PhysicalType::FLOAT => Arc::new(Float32Array::from(array_data)) as ArrayRef,
             PhysicalType::DOUBLE => Arc::new(Float64Array::from(array_data)) as ArrayRef,
-            PhysicalType::INT96
-            | PhysicalType::BYTE_ARRAY
-            | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
+            PhysicalType::INT96 => {
+                Arc::new(TimestampNanosecondArray::from(array_data)) as ArrayRef
+            }
+            PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
                 unreachable!(
                     "PrimitiveArrayReaders don't support complex physical types"
                 );
@@ -181,7 +199,7 @@ where
             ArrowType::Date64 => {
                 // this is cheap as it internally reinterprets the data
                 let a = arrow::compute::cast(&array, &ArrowType::Date32)?;
-                arrow::compute::cast(&a, &target_type)?
+                arrow::compute::cast(&a, target_type)?
             }
             ArrowType::Decimal128(p, s) => {
                 let array = match array.data_type() {
@@ -207,11 +225,11 @@ where
                         ));
                     }
                 }
-                .with_precision_and_scale(p, s)?;
+                .with_precision_and_scale(*p, *s)?;
 
                 Arc::new(array) as ArrayRef
             }
-            _ => arrow::compute::cast(&array, &target_type)?,
+            _ => arrow::compute::cast(&array, target_type)?,
         };
 
         // save definition and repetition buffers

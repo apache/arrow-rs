@@ -635,7 +635,7 @@ mod tests {
     use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
     use crate::data_type::{
         BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray,
-        FixedLenByteArrayType, Int32Type, Int64Type,
+        FixedLenByteArrayType, Int32Type, Int64Type, Int96Type,
     };
     use crate::errors::Result;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
@@ -855,6 +855,22 @@ mod tests {
             None,
             |vals| Arc::new(converter.convert(vals.to_vec()).unwrap()),
             &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
+        );
+    }
+
+    #[test]
+    fn test_int96_single_column_reader_test() {
+        let encodings = &[Encoding::PLAIN, Encoding::RLE_DICTIONARY];
+        run_single_column_reader_tests::<Int96Type, _, Int96Type>(
+            2,
+            ConvertedType::NONE,
+            None,
+            |vals| {
+                Arc::new(TimestampNanosecondArray::from_iter(
+                    vals.iter().map(|x| x.map(|x| x.to_nanos())),
+                )) as _
+            },
+            encodings,
         );
     }
 
