@@ -81,10 +81,10 @@ jobs:
         RUST_BACKTRACE: "1"
         # Run integration tests
         TEST_INTEGRATION: 1
-        AWS_DEFAULT_REGION: "us-east-1"
-        AWS_ACCESS_KEY_ID: test
-        AWS_SECRET_ACCESS_KEY: test
-        AWS_ENDPOINT: http://localstack:4566
+        OBJECT_STORE_AWS_DEFAULT_REGION: "us-east-1"
+        OBJECT_STORE_AWS_ACCESS_KEY_ID: test
+        OBJECT_STORE_AWS_SECRET_ACCESS_KEY: test
+        OBJECT_STORE_AWS_ENDPOINT: http://localstack:4566
         EC2_METADATA_ENDPOINT: http://ec2-metadata:1338
         AZURE_USE_EMULATOR: "1"
         AZURITE_BLOB_STORAGE_URL: "http://azurite:10000"

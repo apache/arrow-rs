@@ -547,10 +547,10 @@ mod tests {
             dotenv::dotenv().ok();
 
             let required_vars = [
-                "AWS_DEFAULT_REGION",
+                "OBJECT_STORE_AWS_DEFAULT_REGION",
                 "OBJECT_STORE_BUCKET",
-                "AWS_ACCESS_KEY_ID",
-                "AWS_SECRET_ACCESS_KEY",
+                "OBJECT_STORE_AWS_ACCESS_KEY_ID",
+                "OBJECT_STORE_AWS_SECRET_ACCESS_KEY",
             ];
             let unset_vars: Vec<_> = required_vars
                 .iter()
@@ -582,16 +582,16 @@ mod tests {
             } else {
                 let config = AmazonS3Builder::new()
                     .with_access_key_id(
-                        env::var("AWS_ACCESS_KEY_ID")
-                            .expect("already checked AWS_ACCESS_KEY_ID"),
+                        env::var("OBJECT_STORE_AWS_ACCESS_KEY_ID")
+                            .expect("already checked OBJECT_STORE_AWS_ACCESS_KEY_ID"),
                     )
                     .with_secret_access_key(
-                        env::var("AWS_SECRET_ACCESS_KEY")
-                            .expect("already checked AWS_SECRET_ACCESS_KEY"),
+                        env::var("OBJECT_STORE_AWS_SECRET_ACCESS_KEY")
+                            .expect("already checked OBJECT_STORE_AWS_SECRET_ACCESS_KEY"),
                     )
                     .with_region(
-                        env::var("AWS_DEFAULT_REGION")
-                            .expect("already checked AWS_DEFAULT_REGION"),
+                        env::var("OBJECT_STORE_AWS_DEFAULT_REGION")
+                            .expect("already checked OBJECT_STORE_AWS_DEFAULT_REGION"),
                     )
                     .with_bucket_name(
                         env::var("OBJECT_STORE_BUCKET")
@@ -599,13 +599,16 @@ mod tests {
                     )
                     .with_allow_http(true);
 
-                let config = if let Some(endpoint) = env::var("AWS_ENDPOINT").ok() {
-                    config.with_endpoint(endpoint)
-                } else {
-                    config
-                };
+                let config =
+                    if let Some(endpoint) = env::var("OBJECT_STORE_AWS_ENDPOINT").ok() {
+                        config.with_endpoint(endpoint)
+                    } else {
+                        config
+                    };
 
-                let config = if let Some(token) = env::var("AWS_SESSION_TOKEN").ok() {
+                let config = if let Some(token) =
+                    env::var("OBJECT_STORE_AWS_SESSION_TOKEN").ok()
+                {
                     config.with_token(token)
                 } else {
                     config
