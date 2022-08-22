@@ -235,12 +235,14 @@ fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32) -> Result<D
         (None, ConvertedType::BSON) => Ok(DataType::Binary),
         (None, ConvertedType::ENUM) => Ok(DataType::Binary),
         (None, ConvertedType::UTF8) => Ok(DataType::Utf8),
-        (Some(LogicalType::Decimal { precision, scale }), _) => {
-            Ok(DataType::Decimal128(precision as usize, scale as usize))
-        }
-        (None, ConvertedType::DECIMAL) => {
-            Ok(DataType::Decimal128(precision as usize, scale as usize))
-        }
+        (Some(LogicalType::Decimal { precision, scale }), _) => Ok(DataType::Decimal128(
+            precision.try_into().unwrap(),
+            scale.try_into().unwrap(),
+        )),
+        (None, ConvertedType::DECIMAL) => Ok(DataType::Decimal128(
+            precision.try_into().unwrap(),
+            scale.try_into().unwrap(),
+        )),
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet BYTE_ARRAY logical type {:?} or converted type {}",
             logical,

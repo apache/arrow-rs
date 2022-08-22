@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn test_dense_i32() {
-        let mut builder = UnionBuilder::new_dense(7);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();
@@ -447,7 +447,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn test_dense_i32_large() {
-        let mut builder = UnionBuilder::new_dense(1024);
+        let mut builder = UnionBuilder::new_dense();
 
         let expected_type_ids = vec![0_i8; 1024];
         let expected_value_offsets: Vec<_> = (0..1024).collect();
@@ -489,7 +489,7 @@ mod tests {
 
     #[test]
     fn test_dense_mixed() {
-        let mut builder = UnionBuilder::new_dense(7);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int64Type>("c", 3).unwrap();
         builder.append::<Int32Type>("a", 4).unwrap();
@@ -539,7 +539,7 @@ mod tests {
 
     #[test]
     fn test_dense_mixed_with_nulls() {
-        let mut builder = UnionBuilder::new_dense(7);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int64Type>("c", 3).unwrap();
         builder.append::<Int32Type>("a", 10).unwrap();
@@ -587,7 +587,7 @@ mod tests {
 
     #[test]
     fn test_dense_mixed_with_nulls_and_offset() {
-        let mut builder = UnionBuilder::new_dense(7);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int64Type>("c", 3).unwrap();
         builder.append::<Int32Type>("a", 10).unwrap();
@@ -714,7 +714,7 @@ mod tests {
 
     #[test]
     fn test_sparse_i32() {
-        let mut builder = UnionBuilder::new_sparse(7);
+        let mut builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();
@@ -766,7 +766,7 @@ mod tests {
 
     #[test]
     fn test_sparse_mixed() {
-        let mut builder = UnionBuilder::new_sparse(5);
+        let mut builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Float64Type>("c", 3.0).unwrap();
         builder.append::<Int32Type>("a", 4).unwrap();
@@ -829,7 +829,7 @@ mod tests {
 
     #[test]
     fn test_sparse_mixed_with_nulls() {
-        let mut builder = UnionBuilder::new_sparse(5);
+        let mut builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append_null::<Int32Type>("a").unwrap();
         builder.append::<Float64Type>("c", 3.0).unwrap();
@@ -882,7 +882,7 @@ mod tests {
 
     #[test]
     fn test_sparse_mixed_with_nulls_and_offset() {
-        let mut builder = UnionBuilder::new_sparse(5);
+        let mut builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append_null::<Int32Type>("a").unwrap();
         builder.append::<Float64Type>("c", 3.0).unwrap();
@@ -929,7 +929,7 @@ mod tests {
 
     #[test]
     fn test_union_array_validaty() {
-        let mut builder = UnionBuilder::new_sparse(5);
+        let mut builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append_null::<Int32Type>("a").unwrap();
         builder.append::<Float64Type>("c", 3.0).unwrap();
@@ -939,7 +939,7 @@ mod tests {
 
         test_union_validity(&union);
 
-        let mut builder = UnionBuilder::new_dense(5);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append_null::<Int32Type>("a").unwrap();
         builder.append::<Float64Type>("c", 3.0).unwrap();
@@ -952,7 +952,7 @@ mod tests {
 
     #[test]
     fn test_type_check() {
-        let mut builder = UnionBuilder::new_sparse(2);
+        let mut builder = UnionBuilder::new_sparse();
         builder.append::<Float32Type>("a", 1.0).unwrap();
         let err = builder.append::<Int32Type>("a", 1).unwrap_err().to_string();
         assert!(err.contains("Attempt to write col \"a\" with type Int32 doesn't match existing type Float32"), "{}", err);
@@ -1009,14 +1009,14 @@ mod tests {
         }
 
         // Sparse Union
-        let builder = UnionBuilder::new_sparse(5);
+        let builder = UnionBuilder::new_sparse();
         let record_batch = create_batch(create_union(builder));
         // [null, 3.0, null]
         let record_batch_slice = record_batch.slice(1, 3);
         test_slice_union(record_batch_slice);
 
         // Dense Union
-        let builder = UnionBuilder::new_dense(5);
+        let builder = UnionBuilder::new_dense();
         let record_batch = create_batch(create_union(builder));
         // [null, 3.0, null]
         let record_batch_slice = record_batch.slice(1, 3);

@@ -98,12 +98,12 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                     ["d", extra] => {
                         match extra.splitn(3, ',').collect::<Vec<&str>>().as_slice() {
                             [precision, scale] => {
-                                let parsed_precision = precision.parse::<usize>().map_err(|_| {
+                                let parsed_precision = precision.parse::<u8>().map_err(|_| {
                                     ArrowError::CDataInterface(
                                         "The decimal type requires an integer precision".to_string(),
                                     )
                                 })?;
-                                let parsed_scale = scale.parse::<usize>().map_err(|_| {
+                                let parsed_scale = scale.parse::<u8>().map_err(|_| {
                                     ArrowError::CDataInterface(
                                         "The decimal type requires an integer scale".to_string(),
                                     )
@@ -114,12 +114,12 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                                 if *bits != "128" {
                                     return Err(ArrowError::CDataInterface("Only 128 bit wide decimal is supported in the Rust implementation".to_string()));
                                 }
-                                let parsed_precision = precision.parse::<usize>().map_err(|_| {
+                                let parsed_precision = precision.parse::<u8>().map_err(|_| {
                                     ArrowError::CDataInterface(
                                         "The decimal type requires an integer precision".to_string(),
                                     )
                                 })?;
-                                let parsed_scale = scale.parse::<usize>().map_err(|_| {
+                                let parsed_scale = scale.parse::<u8>().map_err(|_| {
                                     ArrowError::CDataInterface(
                                         "The decimal type requires an integer scale".to_string(),
                                     )

@@ -2677,7 +2677,7 @@ mod tests {
             ],
             vec![
                 Box::new(Int32Builder::new(5)),
-                Box::new(BooleanBuilder::new(5)),
+                Box::new(BooleanBuilder::with_capacity(5)),
             ],
         );
 
@@ -2847,7 +2847,7 @@ mod tests {
 
     #[test]
     fn test_decimal_validation() {
-        let mut builder = Decimal128Builder::new(4, 10, 4);
+        let mut builder = Decimal128Builder::with_capacity(4, 10, 4);
         builder.append_value(10000).unwrap();
         builder.append_value(20000).unwrap();
         let array = builder.finish();

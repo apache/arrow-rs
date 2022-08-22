@@ -81,29 +81,29 @@ pub type Decimal256Array = DecimalArray<Decimal256Type>;
 pub struct DecimalArray<T: DecimalType> {
     data: ArrayData,
     value_data: RawPtrBox<u8>,
-    precision: usize,
-    scale: usize,
+    precision: u8,
+    scale: u8,
     _phantom: PhantomData<T>,
 }
 
 impl<T: DecimalType> DecimalArray<T> {
     pub const VALUE_LENGTH: i32 = T::BYTE_LENGTH as i32;
     const DEFAULT_TYPE: DataType = T::DEFAULT_TYPE;
-    pub const MAX_PRECISION: usize = T::MAX_PRECISION;
-    pub const MAX_SCALE: usize = T::MAX_SCALE;
-    const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType = T::TYPE_CONSTRUCTOR;
+    pub const MAX_PRECISION: u8 = T::MAX_PRECISION;
+    pub const MAX_SCALE: u8 = T::MAX_SCALE;
+    const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType = T::TYPE_CONSTRUCTOR;
 
     pub fn data(&self) -> &ArrayData {
         &self.data
     }
 
     /// Return the precision (total digits) that can be stored by this array
-    pub fn precision(&self) -> usize {
+    pub fn precision(&self) -> u8 {
         self.precision
     }
 
     /// Return the scale (digits after the decimal) that can be stored by this array
-    pub fn scale(&self) -> usize {
+    pub fn scale(&self) -> u8 {
         self.scale
     }
 
@@ -167,8 +167,8 @@ impl<T: DecimalType> DecimalArray<T> {
     /// range for a decimal
     pub fn from_fixed_size_binary_array(
         v: FixedSizeBinaryArray,
-        precision: usize,
-        scale: usize,
+        precision: u8,
+        scale: u8,
     ) -> Self {
         assert!(
             v.value_length() == Self::VALUE_LENGTH,
@@ -194,8 +194,8 @@ impl<T: DecimalType> DecimalArray<T> {
     #[deprecated(note = "please use `from_fixed_size_binary_array` instead")]
     pub fn from_fixed_size_list_array(
         v: FixedSizeListArray,
-        precision: usize,
-        scale: usize,
+        precision: u8,
+        scale: u8,
     ) -> Self {
         assert_eq!(
             v.data_ref().child_data().len(),
@@ -261,7 +261,7 @@ impl<T: DecimalType> DecimalArray<T> {
     /// 1. `precision` is larger than [`Self::MAX_PRECISION`]
     /// 2. `scale` is larger than [`Self::MAX_SCALE`];
     /// 3. `scale` is > `precision`
-    pub fn with_precision_and_scale(self, precision: usize, scale: usize) -> Result<Self>
+    pub fn with_precision_and_scale(self, precision: u8, scale: u8) -> Result<Self>
     where
         Self: Sized,
     {
@@ -281,7 +281,7 @@ impl<T: DecimalType> DecimalArray<T> {
     }
 
     // validate that the new precision and scale are valid or not
-    fn validate_precision_scale(&self, precision: usize, scale: usize) -> Result<()> {
+    fn validate_precision_scale(&self, precision: u8, scale: u8) -> Result<()> {
         if precision > Self::MAX_PRECISION {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "precision {} is greater than max {}",
@@ -309,7 +309,7 @@ impl<T: DecimalType> DecimalArray<T> {
     }
 
     // validate all the data in the array are valid within the new precision or not
-    fn validate_data(&self, precision: usize) -> Result<()> {
+    fn validate_data(&self, precision: u8) -> Result<()> {
         // TODO: Move into DecimalType
         match Self::VALUE_LENGTH {
             16 => self
@@ -350,7 +350,7 @@ impl Decimal128Array {
 
     // Validates decimal128 values in this array can be properly interpreted
     // with the specified precision.
-    fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
+    fn validate_decimal_precision(&self, precision: u8) -> Result<()> {
         (0..self.len()).try_for_each(|idx| {
             if self.is_valid(idx) {
                 let decimal = unsafe { self.value_unchecked(idx) };
@@ -365,7 +365,7 @@ impl Decimal128Array {
 impl Decimal256Array {
     // Validates decimal256 values in this array can be properly interpreted
     // with the specified precision.
-    fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
+    fn validate_decimal_precision(&self, precision: u8) -> Result<()> {
         (0..self.len()).try_for_each(|idx| {
             if self.is_valid(idx) {
                 let raw_val = unsafe {
@@ -571,7 +571,7 @@ mod tests {
     #[test]
     #[cfg(not(feature = "force_validate"))]
     fn test_decimal_append_error_value() {
-        let mut decimal_builder = Decimal128Builder::new(10, 5, 3);
+        let mut decimal_builder = Decimal128Builder::with_capacity(10, 5, 3);
         let mut result = decimal_builder.append_value(123456);
         let mut error = result.unwrap_err();
         assert_eq!(
@@ -588,7 +588,7 @@ mod tests {
         let arr = decimal_builder.finish();
         assert_eq!("12.345", arr.value_as_string(1));
 
-        decimal_builder = Decimal128Builder::new(10, 2, 1);
+        decimal_builder = Decimal128Builder::new(2, 1);
         result = decimal_builder.append_value(100);
         error = result.unwrap_err();
         assert_eq!(
@@ -884,7 +884,7 @@ mod tests {
 
     #[test]
     fn test_decimal256_iter() {
-        let mut builder = Decimal256Builder::new(30, 76, 6);
+        let mut builder = Decimal256Builder::with_capacity(30, 76, 6);
         let value = BigInt::from_str_radix("12345", 10).unwrap();
         let decimal1 = Decimal256::from_big_int(&value, 76, 6).unwrap();
         builder.append_value(&decimal1).unwrap();

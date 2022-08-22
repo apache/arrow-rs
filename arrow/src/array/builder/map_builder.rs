@@ -36,7 +36,6 @@ pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
     field_names: MapFieldNames,
     key_builder: K,
     value_builder: V,
-    len: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +81,6 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             field_names: field_names.unwrap_or_default(),
             key_builder,
             value_builder,
-            len,
         }
     }
 
@@ -108,13 +106,11 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         }
         self.offsets_builder.append(self.key_builder.len() as i32);
         self.null_buffer_builder.append(is_valid);
-        self.len += 1;
         Ok(())
     }
 
     pub fn finish(&mut self) -> MapArray {
         let len = self.len();
-        self.len = 0;
 
         // Build the keys
         let keys_arr = self
@@ -146,7 +142,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
 
         let offset_buffer = self.offsets_builder.finish();
         let null_bit_buffer = self.null_buffer_builder.finish();
-        self.offsets_builder.append(self.len);
+        self.offsets_builder.append(0);
         let map_field = Box::new(Field::new(
             self.field_names.entry.as_str(),
             struct_array.data_type().clone(),
@@ -166,11 +162,11 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
 
 impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
     fn len(&self) -> usize {
-        self.len as usize
+        self.null_buffer_builder.len()
     }
 
     fn is_empty(&self) -> bool {
-        self.len == 0
+        self.len() == 0
     }
 
     fn finish(&mut self) -> ArrayRef {
