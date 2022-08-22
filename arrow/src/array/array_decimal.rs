@@ -284,6 +284,10 @@ impl<T: DecimalType> DecimalArray<T> {
     /// Returns a Decimal array with specified precision and scale, with the original data, and will not
     /// check/validate the data of self with the new precision.
     ///
+    /// # Safety
+    /// This function should be called when the caller make sure all the elements in the data of self is in within
+    /// the range of the new precision. If the caller doesn't guarantee that, just call [`Self::with_precision_and_scale`]
+    ///
     /// 1. `precision` is larger than [`Self::MAX_PRECISION`]
     /// 2. `scale` is larger than [`Self::MAX_SCALE`];
     /// 3. `scale` is > `precision`
