@@ -467,29 +467,24 @@ pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 
     if !right.contains(is_like_pattern) {
         // fast path, can use equals
+        let right_uppercase = right.to_uppercase();
         for i in 0..left.len() {
-            result.append(left.value(i).to_uppercase() == right.to_uppercase());
+            result.append(left.value(i).to_uppercase() == right_uppercase);
         }
     } else if right.ends_with('%')
         && !right.ends_with("\\%")
         && !right[..right.len() - 1].contains(is_like_pattern)
     {
-        // fast path, can use ends_with
+        // fast path, can use starts_with
+        let start_str = &right[..right.len() - 1].to_uppercase();
         for i in 0..left.len() {
-            result.append(
-                left.value(i)
-                    .to_uppercase()
-                    .starts_with(&right[..right.len() - 1].to_uppercase()),
-            );
+            result.append(left.value(i).to_uppercase().starts_with(start_str));
         }
     } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
-        // fast path, can use starts_with
+        // fast path, can use ends_with
+        let ends_str = &right[1..].to_uppercase();
         for i in 0..left.len() {
-            result.append(
-                left.value(i)
-                    .to_uppercase()
-                    .ends_with(&right[1..].to_uppercase()),
-            );
+            result.append(left.value(i).to_uppercase().ends_with(ends_str));
         }
     } else {
         let re_pattern = replace_like_wildcards(right)?;
@@ -550,31 +545,24 @@ pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 
     if !right.contains(is_like_pattern) {
         // fast path, can use equals
+        let right_uppercase = right.to_uppercase();
         for i in 0..left.len() {
-            result.append(left.value(i).to_uppercase() != right.to_uppercase());
+            result.append(left.value(i).to_uppercase() != right_uppercase);
         }
     } else if right.ends_with('%')
         && !right.ends_with("\\%")
         && !right[..right.len() - 1].contains(is_like_pattern)
     {
-        // fast path, can use ends_with
+        // fast path, can use starts_with
+        let start_str = &right[..right.len() - 1].to_uppercase();
         for i in 0..left.len() {
-            result.append(
-                !left
-                    .value(i)
-                    .to_uppercase()
-                    .starts_with(&right[..right.len() - 1].to_uppercase()),
-            );
+            result.append(!left.value(i).to_uppercase().starts_with(start_str));
         }
     } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
-        // fast path, can use starts_with
+        // fast path, can use ends_with
+        let end_str = &right[1..].to_uppercase();
         for i in 0..left.len() {
-            result.append(
-                !left
-                    .value(i)
-                    .to_uppercase()
-                    .ends_with(&right[1..].to_uppercase()),
-            );
+            result.append(!left.value(i).to_uppercase().ends_with(end_str));
         }
     } else {
         let re_pattern = replace_like_wildcards(right)?;
