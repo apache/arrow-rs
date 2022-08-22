@@ -5278,4 +5278,74 @@ mod tests {
             BooleanArray::from(vec![Some(true), None, Some(false)])
         );
     }
+
+    #[test]
+    fn test_eq_dyn_neq_dyn_float_nan() {
+        let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let array2: Float32Array = vec![f32::NAN, f32::NAN, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+
+        let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let array2: Float64Array = vec![f64::NAN, f64::NAN, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_eq_dyn_scalar_neq_dyn_scalar_float_nan() {
+        let array: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(neq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+
+        let array: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(eq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(neq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
+    }
 }
