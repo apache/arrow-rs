@@ -139,6 +139,18 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("take str null values null indices 1024", |b| {
         b.iter(|| bench_take(&values, &indices))
     });
+
+    let values = create_decimal128_array(1024, 0.0, 10, 2, 0, 9999999);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take decimal128 indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_decimal128_array(1024, 0.5, 10, 2, 0, 9999999);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take decimal128 null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
 }
 
 criterion_group!(benches, add_benchmark);

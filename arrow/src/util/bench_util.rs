@@ -186,3 +186,25 @@ pub fn create_fsb_array(
     }))
     .unwrap()
 }
+
+pub fn create_decimal128_array(
+    size: usize,
+    null_density: f32,
+    precision: u8,
+    scale: u8,
+    min: i128,
+    max: i128,
+) -> Decimal128Array {
+    let mut rng = seedable_rng();
+    (0..size)
+        .map(|_| {
+            if rng.gen::<f32>() < null_density {
+                None
+            } else {
+                Some(rng.gen_range::<i128, _>(min..max))
+            }
+        })
+        .collect::<Decimal128Array>()
+        .with_precision_and_scale(precision, scale)
+        .unwrap()
+}
