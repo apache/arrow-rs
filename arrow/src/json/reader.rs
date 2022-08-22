@@ -2623,7 +2623,7 @@ mod tests {
         let re = builder.build(Cursor::new(json_content));
         assert_eq!(
             re.err().unwrap().to_string(),
-            r#"Json error: Expected JSON record to be an object, found Array([Number(1), String("hello")])"#,
+            r#"Json error: Expected JSON record to be an object, found Array [Number(1), String("hello")]"#,
         );
     }
 
