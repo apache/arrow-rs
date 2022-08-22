@@ -411,12 +411,12 @@ fn create_primitive_array(
         }
         FixedSizeBinary(_) => {
             // read 2 buffers: null buffer (optional) and data buffer
-            let builder = ArrayData::builder(data_type.clone())
+            ArrayData::builder(data_type.clone())
                 .len(length)
                 .add_buffer(buffers[1].clone())
-                .null_bit_buffer(null_buffer);
-
-            unsafe { builder.build_unchecked() }
+                .null_bit_buffer(null_buffer)
+                .build()
+                .unwrap()
         }
         Int8
         | Int16
@@ -429,45 +429,45 @@ fn create_primitive_array(
         | Interval(IntervalUnit::YearMonth) => {
             if buffers[1].len() / 8 == length && length != 1 {
                 // interpret as a signed i64, and cast appropriately
-                let builder = ArrayData::builder(DataType::Int64)
+                let data = ArrayData::builder(DataType::Int64)
                     .len(length)
                     .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer);
-
-                let data = unsafe { builder.build_unchecked() };
+                    .null_bit_buffer(null_buffer)
+                    .build()
+                    .unwrap();
                 let values = Arc::new(Int64Array::from(data)) as ArrayRef;
                 // this cast is infallible, the unwrap is safe
                 let casted = cast(&values, data_type).unwrap();
                 casted.into_data()
             } else {
-                let builder = ArrayData::builder(data_type.clone())
+                ArrayData::builder(data_type.clone())
                     .len(length)
                     .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer);
-
-                unsafe { builder.build_unchecked() }
+                    .null_bit_buffer(null_buffer)
+                    .build()
+                    .unwrap()
             }
         }
         Float32 => {
             if buffers[1].len() / 8 == length && length != 1 {
                 // interpret as a f64, and cast appropriately
-                let builder = ArrayData::builder(DataType::Float64)
+                let data = ArrayData::builder(DataType::Float64)
                     .len(length)
                     .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer);
-
-                let data = unsafe { builder.build_unchecked() };
+                    .null_bit_buffer(null_buffer)
+                    .build()
+                    .unwrap();
                 let values = Arc::new(Float64Array::from(data)) as ArrayRef;
                 // this cast is infallible, the unwrap is safe
                 let casted = cast(&values, data_type).unwrap();
                 casted.into_data()
             } else {
-                let builder = ArrayData::builder(data_type.clone())
+                ArrayData::builder(data_type.clone())
                     .len(length)
                     .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer);
-
-                unsafe { builder.build_unchecked() }
+                    .null_bit_buffer(null_buffer)
+                    .build()
+                    .unwrap()
             }
         }
         Boolean
@@ -479,22 +479,20 @@ fn create_primitive_array(
         | Date64
         | Duration(_)
         | Interval(IntervalUnit::DayTime)
-        | Interval(IntervalUnit::MonthDayNano) => {
-            let builder = ArrayData::builder(data_type.clone())
-                .len(length)
-                .add_buffer(buffers[1].clone())
-                .null_bit_buffer(null_buffer);
-
-            unsafe { builder.build_unchecked() }
-        }
+        | Interval(IntervalUnit::MonthDayNano) => ArrayData::builder(data_type.clone())
+            .len(length)
+            .add_buffer(buffers[1].clone())
+            .null_bit_buffer(null_buffer)
+            .build()
+            .unwrap(),
         Decimal128(_, _) | Decimal256(_, _) => {
             // read 2 buffers: null buffer (optional) and data buffer
-            let builder = ArrayData::builder(data_type.clone())
+            ArrayData::builder(data_type.clone())
                 .len(length)
                 .add_buffer(buffers[1].clone())
-                .null_bit_buffer(null_buffer);
-
-            unsafe { builder.build_unchecked() }
+                .null_bit_buffer(null_buffer)
+                .build()
+                .unwrap()
         }
         t => unreachable!("Data type {:?} either unsupported or not primitive", t),
     };
@@ -527,7 +525,7 @@ fn create_list_array(
 
         _ => unreachable!("Cannot create list or map array from {:?}", data_type),
     };
-    make_array(unsafe { builder.build_unchecked() })
+    make_array(builder.build().unwrap())
 }
 
 /// Reads the correct number of buffers based on list type and null_count, and creates a
