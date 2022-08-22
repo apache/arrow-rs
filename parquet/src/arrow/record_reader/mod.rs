@@ -145,7 +145,11 @@ where
         loop {
             // Try to find some records from buffers that has been read into memory
             // but not counted as seen records.
-            let end_of_column = !self.column_reader.as_mut().unwrap().has_next()?;
+
+            // Check to see if the column is exhausted. Only peek the next page since in
+            // case we are reading to a page boundary and do not actually need to read
+            // the next page.
+            let end_of_column = !self.column_reader.as_mut().unwrap().peek_next()?;
 
             let (record_count, value_count) =
                 self.count_records(num_records - records_read, end_of_column);
@@ -154,7 +158,9 @@ where
             self.num_values += value_count;
             records_read += record_count;
 
-            if records_read == num_records || end_of_column {
+            if records_read == num_records
+                || !self.column_reader.as_mut().unwrap().has_next()?
+            {
                 break;
             }
 
@@ -198,7 +204,7 @@ where
     pub fn skip_records(&mut self, num_records: usize) -> Result<usize> {
         // First need to clear the buffer
         let end_of_column = match self.column_reader.as_mut() {
-            Some(reader) => !reader.has_next()?,
+            Some(reader) => !reader.peek_next()?,
             None => return Ok(0),
         };
 

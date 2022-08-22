@@ -595,5 +595,24 @@ mod tests {
 
         // assert_eq!(mask, vec![false, true, true, false, true, true, true]);
         assert_eq!(ranges, vec![10..20, 20..30, 40..50, 50..60, 60..70]);
+
+        let selection = RowSelection::from(vec![
+            // Skip first page
+            RowSelector::skip(10),
+            // Multiple selects in same page
+            RowSelector::select(3),
+            RowSelector::skip(3),
+            RowSelector::select(4),
+            // Select to remaining in page and first row of next page
+            RowSelector::skip(5),
+            RowSelector::select(6),
+            // Skip remaining
+            RowSelector::skip(50),
+        ]);
+
+        let ranges = selection.scan_ranges(&index);
+
+        // assert_eq!(mask, vec![false, true, true, false, true, true, true]);
+        assert_eq!(ranges, vec![10..20, 20..30, 30..40]);
     }
 }
