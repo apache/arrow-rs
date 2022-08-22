@@ -33,8 +33,8 @@ use crate::schema::types::SchemaDescPtr;
 mod builder;
 mod byte_array;
 mod byte_array_dictionary;
-mod complex_object_array;
 mod empty_array;
+mod fixed_len_byte_array;
 mod list_array;
 mod map_array;
 mod null_array;
@@ -47,7 +47,6 @@ mod test_util;
 pub use builder::build_array_reader;
 pub use byte_array::make_byte_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
-pub use complex_object_array::ComplexObjectArrayReader;
 pub use list_array::ListArrayReader;
 pub use map_array::MapArrayReader;
 pub use null_array::NullArrayReader;
@@ -181,7 +180,7 @@ fn read_records<V, CV>(
     batch_size: usize,
 ) -> Result<usize>
 where
-    V: ValuesBuffer + Default,
+    V: ValuesBuffer,
     CV: ColumnValueDecoder<Slice = V::Slice>,
 {
     let mut records_read = 0usize;
@@ -215,7 +214,7 @@ fn skip_records<V, CV>(
     batch_size: usize,
 ) -> Result<usize>
 where
-    V: ValuesBuffer + Default,
+    V: ValuesBuffer,
     CV: ColumnValueDecoder<Slice = V::Slice>,
 {
     let mut records_skipped = 0usize;

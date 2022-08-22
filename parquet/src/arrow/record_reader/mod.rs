@@ -78,13 +78,23 @@ where
 {
     /// Create a new [`GenericRecordReader`]
     pub fn new(desc: ColumnDescPtr) -> Self {
+        Self::new_with_records(desc, V::default())
+    }
+}
+
+impl<V, CV> GenericRecordReader<V, CV>
+where
+    V: ValuesBuffer,
+    CV: ColumnValueDecoder<Slice = V::Slice>,
+{
+    pub fn new_with_records(desc: ColumnDescPtr, records: V) -> Self {
         let def_levels = (desc.max_def_level() > 0)
             .then(|| DefinitionLevelBuffer::new(&desc, packed_null_mask(&desc)));
 
         let rep_levels = (desc.max_rep_level() > 0).then(ScalarBuffer::new);
 
         Self {
-            records: Default::default(),
+            records,
             def_levels,
             rep_levels,
             column_reader: None,
