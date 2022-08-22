@@ -493,6 +493,28 @@ where
         }
     }
 
+    /// Check whether there is more data to read from this column,
+    /// If the current page is fully decoded, this will NOT load the next page
+    /// into the buffer
+    #[inline]
+    pub(crate) fn peek_next(&mut self) -> Result<bool> {
+        if self.num_buffered_values == 0
+            || self.num_buffered_values == self.num_decoded_values
+        {
+            // TODO: should we return false if read_new_page() = true and
+            // num_buffered_values = 0?
+            match self.page_reader.peek_next_page()? {
+                Some(next_page) => Ok(next_page.num_rows != 0),
+                None => Ok(false),
+            }
+        } else {
+            Ok(true)
+        }
+    }
+
+    /// Check whether there is more data to read from this column,
+    /// If the current page is fully decoded, this will load the next page
+    /// (if it exists) into the buffer
     #[inline]
     pub(crate) fn has_next(&mut self) -> Result<bool> {
         if self.num_buffered_values == 0
