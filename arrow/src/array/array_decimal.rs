@@ -255,12 +255,13 @@ impl<T: DecimalType> DecimalArray<T> {
     }
 
     /// Returns a Decimal array with the same data as self, with the
-    /// specified precision.
+    /// specified precision. It will check/validate the data of self with the new precision.
     ///
     /// Returns an Error if:
     /// 1. `precision` is larger than [`Self::MAX_PRECISION`]
     /// 2. `scale` is larger than [`Self::MAX_SCALE`];
     /// 3. `scale` is > `precision`
+    /// 4. one of the element in the data of self is out of the range for the new precision.
     pub fn with_precision_and_scale(self, precision: u8, scale: u8) -> Result<Self>
     where
         Self: Sized,
@@ -276,6 +277,27 @@ impl<T: DecimalType> DecimalArray<T> {
         }
 
         // safety: self.data is valid DataType::Decimal as checked above
+        let new_data_type = Self::TYPE_CONSTRUCTOR(precision, scale);
+        Ok(self.data().clone().with_data_type(new_data_type).into())
+    }
+
+    /// Returns a Decimal array with specified precision and scale, with the original data, and will not
+    /// check/validate the data of self with the new precision.
+    ///
+    /// 1. `precision` is larger than [`Self::MAX_PRECISION`]
+    /// 2. `scale` is larger than [`Self::MAX_SCALE`];
+    /// 3. `scale` is > `precision`
+    pub unsafe fn with_precision_and_scale_without_validation(
+        self,
+        precision: u8,
+        scale: u8,
+    ) -> Result<Self>
+    where
+        Self: Sized,
+    {
+        // validate precision and scale
+        self.validate_precision_scale(precision, scale)?;
+
         let new_data_type = Self::TYPE_CONSTRUCTOR(precision, scale);
         Ok(self.data().clone().with_data_type(new_data_type).into())
     }

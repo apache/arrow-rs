@@ -512,7 +512,7 @@ where
     IndexType: ArrowNumericType,
     IndexType::Native: ToPrimitive,
 {
-    indices
+    let array = indices
         .iter()
         .map(|index| {
             // Use type annotations below for readability (was blowing
@@ -532,10 +532,15 @@ where
             let t: Result<Option<_>> = t.map(|t| t.flatten());
             t
         })
-        .collect::<Result<Decimal128Array>>()?
-        // PERF: we could avoid re-validating that the data in
-        // Decimal128Array was in range as we know it came from a valid Decimal128Array
-        .with_precision_and_scale(decimal_values.precision(), decimal_values.scale())
+        .collect::<Result<Decimal128Array>>()?;
+
+    // specify the precision/scale without the validation
+    unsafe {
+        array.with_precision_and_scale_without_validation(
+            decimal_values.precision(),
+            decimal_values.scale(),
+        )
+    }
 }
 
 /// `take` implementation for all primitive arrays

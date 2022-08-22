@@ -437,17 +437,17 @@ pub fn cast_with_options(
         return Ok(array.clone());
     }
     match (from_type, to_type) {
-        (Decimal128(_, s1), Decimal128(p2, s2)) => {
-            cast_decimal_to_decimal::<16, 16>(array, s1, p2, s2)
+        (Decimal128(p1, s1), Decimal128(p2, s2)) => {
+            cast_decimal_to_decimal::<16, 16>(array, p1, s1, p2, s2)
         }
-        (Decimal256(_, s1), Decimal256(p2, s2)) => {
-            cast_decimal_to_decimal::<32, 32>(array, s1, p2, s2)
+        (Decimal256(p1, s1), Decimal256(p2, s2)) => {
+            cast_decimal_to_decimal::<32, 32>(array, p1, s1, p2, s2)
         }
-        (Decimal128(_, s1), Decimal256(p2, s2)) => {
-            cast_decimal_to_decimal::<16, 32>(array, s1, p2, s2)
+        (Decimal128(p1, s1), Decimal256(p2, s2)) => {
+            cast_decimal_to_decimal::<16, 32>(array, p1, s1, p2, s2)
         }
-        (Decimal256(_, s1), Decimal128(p2, s2)) => {
-            cast_decimal_to_decimal::<32, 16>(array, s1, p2, s2)
+        (Decimal256(p1, s1), Decimal128(p2, s2)) => {
+            cast_decimal_to_decimal::<32, 16>(array, p1, s1, p2, s2)
         }
         (Decimal128(_, scale), _) => {
             // cast decimal to other type
@@ -1306,10 +1306,13 @@ const fn time_unit_multiple(unit: &TimeUnit) -> i64 {
 /// Cast one type of decimal array to another type of decimal array
 fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
     array: &ArrayRef,
+    input_precision: &u8,
     input_scale: &u8,
     output_precision: &u8,
     output_scale: &u8,
 ) -> Result<ArrayRef> {
+    let need_validation =
+        *output_precision - *output_scale < *input_precision - *input_scale;
     if input_scale > output_scale {
         // For example, input_scale is 4 and output_scale is 3;
         // Original value is 11234_i128, and will be cast to 1123_i128.
@@ -1318,18 +1321,33 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
             let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
             let iter = array.iter().map(|v| v.map(|v| v.as_i128() / div));
             if BYTE_WIDTH2 == 16 {
-                let output_array = iter
-                    .collect::<Decimal128Array>()
-                    .with_precision_and_scale(*output_precision, *output_scale)?;
-
-                Ok(Arc::new(output_array))
+                let output_array = iter.collect::<Decimal128Array>();
+                Ok(Arc::new(if need_validation {
+                    output_array
+                        .with_precision_and_scale(*output_precision, *output_scale)?
+                } else {
+                    unsafe {
+                        output_array.with_precision_and_scale_without_validation(
+                            *output_precision,
+                            *output_scale,
+                        )?
+                    }
+                }))
             } else {
                 let output_array = iter
                     .map(|v| v.map(BigInt::from))
-                    .collect::<Decimal256Array>()
-                    .with_precision_and_scale(*output_precision, *output_scale)?;
-
-                Ok(Arc::new(output_array))
+                    .collect::<Decimal256Array>();
+                Ok(Arc::new(if need_validation {
+                    output_array
+                        .with_precision_and_scale(*output_precision, *output_scale)?
+                } else {
+                    unsafe {
+                        output_array.with_precision_and_scale_without_validation(
+                            *output_precision,
+                            *output_scale,
+                        )?
+                    }
+                }))
             }
         } else {
             let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
@@ -1351,18 +1369,31 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let output_array = values
-                    .into_iter()
-                    .collect::<Decimal128Array>()
-                    .with_precision_and_scale(*output_precision, *output_scale)?;
-
-                Ok(Arc::new(output_array))
+                let output_array = values.into_iter().collect::<Decimal128Array>();
+                Ok(Arc::new(if need_validation {
+                    output_array
+                        .with_precision_and_scale(*output_precision, *output_scale)?
+                } else {
+                    unsafe {
+                        output_array.with_precision_and_scale_without_validation(
+                            *output_precision,
+                            *output_scale,
+                        )?
+                    }
+                }))
             } else {
-                let output_array = iter
-                    .collect::<Decimal256Array>()
-                    .with_precision_and_scale(*output_precision, *output_scale)?;
-
-                Ok(Arc::new(output_array))
+                let output_array = iter.collect::<Decimal256Array>();
+                Ok(Arc::new(if need_validation {
+                    output_array
+                        .with_precision_and_scale(*output_precision, *output_scale)?
+                } else {
+                    unsafe {
+                        output_array.with_precision_and_scale_without_validation(
+                            *output_precision,
+                            *output_scale,
+                        )?
+                    }
+                }))
             }
         }
     } else {
@@ -1373,18 +1404,33 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
             let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
             let iter = array.iter().map(|v| v.map(|v| v.as_i128() * mul));
             if BYTE_WIDTH2 == 16 {
-                let output_array = iter
-                    .collect::<Decimal128Array>()
-                    .with_precision_and_scale(*output_precision, *output_scale)?;
-
-                Ok(Arc::new(output_array))
+                let output_array = iter.collect::<Decimal128Array>();
+                Ok(Arc::new(if need_validation {
+                    output_array
+                        .with_precision_and_scale(*output_precision, *output_scale)?
+                } else {
+                    unsafe {
+                        output_array.with_precision_and_scale_without_validation(
+                            *output_precision,
+                            *output_scale,
+                        )?
+                    }
+                }))
             } else {
                 let output_array = iter
                     .map(|v| v.map(BigInt::from))
-                    .collect::<Decimal256Array>()
-                    .with_precision_and_scale(*output_precision, *output_scale)?;
-
-                Ok(Arc::new(output_array))
+                    .collect::<Decimal256Array>();
+                Ok(Arc::new(if need_validation {
+                    output_array
+                        .with_precision_and_scale(*output_precision, *output_scale)?
+                } else {
+                    unsafe {
+                        output_array.with_precision_and_scale_without_validation(
+                            *output_precision,
+                            *output_scale,
+                        )?
+                    }
+                }))
             }
         } else {
             let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
@@ -1406,18 +1452,31 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let output_array = values
-                    .into_iter()
-                    .collect::<Decimal128Array>()
-                    .with_precision_and_scale(*output_precision, *output_scale)?;
-
-                Ok(Arc::new(output_array))
+                let output_array = values.into_iter().collect::<Decimal128Array>();
+                Ok(Arc::new(if need_validation {
+                    output_array
+                        .with_precision_and_scale(*output_precision, *output_scale)?
+                } else {
+                    unsafe {
+                        output_array.with_precision_and_scale_without_validation(
+                            *output_precision,
+                            *output_scale,
+                        )?
+                    }
+                }))
             } else {
-                let output_array = iter
-                    .collect::<Decimal256Array>()
-                    .with_precision_and_scale(*output_precision, *output_scale)?;
-
-                Ok(Arc::new(output_array))
+                let output_array = iter.collect::<Decimal256Array>();
+                Ok(Arc::new(if need_validation {
+                    output_array
+                        .with_precision_and_scale(*output_precision, *output_scale)?
+                } else {
+                    unsafe {
+                        output_array.with_precision_and_scale_without_validation(
+                            *output_precision,
+                            *output_scale,
+                        )?
+                    }
+                }))
             }
         }
     }
