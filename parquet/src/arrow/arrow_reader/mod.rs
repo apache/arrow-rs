@@ -849,17 +849,26 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn test_interval_day_time_column_reader() {
-    //     let converter = IntervalDayTimeArrayConverter {};
-    //     run_single_column_reader_tests::<FixedLenByteArrayType, _, RandFixedLenGen>(
-    //         12,
-    //         ConvertedType::INTERVAL,
-    //         None,
-    //         |vals| Arc::new(converter.convert(vals.to_vec()).unwrap()),
-    //         &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
-    //     );
-    // }
+    #[test]
+    fn test_interval_day_time_column_reader() {
+        run_single_column_reader_tests::<FixedLenByteArrayType, _, RandFixedLenGen>(
+            12,
+            ConvertedType::INTERVAL,
+            None,
+            |vals| {
+                Arc::new(
+                    vals.iter()
+                        .map(|x| {
+                            x.as_ref().map(|b| {
+                                i64::from_le_bytes(b.as_ref()[4..12].try_into().unwrap())
+                            })
+                        })
+                        .collect::<IntervalDayTimeArray>(),
+                )
+            },
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
+        );
+    }
 
     #[test]
     fn test_int96_single_column_reader_test() {
