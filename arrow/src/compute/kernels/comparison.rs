@@ -236,12 +236,18 @@ pub fn like_utf8<OffsetSize: OffsetSizeTrait>(
 macro_rules! like_scalar {
     ($LEFT: expr, $RIGHT: expr) => {{
         let null_bit_buffer = $LEFT.data().null_buffer().cloned();
-        let mut result = BooleanBufferBuilder::new($LEFT.len());
+        let bytes = bit_util::ceil($LEFT.len(), 8);
+        let mut bool_buf = MutableBuffer::from_len_zeroed(bytes);
+        let bool_slice = bool_buf.as_slice_mut();
 
         if !$RIGHT.contains(is_like_pattern) {
             // fast path, can use equals
             for i in 0..$LEFT.len() {
-                result.append(unsafe { $LEFT.value_unchecked(i) == $RIGHT });
+                unsafe {
+                    if $LEFT.value_unchecked(i) == $RIGHT {
+                        bit_util::set_bit(bool_slice, i);
+                    }
+                }
             }
         } else if $RIGHT.ends_with('%')
             && !$RIGHT.ends_with("\\%")
@@ -250,14 +256,22 @@ macro_rules! like_scalar {
             // fast path, can use starts_with
             let starts_with = &$RIGHT[..$RIGHT.len() - 1];
             for i in 0..$LEFT.len() {
-                result.append(unsafe { $LEFT.value_unchecked(i).starts_with(starts_with) });
+                unsafe {
+                    if $LEFT.value_unchecked(i).starts_with(starts_with) {
+                        bit_util::set_bit(bool_slice, i);
+                    }
+                }
             }
         } else if $RIGHT.starts_with('%') && !$RIGHT[1..].contains(is_like_pattern) {
             // fast path, can use ends_with
             let ends_with = &$RIGHT[1..];
 
             for i in 0..$LEFT.len() {
-                result.append(unsafe { $LEFT.value_unchecked(i).ends_with(ends_with)});
+                unsafe {
+                    if $LEFT.value_unchecked(i).ends_with(ends_with) {
+                        bit_util::set_bit(bool_slice, i);
+                    }
+                }
             }
         } else if $RIGHT.starts_with('%')
             && $RIGHT.ends_with('%')
@@ -265,9 +279,12 @@ macro_rules! like_scalar {
         {
             // fast path, can use contains
             let contains = &$RIGHT[1..$RIGHT.len() - 1];
-
             for i in 0..$LEFT.len() {
-                result.append(unsafe { $LEFT.value_unchecked(i).contains(contains)});
+                unsafe {
+                    if $LEFT.value_unchecked(i).contains(contains) {
+                        bit_util::set_bit(bool_slice, i);
+                    }
+                }
             }
         } else {
             let re_pattern = replace_like_wildcards($RIGHT)?;
@@ -280,7 +297,9 @@ macro_rules! like_scalar {
 
             for i in 0..$LEFT.len() {
                 let haystack = unsafe { $LEFT.value_unchecked(i) };
-                result.append(re.is_match(haystack));
+                if re.is_match(haystack) {
+                    bit_util::set_bit(bool_slice, i);
+                }
             }
         };
 
@@ -291,7 +310,7 @@ macro_rules! like_scalar {
                 None,
                 null_bit_buffer,
                 0,
-                vec![result.finish()],
+                vec![bool_buf.into()],
                 vec![],
             )
         };
@@ -390,6 +409,91 @@ pub fn nlike_utf8<OffsetSize: OffsetSizeTrait>(
     })
 }
 
+macro_rules! nlike_scalar {
+    ($LEFT: expr, $RIGHT: expr) => {{
+        let null_bit_buffer = $LEFT.data().null_buffer().cloned();
+        let bytes = bit_util::ceil($LEFT.len(), 8);
+        let mut bool_buf = MutableBuffer::from_len_zeroed(bytes);
+        let bool_slice = bool_buf.as_slice_mut();
+
+        if !$RIGHT.contains(is_like_pattern) {
+            // fast path, can use equals
+            for i in 0..$LEFT.len() {
+                unsafe {
+                    if $LEFT.value_unchecked(i) != $RIGHT {
+                        bit_util::set_bit(bool_slice, i);
+                    }
+                }
+            }
+        } else if $RIGHT.ends_with('%')
+            && !$RIGHT.ends_with("\\%")
+            && !$RIGHT[..$RIGHT.len() - 1].contains(is_like_pattern)
+        {
+            // fast path, can use starts_with
+            let starts_with = &$RIGHT[..$RIGHT.len() - 1];
+            for i in 0..$LEFT.len() {
+                unsafe {
+                    if !($LEFT.value_unchecked(i).starts_with(starts_with)) {
+                        bit_util::set_bit(bool_slice, i);
+                    }
+                }
+            }
+        } else if $RIGHT.starts_with('%') && !$RIGHT[1..].contains(is_like_pattern) {
+            // fast path, can use ends_with
+            let ends_with = &$RIGHT[1..];
+
+            for i in 0..$LEFT.len() {
+                unsafe {
+                    if !($LEFT.value_unchecked(i).ends_with(ends_with)) {
+                        bit_util::set_bit(bool_slice, i);
+                    }
+                }
+            }
+        } else if $RIGHT.starts_with('%')
+            && $RIGHT.ends_with('%')
+            && !$RIGHT[1..$RIGHT.len() - 1].contains(is_like_pattern)
+        {
+            // fast path, can use contains
+            let contains = &$RIGHT[1..$RIGHT.len() - 1];
+            for i in 0..$LEFT.len() {
+                unsafe {
+                    if !($LEFT.value_unchecked(i).contains(contains)) {
+                        bit_util::set_bit(bool_slice, i);
+                    }
+                }
+            }
+        } else {
+            let re_pattern = replace_like_wildcards($RIGHT)?;
+            let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
+                ArrowError::ComputeError(format!(
+                    "Unable to build regex from LIKE pattern: {}",
+                    e
+                ))
+            })?;
+
+            for i in 0..$LEFT.len() {
+                let haystack = unsafe { $LEFT.value_unchecked(i) };
+                if !re.is_match(haystack) {
+                    bit_util::set_bit(bool_slice, i);
+                }
+            }
+        };
+
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::Boolean,
+                $LEFT.len(),
+                None,
+                null_bit_buffer,
+                0,
+                vec![bool_buf.into()],
+                vec![],
+            )
+        };
+        Ok(BooleanArray::from(data))
+    }};
+}
+
 /// Perform SQL `left NOT LIKE right` operation on [`StringArray`] /
 /// [`LargeStringArray`] and a scalar.
 ///
@@ -398,7 +502,7 @@ pub fn nlike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
 ) -> Result<BooleanArray> {
-    let null_bit_buffer = left.data().null_buffer().cloned();
+    /*let null_bit_buffer = left.data().null_buffer().cloned();
     let mut result = BooleanBufferBuilder::new(left.len());
 
     if !right.contains(is_like_pattern) {
@@ -453,7 +557,9 @@ pub fn nlike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
             vec![],
         )
     };
-    Ok(BooleanArray::from(data))
+    Ok(BooleanArray::from(data))*/
+
+    nlike_scalar!(left, right)
 }
 
 /// Perform SQL `left ILIKE right` operation on [`StringArray`] /
