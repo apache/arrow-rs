@@ -232,7 +232,7 @@ impl UnionBuilder {
                 // In the case of a sparse union, we should pass the maximum of the currently length and the capacity.
                 None => {
                     let mut fd =
-                        FieldData::new::<T>(self.fields.len() as i8, T::DATA_TYPE, std::cmp::max(self.len, self.initial_capacity));
+                        FieldData::new::<T>(self.fields.len() as i8, T::DATA_TYPE, self.len.max(self.initial_capacity));
                     for _ in 0..self.len {
                         fd.append_null();
                     }
