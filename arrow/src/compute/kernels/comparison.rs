@@ -233,6 +233,72 @@ pub fn like_utf8<OffsetSize: OffsetSizeTrait>(
     })
 }
 
+macro_rules! like_scalar {
+    ($LEFT: expr, $RIGHT: expr) => {{
+        let null_bit_buffer = $LEFT.data().null_buffer().cloned();
+        let mut result = BooleanBufferBuilder::new($LEFT.len());
+
+        if !$RIGHT.contains(is_like_pattern) {
+            // fast path, can use equals
+            for i in 0..$LEFT.len() {
+                result.append(unsafe { $LEFT.value_unchecked(i) == $RIGHT });
+            }
+        } else if $RIGHT.ends_with('%')
+            && !$RIGHT.ends_with("\\%")
+            && !$RIGHT[..$RIGHT.len() - 1].contains(is_like_pattern)
+        {
+            // fast path, can use starts_with
+            let starts_with = &$RIGHT[..$RIGHT.len() - 1];
+            for i in 0..$LEFT.len() {
+                result.append(unsafe { $LEFT.value_unchecked(i).starts_with(starts_with) });
+            }
+        } else if $RIGHT.starts_with('%') && !$RIGHT[1..].contains(is_like_pattern) {
+            // fast path, can use ends_with
+            let ends_with = &$RIGHT[1..];
+
+            for i in 0..$LEFT.len() {
+                result.append(unsafe { $LEFT.value_unchecked(i).ends_with(ends_with)});
+            }
+        } else if $RIGHT.starts_with('%')
+            && $RIGHT.ends_with('%')
+            && !$RIGHT[1..$RIGHT.len() - 1].contains(is_like_pattern)
+        {
+            // fast path, can use contains
+            let contains = &$RIGHT[1..$RIGHT.len() - 1];
+
+            for i in 0..$LEFT.len() {
+                result.append(unsafe { $LEFT.value_unchecked(i).contains(contains)});
+            }
+        } else {
+            let re_pattern = replace_like_wildcards($RIGHT)?;
+            let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
+                ArrowError::ComputeError(format!(
+                    "Unable to build regex from LIKE pattern: {}",
+                    e
+                ))
+            })?;
+
+            for i in 0..$LEFT.len() {
+                let haystack = unsafe { $LEFT.value_unchecked(i) };
+                result.append(re.is_match(haystack));
+            }
+        };
+
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::Boolean,
+                $LEFT.len(),
+                None,
+                null_bit_buffer,
+                0,
+                vec![result.finish()],
+                vec![],
+            )
+        };
+        Ok(BooleanArray::from(data))
+    }};
+}
+
 /// Perform SQL `left LIKE right` operation on [`StringArray`] /
 /// [`LargeStringArray`] and a scalar.
 ///
@@ -241,78 +307,32 @@ pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
 ) -> Result<BooleanArray> {
-    let null_bit_buffer = left.data().null_buffer().cloned();
-    let bytes = bit_util::ceil(left.len(), 8);
-    let mut bool_buf = MutableBuffer::from_len_zeroed(bytes);
-    let bool_slice = bool_buf.as_slice_mut();
+    like_scalar!(left, right)
+}
 
-    if !right.contains(is_like_pattern) {
-        // fast path, can use equals
-        for i in 0..left.len() {
-            if left.value(i) == right {
-                bit_util::set_bit(bool_slice, i);
-            }
+/// Perform SQL `left LIKE right` operation on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn like_dict_scalar<K: ArrowNumericType>(
+    left: &DictionaryArray<K>,
+    right: &str,
+) -> Result<BooleanArray> {
+    match left.value_type() {
+        DataType::Utf8 => {
+            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
+            like_scalar!(left, right)
         }
-    } else if right.ends_with('%')
-        && !right.ends_with("\\%")
-        && !right[..right.len() - 1].contains(is_like_pattern)
-    {
-        // fast path, can use starts_with
-        let starts_with = &right[..right.len() - 1];
-        for i in 0..left.len() {
-            if left.value(i).starts_with(starts_with) {
-                bit_util::set_bit(bool_slice, i);
-            }
+        DataType::LargeUtf8 => {
+            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
+            like_scalar!(left, right)
         }
-    } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
-        // fast path, can use ends_with
-        let ends_with = &right[1..];
-
-        for i in 0..left.len() {
-            if left.value(i).ends_with(ends_with) {
-                bit_util::set_bit(bool_slice, i);
-            }
+        _ => {
+            return Err(ArrowError::ComputeError(
+                "like_dict_scalar only supports DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+            ));
         }
-    } else if right.starts_with('%')
-        && right.ends_with('%')
-        && !right[1..right.len() - 1].contains(is_like_pattern)
-    {
-        // fast path, can use contains
-        let contains = &right[1..right.len() - 1];
-        for i in 0..left.len() {
-            if left.value(i).contains(contains) {
-                bit_util::set_bit(bool_slice, i);
-            }
-        }
-    } else {
-        let re_pattern = replace_like_wildcards(right)?;
-        let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
-            ArrowError::ComputeError(format!(
-                "Unable to build regex from LIKE pattern: {}",
-                e
-            ))
-        })?;
-
-        for i in 0..left.len() {
-            let haystack = left.value(i);
-            if re.is_match(haystack) {
-                bit_util::set_bit(bool_slice, i);
-            }
-        }
-    };
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![bool_buf.into()],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
+    }
 }
 
 /// Transforms a like `pattern` to a regex compatible pattern. To achieve that, it does:
@@ -5475,5 +5495,20 @@ mod tests {
             vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
         );
         assert_eq!(gt_eq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_dict_like_kernels() {
+        let data =
+            vec![Some("Earth"), Some("Air"), Some("Water"), Some("Wind"), None, Some("Air")];
+
+        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
+
+        assert_eq!(
+            like_dict_scalar(&dict_array, "%a%r%").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
+            ),
+        );
     }
 }
