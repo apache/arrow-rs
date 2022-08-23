@@ -27,9 +27,12 @@ use crate::column::reader::decoder::{ColumnValueDecoder, ValuesBufferSlice};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::memory::ByteBufferPtr;
-use arrow::array::{ArrayDataBuilder, ArrayRef, Decimal128Array, FixedSizeBinaryArray};
+use arrow::array::{
+    ArrayDataBuilder, ArrayRef, Decimal128Array, FixedSizeBinaryArray,
+    IntervalDayTimeArray, IntervalYearMonthArray,
+};
 use arrow::buffer::Buffer;
-use arrow::datatypes::DataType as ArrowType;
+use arrow::datatypes::{DataType as ArrowType, IntervalUnit};
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
@@ -161,8 +164,32 @@ impl ArrayReader for FixedLenByteArrayReader {
 
                 Arc::new(decimal)
             }
-            ArrowType::Interval(_) => {
-                todo!()
+            ArrowType::Interval(unit) => {
+                // An interval is stored as 3x 32-bit unsigned integers storing months, days,
+                // and milliseconds
+                match unit {
+                    IntervalUnit::YearMonth => Arc::new(
+                        binary
+                            .iter()
+                            .map(|o| {
+                                o.map(|b| i32::from_le_bytes(b[0..4].try_into().unwrap()))
+                            })
+                            .collect::<IntervalYearMonthArray>(),
+                    ) as ArrayRef,
+                    IntervalUnit::DayTime => Arc::new(
+                        binary
+                            .iter()
+                            .map(|o| {
+                                o.map(|b| {
+                                    i64::from_le_bytes(b[4..12].try_into().unwrap())
+                                })
+                            })
+                            .collect::<IntervalDayTimeArray>(),
+                    ) as ArrayRef,
+                    IntervalUnit::MonthDayNano => {
+                        return Err(nyi_err!("MonthDayNano intervals not supported"));
+                    }
+                }
             }
             _ => Arc::new(binary) as ArrayRef,
         };
