@@ -838,12 +838,14 @@ mod tests {
             ConvertedType::NONE,
             None,
             |vals| {
-                Arc::new(
-                    FixedSizeBinaryArray::try_from_sparse_iter(
-                        vals.iter().map(|x| x.as_deref()),
-                    )
-                    .unwrap(),
-                )
+                let mut builder = FixedSizeBinaryBuilder::with_capacity(vals.len(), 20);
+                for val in vals {
+                    match val {
+                        Some(b) => builder.append_value(b).unwrap(),
+                        None => builder.append_null(),
+                    }
+                }
+                Arc::new(builder.finish())
             },
             &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
         );
