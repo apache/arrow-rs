@@ -155,7 +155,7 @@ pub struct UnionBuilder {
     type_id_builder: Int8BufferBuilder,
     /// Builder to keep track of offsets (`None` for sparse unions)
     value_offset_builder: Option<Int32BufferBuilder>,
-    capacity: usize,
+    initial_capacity: usize,
 }
 
 impl UnionBuilder {
@@ -176,7 +176,7 @@ impl UnionBuilder {
             fields: HashMap::default(),
             type_id_builder: Int8BufferBuilder::new(capacity),
             value_offset_builder: Some(Int32BufferBuilder::new(capacity)),
-            capacity
+            initial_capacity: capacity
         }
     }
 
@@ -187,7 +187,7 @@ impl UnionBuilder {
             fields: HashMap::default(),
             type_id_builder: Int8BufferBuilder::new(capacity),
             value_offset_builder: None,
-            capacity
+            initial_capacity: capacity
         }
     }
 
@@ -228,11 +228,11 @@ impl UnionBuilder {
                 data
             }
             None => match self.value_offset_builder {
-                Some(_) => FieldData::new::<T>(self.fields.len() as i8, T::DATA_TYPE, self.capacity),
+                Some(_) => FieldData::new::<T>(self.fields.len() as i8, T::DATA_TYPE, self.initial_capacity),
                 // In the case of a sparse union, we should pass the maximum of the currently length and the capacity.
                 None => {
                     let mut fd =
-                        FieldData::new::<T>(self.fields.len() as i8, T::DATA_TYPE, std::cmp::max(self.len, capacity));
+                        FieldData::new::<T>(self.fields.len() as i8, T::DATA_TYPE, std::cmp::max(self.len, self.initial_capacity));
                     for _ in 0..self.len {
                         fd.append_null();
                     }
