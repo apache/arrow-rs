@@ -1653,8 +1653,8 @@ mod tests {
         )]));
 
         // create some data
-        let key_builder = PrimitiveBuilder::<UInt8Type>::new(3);
-        let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
+        let key_builder = PrimitiveBuilder::<UInt8Type>::with_capacity(3);
+        let value_builder = PrimitiveBuilder::<UInt32Type>::with_capacity(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(12345678).unwrap();
         builder.append_null();
@@ -1792,8 +1792,8 @@ mod tests {
         let int_field = Field::new("a", DataType::Int32, true);
         let int_field2 = Field::new("b", DataType::Int32, true);
 
-        let int_builder = Int32Builder::new(10);
-        let int_builder2 = Int32Builder::new(10);
+        let int_builder = Int32Builder::with_capacity(10);
+        let int_builder2 = Int32Builder::with_capacity(10);
 
         let struct_builder = StructBuilder::new(
             vec![int_field, int_field2],

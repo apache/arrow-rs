@@ -97,16 +97,16 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
     match datatype {
         DataType::Null => unimplemented!(),
         DataType::Boolean => Box::new(BooleanBuilder::with_capacity(capacity)),
-        DataType::Int8 => Box::new(Int8Builder::new(capacity)),
-        DataType::Int16 => Box::new(Int16Builder::new(capacity)),
-        DataType::Int32 => Box::new(Int32Builder::new(capacity)),
-        DataType::Int64 => Box::new(Int64Builder::new(capacity)),
-        DataType::UInt8 => Box::new(UInt8Builder::new(capacity)),
-        DataType::UInt16 => Box::new(UInt16Builder::new(capacity)),
-        DataType::UInt32 => Box::new(UInt32Builder::new(capacity)),
-        DataType::UInt64 => Box::new(UInt64Builder::new(capacity)),
-        DataType::Float32 => Box::new(Float32Builder::new(capacity)),
-        DataType::Float64 => Box::new(Float64Builder::new(capacity)),
+        DataType::Int8 => Box::new(Int8Builder::with_capacity(capacity)),
+        DataType::Int16 => Box::new(Int16Builder::with_capacity(capacity)),
+        DataType::Int32 => Box::new(Int32Builder::with_capacity(capacity)),
+        DataType::Int64 => Box::new(Int64Builder::with_capacity(capacity)),
+        DataType::UInt8 => Box::new(UInt8Builder::with_capacity(capacity)),
+        DataType::UInt16 => Box::new(UInt16Builder::with_capacity(capacity)),
+        DataType::UInt32 => Box::new(UInt32Builder::with_capacity(capacity)),
+        DataType::UInt64 => Box::new(UInt64Builder::with_capacity(capacity)),
+        DataType::Float32 => Box::new(Float32Builder::with_capacity(capacity)),
+        DataType::Float64 => Box::new(Float64Builder::with_capacity(capacity)),
         DataType::Binary => Box::new(BinaryBuilder::new(capacity)),
         DataType::FixedSizeBinary(len) => {
             Box::new(FixedSizeBinaryBuilder::with_capacity(capacity, *len))
@@ -115,52 +115,52 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
             Decimal128Builder::with_capacity(capacity, *precision, *scale),
         ),
         DataType::Utf8 => Box::new(StringBuilder::new(capacity)),
-        DataType::Date32 => Box::new(Date32Builder::new(capacity)),
-        DataType::Date64 => Box::new(Date64Builder::new(capacity)),
+        DataType::Date32 => Box::new(Date32Builder::with_capacity(capacity)),
+        DataType::Date64 => Box::new(Date64Builder::with_capacity(capacity)),
         DataType::Time32(TimeUnit::Second) => {
-            Box::new(Time32SecondBuilder::new(capacity))
+            Box::new(Time32SecondBuilder::with_capacity(capacity))
         }
         DataType::Time32(TimeUnit::Millisecond) => {
-            Box::new(Time32MillisecondBuilder::new(capacity))
+            Box::new(Time32MillisecondBuilder::with_capacity(capacity))
         }
         DataType::Time64(TimeUnit::Microsecond) => {
-            Box::new(Time64MicrosecondBuilder::new(capacity))
+            Box::new(Time64MicrosecondBuilder::with_capacity(capacity))
         }
         DataType::Time64(TimeUnit::Nanosecond) => {
-            Box::new(Time64NanosecondBuilder::new(capacity))
+            Box::new(Time64NanosecondBuilder::with_capacity(capacity))
         }
         DataType::Timestamp(TimeUnit::Second, _) => {
-            Box::new(TimestampSecondBuilder::new(capacity))
+            Box::new(TimestampSecondBuilder::with_capacity(capacity))
         }
         DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            Box::new(TimestampMillisecondBuilder::new(capacity))
+            Box::new(TimestampMillisecondBuilder::with_capacity(capacity))
         }
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            Box::new(TimestampMicrosecondBuilder::new(capacity))
+            Box::new(TimestampMicrosecondBuilder::with_capacity(capacity))
         }
         DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            Box::new(TimestampNanosecondBuilder::new(capacity))
+            Box::new(TimestampNanosecondBuilder::with_capacity(capacity))
         }
         DataType::Interval(IntervalUnit::YearMonth) => {
-            Box::new(IntervalYearMonthBuilder::new(capacity))
+            Box::new(IntervalYearMonthBuilder::with_capacity(capacity))
         }
         DataType::Interval(IntervalUnit::DayTime) => {
-            Box::new(IntervalDayTimeBuilder::new(capacity))
+            Box::new(IntervalDayTimeBuilder::with_capacity(capacity))
         }
         DataType::Interval(IntervalUnit::MonthDayNano) => {
-            Box::new(IntervalMonthDayNanoBuilder::new(capacity))
+            Box::new(IntervalMonthDayNanoBuilder::with_capacity(capacity))
         }
         DataType::Duration(TimeUnit::Second) => {
-            Box::new(DurationSecondBuilder::new(capacity))
+            Box::new(DurationSecondBuilder::with_capacity(capacity))
         }
         DataType::Duration(TimeUnit::Millisecond) => {
-            Box::new(DurationMillisecondBuilder::new(capacity))
+            Box::new(DurationMillisecondBuilder::with_capacity(capacity))
         }
         DataType::Duration(TimeUnit::Microsecond) => {
-            Box::new(DurationMicrosecondBuilder::new(capacity))
+            Box::new(DurationMicrosecondBuilder::with_capacity(capacity))
         }
         DataType::Duration(TimeUnit::Nanosecond) => {
-            Box::new(DurationNanosecondBuilder::new(capacity))
+            Box::new(DurationNanosecondBuilder::with_capacity(capacity))
         }
         DataType::Struct(fields) => {
             Box::new(StructBuilder::from_fields(fields.clone(), capacity))
@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn test_struct_array_builder() {
         let string_builder = StringBuilder::new(4);
-        let int_builder = Int32Builder::new(4);
+        let int_builder = Int32Builder::new();
 
         let mut fields = Vec::new();
         let mut field_builders = Vec::new();
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn test_struct_array_builder_finish() {
-        let int_builder = Int32Builder::new(10);
+        let int_builder = Int32Builder::new();
         let bool_builder = BooleanBuilder::new();
 
         let mut fields = Vec::new();
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_struct_array_builder_field_builder_type_mismatch() {
-        let int_builder = Int32Builder::new(10);
+        let int_builder = Int32Builder::with_capacity(10);
 
         let mut fields = Vec::new();
         let mut field_builders = Vec::new();
@@ -425,7 +425,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "StructBuilder and field_builders are of unequal lengths.")]
     fn test_struct_array_builder_unequal_field_builders_lengths() {
-        let mut int_builder = Int32Builder::new(10);
+        let mut int_builder = Int32Builder::with_capacity(10);
         let mut bool_builder = BooleanBuilder::new();
 
         int_builder.append_value(1);
@@ -450,7 +450,7 @@ mod tests {
         expected = "Number of fields is not equal to the number of field_builders."
     )]
     fn test_struct_array_builder_unequal_field_field_builders() {
-        let int_builder = Int32Builder::new(10);
+        let int_builder = Int32Builder::with_capacity(10);
 
         let mut fields = Vec::new();
         let mut field_builders = Vec::new();

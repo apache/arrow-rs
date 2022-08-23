@@ -30,7 +30,7 @@ use arrow::{array::*, util::bench_util::*};
 
 fn create_random_index(size: usize, null_density: f32) -> UInt32Array {
     let mut rng = seedable_rng();
-    let mut builder = UInt32Builder::new(size);
+    let mut builder = UInt32Builder::with_capacity(size);
     for _ in 0..size {
         if rng.gen::<f32>() < null_density {
             builder.append_null();

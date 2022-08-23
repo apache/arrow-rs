@@ -357,7 +357,7 @@ where
 macro_rules! cast_decimal_to_integer {
     ($ARRAY:expr, $SCALE : ident, $VALUE_BUILDER: ident, $NATIVE_TYPE : ident, $DATA_TYPE : expr) => {{
         let array = $ARRAY.as_any().downcast_ref::<Decimal128Array>().unwrap();
-        let mut value_builder = $VALUE_BUILDER::new(array.len());
+        let mut value_builder = $VALUE_BUILDER::with_capacity(array.len());
         let div: i128 = 10_i128.pow(*$SCALE as u32);
         let min_bound = ($NATIVE_TYPE::MIN) as i128;
         let max_bound = ($NATIVE_TYPE::MAX) as i128;
@@ -388,7 +388,7 @@ macro_rules! cast_decimal_to_float {
     ($ARRAY:expr, $SCALE : ident, $VALUE_BUILDER: ident, $NATIVE_TYPE : ty) => {{
         let array = $ARRAY.as_any().downcast_ref::<Decimal128Array>().unwrap();
         let div = 10_f64.powi(*$SCALE as i32);
-        let mut value_builder = $VALUE_BUILDER::new(array.len());
+        let mut value_builder = $VALUE_BUILDER::with_capacity(array.len());
         for i in 0..array.len() {
             if array.is_null(i) {
                 value_builder.append_null();
@@ -1166,7 +1166,7 @@ pub fn cast_with_options(
             let from_size = time_unit_multiple(from_unit) * SECONDS_IN_DAY;
 
             // Int32Array::from_iter(tim.iter)
-            let mut b = Date32Builder::new(array.len());
+            let mut b = Date32Builder::with_capacity(array.len());
 
             for i in 0..array.len() {
                 if time_array.is_null(i) {
@@ -2327,8 +2327,8 @@ where
         .downcast_ref::<PrimitiveArray<V>>()
         .unwrap();
 
-    let keys_builder = PrimitiveBuilder::<K>::new(values.len());
-    let values_builder = PrimitiveBuilder::<V>::new(values.len());
+    let keys_builder = PrimitiveBuilder::<K>::with_capacity(values.len());
+    let values_builder = PrimitiveBuilder::<V>::with_capacity(values.len());
     let mut b = PrimitiveDictionaryBuilder::new(keys_builder, values_builder);
 
     // copy each element one at a time
@@ -2354,7 +2354,7 @@ where
     let cast_values = cast_with_options(array, &DataType::Utf8, cast_options)?;
     let values = cast_values.as_any().downcast_ref::<StringArray>().unwrap();
 
-    let keys_builder = PrimitiveBuilder::<K>::new(values.len());
+    let keys_builder = PrimitiveBuilder::<K>::with_capacity(values.len());
     let values_builder = StringBuilder::new(values.len());
     let mut b = StringDictionaryBuilder::new(keys_builder, values_builder);
 
@@ -4752,7 +4752,7 @@ mod tests {
         // FROM a dictionary with of Utf8 values
         use DataType::*;
 
-        let keys_builder = PrimitiveBuilder::<Int8Type>::new(10);
+        let keys_builder = PrimitiveBuilder::<Int8Type>::new();
         let values_builder = StringBuilder::new(10);
         let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
         builder.append("one").unwrap();
@@ -4813,8 +4813,8 @@ mod tests {
         // that are out of bounds for a particular other kind of
         // index.
 
-        let keys_builder = PrimitiveBuilder::<Int32Type>::new(10);
-        let values_builder = PrimitiveBuilder::<Int64Type>::new(10);
+        let keys_builder = PrimitiveBuilder::<Int32Type>::new();
+        let values_builder = PrimitiveBuilder::<Int64Type>::new();
         let mut builder = PrimitiveDictionaryBuilder::new(keys_builder, values_builder);
 
         // add 200 distinct values (which can be stored by a
@@ -4844,7 +4844,7 @@ mod tests {
         // Same test as test_cast_dict_to_dict_bad_index_value but use
         // string values (and encode the expected behavior here);
 
-        let keys_builder = PrimitiveBuilder::<Int32Type>::new(10);
+        let keys_builder = PrimitiveBuilder::<Int32Type>::new();
         let values_builder = StringBuilder::new(10);
         let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
 
@@ -4875,8 +4875,8 @@ mod tests {
         // FROM a dictionary with of INT32 values
         use DataType::*;
 
-        let keys_builder = PrimitiveBuilder::<Int8Type>::new(10);
-        let values_builder = PrimitiveBuilder::<Int32Type>::new(10);
+        let keys_builder = PrimitiveBuilder::<Int8Type>::new();
+        let values_builder = PrimitiveBuilder::<Int32Type>::new();
         let mut builder = PrimitiveDictionaryBuilder::new(keys_builder, values_builder);
         builder.append(1).unwrap();
         builder.append_null();
@@ -4899,7 +4899,7 @@ mod tests {
     fn test_cast_primitive_array_to_dict() {
         use DataType::*;
 
-        let mut builder = PrimitiveBuilder::<Int32Type>::new(10);
+        let mut builder = PrimitiveBuilder::<Int32Type>::new();
         builder.append_value(1);
         builder.append_null();
         builder.append_value(3);
@@ -5375,9 +5375,9 @@ mod tests {
 
     /// Creates a dictionary with primitive dictionary values, and keys of type K
     fn make_dictionary_primitive<K: ArrowDictionaryKeyType>() -> ArrayRef {
-        let keys_builder = PrimitiveBuilder::<K>::new(2);
+        let keys_builder = PrimitiveBuilder::<K>::new();
         // Pick Int32 arbitrarily for dictionary values
-        let values_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let values_builder = PrimitiveBuilder::<Int32Type>::new();
         let mut b = PrimitiveDictionaryBuilder::new(keys_builder, values_builder);
         b.append(1).unwrap();
         b.append(2).unwrap();
@@ -5386,7 +5386,7 @@ mod tests {
 
     /// Creates a dictionary with utf8 values, and keys of type K
     fn make_dictionary_utf8<K: ArrowDictionaryKeyType>() -> ArrayRef {
-        let keys_builder = PrimitiveBuilder::<K>::new(2);
+        let keys_builder = PrimitiveBuilder::<K>::new();
         // Pick Int32 arbitrarily for dictionary values
         let values_builder = StringBuilder::new(2);
         let mut b = StringDictionaryBuilder::new(keys_builder, values_builder);

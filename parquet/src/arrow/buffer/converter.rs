@@ -117,7 +117,7 @@ impl Converter<Vec<Option<FixedLenByteArray>>, IntervalYearMonthArray>
         &self,
         source: Vec<Option<FixedLenByteArray>>,
     ) -> Result<IntervalYearMonthArray> {
-        let mut builder = IntervalYearMonthBuilder::new(source.len());
+        let mut builder = IntervalYearMonthBuilder::with_capacity(source.len());
         for v in source {
             match v {
                 Some(array) => builder.append_value(i32::from_le_bytes(
@@ -142,7 +142,7 @@ impl Converter<Vec<Option<FixedLenByteArray>>, IntervalDayTimeArray>
         &self,
         source: Vec<Option<FixedLenByteArray>>,
     ) -> Result<IntervalDayTimeArray> {
-        let mut builder = IntervalDayTimeBuilder::new(source.len());
+        let mut builder = IntervalDayTimeBuilder::with_capacity(source.len());
         for v in source {
             match v {
                 Some(array) => builder.append_value(i64::from_le_bytes(

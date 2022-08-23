@@ -43,7 +43,7 @@ fn bench_primitive(c: &mut Criterion) {
     ));
     group.bench_function("bench_primitive", |b| {
         b.iter(|| {
-            let mut builder = Int64Builder::new(64);
+            let mut builder = Int64Builder::with_capacity(64);
             for _ in 0..NUM_BATCHES {
                 builder.append_slice(&data[..]);
             }
@@ -57,7 +57,7 @@ fn bench_primitive_nulls(c: &mut Criterion) {
     let mut group = c.benchmark_group("bench_primitive_nulls");
     group.bench_function("bench_primitive_nulls", |b| {
         b.iter(|| {
-            let mut builder = UInt8Builder::new(64);
+            let mut builder = UInt8Builder::with_capacity(64);
             for _ in 0..NUM_BATCHES * BATCH_SIZE {
                 builder.append_null();
             }

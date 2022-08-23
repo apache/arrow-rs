@@ -174,7 +174,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::new(array.len());
+    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Time32(_) | &DataType::Time64(_) => {
             extract_component_from_array!(array, b, hour, value_as_time)
@@ -205,7 +205,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::new(array.len());
+    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, _) => {
             extract_component_from_array!(array, b, year, value_as_datetime)
@@ -222,7 +222,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::new(array.len());
+    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
             extract_component_from_array!(array, b, quarter, value_as_datetime)
@@ -250,7 +250,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::new(array.len());
+    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
             extract_component_from_array!(array, b, month, value_as_datetime)
@@ -283,7 +283,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::new(array.len());
+    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
             extract_component_from_array!(
@@ -321,7 +321,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::new(array.len());
+    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
             extract_component_from_array!(
@@ -354,7 +354,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::new(array.len());
+    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
             extract_component_from_array!(array, b, day, value_as_datetime)
@@ -383,7 +383,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::new(array.len());
+    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
             extract_component_from_array!(array, b, ordinal, value_as_datetime)
@@ -411,7 +411,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::new(array.len());
+    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Date64 | &DataType::Timestamp(_, None) => {
             extract_component_from_array!(array, b, minute, value_as_datetime)
@@ -439,7 +439,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::new(array.len());
+    let mut b = Int32Builder::with_capacity(array.len());
 
     match array.data_type() {
         &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
@@ -457,7 +457,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::new(array.len());
+    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Date64 | &DataType::Timestamp(_, None) => {
             extract_component_from_array!(array, b, second, value_as_datetime)

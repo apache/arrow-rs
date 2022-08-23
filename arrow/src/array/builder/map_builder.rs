@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn test_map_array_builder() {
         let string_builder = StringBuilder::new(4);
-        let int_builder = Int32Builder::new(4);
+        let int_builder = Int32Builder::with_capacity(4);
 
         let mut builder = MapBuilder::new(None, string_builder, int_builder);
 
