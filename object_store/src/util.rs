@@ -18,7 +18,7 @@
 //! Common logic for interacting with remote object stores
 use super::Result;
 use bytes::Bytes;
-use futures::{stream::StreamExt, Stream};
+use futures::{stream::StreamExt, Stream, TryStreamExt};
 
 /// Returns the prefix to be passed to an object store
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
@@ -80,16 +80,46 @@ pub const OBJECT_STORE_COALESCE_DEFAULT: usize = 1024 * 1024;
 /// less than `coalesce` bytes apart. Out of order `ranges` are not coalesced
 pub async fn coalesce_ranges<F, Fut>(
     ranges: &[std::ops::Range<usize>],
-    mut fetch: F,
+    fetch: F,
     coalesce: usize,
 ) -> Result<Vec<Bytes>>
 where
     F: Send + FnMut(std::ops::Range<usize>) -> Fut,
     Fut: std::future::Future<Output = Result<Bytes>> + Send,
 {
+    let fetch_ranges = merge_ranges(ranges, coalesce);
+
+    let fetched: Vec<_> = futures::stream::iter(fetch_ranges.iter().cloned())
+        .map(fetch)
+        .buffered(10)
+        .try_collect()
+        .await?;
+
+    Ok(ranges
+        .iter()
+        .map(|range| {
+            let idx = fetch_ranges.partition_point(|v| v.start <= range.start) - 1;
+            let fetch_range = &fetch_ranges[idx];
+            let fetch_bytes = &fetched[idx];
+
+            let start = range.start - fetch_range.start;
+            let end = range.end - fetch_range.start;
+            fetch_bytes.slice(start..end)
+        })
+        .collect())
+}
+
+/// Returns a sorted list of ranges that cover `ranges`
+fn merge_ranges(
+    ranges: &[std::ops::Range<usize>],
+    coalesce: usize,
+) -> Vec<std::ops::Range<usize>> {
     if ranges.is_empty() {
-        return Ok(vec![]);
+        return vec![];
     }
+
+    let mut ranges = ranges.to_vec();
+    ranges.sort_unstable_by_key(|range| range.start);
 
     let mut ret = Vec::with_capacity(ranges.len());
     let mut start_idx = 0;
@@ -101,30 +131,29 @@ where
         while end_idx != ranges.len()
             && ranges[end_idx]
                 .start
-                .checked_sub(ranges[start_idx].end)
+                .checked_sub(range_end)
                 .map(|delta| delta <= coalesce)
-                .unwrap_or(false)
+                .unwrap_or(true)
         {
-            if ranges[end_idx].end > range_end {
-                range_end = ranges[end_idx].end;
-            }
+            range_end = range_end.max(ranges[end_idx].end);
             end_idx += 1;
         }
 
         let start = ranges[start_idx].start;
-        let bytes = fetch(start..range_end).await?;
-        for range in ranges.iter().take(end_idx).skip(start_idx) {
-            ret.push(bytes.slice(range.start - start..range.end - start))
-        }
+        let end = range_end;
+        ret.push(start..end);
+
         start_idx = end_idx;
         end_idx += 1;
     }
-    Ok(ret)
+
+    ret
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{thread_rng, Rng};
     use std::ops::Range;
 
     #[tokio::test]
@@ -171,12 +200,47 @@ mod tests {
         assert_eq!(fetches, vec![0..1, 56..75]);
 
         let fetches = do_fetch(vec![0..1, 5..6, 7..9, 2..3, 4..6], 1).await;
-        assert_eq!(fetches, vec![0..1, 5..9, 2..6]);
+        assert_eq!(fetches, vec![0..9]);
 
         let fetches = do_fetch(vec![0..1, 5..6, 7..9, 2..3, 4..6], 1).await;
-        assert_eq!(fetches, vec![0..1, 5..9, 2..6]);
+        assert_eq!(fetches, vec![0..9]);
 
         let fetches = do_fetch(vec![0..1, 6..7, 8..9, 10..14, 9..10], 4).await;
         assert_eq!(fetches, vec![0..1, 6..14]);
+
+        let mut rand = thread_rng();
+        for _ in 0..100 {
+            let object_len = rand.gen_range(10..250);
+            let range_count = rand.gen_range(0..30);
+            let ranges: Vec<_> = (0..range_count)
+                .map(|_| {
+                    let start = rand.gen_range(0..object_len);
+                    let end = rand.gen_range(start..object_len);
+                    start..end
+                })
+                .collect();
+
+            let coalesce = rand.gen_range(1..5);
+            let fetches = do_fetch(ranges.clone(), coalesce).await;
+
+            for fetch in fetches.windows(2) {
+                assert!(
+                    fetch[0].start <= fetch[1].start,
+                    "fetches should be sorted, {:?} vs {:?}",
+                    fetch[0],
+                    fetch[1]
+                );
+
+                let delta = fetch[1].end - fetch[0].end;
+                assert!(
+                    delta > coalesce,
+                    "fetches should not overlap by {}, {:?} vs {:?} for {:?}",
+                    coalesce,
+                    fetch[0],
+                    fetch[1],
+                    ranges
+                );
+            }
+        }
     }
 }
