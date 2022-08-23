@@ -87,11 +87,17 @@ where
     F: Send + FnMut(std::ops::Range<usize>) -> Fut,
     Fut: std::future::Future<Output = Result<Bytes>> + Send,
 {
+    if ranges.is_empty() {
+        return Ok(vec![]);
+    }
+
     let mut ret = Vec::with_capacity(ranges.len());
     let mut start_idx = 0;
     let mut end_idx = 1;
 
     while start_idx != ranges.len() {
+        let mut range_end = ranges[start_idx].end;
+
         while end_idx != ranges.len()
             && ranges[end_idx]
                 .start
@@ -99,12 +105,14 @@ where
                 .map(|delta| delta <= coalesce)
                 .unwrap_or(false)
         {
+            if ranges[end_idx].end > range_end {
+                range_end = ranges[end_idx].end;
+            }
             end_idx += 1;
         }
 
         let start = ranges[start_idx].start;
-        let end = ranges[end_idx - 1].end;
-        let bytes = fetch(start..end).await?;
+        let bytes = fetch(start..range_end).await?;
         for range in ranges.iter().take(end_idx).skip(start_idx) {
             ret.push(bytes.slice(range.start - start..range.end - start))
         }
@@ -164,5 +172,11 @@ mod tests {
 
         let fetches = do_fetch(vec![0..1, 5..6, 7..9, 2..3, 4..6], 1).await;
         assert_eq!(fetches, vec![0..1, 5..9, 2..6]);
+
+        let fetches = do_fetch(vec![0..1, 5..6, 7..9, 2..3, 4..6], 1).await;
+        assert_eq!(fetches, vec![0..1, 5..9, 2..6]);
+
+        let fetches = do_fetch(vec![0..1, 6..7, 8..9, 10..14, 9..10], 4).await;
+        assert_eq!(fetches, vec![0..1, 6..14]);
     }
 }
