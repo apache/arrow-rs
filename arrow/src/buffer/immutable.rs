@@ -168,7 +168,7 @@ impl Buffer {
         Self {
             data: self.data.clone(),
             offset: self.offset + offset,
-            length: length,
+            length,
         }
     }
 
