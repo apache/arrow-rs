@@ -34,7 +34,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
+use chrono::{TimeZone, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use snafu::{ResultExt, Snafu};
 use std::collections::BTreeSet;
@@ -208,9 +208,9 @@ impl ObjectStore for MicrosoftAzure {
             .ok_or(Error::MissingLastModified)?
             .to_str()
             .context(BadHeaderSnafu)?;
-        let last_modified = DateTime::parse_from_rfc2822(last_modified)
-            .context(InvalidLastModifiedSnafu { last_modified })?
-            .with_timezone(&Utc);
+        let last_modified = Utc
+            .datetime_from_str(last_modified, credential::RFC1123_FMT)
+            .context(InvalidLastModifiedSnafu { last_modified })?;
 
         let content_length = headers
             .get(CONTENT_LENGTH)
@@ -692,9 +692,12 @@ mod tests {
                 env::var("OBJECT_STORE_BUCKET").expect("must be set OBJECT_STORE_BUCKET"),
             )
             .with_client_secret_authorization(
-                env::var("AZURE_CLIENT_ID").expect("must be set AZURE_CLIENT_ID"),
-                env::var("AZURE_CLIENT_SECRET").expect("must be set AZURE_CLIENT_SECRET"),
-                env::var("AZURE_TENANT_ID").expect("must be set AZURE_TENANT_ID"),
+                env::var("AZURE_STORAGE_CLIENT_ID")
+                    .expect("must be set AZURE_STORAGE_CLIENT_ID"),
+                env::var("AZURE_STORAGE_CLIENT_SECRET")
+                    .expect("must be set AZURE_STORAGE_CLIENT_SECRET"),
+                env::var("AZURE_STORAGE_TENANT_ID")
+                    .expect("must be set AZURE_STORAGE_TENANT_ID"),
             );
         let integration = builder.build().unwrap();
 

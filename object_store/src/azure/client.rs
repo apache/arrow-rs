@@ -23,7 +23,7 @@ use crate::path::DELIMITER;
 use crate::util::{encode_path, format_http_range, format_prefix};
 use crate::{BoxStream, ListResult, ObjectMeta, Path, Result, RetryConfig, StreamExt};
 use bytes::{Buf, Bytes};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use itertools::Itertools;
 use reqwest::{
     header::{HeaderValue, CONTENT_LENGTH, IF_NONE_MATCH, RANGE},
@@ -189,7 +189,7 @@ impl AzureClient {
     }
 
     /// Make an Azure PUT request <https://docs.microsoft.com/en-us/rest/api/storageservices/put-blob>
-    pub async fn put_request<T: Serialize + ?Sized + Sync>(
+    pub async fn put_request<T: Serialize + crate::Debug + ?Sized + Sync>(
         &self,
         path: &Path,
         bytes: Option<Bytes>,
@@ -202,17 +202,20 @@ impl AzureClient {
         let mut builder = self.client.request(Method::PUT, url);
 
         if !is_block_op {
-            builder = builder.header(&BLOB_TYPE, "BlockBlob");
+            builder = builder.header(&BLOB_TYPE, "BlockBlob").query(query);
+        } else {
+            builder = builder.query(query);
         }
 
         if let Some(bytes) = bytes {
             builder = builder
                 .header(CONTENT_LENGTH, HeaderValue::from(bytes.len()))
                 .body(bytes)
+        } else {
+            builder = builder.header(CONTENT_LENGTH, HeaderValue::from_static("0"));
         }
 
         let response = builder
-            .query(query)
             .with_azure_authorization(&credential, &self.config.account)
             .send_retry(&self.config.retry_config)
             .await
@@ -502,9 +505,8 @@ where
     D: Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    Ok(DateTime::parse_from_rfc2822(&s)
-        .map_err(serde::de::Error::custom)?
-        .with_timezone(&Utc))
+    Utc.datetime_from_str(&s, RFC1123_FMT)
+        .map_err(serde::de::Error::custom)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

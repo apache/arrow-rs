@@ -37,6 +37,7 @@ pub(crate) static DELETE_SNAPSHOTS: HeaderName =
     HeaderName::from_static("x-ms-delete-snapshots");
 pub(crate) static COPY_SOURCE: HeaderName = HeaderName::from_static("x-ms-copy-source");
 static CONTENT_MD5: HeaderName = HeaderName::from_static("content-md5");
+pub(crate) static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
 
 /// Provides credentials for use when signing requests
 #[derive(Debug)]
@@ -81,8 +82,13 @@ impl CredentialExt for RequestBuilder {
         account: &str,
     ) -> Self {
         // rfc2822 string should never contain illegal characters
-        let date = HeaderValue::from_str(&Utc::now().to_rfc2822()).unwrap();
-        self = self.header(DATE, &date).header(&VERSION, &AZURE_VERSION);
+        let date = Utc::now();
+        let date_str = date.format(RFC1123_FMT).to_string();
+        // we formatted the data string ourselves, so unwrapping should be fine
+        let date_val = HeaderValue::from_str(&date_str).unwrap();
+        self = self
+            .header(DATE, &date_val)
+            .header(&VERSION, &AZURE_VERSION);
 
         // Hack around lack of access to underlying request
         // https://github.com/seanmonstar/reqwest/issues/1212
