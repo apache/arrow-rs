@@ -1355,6 +1355,10 @@ mod tests {
             TestOptions::new(2, 256, 91)
                 .with_null_percent(25)
                 .with_enabled_statistics(EnabledStatistics::None),
+            // Test with all null
+            TestOptions::new(2, 128, 91)
+                .with_null_percent(100)
+                .with_enabled_statistics(EnabledStatistics::None),
             // Test skip
 
             // choose record_batch_batch (15) so batches cross row
