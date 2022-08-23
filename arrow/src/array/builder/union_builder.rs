@@ -73,13 +73,13 @@ impl<T: ArrowNativeType> FieldDataValues for BufferBuilder<T> {
 
 impl FieldData {
     /// Creates a new `FieldData`.
-    fn new<T: ArrowPrimitiveType>(type_id: i8, data_type: DataType) -> Self {
+    fn new<T: ArrowPrimitiveType>(type_id: i8, data_type: DataType, capacity: usize) -> Self {
         Self {
             type_id,
             data_type,
             slots: 0,
-            values_buffer: Box::new(BufferBuilder::<T::Native>::new(1)),
-            null_buffer_builder: NullBufferBuilder::new(1),
+            values_buffer: Box::new(BufferBuilder::<T::Native>::new(capacity)),
+            null_buffer_builder: NullBufferBuilder::new(capacity),
         }
     }
 
@@ -155,6 +155,7 @@ pub struct UnionBuilder {
     type_id_builder: Int8BufferBuilder,
     /// Builder to keep track of offsets (`None` for sparse unions)
     value_offset_builder: Option<Int32BufferBuilder>,
+    capacity: usize,
 }
 
 impl UnionBuilder {
@@ -175,6 +176,7 @@ impl UnionBuilder {
             fields: HashMap::default(),
             type_id_builder: Int8BufferBuilder::new(capacity),
             value_offset_builder: Some(Int32BufferBuilder::new(capacity)),
+            capacity
         }
     }
 
@@ -185,6 +187,7 @@ impl UnionBuilder {
             fields: HashMap::default(),
             type_id_builder: Int8BufferBuilder::new(capacity),
             value_offset_builder: None,
+            capacity
         }
     }
 
@@ -225,10 +228,11 @@ impl UnionBuilder {
                 data
             }
             None => match self.value_offset_builder {
-                Some(_) => FieldData::new::<T>(self.fields.len() as i8, T::DATA_TYPE),
+                Some(_) => FieldData::new::<T>(self.fields.len() as i8, T::DATA_TYPE, self.capacity),
+                // In the case of a sparse union, we should pass the maximum of the currently length and the capacity.
                 None => {
                     let mut fd =
-                        FieldData::new::<T>(self.fields.len() as i8, T::DATA_TYPE);
+                        FieldData::new::<T>(self.fields.len() as i8, T::DATA_TYPE, std::cmp::max(self.len, capacity));
                     for _ in 0..self.len {
                         fd.append_null();
                     }
