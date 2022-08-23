@@ -232,7 +232,7 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
 
         // Flush all encoder buffers and raw values
         let mut buf = rle_encoder.consume();
-        assert!(buf.len() > 4, "should have had padding inserted");
+        assert!(buf.len() >= 4, "should have had padding inserted");
 
         // Note that buf does not have any offset, all data is encoded bytes
         let len = (buf.len() - 4) as i32;
