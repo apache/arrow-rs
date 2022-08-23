@@ -97,10 +97,6 @@ tempfile = { version = "3", default-features = false }
 
 [build-dependencies]
 
-[[bin]]
-name = "arrow_test"
-path="./bins/arrow_test.rs"
-
 [[example]]
 name = "dynamic_types"
 required-features = ["prettyprint"]
