@@ -175,7 +175,7 @@ impl ObjectStore for AmazonS3 {
             .await?
             .bytes()
             .await
-            .map_err(|source| client::Error::GetRequest {
+            .map_err(|source| client::Error::GetRequestBody {
                 source,
                 path: location.to_string(),
             })?;
