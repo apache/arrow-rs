@@ -17,6 +17,7 @@
 
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
+use crate::util::hmac_sha256;
 use crate::{Result, RetryConfig};
 use bytes::Buf;
 use chrono::{DateTime, Utc};
@@ -186,11 +187,6 @@ impl CredentialExt for RequestBuilder {
         }
         self
     }
-}
-
-fn hmac_sha256(secret: impl AsRef<[u8]>, bytes: impl AsRef<[u8]>) -> ring::hmac::Tag {
-    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_ref());
-    ring::hmac::sign(&key, bytes.as_ref())
 }
 
 /// Computes the SHA256 digest of `body` returned as a hex encoded string

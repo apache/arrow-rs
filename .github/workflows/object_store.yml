@@ -129,4 +129,4 @@ jobs:
           OBJECT_STORE_AWS_ENDPOINT: http://localstack:4566
         run: |
           # run tests
-          cargo test -p object_store --features=aws,azure,azure_test,gcp
+          cargo test -p object_store --features=aws,azure,gcp
