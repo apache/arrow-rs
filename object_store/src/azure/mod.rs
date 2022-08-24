@@ -530,7 +530,7 @@ impl MicrosoftAzureBuilder {
         } else {
             let account_name = account_name.ok_or(Error::MissingAccount {})?;
             let account_url = format!("https://{}.blob.core.windows.net", &account_name);
-            let url = url::Url::parse(&account_url)
+            let url = Url::parse(&account_url)
                 .context(UnableToParseUrlSnafu { url: account_url })?;
             let credential = if let Some(bearer_token) = bearer_token {
                 Ok(credential::CredentialProvider::AccessKey(bearer_token))
@@ -557,17 +557,11 @@ impl MicrosoftAzureBuilder {
             (false, allow_http, url, credential, account_name)
         };
 
-        let blob_base_url = storage_url
-            .as_ref()
-            // make url ending consistent between the emulator and remote storage account
-            .trim_end_matches('/')
-            .to_string();
-
         let config = client::AzureConfig {
             account,
             allow_http,
             retry_config,
-            service: blob_base_url,
+            service: storage_url,
             container,
             credentials: auth,
             is_emulator,

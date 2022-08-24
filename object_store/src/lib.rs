@@ -713,7 +713,7 @@ mod tests {
         let location = Path::from("test_dir/test_upload_file.txt");
 
         // Can write to storage
-        let data = get_vec_of_bytes(5_000_000, 10);
+        let data = get_vec_of_bytes(5_000, 10);
         let bytes_expected = data.concat();
         let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
         for chunk in &data {

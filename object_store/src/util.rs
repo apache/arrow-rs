@@ -17,23 +17,8 @@
 
 //! Common logic for interacting with remote object stores
 use super::Result;
-use crate::path::Path;
 use bytes::Bytes;
 use futures::{stream::StreamExt, Stream};
-use percent_encoding::{utf8_percent_encode, AsciiSet, PercentEncode, NON_ALPHANUMERIC};
-
-// http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
-//
-// Do not URI-encode any of the unreserved characters that RFC 3986 defines:
-// A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
-pub(crate) const STRICT_ENCODE_SET: AsciiSet = NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'.')
-    .remove(b'_')
-    .remove(b'~');
-
-/// This struct is used to maintain the URI path encoding
-const STRICT_PATH_ENCODE_SET: AsciiSet = STRICT_ENCODE_SET.remove(b'/');
 
 /// Returns the prefix to be passed to an object store
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
@@ -48,11 +33,6 @@ pub fn format_prefix(prefix: Option<&crate::path::Path>) -> Option<String> {
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub fn format_http_range(range: std::ops::Range<usize>) -> String {
     format!("bytes={}-{}", range.start, range.end.saturating_sub(1))
-}
-
-#[cfg(any(feature = "aws", feature = "azure"))]
-pub(crate) fn encode_path(path: &Path) -> PercentEncode<'_> {
-    utf8_percent_encode(path.as_ref(), &STRICT_PATH_ENCODE_SET)
 }
 
 #[cfg(any(feature = "aws", feature = "azure"))]

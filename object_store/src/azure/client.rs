@@ -20,7 +20,7 @@ use crate::azure::credential::*;
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
 use crate::path::DELIMITER;
-use crate::util::{encode_path, format_http_range, format_prefix};
+use crate::util::{format_http_range, format_prefix};
 use crate::{BoxStream, ListResult, ObjectMeta, Path, Result, RetryConfig, StreamExt};
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, TimeZone, Utc};
@@ -33,6 +33,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::collections::HashMap;
 use std::ops::Range;
+use url::Url;
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -119,23 +120,21 @@ pub struct AzureConfig {
     pub credentials: CredentialProvider,
     pub retry_config: RetryConfig,
     pub allow_http: bool,
-    pub service: String,
+    pub service: Url,
     pub is_emulator: bool,
 }
 
 impl AzureConfig {
-    fn path_url(&self, path: &Path) -> String {
-        if self.is_emulator {
-            format!(
-                "{}/{}/{}/{}",
-                self.service,
-                self.account,
-                self.container,
-                encode_path(path)
-            )
-        } else {
-            format!("{}/{}/{}", self.service, self.container, encode_path(path))
+    fn path_url(&self, path: &Path) -> Url {
+        let mut url = self.service.clone();
+        {
+            let mut path_mut = url.path_segments_mut().unwrap();
+            if self.is_emulator {
+                path_mut.push(&self.account);
+            }
+            path_mut.push(&self.container).extend(path.parts());
         }
+        url
     }
 }
 
@@ -309,18 +308,16 @@ impl AzureClient {
         let url = self.config.path_url(to);
         let mut source = self.config.path_url(from);
 
+        // If using SAS authorization must include the headers in the URL
+        // <https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob#request-headers>
         if let AzureCredential::SASToken(pairs) = &credential {
-            let query = pairs
-                .iter()
-                .map(|pair| format!("{}={}", pair.0, pair.1))
-                .join("&");
-            source = format!("{}?{}", source, query);
+            source.query_pairs_mut().extend_pairs(pairs);
         }
 
         let mut builder = self
             .client
             .request(Method::PUT, url)
-            .header(&COPY_SOURCE, source)
+            .header(&COPY_SOURCE, source.to_string())
             .header(CONTENT_LENGTH, HeaderValue::from_static("0"));
 
         if !overwrite {
@@ -350,7 +347,7 @@ impl AzureClient {
         token: Option<&str>,
     ) -> Result<(ListResult, Option<String>)> {
         let credential = self.get_credential().await?;
-        let url = self.config.path_url(&Path::from(""));
+        let url = self.config.path_url(&Path::default());
 
         let mut query = Vec::with_capacity(5);
         query.push(("restype", "container"));
@@ -370,7 +367,7 @@ impl AzureClient {
 
         let response = self
             .client
-            .request(Method::GET, url.strip_suffix('/').unwrap())
+            .request(Method::GET, url)
             .query(&query)
             .with_azure_authorization(&credential, &self.config.account)
             .send_retry(&self.config.retry_config)
