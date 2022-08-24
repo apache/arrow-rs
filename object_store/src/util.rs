@@ -30,9 +30,18 @@ pub fn format_prefix(prefix: Option<&crate::path::Path>) -> Option<String> {
 
 /// Returns a formatted HTTP range header as per
 /// <https://httpwg.org/specs/rfc7233.html#header.range>
-#[cfg(any(feature = "aws", feature = "gcp"))]
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub fn format_http_range(range: std::ops::Range<usize>) -> String {
     format!("bytes={}-{}", range.start, range.end.saturating_sub(1))
+}
+
+#[cfg(any(feature = "aws", feature = "azure"))]
+pub(crate) fn hmac_sha256(
+    secret: impl AsRef<[u8]>,
+    bytes: impl AsRef<[u8]>,
+) -> ring::hmac::Tag {
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_ref());
+    ring::hmac::sign(&key, bytes.as_ref())
 }
 
 /// Collect a stream into [`Bytes`] avoiding copying in the event of a single chunk

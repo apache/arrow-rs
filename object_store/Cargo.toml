@@ -30,38 +30,33 @@ all-features = true
 
 [dependencies] # In alphabetical order
 async-trait = "0.1.53"
-# Microsoft Azure Blob storage integration
-azure_core = { version = "0.4", optional = true, default-features = false, features = ["enable_reqwest_rustls"] }
-azure_identity = { version = "0.5", optional = true, default-features = false, features = ["enable_reqwest_rustls"] }
-azure_storage = { version = "0.5", optional = true, default-features = false, features = ["enable_reqwest_rustls"] }
-azure_storage_blobs = { version = "0.5", optional = true, default-features = false, features = ["enable_reqwest_rustls"] }
 bytes = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-# Google Cloud Storage integration
 futures = "0.3"
-serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
-serde_json = { version = "1.0", default-features = false, optional = true }
-quick-xml = { version = "0.23.0", features = ["serialize"], optional = true }
-rustls-pemfile = { version = "1.0", default-features = false, optional = true }
-ring = { version = "0.16", default-features = false, features = ["std"], optional = true }
-base64 = { version = "0.13", default-features = false, optional = true }
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 itertools = "0.10.1"
+parking_lot = { version = "0.12" }
 percent-encoding = "2.1"
 snafu = "0.7"
 tokio = { version = "1.18", features = ["sync", "macros", "parking_lot", "rt-multi-thread", "time", "io-util"] }
 tracing = { version = "0.1" }
-reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"], optional = true }
-parking_lot = { version = "0.12" }
-# Filesystem integration
 url = "2.2"
 walkdir = "2"
 
+# Cloud storage support
+base64 = { version = "0.13", default-features = false, optional = true }
+quick-xml = { version = "0.23.0", features = ["serialize"], optional = true }
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
+serde_json = { version = "1.0", default-features = false, optional = true }
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"], optional = true }
+ring = { version = "0.16", default-features = false, features = ["std"], optional = true }
+rustls-pemfile = { version = "1.0", default-features = false, optional = true }
+
 [features]
-azure = ["azure_core", "azure_storage_blobs", "azure_storage", "reqwest", "azure_identity"]
-azure_test = ["azure", "azure_core/azurite_workaround", "azure_storage/azurite_workaround", "azure_storage_blobs/azurite_workaround"]
-gcp = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "rustls-pemfile", "base64", "rand", "ring"]
-aws = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "rustls-pemfile", "base64", "rand", "ring"]
+cloud = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "rustls-pemfile", "base64", "rand", "ring"]
+azure = ["cloud"]
+gcp = ["cloud"]
+aws = ["cloud"]
 
 [dev-dependencies] # In alphabetical order
 dotenv = "0.15.0"

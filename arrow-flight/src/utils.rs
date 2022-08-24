@@ -21,6 +21,7 @@ use crate::{FlightData, IpcMessage, SchemaAsIpc, SchemaResult};
 use std::collections::HashMap;
 
 use arrow::array::ArrayRef;
+use arrow::buffer::Buffer;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::{ArrowError, Result};
 use arrow::ipc::{reader, writer, writer::IpcWriteOptions};
@@ -66,7 +67,7 @@ pub fn flight_data_to_arrow_batch(
         })
         .map(|batch| {
             reader::read_record_batch(
-                &data.data_body,
+                &Buffer::from(&data.data_body),
                 batch,
                 schema,
                 dictionaries_by_id,

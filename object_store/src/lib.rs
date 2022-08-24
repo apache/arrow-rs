@@ -165,10 +165,10 @@ pub mod memory;
 pub mod path;
 pub mod throttle;
 
-#[cfg(any(feature = "gcp", feature = "aws"))]
+#[cfg(any(feature = "gcp", feature = "aws", feature = "azure"))]
 mod client;
 
-#[cfg(any(feature = "gcp", feature = "aws"))]
+#[cfg(any(feature = "gcp", feature = "aws", feature = "azure"))]
 pub use client::{backoff::BackoffConfig, retry::RetryConfig};
 
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
@@ -506,8 +506,6 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
-        let store_str = storage.to_string();
-
         delete_fixtures(storage).await;
 
         let content_list = flatten_list_stream(storage, None).await.unwrap();
@@ -565,26 +563,16 @@ mod tests {
         let out_of_range = 200..300;
         let out_of_range_result = storage.get_range(&location, out_of_range).await;
 
-        if store_str.starts_with("MicrosoftAzureEmulator") {
-            // Azurite doesn't support x-ms-range-get-content-crc64 set by Azure SDK
-            // https://github.com/Azure/Azurite/issues/444
-            let err = range_result.unwrap_err().to_string();
-            assert!(err.contains("x-ms-range-get-content-crc64 header or parameter is not supported in Azurite strict mode"), "{}", err);
+        let bytes = range_result.unwrap();
+        assert_eq!(bytes, expected_data.slice(range));
 
-            let err = out_of_range_result.unwrap_err().to_string();
-            assert!(err.contains("x-ms-range-get-content-crc64 header or parameter is not supported in Azurite strict mode"), "{}", err);
-        } else {
-            let bytes = range_result.unwrap();
-            assert_eq!(bytes, expected_data.slice(range));
+        // Should be a non-fatal error
+        out_of_range_result.unwrap_err();
 
-            // Should be a non-fatal error
-            out_of_range_result.unwrap_err();
-
-            let ranges = vec![0..1, 2..3, 0..5];
-            let bytes = storage.get_ranges(&location, &ranges).await.unwrap();
-            for (range, bytes) in ranges.iter().zip(bytes) {
-                assert_eq!(bytes, expected_data.slice(range.clone()))
-            }
+        let ranges = vec![0..1, 2..3, 0..5];
+        let bytes = storage.get_ranges(&location, &ranges).await.unwrap();
+        for (range, bytes) in ranges.iter().zip(bytes) {
+            assert_eq!(bytes, expected_data.slice(range.clone()))
         }
 
         let head = storage.head(&location).await.unwrap();
@@ -725,7 +713,7 @@ mod tests {
         let location = Path::from("test_dir/test_upload_file.txt");
 
         // Can write to storage
-        let data = get_vec_of_bytes(5_000_000, 10);
+        let data = get_vec_of_bytes(5_000, 10);
         let bytes_expected = data.concat();
         let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
         for chunk in &data {
