@@ -215,6 +215,70 @@ where
     }
 }
 
+/// Returns the min of values in the array.
+pub fn min_dyn<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
+where
+    T: ArrowNumericType,
+    T::Native: Add<Output = T::Native>,
+{
+    match array.data_type() {
+        DataType::Dictionary(_, _) => {
+            let null_count = array.null_count();
+
+            if null_count == array.len() {
+                return None;
+            }
+
+            let mut has_value = false;
+            let mut n = T::default_value();
+            let iter = ArrayIter::new(array);
+            iter.into_iter().for_each(|value| {
+                if let Some(value) = value {
+                    if !has_value || value < n {
+                        has_value = true;
+                        n = value;
+                    }
+                }
+            });
+
+            Some(n)
+        }
+        _ => min::<T>(as_primitive_array(&array)),
+    }
+}
+
+/// Returns the max of values in the array.
+pub fn max_dyn<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
+where
+    T: ArrowNumericType,
+    T::Native: Add<Output = T::Native>,
+{
+    match array.data_type() {
+        DataType::Dictionary(_, _) => {
+            let null_count = array.null_count();
+
+            if null_count == array.len() {
+                return None;
+            }
+
+            let mut has_value = false;
+            let mut n = T::default_value();
+            let iter = ArrayIter::new(array);
+            iter.into_iter().for_each(|value| {
+                if let Some(value) = value {
+                    if !has_value || value > n {
+                        has_value = true;
+                        n = value;
+                    }
+                }
+            });
+
+            Some(n)
+        }
+        _ => max::<T>(as_primitive_array(&array)),
+    }
+}
+
 /// Returns the sum of values in the primitive array.
 ///
 /// Returns `None` if the array is empty or only contains null values.
@@ -1057,5 +1121,36 @@ mod tests {
         let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
         assert!(sum_dyn::<Int8Type, _>(array).is_none());
+    }
+
+    #[test]
+    fn test_max_min_dyn() {
+        let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
+        let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
+
+        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert_eq!(14, max_dyn::<Int8Type, _>(array).unwrap());
+
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert_eq!(12, min_dyn::<Int8Type, _>(array).unwrap());
+
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        assert_eq!(5, max_dyn::<Int32Type, _>(&a).unwrap());
+        assert_eq!(1, min_dyn::<Int32Type, _>(&a).unwrap());
+
+        let keys = Int8Array::from(vec![Some(2_i8), None, Some(7)]);
+        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert_eq!(17, max_dyn::<Int8Type, _>(array).unwrap());
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert_eq!(12, min_dyn::<Int8Type, _>(array).unwrap());
+
+        let keys = Int8Array::from(vec![None, None, None]);
+        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert!(max_dyn::<Int8Type, _>(array).is_none());
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert!(min_dyn::<Int8Type, _>(array).is_none());
     }
 }
