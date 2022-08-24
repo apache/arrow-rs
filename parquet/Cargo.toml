@@ -27,7 +27,7 @@ keywords = ["arrow", "parquet", "hadoop"]
 readme = "README.md"
 build = "build.rs"
 edition = "2021"
-rust-version = "1.62"
+rust-version = "1.63"
 
 [dependencies]
 ahash = "0.8"
