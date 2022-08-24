@@ -64,11 +64,12 @@ pub trait FlightSqlService:
     /// Implementors may override to handle additional calls to do_get()
     async fn custom_do_get(
         &self,
-        request: Request<Ticket>,
+        _request: Request<Ticket>,
         message: prost_types::Any,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         Err(Status::unimplemented(format!(
-            "do_get: The defined request is invalid: {}", message.type_url
+            "do_get: The defined request is invalid: {}",
+            message.type_url
         )))
     }
 
@@ -396,7 +397,8 @@ where
         }
 
         Err(Status::unimplemented(format!(
-            "get_flight_info: The defined request is invalid: {}", message.type_url
+            "get_flight_info: The defined request is invalid: {}",
+            message.type_url
         )))
     }
 
@@ -415,10 +417,9 @@ where
             .map_err(decode_error_to_status)?;
 
         fn unpack<T: ProstMessageExt>(msg: prost_types::Any) -> Result<T, Status> {
-            msg
-                .unpack()
+            msg.unpack()
                 .map_err(arrow_error_to_status)?
-                .ok_or(Status::internal("Expected a command, but found none.".to_string()))
+                .ok_or_else(|| Status::internal("Expected a command, but found none."))
         }
 
         if msg.is::<TicketStatementQuery>() {
@@ -501,7 +502,8 @@ where
         }
 
         Err(Status::invalid_argument(format!(
-            "do_put: The defined request is invalid: {}", message.type_url
+            "do_put: The defined request is invalid: {}",
+            message.type_url
         )))
     }
 
