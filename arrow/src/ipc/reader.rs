@@ -26,7 +26,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use crate::array::*;
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, MutableBuffer};
 use crate::compute::cast;
 use crate::datatypes::{DataType, Field, IntervalUnit, Schema, SchemaRef, UnionMode};
 use crate::error::{ArrowError, Result};
@@ -48,12 +48,11 @@ use DataType::*;
 /// compression does not yield appreciable savings.
 fn read_buffer(
     buf: &ipc::Buffer,
-    a_data: &[u8],
+    a_data: &Buffer,
     compression_codec: &Option<CompressionCodec>,
 ) -> Result<Buffer> {
     let start_offset = buf.offset() as usize;
-    let end_offset = start_offset + buf.length() as usize;
-    let buf_data = Buffer::from(&a_data[start_offset..end_offset]);
+    let buf_data = a_data.slice_with_length(start_offset, buf.length() as usize);
     // corner case: empty buffer
     match (buf_data.is_empty(), compression_codec) {
         (true, _) | (_, None) => Ok(buf_data),
@@ -74,7 +73,7 @@ fn read_buffer(
 fn create_array(
     nodes: &[ipc::FieldNode],
     field: &Field,
-    data: &[u8],
+    data: &Buffer,
     buffers: &[ipc::Buffer],
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     mut node_index: usize,
@@ -411,12 +410,12 @@ fn create_primitive_array(
         }
         FixedSizeBinary(_) => {
             // read 2 buffers: null buffer (optional) and data buffer
-            let builder = ArrayData::builder(data_type.clone())
+            ArrayData::builder(data_type.clone())
                 .len(length)
                 .add_buffer(buffers[1].clone())
-                .null_bit_buffer(null_buffer);
-
-            unsafe { builder.build_unchecked() }
+                .null_bit_buffer(null_buffer)
+                .build()
+                .unwrap()
         }
         Int8
         | Int16
@@ -429,45 +428,45 @@ fn create_primitive_array(
         | Interval(IntervalUnit::YearMonth) => {
             if buffers[1].len() / 8 == length && length != 1 {
                 // interpret as a signed i64, and cast appropriately
-                let builder = ArrayData::builder(DataType::Int64)
+                let data = ArrayData::builder(DataType::Int64)
                     .len(length)
                     .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer);
-
-                let data = unsafe { builder.build_unchecked() };
+                    .null_bit_buffer(null_buffer)
+                    .build()
+                    .unwrap();
                 let values = Arc::new(Int64Array::from(data)) as ArrayRef;
                 // this cast is infallible, the unwrap is safe
                 let casted = cast(&values, data_type).unwrap();
                 casted.into_data()
             } else {
-                let builder = ArrayData::builder(data_type.clone())
+                ArrayData::builder(data_type.clone())
                     .len(length)
                     .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer);
-
-                unsafe { builder.build_unchecked() }
+                    .null_bit_buffer(null_buffer)
+                    .build()
+                    .unwrap()
             }
         }
         Float32 => {
             if buffers[1].len() / 8 == length && length != 1 {
                 // interpret as a f64, and cast appropriately
-                let builder = ArrayData::builder(DataType::Float64)
+                let data = ArrayData::builder(DataType::Float64)
                     .len(length)
                     .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer);
-
-                let data = unsafe { builder.build_unchecked() };
+                    .null_bit_buffer(null_buffer)
+                    .build()
+                    .unwrap();
                 let values = Arc::new(Float64Array::from(data)) as ArrayRef;
                 // this cast is infallible, the unwrap is safe
                 let casted = cast(&values, data_type).unwrap();
                 casted.into_data()
             } else {
-                let builder = ArrayData::builder(data_type.clone())
+                ArrayData::builder(data_type.clone())
                     .len(length)
                     .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer);
-
-                unsafe { builder.build_unchecked() }
+                    .null_bit_buffer(null_buffer)
+                    .build()
+                    .unwrap()
             }
         }
         Boolean
@@ -479,14 +478,12 @@ fn create_primitive_array(
         | Date64
         | Duration(_)
         | Interval(IntervalUnit::DayTime)
-        | Interval(IntervalUnit::MonthDayNano) => {
-            let builder = ArrayData::builder(data_type.clone())
-                .len(length)
-                .add_buffer(buffers[1].clone())
-                .null_bit_buffer(null_buffer);
-
-            unsafe { builder.build_unchecked() }
-        }
+        | Interval(IntervalUnit::MonthDayNano) => ArrayData::builder(data_type.clone())
+            .len(length)
+            .add_buffer(buffers[1].clone())
+            .null_bit_buffer(null_buffer)
+            .build()
+            .unwrap(),
         Decimal128(_, _) | Decimal256(_, _) => {
             // read 2 buffers: null buffer (optional) and data buffer
             let builder = ArrayData::builder(data_type.clone())
@@ -494,6 +491,10 @@ fn create_primitive_array(
                 .add_buffer(buffers[1].clone())
                 .null_bit_buffer(null_buffer);
 
+            // Don't validate the decimal array so far,
+            // becasue validating decimal is some what complicated
+            // and there is no conclusion on whether we should do it.
+            // For more infomation, please look at https://github.com/apache/arrow-rs/issues/2387
             unsafe { builder.build_unchecked() }
         }
         t => unreachable!("Data type {:?} either unsupported or not primitive", t),
@@ -527,7 +528,7 @@ fn create_list_array(
 
         _ => unreachable!("Cannot create list or map array from {:?}", data_type),
     };
-    make_array(unsafe { builder.build_unchecked() })
+    make_array(builder.build().unwrap())
 }
 
 /// Reads the correct number of buffers based on list type and null_count, and creates a
@@ -554,7 +555,7 @@ fn create_dictionary_array(
 
 /// Creates a record batch from binary data using the `ipc::RecordBatch` indexes and the `Schema`
 pub fn read_record_batch(
-    buf: &[u8],
+    buf: &Buffer,
     batch: ipc::RecordBatch,
     schema: SchemaRef,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
@@ -640,7 +641,7 @@ pub fn read_record_batch(
 /// Read the dictionary from the buffer and provided metadata,
 /// updating the `dictionaries_by_id` with the resulting dictionary
 pub fn read_dictionary(
-    buf: &[u8],
+    buf: &Buffer,
     batch: ipc::DictionaryBatch,
     schema: &Schema,
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
@@ -815,14 +816,15 @@ impl<R: Read + Seek> FileReader<R> {
                         let batch = message.header_as_dictionary_batch().unwrap();
 
                         // read the block that makes up the dictionary batch into a buffer
-                        let mut buf = vec![0; block.bodyLength() as usize];
+                        let mut buf =
+                            MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
                         reader.seek(SeekFrom::Start(
                             block.offset() as u64 + block.metaDataLength() as u64,
                         ))?;
                         reader.read_exact(&mut buf)?;
 
                         read_dictionary(
-                            &buf,
+                            &buf.into(),
                             batch,
                             &schema,
                             &mut dictionaries_by_id,
@@ -923,14 +925,14 @@ impl<R: Read + Seek> FileReader<R> {
                     )
                 })?;
                 // read the block that makes up the record batch into a buffer
-                let mut buf = vec![0; block.bodyLength() as usize];
+                let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
                 self.reader.seek(SeekFrom::Start(
                     block.offset() as u64 + block.metaDataLength() as u64,
                 ))?;
                 self.reader.read_exact(&mut buf)?;
 
                 read_record_batch(
-                    &buf,
+                    &buf.into(),
                     batch,
                     self.schema(),
                     &self.dictionaries_by_id,
@@ -1119,10 +1121,10 @@ impl<R: Read> StreamReader<R> {
                     )
                 })?;
                 // read the block that makes up the record batch into a buffer
-                let mut buf = vec![0; message.bodyLength() as usize];
+                let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
                 self.reader.read_exact(&mut buf)?;
 
-                read_record_batch(&buf, batch, self.schema(), &self.dictionaries_by_id, self.projection.as_ref().map(|x| x.0.as_ref()), &message.version()).map(Some)
+                read_record_batch(&buf.into(), batch, self.schema(), &self.dictionaries_by_id, self.projection.as_ref().map(|x| x.0.as_ref()), &message.version()).map(Some)
             }
             ipc::MessageHeader::DictionaryBatch => {
                 let batch = message.header_as_dictionary_batch().ok_or_else(|| {
@@ -1131,11 +1133,11 @@ impl<R: Read> StreamReader<R> {
                     )
                 })?;
                 // read the block that makes up the dictionary batch into a buffer
-                let mut buf = vec![0; message.bodyLength() as usize];
+                let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
                 self.reader.read_exact(&mut buf)?;
 
                 read_dictionary(
-                    &buf, batch, &self.schema, &mut self.dictionaries_by_id, &message.version()
+                    &buf.into(), batch, &self.schema, &mut self.dictionaries_by_id, &message.version()
                 )?;
 
                 // read the next message until we encounter a RecordBatch

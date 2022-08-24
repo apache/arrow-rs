@@ -1369,6 +1369,10 @@ mod tests {
             TestOptions::new(2, 256, 91)
                 .with_null_percent(25)
                 .with_enabled_statistics(EnabledStatistics::None),
+            // Test with all null
+            TestOptions::new(2, 128, 91)
+                .with_null_percent(100)
+                .with_enabled_statistics(EnabledStatistics::None),
             // Test skip
 
             // choose record_batch_batch (15) so batches cross row
@@ -2104,7 +2108,8 @@ mod tests {
         )
         .unwrap();
         for _ in 0..2 {
-            let mut list_builder = ListBuilder::new(Int32Builder::new(batch_size));
+            let mut list_builder =
+                ListBuilder::new(Int32Builder::with_capacity(batch_size));
             for _ in 0..(batch_size) {
                 list_builder.append(true);
             }

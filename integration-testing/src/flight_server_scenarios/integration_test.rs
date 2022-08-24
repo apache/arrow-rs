@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use arrow::{
     array::ArrayRef,
+    buffer::Buffer,
     datatypes::Schema,
     datatypes::SchemaRef,
     ipc::{self, reader},
@@ -282,7 +283,7 @@ async fn send_app_metadata(
 
 async fn record_batch_from_message(
     message: ipc::Message<'_>,
-    data_body: &[u8],
+    data_body: &Buffer,
     schema_ref: SchemaRef,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
 ) -> Result<RecordBatch, Status> {
@@ -306,7 +307,7 @@ async fn record_batch_from_message(
 
 async fn dictionary_from_message(
     message: ipc::Message<'_>,
-    data_body: &[u8],
+    data_body: &Buffer,
     schema_ref: SchemaRef,
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
 ) -> Result<(), Status> {
@@ -354,7 +355,7 @@ async fn save_uploaded_chunks(
 
                 let batch = record_batch_from_message(
                     message,
-                    &data.data_body,
+                    &Buffer::from(data.data_body),
                     schema_ref.clone(),
                     &dictionaries_by_id,
                 )
@@ -365,7 +366,7 @@ async fn save_uploaded_chunks(
             ipc::MessageHeader::DictionaryBatch => {
                 dictionary_from_message(
                     message,
-                    &data.data_body,
+                    &Buffer::from(data.data_body),
                     schema_ref.clone(),
                     &mut dictionaries_by_id,
                 )

@@ -49,8 +49,10 @@ where
     futures::stream::unfold(PaginationState::Start(state), move |state| async move {
         let (s, page_token) = match state {
             PaginationState::Start(s) => (s, None),
-            PaginationState::HasMore(s, page_token) => (s, Some(page_token)),
-            PaginationState::Done => {
+            PaginationState::HasMore(s, page_token) if !page_token.is_empty() => {
+                (s, Some(page_token))
+            }
+            _ => {
                 return None;
             }
         };

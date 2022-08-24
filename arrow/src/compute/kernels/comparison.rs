@@ -467,29 +467,24 @@ pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 
     if !right.contains(is_like_pattern) {
         // fast path, can use equals
+        let right_uppercase = right.to_uppercase();
         for i in 0..left.len() {
-            result.append(left.value(i) == right);
+            result.append(left.value(i).to_uppercase() == right_uppercase);
         }
     } else if right.ends_with('%')
         && !right.ends_with("\\%")
         && !right[..right.len() - 1].contains(is_like_pattern)
     {
-        // fast path, can use ends_with
+        // fast path, can use starts_with
+        let start_str = &right[..right.len() - 1].to_uppercase();
         for i in 0..left.len() {
-            result.append(
-                left.value(i)
-                    .to_uppercase()
-                    .starts_with(&right[..right.len() - 1].to_uppercase()),
-            );
+            result.append(left.value(i).to_uppercase().starts_with(start_str));
         }
     } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
-        // fast path, can use starts_with
+        // fast path, can use ends_with
+        let ends_str = &right[1..].to_uppercase();
         for i in 0..left.len() {
-            result.append(
-                left.value(i)
-                    .to_uppercase()
-                    .ends_with(&right[1..].to_uppercase()),
-            );
+            result.append(left.value(i).to_uppercase().ends_with(ends_str));
         }
     } else {
         let re_pattern = replace_like_wildcards(right)?;
@@ -550,31 +545,24 @@ pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 
     if !right.contains(is_like_pattern) {
         // fast path, can use equals
+        let right_uppercase = right.to_uppercase();
         for i in 0..left.len() {
-            result.append(left.value(i) != right);
+            result.append(left.value(i).to_uppercase() != right_uppercase);
         }
     } else if right.ends_with('%')
         && !right.ends_with("\\%")
         && !right[..right.len() - 1].contains(is_like_pattern)
     {
-        // fast path, can use ends_with
+        // fast path, can use starts_with
+        let start_str = &right[..right.len() - 1].to_uppercase();
         for i in 0..left.len() {
-            result.append(
-                !left
-                    .value(i)
-                    .to_uppercase()
-                    .starts_with(&right[..right.len() - 1].to_uppercase()),
-            );
+            result.append(!left.value(i).to_uppercase().starts_with(start_str));
         }
     } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
-        // fast path, can use starts_with
+        // fast path, can use ends_with
+        let end_str = &right[1..].to_uppercase();
         for i in 0..left.len() {
-            result.append(
-                !left
-                    .value(i)
-                    .to_uppercase()
-                    .ends_with(&right[1..].to_uppercase()),
-            );
+            result.append(!left.value(i).to_uppercase().ends_with(end_str));
         }
     } else {
         let re_pattern = replace_like_wildcards(right)?;
@@ -4181,7 +4169,7 @@ mod tests {
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar_equals,
         vec!["arrow", "parrow", "arrows", "arr"],
-        "arrow",
+        "Arrow",
         ilike_utf8_scalar,
         vec![true, false, false, false]
     );
@@ -4234,8 +4222,8 @@ mod tests {
 
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar_equals,
-        vec!["arrow", "parrow", "arrows", "arr"],
-        "arrow",
+        vec!["arRow", "parrow", "arrows", "arr"],
+        "Arrow",
         nilike_utf8_scalar,
         vec![false, true, true, true]
     );
@@ -4375,8 +4363,8 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(123).unwrap();
         builder.append_null();
@@ -4419,8 +4407,8 @@ mod tests {
 
     #[test]
     fn test_lt_dyn_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(123).unwrap();
         builder.append_null();
@@ -4462,8 +4450,8 @@ mod tests {
     }
     #[test]
     fn test_lt_eq_dyn_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let key_builder = PrimitiveBuilder::<Int8Type>::new();
+        let value_builder = PrimitiveBuilder::<Int32Type>::new();
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(123).unwrap();
         builder.append_null();
@@ -4506,8 +4494,8 @@ mod tests {
 
     #[test]
     fn test_gt_dyn_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(123).unwrap();
         builder.append_null();
@@ -4550,8 +4538,8 @@ mod tests {
 
     #[test]
     fn test_gt_eq_dyn_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let key_builder = PrimitiveBuilder::<Int8Type>::new();
+        let value_builder = PrimitiveBuilder::<Int32Type>::new();
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(22).unwrap();
         builder.append_null();
@@ -4594,8 +4582,8 @@ mod tests {
 
     #[test]
     fn test_neq_dyn_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let key_builder = PrimitiveBuilder::<Int8Type>::new();
+        let value_builder = PrimitiveBuilder::<Int32Type>::new();
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(22).unwrap();
         builder.append_null();
@@ -4738,7 +4726,7 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_utf8_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let key_builder = PrimitiveBuilder::<Int8Type>::new();
         let value_builder = StringBuilder::new(100);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
@@ -4766,7 +4754,7 @@ mod tests {
     }
     #[test]
     fn test_lt_dyn_utf8_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let key_builder = PrimitiveBuilder::<Int8Type>::new();
         let value_builder = StringBuilder::new(100);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
@@ -4795,7 +4783,7 @@ mod tests {
     }
     #[test]
     fn test_lt_eq_dyn_utf8_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let key_builder = PrimitiveBuilder::<Int8Type>::new();
         let value_builder = StringBuilder::new(100);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
@@ -4824,7 +4812,7 @@ mod tests {
     }
     #[test]
     fn test_gt_eq_dyn_utf8_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let key_builder = PrimitiveBuilder::<Int8Type>::new();
         let value_builder = StringBuilder::new(100);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
@@ -4854,7 +4842,7 @@ mod tests {
 
     #[test]
     fn test_gt_dyn_utf8_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let key_builder = PrimitiveBuilder::<Int8Type>::new();
         let value_builder = StringBuilder::new(100);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
@@ -4883,7 +4871,7 @@ mod tests {
     }
     #[test]
     fn test_neq_dyn_utf8_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let key_builder = PrimitiveBuilder::<Int8Type>::new();
         let value_builder = StringBuilder::new(100);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
@@ -5277,5 +5265,215 @@ mod tests {
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, Some(false)])
         );
+    }
+
+    #[test]
+    fn test_eq_dyn_neq_dyn_float_nan() {
+        let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let array2: Float32Array = vec![f32::NAN, f32::NAN, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+
+        let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let array2: Float64Array = vec![f64::NAN, f64::NAN, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_lt_dyn_lt_eq_dyn_float_nan() {
+        let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let array2: Float32Array = vec![f32::NAN, f32::NAN, 8.0, 9.0, 10.0, 1.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(true), Some(false), Some(false)],
+        );
+        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(true), Some(false), Some(false)],
+        );
+        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let array2: Float64Array = vec![f64::NAN, f64::NAN, 8.0, 9.0, 10.0, 1.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(true), Some(false), Some(false)],
+        );
+        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(true), Some(false), Some(false)],
+        );
+        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_gt_dyn_gt_eq_dyn_float_nan() {
+        let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let array2: Float32Array = vec![f32::NAN, f32::NAN, 8.0, 9.0, 10.0, 1.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(false)],
+        );
+        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(false), Some(true), Some(false)],
+        );
+        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let array2: Float64Array = vec![f64::NAN, f64::NAN, 8.0, 9.0, 10.0, 1.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(false)],
+        );
+        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(false), Some(true), Some(false)],
+        );
+        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_eq_dyn_scalar_neq_dyn_scalar_float_nan() {
+        let array: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(neq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+
+        let array: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(eq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(neq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_lt_dyn_scalar_lt_eq_dyn_scalar_float_nan() {
+        let array: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(lt_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(lt_eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+
+        let array: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(lt_dyn_scalar(&array, f64::NAN).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(lt_eq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_gt_dyn_scalar_gt_eq_dyn_scalar_float_nan() {
+        let array: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(gt_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(gt_eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+
+        let array: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(gt_dyn_scalar(&array, f64::NAN).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(gt_eq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
     }
 }

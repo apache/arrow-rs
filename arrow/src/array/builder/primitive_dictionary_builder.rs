@@ -60,8 +60,8 @@ impl<T: ToByteSlice> Eq for Value<T> {}
 ///    };
 ///  use arrow::datatypes::{UInt8Type, UInt32Type};
 ///
-///  let key_builder = PrimitiveBuilder::<UInt8Type>::new(3);
-///  let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
+///  let key_builder = PrimitiveBuilder::<UInt8Type>::with_capacity(3);
+///  let value_builder = PrimitiveBuilder::<UInt32Type>::with_capacity(2);
 ///  let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
 ///  builder.append(12345678).unwrap();
 ///  builder.append_null();
@@ -211,8 +211,8 @@ mod tests {
 
     #[test]
     fn test_primitive_dictionary_builder() {
-        let key_builder = PrimitiveBuilder::<UInt8Type>::new(3);
-        let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
+        let key_builder = PrimitiveBuilder::<UInt8Type>::with_capacity(3);
+        let value_builder = PrimitiveBuilder::<UInt32Type>::with_capacity(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(12345678).unwrap();
         builder.append_null();
@@ -239,8 +239,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "DictionaryKeyOverflowError")]
     fn test_primitive_dictionary_overflow() {
-        let key_builder = PrimitiveBuilder::<UInt8Type>::new(257);
-        let value_builder = PrimitiveBuilder::<UInt32Type>::new(257);
+        let key_builder = PrimitiveBuilder::<UInt8Type>::with_capacity(257);
+        let value_builder = PrimitiveBuilder::<UInt32Type>::with_capacity(257);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         // 256 unique keys.
         for i in 0..256 {

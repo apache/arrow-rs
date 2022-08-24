@@ -300,7 +300,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::Int8 => {
-            let mut b = Int8Builder::new(json_col.count);
+            let mut b = Int8Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -321,7 +321,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::Int16 => {
-            let mut b = Int16Builder::new(json_col.count);
+            let mut b = Int16Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -340,7 +340,7 @@ pub fn array_from_json(
         | DataType::Date32
         | DataType::Time32(_)
         | DataType::Interval(IntervalUnit::YearMonth) => {
-            let mut b = Int32Builder::new(json_col.count);
+            let mut b = Int32Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -362,7 +362,7 @@ pub fn array_from_json(
         | DataType::Timestamp(_, _)
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime) => {
-            let mut b = Int64Builder::new(json_col.count);
+            let mut b = Int64Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -418,7 +418,7 @@ pub fn array_from_json(
             compute::cast(&array, field.data_type())
         }
         DataType::UInt8 => {
-            let mut b = UInt8Builder::new(json_col.count);
+            let mut b = UInt8Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -434,7 +434,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::UInt16 => {
-            let mut b = UInt16Builder::new(json_col.count);
+            let mut b = UInt16Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -450,7 +450,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::UInt32 => {
-            let mut b = UInt32Builder::new(json_col.count);
+            let mut b = UInt32Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -466,7 +466,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::UInt64 => {
-            let mut b = UInt64Builder::new(json_col.count);
+            let mut b = UInt64Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -498,7 +498,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::Interval(IntervalUnit::MonthDayNano) => {
-            let mut b = IntervalMonthDayNanoBuilder::new(json_col.count);
+            let mut b = IntervalMonthDayNanoBuilder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -541,7 +541,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::Float32 => {
-            let mut b = Float32Builder::new(json_col.count);
+            let mut b = Float32Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -557,7 +557,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::Float64 => {
-            let mut b = Float64Builder::new(json_col.count);
+            let mut b = Float64Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
