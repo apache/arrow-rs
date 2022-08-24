@@ -54,6 +54,9 @@ jobs:
       - name: Test --features=force_validate,prettyprint,ipc_compression,ffi
         run: |
           cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi
+      - name: Test --features=sql_compliant
+        run: |
+          cargo test -p arrow --features "sql_compliant"
       - name: Run examples
         run: |
           # Test arrow examples

@@ -88,6 +88,8 @@ pyarrow = ["pyo3", "ffi"]
 force_validate = []
 # Enable ffi support
 ffi = []
+# Enable SQL-compliant kernels
+sql_compliant = []
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }

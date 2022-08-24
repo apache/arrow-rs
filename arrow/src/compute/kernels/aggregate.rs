@@ -28,7 +28,7 @@ use crate::datatypes::{ArrowNativeType, ArrowNumericType};
 
 /// Generic test for NaN, the optimizer should be able to remove this for integer types.
 #[inline]
-fn is_nan<T: ArrowNativeType + PartialOrd + Copy>(a: T) -> bool {
+pub(crate) fn is_nan<T: ArrowNativeType + PartialOrd + Copy>(a: T) -> bool {
     #[allow(clippy::eq_op)]
     !(a == a)
 }

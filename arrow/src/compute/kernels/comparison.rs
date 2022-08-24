@@ -25,6 +25,8 @@
 
 use crate::array::*;
 use crate::buffer::{buffer_unary_not, Buffer, MutableBuffer};
+#[cfg(feature = "sql_compliant")]
+use crate::compute::is_nan;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{
     ArrowNativeType, ArrowNumericType, DataType, Date32Type, Date64Type, Float32Type,
@@ -1947,7 +1949,7 @@ macro_rules! typed_cmp_dict_non_dict {
 }
 
 macro_rules! typed_compares {
-    ($LEFT: expr, $RIGHT: expr, $OP_BOOL: expr, $OP: expr) => {{
+    ($LEFT: expr, $RIGHT: expr, $OP_BOOL: expr, $OP: expr, $OP_FLOAT: expr) => {{
         match ($LEFT.data_type(), $RIGHT.data_type()) {
             (DataType::Boolean, DataType::Boolean) => {
                 compare_op(as_boolean_array($LEFT), as_boolean_array($RIGHT), $OP_BOOL)
@@ -1977,10 +1979,10 @@ macro_rules! typed_compares {
                 cmp_primitive_array::<UInt64Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Float32, DataType::Float32) => {
-                cmp_primitive_array::<Float32Type, _>($LEFT, $RIGHT, $OP)
+                cmp_primitive_array::<Float32Type, _>($LEFT, $RIGHT, $OP_FLOAT)
             }
             (DataType::Float64, DataType::Float64) => {
-                cmp_primitive_array::<Float64Type, _>($LEFT, $RIGHT, $OP)
+                cmp_primitive_array::<Float64Type, _>($LEFT, $RIGHT, $OP_FLOAT)
             }
             (DataType::Utf8, DataType::Utf8) => {
                 compare_op(as_string_array($LEFT), as_string_array($RIGHT), $OP)
@@ -2063,7 +2065,7 @@ macro_rules! typed_compares {
 
 /// Applies $OP to $LEFT and $RIGHT which are two dictionaries which have (the same) key type $KT
 macro_rules! typed_dict_cmp {
-    ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_BOOL: expr, $KT: tt) => {{
+    ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_FLOAT: expr, $OP_BOOL: expr, $KT: tt) => {{
         match ($LEFT.value_type(), $RIGHT.value_type()) {
             (DataType::Boolean, DataType::Boolean) => {
                 cmp_dict_bool::<$KT, _>($LEFT, $RIGHT, $OP_BOOL)
@@ -2093,10 +2095,10 @@ macro_rules! typed_dict_cmp {
                 cmp_dict::<$KT, UInt64Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Float32, DataType::Float32) => {
-                cmp_dict::<$KT, Float32Type, _>($LEFT, $RIGHT, $OP)
+                cmp_dict::<$KT, Float32Type, _>($LEFT, $RIGHT, $OP_FLOAT)
             }
             (DataType::Float64, DataType::Float64) => {
-                cmp_dict::<$KT, Float64Type, _>($LEFT, $RIGHT, $OP)
+                cmp_dict::<$KT, Float64Type, _>($LEFT, $RIGHT, $OP_FLOAT)
             }
             (DataType::Utf8, DataType::Utf8) => {
                 cmp_dict_utf8::<$KT, i32, _>($LEFT, $RIGHT, $OP)
@@ -2196,49 +2198,49 @@ macro_rules! typed_dict_cmp {
 
 macro_rules! typed_dict_compares {
    // Applies `LEFT OP RIGHT` when `LEFT` and `RIGHT` both are `DictionaryArray`
-    ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_BOOL: expr) => {{
+    ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_FLOAT: expr, $OP_BOOL: expr) => {{
         match ($LEFT.data_type(), $RIGHT.data_type()) {
             (DataType::Dictionary(left_key_type, _), DataType::Dictionary(right_key_type, _))=> {
                 match (left_key_type.as_ref(), right_key_type.as_ref()) {
                     (DataType::Int8, DataType::Int8) => {
                         let left = as_dictionary_array::<Int8Type>($LEFT);
                         let right = as_dictionary_array::<Int8Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP, $OP_BOOL, Int8Type)
+                        typed_dict_cmp!(left, right, $OP, $OP_FLOAT, $OP_BOOL, Int8Type)
                     }
                     (DataType::Int16, DataType::Int16) => {
                         let left = as_dictionary_array::<Int16Type>($LEFT);
                         let right = as_dictionary_array::<Int16Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP, $OP_BOOL, Int16Type)
+                        typed_dict_cmp!(left, right, $OP, $OP_FLOAT, $OP_BOOL, Int16Type)
                     }
                     (DataType::Int32, DataType::Int32) => {
                         let left = as_dictionary_array::<Int32Type>($LEFT);
                         let right = as_dictionary_array::<Int32Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP, $OP_BOOL, Int32Type)
+                        typed_dict_cmp!(left, right, $OP, $OP_FLOAT, $OP_BOOL, Int32Type)
                     }
                     (DataType::Int64, DataType::Int64) => {
                         let left = as_dictionary_array::<Int64Type>($LEFT);
                         let right = as_dictionary_array::<Int64Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP, $OP_BOOL, Int64Type)
+                        typed_dict_cmp!(left, right, $OP, $OP_FLOAT, $OP_BOOL, Int64Type)
                     }
                     (DataType::UInt8, DataType::UInt8) => {
                         let left = as_dictionary_array::<UInt8Type>($LEFT);
                         let right = as_dictionary_array::<UInt8Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP, $OP_BOOL, UInt8Type)
+                        typed_dict_cmp!(left, right, $OP, $OP_FLOAT, $OP_BOOL, UInt8Type)
                     }
                     (DataType::UInt16, DataType::UInt16) => {
                         let left = as_dictionary_array::<UInt16Type>($LEFT);
                         let right = as_dictionary_array::<UInt16Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP, $OP_BOOL, UInt16Type)
+                        typed_dict_cmp!(left, right, $OP, $OP_FLOAT, $OP_BOOL, UInt16Type)
                     }
                     (DataType::UInt32, DataType::UInt32) => {
                         let left = as_dictionary_array::<UInt32Type>($LEFT);
                         let right = as_dictionary_array::<UInt32Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP, $OP_BOOL, UInt32Type)
+                        typed_dict_cmp!(left, right, $OP, $OP_FLOAT, $OP_BOOL, UInt32Type)
                     }
                     (DataType::UInt64, DataType::UInt64) => {
                         let left = as_dictionary_array::<UInt64Type>($LEFT);
                         let right = as_dictionary_array::<UInt64Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP, $OP_BOOL, UInt64Type)
+                        typed_dict_cmp!(left, right, $OP, $OP_FLOAT, $OP_BOOL, UInt64Type)
                     }
                     (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                         "Comparing dictionary arrays of type {} is not yet implemented",
@@ -2376,7 +2378,28 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(left, right, |a, b| a == b, |a, b| a == b)
+            #[cfg(not(feature = "sql_compliant"))]
+            return typed_dict_compares!(
+                left,
+                right,
+                |a, b| a == b,
+                |a, b| a == b,
+                |a, b| a == b
+            );
+            #[cfg(feature = "sql_compliant")]
+            return typed_dict_compares!(
+                left,
+                right,
+                |a, b| a == b,
+                |a, b| {
+                    if is_nan(a) && is_nan(b) {
+                        true
+                    } else {
+                        a == b
+                    }
+                },
+                |a, b| a == b
+            );
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -2386,7 +2409,30 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
             typed_cmp_dict_non_dict!(right, left, |a, b| a == b, |a, b| a == b)
         }
-        _ => typed_compares!(left, right, |a, b| !(a ^ b), |a, b| a == b),
+        _ => {
+            #[cfg(not(feature = "sql_compliant"))]
+            return typed_compares!(
+                left,
+                right,
+                |a, b| !(a ^ b),
+                |a, b| a == b,
+                |a, b| a == b
+            );
+            #[cfg(feature = "sql_compliant")]
+            return typed_compares!(
+                left,
+                right,
+                |a, b| !(a ^ b),
+                |a, b| a == b,
+                |a, b| {
+                    if is_nan(a) && is_nan(b) {
+                        true
+                    } else {
+                        a == b
+                    }
+                }
+            );
+        }
     }
 }
 
@@ -2411,7 +2457,28 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(left, right, |a, b| a != b, |a, b| a != b)
+            #[cfg(not(feature = "sql_compliant"))]
+            return typed_dict_compares!(
+                left,
+                right,
+                |a, b| a != b,
+                |a, b| a != b,
+                |a, b| a != b
+            );
+            #[cfg(feature = "sql_compliant")]
+            return typed_dict_compares!(
+                left,
+                right,
+                |a, b| a != b,
+                |a, b| {
+                    if is_nan(a) && is_nan(b) {
+                        false
+                    } else {
+                        a != b
+                    }
+                },
+                |a, b| a != b
+            );
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -2421,7 +2488,30 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
             typed_cmp_dict_non_dict!(right, left, |a, b| a != b, |a, b| a != b)
         }
-        _ => typed_compares!(left, right, |a, b| (a ^ b), |a, b| a != b),
+        _ => {
+            #[cfg(not(feature = "sql_compliant"))]
+            return typed_compares!(
+                left,
+                right,
+                |a, b| (a ^ b),
+                |a, b| a != b,
+                |a, b| a != b
+            );
+            #[cfg(feature = "sql_compliant")]
+            return typed_compares!(
+                left,
+                right,
+                |a, b| (a ^ b),
+                |a, b| a != b,
+                |a, b| {
+                    if is_nan(a) && is_nan(b) {
+                        false
+                    } else {
+                        a != b
+                    }
+                }
+            );
+        }
     }
 }
 
@@ -2446,7 +2536,30 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(left, right, |a, b| a < b, |a, b| a < b)
+            #[cfg(not(feature = "sql_compliant"))]
+            return typed_dict_compares!(
+                left,
+                right,
+                |a, b| a < b,
+                |a, b| a < b,
+                |a, b| a < b
+            );
+            #[cfg(feature = "sql_compliant")]
+            return typed_dict_compares!(
+                left,
+                right,
+                |a, b| a < b,
+                |a, b| {
+                    if is_nan(a) {
+                        false
+                    } else if is_nan(b) {
+                        true
+                    } else {
+                        a < b
+                    }
+                },
+                |a, b| a < b
+            );
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -2456,7 +2569,32 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
             typed_cmp_dict_non_dict!(right, left, |a, b| a > b, |a, b| a > b)
         }
-        _ => typed_compares!(left, right, |a, b| ((!a) & b), |a, b| a < b),
+        _ => {
+            #[cfg(not(feature = "sql_compliant"))]
+            return typed_compares!(
+                left,
+                right,
+                |a, b| ((!a) & b),
+                |a, b| a < b,
+                |a, b| a < b
+            );
+            #[cfg(feature = "sql_compliant")]
+            return typed_compares!(
+                left,
+                right,
+                |a, b| ((!a) & b),
+                |a, b| a < b,
+                |a, b| {
+                    if is_nan(a) {
+                        false
+                    } else if is_nan(b) {
+                        true
+                    } else {
+                        a < b
+                    }
+                }
+            );
+        }
     }
 }
 
@@ -2480,7 +2618,28 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(left, right, |a, b| a <= b, |a, b| a <= b)
+            #[cfg(not(feature = "sql_compliant"))]
+            return typed_dict_compares!(
+                left,
+                right,
+                |a, b| a <= b,
+                |a, b| a <= b,
+                |a, b| a <= b
+            );
+            #[cfg(feature = "sql_compliant")]
+            return typed_dict_compares!(
+                left,
+                right,
+                |a, b| a <= b,
+                |a, b| {
+                    if is_nan(a) {
+                        is_nan(b)
+                    } else {
+                        a <= b
+                    }
+                },
+                |a, b| a <= b
+            );
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -2490,7 +2649,30 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
             typed_cmp_dict_non_dict!(right, left, |a, b| a >= b, |a, b| a >= b)
         }
-        _ => typed_compares!(left, right, |a, b| !(a & (!b)), |a, b| a <= b),
+        _ => {
+            #[cfg(not(feature = "sql_compliant"))]
+            return typed_compares!(
+                left,
+                right,
+                |a, b| !(a & (!b)),
+                |a, b| a <= b,
+                |a, b| a <= b
+            );
+            #[cfg(feature = "sql_compliant")]
+            return typed_compares!(
+                left,
+                right,
+                |a, b| !(a & (!b)),
+                |a, b| a <= b,
+                |a, b| {
+                    if is_nan(a) {
+                        is_nan(b)
+                    } else {
+                        a <= b
+                    }
+                }
+            );
+        }
     }
 }
 
@@ -2514,7 +2696,30 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(left, right, |a, b| a > b, |a, b| a > b)
+            #[cfg(not(feature = "sql_compliant"))]
+            return typed_dict_compares!(
+                left,
+                right,
+                |a, b| a > b,
+                |a, b| a > b,
+                |a, b| a > b
+            );
+            #[cfg(feature = "sql_compliant")]
+            return typed_dict_compares!(
+                left,
+                right,
+                |a, b| a > b,
+                |a, b| {
+                    if is_nan(a) {
+                        !is_nan(b)
+                    } else if is_nan(b) {
+                        false
+                    } else {
+                        a > b
+                    }
+                },
+                |a, b| a > b
+            );
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -2524,7 +2729,32 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
             typed_cmp_dict_non_dict!(right, left, |a, b| a < b, |a, b| a < b)
         }
-        _ => typed_compares!(left, right, |a, b| (a & (!b)), |a, b| a > b),
+        _ => {
+            #[cfg(not(feature = "sql_compliant"))]
+            return typed_compares!(
+                left,
+                right,
+                |a, b| (a & (!b)),
+                |a, b| a > b,
+                |a, b| a > b
+            );
+            #[cfg(feature = "sql_compliant")]
+            return typed_compares!(
+                left,
+                right,
+                |a, b| (a & (!b)),
+                |a, b| a > b,
+                |a, b| {
+                    if is_nan(a) {
+                        !is_nan(b)
+                    } else if is_nan(b) {
+                        false
+                    } else {
+                        a > b
+                    }
+                }
+            );
+        }
     }
 }
 
@@ -2547,7 +2777,28 @@ pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(left, right, |a, b| a >= b, |a, b| a >= b)
+            #[cfg(not(feature = "sql_compliant"))]
+            return typed_dict_compares!(
+                left,
+                right,
+                |a, b| a >= b,
+                |a, b| a >= b,
+                |a, b| a >= b
+            );
+            #[cfg(feature = "sql_compliant")]
+            return typed_dict_compares!(
+                left,
+                right,
+                |a, b| a >= b,
+                |a, b| {
+                    if is_nan(a) {
+                        true
+                    } else {
+                        a >= b
+                    }
+                },
+                |a, b| a >= b
+            );
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -2557,7 +2808,30 @@ pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
             typed_cmp_dict_non_dict!(right, left, |a, b| a <= b, |a, b| a <= b)
         }
-        _ => typed_compares!(left, right, |a, b| !((!a) & b), |a, b| a >= b),
+        _ => {
+            #[cfg(not(feature = "sql_compliant"))]
+            return typed_compares!(
+                left,
+                right,
+                |a, b| !((!a) & b),
+                |a, b| a >= b,
+                |a, b| a >= b
+            );
+            #[cfg(feature = "sql_compliant")]
+            return typed_compares!(
+                left,
+                right,
+                |a, b| !((!a) & b),
+                |a, b| a >= b,
+                |a, b| {
+                    if is_nan(a) {
+                        true
+                    } else {
+                        a >= b
+                    }
+                }
+            );
+        }
     }
 }
 
@@ -5277,15 +5551,35 @@ mod tests {
             .into_iter()
             .map(Some)
             .collect();
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
-        );
-        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        #[cfg(not(feature = "sql_compliant"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
+            );
+            assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "sql_compliant")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
+            );
+            assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        }
 
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
-        );
-        assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+        #[cfg(not(feature = "sql_compliant"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
+            );
+            assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "sql_compliant")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
+            );
+            assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+        }
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]
             .into_iter()
@@ -5295,15 +5589,36 @@ mod tests {
             .into_iter()
             .map(Some)
             .collect();
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
-        );
-        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
 
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
-        );
-        assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+        #[cfg(not(feature = "sql_compliant"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
+            );
+            assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "sql_compliant")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
+            );
+            assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+
+        #[cfg(not(feature = "sql_compliant"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
+            );
+            assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "sql_compliant")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
+            );
+            assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+        }
     }
 
     #[test]
@@ -5316,15 +5631,35 @@ mod tests {
             .into_iter()
             .map(Some)
             .collect();
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), Some(true), Some(false), Some(false)],
-        );
-        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        #[cfg(not(feature = "sql_compliant"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(true), Some(false), Some(false)],
+            );
+            assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "sql_compliant")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+            );
+            assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        }
 
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(true), Some(true), Some(false), Some(false)],
-        );
-        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        #[cfg(not(feature = "sql_compliant"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(true), Some(false), Some(false)],
+            );
+            assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "sql_compliant")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(true), Some(false), Some(false)],
+            );
+            assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        }
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
             .into_iter()
@@ -5334,15 +5669,36 @@ mod tests {
             .into_iter()
             .map(Some)
             .collect();
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), Some(true), Some(false), Some(false)],
-        );
-        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(true), Some(true), Some(false), Some(false)],
-        );
-        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        #[cfg(not(feature = "sql_compliant"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(true), Some(false), Some(false)],
+            );
+            assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "sql_compliant")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+            );
+            assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        }
+
+        #[cfg(not(feature = "sql_compliant"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(true), Some(false), Some(false)],
+            );
+            assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "sql_compliant")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(true), Some(false), Some(false)],
+            );
+            assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        }
     }
 
     #[test]
@@ -5355,15 +5711,35 @@ mod tests {
             .into_iter()
             .map(Some)
             .collect();
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(false)],
-        );
-        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        #[cfg(not(feature = "sql_compliant"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(false)],
+            );
+            assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "sql_compliant")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+            );
+            assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        }
 
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(true), Some(false), Some(true), Some(false)],
-        );
-        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        #[cfg(not(feature = "sql_compliant"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(false), Some(true), Some(false)],
+            );
+            assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "sql_compliant")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+            );
+            assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        }
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
             .into_iter()
@@ -5373,15 +5749,35 @@ mod tests {
             .into_iter()
             .map(Some)
             .collect();
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(false)],
-        );
-        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        #[cfg(not(feature = "sql_compliant"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(false)],
+            );
+            assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "sql_compliant")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+            );
+            assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        }
 
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(true), Some(false), Some(true), Some(false)],
-        );
-        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        #[cfg(not(feature = "sql_compliant"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(false), Some(true), Some(false)],
+            );
+            assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "sql_compliant")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+            );
+            assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        }
     }
 
     #[test]
