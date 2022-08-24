@@ -84,7 +84,6 @@ where
 }
 
 /// A helper function that applies an unary function to a dictionary array with primitive value type.
-#[allow(clippy::redundant_closure)]
 fn unary_dict<K, F, T>(array: &DictionaryArray<K>, op: F) -> Result<ArrayRef>
 where
     K: ArrowNumericType,
@@ -99,7 +98,7 @@ where
 
     let values = dict_values
         .iter()
-        .map(|v| v.map(|value| op(value)))
+        .map(|v| v.map(&op))
         .collect::<PrimitiveArray<T>>();
 
     let keys = array.keys();

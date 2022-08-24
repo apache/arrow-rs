@@ -307,9 +307,8 @@ fn cast_primitive_to_decimal<T: ArrayAccessor, F>(
 where
     F: Fn(T::Item) -> i128,
 {
-    #[allow(clippy::redundant_closure)]
     let decimal_array = ArrayIter::new(array)
-        .map(|v| v.map(|v| op(v)))
+        .map(|v| v.map(&op))
         .collect::<Decimal128Array>()
         .with_precision_and_scale(precision, scale)?;
 

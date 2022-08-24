@@ -98,7 +98,7 @@ where
 
     let len = left.len();
 
-    let comparison = ValuesIter::new(left).map(|x| x.map(|v| op(v)).unwrap_or(false));
+    let comparison = ValuesIter::new(left).map(|x| x.map(&op).unwrap_or(false));
     // ValuesIter is a trusted length iterator
     let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
 
