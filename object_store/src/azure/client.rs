@@ -307,7 +307,15 @@ impl AzureClient {
     ) -> Result<()> {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(to);
-        let source = self.config.path_url(from);
+        let mut source = self.config.path_url(from);
+
+        if let AzureCredential::SASToken(pairs) = self.get_credential().await? {
+            let query = pairs
+                .iter()
+                .map(|pair| format!("{}={}", pair.0, pair.1))
+                .join("&");
+            source = format!("{}?{}", source, query);
+        }
 
         let mut builder = self
             .client
