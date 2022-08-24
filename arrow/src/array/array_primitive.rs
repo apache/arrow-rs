@@ -106,11 +106,16 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     }
 
     /// Returns the primitive value at index `i`.
-    ///
-    /// Panics of offset `i` is out of bounds
+    /// # Panics
+    /// Panics if index `i` is out of bounds
     #[inline]
     pub fn value(&self, i: usize) -> T::Native {
-        assert!(i < self.len());
+        assert!(
+            i < self.len(),
+            "Trying to access an element at index {} from a PrimitiveArray of length {}",
+            i,
+            self.len()
+        );
         unsafe { self.value_unchecked(i) }
     }
 
@@ -1127,5 +1132,15 @@ mod tests {
         let b = hour(&a).unwrap();
         assert_eq!(2, b.value(0));
         assert_eq!(15, b.value(1));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Trying to access an element at index 4 from a PrimitiveArray of length 3"
+    )]
+    fn test_string_array_get_value_index_out_of_bound() {
+        let array: Int8Array = [10_i8, 11, 12].into_iter().collect();
+
+        array.value(4);
     }
 }
