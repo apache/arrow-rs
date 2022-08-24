@@ -309,7 +309,7 @@ impl AzureClient {
         let url = self.config.path_url(to);
         let mut source = self.config.path_url(from);
 
-        if let AzureCredential::SASToken(pairs) = self.get_credential().await? {
+        if let AzureCredential::SASToken(pairs) = &credential {
             let query = pairs
                 .iter()
                 .map(|pair| format!("{}={}", pair.0, pair.1))
