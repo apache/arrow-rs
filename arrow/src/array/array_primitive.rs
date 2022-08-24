@@ -191,10 +191,7 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
 
 impl<'a, T: ArrowPrimitiveType> ArrayAccessor for &'a PrimitiveArray<T> {
     type Item = T::Native;
-
-    fn value(&self, index: usize) -> Self::Item {
-        PrimitiveArray::value(self, index)
-    }
+    const NULLS_DEFINED: bool = true;
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         PrimitiveArray::value_unchecked(self, index)

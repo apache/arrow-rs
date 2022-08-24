@@ -271,10 +271,7 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
 
 impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor for &'a GenericListArray<OffsetSize> {
     type Item = ArrayRef;
-
-    fn value(&self, index: usize) -> Self::Item {
-        GenericListArray::value(self, index)
-    }
+    const NULLS_DEFINED: bool = true;
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         GenericListArray::value(self, index)

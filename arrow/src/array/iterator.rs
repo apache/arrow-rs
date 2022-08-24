@@ -18,6 +18,7 @@
 use crate::array::array::ArrayAccessor;
 use crate::array::{DecimalArray, FixedSizeBinaryArray};
 use crate::datatypes::{Decimal128Type, Decimal256Type};
+use std::ops::Range;
 
 use super::{
     BooleanArray, GenericBinaryArray, GenericListArray, GenericStringArray,
@@ -59,18 +60,16 @@ impl<T: ArrayAccessor> Iterator for ArrayIter<T> {
             let old = self.current;
             self.current += 1;
             // Safety:
-            // we just checked bounds in `self.current_end == self.current`
-            // this is safe on the premise that this struct is initialized with
-            // current = array.len()
-            // and that current_end is ever only decremented
+            // This is safe as `current` cannot exceed the bounds of the array
+            // and we have verified that the value is not null
             unsafe { Some(Some(self.array.value_unchecked(old))) }
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         (
-            self.array.len() - self.current,
-            Some(self.array.len() - self.current),
+            self.current_end - self.current,
+            Some(self.current_end - self.current),
         )
     }
 }
@@ -85,10 +84,8 @@ impl<T: ArrayAccessor> DoubleEndedIterator for ArrayIter<T> {
                 None
             } else {
                 // Safety:
-                // we just checked bounds in `self.current_end == self.current`
-                // this is safe on the premise that this struct is initialized with
-                // current = array.len()
-                // and that current_end is ever only decremented
+                // This is safe as `current` cannot exceed the bounds of the array
+                // and we have verified that the value is not null
                 unsafe { Some(self.array.value_unchecked(self.current_end)) }
             })
         }
@@ -114,6 +111,50 @@ pub type Decimal128Iter<'a> = DecimalIter<'a, Decimal128Type>;
 /// an iterator that returns `Some(Decimal256)` or `None`, that can be used on a
 /// [`super::Decimal256Array`]
 pub type Decimal256Iter<'a> = DecimalIter<'a, Decimal256Type>;
+
+/// An iterator over the defined values within an array
+///
+/// Note: Unlike [`ArrayIter`] this may return values for null indexes, provided
+/// doing so is well defined
+pub(crate) struct ValuesIter<T: ArrayAccessor> {
+    inner: ValuesIterInner<T>,
+}
+
+impl<T: ArrayAccessor> ValuesIter<T> {
+    pub(crate) fn new(array: T) -> Self {
+        let inner = match T::NULLS_DEFINED || array.null_count() == 0 {
+            true => ValuesIterInner::Indices(0..array.len(), array),
+            false => ValuesIterInner::Array(ArrayIter::new(array)),
+        };
+
+        Self { inner }
+    }
+}
+
+impl<T: ArrayAccessor> Iterator for ValuesIter<T> {
+    type Item = Option<T::Item>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.inner {
+            ValuesIterInner::Indices(idx, array) => {
+                Some(Some(unsafe { array.value_unchecked(idx.next()?) }))
+            }
+            ValuesIterInner::Array(a) => a.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match &self.inner {
+            ValuesIterInner::Indices(idx, _) => idx.size_hint(),
+            ValuesIterInner::Array(a) => a.size_hint(),
+        }
+    }
+}
+
+enum ValuesIterInner<T: ArrayAccessor> {
+    Indices(Range<usize>, T),
+    Array(ArrayIter<T>),
+}
 
 #[cfg(test)]
 mod tests {

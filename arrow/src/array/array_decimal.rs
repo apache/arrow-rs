@@ -514,9 +514,7 @@ impl<T: DecimalType> fmt::Debug for DecimalArray<T> {
 impl<'a, T: DecimalType> ArrayAccessor for &'a DecimalArray<T> {
     type Item = Decimal<T>;
 
-    fn value(&self, index: usize) -> Self::Item {
-        DecimalArray::<T>::value(self, index)
-    }
+    const NULLS_DEFINED: bool = true;
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         DecimalArray::<T>::value_unchecked(self, index)

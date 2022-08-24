@@ -493,13 +493,7 @@ where
     &'a V: ArrayAccessor,
 {
     type Item = <&'a V as ArrayAccessor>::Item;
-
-    fn value(&self, index: usize) -> Self::Item {
-        assert!(self.dictionary.is_valid(index), "{}", index);
-        let value_idx = self.dictionary.keys.value(index).to_usize().unwrap();
-        // Dictionary indexes should be valid
-        unsafe { self.values.value_unchecked(value_idx) }
-    }
+    const NULLS_DEFINED: bool = false;
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         let val = self.dictionary.keys.value_unchecked(index);

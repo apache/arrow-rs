@@ -164,10 +164,7 @@ impl Array for FixedSizeListArray {
 
 impl ArrayAccessor for FixedSizeListArray {
     type Item = ArrayRef;
-
-    fn value(&self, index: usize) -> Self::Item {
-        FixedSizeListArray::value(self, index)
-    }
+    const NULLS_DEFINED: bool = true;
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         FixedSizeListArray::value(self, index)

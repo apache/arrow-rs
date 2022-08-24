@@ -370,10 +370,7 @@ impl Array for FixedSizeBinaryArray {
 
 impl<'a> ArrayAccessor for &'a FixedSizeBinaryArray {
     type Item = &'a [u8];
-
-    fn value(&self, index: usize) -> Self::Item {
-        FixedSizeBinaryArray::value(self, index)
-    }
+    const NULLS_DEFINED: bool = true;
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         FixedSizeBinaryArray::value_unchecked(self, index)

@@ -322,10 +322,7 @@ impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor
     for &'a GenericStringArray<OffsetSize>
 {
     type Item = &'a str;
-
-    fn value(&self, index: usize) -> Self::Item {
-        GenericStringArray::value(self, index)
-    }
+    const NULLS_DEFINED: bool = true;
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         GenericStringArray::value_unchecked(self, index)

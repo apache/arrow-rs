@@ -160,10 +160,7 @@ impl Array for BooleanArray {
 
 impl<'a> ArrayAccessor for &'a BooleanArray {
     type Item = bool;
-
-    fn value(&self, index: usize) -> Self::Item {
-        BooleanArray::value(self, index)
-    }
+    const NULLS_DEFINED: bool = true;
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         BooleanArray::value_unchecked(self, index)

@@ -56,20 +56,25 @@ where
         ));
     }
 
+    let len = left.len();
+
     let null_bit_buffer =
         combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
 
-    // Safety:
-    // `i < $left.len()` and $left.len() == $right.len()
-    let comparison = (0..left.len())
-        .map(|i| unsafe { op(left.value_unchecked(i), right.value_unchecked(i)) });
-    // same size as $left.len() and $right.len()
+    let comparison =
+        ValuesIter::new(left)
+            .zip(ValuesIter::new(right))
+            .map(|(a, b)| match (a, b) {
+                (Some(a), Some(b)) => op(a, b),
+                _ => false,
+            });
+    // SAFETY: ValuesIter is a trusted length iterator
     let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
 
     let data = unsafe {
         ArrayData::new_unchecked(
             DataType::Boolean,
-            left.len(),
+            len,
             None,
             null_bit_buffer,
             0,
@@ -91,16 +96,16 @@ where
         .null_buffer()
         .map(|b| b.bit_slice(left.offset(), left.len()));
 
-    // Safety:
-    // `i < $left.len()`
-    let comparison = (0..left.len()).map(|i| unsafe { op(left.value_unchecked(i)) });
-    // same as $left.len()
+    let len = left.len();
+
+    let comparison = ValuesIter::new(left).map(|x| x.map(|v| op(v)).unwrap_or(false));
+    // ValuesIter is a trusted length iterator
     let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
 
     let data = unsafe {
         ArrayData::new_unchecked(
             DataType::Boolean,
-            left.len(),
+            len,
             None,
             null_bit_buffer,
             0,

@@ -339,14 +339,44 @@ impl<'a, T: Array> Array for &'a T {
 pub trait ArrayAccessor: Array {
     type Item: Send + Sync;
 
-    /// Returns the element at index `i`
-    /// # Panics
-    /// Panics if the value is outside the bounds of the array
-    fn value(&self, index: usize) -> Self::Item;
+    /// `true` if null indices, i.e. where [`Array::is_null`], have a defined value. The exact
+    /// value may be unspecified, but it must not be undefined.
+    ///
+    /// This allows for optimised kernels that can process the null mask separately
+    /// from processing the value data.
+    ///
+    /// For example, the value of a [`PrimitiveArray`] is always well defined as it always
+    /// corresponds to an initialized slot in the underlying buffer, and all bit patterns
+    /// correspond to a valid primitive value.
+    ///
+    /// An example where nulls are not well defined is a [`DictionaryArray`]. This is because
+    /// the key at a null index is unspecified, and consequently may exceed the bounds of the
+    /// values array.
+    ///
+    const NULLS_DEFINED: bool;
 
     /// Returns the element at index `i`
+    ///
+    /// # Panics
+    ///
+    /// Panics if the value is outside the bounds of the array or is not well
+    /// defined, see [`Self::NULLS_DEFINED`]
+    fn value(&self, index: usize) -> Self::Item {
+        assert!(index < self.len(), "Out of bounds access");
+        assert!(
+            Self::NULLS_DEFINED || self.is_valid(index),
+            "Value at index {} is not defined",
+            index
+        );
+        unsafe { self.value_unchecked(index) }
+    }
+
+    /// Returns the element at index `i`
+    ///
     /// # Safety
-    /// Caller is responsible for ensuring that the index is within the bounds of the array
+    ///
+    /// Caller is responsible for ensuring that the index is within the bounds of the array,
+    /// and that the value at the index is well defined, see [`Self::NULLS_DEFINED`]
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item;
 }
 

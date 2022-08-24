@@ -262,10 +262,7 @@ impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor
     for &'a GenericBinaryArray<OffsetSize>
 {
     type Item = &'a [u8];
-
-    fn value(&self, index: usize) -> Self::Item {
-        GenericBinaryArray::value(self, index)
-    }
+    const NULLS_DEFINED: bool = true;
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         GenericBinaryArray::value_unchecked(self, index)
