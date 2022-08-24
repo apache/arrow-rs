@@ -1047,5 +1047,15 @@ mod tests {
 
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
         assert_eq!(15, sum_dyn::<Int32Type, _>(&a).unwrap());
+
+        let keys = Int8Array::from(vec![Some(2_i8), None, Some(4)]);
+        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert_eq!(26, sum_dyn::<Int8Type, _>(array).unwrap());
+
+        let keys = Int8Array::from(vec![None, None, None]);
+        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert!(sum_dyn::<Int8Type, _>(array).is_none());
     }
 }
