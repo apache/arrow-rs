@@ -188,7 +188,7 @@ impl ObjectStore for MicrosoftAzure {
             .await?
             .bytes()
             .await
-            .map_err(|source| client::Error::GetRequest {
+            .map_err(|source| client::Error::GetResponseBody {
                 source,
                 path: location.to_string(),
             })?;

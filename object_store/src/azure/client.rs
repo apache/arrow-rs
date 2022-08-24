@@ -41,30 +41,39 @@ use url::Url;
 pub(crate) enum Error {
     #[snafu(display("Error performing get request {}: {}", path, source))]
     GetRequest {
+        source: crate::client::retry::Error,
+        path: String,
+    },
+
+    #[snafu(display("Error getting get response body {}: {}", path, source))]
+    GetResponseBody {
         source: reqwest::Error,
         path: String,
     },
 
     #[snafu(display("Error performing put request {}: {}", path, source))]
     PutRequest {
-        source: reqwest::Error,
+        source: crate::client::retry::Error,
         path: String,
     },
 
     #[snafu(display("Error performing delete request {}: {}", path, source))]
     DeleteRequest {
-        source: reqwest::Error,
+        source: crate::client::retry::Error,
         path: String,
     },
 
     #[snafu(display("Error performing copy request {}: {}", path, source))]
     CopyRequest {
-        source: reqwest::Error,
+        source: crate::client::retry::Error,
         path: String,
     },
 
     #[snafu(display("Error performing list request: {}", source))]
-    ListRequest { source: reqwest::Error },
+    ListRequest { source: crate::client::retry::Error },
+
+    #[snafu(display("Error getting list response body: {}", source))]
+    ListResponseBody { source: reqwest::Error },
 
     #[snafu(display("Error performing create multipart request: {}", source))]
     CreateMultipartRequest { source: reqwest::Error },
@@ -220,10 +229,6 @@ impl AzureClient {
             .await
             .context(PutRequestSnafu {
                 path: path.as_ref(),
-            })?
-            .error_for_status()
-            .context(PutRequestSnafu {
-                path: path.as_ref(),
             })?;
 
         Ok(response)
@@ -261,10 +266,6 @@ impl AzureClient {
             .await
             .context(GetRequestSnafu {
                 path: path.as_ref(),
-            })?
-            .error_for_status()
-            .context(GetRequestSnafu {
-                path: path.as_ref(),
             })?;
 
         Ok(response)
@@ -286,10 +287,6 @@ impl AzureClient {
             .with_azure_authorization(&credential, &self.config.account)
             .send_retry(&self.config.retry_config)
             .await
-            .context(DeleteRequestSnafu {
-                path: path.as_ref(),
-            })?
-            .error_for_status()
             .context(DeleteRequestSnafu {
                 path: path.as_ref(),
             })?;
@@ -328,10 +325,6 @@ impl AzureClient {
             .with_azure_authorization(&credential, &self.config.account)
             .send_retry(&self.config.retry_config)
             .await
-            .context(CopyRequestSnafu {
-                path: from.as_ref(),
-            })?
-            .error_for_status()
             .context(CopyRequestSnafu {
                 path: from.as_ref(),
             })?;
@@ -373,11 +366,9 @@ impl AzureClient {
             .send_retry(&self.config.retry_config)
             .await
             .context(ListRequestSnafu)?
-            .error_for_status()
-            .context(ListRequestSnafu)?
             .bytes()
             .await
-            .context(ListRequestSnafu)?;
+            .context(ListResponseBodySnafu)?;
 
         let mut response: ListResultInternal =
             quick_xml::de::from_reader(response.reader())

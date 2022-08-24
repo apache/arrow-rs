@@ -74,8 +74,8 @@ enum Error {
     #[snafu(display("Error performing list request: {}", source))]
     ListRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting list request body: {}", source))]
-    ListRequestBody { source: reqwest::Error },
+    #[snafu(display("Error getting list response body: {}", source))]
+    ListResponseBody { source: reqwest::Error },
 
     #[snafu(display("Error performing get request {}: {}", path, source))]
     GetRequest {
@@ -83,8 +83,8 @@ enum Error {
         path: String,
     },
 
-    #[snafu(display("Error getting get request body {}: {}", path, source))]
-    GetRequestBody {
+    #[snafu(display("Error getting get response body {}: {}", path, source))]
+    GetResponseBody {
         source: reqwest::Error,
         path: String,
     },
@@ -104,8 +104,8 @@ enum Error {
     #[snafu(display("Error performing put request: {}", source))]
     PutRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting put request body: {}", source))]
-    PutRequestBody { source: reqwest::Error },
+    #[snafu(display("Error getting put response body: {}", source))]
+    PutResponseBody { source: reqwest::Error },
 
     #[snafu(display("Error decoding object size: {}", source))]
     InvalidSize { source: std::num::ParseIntError },
@@ -326,7 +326,7 @@ impl GoogleCloudStorageClient {
             .await
             .context(PutRequestSnafu)?;
 
-        let data = response.bytes().await.context(PutRequestBodySnafu)?;
+        let data = response.bytes().await.context(PutResponseBodySnafu)?;
         let result: InitiateMultipartUploadResult = quick_xml::de::from_reader(
             data.as_ref().reader(),
         )
@@ -458,7 +458,7 @@ impl GoogleCloudStorageClient {
             .context(ListRequestSnafu)?
             .json()
             .await
-            .context(ListRequestBodySnafu)?;
+            .context(ListResponseBodySnafu)?;
 
         Ok(response)
     }
@@ -637,14 +637,14 @@ impl ObjectStore for GoogleCloudStorage {
             .client
             .get_request(location, Some(range), false)
             .await?;
-        Ok(response.bytes().await.context(GetRequestBodySnafu {
+        Ok(response.bytes().await.context(GetResponseBodySnafu {
             path: location.as_ref(),
         })?)
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         let response = self.client.get_request(location, None, true).await?;
-        let object = response.json().await.context(GetRequestBodySnafu {
+        let object = response.json().await.context(GetResponseBodySnafu {
             path: location.as_ref(),
         })?;
         convert_object_meta(&object)

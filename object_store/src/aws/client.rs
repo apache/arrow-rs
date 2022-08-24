@@ -56,8 +56,8 @@ pub(crate) enum Error {
         path: String,
     },
 
-    #[snafu(display("Error fetching get request body {}: {}", path, source))]
-    GetRequestBody {
+    #[snafu(display("Error fetching get response body {}: {}", path, source))]
+    GetResponseBody {
         source: reqwest::Error,
         path: String,
     },
@@ -83,14 +83,14 @@ pub(crate) enum Error {
     #[snafu(display("Error performing list request: {}", source))]
     ListRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting list request body: {}", source))]
-    ListRequestBody { source: reqwest::Error },
+    #[snafu(display("Error getting list response body: {}", source))]
+    ListResponseBody { source: reqwest::Error },
 
     #[snafu(display("Error performing create multipart request: {}", source))]
     CreateMultipartRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting create multipart request body: {}", source))]
-    CreateMultipartRequestBody { source: reqwest::Error },
+    #[snafu(display("Error getting create multipart response body: {}", source))]
+    CreateMultipartResponseBody { source: reqwest::Error },
 
     #[snafu(display("Error performing complete multipart request: {}", source))]
     CompleteMultipartRequest { source: crate::client::retry::Error },
@@ -383,7 +383,7 @@ impl S3Client {
             .context(ListRequestSnafu)?
             .bytes()
             .await
-            .context(ListRequestBodySnafu)?;
+            .context(ListResponseBodySnafu)?;
 
         let mut response: ListResponse = quick_xml::de::from_reader(response.reader())
             .context(InvalidListResponseSnafu)?;
@@ -426,7 +426,7 @@ impl S3Client {
             .context(CreateMultipartRequestSnafu)?
             .bytes()
             .await
-            .context(CreateMultipartRequestBodySnafu)?;
+            .context(CreateMultipartResponseBodySnafu)?;
 
         let response: InitiateMultipart = quick_xml::de::from_reader(response.reader())
             .context(InvalidMultipartResponseSnafu)?;
