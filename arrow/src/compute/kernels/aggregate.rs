@@ -221,7 +221,7 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeType,
 {
-    min_max_dyn_helper::<T, A, _, _>(
+    min_max_array_helper::<T, A, _, _>(
         array,
         |a, b| (!is_nan(*a) & is_nan(*b)) || a < b,
         min,
@@ -234,14 +234,14 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeType,
 {
-    min_max_dyn_helper::<T, A, _, _>(
+    min_max_array_helper::<T, A, _, _>(
         array,
         |a, b| (is_nan(*a) & !is_nan(*b)) || a > b,
         max,
     )
 }
 
-fn min_max_dyn_helper<T, A: ArrayAccessor<Item = T::Native>, F, M>(
+fn min_max_array_helper<T, A: ArrayAccessor<Item = T::Native>, F, M>(
     array: A,
     cmp: F,
     m: M,
