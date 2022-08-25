@@ -63,3 +63,4 @@ dotenv = "0.15.0"
 tempfile = "3.1.0"
 futures-test = "0.3"
 rand = "0.8"
+hyper = { version = "0.14", features = ["server"] }
