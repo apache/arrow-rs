@@ -282,7 +282,7 @@ impl TryFrom<SchemaAsIpc<'_>> for IpcMessage {
     type Error = ArrowError;
 
     fn try_from(schema_ipc: SchemaAsIpc) -> ArrowResult<Self> {
-        Ok(schema_to_ipc_format(schema_ipc)?)
+        schema_to_ipc_format(schema_ipc)
     }
 }
 
