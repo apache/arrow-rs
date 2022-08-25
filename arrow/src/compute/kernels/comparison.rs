@@ -25,7 +25,7 @@
 
 use crate::array::*;
 use crate::buffer::{buffer_unary_not, Buffer, MutableBuffer};
-#[cfg(feature = "sql_compliant")]
+#[cfg(feature = "nan_ordering")]
 use crate::compute::is_nan;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{
@@ -2364,6 +2364,9 @@ where
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 ///
+/// When `nan_ordering` feature is enabled, this kernel will treats NaN values as equal, and
+/// greater than all non-NaN values.
+///
 /// # Example
 /// ```
 /// use arrow::array::{StringArray, BooleanArray};
@@ -2378,7 +2381,7 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            #[cfg(not(feature = "sql_compliant"))]
+            #[cfg(not(feature = "nan_ordering"))]
             return typed_dict_compares!(
                 left,
                 right,
@@ -2386,7 +2389,7 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
                 |a, b| a == b,
                 |a, b| a == b
             );
-            #[cfg(feature = "sql_compliant")]
+            #[cfg(feature = "nan_ordering")]
             return typed_dict_compares!(
                 left,
                 right,
@@ -2410,7 +2413,7 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
             typed_cmp_dict_non_dict!(right, left, |a, b| a == b, |a, b| a == b)
         }
         _ => {
-            #[cfg(not(feature = "sql_compliant"))]
+            #[cfg(not(feature = "nan_ordering"))]
             return typed_compares!(
                 left,
                 right,
@@ -2418,7 +2421,7 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
                 |a, b| a == b,
                 |a, b| a == b
             );
-            #[cfg(feature = "sql_compliant")]
+            #[cfg(feature = "nan_ordering")]
             return typed_compares!(
                 left,
                 right,
@@ -2441,6 +2444,9 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 ///
+/// When `nan_ordering` feature is enabled, this kernel will treats NaN values as equal, and
+/// greater than all non-NaN values.
+///
 /// # Example
 /// ```
 /// use arrow::array::{BinaryArray, BooleanArray};
@@ -2457,7 +2463,7 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            #[cfg(not(feature = "sql_compliant"))]
+            #[cfg(not(feature = "nan_ordering"))]
             return typed_dict_compares!(
                 left,
                 right,
@@ -2465,7 +2471,7 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
                 |a, b| a != b,
                 |a, b| a != b
             );
-            #[cfg(feature = "sql_compliant")]
+            #[cfg(feature = "nan_ordering")]
             return typed_dict_compares!(
                 left,
                 right,
@@ -2489,7 +2495,7 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
             typed_cmp_dict_non_dict!(right, left, |a, b| a != b, |a, b| a != b)
         }
         _ => {
-            #[cfg(not(feature = "sql_compliant"))]
+            #[cfg(not(feature = "nan_ordering"))]
             return typed_compares!(
                 left,
                 right,
@@ -2497,7 +2503,7 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
                 |a, b| a != b,
                 |a, b| a != b
             );
-            #[cfg(feature = "sql_compliant")]
+            #[cfg(feature = "nan_ordering")]
             return typed_compares!(
                 left,
                 right,
@@ -2520,6 +2526,9 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 ///
+/// When `nan_ordering` feature is enabled, this kernel will treats NaN values as equal, and
+/// greater than all non-NaN values.
+///
 /// # Example
 /// ```
 /// use arrow::array::{PrimitiveArray, BooleanArray};
@@ -2536,7 +2545,7 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            #[cfg(not(feature = "sql_compliant"))]
+            #[cfg(not(feature = "nan_ordering"))]
             return typed_dict_compares!(
                 left,
                 right,
@@ -2544,7 +2553,7 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
                 |a, b| a < b,
                 |a, b| a < b
             );
-            #[cfg(feature = "sql_compliant")]
+            #[cfg(feature = "nan_ordering")]
             return typed_dict_compares!(
                 left,
                 right,
@@ -2570,7 +2579,7 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
             typed_cmp_dict_non_dict!(right, left, |a, b| a > b, |a, b| a > b)
         }
         _ => {
-            #[cfg(not(feature = "sql_compliant"))]
+            #[cfg(not(feature = "nan_ordering"))]
             return typed_compares!(
                 left,
                 right,
@@ -2578,7 +2587,7 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
                 |a, b| a < b,
                 |a, b| a < b
             );
-            #[cfg(feature = "sql_compliant")]
+            #[cfg(feature = "nan_ordering")]
             return typed_compares!(
                 left,
                 right,
@@ -2603,6 +2612,9 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 ///
+/// When `nan_ordering` feature is enabled, this kernel will treats NaN values as equal, and
+/// greater than all non-NaN values.
+///
 /// # Example
 /// ```
 /// use arrow::array::{PrimitiveArray, BooleanArray};
@@ -2618,7 +2630,7 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            #[cfg(not(feature = "sql_compliant"))]
+            #[cfg(not(feature = "nan_ordering"))]
             return typed_dict_compares!(
                 left,
                 right,
@@ -2626,7 +2638,7 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
                 |a, b| a <= b,
                 |a, b| a <= b
             );
-            #[cfg(feature = "sql_compliant")]
+            #[cfg(feature = "nan_ordering")]
             return typed_dict_compares!(
                 left,
                 right,
@@ -2650,7 +2662,7 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
             typed_cmp_dict_non_dict!(right, left, |a, b| a >= b, |a, b| a >= b)
         }
         _ => {
-            #[cfg(not(feature = "sql_compliant"))]
+            #[cfg(not(feature = "nan_ordering"))]
             return typed_compares!(
                 left,
                 right,
@@ -2658,7 +2670,7 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
                 |a, b| a <= b,
                 |a, b| a <= b
             );
-            #[cfg(feature = "sql_compliant")]
+            #[cfg(feature = "nan_ordering")]
             return typed_compares!(
                 left,
                 right,
@@ -2681,6 +2693,9 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 ///
+/// When `nan_ordering` feature is enabled, this kernel will treats NaN values as equal, and
+/// greater than all non-NaN values.
+///
 /// # Example
 /// ```
 /// use arrow::array::BooleanArray;
@@ -2696,7 +2711,7 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            #[cfg(not(feature = "sql_compliant"))]
+            #[cfg(not(feature = "nan_ordering"))]
             return typed_dict_compares!(
                 left,
                 right,
@@ -2704,7 +2719,7 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
                 |a, b| a > b,
                 |a, b| a > b
             );
-            #[cfg(feature = "sql_compliant")]
+            #[cfg(feature = "nan_ordering")]
             return typed_dict_compares!(
                 left,
                 right,
@@ -2730,7 +2745,7 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
             typed_cmp_dict_non_dict!(right, left, |a, b| a < b, |a, b| a < b)
         }
         _ => {
-            #[cfg(not(feature = "sql_compliant"))]
+            #[cfg(not(feature = "nan_ordering"))]
             return typed_compares!(
                 left,
                 right,
@@ -2738,7 +2753,7 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
                 |a, b| a > b,
                 |a, b| a > b
             );
-            #[cfg(feature = "sql_compliant")]
+            #[cfg(feature = "nan_ordering")]
             return typed_compares!(
                 left,
                 right,
@@ -2763,6 +2778,9 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 ///
+/// When `nan_ordering` feature is enabled, this kernel will treats NaN values as equal, and
+/// greater than all non-NaN values.
+///
 /// # Example
 /// ```
 /// use arrow::array::{BooleanArray, StringArray};
@@ -2777,7 +2795,7 @@ pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            #[cfg(not(feature = "sql_compliant"))]
+            #[cfg(not(feature = "nan_ordering"))]
             return typed_dict_compares!(
                 left,
                 right,
@@ -2785,7 +2803,7 @@ pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
                 |a, b| a >= b,
                 |a, b| a >= b
             );
-            #[cfg(feature = "sql_compliant")]
+            #[cfg(feature = "nan_ordering")]
             return typed_dict_compares!(
                 left,
                 right,
@@ -2809,7 +2827,7 @@ pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
             typed_cmp_dict_non_dict!(right, left, |a, b| a <= b, |a, b| a <= b)
         }
         _ => {
-            #[cfg(not(feature = "sql_compliant"))]
+            #[cfg(not(feature = "nan_ordering"))]
             return typed_compares!(
                 left,
                 right,
@@ -2817,7 +2835,7 @@ pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
                 |a, b| a >= b,
                 |a, b| a >= b
             );
-            #[cfg(feature = "sql_compliant")]
+            #[cfg(feature = "nan_ordering")]
             return typed_compares!(
                 left,
                 right,
@@ -5551,14 +5569,14 @@ mod tests {
             .into_iter()
             .map(Some)
             .collect();
-        #[cfg(not(feature = "sql_compliant"))]
+        #[cfg(not(feature = "nan_ordering"))]
         {
             let expected = BooleanArray::from(
                 vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
             );
             assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
         }
-        #[cfg(feature = "sql_compliant")]
+        #[cfg(feature = "nan_ordering")]
         {
             let expected = BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
@@ -5566,14 +5584,14 @@ mod tests {
             assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
         }
 
-        #[cfg(not(feature = "sql_compliant"))]
+        #[cfg(not(feature = "nan_ordering"))]
         {
             let expected = BooleanArray::from(
                 vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
             );
             assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
         }
-        #[cfg(feature = "sql_compliant")]
+        #[cfg(feature = "nan_ordering")]
         {
             let expected = BooleanArray::from(
                 vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
@@ -5590,14 +5608,14 @@ mod tests {
             .map(Some)
             .collect();
 
-        #[cfg(not(feature = "sql_compliant"))]
+        #[cfg(not(feature = "nan_ordering"))]
         {
             let expected = BooleanArray::from(
                 vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
             );
             assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
         }
-        #[cfg(feature = "sql_compliant")]
+        #[cfg(feature = "nan_ordering")]
         {
             let expected = BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
@@ -5605,14 +5623,14 @@ mod tests {
             assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
         }
 
-        #[cfg(not(feature = "sql_compliant"))]
+        #[cfg(not(feature = "nan_ordering"))]
         {
             let expected = BooleanArray::from(
                 vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
             );
             assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
         }
-        #[cfg(feature = "sql_compliant")]
+        #[cfg(feature = "nan_ordering")]
         {
             let expected = BooleanArray::from(
                 vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
@@ -5631,14 +5649,14 @@ mod tests {
             .into_iter()
             .map(Some)
             .collect();
-        #[cfg(not(feature = "sql_compliant"))]
+        #[cfg(not(feature = "nan_ordering"))]
         {
             let expected = BooleanArray::from(
                 vec![Some(false), Some(false), Some(false), Some(true), Some(false), Some(false)],
             );
             assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
         }
-        #[cfg(feature = "sql_compliant")]
+        #[cfg(feature = "nan_ordering")]
         {
             let expected = BooleanArray::from(
                 vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
@@ -5646,14 +5664,14 @@ mod tests {
             assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
         }
 
-        #[cfg(not(feature = "sql_compliant"))]
+        #[cfg(not(feature = "nan_ordering"))]
         {
             let expected = BooleanArray::from(
                 vec![Some(false), Some(false), Some(true), Some(true), Some(false), Some(false)],
             );
             assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
         }
-        #[cfg(feature = "sql_compliant")]
+        #[cfg(feature = "nan_ordering")]
         {
             let expected = BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(true), Some(false), Some(false)],
@@ -5670,14 +5688,14 @@ mod tests {
             .map(Some)
             .collect();
 
-        #[cfg(not(feature = "sql_compliant"))]
+        #[cfg(not(feature = "nan_ordering"))]
         {
             let expected = BooleanArray::from(
                 vec![Some(false), Some(false), Some(false), Some(true), Some(false), Some(false)],
             );
             assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
         }
-        #[cfg(feature = "sql_compliant")]
+        #[cfg(feature = "nan_ordering")]
         {
             let expected = BooleanArray::from(
                 vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
@@ -5685,14 +5703,14 @@ mod tests {
             assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
         }
 
-        #[cfg(not(feature = "sql_compliant"))]
+        #[cfg(not(feature = "nan_ordering"))]
         {
             let expected = BooleanArray::from(
                 vec![Some(false), Some(false), Some(true), Some(true), Some(false), Some(false)],
             );
             assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
         }
-        #[cfg(feature = "sql_compliant")]
+        #[cfg(feature = "nan_ordering")]
         {
             let expected = BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(true), Some(false), Some(false)],
@@ -5711,14 +5729,14 @@ mod tests {
             .into_iter()
             .map(Some)
             .collect();
-        #[cfg(not(feature = "sql_compliant"))]
+        #[cfg(not(feature = "nan_ordering"))]
         {
             let expected = BooleanArray::from(
                 vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(false)],
             );
             assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
         }
-        #[cfg(feature = "sql_compliant")]
+        #[cfg(feature = "nan_ordering")]
         {
             let expected = BooleanArray::from(
                 vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
@@ -5726,14 +5744,14 @@ mod tests {
             assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
         }
 
-        #[cfg(not(feature = "sql_compliant"))]
+        #[cfg(not(feature = "nan_ordering"))]
         {
             let expected = BooleanArray::from(
                 vec![Some(false), Some(false), Some(true), Some(false), Some(true), Some(false)],
             );
             assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
         }
-        #[cfg(feature = "sql_compliant")]
+        #[cfg(feature = "nan_ordering")]
         {
             let expected = BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
@@ -5749,14 +5767,14 @@ mod tests {
             .into_iter()
             .map(Some)
             .collect();
-        #[cfg(not(feature = "sql_compliant"))]
+        #[cfg(not(feature = "nan_ordering"))]
         {
             let expected = BooleanArray::from(
                 vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(false)],
             );
             assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
         }
-        #[cfg(feature = "sql_compliant")]
+        #[cfg(feature = "nan_ordering")]
         {
             let expected = BooleanArray::from(
                 vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
@@ -5764,14 +5782,14 @@ mod tests {
             assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
         }
 
-        #[cfg(not(feature = "sql_compliant"))]
+        #[cfg(not(feature = "nan_ordering"))]
         {
             let expected = BooleanArray::from(
                 vec![Some(false), Some(false), Some(true), Some(false), Some(true), Some(false)],
             );
             assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
         }
-        #[cfg(feature = "sql_compliant")]
+        #[cfg(feature = "nan_ordering")]
         {
             let expected = BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
