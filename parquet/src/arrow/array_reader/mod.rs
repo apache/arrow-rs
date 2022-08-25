@@ -47,6 +47,7 @@ mod test_util;
 pub use builder::build_array_reader;
 pub use byte_array::make_byte_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
+pub use fixed_len_byte_array::make_fixed_len_byte_array_reader;
 pub use list_array::ListArrayReader;
 pub use map_array::MapArrayReader;
 pub use null_array::NullArrayReader;
