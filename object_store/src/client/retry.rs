@@ -182,12 +182,53 @@ impl RetryExt for reqwest::RequestBuilder {
 mod tests {
     use crate::client::retry::RetryExt;
     use crate::RetryConfig;
-    use reqwest::header::{AUTHORIZATION, IF_MATCH};
+    use hyper::header::LOCATION;
+    use hyper::service::{make_service_fn, service_fn};
+    use hyper::{Body, Response, Server};
+    use parking_lot::Mutex;
     use reqwest::{Client, Method, StatusCode};
+    use std::collections::VecDeque;
+    use std::convert::Infallible;
+    use std::net::SocketAddr;
+    use std::sync::Arc;
     use std::time::Duration;
 
     #[tokio::test]
     async fn test_retry() {
+        let responses: Arc<Mutex<VecDeque<Response<Body>>>> =
+            Arc::new(Mutex::new(VecDeque::with_capacity(10)));
+
+        let r = Arc::clone(&responses);
+        let make_service = make_service_fn(move |_conn| {
+            let r = Arc::clone(&r);
+            async move {
+                Ok::<_, Infallible>(service_fn(move |_req| {
+                    let r = Arc::clone(&r);
+                    async move {
+                        Ok::<_, Infallible>(match r.lock().pop_front() {
+                            Some(r) => r,
+                            None => Response::new(Body::from("Hello World")),
+                        })
+                    }
+                }))
+            }
+        });
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let server =
+            Server::bind(&SocketAddr::from(([127, 0, 0, 1], 0))).serve(make_service);
+
+        let url = format!("http://{}", server.local_addr());
+
+        let server_handle = tokio::spawn(async move {
+            server
+                .with_graceful_shutdown(async {
+                    rx.await.ok();
+                })
+                .await
+                .unwrap()
+        });
+
         let retry = RetryConfig {
             backoff: Default::default(),
             max_retries: 2,
@@ -195,88 +236,89 @@ mod tests {
         };
 
         let client = Client::new();
+        let do_request = || client.request(Method::GET, &url).send_retry(&retry);
 
         // Simple request should work
-        let r = client
-            .request(Method::GET, "https://httpbin.org/get")
-            .send_retry(&retry)
-            .await
-            .unwrap();
-        assert_eq!(r.status(), StatusCode::OK);
-
-        // Accepts 204 status code
-        let r = client
-            .request(Method::GET, "https://httpbin.org/status/204")
-            .send_retry(&retry)
-            .await
-            .unwrap();
-        assert_eq!(r.status(), StatusCode::NO_CONTENT);
-
-        // Follows redirects
-        let r = client
-            .request(Method::GET, "https://httpbin.org/relative-redirect/3")
-            .send_retry(&retry)
-            .await
-            .unwrap();
+        let r = do_request().await.unwrap();
         assert_eq!(r.status(), StatusCode::OK);
 
         // Returns client errors immediately with status message
-        let err = client
-            .request(Method::GET, "https://httpbin.org/status/400")
-            .send_retry(&retry)
-            .await
-            .unwrap_err();
-        assert_eq!(err.status().unwrap(), StatusCode::BAD_REQUEST);
-        assert_eq!(err.retries, 0);
-        assert_eq!(err.message, "No Body");
-
-        let err = client
-            .request(Method::GET, "https://httpbin.org/etag/foo")
-            .header(IF_MATCH, "bar")
-            .send_retry(&retry)
-            .await
-            .unwrap_err();
-
-        assert_eq!(err.status().unwrap(), StatusCode::PRECONDITION_FAILED);
-        assert_eq!(err.retries, 0);
-        assert_eq!(err.message, "No Body");
-
-        // Retries server errors before returning
-        let err = client
-            .request(Method::GET, "https://httpbin.org/status/502")
-            .send_retry(&retry)
-            .await
-            .unwrap_err();
-        assert_eq!(err.status().unwrap(), StatusCode::BAD_GATEWAY);
-        assert_eq!(err.retries, retry.max_retries);
-        assert_eq!(err.message, "502 Bad Gateway");
-
-        // Shows error message
-        let err = client
-            .request(Method::GET, "https://s3.amazonaws.com/examplebucket")
-            .send_retry(&retry)
-            .await
-            .unwrap_err();
-        assert_eq!(err.status().unwrap(), StatusCode::FORBIDDEN);
-        assert_eq!(err.retries, 0);
-        assert!(
-            err.message.contains("<Code>AccessDenied</Code>"),
-            "{}",
-            err.message
+        responses.lock().push_back(
+            Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from("cupcakes"))
+                .unwrap(),
         );
 
-        let err = client
-            .request(Method::GET, "https://s3.amazonaws.com/examplebucket")
-            .header(AUTHORIZATION, "invalid")
-            .send_retry(&retry)
-            .await
-            .unwrap_err();
-        assert_eq!(err.status().unwrap(), StatusCode::BAD_REQUEST);
-        assert_eq!(err.retries, 0);
-        assert!(
-            err.message.contains("Authorization header is invalid"),
-            "{}",
-            err.message
+        let e = do_request().await.unwrap_err();
+        assert_eq!(e.status().unwrap(), StatusCode::BAD_REQUEST);
+        assert_eq!(e.retries, 0);
+        assert_eq!(&e.message, "cupcakes");
+
+        // Handles client errors with no payload
+        responses.lock().push_back(
+            Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::empty())
+                .unwrap(),
         );
+
+        let e = do_request().await.unwrap_err();
+        assert_eq!(e.status().unwrap(), StatusCode::BAD_REQUEST);
+        assert_eq!(e.retries, 0);
+        assert_eq!(&e.message, "No Body");
+
+        // Should retry server error request
+        responses.lock().push_back(
+            Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .body(Body::empty())
+                .unwrap(),
+        );
+
+        let r = do_request().await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+
+        // Accepts 204 status code
+        responses.lock().push_back(
+            Response::builder()
+                .status(StatusCode::NO_CONTENT)
+                .body(Body::empty())
+                .unwrap(),
+        );
+
+        let r = do_request().await.unwrap();
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+
+        // Follows redirects
+        responses.lock().push_back(
+            Response::builder()
+                .status(StatusCode::FOUND)
+                .header(LOCATION, "/foo")
+                .body(Body::empty())
+                .unwrap(),
+        );
+
+        let r = do_request().await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(r.url().path(), "/foo");
+
+        // Gives up after the retrying the specified number of times
+        for _ in 0..=retry.max_retries {
+            responses.lock().push_back(
+                Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body(Body::from("ignored"))
+                    .unwrap(),
+            );
+        }
+
+        let e = do_request().await.unwrap_err();
+        assert_eq!(e.retries, retry.max_retries);
+        assert_eq!(e.message, "502 Bad Gateway");
+
+        // Shutdown
+        let _ = tx.send(());
+        server_handle.await.unwrap();
     }
 }
