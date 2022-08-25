@@ -254,10 +254,17 @@ impl From<SchemaAsIpc<'_>> for FlightData {
     }
 }
 
-impl From<SchemaAsIpc<'_>> for SchemaResult {
-    fn from(schema_ipc: SchemaAsIpc) -> Self {
-        let IpcMessage(vals) = flight_schema_as_flatbuffer(schema_ipc.0, schema_ipc.1);
-        SchemaResult { schema: vals }
+impl TryFrom<SchemaAsIpc<'_>> for SchemaResult {
+    type Error = ArrowError;
+
+    fn try_from(schema_ipc: SchemaAsIpc) -> ArrowResult<Self> {
+        // According to the definition from `Flight.proto`
+        // The schema of the dataset in its IPC form:
+        //   4 bytes - an optional IPC_CONTINUATION_TOKEN prefix
+        //   4 bytes - the byte length of the payload
+        //   a flatbuffer Message whose header is the Schema
+        let IpcMessage(vals) = schema_to_ipc_format(schema_ipc)?;
+        Ok(SchemaResult { schema: vals })
     }
 }
 
@@ -275,13 +282,17 @@ impl TryFrom<SchemaAsIpc<'_>> for IpcMessage {
     type Error = ArrowError;
 
     fn try_from(schema_ipc: SchemaAsIpc) -> ArrowResult<Self> {
-        let pair = *schema_ipc;
-        let encoded_data = flight_schema_as_encoded_data(pair.0, pair.1);
-
-        let mut schema = vec![];
-        arrow::ipc::writer::write_message(&mut schema, encoded_data, pair.1)?;
-        Ok(IpcMessage(schema))
+        Ok(schema_to_ipc_format(schema_ipc)?)
     }
+}
+
+fn schema_to_ipc_format(schema_ipc: SchemaAsIpc) -> ArrowResult<IpcMessage> {
+    let pair = *schema_ipc;
+    let encoded_data = flight_schema_as_encoded_data(pair.0, pair.1);
+
+    let mut schema = vec![];
+    arrow::ipc::writer::write_message(&mut schema, encoded_data, pair.1)?;
+    Ok(IpcMessage(schema))
 }
 
 impl TryFrom<&FlightData> for Schema {

@@ -80,13 +80,13 @@ pub fn flight_data_to_arrow_batch(
 /// Convert a `Schema` to `SchemaResult` by converting to an IPC message
 #[deprecated(
     since = "4.4.0",
-    note = "Use From trait, e.g.: SchemaAsIpc::new(schema, options).into()"
+    note = "Use From trait, e.g.: SchemaAsIpc::new(schema, options).try_into()"
 )]
 pub fn flight_schema_from_arrow_schema(
     schema: &Schema,
     options: &IpcWriteOptions,
-) -> SchemaResult {
-    SchemaAsIpc::new(schema, options).into()
+) -> Result<SchemaResult> {
+    SchemaAsIpc::new(schema, options).try_into()
 }
 
 /// Convert a `Schema` to `FlightData` by converting to an IPC message
