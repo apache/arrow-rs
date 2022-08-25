@@ -3739,7 +3739,7 @@ mod tests {
     // contains(null, null) = false
     #[test]
     fn test_contains_utf8() {
-        let values_builder = StringBuilder::new(10);
+        let values_builder = StringBuilder::new();
         let mut builder = ListBuilder::new(values_builder);
 
         builder.values().append_value("Lorem");
@@ -4727,7 +4727,7 @@ mod tests {
     #[test]
     fn test_eq_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -4755,7 +4755,7 @@ mod tests {
     #[test]
     fn test_lt_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -4784,7 +4784,7 @@ mod tests {
     #[test]
     fn test_lt_eq_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -4813,7 +4813,7 @@ mod tests {
     #[test]
     fn test_gt_eq_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -4843,7 +4843,7 @@ mod tests {
     #[test]
     fn test_gt_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -4872,7 +4872,7 @@ mod tests {
     #[test]
     fn test_neq_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();

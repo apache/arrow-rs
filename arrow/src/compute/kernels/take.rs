@@ -2040,7 +2040,7 @@ mod tests {
     #[test]
     fn test_take_dict() {
         let keys_builder = Int16Builder::new();
-        let values_builder = StringBuilder::new(4);
+        let values_builder = StringBuilder::new();
 
         let mut dict_builder = StringDictionaryBuilder::new(keys_builder, values_builder);
 

@@ -35,7 +35,8 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
     flags_array: Option<&GenericStringArray<OffsetSize>>,
 ) -> Result<ArrayRef> {
     let mut patterns: HashMap<String, Regex> = HashMap::new();
-    let builder: GenericStringBuilder<OffsetSize> = GenericStringBuilder::new(0);
+    let builder: GenericStringBuilder<OffsetSize> =
+        GenericStringBuilder::with_capacity(0, 0);
     let mut list_builder = ListBuilder::new(builder);
 
     let complete_pattern = match flags_array {
@@ -118,7 +119,7 @@ mod tests {
         pattern_values.push("");
         let pattern = StringArray::from(pattern_values);
         let actual = regexp_match(&array, &pattern, None).unwrap();
-        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new(0);
+        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new();
         let mut expected_builder = ListBuilder::new(elem_builder);
         expected_builder.values().append_value("005");
         expected_builder.append(true);
@@ -141,7 +142,8 @@ mod tests {
         let pattern = StringArray::from(vec![r"x.*-(\d*)-.*"; 4]);
         let flags = StringArray::from(vec!["i"; 4]);
         let actual = regexp_match(&array, &pattern, Some(&flags)).unwrap();
-        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new(0);
+        let elem_builder: GenericStringBuilder<i32> =
+            GenericStringBuilder::with_capacity(0, 0);
         let mut expected_builder = ListBuilder::new(elem_builder);
         expected_builder.append(false);
         expected_builder.values().append_value("7");

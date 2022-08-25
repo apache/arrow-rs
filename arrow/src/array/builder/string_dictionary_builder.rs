@@ -43,7 +43,7 @@ use std::sync::Arc;
 /// // It can thus hold up to 256 distinct string values.
 ///
 /// let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(100);
-/// let value_builder = StringBuilder::new(100);
+/// let value_builder = StringBuilder::new();
 /// let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
 ///
 /// // The builder builds the dictionary value by value
@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn test_string_dictionary_builder() {
         let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(5);
-        let value_builder = StringBuilder::new(2);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
