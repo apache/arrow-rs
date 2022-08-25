@@ -475,8 +475,7 @@ impl<'a, K: ArrowPrimitiveType, V: Sync> Array for TypedDictionaryArray<'a, K, V
 impl<'a, K, V> IntoIterator for TypedDictionaryArray<'a, K, V>
 where
     K: ArrowPrimitiveType,
-    V: Sync + Send,
-    &'a V: ArrayAccessor,
+    Self: ArrayAccessor,
 {
     type Item = Option<<Self as ArrayAccessor>::Item>;
     type IntoIter = ArrayIter<Self>;
@@ -491,21 +490,30 @@ where
     K: ArrowPrimitiveType,
     V: Sync + Send,
     &'a V: ArrayAccessor,
+    <&'a V as ArrayAccessor>::Item: Default,
 {
     type Item = <&'a V as ArrayAccessor>::Item;
 
     fn value(&self, index: usize) -> Self::Item {
-        assert!(self.dictionary.is_valid(index), "{}", index);
-        let value_idx = self.dictionary.keys.value(index).to_usize().unwrap();
-        // Dictionary indexes should be valid
-        unsafe { self.values.value_unchecked(value_idx) }
+        assert!(
+            index < self.len(),
+            "Trying to access an element at index {} from a TypedDictionaryArray of length {}",
+            index,
+            self.len()
+        );
+        unsafe { self.value_unchecked(index) }
     }
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         let val = self.dictionary.keys.value_unchecked(index);
         let value_idx = val.to_usize().unwrap();
-        // Dictionary indexes should be valid
-        self.values.value_unchecked(value_idx)
+
+        // As dictionary keys are only verified for non-null indexes
+        // we must check the value is within bounds
+        match value_idx < self.values.len() {
+            true => self.values.value_unchecked(value_idx),
+            false => Default::default(),
+        }
     }
 }
 
