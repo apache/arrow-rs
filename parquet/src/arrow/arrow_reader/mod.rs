@@ -627,9 +627,6 @@ mod tests {
         ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReader,
         ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
     };
-    use crate::arrow::buffer::converter::{
-        Converter, FixedSizeArrayConverter, IntervalDayTimeArrayConverter,
-    };
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
     use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
@@ -836,24 +833,41 @@ mod tests {
 
     #[test]
     fn test_fixed_length_binary_column_reader() {
-        let converter = FixedSizeArrayConverter::new(20);
         run_single_column_reader_tests::<FixedLenByteArrayType, _, RandFixedLenGen>(
             20,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(converter.convert(vals.to_vec()).unwrap()),
+            |vals| {
+                let mut builder = FixedSizeBinaryBuilder::with_capacity(vals.len(), 20);
+                for val in vals {
+                    match val {
+                        Some(b) => builder.append_value(b).unwrap(),
+                        None => builder.append_null(),
+                    }
+                }
+                Arc::new(builder.finish())
+            },
             &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
         );
     }
 
     #[test]
     fn test_interval_day_time_column_reader() {
-        let converter = IntervalDayTimeArrayConverter {};
         run_single_column_reader_tests::<FixedLenByteArrayType, _, RandFixedLenGen>(
             12,
             ConvertedType::INTERVAL,
             None,
-            |vals| Arc::new(converter.convert(vals.to_vec()).unwrap()),
+            |vals| {
+                Arc::new(
+                    vals.iter()
+                        .map(|x| {
+                            x.as_ref().map(|b| {
+                                i64::from_le_bytes(b.as_ref()[4..12].try_into().unwrap())
+                            })
+                        })
+                        .collect::<IntervalDayTimeArray>(),
+                )
+            },
             &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
         );
     }
