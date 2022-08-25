@@ -799,7 +799,7 @@ impl Decoder {
         let mut builder: Box<dyn ArrayBuilder> = match data_type {
             DataType::Utf8 => {
                 let values_builder =
-                    StringBuilder::with_capcity(rows.len(), rows.len() * 5);
+                    StringBuilder::with_capacity(rows.len(), rows.len() * 5);
                 Box::new(ListBuilder::new(values_builder))
             }
             DataType::Dictionary(_, _) => {
