@@ -62,7 +62,7 @@ pub trait FlightSqlService:
     }
 
     /// Implementors may override to handle additional calls to do_get()
-    async fn custom_do_get(
+    async fn do_get_fallback(
         &self,
         _request: Request<Ticket>,
         message: prost_types::Any,
@@ -456,7 +456,7 @@ where
             return self.do_get_cross_reference(unpack(msg)?, request).await;
         }
 
-        self.custom_do_get(request, msg).await
+        self.do_get_fallback(request, msg).await
     }
 
     async fn do_put(
