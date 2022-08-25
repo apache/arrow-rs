@@ -221,7 +221,11 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeType,
 {
-    min_max_dyn_helper::<T, A, _, _>(array, |a, b| a < b, min)
+    min_max_dyn_helper::<T, A, _, _>(
+        array,
+        |a, b| (!is_nan(*a) & is_nan(*b)) || a < b,
+        min,
+    )
 }
 
 /// Returns the max of values in the array.
@@ -230,7 +234,11 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeType,
 {
-    min_max_dyn_helper::<T, A, _, _>(array, |a, b| a > b, max)
+    min_max_dyn_helper::<T, A, _, _>(
+        array,
+        |a, b| (is_nan(*a) & !is_nan(*b)) || a > b,
+        max,
+    )
 }
 
 fn min_max_dyn_helper<T, A: ArrayAccessor<Item = T::Native>, F, M>(
@@ -710,7 +718,7 @@ mod tests {
     use super::*;
     use crate::array::*;
     use crate::compute::add;
-    use crate::datatypes::{Int32Type, Int8Type};
+    use crate::datatypes::{Float32Type, Int32Type, Int8Type};
 
     #[test]
     fn test_primitive_array_sum() {
@@ -1142,5 +1150,18 @@ mod tests {
         assert!(max_dyn::<Int8Type, _>(array).is_none());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
         assert!(min_dyn::<Int8Type, _>(array).is_none());
+    }
+
+    #[test]
+    fn test_max_min_dyn_nan() {
+        let values = Float32Array::from(vec![5.0_f32, 2.0_f32, f32::NAN]);
+        let keys = Int8Array::from_iter_values([0_i8, 1, 2]);
+
+        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array = dict_array.downcast_dict::<Float32Array>().unwrap();
+        assert!(max_dyn::<Float32Type, _>(array).unwrap().is_nan());
+
+        let array = dict_array.downcast_dict::<Float32Array>().unwrap();
+        assert_eq!(2.0_f32, min_dyn::<Float32Type, _>(array).unwrap());
     }
 }
