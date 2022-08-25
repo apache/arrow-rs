@@ -617,7 +617,7 @@ fn ilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
         let re_pattern = replace_like_wildcards(right)?;
         let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
-                "Unable to build regex from LIKE pattern: {}",
+                "Unable to build regex from ILIKE pattern: {}",
                 e
             ))
         })?;
@@ -763,7 +763,7 @@ fn nilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
         let re_pattern = replace_like_wildcards(right)?;
         let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
-                "Unable to build regex from LIKE pattern: {}",
+                "Unable to build regex from ILIKE pattern: {}",
                 e
             ))
         })?;
