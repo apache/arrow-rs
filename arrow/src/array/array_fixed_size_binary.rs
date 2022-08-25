@@ -60,10 +60,14 @@ pub struct FixedSizeBinaryArray {
 
 impl FixedSizeBinaryArray {
     /// Returns the element at index `i` as a byte slice.
+    /// # Panics
+    /// Panics if index `i` is out of bounds.
     pub fn value(&self, i: usize) -> &[u8] {
         assert!(
             i < self.data.len(),
-            "FixedSizeBinaryArray out of bounds access"
+            "Trying to access an element at index {} from a FixedSizeBinaryArray of length {}",
+            i,
+            self.len()
         );
         let offset = i + self.data.offset();
         unsafe {
@@ -671,5 +675,16 @@ mod tests {
 
         // Should not panic
         RecordBatch::try_new(Arc::new(schema), vec![Arc::new(item)]).unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Trying to access an element at index 4 from a FixedSizeBinaryArray of length 3"
+    )]
+    fn test_fixed_size_binary_array_get_value_index_out_of_bound() {
+        let values = vec![Some("one".as_bytes()), Some(b"two"), None];
+        let array = FixedSizeBinaryArray::from(values);
+
+        array.value(4);
     }
 }

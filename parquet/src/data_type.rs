@@ -1208,6 +1208,18 @@ make_type!(
     mem::size_of::<FixedLenByteArray>()
 );
 
+impl AsRef<[u8]> for ByteArray {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl AsRef<[u8]> for FixedLenByteArray {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
 impl FromBytes for Int96 {
     type Buffer = [u8; 12];
     fn from_le_bytes(bs: Self::Buffer) -> Self {

@@ -18,7 +18,7 @@
 //! Generic utilities reqwest based ObjectStore implementations
 
 pub mod backoff;
-#[cfg(feature = "gcp")]
+#[cfg(any(feature = "gcp", feature = "azure"))]
 pub mod oauth;
 pub mod pagination;
 pub mod retry;
