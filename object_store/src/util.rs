@@ -235,12 +235,13 @@ mod tests {
         let mut rand = thread_rng();
         for _ in 0..100 {
             let object_len = rand.gen_range(10..250);
-            let range_count = rand.gen_range(0..30);
+            let range_count = rand.gen_range(0..10);
             let ranges: Vec<_> = (0..range_count)
                 .map(|_| {
                     let start = rand.gen_range(0..object_len);
-                    let end = rand.gen_range(start..object_len);
-                    start..end
+                    let max_len = 20.min(object_len - start);
+                    let len = rand.gen_range(0..max_len);
+                    start..start + len
                 })
                 .collect();
 
