@@ -85,8 +85,17 @@ where
 /// will be coalesced into a single request by [`coalesce_ranges`]
 pub const OBJECT_STORE_COALESCE_DEFAULT: usize = 1024 * 1024;
 
-/// Takes a function to fetch ranges and coalesces adjacent ranges if they are
-/// less than `coalesce` bytes apart. Out of order `ranges` are not coalesced
+/// Up to this number of range requests will be performed in parallel by [`coalesce_ranges`]
+pub const OBJECT_STORE_COALESCE_PARALLEL: usize = 10;
+
+/// Takes a function `fetch` that can fetch a range of bytes and uses this to
+/// fetch the provided byte `ranges`
+///
+/// To improve performance it will:
+///
+/// * Combine ranges less than `coalesce` bytes apart into a single call to `fetch`
+/// * Make multiple `fetch` requests in parallel (up to maximum of 10)
+///
 pub async fn coalesce_ranges<F, Fut>(
     ranges: &[std::ops::Range<usize>],
     fetch: F,
@@ -100,7 +109,7 @@ where
 
     let fetched: Vec<_> = futures::stream::iter(fetch_ranges.iter().cloned())
         .map(fetch)
-        .buffered(10)
+        .buffered(OBJECT_STORE_COALESCE_PARALLEL)
         .try_collect()
         .await?;
 
@@ -165,31 +174,34 @@ mod tests {
     use rand::{thread_rng, Rng};
     use std::ops::Range;
 
+    /// Calls coalesce_ranges and validates the returned data is correct
+    ///
+    /// Returns the fetched ranges
+    async fn do_fetch(ranges: Vec<Range<usize>>, coalesce: usize) -> Vec<Range<usize>> {
+        let max = ranges.iter().map(|x| x.end).max().unwrap_or(0);
+        let src: Vec<_> = (0..max).map(|x| x as u8).collect();
+
+        let mut fetches = vec![];
+        let coalesced = coalesce_ranges(
+            &ranges,
+            |range| {
+                fetches.push(range.clone());
+                futures::future::ready(Ok(Bytes::from(src[range].to_vec())))
+            },
+            coalesce,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(ranges.len(), coalesced.len());
+        for (range, bytes) in ranges.iter().zip(coalesced) {
+            assert_eq!(bytes.as_ref(), &src[range.clone()]);
+        }
+        fetches
+    }
+
     #[tokio::test]
     async fn test_coalesce_ranges() {
-        let do_fetch = |ranges: Vec<Range<usize>>, coalesce: usize| async move {
-            let max = ranges.iter().map(|x| x.end).max().unwrap_or(0);
-            let src: Vec<_> = (0..max).map(|x| x as u8).collect();
-
-            let mut fetches = vec![];
-            let coalesced = coalesce_ranges(
-                &ranges,
-                |range| {
-                    fetches.push(range.clone());
-                    futures::future::ready(Ok(Bytes::from(src[range].to_vec())))
-                },
-                coalesce,
-            )
-            .await
-            .unwrap();
-
-            assert_eq!(ranges.len(), coalesced.len());
-            for (range, bytes) in ranges.iter().zip(coalesced) {
-                assert_eq!(bytes.as_ref(), &src[range.clone()]);
-            }
-            fetches
-        };
-
         let fetches = do_fetch(vec![], 0).await;
         assert_eq!(fetches, vec![]);
 
@@ -216,7 +228,10 @@ mod tests {
 
         let fetches = do_fetch(vec![0..1, 6..7, 8..9, 10..14, 9..10], 4).await;
         assert_eq!(fetches, vec![0..1, 6..14]);
+    }
 
+    #[tokio::test]
+    async fn test_coalesce_fuzz() {
         let mut rand = thread_rng();
         for _ in 0..100 {
             let object_len = rand.gen_range(10..250);
