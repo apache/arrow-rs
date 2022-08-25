@@ -115,10 +115,15 @@ impl BooleanArray {
     }
 
     /// Returns the boolean value at index `i`.
-    ///
-    /// Panics of offset `i` is out of bounds
+    /// # Panics
+    /// Panics if index `i` is out of bounds
     pub fn value(&self, i: usize) -> bool {
-        assert!(i < self.len());
+        assert!(
+            i < self.len(),
+            "Trying to access an element at index {} from a BooleanArray of length {}",
+            i,
+            self.len()
+        );
         // Safety:
         // `i < self.len()
         unsafe { self.value_unchecked(i) }
@@ -387,6 +392,17 @@ mod tests {
         for i in 0..3 {
             assert_eq!(i != 0, arr.value(i), "failed at {}", i);
         }
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Trying to access an element at index 4 from a BooleanArray of length 3"
+    )]
+    fn test_fixed_size_binary_array_get_value_index_out_of_bound() {
+        let v = vec![Some(true), None, Some(false)];
+        let array = v.into_iter().collect::<BooleanArray>();
+
+        array.value(4);
     }
 
     #[test]
