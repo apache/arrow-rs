@@ -235,6 +235,22 @@ macro_rules! make_string_from_list {
     }};
 }
 
+macro_rules! make_string_from_large_list {
+    ($column: ident, $row: ident) => {{
+        let list = $column
+            .as_any()
+            .downcast_ref::<array::LargeListArray>()
+            .ok_or(ArrowError::InvalidArgumentError(format!(
+                "Repl error: could not convert large list column to list array."
+            )))?
+            .value($row);
+        let string_values = (0..list.len())
+            .map(|i| array_value_to_string(&list, i))
+            .collect::<Result<Vec<String>>>()?;
+        Ok(format!("[{}]", string_values.join(", ")))
+    }};
+}
+
 macro_rules! make_string_from_fixed_size_list {
     ($column: ident, $row: ident) => {{
         let list = $column
@@ -357,6 +373,7 @@ pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<Str
             }
         },
         DataType::List(_) => make_string_from_list!(column, row),
+        DataType::LargeList(_) => make_string_from_large_list!(column, row),
         DataType::Dictionary(index_type, _value_type) => match **index_type {
             DataType::Int8 => dict_array_value_to_string::<Int8Type>(column, row),
             DataType::Int16 => dict_array_value_to_string::<Int16Type>(column, row),
