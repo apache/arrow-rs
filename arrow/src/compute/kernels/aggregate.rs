@@ -219,39 +219,29 @@ where
 pub fn min_dyn<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
 where
     T: ArrowNumericType,
-    T::Native: Add<Output = T::Native>,
+    T::Native: ArrowNativeType,
 {
-    match array.data_type() {
-        DataType::Dictionary(_, _) => {
-            let null_count = array.null_count();
-
-            if null_count == array.len() {
-                return None;
-            }
-
-            let mut has_value = false;
-            let mut n = T::default_value();
-            let iter = ArrayIter::new(array);
-            iter.into_iter().for_each(|value| {
-                if let Some(value) = value {
-                    if !has_value || value < n {
-                        has_value = true;
-                        n = value;
-                    }
-                }
-            });
-
-            Some(n)
-        }
-        _ => min::<T>(as_primitive_array(&array)),
-    }
+    min_max_dyn_helper::<T, A, _, _>(array, |a, b| a < b, min)
 }
 
 /// Returns the max of values in the array.
 pub fn max_dyn<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
 where
     T: ArrowNumericType,
-    T::Native: Add<Output = T::Native>,
+    T::Native: ArrowNativeType,
+{
+    min_max_dyn_helper::<T, A, _, _>(array, |a, b| a > b, max)
+}
+
+fn min_max_dyn_helper<T, A: ArrayAccessor<Item = T::Native>, F, M>(
+    array: A,
+    cmp: F,
+    m: M,
+) -> Option<T::Native>
+where
+    T: ArrowNumericType,
+    F: Fn(&T::Native, &T::Native) -> bool,
+    M: Fn(&PrimitiveArray<T>) -> Option<T::Native>,
 {
     match array.data_type() {
         DataType::Dictionary(_, _) => {
@@ -266,7 +256,7 @@ where
             let iter = ArrayIter::new(array);
             iter.into_iter().for_each(|value| {
                 if let Some(value) = value {
-                    if !has_value || value > n {
+                    if !has_value || cmp(&value, &n) {
                         has_value = true;
                         n = value;
                     }
@@ -275,7 +265,7 @@ where
 
             Some(n)
         }
-        _ => max::<T>(as_primitive_array(&array)),
+        _ => m(as_primitive_array(&array)),
     }
 }
 
