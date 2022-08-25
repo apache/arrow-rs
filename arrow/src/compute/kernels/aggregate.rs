@@ -185,7 +185,7 @@ pub fn min_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&
 }
 
 /// Returns the sum of values in the array.
-pub fn sum_dyn<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
+pub fn sum_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
 where
     T: ArrowNumericType,
     T::Native: Add<Output = T::Native>,
@@ -216,7 +216,7 @@ where
 }
 
 /// Returns the min of values in the array.
-pub fn min_dyn<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
+pub fn min_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeType,
@@ -229,7 +229,7 @@ where
 }
 
 /// Returns the max of values in the array.
-pub fn max_dyn<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
+pub fn max_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeType,
@@ -1105,20 +1105,20 @@ mod tests {
 
         let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
-        assert_eq!(39, sum_dyn::<Int8Type, _>(array).unwrap());
+        assert_eq!(39, sum_array::<Int8Type, _>(array).unwrap());
 
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
-        assert_eq!(15, sum_dyn::<Int32Type, _>(&a).unwrap());
+        assert_eq!(15, sum_array::<Int32Type, _>(&a).unwrap());
 
         let keys = Int8Array::from(vec![Some(2_i8), None, Some(4)]);
         let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
-        assert_eq!(26, sum_dyn::<Int8Type, _>(array).unwrap());
+        assert_eq!(26, sum_array::<Int8Type, _>(array).unwrap());
 
         let keys = Int8Array::from(vec![None, None, None]);
         let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
-        assert!(sum_dyn::<Int8Type, _>(array).is_none());
+        assert!(sum_array::<Int8Type, _>(array).is_none());
     }
 
     #[test]
@@ -1128,28 +1128,28 @@ mod tests {
 
         let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
-        assert_eq!(14, max_dyn::<Int8Type, _>(array).unwrap());
+        assert_eq!(14, max_array::<Int8Type, _>(array).unwrap());
 
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
-        assert_eq!(12, min_dyn::<Int8Type, _>(array).unwrap());
+        assert_eq!(12, min_array::<Int8Type, _>(array).unwrap());
 
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
-        assert_eq!(5, max_dyn::<Int32Type, _>(&a).unwrap());
-        assert_eq!(1, min_dyn::<Int32Type, _>(&a).unwrap());
+        assert_eq!(5, max_array::<Int32Type, _>(&a).unwrap());
+        assert_eq!(1, min_array::<Int32Type, _>(&a).unwrap());
 
         let keys = Int8Array::from(vec![Some(2_i8), None, Some(7)]);
         let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
-        assert_eq!(17, max_dyn::<Int8Type, _>(array).unwrap());
+        assert_eq!(17, max_array::<Int8Type, _>(array).unwrap());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
-        assert_eq!(12, min_dyn::<Int8Type, _>(array).unwrap());
+        assert_eq!(12, min_array::<Int8Type, _>(array).unwrap());
 
         let keys = Int8Array::from(vec![None, None, None]);
         let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
-        assert!(max_dyn::<Int8Type, _>(array).is_none());
+        assert!(max_array::<Int8Type, _>(array).is_none());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
-        assert!(min_dyn::<Int8Type, _>(array).is_none());
+        assert!(min_array::<Int8Type, _>(array).is_none());
     }
 
     #[test]
@@ -1159,9 +1159,9 @@ mod tests {
 
         let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
         let array = dict_array.downcast_dict::<Float32Array>().unwrap();
-        assert!(max_dyn::<Float32Type, _>(array).unwrap().is_nan());
+        assert!(max_array::<Float32Type, _>(array).unwrap().is_nan());
 
         let array = dict_array.downcast_dict::<Float32Array>().unwrap();
-        assert_eq!(2.0_f32, min_dyn::<Float32Type, _>(array).unwrap());
+        assert_eq!(2.0_f32, min_array::<Float32Type, _>(array).unwrap());
     }
 }
