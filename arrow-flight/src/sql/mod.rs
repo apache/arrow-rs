@@ -69,7 +69,6 @@ pub trait ProstMessageExt: prost::Message + Default {
     fn as_any(&self) -> prost_types::Any;
 }
 
-#[macro_export]
 macro_rules! prost_message_ext {
     ($($name:ty,)*) => {
         $(
