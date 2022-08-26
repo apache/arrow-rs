@@ -17,15 +17,9 @@
 
 use super::DataType;
 use half::f16;
-use serde_json::{Number, Value};
 
 mod private {
     pub trait Sealed {}
-}
-
-/// Trait declaring any type that is serializable to JSON. This includes all primitive types (bool, i32, etc.).
-pub trait JsonSerializable: 'static {
-    fn into_json_value(self) -> Option<Value>;
 }
 
 /// Trait expressing a Rust type that has the same in-memory representation
@@ -58,8 +52,8 @@ pub trait ArrowNativeType:
     + PartialOrd
     + std::str::FromStr
     + Default
-    + JsonSerializable
     + private::Sealed
+    + 'static
 {
     /// Convert native type from usize.
     #[inline]
@@ -120,18 +114,6 @@ pub trait ArrowPrimitiveType: 'static {
     }
 }
 
-impl JsonSerializable for bool {
-    fn into_json_value(self) -> Option<Value> {
-        Some(self.into())
-    }
-}
-
-impl JsonSerializable for i8 {
-    fn into_json_value(self) -> Option<Value> {
-        Some(self.into())
-    }
-}
-
 impl private::Sealed for i8 {}
 impl ArrowNativeType for i8 {
     #[inline]
@@ -150,12 +132,6 @@ impl ArrowNativeType for i8 {
     }
 }
 
-impl JsonSerializable for i16 {
-    fn into_json_value(self) -> Option<Value> {
-        Some(self.into())
-    }
-}
-
 impl private::Sealed for i16 {}
 impl ArrowNativeType for i16 {
     #[inline]
@@ -171,12 +147,6 @@ impl ArrowNativeType for i16 {
     #[inline]
     fn to_isize(&self) -> Option<isize> {
         num::ToPrimitive::to_isize(self)
-    }
-}
-
-impl JsonSerializable for i32 {
-    fn into_json_value(self) -> Option<Value> {
-        Some(self.into())
     }
 }
 
@@ -204,12 +174,6 @@ impl ArrowNativeType for i32 {
     }
 }
 
-impl JsonSerializable for i64 {
-    fn into_json_value(self) -> Option<Value> {
-        Some(Value::Number(Number::from(self)))
-    }
-}
-
 impl private::Sealed for i64 {}
 impl ArrowNativeType for i64 {
     #[inline]
@@ -231,16 +195,6 @@ impl ArrowNativeType for i64 {
     #[inline]
     fn from_i64(val: i64) -> Option<Self> {
         Some(val)
-    }
-}
-
-impl JsonSerializable for i128 {
-    fn into_json_value(self) -> Option<Value> {
-        // Serialize as string to avoid issues with arbitrary_precision serde_json feature
-        // - https://github.com/serde-rs/json/issues/559
-        // - https://github.com/serde-rs/json/issues/845
-        // - https://github.com/serde-rs/json/issues/846
-        Some(self.to_string().into())
     }
 }
 
@@ -268,12 +222,6 @@ impl ArrowNativeType for i128 {
     }
 }
 
-impl JsonSerializable for u8 {
-    fn into_json_value(self) -> Option<Value> {
-        Some(self.into())
-    }
-}
-
 impl private::Sealed for u8 {}
 impl ArrowNativeType for u8 {
     #[inline]
@@ -289,12 +237,6 @@ impl ArrowNativeType for u8 {
     #[inline]
     fn to_isize(&self) -> Option<isize> {
         num::ToPrimitive::to_isize(self)
-    }
-}
-
-impl JsonSerializable for u16 {
-    fn into_json_value(self) -> Option<Value> {
-        Some(self.into())
     }
 }
 
@@ -316,12 +258,6 @@ impl ArrowNativeType for u16 {
     }
 }
 
-impl JsonSerializable for u32 {
-    fn into_json_value(self) -> Option<Value> {
-        Some(self.into())
-    }
-}
-
 impl private::Sealed for u32 {}
 impl ArrowNativeType for u32 {
     #[inline]
@@ -340,12 +276,6 @@ impl ArrowNativeType for u32 {
     }
 }
 
-impl JsonSerializable for u64 {
-    fn into_json_value(self) -> Option<Value> {
-        Some(self.into())
-    }
-}
-
 impl private::Sealed for u64 {}
 impl ArrowNativeType for u64 {
     #[inline]
@@ -361,24 +291,6 @@ impl ArrowNativeType for u64 {
     #[inline]
     fn to_isize(&self) -> Option<isize> {
         num::ToPrimitive::to_isize(self)
-    }
-}
-
-impl JsonSerializable for f16 {
-    fn into_json_value(self) -> Option<Value> {
-        Number::from_f64(f64::round(f64::from(self) * 1000.0) / 1000.0).map(Value::Number)
-    }
-}
-
-impl JsonSerializable for f32 {
-    fn into_json_value(self) -> Option<Value> {
-        Number::from_f64(f64::round(self as f64 * 1000.0) / 1000.0).map(Value::Number)
-    }
-}
-
-impl JsonSerializable for f64 {
-    fn into_json_value(self) -> Option<Value> {
-        Number::from_f64(self).map(Value::Number)
     }
 }
 
