@@ -233,3 +233,8 @@ harness = false
 [[bench]]
 name = "decimal_validate"
 harness = false
+
+[[bench]]
+name = "row_format"
+harness = false
+required-features = ["test_utils"]
