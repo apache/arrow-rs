@@ -94,8 +94,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
 }
 
 impl<OffsetSize: OffsetSizeTrait> Default for GenericBinaryBuilder<OffsetSize> {
-     fn default() -> Self {
-         Self::new()
+    fn default() -> Self {
+        Self::new()
     }
 }
 
