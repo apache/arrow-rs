@@ -81,6 +81,12 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> Default for GenericStringBuilder<OffsetSize> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericStringBuilder<OffsetSize> {
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {

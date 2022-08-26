@@ -93,6 +93,12 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> Default for GenericBinaryBuilder<OffsetSize> {
+     fn default() -> Self {
+         Self::new()
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSize> {
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
