@@ -801,7 +801,7 @@ pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     nilike_scalar(left, right)
 }
 
-/// Perform SQL `left ILIKE right` operation on [`DictionaryArray`] with values
+/// Perform SQL `left NOT ILIKE right` operation on [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`] and a scalar.
 ///
 /// See the documentation on [`like_utf8`] for more details.
