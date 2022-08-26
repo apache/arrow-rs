@@ -88,6 +88,8 @@ pyarrow = ["pyo3", "ffi"]
 force_validate = []
 # Enable ffi support
 ffi = []
+# Enable NaN-ordering behavior on comparison kernels
+nan_ordering = []
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
