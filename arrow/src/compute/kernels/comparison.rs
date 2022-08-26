@@ -235,12 +235,9 @@ pub fn like_utf8<OffsetSize: OffsetSizeTrait>(
     })
 }
 
-/// Perform SQL `left LIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
-    left: &GenericStringArray<OffsetSize>,
+#[inline]
+fn like_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
+    left: L,
     right: &str,
 ) -> Result<BooleanArray> {
     let null_bit_buffer = left.data().null_buffer().cloned();
@@ -251,8 +248,10 @@ pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     if !right.contains(is_like_pattern) {
         // fast path, can use equals
         for i in 0..left.len() {
-            if left.value(i) == right {
-                bit_util::set_bit(bool_slice, i);
+            unsafe {
+                if left.value_unchecked(i) == right {
+                    bit_util::set_bit(bool_slice, i);
+                }
             }
         }
     } else if right.ends_with('%')
@@ -262,8 +261,10 @@ pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
         // fast path, can use starts_with
         let starts_with = &right[..right.len() - 1];
         for i in 0..left.len() {
-            if left.value(i).starts_with(starts_with) {
-                bit_util::set_bit(bool_slice, i);
+            unsafe {
+                if left.value_unchecked(i).starts_with(starts_with) {
+                    bit_util::set_bit(bool_slice, i);
+                }
             }
         }
     } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
@@ -271,8 +272,10 @@ pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
         let ends_with = &right[1..];
 
         for i in 0..left.len() {
-            if left.value(i).ends_with(ends_with) {
-                bit_util::set_bit(bool_slice, i);
+            unsafe {
+                if left.value_unchecked(i).ends_with(ends_with) {
+                    bit_util::set_bit(bool_slice, i);
+                }
             }
         }
     } else if right.starts_with('%')
@@ -282,8 +285,10 @@ pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
         // fast path, can use contains
         let contains = &right[1..right.len() - 1];
         for i in 0..left.len() {
-            if left.value(i).contains(contains) {
-                bit_util::set_bit(bool_slice, i);
+            unsafe {
+                if left.value_unchecked(i).contains(contains) {
+                    bit_util::set_bit(bool_slice, i);
+                }
             }
         }
     } else {
@@ -296,7 +301,7 @@ pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
         })?;
 
         for i in 0..left.len() {
-            let haystack = left.value(i);
+            let haystack = unsafe { left.value_unchecked(i) };
             if re.is_match(haystack) {
                 bit_util::set_bit(bool_slice, i);
             }
@@ -315,6 +320,42 @@ pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
         )
     };
     Ok(BooleanArray::from(data))
+}
+
+/// Perform SQL `left LIKE right` operation on [`StringArray`] /
+/// [`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &str,
+) -> Result<BooleanArray> {
+    like_scalar(left, right)
+}
+
+/// Perform SQL `left LIKE right` operation on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn like_dict_scalar<K: ArrowNumericType>(
+    left: &DictionaryArray<K>,
+    right: &str,
+) -> Result<BooleanArray> {
+    match left.value_type() {
+        DataType::Utf8 => {
+            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
+            like_scalar(left, right)
+        }
+        DataType::LargeUtf8 => {
+            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
+            like_scalar(left, right)
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "like_dict_scalar only supports DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
 }
 
 /// Transforms a like `pattern` to a regex compatible pattern. To achieve that, it does:
@@ -372,34 +413,48 @@ pub fn nlike_utf8<OffsetSize: OffsetSizeTrait>(
     })
 }
 
-/// Perform SQL `left NOT LIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn nlike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
-    left: &GenericStringArray<OffsetSize>,
+#[inline]
+fn nlike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
+    left: L,
     right: &str,
 ) -> Result<BooleanArray> {
     let null_bit_buffer = left.data().null_buffer().cloned();
-    let mut result = BooleanBufferBuilder::new(left.len());
+    let bytes = bit_util::ceil(left.len(), 8);
+    let mut bool_buf = MutableBuffer::from_len_zeroed(bytes);
+    let bool_slice = bool_buf.as_slice_mut();
 
     if !right.contains(is_like_pattern) {
         // fast path, can use equals
         for i in 0..left.len() {
-            result.append(left.value(i) != right);
+            unsafe {
+                if left.value_unchecked(i) != right {
+                    bit_util::set_bit(bool_slice, i);
+                }
+            }
         }
     } else if right.ends_with('%')
         && !right.ends_with("\\%")
         && !right[..right.len() - 1].contains(is_like_pattern)
     {
-        // fast path, can use ends_with
+        // fast path, can use starts_with
+        let starts_with = &right[..right.len() - 1];
         for i in 0..left.len() {
-            result.append(!left.value(i).starts_with(&right[..right.len() - 1]));
+            unsafe {
+                if !(left.value_unchecked(i).starts_with(starts_with)) {
+                    bit_util::set_bit(bool_slice, i);
+                }
+            }
         }
     } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
-        // fast path, can use starts_with
+        // fast path, can use ends_with
+        let ends_with = &right[1..];
+
         for i in 0..left.len() {
-            result.append(!left.value(i).ends_with(&right[1..]));
+            unsafe {
+                if !(left.value_unchecked(i).ends_with(ends_with)) {
+                    bit_util::set_bit(bool_slice, i);
+                }
+            }
         }
     } else if right.starts_with('%')
         && right.ends_with('%')
@@ -408,7 +463,11 @@ pub fn nlike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
         // fast path, can use contains
         let contains = &right[1..right.len() - 1];
         for i in 0..left.len() {
-            result.append(!left.value(i).contains(contains));
+            unsafe {
+                if !(left.value_unchecked(i).contains(contains)) {
+                    bit_util::set_bit(bool_slice, i);
+                }
+            }
         }
     } else {
         let re_pattern = replace_like_wildcards(right)?;
@@ -418,11 +477,14 @@ pub fn nlike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
                 e
             ))
         })?;
+
         for i in 0..left.len() {
-            let haystack = left.value(i);
-            result.append(!re.is_match(haystack));
+            let haystack = unsafe { left.value_unchecked(i) };
+            if !re.is_match(haystack) {
+                bit_util::set_bit(bool_slice, i);
+            }
         }
-    }
+    };
 
     let data = unsafe {
         ArrayData::new_unchecked(
@@ -431,11 +493,47 @@ pub fn nlike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
             None,
             null_bit_buffer,
             0,
-            vec![result.finish()],
+            vec![bool_buf.into()],
             vec![],
         )
     };
     Ok(BooleanArray::from(data))
+}
+
+/// Perform SQL `left NOT LIKE right` operation on [`StringArray`] /
+/// [`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn nlike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &str,
+) -> Result<BooleanArray> {
+    nlike_scalar(left, right)
+}
+
+/// Perform SQL `left NOT LIKE right` operation on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn nlike_dict_scalar<K: ArrowNumericType>(
+    left: &DictionaryArray<K>,
+    right: &str,
+) -> Result<BooleanArray> {
+    match left.value_type() {
+        DataType::Utf8 => {
+            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
+            nlike_scalar(left, right)
+        }
+        DataType::LargeUtf8 => {
+            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
+            nlike_scalar(left, right)
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "nlike_dict_scalar only supports DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
 }
 
 /// Perform SQL `left ILIKE right` operation on [`StringArray`] /
@@ -456,22 +554,25 @@ pub fn ilike_utf8<OffsetSize: OffsetSizeTrait>(
     })
 }
 
-/// Perform SQL `left ILIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
-    left: &GenericStringArray<OffsetSize>,
+#[inline]
+fn ilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
+    left: L,
     right: &str,
 ) -> Result<BooleanArray> {
     let null_bit_buffer = left.data().null_buffer().cloned();
-    let mut result = BooleanBufferBuilder::new(left.len());
+    let bytes = bit_util::ceil(left.len(), 8);
+    let mut bool_buf = MutableBuffer::from_len_zeroed(bytes);
+    let bool_slice = bool_buf.as_slice_mut();
 
     if !right.contains(is_like_pattern) {
         // fast path, can use equals
         let right_uppercase = right.to_uppercase();
         for i in 0..left.len() {
-            result.append(left.value(i).to_uppercase() == right_uppercase);
+            unsafe {
+                if left.value_unchecked(i).to_uppercase() == right_uppercase {
+                    bit_util::set_bit(bool_slice, i);
+                }
+            }
         }
     } else if right.ends_with('%')
         && !right.ends_with("\\%")
@@ -480,13 +581,39 @@ pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
         // fast path, can use starts_with
         let start_str = &right[..right.len() - 1].to_uppercase();
         for i in 0..left.len() {
-            result.append(left.value(i).to_uppercase().starts_with(start_str));
+            unsafe {
+                if left
+                    .value_unchecked(i)
+                    .to_uppercase()
+                    .starts_with(start_str)
+                {
+                    bit_util::set_bit(bool_slice, i);
+                }
+            }
         }
     } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
         // fast path, can use ends_with
         let ends_str = &right[1..].to_uppercase();
+
         for i in 0..left.len() {
-            result.append(left.value(i).to_uppercase().ends_with(ends_str));
+            unsafe {
+                if left.value_unchecked(i).to_uppercase().ends_with(ends_str) {
+                    bit_util::set_bit(bool_slice, i);
+                }
+            }
+        }
+    } else if right.starts_with('%')
+        && right.ends_with('%')
+        && !right[1..right.len() - 1].contains(is_like_pattern)
+    {
+        // fast path, can use contains
+        let contains = &right[1..right.len() - 1].to_uppercase();
+        for i in 0..left.len() {
+            unsafe {
+                if left.value_unchecked(i).to_uppercase().contains(contains) {
+                    bit_util::set_bit(bool_slice, i);
+                }
+            }
         }
     } else {
         let re_pattern = replace_like_wildcards(right)?;
@@ -496,11 +623,14 @@ pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
                 e
             ))
         })?;
+
         for i in 0..left.len() {
-            let haystack = left.value(i);
-            result.append(re.is_match(haystack));
+            let haystack = unsafe { left.value_unchecked(i) };
+            if re.is_match(haystack) {
+                bit_util::set_bit(bool_slice, i);
+            }
         }
-    }
+    };
 
     let data = unsafe {
         ArrayData::new_unchecked(
@@ -509,11 +639,47 @@ pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
             None,
             null_bit_buffer,
             0,
-            vec![result.finish()],
+            vec![bool_buf.into()],
             vec![],
         )
     };
     Ok(BooleanArray::from(data))
+}
+
+/// Perform SQL `left ILIKE right` operation on [`StringArray`] /
+/// [`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &str,
+) -> Result<BooleanArray> {
+    ilike_scalar(left, right)
+}
+
+/// Perform SQL `left ILIKE right` operation on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn ilike_dict_scalar<K: ArrowNumericType>(
+    left: &DictionaryArray<K>,
+    right: &str,
+) -> Result<BooleanArray> {
+    match left.value_type() {
+        DataType::Utf8 => {
+            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
+            ilike_scalar(left, right)
+        }
+        DataType::LargeUtf8 => {
+            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
+            ilike_scalar(left, right)
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "ilike_dict_scalar only supports DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
 }
 
 /// Perform SQL `left NOT ILIKE right` operation on [`StringArray`] /
@@ -534,22 +700,25 @@ pub fn nilike_utf8<OffsetSize: OffsetSizeTrait>(
     })
 }
 
-/// Perform SQL `left NOT ILIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
-    left: &GenericStringArray<OffsetSize>,
+#[inline]
+fn nilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
+    left: L,
     right: &str,
 ) -> Result<BooleanArray> {
     let null_bit_buffer = left.data().null_buffer().cloned();
-    let mut result = BooleanBufferBuilder::new(left.len());
+    let bytes = bit_util::ceil(left.len(), 8);
+    let mut bool_buf = MutableBuffer::from_len_zeroed(bytes);
+    let bool_slice = bool_buf.as_slice_mut();
 
     if !right.contains(is_like_pattern) {
         // fast path, can use equals
         let right_uppercase = right.to_uppercase();
         for i in 0..left.len() {
-            result.append(left.value(i).to_uppercase() != right_uppercase);
+            unsafe {
+                if left.value_unchecked(i).to_uppercase() != right_uppercase {
+                    bit_util::set_bit(bool_slice, i);
+                }
+            }
         }
     } else if right.ends_with('%')
         && !right.ends_with("\\%")
@@ -558,13 +727,39 @@ pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
         // fast path, can use starts_with
         let start_str = &right[..right.len() - 1].to_uppercase();
         for i in 0..left.len() {
-            result.append(!left.value(i).to_uppercase().starts_with(start_str));
+            unsafe {
+                if !(left
+                    .value_unchecked(i)
+                    .to_uppercase()
+                    .starts_with(start_str))
+                {
+                    bit_util::set_bit(bool_slice, i);
+                }
+            }
         }
     } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
         // fast path, can use ends_with
-        let end_str = &right[1..].to_uppercase();
+        let ends_str = &right[1..].to_uppercase();
+
         for i in 0..left.len() {
-            result.append(!left.value(i).to_uppercase().ends_with(end_str));
+            unsafe {
+                if !(left.value_unchecked(i).to_uppercase().ends_with(ends_str)) {
+                    bit_util::set_bit(bool_slice, i);
+                }
+            }
+        }
+    } else if right.starts_with('%')
+        && right.ends_with('%')
+        && !right[1..right.len() - 1].contains(is_like_pattern)
+    {
+        // fast path, can use contains
+        let contains = &right[1..right.len() - 1].to_uppercase();
+        for i in 0..left.len() {
+            unsafe {
+                if !(left.value_unchecked(i).to_uppercase().contains(contains)) {
+                    bit_util::set_bit(bool_slice, i);
+                }
+            }
         }
     } else {
         let re_pattern = replace_like_wildcards(right)?;
@@ -574,11 +769,14 @@ pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
                 e
             ))
         })?;
+
         for i in 0..left.len() {
-            let haystack = left.value(i);
-            result.append(!re.is_match(haystack));
+            let haystack = unsafe { left.value_unchecked(i) };
+            if !re.is_match(haystack) {
+                bit_util::set_bit(bool_slice, i);
+            }
         }
-    }
+    };
 
     let data = unsafe {
         ArrayData::new_unchecked(
@@ -587,11 +785,47 @@ pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
             None,
             null_bit_buffer,
             0,
-            vec![result.finish()],
+            vec![bool_buf.into()],
             vec![],
         )
     };
     Ok(BooleanArray::from(data))
+}
+
+/// Perform SQL `left NOT ILIKE right` operation on [`StringArray`] /
+/// [`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &str,
+) -> Result<BooleanArray> {
+    nilike_scalar(left, right)
+}
+
+/// Perform SQL `left NOT ILIKE right` operation on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn nilike_dict_scalar<K: ArrowNumericType>(
+    left: &DictionaryArray<K>,
+    right: &str,
+) -> Result<BooleanArray> {
+    match left.value_type() {
+        DataType::Utf8 => {
+            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
+            nilike_scalar(left, right)
+        }
+        DataType::LargeUtf8 => {
+            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
+            nilike_scalar(left, right)
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "nilike_dict_scalar only supports DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
 }
 
 /// Perform SQL `array ~ regex_array` operation on [`StringArray`] / [`LargeStringArray`].
@@ -5889,5 +6123,177 @@ mod tests {
             vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
         );
         assert_eq!(gt_eq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_dict_like_kernels() {
+        let data =
+            vec![Some("Earth"), Some("Fire"), Some("Water"), Some("Air"), None, Some("Air")];
+
+        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
+
+        assert_eq!(
+            like_dict_scalar(&dict_array, "Air").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            like_dict_scalar(&dict_array, "Wa%").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            like_dict_scalar(&dict_array, "%r").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            like_dict_scalar(&dict_array, "%i%").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            like_dict_scalar(&dict_array, "%a%r%").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
+            ),
+        );
+    }
+
+    #[test]
+    fn test_dict_nlike_kernels() {
+        let data =
+            vec![Some("Earth"), Some("Fire"), Some("Water"), Some("Air"), None, Some("Air")];
+
+        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
+
+        assert_eq!(
+            nlike_dict_scalar(&dict_array, "Air").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(true), Some(true), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            nlike_dict_scalar(&dict_array, "Wa%").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(true), Some(false), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            nlike_dict_scalar(&dict_array, "%r").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            nlike_dict_scalar(&dict_array, "%i%").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            nlike_dict_scalar(&dict_array, "%a%r%").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
+            ),
+        );
+    }
+
+    #[test]
+    fn test_dict_ilike_kernels() {
+        let data =
+            vec![Some("Earth"), Some("Fire"), Some("Water"), Some("Air"), None, Some("Air")];
+
+        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
+
+        assert_eq!(
+            ilike_dict_scalar(&dict_array, "air").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            ilike_dict_scalar(&dict_array, "wa%").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            ilike_dict_scalar(&dict_array, "%R").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            ilike_dict_scalar(&dict_array, "%I%").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            ilike_dict_scalar(&dict_array, "%A%r%").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(true), None, Some(true)]
+            ),
+        );
+    }
+
+    #[test]
+    fn test_dict_nilike_kernels() {
+        let data =
+            vec![Some("Earth"), Some("Fire"), Some("Water"), Some("Air"), None, Some("Air")];
+
+        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
+
+        assert_eq!(
+            nilike_dict_scalar(&dict_array, "air").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(true), Some(true), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            nilike_dict_scalar(&dict_array, "wa%").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(true), Some(false), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            nilike_dict_scalar(&dict_array, "%R").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            nilike_dict_scalar(&dict_array, "%I%").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            nilike_dict_scalar(&dict_array, "%A%r%").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(false), None, Some(false)]
+            ),
+        );
     }
 }
