@@ -1855,6 +1855,7 @@ where
     compare_op(left_array, right_array, op)
 }
 
+#[cfg(feature = "dyn_cmp_dict")]
 macro_rules! typed_dict_non_dict_cmp {
     ($LEFT: expr, $RIGHT: expr, $LEFT_KEY_TYPE: expr, $RIGHT_TYPE: tt, $OP_BOOL: expr, $OP: expr) => {{
         match $LEFT_KEY_TYPE {
@@ -1898,6 +1899,7 @@ macro_rules! typed_dict_non_dict_cmp {
     }};
 }
 
+#[cfg(feature = "dyn_cmp_dict")]
 macro_rules! typed_cmp_dict_non_dict {
     ($LEFT: expr, $RIGHT: expr, $OP_BOOL: expr, $OP: expr) => {{
        match ($LEFT.data_type(), $RIGHT.data_type()) {
@@ -1946,6 +1948,16 @@ macro_rules! typed_cmp_dict_non_dict {
         _ => unreachable!("Should not reach this branch"),
     }
     }};
+}
+
+#[cfg(not(feature = "dyn_cmp_dict"))]
+macro_rules! typed_cmp_dict_non_dict {
+    ($LEFT: expr, $RIGHT: expr, $OP_BOOL: expr, $OP: expr) => {{
+        Err(ArrowError::CastError(format!(
+            "Comparing dictionary array of type {} with array of type {} requires \"dyn_cmp_dict\" feature",
+            $LEFT.data_type(), $RIGHT.data_type()
+        )))
+    }}
 }
 
 macro_rules! typed_compares {
@@ -2064,6 +2076,7 @@ macro_rules! typed_compares {
 }
 
 /// Applies $OP to $LEFT and $RIGHT which are two dictionaries which have (the same) key type $KT
+#[cfg(feature = "dyn_cmp_dict")]
 macro_rules! typed_dict_cmp {
     ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_FLOAT: expr, $OP_BOOL: expr, $KT: tt) => {{
         match ($LEFT.value_type(), $RIGHT.value_type()) {
@@ -2196,6 +2209,7 @@ macro_rules! typed_dict_cmp {
     }};
 }
 
+#[cfg(feature = "dyn_cmp_dict")]
 macro_rules! typed_dict_compares {
    // Applies `LEFT OP RIGHT` when `LEFT` and `RIGHT` both are `DictionaryArray`
     ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_FLOAT: expr, $OP_BOOL: expr) => {{
@@ -2260,8 +2274,19 @@ macro_rules! typed_dict_compares {
     }};
 }
 
+#[cfg(not(feature = "dyn_cmp_dict"))]
+macro_rules! typed_dict_compares {
+    ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_FLOAT: expr, $OP_BOOL: expr) => {{
+        Err(ArrowError::CastError(format!(
+            "Comparing array of type {} with array of type {} requires \"dyn_cmp_dict\" feature",
+            $LEFT.data_type(), $RIGHT.data_type()
+        )))
+    }}
+}
+
 /// Perform given operation on `DictionaryArray` and `PrimitiveArray`. The value
 /// type of `DictionaryArray` is same as `PrimitiveArray`'s type.
+#[cfg(feature = "dyn_cmp_dict")]
 fn cmp_dict_primitive<K, T, F>(
     left: &DictionaryArray<K>,
     right: &dyn Array,
@@ -2282,6 +2307,7 @@ where
 /// Perform given operation on two `DictionaryArray`s which value type is
 /// primitive type. Returns an error if the two arrays have different value
 /// type
+#[cfg(feature = "dyn_cmp_dict")]
 pub fn cmp_dict<K, T, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
@@ -2301,6 +2327,7 @@ where
 
 /// Perform the given operation on two `DictionaryArray`s which value type is
 /// `DataType::Boolean`.
+#[cfg(feature = "dyn_cmp_dict")]
 pub fn cmp_dict_bool<K, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
@@ -2319,6 +2346,7 @@ where
 
 /// Perform the given operation on two `DictionaryArray`s which value type is
 /// `DataType::Utf8` or `DataType::LargeUtf8`.
+#[cfg(feature = "dyn_cmp_dict")]
 pub fn cmp_dict_utf8<K, OffsetSize: OffsetSizeTrait, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
@@ -2340,6 +2368,7 @@ where
 
 /// Perform the given operation on two `DictionaryArray`s which value type is
 /// `DataType::Binary` or `DataType::LargeBinary`.
+#[cfg(feature = "dyn_cmp_dict")]
 pub fn cmp_dict_binary<K, OffsetSize: OffsetSizeTrait, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
