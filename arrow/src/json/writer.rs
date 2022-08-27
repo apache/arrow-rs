@@ -111,11 +111,14 @@ use serde_json::Value;
 use crate::array::*;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
+use crate::json::JsonSerializable;
 use crate::record_batch::RecordBatch;
 
-fn primitive_array_to_json<T: ArrowPrimitiveType>(
-    array: &ArrayRef,
-) -> Result<Vec<Value>> {
+fn primitive_array_to_json<T>(array: &ArrayRef) -> Result<Vec<Value>>
+where
+    T: ArrowPrimitiveType,
+    T::Native: JsonSerializable,
+{
     Ok(as_primitive_array::<T>(array)
         .iter()
         .map(|maybe_value| match maybe_value {
@@ -239,12 +242,15 @@ macro_rules! set_temporal_column_by_array_type {
     };
 }
 
-fn set_column_by_primitive_type<T: ArrowPrimitiveType>(
+fn set_column_by_primitive_type<T>(
     rows: &mut [JsonMap<String, Value>],
     row_count: usize,
     array: &ArrayRef,
     col_name: &str,
-) {
+) where
+    T: ArrowPrimitiveType,
+    T::Native: JsonSerializable,
+{
     let primitive_arr = as_primitive_array::<T>(array);
 
     rows.iter_mut()
