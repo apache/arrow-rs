@@ -5271,6 +5271,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_i8_array() {
         // Construct a value array
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
@@ -5291,6 +5292,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_u64_array() {
         let values = UInt64Array::from_iter_values([10_u64, 11, 12, 13, 14, 15, 16, 17]);
 
@@ -5312,6 +5314,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_utf8_array() {
         let test1 = vec!["a", "a", "b", "c"];
         let test2 = vec!["a", "b", "b", "c"];
@@ -5339,6 +5342,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_binary_array() {
         let values: BinaryArray = ["hello", "", "parquet"]
             .into_iter()
@@ -5363,6 +5367,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_interval_array() {
         let values = IntervalDayTimeArray::from(vec![1, 6, 10, 2, 3, 5]);
 
@@ -5384,6 +5389,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_date_array() {
         let values = Date32Array::from(vec![1, 6, 10, 2, 3, 5]);
 
@@ -5405,6 +5411,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_bool_array() {
         let values = BooleanArray::from(vec![true, false]);
 
@@ -5426,6 +5433,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_lt_dyn_gt_dyn_dictionary_i8_array() {
         // Construct a value array
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
@@ -5455,6 +5463,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_lt_dyn_gt_dyn_dictionary_bool_array() {
         let values = BooleanArray::from(vec![true, false]);
 
@@ -5497,6 +5506,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_i8_i8_array() {
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
         let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
@@ -5531,6 +5541,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_lt_dyn_lt_eq_dyn_gt_dyn_gt_eq_dyn_dictionary_i8_i8_array() {
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
         let keys = Int8Array::from_iter_values([2_i8, 3, 4]);

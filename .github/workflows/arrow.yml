@@ -51,9 +51,9 @@ jobs:
       - name: Test
         run: |
           cargo test -p arrow
-      - name: Test --features=force_validate,prettyprint,ipc_compression,ffi
+      - name: Test --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict
         run: |
-          cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi
+          cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict
       - name: Test --features=nan_ordering
         run: |
           cargo test -p arrow --features "nan_ordering"
