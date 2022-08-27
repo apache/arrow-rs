@@ -22,19 +22,19 @@
 use hex::decode;
 use num::BigInt;
 use num::Signed;
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map as SJMap, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::array::*;
-use crate::buffer::{Buffer, MutableBuffer};
-use crate::compute;
-use crate::datatypes::*;
-use crate::error::{ArrowError, Result};
-use crate::record_batch::{RecordBatch, RecordBatchReader};
-use crate::util::bit_util;
-use crate::util::decimal::Decimal256;
+use arrow::array::*;
+use arrow::buffer::{Buffer, MutableBuffer};
+use arrow::compute;
+use arrow::datatypes::*;
+use arrow::error::{ArrowError, Result};
+use arrow::record_batch::{RecordBatch, RecordBatchReader};
+use arrow::util::bit_util;
+use arrow::util::decimal::Decimal256;
 
 /// A struct that represents an Arrow file with a schema and record batches
 #[derive(Deserialize, Serialize, Debug)]
@@ -1047,7 +1047,7 @@ mod tests {
     use std::io::Read;
     use std::sync::Arc;
 
-    use crate::buffer::Buffer;
+    use arrow::buffer::Buffer;
 
     #[test]
     fn test_schema_equality() {
@@ -1112,7 +1112,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // running forever
     fn test_arrow_data_equality() {
         let secs_tz = Some("Europe/Budapest".to_string());
         let millis_tz = Some("America/New_York".to_string());
@@ -1333,7 +1332,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let mut file = File::open("test/data/integration.json").unwrap();
+        let mut file = File::open("data/integration.json").unwrap();
         let mut json = String::new();
         file.read_to_string(&mut json).unwrap();
         let arrow_json: ArrowJson = serde_json::from_str(&json).unwrap();

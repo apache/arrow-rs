@@ -20,8 +20,7 @@ use arrow::datatypes::{DataType, Field};
 use arrow::error::{ArrowError, Result};
 use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::FileWriter;
-use arrow::util::integration_util::*;
-use arrow_integration_testing::read_json_file;
+use arrow_integration_testing::{read_json_file, util::*};
 use clap::Parser;
 use std::fs::File;
 

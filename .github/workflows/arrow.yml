@@ -64,6 +64,8 @@ jobs:
           cargo run --example dynamic_types
           cargo run --example read_csv
           cargo run --example read_csv_infer_schema
+      - name: Run non-archery based integration-tests
+        run: cargo test -p arrow-integration-testing
 
   # test compilaton features
   linux-features:
