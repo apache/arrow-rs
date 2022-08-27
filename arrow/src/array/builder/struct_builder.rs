@@ -107,14 +107,14 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::UInt64 => Box::new(UInt64Builder::with_capacity(capacity)),
         DataType::Float32 => Box::new(Float32Builder::with_capacity(capacity)),
         DataType::Float64 => Box::new(Float64Builder::with_capacity(capacity)),
-        DataType::Binary => Box::new(BinaryBuilder::new(capacity)),
+        DataType::Binary => Box::new(BinaryBuilder::with_capacity(1024, capacity)),
         DataType::FixedSizeBinary(len) => {
             Box::new(FixedSizeBinaryBuilder::with_capacity(capacity, *len))
         }
         DataType::Decimal128(precision, scale) => Box::new(
             Decimal128Builder::with_capacity(capacity, *precision, *scale),
         ),
-        DataType::Utf8 => Box::new(StringBuilder::new(capacity)),
+        DataType::Utf8 => Box::new(StringBuilder::with_capacity(1024, capacity)),
         DataType::Date32 => Box::new(Date32Builder::with_capacity(capacity)),
         DataType::Date64 => Box::new(Date64Builder::with_capacity(capacity)),
         DataType::Time32(TimeUnit::Second) => {
@@ -255,7 +255,7 @@ mod tests {
 
     #[test]
     fn test_struct_array_builder() {
-        let string_builder = StringBuilder::new(4);
+        let string_builder = StringBuilder::new();
         let int_builder = Int32Builder::new();
 
         let mut fields = Vec::new();

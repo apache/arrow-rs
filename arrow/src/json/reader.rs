@@ -798,7 +798,8 @@ impl Decoder {
     {
         let mut builder: Box<dyn ArrayBuilder> = match data_type {
             DataType::Utf8 => {
-                let values_builder = StringBuilder::new(rows.len() * 5);
+                let values_builder =
+                    StringBuilder::with_capacity(rows.len(), rows.len() * 5);
                 Box::new(ListBuilder::new(values_builder))
             }
             DataType::Dictionary(_, _) => {
@@ -902,7 +903,7 @@ impl Decoder {
         T: ArrowPrimitiveType + ArrowDictionaryKeyType,
     {
         let key_builder = PrimitiveBuilder::<T>::with_capacity(row_len);
-        let values_builder = StringBuilder::new(row_len * 5);
+        let values_builder = StringBuilder::with_capacity(row_len, row_len * 5);
         StringDictionaryBuilder::new(key_builder, values_builder)
     }
 

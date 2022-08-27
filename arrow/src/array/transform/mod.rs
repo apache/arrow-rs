@@ -1507,7 +1507,7 @@ mod tests {
     #[test]
     fn test_list_of_strings_append() -> Result<()> {
         // [["alpha", "beta", None]]
-        let mut builder = ListBuilder::new(StringBuilder::new(32));
+        let mut builder = ListBuilder::new(StringBuilder::new());
         builder.values().append_value("Hello");
         builder.values().append_value("Arrow");
         builder.values().append_null();
@@ -1515,7 +1515,7 @@ mod tests {
         let a = builder.finish();
 
         // [["alpha", "beta"], [None], ["gamma", "delta", None]]
-        let mut builder = ListBuilder::new(StringBuilder::new(32));
+        let mut builder = ListBuilder::new(StringBuilder::new());
         builder.values().append_value("alpha");
         builder.values().append_value("beta");
         builder.append(true);

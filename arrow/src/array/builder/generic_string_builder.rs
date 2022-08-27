@@ -29,10 +29,9 @@ pub struct GenericStringBuilder<OffsetSize: OffsetSizeTrait> {
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
     /// Creates a new [`GenericStringBuilder`],
-    /// `capacity` is the number of bytes of string data to pre-allocate space for in this builder
-    pub fn new(capacity: usize) -> Self {
+    pub fn new() -> Self {
         Self {
-            builder: GenericBinaryBuilder::new(capacity),
+            builder: GenericBinaryBuilder::new(),
         }
     }
 
@@ -82,6 +81,12 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> Default for GenericStringBuilder<OffsetSize> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericStringBuilder<OffsetSize> {
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
@@ -121,7 +126,7 @@ mod tests {
     use crate::array::{Array, ArrayBuilder, OffsetSizeTrait};
 
     fn _test_generic_string_array_builder<O: OffsetSizeTrait>() {
-        let mut builder = GenericStringBuilder::<O>::new(20);
+        let mut builder = GenericStringBuilder::<O>::new();
         let owned = "arrow".to_owned();
 
         builder.append_value("hello");

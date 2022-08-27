@@ -44,7 +44,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                 let strings = build_strings(dict_size, total_size, key_len);
                 b.iter(|| {
                     let keys = Int32Builder::with_capacity(strings.len());
-                    let values = StringBuilder::new((key_len + 1) * dict_size);
+                    let values = StringBuilder::with_capacity(
+                        key_len + 1,
+                        (key_len + 1) * dict_size,
+                    );
                     let mut builder = StringDictionaryBuilder::new(keys, values);
 
                     for val in &strings {
