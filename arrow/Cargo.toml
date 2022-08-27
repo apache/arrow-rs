@@ -38,10 +38,10 @@ path = "src/lib.rs"
 bench = false
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-ahash = { version = "0.8", default-features = false, features=["compile-time-rng"] }
+ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ahash = { version = "0.8", default-features = false, features=["runtime-rng"] }
+ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
 serde = { version = "1.0", default-features = false }
@@ -105,7 +105,7 @@ tempfile = { version = "3", default-features = false }
 [[example]]
 name = "dynamic_types"
 required-features = ["prettyprint"]
-path="./examples/dynamic_types.rs"
+path = "./examples/dynamic_types.rs"
 
 [[bench]]
 name = "aggregate_kernels"
@@ -147,7 +147,7 @@ required-features = ["test_utils"]
 [[bench]]
 name = "comparison_kernels"
 harness = false
-required-features = ["test_utils"]
+required-features = ["test_utils", "dyn_cmp_dict"]
 
 [[bench]]
 name = "filter_kernels"
