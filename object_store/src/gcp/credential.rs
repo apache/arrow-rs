@@ -16,16 +16,12 @@
 // under the License.
 
 use crate::client::retry::RetryExt;
-use crate::client::token::{TemporaryToken, TokenCache};
+use crate::client::token::TemporaryToken;
 use crate::RetryConfig;
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT};
 use reqwest::{Client, Method};
 use ring::signature::RsaKeyPair;
 use snafu::{ResultExt, Snafu};
 use std::time::{Duration, Instant};
-
-const CONTENT_TYPE_JSON: &str = "application/json";
-const AZURE_STORAGE_TOKEN_SCOPE: &str = "https://storage.azure.com/.default";
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -223,83 +219,4 @@ fn decode_first_rsa_key(private_key_pem: String) -> Result<RsaKeyPair> {
 fn b64_encode_obj<T: serde::Serialize>(obj: &T) -> Result<String> {
     let string = serde_json::to_string(obj).context(EncodeSnafu)?;
     Ok(base64::encode_config(string, base64::URL_SAFE_NO_PAD))
-}
-
-/// Encapsulates the logic to perform an OAuth token challenge
-#[derive(Debug)]
-pub struct ClientSecretOAuthProvider {
-    scope: String,
-    token_url: String,
-    client_id: String,
-    client_secret: String,
-    cache: TokenCache<String>,
-}
-
-impl ClientSecretOAuthProvider {
-    /// Create a new [`ClientSecretOAuthProvider`] for an azure backed store
-    pub fn new_azure(
-        client_id: String,
-        client_secret: String,
-        tenant_id: String,
-        authority_host: Option<String>,
-    ) -> Self {
-        let authority_host = authority_host.unwrap_or_else(|| {
-            crate::azure::authority_hosts::AZURE_PUBLIC_CLOUD.to_owned()
-        });
-
-        Self {
-            scope: AZURE_STORAGE_TOKEN_SCOPE.to_owned(),
-            token_url: format!("{}/{}/oauth2/v2.0/token", authority_host, tenant_id),
-            client_id,
-            client_secret,
-            cache: TokenCache::default(),
-        }
-    }
-
-    /// Fetch a token
-    pub async fn fetch_token(
-        &self,
-        client: &Client,
-        retry: &RetryConfig,
-    ) -> Result<String> {
-        self.cache
-            .get_or_insert_with(|| self.fetch_token_inner(client, retry))
-            .await
-    }
-
-    /// Fetch a fresh token
-    async fn fetch_token_inner(
-        &self,
-        client: &Client,
-        retry: &RetryConfig,
-    ) -> Result<TemporaryToken<String>> {
-        let mut headers = HeaderMap::new();
-        headers.append(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_JSON));
-
-        let mut params = std::collections::HashMap::new();
-        params.insert("client_id", self.client_id.as_str());
-        params.insert("client_secret", self.client_secret.as_str());
-        params.insert("scope", self.scope.as_str());
-        params.insert("grant_type", "client_credentials");
-
-        let response: TokenResponse = client
-            .request(Method::POST, &self.token_url)
-            .headers(headers)
-            .form(&params)
-            .send_retry(retry)
-            .await
-            .context(TokenRequestSnafu)?
-            .error_for_status()
-            .context(TokenResponseBodySnafu)?
-            .json()
-            .await
-            .context(TokenResponseBodySnafu)?;
-
-        let token = TemporaryToken {
-            token: response.access_token,
-            expiry: Instant::now() + Duration::from_secs(response.expires_in),
-        };
-
-        Ok(token)
-    }
 }

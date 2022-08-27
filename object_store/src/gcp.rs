@@ -48,12 +48,16 @@ use tokio::io::AsyncWrite;
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
 use crate::{
-    client::{oauth::OAuthProvider, token::TokenCache},
+    client::token::TokenCache,
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::{Path, DELIMITER},
     util::{format_http_range, format_prefix},
     GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result, RetryConfig,
 };
+
+use credential::OAuthProvider;
+
+mod credential;
 
 #[derive(Debug, Snafu)]
 enum Error {
@@ -115,6 +119,9 @@ enum Error {
 
     #[snafu(display("Missing service account path"))]
     MissingServiceAccountPath,
+
+    #[snafu(display("GCP credential error: {}", source))]
+    Credential { source: credential::Error },
 }
 
 impl From<Error> for super::Error {
@@ -240,7 +247,8 @@ impl GoogleCloudStorageClient {
                 .get_or_insert_with(|| {
                     oauth_provider.fetch_token(&self.client, &self.retry_config)
                 })
-                .await?)
+                .await
+                .context(CredentialSnafu)?)
         } else {
             Ok("".to_owned())
         }
@@ -818,7 +826,8 @@ impl GoogleCloudStorageBuilder {
                     audience,
                 )
             })
-            .transpose()?;
+            .transpose()
+            .context(CredentialSnafu)?;
 
         let encoded_bucket_name =
             percent_encode(bucket_name.as_bytes(), NON_ALPHANUMERIC).to_string();
