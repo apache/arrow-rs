@@ -1188,7 +1188,7 @@ mod tests {
             Field::new("item", DataType::Struct(vec![int_field.clone()]), true);
         let list_field = Field::new("list", DataType::List(Box::new(item_field)), true);
 
-        let int_builder = Int32Builder::new(10);
+        let int_builder = Int32Builder::with_capacity(10);
         let struct_builder =
             StructBuilder::new(vec![int_field], vec![Box::new(int_builder)]);
         let mut list_builder = ListBuilder::new(struct_builder);

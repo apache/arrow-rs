@@ -261,14 +261,12 @@ impl UnionArray {
         }
     }
 
-    /// Returns the array's value at `index`.
-    ///
+    /// Returns the array's value at index `i`.
     /// # Panics
-    ///
-    /// Panics if `index` is greater than the length of the array.
-    pub fn value(&self, index: usize) -> ArrayRef {
-        let type_id = self.type_id(index);
-        let value_offset = self.value_offset(index) as usize;
+    /// Panics if index `i` is out of bounds
+    pub fn value(&self, i: usize) -> ArrayRef {
+        let type_id = self.type_id(i);
+        let value_offset = self.value_offset(i) as usize;
         let child_data = self.boxed_fields[type_id as usize].clone();
         child_data.slice(value_offset, 1)
     }

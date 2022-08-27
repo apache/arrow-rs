@@ -20,6 +20,7 @@ use std::collections::HashMap;
 
 use arrow::{
     array::ArrayRef,
+    buffer::Buffer,
     datatypes::SchemaRef,
     ipc::{self, reader, writer},
     record_batch::RecordBatch,
@@ -264,7 +265,7 @@ async fn receive_batch_flight_data(
 
     while message.header_type() == ipc::MessageHeader::DictionaryBatch {
         reader::read_dictionary(
-            &data.data_body,
+            &Buffer::from(&data.data_body),
             message
                 .header_as_dictionary_batch()
                 .expect("Error parsing dictionary"),

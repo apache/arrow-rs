@@ -627,15 +627,12 @@ mod tests {
         ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReader,
         ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
     };
-    use crate::arrow::buffer::converter::{
-        Converter, FixedSizeArrayConverter, IntervalDayTimeArrayConverter,
-    };
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
     use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
     use crate::data_type::{
         BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray,
-        FixedLenByteArrayType, Int32Type, Int64Type,
+        FixedLenByteArrayType, Int32Type, Int64Type, Int96Type,
     };
     use crate::errors::Result;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
@@ -836,25 +833,58 @@ mod tests {
 
     #[test]
     fn test_fixed_length_binary_column_reader() {
-        let converter = FixedSizeArrayConverter::new(20);
         run_single_column_reader_tests::<FixedLenByteArrayType, _, RandFixedLenGen>(
             20,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(converter.convert(vals.to_vec()).unwrap()),
+            |vals| {
+                let mut builder = FixedSizeBinaryBuilder::with_capacity(vals.len(), 20);
+                for val in vals {
+                    match val {
+                        Some(b) => builder.append_value(b).unwrap(),
+                        None => builder.append_null(),
+                    }
+                }
+                Arc::new(builder.finish())
+            },
             &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
         );
     }
 
     #[test]
     fn test_interval_day_time_column_reader() {
-        let converter = IntervalDayTimeArrayConverter {};
         run_single_column_reader_tests::<FixedLenByteArrayType, _, RandFixedLenGen>(
             12,
             ConvertedType::INTERVAL,
             None,
-            |vals| Arc::new(converter.convert(vals.to_vec()).unwrap()),
+            |vals| {
+                Arc::new(
+                    vals.iter()
+                        .map(|x| {
+                            x.as_ref().map(|b| {
+                                i64::from_le_bytes(b.as_ref()[4..12].try_into().unwrap())
+                            })
+                        })
+                        .collect::<IntervalDayTimeArray>(),
+                )
+            },
             &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
+        );
+    }
+
+    #[test]
+    fn test_int96_single_column_reader_test() {
+        let encodings = &[Encoding::PLAIN, Encoding::RLE_DICTIONARY];
+        run_single_column_reader_tests::<Int96Type, _, Int96Type>(
+            2,
+            ConvertedType::NONE,
+            None,
+            |vals| {
+                Arc::new(TimestampNanosecondArray::from_iter(
+                    vals.iter().map(|x| x.map(|x| x.to_nanos())),
+                )) as _
+            },
+            encodings,
         );
     }
 
@@ -1338,6 +1368,10 @@ mod tests {
             // Test with no statistics
             TestOptions::new(2, 256, 91)
                 .with_null_percent(25)
+                .with_enabled_statistics(EnabledStatistics::None),
+            // Test with all null
+            TestOptions::new(2, 128, 91)
+                .with_null_percent(100)
                 .with_enabled_statistics(EnabledStatistics::None),
             // Test skip
 
@@ -2074,7 +2108,8 @@ mod tests {
         )
         .unwrap();
         for _ in 0..2 {
-            let mut list_builder = ListBuilder::new(Int32Builder::new(batch_size));
+            let mut list_builder =
+                ListBuilder::new(Int32Builder::with_capacity(batch_size));
             for _ in 0..(batch_size) {
                 list_builder.append(true);
             }

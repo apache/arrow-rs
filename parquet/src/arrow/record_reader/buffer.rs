@@ -18,6 +18,7 @@
 use std::marker::PhantomData;
 
 use crate::arrow::buffer::bit_util::iter_set_bits_rev;
+use crate::data_type::Int96;
 use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::datatypes::ArrowNativeType;
 
@@ -85,6 +86,7 @@ impl ScalarValue for u64 {}
 impl ScalarValue for i64 {}
 impl ScalarValue for f32 {}
 impl ScalarValue for f64 {}
+impl ScalarValue for Int96 {}
 
 /// A typed buffer similar to [`Vec<T>`] but using [`MutableBuffer`] for storage
 #[derive(Debug)]

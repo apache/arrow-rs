@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     fn test_append_values() {
-        let mut a = Int8Builder::new(0);
+        let mut a = Int8Builder::new();
         a.append_value(1);
         a.append_null();
         a.append_value(-2);

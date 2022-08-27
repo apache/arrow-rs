@@ -1084,7 +1084,7 @@ mod tests {
             ],
             vec![
                 Box::new(BooleanBuilder::with_capacity(values.len())),
-                Box::new(Int32Builder::new(values.len())),
+                Box::new(Int32Builder::with_capacity(values.len())),
             ],
         );
 
@@ -2039,7 +2039,7 @@ mod tests {
 
     #[test]
     fn test_take_dict() {
-        let keys_builder = Int16Builder::new(8);
+        let keys_builder = Int16Builder::new();
         let values_builder = StringBuilder::new(4);
 
         let mut dict_builder = StringDictionaryBuilder::new(keys_builder, values_builder);

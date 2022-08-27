@@ -901,7 +901,7 @@ impl Decoder {
     where
         T: ArrowPrimitiveType + ArrowDictionaryKeyType,
     {
-        let key_builder = PrimitiveBuilder::<T>::new(row_len);
+        let key_builder = PrimitiveBuilder::<T>::with_capacity(row_len);
         let values_builder = StringBuilder::new(row_len * 5);
         StringDictionaryBuilder::new(key_builder, values_builder)
     }

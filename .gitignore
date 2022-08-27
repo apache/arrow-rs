@@ -14,3 +14,6 @@ parquet/data.parquet
 justfile
 .prettierignore
 .env
+# local azurite file
+__azurite*
+__blobstorage__

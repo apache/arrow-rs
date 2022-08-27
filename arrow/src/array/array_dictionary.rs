@@ -329,7 +329,7 @@ impl<'a, T: ArrowDictionaryKeyType> FromIterator<Option<&'a str>> for Dictionary
     fn from_iter<I: IntoIterator<Item = Option<&'a str>>>(iter: I) -> Self {
         let it = iter.into_iter();
         let (lower, _) = it.size_hint();
-        let key_builder = PrimitiveBuilder::<T>::new(lower);
+        let key_builder = PrimitiveBuilder::<T>::with_capacity(lower);
         let value_builder = StringBuilder::new(256);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         it.for_each(|i| {
@@ -367,7 +367,7 @@ impl<'a, T: ArrowDictionaryKeyType> FromIterator<&'a str> for DictionaryArray<T>
     fn from_iter<I: IntoIterator<Item = &'a str>>(iter: I) -> Self {
         let it = iter.into_iter();
         let (lower, _) = it.size_hint();
-        let key_builder = PrimitiveBuilder::<T>::new(lower);
+        let key_builder = PrimitiveBuilder::<T>::with_capacity(lower);
         let value_builder = StringBuilder::new(256);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         it.for_each(|i| {
@@ -475,8 +475,7 @@ impl<'a, K: ArrowPrimitiveType, V: Sync> Array for TypedDictionaryArray<'a, K, V
 impl<'a, K, V> IntoIterator for TypedDictionaryArray<'a, K, V>
 where
     K: ArrowPrimitiveType,
-    V: Sync + Send,
-    &'a V: ArrayAccessor,
+    Self: ArrayAccessor,
 {
     type Item = Option<<Self as ArrayAccessor>::Item>;
     type IntoIter = ArrayIter<Self>;
@@ -491,21 +490,30 @@ where
     K: ArrowPrimitiveType,
     V: Sync + Send,
     &'a V: ArrayAccessor,
+    <&'a V as ArrayAccessor>::Item: Default,
 {
     type Item = <&'a V as ArrayAccessor>::Item;
 
     fn value(&self, index: usize) -> Self::Item {
-        assert!(self.dictionary.is_valid(index), "{}", index);
-        let value_idx = self.dictionary.keys.value(index).to_usize().unwrap();
-        // Dictionary indexes should be valid
-        unsafe { self.values.value_unchecked(value_idx) }
+        assert!(
+            index < self.len(),
+            "Trying to access an element at index {} from a TypedDictionaryArray of length {}",
+            index,
+            self.len()
+        );
+        unsafe { self.value_unchecked(index) }
     }
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         let val = self.dictionary.keys.value_unchecked(index);
         let value_idx = val.to_usize().unwrap();
-        // Dictionary indexes should be valid
-        self.values.value_unchecked(value_idx)
+
+        // As dictionary keys are only verified for non-null indexes
+        // we must check the value is within bounds
+        match value_idx < self.values.len() {
+            true => self.values.value_unchecked(value_idx),
+            false => Default::default(),
+        }
     }
 }
 
@@ -581,8 +589,8 @@ mod tests {
 
     #[test]
     fn test_dictionary_array_fmt_debug() {
-        let key_builder = PrimitiveBuilder::<UInt8Type>::new(3);
-        let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
+        let key_builder = PrimitiveBuilder::<UInt8Type>::with_capacity(3);
+        let value_builder = PrimitiveBuilder::<UInt32Type>::with_capacity(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(12345678).unwrap();
         builder.append_null();
@@ -593,8 +601,8 @@ mod tests {
             format!("{:?}", array)
         );
 
-        let key_builder = PrimitiveBuilder::<UInt8Type>::new(20);
-        let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
+        let key_builder = PrimitiveBuilder::<UInt8Type>::with_capacity(20);
+        let value_builder = PrimitiveBuilder::<UInt32Type>::with_capacity(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         for _ in 0..20 {
             builder.append(1).unwrap();
