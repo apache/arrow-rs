@@ -107,6 +107,16 @@ name = "dynamic_types"
 required-features = ["prettyprint"]
 path = "./examples/dynamic_types.rs"
 
+[[example]]
+name = "read_csv"
+required-features = ["prettyprint", "csv"]
+path = "./examples/read_csv.rs"
+
+[[example]]
+name = "read_csv_infer_schema"
+required-features = ["prettyprint", "csv"]
+path = "./examples/read_csv_infer_schema.rs"
+
 [[bench]]
 name = "aggregate_kernels"
 harness = false
@@ -180,6 +190,7 @@ required-features = ["test_utils"]
 [[bench]]
 name = "csv_writer"
 harness = false
+required-features = ["csv"]
 
 [[bench]]
 name = "json_reader"
