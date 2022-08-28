@@ -573,7 +573,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::Binary => {
-            let mut b = BinaryBuilder::new(json_col.count);
+            let mut b = BinaryBuilder::with_capacity(json_col.count, 1024);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -592,7 +592,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::LargeBinary => {
-            let mut b = LargeBinaryBuilder::new(json_col.count);
+            let mut b = LargeBinaryBuilder::with_capacity(json_col.count, 1024);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -611,7 +611,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::Utf8 => {
-            let mut b = StringBuilder::new(json_col.count);
+            let mut b = StringBuilder::with_capacity(json_col.count, 1024);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -627,7 +627,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::LargeUtf8 => {
-            let mut b = LargeStringBuilder::new(json_col.count);
+            let mut b = LargeStringBuilder::with_capacity(json_col.count, 1024);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()

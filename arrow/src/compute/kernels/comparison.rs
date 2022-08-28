@@ -2089,6 +2089,7 @@ where
     compare_op(left_array, right_array, op)
 }
 
+#[cfg(feature = "dyn_cmp_dict")]
 macro_rules! typed_dict_non_dict_cmp {
     ($LEFT: expr, $RIGHT: expr, $LEFT_KEY_TYPE: expr, $RIGHT_TYPE: tt, $OP_BOOL: expr, $OP: expr) => {{
         match $LEFT_KEY_TYPE {
@@ -2132,6 +2133,7 @@ macro_rules! typed_dict_non_dict_cmp {
     }};
 }
 
+#[cfg(feature = "dyn_cmp_dict")]
 macro_rules! typed_cmp_dict_non_dict {
     ($LEFT: expr, $RIGHT: expr, $OP_BOOL: expr, $OP: expr) => {{
        match ($LEFT.data_type(), $RIGHT.data_type()) {
@@ -2180,6 +2182,16 @@ macro_rules! typed_cmp_dict_non_dict {
         _ => unreachable!("Should not reach this branch"),
     }
     }};
+}
+
+#[cfg(not(feature = "dyn_cmp_dict"))]
+macro_rules! typed_cmp_dict_non_dict {
+    ($LEFT: expr, $RIGHT: expr, $OP_BOOL: expr, $OP: expr) => {{
+        Err(ArrowError::CastError(format!(
+            "Comparing dictionary array of type {} with array of type {} requires \"dyn_cmp_dict\" feature",
+            $LEFT.data_type(), $RIGHT.data_type()
+        )))
+    }}
 }
 
 macro_rules! typed_compares {
@@ -2298,6 +2310,7 @@ macro_rules! typed_compares {
 }
 
 /// Applies $OP to $LEFT and $RIGHT which are two dictionaries which have (the same) key type $KT
+#[cfg(feature = "dyn_cmp_dict")]
 macro_rules! typed_dict_cmp {
     ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_FLOAT: expr, $OP_BOOL: expr, $KT: tt) => {{
         match ($LEFT.value_type(), $RIGHT.value_type()) {
@@ -2430,6 +2443,7 @@ macro_rules! typed_dict_cmp {
     }};
 }
 
+#[cfg(feature = "dyn_cmp_dict")]
 macro_rules! typed_dict_compares {
    // Applies `LEFT OP RIGHT` when `LEFT` and `RIGHT` both are `DictionaryArray`
     ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_FLOAT: expr, $OP_BOOL: expr) => {{
@@ -2494,8 +2508,19 @@ macro_rules! typed_dict_compares {
     }};
 }
 
+#[cfg(not(feature = "dyn_cmp_dict"))]
+macro_rules! typed_dict_compares {
+    ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_FLOAT: expr, $OP_BOOL: expr) => {{
+        Err(ArrowError::CastError(format!(
+            "Comparing array of type {} with array of type {} requires \"dyn_cmp_dict\" feature",
+            $LEFT.data_type(), $RIGHT.data_type()
+        )))
+    }}
+}
+
 /// Perform given operation on `DictionaryArray` and `PrimitiveArray`. The value
 /// type of `DictionaryArray` is same as `PrimitiveArray`'s type.
+#[cfg(feature = "dyn_cmp_dict")]
 fn cmp_dict_primitive<K, T, F>(
     left: &DictionaryArray<K>,
     right: &dyn Array,
@@ -2516,6 +2541,7 @@ where
 /// Perform given operation on two `DictionaryArray`s which value type is
 /// primitive type. Returns an error if the two arrays have different value
 /// type
+#[cfg(feature = "dyn_cmp_dict")]
 pub fn cmp_dict<K, T, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
@@ -2535,6 +2561,7 @@ where
 
 /// Perform the given operation on two `DictionaryArray`s which value type is
 /// `DataType::Boolean`.
+#[cfg(feature = "dyn_cmp_dict")]
 pub fn cmp_dict_bool<K, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
@@ -2553,6 +2580,7 @@ where
 
 /// Perform the given operation on two `DictionaryArray`s which value type is
 /// `DataType::Utf8` or `DataType::LargeUtf8`.
+#[cfg(feature = "dyn_cmp_dict")]
 pub fn cmp_dict_utf8<K, OffsetSize: OffsetSizeTrait, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
@@ -2574,6 +2602,7 @@ where
 
 /// Perform the given operation on two `DictionaryArray`s which value type is
 /// `DataType::Binary` or `DataType::LargeBinary`.
+#[cfg(feature = "dyn_cmp_dict")]
 pub fn cmp_dict_binary<K, OffsetSize: OffsetSizeTrait, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
@@ -4265,7 +4294,7 @@ mod tests {
     // contains(null, null) = false
     #[test]
     fn test_contains_utf8() {
-        let values_builder = StringBuilder::new(10);
+        let values_builder = StringBuilder::new();
         let mut builder = ListBuilder::new(values_builder);
 
         builder.values().append_value("Lorem");
@@ -5253,7 +5282,7 @@ mod tests {
     #[test]
     fn test_eq_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -5281,7 +5310,7 @@ mod tests {
     #[test]
     fn test_lt_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -5310,7 +5339,7 @@ mod tests {
     #[test]
     fn test_lt_eq_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -5339,7 +5368,7 @@ mod tests {
     #[test]
     fn test_gt_eq_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -5369,7 +5398,7 @@ mod tests {
     #[test]
     fn test_gt_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -5398,7 +5427,7 @@ mod tests {
     #[test]
     fn test_neq_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -5476,6 +5505,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_i8_array() {
         // Construct a value array
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
@@ -5496,6 +5526,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_u64_array() {
         let values = UInt64Array::from_iter_values([10_u64, 11, 12, 13, 14, 15, 16, 17]);
 
@@ -5517,6 +5548,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_utf8_array() {
         let test1 = vec!["a", "a", "b", "c"];
         let test2 = vec!["a", "b", "b", "c"];
@@ -5544,6 +5576,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_binary_array() {
         let values: BinaryArray = ["hello", "", "parquet"]
             .into_iter()
@@ -5568,6 +5601,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_interval_array() {
         let values = IntervalDayTimeArray::from(vec![1, 6, 10, 2, 3, 5]);
 
@@ -5589,6 +5623,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_date_array() {
         let values = Date32Array::from(vec![1, 6, 10, 2, 3, 5]);
 
@@ -5610,6 +5645,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_bool_array() {
         let values = BooleanArray::from(vec![true, false]);
 
@@ -5631,6 +5667,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_lt_dyn_gt_dyn_dictionary_i8_array() {
         // Construct a value array
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
@@ -5660,6 +5697,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_lt_dyn_gt_dyn_dictionary_bool_array() {
         let values = BooleanArray::from(vec![true, false]);
 
@@ -5702,6 +5740,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_i8_i8_array() {
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
         let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
@@ -5736,6 +5775,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_lt_dyn_lt_eq_dyn_gt_dyn_gt_eq_dyn_dictionary_i8_i8_array() {
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
         let keys = Int8Array::from_iter_values([2_i8, 3, 4]);

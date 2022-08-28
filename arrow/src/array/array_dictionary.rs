@@ -330,7 +330,7 @@ impl<'a, T: ArrowDictionaryKeyType> FromIterator<Option<&'a str>> for Dictionary
         let it = iter.into_iter();
         let (lower, _) = it.size_hint();
         let key_builder = PrimitiveBuilder::<T>::with_capacity(lower);
-        let value_builder = StringBuilder::new(256);
+        let value_builder = StringBuilder::with_capacity(256, 1024);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         it.for_each(|i| {
             if let Some(i) = i {
@@ -368,7 +368,7 @@ impl<'a, T: ArrowDictionaryKeyType> FromIterator<&'a str> for DictionaryArray<T>
         let it = iter.into_iter();
         let (lower, _) = it.size_hint();
         let key_builder = PrimitiveBuilder::<T>::with_capacity(lower);
-        let value_builder = StringBuilder::new(256);
+        let value_builder = StringBuilder::with_capacity(256, 1024);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         it.for_each(|i| {
             builder

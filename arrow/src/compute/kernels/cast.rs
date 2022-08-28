@@ -2355,7 +2355,7 @@ where
     let values = cast_values.as_any().downcast_ref::<StringArray>().unwrap();
 
     let keys_builder = PrimitiveBuilder::<K>::with_capacity(values.len());
-    let values_builder = StringBuilder::new(values.len());
+    let values_builder = StringBuilder::with_capacity(1024, values.len());
     let mut b = StringDictionaryBuilder::new(keys_builder, values_builder);
 
     // copy each element one at a time
@@ -4753,7 +4753,7 @@ mod tests {
         use DataType::*;
 
         let keys_builder = PrimitiveBuilder::<Int8Type>::new();
-        let values_builder = StringBuilder::new(10);
+        let values_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
         builder.append("one").unwrap();
         builder.append_null();
@@ -4845,7 +4845,7 @@ mod tests {
         // string values (and encode the expected behavior here);
 
         let keys_builder = PrimitiveBuilder::<Int32Type>::new();
-        let values_builder = StringBuilder::new(10);
+        let values_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
 
         // add 200 distinct values (which can be stored by a
@@ -5388,7 +5388,7 @@ mod tests {
     fn make_dictionary_utf8<K: ArrowDictionaryKeyType>() -> ArrayRef {
         let keys_builder = PrimitiveBuilder::<K>::new();
         // Pick Int32 arbitrarily for dictionary values
-        let values_builder = StringBuilder::new(2);
+        let values_builder = StringBuilder::new();
         let mut b = StringDictionaryBuilder::new(keys_builder, values_builder);
         b.append("foo").unwrap();
         b.append("bar").unwrap();

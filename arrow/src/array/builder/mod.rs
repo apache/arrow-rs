@@ -75,7 +75,7 @@ pub use union_builder::UnionBuilder;
 /// let mut data_builders: Vec<Box<dyn ArrayBuilder>> = vec![
 ///     Box::new(Float64Builder::new()),
 ///     Box::new(Int64Builder::new()),
-///     Box::new(StringBuilder::new(1024)),
+///     Box::new(StringBuilder::new()),
 /// ];
 ///
 /// // Fill

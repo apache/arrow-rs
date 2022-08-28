@@ -89,6 +89,9 @@ force_validate = []
 ffi = []
 # Enable NaN-ordering behavior on comparison kernels
 nan_ordering = []
+# Enable dyn-comparison of dictionary arrays with other arrays
+# Note: this does not impact comparison against scalars
+dyn_cmp_dict = []
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
@@ -143,7 +146,7 @@ required-features = ["test_utils"]
 [[bench]]
 name = "comparison_kernels"
 harness = false
-required-features = ["test_utils"]
+required-features = ["test_utils", "dyn_cmp_dict"]
 
 [[bench]]
 name = "filter_kernels"

@@ -75,20 +75,13 @@ pub(crate) enum Error {
     #[snafu(display("Error getting list response body: {}", source))]
     ListResponseBody { source: reqwest::Error },
 
-    #[snafu(display("Error performing create multipart request: {}", source))]
-    CreateMultipartRequest { source: reqwest::Error },
-
-    #[snafu(display("Error performing complete multipart request: {}", source))]
-    CompleteMultipartRequest { source: reqwest::Error },
-
     #[snafu(display("Got invalid list response: {}", source))]
     InvalidListResponse { source: quick_xml::de::DeError },
 
-    #[snafu(display("Got invalid multipart response: {}", source))]
-    InvalidMultipartResponse { source: quick_xml::de::DeError },
-
     #[snafu(display("Error authorizing request: {}", source))]
-    Authorization { source: crate::client::oauth::Error },
+    Authorization {
+        source: crate::azure::credential::Error,
+    },
 }
 
 impl From<Error> for crate::Error {
