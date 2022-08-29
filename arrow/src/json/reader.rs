@@ -58,7 +58,7 @@ use serde_json::{map::Map as JsonMap, Value};
 use crate::buffer::MutableBuffer;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
-use crate::record_batch::RecordBatch;
+use crate::record_batch::{RecordBatch, RecordBatchOptions};
 use crate::util::bit_util;
 use crate::util::reader_parser::Parser;
 use crate::{array::*, buffer::Buffer};
@@ -701,19 +701,25 @@ impl Decoder {
         let projection = self.options.projection.clone().unwrap_or_default();
         let arrays = self.build_struct_array(rows, self.schema.fields(), &projection);
 
-        let projected_fields: Vec<Field> = if projection.is_empty() {
-            self.schema.fields().to_vec()
-        } else {
-            projection
-                .iter()
-                .filter_map(|name| self.schema.column_with_name(name))
-                .map(|(_, field)| field.clone())
-                .collect()
-        };
+        let projected_fields: Vec<Field> = projection
+            .iter()
+            .filter_map(|name| self.schema.column_with_name(name))
+            .map(|(_, field)| field.clone())
+            .collect();
 
         let projected_schema = Arc::new(Schema::new(projected_fields));
 
-        arrays.and_then(|arr| RecordBatch::try_new(projected_schema, arr).map(Some))
+        arrays.and_then(|arr| {
+            RecordBatch::try_new_with_options(
+                projected_schema,
+                arr,
+                &RecordBatchOptions {
+                    match_field_names: true,
+                    row_count: Some(rows.len()),
+                },
+            )
+            .map(Some)
+        })
     }
 
     fn build_wrapped_list_array(
@@ -1182,7 +1188,7 @@ impl Decoder {
     ) -> Result<Vec<ArrayRef>> {
         let arrays: Result<Vec<ArrayRef>> = struct_fields
             .iter()
-            .filter(|field| projection.is_empty() || projection.contains(field.name()))
+            .filter(|field| projection.contains(field.name()))
             .map(|field| {
                 match field.data_type() {
                     DataType::Null => {
@@ -1804,6 +1810,21 @@ mod tests {
             .unwrap();
         assert_eq!("4", dd.value(0));
         assert_eq!("text", dd.value(8));
+    }
+
+    #[test]
+    fn test_json_empty_projection() {
+        let builder = ReaderBuilder::new()
+            .infer_schema(None)
+            .with_batch_size(64)
+            .with_projection(vec![]);
+        let mut reader: Reader<File> = builder
+            .build::<File>(File::open("test/data/basic.json").unwrap())
+            .unwrap();
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(0, batch.num_columns());
+        assert_eq!(12, batch.num_rows());
     }
 
     #[test]
