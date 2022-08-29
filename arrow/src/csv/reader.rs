@@ -55,7 +55,7 @@ use crate::array::{
 };
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
-use crate::record_batch::RecordBatch;
+use crate::record_batch::{RecordBatch, RecordBatchOptions};
 use crate::util::reader_parser::Parser;
 
 use csv_crate::{ByteRecord, StringRecord};
@@ -671,7 +671,16 @@ fn parse(
         Some(metadata) => Schema::new_with_metadata(projected_fields, metadata),
     });
 
-    arrays.and_then(|arr| RecordBatch::try_new(projected_schema, arr))
+    arrays.and_then(|arr| {
+        RecordBatch::try_new_with_options(
+            projected_schema,
+            arr,
+            &RecordBatchOptions {
+                match_field_names: true,
+                row_count: Some(rows.len()),
+            },
+        )
+    })
 }
 fn parse_item<T: Parser>(string: &str) -> Option<T::Native> {
     T::parse(string)
@@ -1865,6 +1874,38 @@ mod tests {
         let a = batch.column(0);
         let a = a.as_any().downcast_ref::<UInt32Array>().unwrap();
         assert_eq!(a, &UInt32Array::from(vec![4, 5]));
+
+        assert!(csv.next().is_none());
+    }
+
+    #[test]
+    fn test_empty_projection() {
+        let schema = Schema::new(vec![Field::new("int", DataType::UInt32, false)]);
+        let data = vec![vec!["0"], vec!["1"]];
+
+        let data = data
+            .iter()
+            .map(|x| x.join(","))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let data = data.as_bytes();
+
+        let reader = std::io::Cursor::new(data);
+
+        let mut csv = Reader::new(
+            reader,
+            Arc::new(schema),
+            false,
+            None,
+            2,
+            None,
+            Some(vec![]),
+            None,
+        );
+
+        let batch = csv.next().unwrap().unwrap();
+        assert_eq!(batch.columns().len(), 0);
+        assert_eq!(batch.num_rows(), 2);
 
         assert!(csv.next().is_none());
     }

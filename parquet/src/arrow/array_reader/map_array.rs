@@ -162,7 +162,7 @@ mod tests {
         )]);
 
         // Create builders for map
-        let string_builder = StringBuilder::new(5);
+        let string_builder = StringBuilder::new();
         let ints_builder: PrimitiveBuilder<Int32Type> = PrimitiveBuilder::new();
         let mut map_builder = MapBuilder::new(None, string_builder, ints_builder);
 

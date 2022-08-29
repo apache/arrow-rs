@@ -2089,6 +2089,7 @@ where
     compare_op(left_array, right_array, op)
 }
 
+#[cfg(feature = "dyn_cmp_dict")]
 macro_rules! typed_dict_non_dict_cmp {
     ($LEFT: expr, $RIGHT: expr, $LEFT_KEY_TYPE: expr, $RIGHT_TYPE: tt, $OP_BOOL: expr, $OP: expr) => {{
         match $LEFT_KEY_TYPE {
@@ -2132,6 +2133,7 @@ macro_rules! typed_dict_non_dict_cmp {
     }};
 }
 
+#[cfg(feature = "dyn_cmp_dict")]
 macro_rules! typed_dict_string_array_cmp {
     ($LEFT: expr, $RIGHT: expr, $LEFT_KEY_TYPE: expr, $RIGHT_TYPE: tt, $OP: expr) => {{
         match $LEFT_KEY_TYPE {
@@ -2175,8 +2177,9 @@ macro_rules! typed_dict_string_array_cmp {
     }};
 }
 
+#[cfg(feature = "dyn_cmp_dict")]
 macro_rules! typed_cmp_dict_non_dict {
-    ($LEFT: expr, $RIGHT: expr, $OP_BOOL: expr, $OP: expr) => {{
+    ($LEFT: expr, $RIGHT: expr, $OP_BOOL: expr, $OP: expr, $OP_FLOAT: expr) => {{
        match ($LEFT.data_type(), $RIGHT.data_type()) {
         (DataType::Dictionary(left_key_type, left_value_type), right_type) => {
             match (left_value_type.as_ref(), right_type) {
@@ -2205,10 +2208,10 @@ macro_rules! typed_cmp_dict_non_dict {
                     typed_dict_non_dict_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), UInt64Type, $OP_BOOL, $OP)
                 }
                 (DataType::Float32, DataType::Float32) => {
-                    typed_dict_non_dict_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), Float32Type, $OP_BOOL, $OP)
+                    typed_dict_non_dict_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), Float32Type, $OP_BOOL, $OP_FLOAT)
                 }
                 (DataType::Float64, DataType::Float64) => {
-                    typed_dict_non_dict_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), Float64Type, $OP_BOOL, $OP)
+                    typed_dict_non_dict_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), Float64Type, $OP_BOOL, $OP_FLOAT)
                 }
                 (DataType::Utf8, DataType::Utf8) => {
                     typed_dict_string_array_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), i32, $OP)
@@ -2229,6 +2232,16 @@ macro_rules! typed_cmp_dict_non_dict {
         _ => unreachable!("Should not reach this branch"),
     }
     }};
+}
+
+#[cfg(not(feature = "dyn_cmp_dict"))]
+macro_rules! typed_cmp_dict_non_dict {
+    ($LEFT: expr, $RIGHT: expr, $OP_BOOL: expr, $OP: expr, $OP_FLOAT: expr) => {{
+        Err(ArrowError::CastError(format!(
+            "Comparing dictionary array of type {} with array of type {} requires \"dyn_cmp_dict\" feature",
+            $LEFT.data_type(), $RIGHT.data_type()
+        )))
+    }}
 }
 
 macro_rules! typed_compares {
@@ -2347,6 +2360,7 @@ macro_rules! typed_compares {
 }
 
 /// Applies $OP to $LEFT and $RIGHT which are two dictionaries which have (the same) key type $KT
+#[cfg(feature = "dyn_cmp_dict")]
 macro_rules! typed_dict_cmp {
     ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_FLOAT: expr, $OP_BOOL: expr, $KT: tt) => {{
         match ($LEFT.value_type(), $RIGHT.value_type()) {
@@ -2479,6 +2493,7 @@ macro_rules! typed_dict_cmp {
     }};
 }
 
+#[cfg(feature = "dyn_cmp_dict")]
 macro_rules! typed_dict_compares {
    // Applies `LEFT OP RIGHT` when `LEFT` and `RIGHT` both are `DictionaryArray`
     ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_FLOAT: expr, $OP_BOOL: expr) => {{
@@ -2543,8 +2558,19 @@ macro_rules! typed_dict_compares {
     }};
 }
 
+#[cfg(not(feature = "dyn_cmp_dict"))]
+macro_rules! typed_dict_compares {
+    ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_FLOAT: expr, $OP_BOOL: expr) => {{
+        Err(ArrowError::CastError(format!(
+            "Comparing array of type {} with array of type {} requires \"dyn_cmp_dict\" feature",
+            $LEFT.data_type(), $RIGHT.data_type()
+        )))
+    }}
+}
+
 /// Perform given operation on `DictionaryArray` and `PrimitiveArray`. The value
 /// type of `DictionaryArray` is same as `PrimitiveArray`'s type.
+#[cfg(feature = "dyn_cmp_dict")]
 fn cmp_dict_primitive<K, T, F>(
     left: &DictionaryArray<K>,
     right: &dyn Array,
@@ -2564,6 +2590,7 @@ where
 
 /// Perform given operation on `DictionaryArray` and `GenericStringArray`. The value
 /// type of `DictionaryArray` is same as `GenericStringArray`'s type.
+#[cfg(feature = "dyn_cmp_dict")]
 fn cmp_dict_string_array<K, OffsetSize: OffsetSizeTrait, F>(
     left: &DictionaryArray<K>,
     right: &dyn Array,
@@ -2587,6 +2614,7 @@ where
 /// Perform given operation on two `DictionaryArray`s which value type is
 /// primitive type. Returns an error if the two arrays have different value
 /// type
+#[cfg(feature = "dyn_cmp_dict")]
 pub fn cmp_dict<K, T, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
@@ -2606,6 +2634,7 @@ where
 
 /// Perform the given operation on two `DictionaryArray`s which value type is
 /// `DataType::Boolean`.
+#[cfg(feature = "dyn_cmp_dict")]
 pub fn cmp_dict_bool<K, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
@@ -2624,6 +2653,7 @@ where
 
 /// Perform the given operation on two `DictionaryArray`s which value type is
 /// `DataType::Utf8` or `DataType::LargeUtf8`.
+#[cfg(feature = "dyn_cmp_dict")]
 pub fn cmp_dict_utf8<K, OffsetSize: OffsetSizeTrait, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
@@ -2645,6 +2675,7 @@ where
 
 /// Perform the given operation on two `DictionaryArray`s which value type is
 /// `DataType::Binary` or `DataType::LargeBinary`.
+#[cfg(feature = "dyn_cmp_dict")]
 pub fn cmp_dict_binary<K, OffsetSize: OffsetSizeTrait, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
@@ -2712,10 +2743,54 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_cmp_dict_non_dict!(left, right, |a, b| a == b, |a, b| a == b)
+            #[cfg(not(feature = "nan_ordering"))]
+            return typed_cmp_dict_non_dict!(
+                left,
+                right,
+                |a, b| a == b,
+                |a, b| a == b,
+                |a, b| a == b
+            );
+
+            #[cfg(feature = "nan_ordering")]
+            return typed_cmp_dict_non_dict!(
+                left,
+                right,
+                |a, b| a == b,
+                |a, b| a == b,
+                |a, b| {
+                    if is_nan(a) && is_nan(b) {
+                        true
+                    } else {
+                        a == b
+                    }
+                }
+            );
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
-            typed_cmp_dict_non_dict!(right, left, |a, b| a == b, |a, b| a == b)
+            #[cfg(not(feature = "nan_ordering"))]
+            return typed_cmp_dict_non_dict!(
+                right,
+                left,
+                |a, b| a == b,
+                |a, b| a == b,
+                |a, b| a == b
+            );
+
+            #[cfg(feature = "nan_ordering")]
+            return typed_cmp_dict_non_dict!(
+                right,
+                left,
+                |a, b| a == b,
+                |a, b| a == b,
+                |a, b| {
+                    if is_nan(a) && is_nan(b) {
+                        true
+                    } else {
+                        a == b
+                    }
+                }
+            );
         }
         _ => {
             #[cfg(not(feature = "nan_ordering"))]
@@ -2794,10 +2869,54 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_cmp_dict_non_dict!(left, right, |a, b| a != b, |a, b| a != b)
+            #[cfg(not(feature = "nan_ordering"))]
+            return typed_cmp_dict_non_dict!(
+                left,
+                right,
+                |a, b| a != b,
+                |a, b| a != b,
+                |a, b| a != b
+            );
+
+            #[cfg(feature = "nan_ordering")]
+            return typed_cmp_dict_non_dict!(
+                left,
+                right,
+                |a, b| a != b,
+                |a, b| a != b,
+                |a, b| {
+                    if is_nan(a) && is_nan(b) {
+                        false
+                    } else {
+                        a != b
+                    }
+                }
+            );
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
-            typed_cmp_dict_non_dict!(right, left, |a, b| a != b, |a, b| a != b)
+            #[cfg(not(feature = "nan_ordering"))]
+            return typed_cmp_dict_non_dict!(
+                right,
+                left,
+                |a, b| a != b,
+                |a, b| a != b,
+                |a, b| a != b
+            );
+
+            #[cfg(feature = "nan_ordering")]
+            return typed_cmp_dict_non_dict!(
+                right,
+                left,
+                |a, b| a != b,
+                |a, b| a != b,
+                |a, b| {
+                    if is_nan(a) && is_nan(b) {
+                        false
+                    } else {
+                        a != b
+                    }
+                }
+            );
         }
         _ => {
             #[cfg(not(feature = "nan_ordering"))]
@@ -2878,10 +2997,58 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_cmp_dict_non_dict!(left, right, |a, b| a < b, |a, b| a < b)
+            #[cfg(not(feature = "nan_ordering"))]
+            return typed_cmp_dict_non_dict!(
+                left,
+                right,
+                |a, b| a < b,
+                |a, b| a < b,
+                |a, b| a < b
+            );
+
+            #[cfg(feature = "nan_ordering")]
+            return typed_cmp_dict_non_dict!(
+                left,
+                right,
+                |a, b| a < b,
+                |a, b| a < b,
+                |a, b| {
+                    if is_nan(a) {
+                        false
+                    } else if is_nan(b) {
+                        true
+                    } else {
+                        a < b
+                    }
+                }
+            );
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
-            typed_cmp_dict_non_dict!(right, left, |a, b| a > b, |a, b| a > b)
+            #[cfg(not(feature = "nan_ordering"))]
+            return typed_cmp_dict_non_dict!(
+                right,
+                left,
+                |a, b| a > b,
+                |a, b| a > b,
+                |a, b| a > b
+            );
+
+            #[cfg(feature = "nan_ordering")]
+            return typed_cmp_dict_non_dict!(
+                right,
+                left,
+                |a, b| a > b,
+                |a, b| a > b,
+                |a, b| {
+                    if is_nan(b) {
+                        false
+                    } else if is_nan(a) {
+                        true
+                    } else {
+                        a > b
+                    }
+                }
+            );
         }
         _ => {
             #[cfg(not(feature = "nan_ordering"))]
@@ -2961,10 +3128,54 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_cmp_dict_non_dict!(left, right, |a, b| a <= b, |a, b| a <= b)
+            #[cfg(not(feature = "nan_ordering"))]
+            return typed_cmp_dict_non_dict!(
+                left,
+                right,
+                |a, b| a <= b,
+                |a, b| a <= b,
+                |a, b| a <= b
+            );
+
+            #[cfg(feature = "nan_ordering")]
+            return typed_cmp_dict_non_dict!(
+                left,
+                right,
+                |a, b| a <= b,
+                |a, b| a <= b,
+                |a, b| {
+                    if is_nan(a) {
+                        is_nan(b)
+                    } else {
+                        a <= b
+                    }
+                }
+            );
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
-            typed_cmp_dict_non_dict!(right, left, |a, b| a >= b, |a, b| a >= b)
+            #[cfg(not(feature = "nan_ordering"))]
+            return typed_cmp_dict_non_dict!(
+                right,
+                left,
+                |a, b| a >= b,
+                |a, b| a >= b,
+                |a, b| a >= b
+            );
+
+            #[cfg(feature = "nan_ordering")]
+            return typed_cmp_dict_non_dict!(
+                right,
+                left,
+                |a, b| a >= b,
+                |a, b| a >= b,
+                |a, b| {
+                    if is_nan(b) {
+                        is_nan(a)
+                    } else {
+                        a >= b
+                    }
+                }
+            );
         }
         _ => {
             #[cfg(not(feature = "nan_ordering"))]
@@ -3044,10 +3255,58 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_cmp_dict_non_dict!(left, right, |a, b| a > b, |a, b| a > b)
+            #[cfg(not(feature = "nan_ordering"))]
+            return typed_cmp_dict_non_dict!(
+                left,
+                right,
+                |a, b| a > b,
+                |a, b| a > b,
+                |a, b| a > b
+            );
+
+            #[cfg(feature = "nan_ordering")]
+            return typed_cmp_dict_non_dict!(
+                left,
+                right,
+                |a, b| a > b,
+                |a, b| a > b,
+                |a, b| {
+                    if is_nan(a) {
+                        !is_nan(b)
+                    } else if is_nan(b) {
+                        false
+                    } else {
+                        a > b
+                    }
+                }
+            );
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
-            typed_cmp_dict_non_dict!(right, left, |a, b| a < b, |a, b| a < b)
+            #[cfg(not(feature = "nan_ordering"))]
+            return typed_cmp_dict_non_dict!(
+                right,
+                left,
+                |a, b| a < b,
+                |a, b| a < b,
+                |a, b| a < b
+            );
+
+            #[cfg(feature = "nan_ordering")]
+            return typed_cmp_dict_non_dict!(
+                right,
+                left,
+                |a, b| a < b,
+                |a, b| a < b,
+                |a, b| {
+                    if is_nan(b) {
+                        !is_nan(a)
+                    } else if is_nan(a) {
+                        false
+                    } else {
+                        a < b
+                    }
+                }
+            );
         }
         _ => {
             #[cfg(not(feature = "nan_ordering"))]
@@ -3126,10 +3385,54 @@ pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_cmp_dict_non_dict!(left, right, |a, b| a >= b, |a, b| a >= b)
+            #[cfg(not(feature = "nan_ordering"))]
+            return typed_cmp_dict_non_dict!(
+                left,
+                right,
+                |a, b| a >= b,
+                |a, b| a >= b,
+                |a, b| a >= b
+            );
+
+            #[cfg(feature = "nan_ordering")]
+            return typed_cmp_dict_non_dict!(
+                left,
+                right,
+                |a, b| a >= b,
+                |a, b| a >= b,
+                |a, b| {
+                    if is_nan(a) {
+                        true
+                    } else {
+                        a >= b
+                    }
+                }
+            );
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
-            typed_cmp_dict_non_dict!(right, left, |a, b| a <= b, |a, b| a <= b)
+            #[cfg(not(feature = "nan_ordering"))]
+            return typed_cmp_dict_non_dict!(
+                right,
+                left,
+                |a, b| a <= b,
+                |a, b| a <= b,
+                |a, b| a <= b
+            );
+
+            #[cfg(feature = "nan_ordering")]
+            return typed_cmp_dict_non_dict!(
+                right,
+                left,
+                |a, b| a <= b,
+                |a, b| a <= b,
+                |a, b| {
+                    if is_nan(b) {
+                        true
+                    } else {
+                        a <= b
+                    }
+                }
+            );
         }
         _ => {
             #[cfg(not(feature = "nan_ordering"))]
@@ -4336,7 +4639,7 @@ mod tests {
     // contains(null, null) = false
     #[test]
     fn test_contains_utf8() {
-        let values_builder = StringBuilder::new(10);
+        let values_builder = StringBuilder::new();
         let mut builder = ListBuilder::new(values_builder);
 
         builder.values().append_value("Lorem");
@@ -5324,7 +5627,7 @@ mod tests {
     #[test]
     fn test_eq_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -5352,7 +5655,7 @@ mod tests {
     #[test]
     fn test_lt_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -5381,7 +5684,7 @@ mod tests {
     #[test]
     fn test_lt_eq_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -5410,7 +5713,7 @@ mod tests {
     #[test]
     fn test_gt_eq_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -5440,7 +5743,7 @@ mod tests {
     #[test]
     fn test_gt_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -5469,7 +5772,7 @@ mod tests {
     #[test]
     fn test_neq_dyn_utf8_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new(100);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -5547,6 +5850,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_i8_array() {
         // Construct a value array
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
@@ -5567,6 +5871,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_u64_array() {
         let values = UInt64Array::from_iter_values([10_u64, 11, 12, 13, 14, 15, 16, 17]);
 
@@ -5588,6 +5893,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_utf8_array() {
         let test1 = vec!["a", "a", "b", "c"];
         let test2 = vec!["a", "b", "b", "c"];
@@ -5615,6 +5921,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_binary_array() {
         let values: BinaryArray = ["hello", "", "parquet"]
             .into_iter()
@@ -5639,6 +5946,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_interval_array() {
         let values = IntervalDayTimeArray::from(vec![1, 6, 10, 2, 3, 5]);
 
@@ -5660,6 +5968,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_date_array() {
         let values = Date32Array::from(vec![1, 6, 10, 2, 3, 5]);
 
@@ -5681,6 +5990,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_bool_array() {
         let values = BooleanArray::from(vec![true, false]);
 
@@ -5702,6 +6012,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_lt_dyn_gt_dyn_dictionary_i8_array() {
         // Construct a value array
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
@@ -5731,6 +6042,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_lt_dyn_gt_dyn_dictionary_bool_array() {
         let values = BooleanArray::from(vec![true, false]);
 
@@ -5773,6 +6085,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_i8_i8_array() {
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
         let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
@@ -5807,6 +6120,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_lt_dyn_lt_eq_dyn_gt_dyn_gt_eq_dyn_dictionary_i8_i8_array() {
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
         let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
@@ -6240,6 +6554,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_to_utf8_array() {
         let test1 = vec!["a", "a", "b", "c"];
         let test2 = vec!["a", "b", "b", "d"];
@@ -6280,6 +6595,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_lt_dyn_lt_eq_dyn_gt_dyn_gt_eq_dyn_dictionary_to_utf8_array() {
         let test1 = vec!["abc", "abc", "b", "cde"];
         let test2 = vec!["abc", "b", "b", "def"];
@@ -6470,5 +6786,245 @@ mod tests {
                 vec![Some(false), Some(true), Some(false), Some(false), None, Some(false)]
             ),
         );
+    }
+
+    #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
+    fn test_eq_dyn_neq_dyn_dict_non_dict_float_nan() {
+        let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let values = Float32Array::from(vec![f32::NAN, 8.0, 10.0]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 1, 2]);
+        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        #[cfg(not(feature = "nan_ordering"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
+            );
+            assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "nan_ordering")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
+            );
+            assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+
+        #[cfg(not(feature = "nan_ordering"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
+            );
+            assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "nan_ordering")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
+            );
+            assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+        }
+
+        let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let values = Float64Array::from(vec![f64::NAN, 8.0, 10.0]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 1, 2]);
+        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        #[cfg(not(feature = "nan_ordering"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
+            );
+            assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "nan_ordering")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
+            );
+            assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+
+        #[cfg(not(feature = "nan_ordering"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
+            );
+            assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "nan_ordering")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
+            );
+            assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
+    fn test_lt_dyn_lt_eq_dyn_dict_non_dict_float_nan() {
+        let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let values = Float32Array::from(vec![f32::NAN, 8.0, 9.0, 10.0, 1.0]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        #[cfg(not(feature = "nan_ordering"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(true), Some(false), Some(false)],
+            );
+            assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "nan_ordering")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+            );
+            assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        }
+
+        #[cfg(not(feature = "nan_ordering"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(true), Some(false), Some(false)],
+            );
+            assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "nan_ordering")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(true), Some(false), Some(false)],
+            );
+            assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+
+        let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let values = Float64Array::from(vec![f64::NAN, 8.0, 9.0, 10.0, 1.0]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        #[cfg(not(feature = "nan_ordering"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(true), Some(false), Some(false)],
+            );
+            assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "nan_ordering")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+            );
+            assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        }
+
+        #[cfg(not(feature = "nan_ordering"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(true), Some(false), Some(false)],
+            );
+            assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "nan_ordering")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(true), Some(false), Some(false)],
+            );
+            assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
+    fn test_gt_dyn_gt_eq_dyn_dict_non_dict_float_nan() {
+        let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let values = Float32Array::from(vec![f32::NAN, 8.0, 9.0, 10.0, 1.0]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        #[cfg(not(feature = "nan_ordering"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(false)],
+            );
+            assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "nan_ordering")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+            );
+            assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        }
+
+        #[cfg(not(feature = "nan_ordering"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(false), Some(true), Some(false)],
+            );
+            assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "nan_ordering")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+            );
+            assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+
+        let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let values = Float64Array::from(vec![f64::NAN, 8.0, 9.0, 10.0, 1.0]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        #[cfg(not(feature = "nan_ordering"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(false)],
+            );
+            assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "nan_ordering")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+            );
+            assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        }
+
+        #[cfg(not(feature = "nan_ordering"))]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(false), Some(true), Some(false)],
+            );
+            assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        }
+        #[cfg(feature = "nan_ordering")]
+        {
+            let expected = BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+            );
+            assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        }
     }
 }

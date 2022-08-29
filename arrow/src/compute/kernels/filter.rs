@@ -1416,7 +1416,7 @@ mod tests {
     #[test]
     fn test_filter_map() {
         let mut builder =
-            MapBuilder::new(None, StringBuilder::new(16), Int64Builder::with_capacity(4));
+            MapBuilder::new(None, StringBuilder::new(), Int64Builder::with_capacity(4));
         // [{"key1": 1}, {"key2": 2, "key3": 3}, null, {"key1": 1}
         builder.keys().append_value("key1");
         builder.values().append_value(1);
@@ -1438,7 +1438,7 @@ mod tests {
         let got = filter(&maparray, &indices).unwrap();
 
         let mut builder =
-            MapBuilder::new(None, StringBuilder::new(8), Int64Builder::with_capacity(2));
+            MapBuilder::new(None, StringBuilder::new(), Int64Builder::with_capacity(2));
         builder.keys().append_value("key1");
         builder.values().append_value(1);
         builder.append(true).unwrap();

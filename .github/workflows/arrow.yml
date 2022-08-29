@@ -51,9 +51,9 @@ jobs:
       - name: Test
         run: |
           cargo test -p arrow
-      - name: Test --features=force_validate,prettyprint,ipc_compression,ffi
+      - name: Test --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict
         run: |
-          cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi
+          cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict
       - name: Test --features=nan_ordering
         run: |
           cargo test -p arrow --features "nan_ordering"
@@ -64,6 +64,8 @@ jobs:
           cargo run --example dynamic_types
           cargo run --example read_csv
           cargo run --example read_csv_infer_schema
+      - name: Run non-archery based integration-tests
+        run: cargo test -p arrow-integration-testing
 
   # test compilaton features
   linux-features:
@@ -175,4 +177,4 @@ jobs:
           rustup component add clippy
       - name: Run clippy
         run: |
-          cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression --all-targets -- -D warnings
+          cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict --all-targets -- -D warnings

@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn test_nested_string_array() {
-        let string_builder = StringBuilder::new(3);
+        let string_builder = StringBuilder::with_capacity(3, 10);
         let mut list_of_string_builder = ListBuilder::new(string_builder);
 
         list_of_string_builder.values().append_value("foo");

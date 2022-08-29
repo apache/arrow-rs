@@ -19,12 +19,12 @@
 
 use serde_json::Value;
 
-use arrow::util::integration_util::ArrowJsonBatch;
+use util::*;
 
 use arrow::datatypes::Schema;
 use arrow::error::Result;
 use arrow::record_batch::RecordBatch;
-use arrow::util::integration_util::*;
+use arrow::util::test_util::arrow_test_data;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
@@ -36,6 +36,7 @@ pub const AUTH_PASSWORD: &str = "flight";
 
 pub mod flight_client_scenarios;
 pub mod flight_server_scenarios;
+pub mod util;
 
 pub struct ArrowFile {
     pub schema: Schema,
@@ -75,4 +76,23 @@ pub fn read_json_file(json_name: &str) -> Result<ArrowFile> {
         _dictionaries: dictionaries,
         batches,
     })
+}
+
+/// Read gzipped JSON test file
+pub fn read_gzip_json(version: &str, path: &str) -> ArrowJson {
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+
+    let testdata = arrow_test_data();
+    let file = File::open(format!(
+        "{}/arrow-ipc-stream/integration/{}/{}.json.gz",
+        testdata, version, path
+    ))
+    .unwrap();
+    let mut gz = GzDecoder::new(&file);
+    let mut s = String::new();
+    gz.read_to_string(&mut s).unwrap();
+    // convert to Arrow JSON
+    let arrow_json: ArrowJson = serde_json::from_str(&s).unwrap();
+    arrow_json
 }

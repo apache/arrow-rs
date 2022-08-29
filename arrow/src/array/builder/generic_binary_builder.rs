@@ -34,15 +34,8 @@ pub struct GenericBinaryBuilder<OffsetSize: OffsetSizeTrait> {
 
 impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
     /// Creates a new [`GenericBinaryBuilder`].
-    /// `capacity` is the number of bytes in the values array.
-    pub fn new(capacity: usize) -> Self {
-        let mut offsets_builder = BufferBuilder::<OffsetSize>::new(1024);
-        offsets_builder.append(OffsetSize::zero());
-        Self {
-            value_builder: UInt8BufferBuilder::new(capacity),
-            offsets_builder,
-            null_buffer_builder: NullBufferBuilder::new(1024),
-        }
+    pub fn new() -> Self {
+        Self::with_capacity(1024, 1024)
     }
 
     /// Creates a new [`GenericBinaryBuilder`],
@@ -100,6 +93,12 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> Default for GenericBinaryBuilder<OffsetSize> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSize> {
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
@@ -138,7 +137,7 @@ mod tests {
     use crate::array::{Array, OffsetSizeTrait};
 
     fn _test_generic_binary_builder<O: OffsetSizeTrait>() {
-        let mut builder = GenericBinaryBuilder::<O>::new(20);
+        let mut builder = GenericBinaryBuilder::<O>::new();
 
         builder.append_value(b"hello");
         builder.append_value(b"");
@@ -168,7 +167,7 @@ mod tests {
     }
 
     fn _test_generic_binary_builder_all_nulls<O: OffsetSizeTrait>() {
-        let mut builder = GenericBinaryBuilder::<O>::new(10);
+        let mut builder = GenericBinaryBuilder::<O>::new();
         builder.append_null();
         builder.append_null();
         builder.append_null();
@@ -194,7 +193,7 @@ mod tests {
     }
 
     fn _test_generic_binary_builder_reset<O: OffsetSizeTrait>() {
-        let mut builder = GenericBinaryBuilder::<O>::new(20);
+        let mut builder = GenericBinaryBuilder::<O>::new();
 
         builder.append_value(b"hello");
         builder.append_value(b"");

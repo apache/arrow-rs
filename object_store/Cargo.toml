@@ -53,9 +53,9 @@ ring = { version = "0.16", default-features = false, features = ["std"], optiona
 rustls-pemfile = { version = "1.0", default-features = false, optional = true }
 
 [features]
-cloud = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "rustls-pemfile", "base64", "rand", "ring"]
+cloud = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "base64", "rand", "ring"]
 azure = ["cloud"]
-gcp = ["cloud"]
+gcp = ["cloud", "rustls-pemfile"]
 aws = ["cloud"]
 
 [dev-dependencies] # In alphabetical order

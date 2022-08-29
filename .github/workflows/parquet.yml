@@ -58,7 +58,7 @@ jobs:
           cargo test -p parquet --all-features
 
 
-  # test compilaton
+  # test compilation
   linux-features:
     name: Check Compilation
     runs-on: ubuntu-latest
