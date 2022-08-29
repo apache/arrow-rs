@@ -22,6 +22,7 @@ use std::fmt;
 use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData, FixedSizeListArray,
 };
+use crate::array::{ArrayAccessor, FixedSizeBinaryIter};
 use crate::buffer::Buffer;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
@@ -59,10 +60,14 @@ pub struct FixedSizeBinaryArray {
 
 impl FixedSizeBinaryArray {
     /// Returns the element at index `i` as a byte slice.
+    /// # Panics
+    /// Panics if index `i` is out of bounds.
     pub fn value(&self, i: usize) -> &[u8] {
         assert!(
             i < self.data.len(),
-            "FixedSizeBinaryArray out of bounds access"
+            "Trying to access an element at index {} from a FixedSizeBinaryArray of length {}",
+            i,
+            self.len()
         );
         let offset = i + self.data.offset();
         unsafe {
@@ -259,6 +264,11 @@ impl FixedSizeBinaryArray {
     fn value_offset_at(&self, i: usize) -> i32 {
         self.length * i as i32
     }
+
+    /// constructs a new iterator
+    pub fn iter(&self) -> FixedSizeBinaryIter<'_> {
+        FixedSizeBinaryIter::new(self)
+    }
 }
 
 impl From<ArrayData> for FixedSizeBinaryArray {
@@ -359,6 +369,27 @@ impl Array for FixedSizeBinaryArray {
 
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+}
+
+impl<'a> ArrayAccessor for &'a FixedSizeBinaryArray {
+    type Item = &'a [u8];
+
+    fn value(&self, index: usize) -> Self::Item {
+        FixedSizeBinaryArray::value(self, index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        FixedSizeBinaryArray::value_unchecked(self, index)
+    }
+}
+
+impl<'a> IntoIterator for &'a FixedSizeBinaryArray {
+    type Item = Option<&'a [u8]>;
+    type IntoIter = FixedSizeBinaryIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        FixedSizeBinaryIter::<'a>::new(self)
     }
 }
 
@@ -644,5 +675,16 @@ mod tests {
 
         // Should not panic
         RecordBatch::try_new(Arc::new(schema), vec![Arc::new(item)]).unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Trying to access an element at index 4 from a FixedSizeBinaryArray of length 3"
+    )]
+    fn test_fixed_size_binary_array_get_value_index_out_of_bound() {
+        let values = vec![Some("one".as_bytes()), Some(b"two"), None];
+        let array = FixedSizeBinaryArray::from(values);
+
+        array.value(4);
     }
 }

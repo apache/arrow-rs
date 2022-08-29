@@ -151,7 +151,7 @@ impl TripletIter {
                 Field::convert_int64(typed.column_descr(), *typed.current_value())
             }
             TripletIter::Int96TripletIter(ref typed) => {
-                Field::convert_int96(typed.column_descr(), typed.current_value().clone())
+                Field::convert_int96(typed.column_descr(), *typed.current_value())
             }
             TripletIter::FloatTripletIter(ref typed) => {
                 Field::convert_float(typed.column_descr(), *typed.current_value())

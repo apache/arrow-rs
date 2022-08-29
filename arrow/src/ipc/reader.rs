@@ -26,7 +26,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use crate::array::*;
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, MutableBuffer};
 use crate::compute::cast;
 use crate::datatypes::{DataType, Field, IntervalUnit, Schema, SchemaRef, UnionMode};
 use crate::error::{ArrowError, Result};
@@ -48,19 +48,15 @@ use DataType::*;
 /// compression does not yield appreciable savings.
 fn read_buffer(
     buf: &ipc::Buffer,
-    a_data: &[u8],
+    a_data: &Buffer,
     compression_codec: &Option<CompressionCodec>,
 ) -> Result<Buffer> {
     let start_offset = buf.offset() as usize;
-    let end_offset = start_offset + buf.length() as usize;
-    let buf_data = &a_data[start_offset..end_offset];
+    let buf_data = a_data.slice_with_length(start_offset, buf.length() as usize);
     // corner case: empty buffer
-    if buf_data.is_empty() {
-        return Ok(Buffer::from(buf_data));
-    }
-    match compression_codec {
-        Some(decompressor) => decompressor.decompress_to_buffer(buf_data),
-        None => Ok(Buffer::from(buf_data)),
+    match (buf_data.is_empty(), compression_codec) {
+        (true, _) | (_, None) => Ok(buf_data),
+        (false, Some(decompressor)) => decompressor.decompress_to_buffer(&buf_data),
     }
 }
 
@@ -77,7 +73,7 @@ fn read_buffer(
 fn create_array(
     nodes: &[ipc::FieldNode],
     field: &Field,
-    data: &[u8],
+    data: &Buffer,
     buffers: &[ipc::Buffer],
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     mut node_index: usize,
@@ -85,17 +81,16 @@ fn create_array(
     compression_codec: &Option<CompressionCodec>,
     metadata: &ipc::MetadataVersion,
 ) -> Result<(ArrayRef, usize, usize)> {
-    use DataType::*;
     let data_type = field.data_type();
     let array = match data_type {
         Utf8 | Binary | LargeBinary | LargeUtf8 => {
             let array = create_primitive_array(
                 &nodes[node_index],
                 data_type,
-                buffers[buffer_index..buffer_index + 3]
+                &buffers[buffer_index..buffer_index + 3]
                     .iter()
                     .map(|buf| read_buffer(buf, data, compression_codec))
-                    .collect::<Result<_>>()?,
+                    .collect::<Result<Vec<Buffer>>>()?,
             );
             node_index += 1;
             buffer_index += 3;
@@ -105,10 +100,10 @@ fn create_array(
             let array = create_primitive_array(
                 &nodes[node_index],
                 data_type,
-                buffers[buffer_index..buffer_index + 2]
+                &buffers[buffer_index..buffer_index + 2]
                     .iter()
                     .map(|buf| read_buffer(buf, data, compression_codec))
-                    .collect::<Result<_>>()?,
+                    .collect::<Result<Vec<Buffer>>>()?,
             );
             node_index += 1;
             buffer_index += 2;
@@ -304,10 +299,10 @@ fn create_array(
             let array = create_primitive_array(
                 &nodes[node_index],
                 data_type,
-                buffers[buffer_index..buffer_index + 2]
+                &buffers[buffer_index..buffer_index + 2]
                     .iter()
                     .map(|buf| read_buffer(buf, data, compression_codec))
-                    .collect::<Result<_>>()?,
+                    .collect::<Result<Vec<Buffer>>>()?,
             );
             node_index += 1;
             buffer_index += 2;
@@ -321,16 +316,10 @@ fn create_array(
 /// This function should be called when doing projection in fn `read_record_batch`.
 /// The advancement logic references fn `create_array`.
 fn skip_field(
-    nodes: &[ipc::FieldNode],
-    field: &Field,
-    data: &[u8],
-    buffers: &[ipc::Buffer],
-    dictionaries_by_id: &HashMap<i64, ArrayRef>,
+    data_type: &DataType,
     mut node_index: usize,
     mut buffer_index: usize,
 ) -> Result<(usize, usize)> {
-    use DataType::*;
-    let data_type = field.data_type();
     match data_type {
         Utf8 | Binary | LargeBinary | LargeUtf8 => {
             node_index += 1;
@@ -343,30 +332,14 @@ fn skip_field(
         List(ref list_field) | LargeList(ref list_field) | Map(ref list_field, _) => {
             node_index += 1;
             buffer_index += 2;
-            let tuple = skip_field(
-                nodes,
-                list_field,
-                data,
-                buffers,
-                dictionaries_by_id,
-                node_index,
-                buffer_index,
-            )?;
+            let tuple = skip_field(list_field.data_type(), node_index, buffer_index)?;
             node_index = tuple.0;
             buffer_index = tuple.1;
         }
         FixedSizeList(ref list_field, _) => {
             node_index += 1;
             buffer_index += 1;
-            let tuple = skip_field(
-                nodes,
-                list_field,
-                data,
-                buffers,
-                dictionaries_by_id,
-                node_index,
-                buffer_index,
-            )?;
+            let tuple = skip_field(list_field.data_type(), node_index, buffer_index)?;
             node_index = tuple.0;
             buffer_index = tuple.1;
         }
@@ -376,15 +349,8 @@ fn skip_field(
 
             // skip for each field
             for struct_field in struct_fields {
-                let tuple = skip_field(
-                    nodes,
-                    struct_field,
-                    data,
-                    buffers,
-                    dictionaries_by_id,
-                    node_index,
-                    buffer_index,
-                )?;
+                let tuple =
+                    skip_field(struct_field.data_type(), node_index, buffer_index)?;
                 node_index = tuple.0;
                 buffer_index = tuple.1;
             }
@@ -405,15 +371,7 @@ fn skip_field(
             };
 
             for field in fields {
-                let tuple = skip_field(
-                    nodes,
-                    field,
-                    data,
-                    buffers,
-                    dictionaries_by_id,
-                    node_index,
-                    buffer_index,
-                )?;
+                let tuple = skip_field(field.data_type(), node_index, buffer_index)?;
 
                 node_index = tuple.0;
                 buffer_index = tuple.1;
@@ -436,30 +394,28 @@ fn skip_field(
 fn create_primitive_array(
     field_node: &ipc::FieldNode,
     data_type: &DataType,
-    buffers: Vec<Buffer>,
+    buffers: &[Buffer],
 ) -> ArrayRef {
     let length = field_node.length() as usize;
-    let null_count = field_node.null_count() as usize;
+    let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
     let array_data = match data_type {
         Utf8 | Binary | LargeBinary | LargeUtf8 => {
-            // read 3 buffers
+            // read 3 buffers: null buffer (optional), offsets buffer and data buffer
             ArrayData::builder(data_type.clone())
                 .len(length)
                 .buffers(buffers[1..3].to_vec())
-                .offset(0)
-                .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()))
+                .null_bit_buffer(null_buffer)
                 .build()
                 .unwrap()
         }
         FixedSizeBinary(_) => {
-            // read 3 buffers
-            let builder = ArrayData::builder(data_type.clone())
+            // read 2 buffers: null buffer (optional) and data buffer
+            ArrayData::builder(data_type.clone())
                 .len(length)
-                .buffers(buffers[1..2].to_vec())
-                .offset(0)
-                .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
-
-            unsafe { builder.build_unchecked() }
+                .add_buffer(buffers[1].clone())
+                .null_bit_buffer(null_buffer)
+                .build()
+                .unwrap()
         }
         Int8
         | Int16
@@ -472,49 +428,45 @@ fn create_primitive_array(
         | Interval(IntervalUnit::YearMonth) => {
             if buffers[1].len() / 8 == length && length != 1 {
                 // interpret as a signed i64, and cast appropriately
-                let builder = ArrayData::builder(DataType::Int64)
+                let data = ArrayData::builder(DataType::Int64)
                     .len(length)
-                    .buffers(buffers[1..].to_vec())
-                    .offset(0)
-                    .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
-
-                let data = unsafe { builder.build_unchecked() };
+                    .add_buffer(buffers[1].clone())
+                    .null_bit_buffer(null_buffer)
+                    .build()
+                    .unwrap();
                 let values = Arc::new(Int64Array::from(data)) as ArrayRef;
                 // this cast is infallible, the unwrap is safe
                 let casted = cast(&values, data_type).unwrap();
                 casted.into_data()
             } else {
-                let builder = ArrayData::builder(data_type.clone())
+                ArrayData::builder(data_type.clone())
                     .len(length)
-                    .buffers(buffers[1..].to_vec())
-                    .offset(0)
-                    .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
-
-                unsafe { builder.build_unchecked() }
+                    .add_buffer(buffers[1].clone())
+                    .null_bit_buffer(null_buffer)
+                    .build()
+                    .unwrap()
             }
         }
         Float32 => {
             if buffers[1].len() / 8 == length && length != 1 {
                 // interpret as a f64, and cast appropriately
-                let builder = ArrayData::builder(DataType::Float64)
+                let data = ArrayData::builder(DataType::Float64)
                     .len(length)
-                    .buffers(buffers[1..].to_vec())
-                    .offset(0)
-                    .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
-
-                let data = unsafe { builder.build_unchecked() };
+                    .add_buffer(buffers[1].clone())
+                    .null_bit_buffer(null_buffer)
+                    .build()
+                    .unwrap();
                 let values = Arc::new(Float64Array::from(data)) as ArrayRef;
                 // this cast is infallible, the unwrap is safe
                 let casted = cast(&values, data_type).unwrap();
                 casted.into_data()
             } else {
-                let builder = ArrayData::builder(data_type.clone())
+                ArrayData::builder(data_type.clone())
                     .len(length)
-                    .buffers(buffers[1..].to_vec())
-                    .offset(0)
-                    .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
-
-                unsafe { builder.build_unchecked() }
+                    .add_buffer(buffers[1].clone())
+                    .null_bit_buffer(null_buffer)
+                    .build()
+                    .unwrap()
             }
         }
         Boolean
@@ -526,26 +478,26 @@ fn create_primitive_array(
         | Date64
         | Duration(_)
         | Interval(IntervalUnit::DayTime)
-        | Interval(IntervalUnit::MonthDayNano) => {
-            let builder = ArrayData::builder(data_type.clone())
-                .len(length)
-                .buffers(buffers[1..].to_vec())
-                .offset(0)
-                .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
-
-            unsafe { builder.build_unchecked() }
-        }
+        | Interval(IntervalUnit::MonthDayNano) => ArrayData::builder(data_type.clone())
+            .len(length)
+            .add_buffer(buffers[1].clone())
+            .null_bit_buffer(null_buffer)
+            .build()
+            .unwrap(),
         Decimal128(_, _) | Decimal256(_, _) => {
-            // read 3 buffers
+            // read 2 buffers: null buffer (optional) and data buffer
             let builder = ArrayData::builder(data_type.clone())
                 .len(length)
-                .buffers(buffers[1..2].to_vec())
-                .offset(0)
-                .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
+                .add_buffer(buffers[1].clone())
+                .null_bit_buffer(null_buffer);
 
+            // Don't validate the decimal array so far,
+            // becasue validating decimal is some what complicated
+            // and there is no conclusion on whether we should do it.
+            // For more infomation, please look at https://github.com/apache/arrow-rs/issues/2387
             unsafe { builder.build_unchecked() }
         }
-        t => panic!("Data type {:?} either unsupported or not primitive", t),
+        t => unreachable!("Data type {:?} either unsupported or not primitive", t),
     };
 
     make_array(array_data)
@@ -559,39 +511,24 @@ fn create_list_array(
     buffers: &[Buffer],
     child_array: ArrayRef,
 ) -> ArrayRef {
-    if let DataType::List(_) | DataType::LargeList(_) = *data_type {
-        let null_count = field_node.null_count() as usize;
-        let builder = ArrayData::builder(data_type.clone())
-            .len(field_node.length() as usize)
-            .buffers(buffers[1..2].to_vec())
-            .offset(0)
-            .child_data(vec![child_array.into_data()])
-            .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
+    let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
+    let length = field_node.length() as usize;
+    let child_data = child_array.into_data();
+    let builder = match data_type {
+        List(_) | LargeList(_) | Map(_, _) => ArrayData::builder(data_type.clone())
+            .len(length)
+            .add_buffer(buffers[1].clone())
+            .add_child_data(child_data)
+            .null_bit_buffer(null_buffer),
 
-        make_array(unsafe { builder.build_unchecked() })
-    } else if let DataType::FixedSizeList(_, _) = *data_type {
-        let null_count = field_node.null_count() as usize;
-        let builder = ArrayData::builder(data_type.clone())
-            .len(field_node.length() as usize)
-            .buffers(buffers[1..1].to_vec())
-            .offset(0)
-            .child_data(vec![child_array.into_data()])
-            .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
+        FixedSizeList(_, _) => ArrayData::builder(data_type.clone())
+            .len(length)
+            .add_child_data(child_data)
+            .null_bit_buffer(null_buffer),
 
-        make_array(unsafe { builder.build_unchecked() })
-    } else if let DataType::Map(_, _) = *data_type {
-        let null_count = field_node.null_count() as usize;
-        let builder = ArrayData::builder(data_type.clone())
-            .len(field_node.length() as usize)
-            .buffers(buffers[1..2].to_vec())
-            .offset(0)
-            .child_data(vec![child_array.into_data()])
-            .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
-
-        make_array(unsafe { builder.build_unchecked() })
-    } else {
-        panic!("Cannot create list or map array from {:?}", data_type)
-    }
+        _ => unreachable!("Cannot create list or map array from {:?}", data_type),
+    };
+    make_array(builder.build().unwrap())
 }
 
 /// Reads the correct number of buffers based on list type and null_count, and creates a
@@ -602,14 +539,13 @@ fn create_dictionary_array(
     buffers: &[Buffer],
     value_array: ArrayRef,
 ) -> ArrayRef {
-    if let DataType::Dictionary(_, _) = *data_type {
-        let null_count = field_node.null_count() as usize;
+    if let Dictionary(_, _) = *data_type {
+        let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
         let builder = ArrayData::builder(data_type.clone())
             .len(field_node.length() as usize)
-            .buffers(buffers[1..2].to_vec())
-            .offset(0)
-            .child_data(vec![value_array.into_data()])
-            .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
+            .add_buffer(buffers[1].clone())
+            .add_child_data(value_array.into_data())
+            .null_bit_buffer(null_buffer);
 
         make_array(unsafe { builder.build_unchecked() })
     } else {
@@ -619,7 +555,7 @@ fn create_dictionary_array(
 
 /// Creates a record batch from binary data using the `ipc::RecordBatch` indexes and the `Schema`
 pub fn read_record_batch(
-    buf: &[u8],
+    buf: &Buffer,
     batch: ipc::RecordBatch,
     schema: SchemaRef,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
@@ -669,15 +605,7 @@ pub fn read_record_batch(
             } else {
                 // Skip field.
                 // This must be called to advance `node_index` and `buffer_index`.
-                let tuple = skip_field(
-                    field_nodes,
-                    field,
-                    buf,
-                    buffers,
-                    dictionaries_by_id,
-                    node_index,
-                    buffer_index,
-                )?;
+                let tuple = skip_field(field.data_type(), node_index, buffer_index)?;
                 node_index = tuple.0;
                 buffer_index = tuple.1;
             }
@@ -713,7 +641,7 @@ pub fn read_record_batch(
 /// Read the dictionary from the buffer and provided metadata,
 /// updating the `dictionaries_by_id` with the resulting dictionary
 pub fn read_dictionary(
-    buf: &[u8],
+    buf: &Buffer,
     batch: ipc::DictionaryBatch,
     schema: &Schema,
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
@@ -888,14 +816,15 @@ impl<R: Read + Seek> FileReader<R> {
                         let batch = message.header_as_dictionary_batch().unwrap();
 
                         // read the block that makes up the dictionary batch into a buffer
-                        let mut buf = vec![0; block.bodyLength() as usize];
+                        let mut buf =
+                            MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
                         reader.seek(SeekFrom::Start(
                             block.offset() as u64 + block.metaDataLength() as u64,
                         ))?;
                         reader.read_exact(&mut buf)?;
 
                         read_dictionary(
-                            &buf,
+                            &buf.into(),
                             batch,
                             &schema,
                             &mut dictionaries_by_id,
@@ -996,14 +925,14 @@ impl<R: Read + Seek> FileReader<R> {
                     )
                 })?;
                 // read the block that makes up the record batch into a buffer
-                let mut buf = vec![0; block.bodyLength() as usize];
+                let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
                 self.reader.seek(SeekFrom::Start(
                     block.offset() as u64 + block.metaDataLength() as u64,
                 ))?;
                 self.reader.read_exact(&mut buf)?;
 
                 read_record_batch(
-                    &buf,
+                    &buf.into(),
                     batch,
                     self.schema(),
                     &self.dictionaries_by_id,
@@ -1192,10 +1121,10 @@ impl<R: Read> StreamReader<R> {
                     )
                 })?;
                 // read the block that makes up the record batch into a buffer
-                let mut buf = vec![0; message.bodyLength() as usize];
+                let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
                 self.reader.read_exact(&mut buf)?;
 
-                read_record_batch(&buf, batch, self.schema(), &self.dictionaries_by_id, self.projection.as_ref().map(|x| x.0.as_ref()), &message.version()).map(Some)
+                read_record_batch(&buf.into(), batch, self.schema(), &self.dictionaries_by_id, self.projection.as_ref().map(|x| x.0.as_ref()), &message.version()).map(Some)
             }
             ipc::MessageHeader::DictionaryBatch => {
                 let batch = message.header_as_dictionary_batch().ok_or_else(|| {
@@ -1204,11 +1133,11 @@ impl<R: Read> StreamReader<R> {
                     )
                 })?;
                 // read the block that makes up the dictionary batch into a buffer
-                let mut buf = vec![0; message.bodyLength() as usize];
+                let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
                 self.reader.read_exact(&mut buf)?;
 
                 read_dictionary(
-                    &buf, batch, &self.schema, &mut self.dictionaries_by_id, &message.version()
+                    &buf.into(), batch, &self.schema, &mut self.dictionaries_by_id, &message.version()
                 )?;
 
                 // read the next message until we encounter a RecordBatch
@@ -1244,336 +1173,8 @@ mod tests {
 
     use std::fs::File;
 
-    use flate2::read::GzDecoder;
-
+    use crate::datatypes;
     use crate::datatypes::{ArrowNativeType, Float64Type, Int32Type, Int8Type};
-    use crate::{datatypes, util::integration_util::*};
-
-    #[test]
-    #[cfg(not(feature = "force_validate"))]
-    fn read_generated_files_014() {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let version = "0.14.1";
-        // the test is repetitive, thus we can read all supported files at once
-        let paths = vec![
-            "generated_interval",
-            "generated_datetime",
-            "generated_dictionary",
-            "generated_map",
-            "generated_nested",
-            "generated_primitive_no_batches",
-            "generated_primitive_zerolength",
-            "generated_primitive",
-            "generated_decimal",
-        ];
-        paths.iter().for_each(|path| {
-            let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/{}/{}.arrow_file",
-                testdata, version, path
-            ))
-            .unwrap();
-
-            let mut reader = FileReader::try_new(file, None).unwrap();
-
-            // read expected JSON output
-            let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader).unwrap());
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "Big Endian is not supported for Decimal!")]
-    fn read_decimal_be_file_should_panic() {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/1.0.0-bigendian/generated_decimal.arrow_file",
-                testdata
-            ))
-            .unwrap();
-        FileReader::try_new(file, None).unwrap();
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "Last offset 687865856 of Utf8 is larger than values length 41"
-    )]
-    fn read_dictionary_be_not_implemented() {
-        // The offsets are not translated for big-endian files
-        // https://github.com/apache/arrow-rs/issues/859
-        let testdata = crate::util::test_util::arrow_test_data();
-        let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/1.0.0-bigendian/generated_dictionary.arrow_file",
-                testdata
-            ))
-            .unwrap();
-        FileReader::try_new(file, None).unwrap();
-    }
-
-    #[test]
-    fn read_generated_be_files_should_work() {
-        // complementary to the previous test
-        let testdata = crate::util::test_util::arrow_test_data();
-        let paths = vec![
-            "generated_interval",
-            "generated_datetime",
-            "generated_map",
-            "generated_nested",
-            "generated_null_trivial",
-            "generated_null",
-            "generated_primitive_no_batches",
-            "generated_primitive_zerolength",
-            "generated_primitive",
-        ];
-        paths.iter().for_each(|path| {
-            let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/1.0.0-bigendian/{}.arrow_file",
-                testdata, path
-            ))
-            .unwrap();
-
-            FileReader::try_new(file, None).unwrap();
-        });
-    }
-
-    #[test]
-    fn projection_should_work() {
-        // complementary to the previous test
-        let testdata = crate::util::test_util::arrow_test_data();
-        let paths = vec![
-            "generated_interval",
-            "generated_datetime",
-            "generated_map",
-            "generated_nested",
-            "generated_null_trivial",
-            "generated_null",
-            "generated_primitive_no_batches",
-            "generated_primitive_zerolength",
-            "generated_primitive",
-        ];
-        paths.iter().for_each(|path| {
-            // We must use littleendian files here.
-            // The offsets are not translated for big-endian files
-            // https://github.com/apache/arrow-rs/issues/859
-            let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/1.0.0-littleendian/{}.arrow_file",
-                testdata, path
-            ))
-            .unwrap();
-
-            let reader = FileReader::try_new(file, Some(vec![0])).unwrap();
-            let datatype_0 = reader.schema().fields()[0].data_type().clone();
-            reader.for_each(|batch| {
-                let batch = batch.unwrap();
-                assert_eq!(batch.columns().len(), 1);
-                assert_eq!(datatype_0, batch.schema().fields()[0].data_type().clone());
-            });
-        });
-    }
-
-    #[test]
-    #[cfg(not(feature = "force_validate"))]
-    fn read_generated_streams_014() {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let version = "0.14.1";
-        // the test is repetitive, thus we can read all supported files at once
-        let paths = vec![
-            "generated_interval",
-            "generated_datetime",
-            "generated_dictionary",
-            "generated_map",
-            "generated_nested",
-            "generated_primitive_no_batches",
-            "generated_primitive_zerolength",
-            "generated_primitive",
-            "generated_decimal",
-        ];
-        paths.iter().for_each(|path| {
-            let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/{}/{}.stream",
-                testdata, version, path
-            ))
-            .unwrap();
-
-            let mut reader = StreamReader::try_new(file, None).unwrap();
-
-            // read expected JSON output
-            let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader).unwrap());
-            // the next batch must be empty
-            assert!(reader.next().is_none());
-            // the stream must indicate that it's finished
-            assert!(reader.is_finished());
-        });
-    }
-
-    #[test]
-    fn read_generated_files_100() {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let version = "1.0.0-littleendian";
-        // the test is repetitive, thus we can read all supported files at once
-        let paths = vec![
-            "generated_interval",
-            "generated_datetime",
-            "generated_dictionary",
-            "generated_map",
-            // "generated_map_non_canonical",
-            "generated_nested",
-            "generated_null_trivial",
-            "generated_null",
-            "generated_primitive_no_batches",
-            "generated_primitive_zerolength",
-            "generated_primitive",
-        ];
-        paths.iter().for_each(|path| {
-            let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/{}/{}.arrow_file",
-                testdata, version, path
-            ))
-            .unwrap();
-
-            let mut reader = FileReader::try_new(file, None).unwrap();
-
-            // read expected JSON output
-            let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader).unwrap());
-        });
-    }
-
-    #[test]
-    fn read_generated_streams_100() {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let version = "1.0.0-littleendian";
-        // the test is repetitive, thus we can read all supported files at once
-        let paths = vec![
-            "generated_interval",
-            "generated_datetime",
-            "generated_dictionary",
-            "generated_map",
-            // "generated_map_non_canonical",
-            "generated_nested",
-            "generated_null_trivial",
-            "generated_null",
-            "generated_primitive_no_batches",
-            "generated_primitive_zerolength",
-            "generated_primitive",
-        ];
-        paths.iter().for_each(|path| {
-            let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/{}/{}.stream",
-                testdata, version, path
-            ))
-            .unwrap();
-
-            let mut reader = StreamReader::try_new(file, None).unwrap();
-
-            // read expected JSON output
-            let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader).unwrap());
-            // the next batch must be empty
-            assert!(reader.next().is_none());
-            // the stream must indicate that it's finished
-            assert!(reader.is_finished());
-        });
-    }
-
-    #[test]
-    #[cfg(feature = "ipc_compression")]
-    fn read_generated_streams_200() {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let version = "2.0.0-compression";
-
-        // the test is repetitive, thus we can read all supported files at once
-        let paths = vec!["generated_lz4", "generated_zstd"];
-        paths.iter().for_each(|path| {
-            let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/{}/{}.stream",
-                testdata, version, path
-            ))
-            .unwrap();
-
-            let mut reader = StreamReader::try_new(file, None).unwrap();
-
-            // read expected JSON output
-            let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader).unwrap());
-            // the next batch must be empty
-            assert!(reader.next().is_none());
-            // the stream must indicate that it's finished
-            assert!(reader.is_finished());
-        });
-    }
-
-    #[test]
-    #[cfg(not(feature = "ipc_compression"))]
-    fn read_generated_streams_200_negative() {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let version = "2.0.0-compression";
-
-        // the test is repetitive, thus we can read all supported files at once
-        let cases = vec![("generated_lz4", "LZ4_FRAME"), ("generated_zstd", "ZSTD")];
-        cases.iter().for_each(|(path, compression_name)| {
-            let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/{}/{}.stream",
-                testdata, version, path
-            ))
-            .unwrap();
-
-            let mut reader = StreamReader::try_new(file, None).unwrap();
-            let err = reader.next().unwrap().unwrap_err();
-            let expected_error = format!(
-                "Invalid argument error: compression type {} not supported because arrow was not compiled with the ipc_compression feature",
-                compression_name
-            );
-            assert_eq!(err.to_string(), expected_error);
-        });
-    }
-
-    #[test]
-    #[cfg(feature = "ipc_compression")]
-    fn read_generated_files_200() {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let version = "2.0.0-compression";
-        // the test is repetitive, thus we can read all supported files at once
-        let paths = vec!["generated_lz4", "generated_zstd"];
-        paths.iter().for_each(|path| {
-            let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/{}/{}.arrow_file",
-                testdata, version, path
-            ))
-            .unwrap();
-
-            let mut reader = FileReader::try_new(file, None).unwrap();
-
-            // read expected JSON output
-            let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader).unwrap());
-        });
-    }
-
-    #[test]
-    #[cfg(not(feature = "ipc_compression"))]
-    fn read_generated_files_200_negative() {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let version = "2.0.0-compression";
-        // the test is repetitive, thus we can read all supported files at once
-        let cases = vec![("generated_lz4", "LZ4_FRAME"), ("generated_zstd", "ZSTD")];
-        cases.iter().for_each(|(path, compression_name)| {
-            let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/{}/{}.arrow_file",
-                testdata, version, path
-            ))
-            .unwrap();
-
-            let mut reader = FileReader::try_new(file, None).unwrap();
-
-            let err = reader.next().unwrap().unwrap_err();
-            let expected_error = format!(
-                "Invalid argument error: compression type {} not supported because arrow was not compiled with the ipc_compression feature",
-                compression_name
-            );
-            assert_eq!(err.to_string(), expected_error);
-        });
-    }
 
     fn create_test_projection_schema() -> Schema {
         // define field types
@@ -1630,7 +1231,7 @@ mod tests {
         let array1 = StringArray::from(vec!["foo", "bar", "baz"]);
         let array2 = BooleanArray::from(vec![true, false, true]);
 
-        let mut union_builder = UnionBuilder::new_dense(3);
+        let mut union_builder = UnionBuilder::new_dense();
         union_builder.append::<Int32Type>("a", 1).unwrap();
         union_builder.append::<Float64Type>("b", 10.1).unwrap();
         union_builder.append_null::<Float64Type>("b").unwrap();
@@ -1879,28 +1480,12 @@ mod tests {
 
     #[test]
     fn test_roundtrip_dense_union() {
-        check_union_with_builder(UnionBuilder::new_dense(6));
+        check_union_with_builder(UnionBuilder::new_dense());
     }
 
     #[test]
     fn test_roundtrip_sparse_union() {
-        check_union_with_builder(UnionBuilder::new_sparse(6));
-    }
-
-    /// Read gzipped JSON file
-    fn read_gzip_json(version: &str, path: &str) -> ArrowJson {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let file = File::open(format!(
-            "{}/arrow-ipc-stream/integration/{}/{}.json.gz",
-            testdata, version, path
-        ))
-        .unwrap();
-        let mut gz = GzDecoder::new(&file);
-        let mut s = String::new();
-        gz.read_to_string(&mut s).unwrap();
-        // convert to Arrow JSON
-        let arrow_json: ArrowJson = serde_json::from_str(&s).unwrap();
-        arrow_json
+        check_union_with_builder(UnionBuilder::new_sparse());
     }
 
     #[test]

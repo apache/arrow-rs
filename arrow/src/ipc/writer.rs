@@ -1270,31 +1270,28 @@ mod tests {
     use super::*;
 
     use std::fs::File;
-    use std::io::Read;
+    use std::io::Seek;
     use std::sync::Arc;
 
-    use flate2::read::GzDecoder;
     use ipc::MetadataVersion;
 
     use crate::array::*;
     use crate::datatypes::Field;
     use crate::ipc::reader::*;
-    use crate::util::integration_util::*;
 
     #[test]
     #[cfg(feature = "ipc_compression")]
     fn test_write_empty_record_batch_lz4_compression() {
-        let file_name = "arrow_lz4_empty";
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
         let values: Vec<Option<i32>> = vec![];
         let array = Int32Array::from(values);
         let record_batch =
             RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)])
                 .unwrap();
+
+        let mut file = tempfile::tempfile().unwrap();
+
         {
-            let file =
-                File::create(format!("target/debug/testdata/{}.arrow_file", file_name))
-                    .unwrap();
             let write_option =
                 IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
                     .unwrap()
@@ -1302,15 +1299,14 @@ mod tests {
                     .unwrap();
 
             let mut writer =
-                FileWriter::try_new_with_options(file, &schema, write_option).unwrap();
+                FileWriter::try_new_with_options(&mut file, &schema, write_option)
+                    .unwrap();
             writer.write(&record_batch).unwrap();
             writer.finish().unwrap();
         }
+        file.rewind().unwrap();
         {
             // read file
-            let file =
-                File::open(format!("target/debug/testdata/{}.arrow_file", file_name))
-                    .unwrap();
             let mut reader = FileReader::try_new(file, None).unwrap();
             loop {
                 match reader.next() {
@@ -1345,9 +1341,9 @@ mod tests {
         let record_batch =
             RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)])
                 .unwrap();
+
+        let mut file = tempfile::tempfile().unwrap();
         {
-            let file =
-                File::create("target/debug/testdata/arrow_lz4.arrow_file").unwrap();
             let write_option =
                 IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
                     .unwrap()
@@ -1355,15 +1351,14 @@ mod tests {
                     .unwrap();
 
             let mut writer =
-                FileWriter::try_new_with_options(file, &schema, write_option).unwrap();
+                FileWriter::try_new_with_options(&mut file, &schema, write_option)
+                    .unwrap();
             writer.write(&record_batch).unwrap();
             writer.finish().unwrap();
         }
+        file.rewind().unwrap();
         {
             // read file
-            let file =
-                File::open(format!("target/debug/testdata/{}.arrow_file", "arrow_lz4"))
-                    .unwrap();
             let mut reader = FileReader::try_new(file, None).unwrap();
             loop {
                 match reader.next() {
@@ -1398,9 +1393,8 @@ mod tests {
         let record_batch =
             RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)])
                 .unwrap();
+        let mut file = tempfile::tempfile().unwrap();
         {
-            let file =
-                File::create("target/debug/testdata/arrow_zstd.arrow_file").unwrap();
             let write_option =
                 IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
                     .unwrap()
@@ -1408,15 +1402,14 @@ mod tests {
                     .unwrap();
 
             let mut writer =
-                FileWriter::try_new_with_options(file, &schema, write_option).unwrap();
+                FileWriter::try_new_with_options(&mut file, &schema, write_option)
+                    .unwrap();
             writer.write(&record_batch).unwrap();
             writer.finish().unwrap();
         }
+        file.rewind().unwrap();
         {
             // read file
-            let file =
-                File::open(format!("target/debug/testdata/{}.arrow_file", "arrow_zstd"))
-                    .unwrap();
             let mut reader = FileReader::try_new(file, None).unwrap();
             loop {
                 match reader.next() {
@@ -1462,18 +1455,16 @@ mod tests {
             vec![Arc::new(array1) as ArrayRef],
         )
         .unwrap();
+        let mut file = tempfile::tempfile().unwrap();
         {
-            let file = File::create("target/debug/testdata/arrow.arrow_file").unwrap();
-            let mut writer = FileWriter::try_new(file, &schema).unwrap();
+            let mut writer = FileWriter::try_new(&mut file, &schema).unwrap();
 
             writer.write(&batch).unwrap();
             writer.finish().unwrap();
         }
+        file.rewind().unwrap();
 
         {
-            let file =
-                File::open(format!("target/debug/testdata/{}.arrow_file", "arrow"))
-                    .unwrap();
             let mut reader = FileReader::try_new(file, None).unwrap();
             while let Some(Ok(read_batch)) = reader.next() {
                 read_batch
@@ -1570,352 +1561,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "force_validate"))]
-    fn read_and_rewrite_generated_files_014() {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let version = "0.14.1";
-        // the test is repetitive, thus we can read all supported files at once
-        let paths = vec![
-            "generated_interval",
-            "generated_datetime",
-            "generated_dictionary",
-            "generated_map",
-            "generated_nested",
-            "generated_primitive_no_batches",
-            "generated_primitive_zerolength",
-            "generated_primitive",
-            "generated_decimal",
-        ];
-        paths.iter().for_each(|path| {
-            let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/{}/{}.arrow_file",
-                testdata, version, path
-            ))
-            .unwrap();
-
-            let mut reader = FileReader::try_new(file, None).unwrap();
-
-            // read and rewrite the file to a temp location
-            {
-                let file = File::create(format!(
-                    "target/debug/testdata/{}-{}.arrow_file",
-                    version, path
-                ))
-                .unwrap();
-                let mut writer = FileWriter::try_new(file, &reader.schema()).unwrap();
-                while let Some(Ok(batch)) = reader.next() {
-                    writer.write(&batch).unwrap();
-                }
-                writer.finish().unwrap();
-            }
-
-            let file = File::open(format!(
-                "target/debug/testdata/{}-{}.arrow_file",
-                version, path
-            ))
-            .unwrap();
-            let mut reader = FileReader::try_new(file, None).unwrap();
-
-            // read expected JSON output
-            let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader).unwrap());
-        });
-    }
-
-    #[test]
-    #[cfg(not(feature = "force_validate"))]
-    fn read_and_rewrite_generated_streams_014() {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let version = "0.14.1";
-        // the test is repetitive, thus we can read all supported files at once
-        let paths = vec![
-            "generated_interval",
-            "generated_datetime",
-            "generated_dictionary",
-            "generated_map",
-            "generated_nested",
-            "generated_primitive_no_batches",
-            "generated_primitive_zerolength",
-            "generated_primitive",
-            "generated_decimal",
-        ];
-        paths.iter().for_each(|path| {
-            let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/{}/{}.stream",
-                testdata, version, path
-            ))
-            .unwrap();
-
-            let reader = StreamReader::try_new(file, None).unwrap();
-
-            // read and rewrite the stream to a temp location
-            {
-                let file = File::create(format!(
-                    "target/debug/testdata/{}-{}.stream",
-                    version, path
-                ))
-                .unwrap();
-                let mut writer = StreamWriter::try_new(file, &reader.schema()).unwrap();
-                reader.for_each(|batch| {
-                    writer.write(&batch.unwrap()).unwrap();
-                });
-                writer.finish().unwrap();
-            }
-
-            let file =
-                File::open(format!("target/debug/testdata/{}-{}.stream", version, path))
-                    .unwrap();
-            let mut reader = StreamReader::try_new(file, None).unwrap();
-
-            // read expected JSON output
-            let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader).unwrap());
-        });
-    }
-
-    #[test]
-    fn read_and_rewrite_generated_files_100() {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let version = "1.0.0-littleendian";
-        // the test is repetitive, thus we can read all supported files at once
-        let paths = vec![
-            "generated_custom_metadata",
-            "generated_datetime",
-            "generated_dictionary_unsigned",
-            "generated_dictionary",
-            // "generated_duplicate_fieldnames",
-            "generated_interval",
-            "generated_map",
-            "generated_nested",
-            // "generated_nested_large_offsets",
-            "generated_null_trivial",
-            "generated_null",
-            "generated_primitive_large_offsets",
-            "generated_primitive_no_batches",
-            "generated_primitive_zerolength",
-            "generated_primitive",
-            // "generated_recursive_nested",
-        ];
-        paths.iter().for_each(|path| {
-            let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/{}/{}.arrow_file",
-                testdata, version, path
-            ))
-            .unwrap();
-
-            let mut reader = FileReader::try_new(file, None).unwrap();
-
-            // read and rewrite the file to a temp location
-            {
-                let file = File::create(format!(
-                    "target/debug/testdata/{}-{}.arrow_file",
-                    version, path
-                ))
-                .unwrap();
-                // write IPC version 5
-                let options =
-                    IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5).unwrap();
-                let mut writer =
-                    FileWriter::try_new_with_options(file, &reader.schema(), options)
-                        .unwrap();
-                while let Some(Ok(batch)) = reader.next() {
-                    writer.write(&batch).unwrap();
-                }
-                writer.finish().unwrap();
-            }
-
-            let file = File::open(format!(
-                "target/debug/testdata/{}-{}.arrow_file",
-                version, path
-            ))
-            .unwrap();
-            let mut reader = FileReader::try_new(file, None).unwrap();
-
-            // read expected JSON output
-            let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader).unwrap());
-        });
-    }
-
-    #[test]
-    fn read_and_rewrite_generated_streams_100() {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let version = "1.0.0-littleendian";
-        // the test is repetitive, thus we can read all supported files at once
-        let paths = vec![
-            "generated_custom_metadata",
-            "generated_datetime",
-            "generated_dictionary_unsigned",
-            "generated_dictionary",
-            // "generated_duplicate_fieldnames",
-            "generated_interval",
-            "generated_map",
-            "generated_nested",
-            // "generated_nested_large_offsets",
-            "generated_null_trivial",
-            "generated_null",
-            "generated_primitive_large_offsets",
-            "generated_primitive_no_batches",
-            "generated_primitive_zerolength",
-            "generated_primitive",
-            // "generated_recursive_nested",
-        ];
-        paths.iter().for_each(|path| {
-            let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/{}/{}.stream",
-                testdata, version, path
-            ))
-            .unwrap();
-
-            let reader = StreamReader::try_new(file, None).unwrap();
-
-            // read and rewrite the stream to a temp location
-            {
-                let file = File::create(format!(
-                    "target/debug/testdata/{}-{}.stream",
-                    version, path
-                ))
-                .unwrap();
-                let options =
-                    IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5).unwrap();
-                let mut writer =
-                    StreamWriter::try_new_with_options(file, &reader.schema(), options)
-                        .unwrap();
-                reader.for_each(|batch| {
-                    writer.write(&batch.unwrap()).unwrap();
-                });
-                writer.finish().unwrap();
-            }
-
-            let file =
-                File::open(format!("target/debug/testdata/{}-{}.stream", version, path))
-                    .unwrap();
-            let mut reader = StreamReader::try_new(file, None).unwrap();
-
-            // read expected JSON output
-            let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader).unwrap());
-        });
-    }
-
-    #[test]
-    #[cfg(feature = "ipc_compression")]
-    fn read_and_rewrite_compression_files_200() {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let version = "2.0.0-compression";
-        // the test is repetitive, thus we can read all supported files at once
-        let paths = vec!["generated_lz4", "generated_zstd"];
-        paths.iter().for_each(|path| {
-            let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/{}/{}.arrow_file",
-                testdata, version, path
-            ))
-            .unwrap();
-
-            let mut reader = FileReader::try_new(file, None).unwrap();
-
-            // read and rewrite the file to a temp location
-            {
-                let file = File::create(format!(
-                    "target/debug/testdata/{}-{}.arrow_file",
-                    version, path
-                ))
-                .unwrap();
-                // write IPC version 5
-                let options =
-                    IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
-                        .unwrap()
-                        .try_with_compression(Some(ipc::CompressionType::LZ4_FRAME))
-                        .unwrap();
-
-                let mut writer =
-                    FileWriter::try_new_with_options(file, &reader.schema(), options)
-                        .unwrap();
-                while let Some(Ok(batch)) = reader.next() {
-                    writer.write(&batch).unwrap();
-                }
-                writer.finish().unwrap();
-            }
-
-            let file = File::open(format!(
-                "target/debug/testdata/{}-{}.arrow_file",
-                version, path
-            ))
-            .unwrap();
-            let mut reader = FileReader::try_new(file, None).unwrap();
-
-            // read expected JSON output
-            let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader).unwrap());
-        });
-    }
-
-    #[test]
-    #[cfg(feature = "ipc_compression")]
-    fn read_and_rewrite_compression_stream_200() {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let version = "2.0.0-compression";
-        // the test is repetitive, thus we can read all supported files at once
-        let paths = vec!["generated_lz4", "generated_zstd"];
-        paths.iter().for_each(|path| {
-            let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/{}/{}.stream",
-                testdata, version, path
-            ))
-            .unwrap();
-
-            let reader = StreamReader::try_new(file, None).unwrap();
-
-            // read and rewrite the stream to a temp location
-            {
-                let file = File::create(format!(
-                    "target/debug/testdata/{}-{}.stream",
-                    version, path
-                ))
-                .unwrap();
-                let options =
-                    IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
-                        .unwrap()
-                        .try_with_compression(Some(ipc::CompressionType::ZSTD))
-                        .unwrap();
-
-                let mut writer =
-                    StreamWriter::try_new_with_options(file, &reader.schema(), options)
-                        .unwrap();
-                reader.for_each(|batch| {
-                    writer.write(&batch.unwrap()).unwrap();
-                });
-                writer.finish().unwrap();
-            }
-
-            let file =
-                File::open(format!("target/debug/testdata/{}-{}.stream", version, path))
-                    .unwrap();
-            let mut reader = StreamReader::try_new(file, None).unwrap();
-
-            // read expected JSON output
-            let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader).unwrap());
-        });
-    }
-
-    /// Read gzipped JSON file
-    fn read_gzip_json(version: &str, path: &str) -> ArrowJson {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let file = File::open(format!(
-            "{}/arrow-ipc-stream/integration/{}/{}.json.gz",
-            testdata, version, path
-        ))
-        .unwrap();
-        let mut gz = GzDecoder::new(&file);
-        let mut s = String::new();
-        gz.read_to_string(&mut s).unwrap();
-        // convert to Arrow JSON
-        let arrow_json: ArrowJson = serde_json::from_str(&s).unwrap();
-        arrow_json
-    }
-
-    #[test]
     fn track_union_nested_dict() {
         let inner: DictionaryArray<Int32Type> = vec!["a", "b", "a"].into_iter().collect();
 
@@ -1982,7 +1627,6 @@ mod tests {
     #[test]
     fn read_union_017() {
         let testdata = crate::util::test_util::arrow_test_data();
-        let version = "0.17.1";
         let data_file = File::open(format!(
             "{}/arrow-ipc-stream/integration/0.17.1/generated_union.stream",
             testdata,
@@ -1991,26 +1635,18 @@ mod tests {
 
         let reader = StreamReader::try_new(data_file, None).unwrap();
 
+        let mut file = tempfile::tempfile().unwrap();
         // read and rewrite the stream to a temp location
         {
-            let file = File::create(format!(
-                "target/debug/testdata/{}-generated_union.stream",
-                version
-            ))
-            .unwrap();
-            let mut writer = StreamWriter::try_new(file, &reader.schema()).unwrap();
+            let mut writer = StreamWriter::try_new(&mut file, &reader.schema()).unwrap();
             reader.for_each(|batch| {
                 writer.write(&batch.unwrap()).unwrap();
             });
             writer.finish().unwrap();
         }
+        file.rewind().unwrap();
 
         // Compare original file and rewrote file
-        let file = File::open(format!(
-            "target/debug/testdata/{}-generated_union.stream",
-            version
-        ))
-        .unwrap();
         let rewrite_reader = StreamReader::try_new(file, None).unwrap();
 
         let data_file = File::open(format!(
@@ -2040,7 +1676,7 @@ mod tests {
             ),
             true,
         )]);
-        let mut builder = UnionBuilder::new_sparse(5);
+        let mut builder = UnionBuilder::with_capacity_sparse(5);
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append_null::<Int32Type>("a").unwrap();
         builder.append::<Float64Type>("c", 3.0).unwrap();
@@ -2053,18 +1689,18 @@ mod tests {
             vec![Arc::new(union) as ArrayRef],
         )
         .unwrap();
-        let file_name = "target/debug/testdata/union.arrow_file";
+
+        let mut file = tempfile::tempfile().unwrap();
         {
-            let file = File::create(&file_name).unwrap();
             let mut writer =
-                FileWriter::try_new_with_options(file, &schema, options).unwrap();
+                FileWriter::try_new_with_options(&mut file, &schema, options).unwrap();
 
             writer.write(&batch).unwrap();
             writer.finish().unwrap();
         }
+        file.rewind().unwrap();
 
         {
-            let file = File::open(&file_name).unwrap();
             let reader = FileReader::try_new(file, None).unwrap();
             reader.for_each(|maybe_batch| {
                 maybe_batch

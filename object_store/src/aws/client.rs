@@ -52,36 +52,48 @@ const STRICT_PATH_ENCODE_SET: AsciiSet = STRICT_ENCODE_SET.remove(b'/');
 pub(crate) enum Error {
     #[snafu(display("Error performing get request {}: {}", path, source))]
     GetRequest {
+        source: crate::client::retry::Error,
+        path: String,
+    },
+
+    #[snafu(display("Error fetching get response body {}: {}", path, source))]
+    GetResponseBody {
         source: reqwest::Error,
         path: String,
     },
 
     #[snafu(display("Error performing put request {}: {}", path, source))]
     PutRequest {
-        source: reqwest::Error,
+        source: crate::client::retry::Error,
         path: String,
     },
 
     #[snafu(display("Error performing delete request {}: {}", path, source))]
     DeleteRequest {
-        source: reqwest::Error,
+        source: crate::client::retry::Error,
         path: String,
     },
 
     #[snafu(display("Error performing copy request {}: {}", path, source))]
     CopyRequest {
-        source: reqwest::Error,
+        source: crate::client::retry::Error,
         path: String,
     },
 
     #[snafu(display("Error performing list request: {}", source))]
-    ListRequest { source: reqwest::Error },
+    ListRequest { source: crate::client::retry::Error },
+
+    #[snafu(display("Error getting list response body: {}", source))]
+    ListResponseBody { source: reqwest::Error },
 
     #[snafu(display("Error performing create multipart request: {}", source))]
-    CreateMultipartRequest { source: reqwest::Error },
+    CreateMultipartRequest { source: crate::client::retry::Error },
+
+    #[snafu(display("Error getting create multipart response body: {}", source))]
+    CreateMultipartResponseBody { source: reqwest::Error },
 
     #[snafu(display("Error performing complete multipart request: {}", source))]
-    CompleteMultipartRequest { source: reqwest::Error },
+    CompleteMultipartRequest { source: crate::client::retry::Error },
 
     #[snafu(display("Got invalid list response: {}", source))]
     InvalidListResponse { source: quick_xml::de::DeError },
@@ -261,10 +273,6 @@ impl S3Client {
             .await
             .context(GetRequestSnafu {
                 path: path.as_ref(),
-            })?
-            .error_for_status()
-            .context(GetRequestSnafu {
-                path: path.as_ref(),
             })?;
 
         Ok(response)
@@ -292,10 +300,6 @@ impl S3Client {
             .await
             .context(PutRequestSnafu {
                 path: path.as_ref(),
-            })?
-            .error_for_status()
-            .context(PutRequestSnafu {
-                path: path.as_ref(),
             })?;
 
         Ok(response)
@@ -318,10 +322,6 @@ impl S3Client {
             .await
             .context(DeleteRequestSnafu {
                 path: path.as_ref(),
-            })?
-            .error_for_status()
-            .context(DeleteRequestSnafu {
-                path: path.as_ref(),
             })?;
 
         Ok(())
@@ -339,10 +339,6 @@ impl S3Client {
             .with_aws_sigv4(credential.as_ref(), &self.config.region, "s3")
             .send_retry(&self.config.retry_config)
             .await
-            .context(CopyRequestSnafu {
-                path: from.as_ref(),
-            })?
-            .error_for_status()
             .context(CopyRequestSnafu {
                 path: from.as_ref(),
             })?;
@@ -385,11 +381,9 @@ impl S3Client {
             .send_retry(&self.config.retry_config)
             .await
             .context(ListRequestSnafu)?
-            .error_for_status()
-            .context(ListRequestSnafu)?
             .bytes()
             .await
-            .context(ListRequestSnafu)?;
+            .context(ListResponseBodySnafu)?;
 
         let mut response: ListResponse = quick_xml::de::from_reader(response.reader())
             .context(InvalidListResponseSnafu)?;
@@ -430,11 +424,9 @@ impl S3Client {
             .send_retry(&self.config.retry_config)
             .await
             .context(CreateMultipartRequestSnafu)?
-            .error_for_status()
-            .context(CreateMultipartRequestSnafu)?
             .bytes()
             .await
-            .context(CreateMultipartRequestSnafu)?;
+            .context(CreateMultipartResponseBodySnafu)?;
 
         let response: InitiateMultipart = quick_xml::de::from_reader(response.reader())
             .context(InvalidMultipartResponseSnafu)?;
@@ -470,8 +462,6 @@ impl S3Client {
             .with_aws_sigv4(credential.as_ref(), &self.config.region, "s3")
             .send_retry(&self.config.retry_config)
             .await
-            .context(CompleteMultipartRequestSnafu)?
-            .error_for_status()
             .context(CompleteMultipartRequestSnafu)?;
 
         Ok(())

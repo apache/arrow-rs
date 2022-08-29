@@ -50,6 +50,7 @@ pub type SchemaRef = Arc<Schema>;
 mod tests {
     use super::*;
     use crate::error::Result;
+    use crate::json::JsonSerializable;
     use serde_json::Value::{Bool, Number as VNumber, String as VString};
     use serde_json::{Number, Value};
     use std::{

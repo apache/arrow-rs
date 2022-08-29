@@ -17,7 +17,6 @@
 
 use arrow::array::{Array, BooleanArray};
 use arrow::compute::SlicesIterator;
-use parquet_format::PageLocation;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::Range;
@@ -119,9 +118,10 @@ impl RowSelection {
     }
 
     /// Given an offset index, return the offset ranges for all data pages selected by `self`
+    #[cfg(any(test, feature = "async"))]
     pub(crate) fn scan_ranges(
         &self,
-        page_locations: &[PageLocation],
+        page_locations: &[parquet_format::PageLocation],
     ) -> Vec<Range<usize>> {
         let mut ranges = vec![];
         let mut row_offset = 0;
@@ -162,7 +162,12 @@ impl RowSelection {
                     current_selector = selectors.next();
                 }
             } else {
-                break;
+                if !(selector.skip || current_page_included) {
+                    let start = page.offset as usize;
+                    let end = start + page.compressed_page_size as usize;
+                    ranges.push(start..end);
+                }
+                current_selector = selectors.next()
             }
         }
 
@@ -297,6 +302,7 @@ impl From<RowSelection> for VecDeque<RowSelector> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use parquet_format::PageLocation;
     use rand::{thread_rng, Rng};
 
     #[test]
@@ -557,6 +563,32 @@ mod tests {
             RowSelector::skip(1),
             // Select across page boundaries including final page
             RowSelector::select(8),
+        ]);
+
+        let ranges = selection.scan_ranges(&index);
+
+        // assert_eq!(mask, vec![false, true, true, false, true, true, true]);
+        assert_eq!(ranges, vec![10..20, 20..30, 40..50, 50..60, 60..70]);
+
+        let selection = RowSelection::from(vec![
+            // Skip first page
+            RowSelector::skip(10),
+            // Multiple selects in same page
+            RowSelector::select(3),
+            RowSelector::skip(3),
+            RowSelector::select(4),
+            // Select to page boundary
+            RowSelector::skip(5),
+            RowSelector::select(5),
+            // Skip full page past page boundary
+            RowSelector::skip(12),
+            // Select to final page bounday
+            RowSelector::select(12),
+            RowSelector::skip(1),
+            // Skip across final page boundary
+            RowSelector::skip(8),
+            // Select from final page
+            RowSelector::select(4),
         ]);
 
         let ranges = selection.scan_ranges(&index);

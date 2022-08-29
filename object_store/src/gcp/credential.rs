@@ -41,7 +41,10 @@ pub enum Error {
     UnsupportedKey { encoding: String },
 
     #[snafu(display("Error performing token request: {}", source))]
-    TokenRequest { source: reqwest::Error },
+    TokenRequest { source: crate::client::retry::Error },
+
+    #[snafu(display("Error getting token response body: {}", source))]
+    TokenResponseBody { source: reqwest::Error },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -177,11 +180,9 @@ impl OAuthProvider {
             .send_retry(retry)
             .await
             .context(TokenRequestSnafu)?
-            .error_for_status()
-            .context(TokenRequestSnafu)?
             .json()
             .await
-            .context(TokenRequestSnafu)?;
+            .context(TokenResponseBodySnafu)?;
 
         let token = TemporaryToken {
             token: response.access_token,

@@ -99,8 +99,15 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     }
 
     /// Returns the element at index `i` as bytes slice
+    /// # Panics
+    /// Panics if index `i` is out of bounds.
     pub fn value(&self, i: usize) -> &[u8] {
-        assert!(i < self.data.len(), "BinaryArray out of bounds access");
+        assert!(
+            i < self.data.len(),
+            "Trying to access an element at index {} from a BinaryArray of length {}",
+            i,
+            self.len()
+        );
         //Soundness: length checked above, offset buffer length is 1 larger than logical array length
         let end = unsafe { self.value_offsets().get_unchecked(i + 1) };
         let start = unsafe { self.value_offsets().get_unchecked(i) };
@@ -225,12 +232,10 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     ) -> impl Iterator<Item = Option<&[u8]>> + 'a {
         indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
     }
-}
 
-impl<'a, T: OffsetSizeTrait> GenericBinaryArray<T> {
     /// constructs a new iterator
-    pub fn iter(&'a self) -> GenericBinaryIter<'a, T> {
-        GenericBinaryIter::<'a, T>::new(self)
+    pub fn iter(&self) -> GenericBinaryIter<'_, OffsetSize> {
+        GenericBinaryIter::<'_, OffsetSize>::new(self)
     }
 }
 
@@ -808,7 +813,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "BinaryArray out of bounds access")]
+    #[should_panic(
+        expected = "Trying to access an element at index 4 from a BinaryArray of length 3"
+    )]
     fn test_binary_array_get_value_index_out_of_bound() {
         let values: [u8; 12] =
             [104, 101, 108, 108, 111, 112, 97, 114, 113, 117, 101, 116];

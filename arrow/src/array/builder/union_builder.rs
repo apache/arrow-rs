@@ -73,13 +73,17 @@ impl<T: ArrowNativeType> FieldDataValues for BufferBuilder<T> {
 
 impl FieldData {
     /// Creates a new `FieldData`.
-    fn new<T: ArrowPrimitiveType>(type_id: i8, data_type: DataType) -> Self {
+    fn new<T: ArrowPrimitiveType>(
+        type_id: i8,
+        data_type: DataType,
+        capacity: usize,
+    ) -> Self {
         Self {
             type_id,
             data_type,
             slots: 0,
-            values_buffer: Box::new(BufferBuilder::<T::Native>::new(1)),
-            null_buffer_builder: NullBufferBuilder::new(1),
+            values_buffer: Box::new(BufferBuilder::<T::Native>::new(capacity)),
+            null_buffer_builder: NullBufferBuilder::new(capacity),
         }
     }
 
@@ -111,7 +115,7 @@ impl FieldData {
 /// use arrow::array::UnionBuilder;
 /// use arrow::datatypes::{Float64Type, Int32Type};
 ///
-/// let mut builder = UnionBuilder::new_dense(3);
+/// let mut builder = UnionBuilder::new_dense();
 /// builder.append::<Int32Type>("a", 1).unwrap();
 /// builder.append::<Float64Type>("b", 3.0).unwrap();
 /// builder.append::<Int32Type>("a", 4).unwrap();
@@ -131,7 +135,7 @@ impl FieldData {
 /// use arrow::array::UnionBuilder;
 /// use arrow::datatypes::{Float64Type, Int32Type};
 ///
-/// let mut builder = UnionBuilder::new_sparse(3);
+/// let mut builder = UnionBuilder::new_sparse();
 /// builder.append::<Int32Type>("a", 1).unwrap();
 /// builder.append::<Float64Type>("b", 3.0).unwrap();
 /// builder.append::<Int32Type>("a", 4).unwrap();
@@ -155,26 +159,39 @@ pub struct UnionBuilder {
     type_id_builder: Int8BufferBuilder,
     /// Builder to keep track of offsets (`None` for sparse unions)
     value_offset_builder: Option<Int32BufferBuilder>,
+    initial_capacity: usize,
 }
 
 impl UnionBuilder {
     /// Creates a new dense array builder.
-    pub fn new_dense(capacity: usize) -> Self {
+    pub fn new_dense() -> Self {
+        Self::with_capacity_dense(1024)
+    }
+
+    /// Creates a new sparse array builder.
+    pub fn new_sparse() -> Self {
+        Self::with_capacity_sparse(1024)
+    }
+
+    /// Creates a new dense array builder with capacity.
+    pub fn with_capacity_dense(capacity: usize) -> Self {
         Self {
             len: 0,
             fields: HashMap::default(),
             type_id_builder: Int8BufferBuilder::new(capacity),
             value_offset_builder: Some(Int32BufferBuilder::new(capacity)),
+            initial_capacity: capacity,
         }
     }
 
-    /// Creates a new sparse array builder.
-    pub fn new_sparse(capacity: usize) -> Self {
+    /// Creates a new sparse array builder  with capacity.
+    pub fn with_capacity_sparse(capacity: usize) -> Self {
         Self {
             len: 0,
             fields: HashMap::default(),
             type_id_builder: Int8BufferBuilder::new(capacity),
             value_offset_builder: None,
+            initial_capacity: capacity,
         }
     }
 
@@ -215,10 +232,18 @@ impl UnionBuilder {
                 data
             }
             None => match self.value_offset_builder {
-                Some(_) => FieldData::new::<T>(self.fields.len() as i8, T::DATA_TYPE),
+                Some(_) => FieldData::new::<T>(
+                    self.fields.len() as i8,
+                    T::DATA_TYPE,
+                    self.initial_capacity,
+                ),
+                // In the case of a sparse union, we should pass the maximum of the currently length and the capacity.
                 None => {
-                    let mut fd =
-                        FieldData::new::<T>(self.fields.len() as i8, T::DATA_TYPE);
+                    let mut fd = FieldData::new::<T>(
+                        self.fields.len() as i8,
+                        T::DATA_TYPE,
+                        self.len.max(self.initial_capacity),
+                    );
                     for _ in 0..self.len {
                         fd.append_null();
                     }

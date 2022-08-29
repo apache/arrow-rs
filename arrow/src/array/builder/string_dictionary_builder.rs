@@ -42,8 +42,8 @@ use std::sync::Arc;
 /// // Create a dictionary array indexed by bytes whose values are Strings.
 /// // It can thus hold up to 256 distinct string values.
 ///
-/// let key_builder = PrimitiveBuilder::<Int8Type>::new(100);
-/// let value_builder = StringBuilder::new(100);
+/// let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(100);
+/// let value_builder = StringBuilder::new();
 /// let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
 ///
 /// // The builder builds the dictionary value by value
@@ -111,7 +111,7 @@ where
     ///
     /// let dictionary_values = StringArray::from(vec![None, Some("abc"), Some("def")]);
     ///
-    /// let mut builder = StringDictionaryBuilder::new_with_dictionary(PrimitiveBuilder::<Int16Type>::new(3), &dictionary_values).unwrap();
+    /// let mut builder = StringDictionaryBuilder::new_with_dictionary(PrimitiveBuilder::<Int16Type>::with_capacity(3), &dictionary_values).unwrap();
     /// builder.append("def").unwrap();
     /// builder.append_null();
     /// builder.append("abc").unwrap();
@@ -290,8 +290,8 @@ mod tests {
 
     #[test]
     fn test_string_dictionary_builder() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(5);
-        let value_builder = StringBuilder::new(2);
+        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(5);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
         builder.append_null();
@@ -317,7 +317,7 @@ mod tests {
     fn test_string_dictionary_builder_with_existing_dictionary() {
         let dictionary = StringArray::from(vec![None, Some("def"), Some("abc")]);
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(6);
+        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(6);
         let mut builder =
             StringDictionaryBuilder::new_with_dictionary(key_builder, &dictionary)
                 .unwrap();
@@ -349,7 +349,7 @@ mod tests {
         let dictionary: Vec<Option<&str>> = vec![None];
         let dictionary = StringArray::from(dictionary);
 
-        let key_builder = PrimitiveBuilder::<Int16Type>::new(4);
+        let key_builder = PrimitiveBuilder::<Int16Type>::with_capacity(4);
         let mut builder =
             StringDictionaryBuilder::new_with_dictionary(key_builder, &dictionary)
                 .unwrap();

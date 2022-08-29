@@ -42,9 +42,22 @@ jobs:
           rustup toolchain install stable
           rustup default stable
           rustup component add clippy
-      - name: Run clippy
-        run: |
-          cargo clippy -p object_store --all-features -- -D warnings
+      # Run different tests for the library on its own as well as
+      # all targets to ensure that it still works in the absence of
+      # features that might be enabled by dev-dependencies of other
+      # targets.
+      - name: Run clippy with default features
+        run: cargo clippy -p object_store -- -D warnings
+      - name: Run clippy with aws feature
+        run: cargo clippy -p object_store --features aws -- -D warnings
+      - name: Run clippy with gcp feature
+        run: cargo clippy -p object_store --features gcp -- -D warnings
+      - name: Run clippy with azure feature
+        run: cargo clippy -p object_store --features azure -- -D warnings
+      - name: Run clippy with all features
+        run: cargo clippy -p object_store --all-features -- -D warnings
+      - name: Run clippy with all features and all targets
+        run: cargo clippy -p object_store --all-features --all-targets -- -D warnings
 
   # test the crate
   linux-test:
@@ -81,10 +94,6 @@ jobs:
         RUST_BACKTRACE: "1"
         # Run integration tests
         TEST_INTEGRATION: 1
-        AWS_DEFAULT_REGION: "us-east-1"
-        AWS_ACCESS_KEY_ID: test
-        AWS_SECRET_ACCESS_KEY: test
-        AWS_ENDPOINT: http://localstack:4566
         EC2_METADATA_ENDPOINT: http://ec2-metadata:1338
         AZURE_USE_EMULATOR: "1"
         AZURITE_BLOB_STORAGE_URL: "http://azurite:10000"
@@ -101,6 +110,11 @@ jobs:
           echo '{"gcs_base_url": "https://fake-gcs:4443", "disable_oauth": true, "client_email": "", "private_key": ""}' > "$GOOGLE_SERVICE_ACCOUNT"
 
       - name: Setup LocalStack (AWS emulation)
+        env:
+          AWS_DEFAULT_REGION: "us-east-1"
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_ENDPOINT: http://localstack:4566
         run: |
           cd /tmp
           curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
@@ -121,6 +135,11 @@ jobs:
           rustup default stable
 
       - name: Run object_store tests
+        env:
+          OBJECT_STORE_AWS_DEFAULT_REGION: "us-east-1"
+          OBJECT_STORE_AWS_ACCESS_KEY_ID: test
+          OBJECT_STORE_AWS_SECRET_ACCESS_KEY: test
+          OBJECT_STORE_AWS_ENDPOINT: http://localstack:4566
         run: |
           # run tests
-          cargo test -p object_store --features=aws,azure,azure_test,gcp
+          cargo test -p object_store --features=aws,azure,gcp

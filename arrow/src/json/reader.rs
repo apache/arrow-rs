@@ -798,7 +798,8 @@ impl Decoder {
     {
         let mut builder: Box<dyn ArrayBuilder> = match data_type {
             DataType::Utf8 => {
-                let values_builder = StringBuilder::new(rows.len() * 5);
+                let values_builder =
+                    StringBuilder::with_capacity(rows.len(), rows.len() * 5);
                 Box::new(ListBuilder::new(values_builder))
             }
             DataType::Dictionary(_, _) => {
@@ -901,8 +902,8 @@ impl Decoder {
     where
         T: ArrowPrimitiveType + ArrowDictionaryKeyType,
     {
-        let key_builder = PrimitiveBuilder::<T>::new(row_len);
-        let values_builder = StringBuilder::new(row_len * 5);
+        let key_builder = PrimitiveBuilder::<T>::with_capacity(row_len);
+        let values_builder = StringBuilder::with_capacity(row_len, row_len * 5);
         StringDictionaryBuilder::new(key_builder, values_builder)
     }
 
@@ -950,7 +951,7 @@ impl Decoder {
     }
 
     fn build_boolean_array(&self, rows: &[Value], col_name: &str) -> Result<ArrayRef> {
-        let mut builder = BooleanBuilder::new(rows.len());
+        let mut builder = BooleanBuilder::with_capacity(rows.len());
         for row in rows {
             if let Some(value) = row.get(&col_name) {
                 if let Some(boolean) = value.as_bool() {
@@ -2623,7 +2624,7 @@ mod tests {
         let re = builder.build(Cursor::new(json_content));
         assert_eq!(
             re.err().unwrap().to_string(),
-            r#"Json error: Expected JSON record to be an object, found Array([Number(1), String("hello")])"#,
+            r#"Json error: Expected JSON record to be an object, found Array [Number(1), String("hello")]"#,
         );
     }
 

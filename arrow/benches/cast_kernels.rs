@@ -45,7 +45,7 @@ fn build_utf8_date_array(size: usize, with_nulls: bool) -> ArrayRef {
 
     // use random numbers to avoid spurious compiler optimizations wrt to branching
     let mut rng = seedable_rng();
-    let mut builder = StringBuilder::new(size);
+    let mut builder = StringBuilder::new();
     let range = Uniform::new(0, 737776);
 
     for _ in 0..size {
@@ -66,7 +66,7 @@ fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
 
     // use random numbers to avoid spurious compiler optimizations wrt to branching
     let mut rng = seedable_rng();
-    let mut builder = StringBuilder::new(size);
+    let mut builder = StringBuilder::new();
     let range = Uniform::new(0, 1608071414123);
 
     for _ in 0..size {
@@ -82,9 +82,9 @@ fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
     Arc::new(builder.finish())
 }
 
-fn build_decimal128_array(size: usize, precision: usize, scale: usize) -> ArrayRef {
+fn build_decimal128_array(size: usize, precision: u8, scale: u8) -> ArrayRef {
     let mut rng = seedable_rng();
-    let mut builder = Decimal128Builder::new(size, precision, scale);
+    let mut builder = Decimal128Builder::with_capacity(size, precision, scale);
 
     for _ in 0..size {
         let _ = builder.append_value(rng.gen_range::<i128, _>(0..1000000000));
@@ -92,9 +92,9 @@ fn build_decimal128_array(size: usize, precision: usize, scale: usize) -> ArrayR
     Arc::new(builder.finish())
 }
 
-fn build_decimal256_array(size: usize, precision: usize, scale: usize) -> ArrayRef {
+fn build_decimal256_array(size: usize, precision: u8, scale: u8) -> ArrayRef {
     let mut rng = seedable_rng();
-    let mut builder = Decimal256Builder::new(size, precision, scale);
+    let mut builder = Decimal256Builder::with_capacity(size, precision, scale);
     let mut bytes = [0; 32];
     for _ in 0..size {
         let num = rng.gen_range::<i128, _>(0..1000000000);

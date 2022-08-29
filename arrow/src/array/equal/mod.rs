@@ -610,7 +610,7 @@ mod tests {
     }
 
     fn create_list_array<U: AsRef<[i32]>, T: AsRef<[Option<U>]>>(data: T) -> ArrayData {
-        let mut builder = ListBuilder::new(Int32Builder::new(10));
+        let mut builder = ListBuilder::new(Int32Builder::with_capacity(10));
         for d in data.as_ref() {
             if let Some(v) = d {
                 builder.values().append_slice(v.as_ref());
@@ -768,7 +768,7 @@ mod tests {
     fn create_fixed_size_binary_array<U: AsRef<[u8]>, T: AsRef<[Option<U>]>>(
         data: T,
     ) -> ArrayData {
-        let mut builder = FixedSizeBinaryBuilder::new(15, 5);
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(data.as_ref().len(), 5);
 
         for d in data.as_ref() {
             if let Some(v) = d {
@@ -935,7 +935,7 @@ mod tests {
     fn create_fixed_size_list_array<U: AsRef<[i32]>, T: AsRef<[Option<U>]>>(
         data: T,
     ) -> ArrayData {
-        let mut builder = FixedSizeListBuilder::new(Int32Builder::new(10), 3);
+        let mut builder = FixedSizeListBuilder::new(Int32Builder::with_capacity(10), 3);
 
         for d in data.as_ref() {
             if let Some(v) = d {
@@ -1246,7 +1246,7 @@ mod tests {
     fn create_dictionary_array(values: &[&str], keys: &[Option<&str>]) -> ArrayData {
         let values = StringArray::from(values.to_vec());
         let mut builder = StringDictionaryBuilder::new_with_dictionary(
-            PrimitiveBuilder::<Int16Type>::new(3),
+            PrimitiveBuilder::<Int16Type>::with_capacity(3),
             &values,
         )
         .unwrap();
@@ -1370,7 +1370,7 @@ mod tests {
 
     #[test]
     fn test_union_equal_dense() {
-        let mut builder = UnionBuilder::new_dense(7);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();
@@ -1380,7 +1380,7 @@ mod tests {
         builder.append::<Int32Type>("b", 7).unwrap();
         let union1 = builder.build().unwrap();
 
-        builder = UnionBuilder::new_dense(7);
+        builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();
@@ -1390,7 +1390,7 @@ mod tests {
         builder.append::<Int32Type>("b", 7).unwrap();
         let union2 = builder.build().unwrap();
 
-        builder = UnionBuilder::new_dense(7);
+        builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();
@@ -1400,7 +1400,7 @@ mod tests {
         builder.append::<Int32Type>("b", 7).unwrap();
         let union3 = builder.build().unwrap();
 
-        builder = UnionBuilder::new_dense(7);
+        builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();
@@ -1417,7 +1417,7 @@ mod tests {
 
     #[test]
     fn test_union_equal_sparse() {
-        let mut builder = UnionBuilder::new_sparse(7);
+        let mut builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();
@@ -1427,7 +1427,7 @@ mod tests {
         builder.append::<Int32Type>("b", 7).unwrap();
         let union1 = builder.build().unwrap();
 
-        builder = UnionBuilder::new_sparse(7);
+        builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();
@@ -1437,7 +1437,7 @@ mod tests {
         builder.append::<Int32Type>("b", 7).unwrap();
         let union2 = builder.build().unwrap();
 
-        builder = UnionBuilder::new_sparse(7);
+        builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();
@@ -1447,7 +1447,7 @@ mod tests {
         builder.append::<Int32Type>("b", 7).unwrap();
         let union3 = builder.build().unwrap();
 
-        builder = UnionBuilder::new_sparse(7);
+        builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();

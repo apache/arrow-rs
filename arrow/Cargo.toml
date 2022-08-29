@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow"
-version = "20.0.0"
+version = "21.0.0"
 description = "Rust implementation of Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -38,10 +38,10 @@ path = "src/lib.rs"
 bench = false
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-ahash = { version = "0.8", default-features = false, features=["compile-time-rng"] }
+ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ahash = { version = "0.8", default-features = false, features=["runtime-rng"] }
+ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
 serde = { version = "1.0", default-features = false }
@@ -61,9 +61,8 @@ packed_simd = { version = "0.3", default-features = false, optional = true, pack
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = { version = "0.6", default-features = false, optional = true }
 flatbuffers = { version = "2.1.2", default-features = false, features = ["thiserror"], optional = true }
-hex = { version = "0.4", default-features = false, features = ["std"] }
 comfy-table = { version = "6.0", optional = true, default-features = false }
-pyo3 = { version = "0.16", default-features = false, optional = true }
+pyo3 = { version = "0.17", default-features = false, optional = true }
 lexical-core = { version = "^0.8", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 multiversion = { version = "0.6.1", default-features = false }
 bitflags = { version = "1.2.1", default-features = false }
@@ -88,6 +87,11 @@ pyarrow = ["pyo3", "ffi"]
 force_validate = []
 # Enable ffi support
 ffi = []
+# Enable NaN-ordering behavior on comparison kernels
+nan_ordering = []
+# Enable dyn-comparison of dictionary arrays with other arrays
+# Note: this does not impact comparison against scalars
+dyn_cmp_dict = []
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
@@ -100,7 +104,7 @@ tempfile = { version = "3", default-features = false }
 [[example]]
 name = "dynamic_types"
 required-features = ["prettyprint"]
-path="./examples/dynamic_types.rs"
+path = "./examples/dynamic_types.rs"
 
 [[bench]]
 name = "aggregate_kernels"
@@ -142,7 +146,7 @@ required-features = ["test_utils"]
 [[bench]]
 name = "comparison_kernels"
 harness = false
-required-features = ["test_utils"]
+required-features = ["test_utils", "dyn_cmp_dict"]
 
 [[bench]]
 name = "filter_kernels"

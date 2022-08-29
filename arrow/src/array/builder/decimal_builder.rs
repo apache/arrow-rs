@@ -37,8 +37,8 @@ use crate::util::decimal::Decimal256;
 #[derive(Debug)]
 pub struct Decimal128Builder {
     builder: FixedSizeBinaryBuilder,
-    precision: usize,
-    scale: usize,
+    precision: u8,
+    scale: u8,
 
     /// Should i128 values be validated for compatibility with scale and precision?
     /// defaults to true
@@ -51,8 +51,8 @@ pub struct Decimal128Builder {
 #[derive(Debug)]
 pub struct Decimal256Builder {
     builder: FixedSizeBinaryBuilder,
-    precision: usize,
-    scale: usize,
+    precision: u8,
+    scale: u8,
 
     /// Should decimal values be validated for compatibility with scale and precision?
     /// defaults to true
@@ -61,11 +61,17 @@ pub struct Decimal256Builder {
 
 impl Decimal128Builder {
     const BYTE_LENGTH: i32 = 16;
-    /// Creates a new [`Decimal128Builder`], `capacity` is the number of bytes in the values
-    /// array
-    pub fn new(capacity: usize, precision: usize, scale: usize) -> Self {
+
+    /// Creates a new [`Decimal128Builder`]
+    pub fn new(precision: u8, scale: u8) -> Self {
+        Self::with_capacity(1024, precision, scale)
+    }
+
+    /// Creates a new [`Decimal128Builder`], `capacity` is the number of decimal values
+    /// that can be appended without reallocating
+    pub fn with_capacity(capacity: usize, precision: u8, scale: u8) -> Self {
         Self {
-            builder: FixedSizeBinaryBuilder::new(capacity, Self::BYTE_LENGTH),
+            builder: FixedSizeBinaryBuilder::with_capacity(capacity, Self::BYTE_LENGTH),
             precision,
             scale,
             value_validation: true,
@@ -155,11 +161,17 @@ impl ArrayBuilder for Decimal128Builder {
 
 impl Decimal256Builder {
     const BYTE_LENGTH: i32 = 32;
-    /// Creates a new [`Decimal256Builder`], `capacity` is the number of bytes in the values
-    /// array
-    pub fn new(capacity: usize, precision: usize, scale: usize) -> Self {
+
+    /// Creates a new [`Decimal256Builder`]
+    pub fn new(precision: u8, scale: u8) -> Self {
+        Self::with_capacity(1024, precision, scale)
+    }
+
+    /// Creates a new [`Decimal256Builder`], `capacity` is the number of decimal values
+    /// that can be appended without reallocating
+    pub fn with_capacity(capacity: usize, precision: u8, scale: u8) -> Self {
         Self {
-            builder: FixedSizeBinaryBuilder::new(capacity, Self::BYTE_LENGTH),
+            builder: FixedSizeBinaryBuilder::with_capacity(capacity, Self::BYTE_LENGTH),
             precision,
             scale,
             value_validation: true,
@@ -245,7 +257,7 @@ mod tests {
 
     #[test]
     fn test_decimal_builder() {
-        let mut builder = Decimal128Builder::new(30, 38, 6);
+        let mut builder = Decimal128Builder::new(38, 6);
 
         builder.append_value(8_887_000_000_i128).unwrap();
         builder.append_null();
@@ -263,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_decimal_builder_with_decimal128() {
-        let mut builder = Decimal128Builder::new(30, 38, 6);
+        let mut builder = Decimal128Builder::new(38, 6);
 
         builder
             .append_value(Decimal128::new_from_i128(30, 38, 8_887_000_000_i128))
@@ -283,7 +295,7 @@ mod tests {
 
     #[test]
     fn test_decimal256_builder() {
-        let mut builder = Decimal256Builder::new(30, 40, 6);
+        let mut builder = Decimal256Builder::new(40, 6);
 
         let mut bytes = [0_u8; 32];
         bytes[0..16].clone_from_slice(&8_887_000_000_i128.to_le_bytes());
@@ -327,7 +339,7 @@ mod tests {
         expected = "Decimal value does not have the same precision or scale as Decimal256Builder"
     )]
     fn test_decimal256_builder_unmatched_precision_scale() {
-        let mut builder = Decimal256Builder::new(30, 10, 6);
+        let mut builder = Decimal256Builder::with_capacity(30, 10, 6);
 
         let mut bytes = [0_u8; 32];
         bytes[0..16].clone_from_slice(&8_887_000_000_i128.to_le_bytes());
@@ -340,7 +352,7 @@ mod tests {
         expected = "9999999999999999999999999999999999999999999999999999999999999999999999999999 is too large to store in a Decimal256 of precision 75. Max is 999999999999999999999999999999999999999999999999999999999999999999999999999"
     )]
     fn test_decimal256_builder_out_of_range_precision_scale() {
-        let mut builder = Decimal256Builder::new(30, 75, 6);
+        let mut builder = Decimal256Builder::new(75, 6);
 
         let big_value = BigInt::from_str_radix("9999999999999999999999999999999999999999999999999999999999999999999999999999", 10).unwrap();
         let value = Decimal256::from_big_int(&big_value, 75, 6).unwrap();
@@ -352,7 +364,7 @@ mod tests {
         expected = "9999999999999999999999999999999999999999999999999999999999999999999999999999 is too large to store in a Decimal256 of precision 75. Max is 999999999999999999999999999999999999999999999999999999999999999999999999999"
     )]
     fn test_decimal256_data_validation() {
-        let mut builder = Decimal256Builder::new(30, 75, 6);
+        let mut builder = Decimal256Builder::new(75, 6);
         // Disable validation at builder
         unsafe {
             builder.disable_value_validation();
@@ -365,7 +377,7 @@ mod tests {
             .expect("should not validate invalid value at builder");
 
         let array = builder.finish();
-        let array_data = array_decimal::BasicDecimalArray::data(&array);
+        let array_data = array_decimal::DecimalArray::data(&array);
         array_data.validate_values().unwrap();
     }
 }

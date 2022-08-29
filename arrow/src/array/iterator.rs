@@ -16,11 +16,12 @@
 // under the License.
 
 use crate::array::array::ArrayAccessor;
-use crate::array::BasicDecimalArray;
+use crate::array::{DecimalArray, FixedSizeBinaryArray};
+use crate::datatypes::{Decimal128Type, Decimal256Type};
 
 use super::{
-    Array, BooleanArray, Decimal128Array, GenericBinaryArray, GenericListArray,
-    GenericStringArray, PrimitiveArray,
+    BooleanArray, GenericBinaryArray, GenericListArray, GenericStringArray,
+    PrimitiveArray,
 };
 
 /// an iterator that returns Some(T) or None, that can be used on any [`ArrayAccessor`]
@@ -102,71 +103,17 @@ pub type PrimitiveIter<'a, T> = ArrayIter<&'a PrimitiveArray<T>>;
 pub type BooleanIter<'a> = ArrayIter<&'a BooleanArray>;
 pub type GenericStringIter<'a, T> = ArrayIter<&'a GenericStringArray<T>>;
 pub type GenericBinaryIter<'a, T> = ArrayIter<&'a GenericBinaryArray<T>>;
+pub type FixedSizeBinaryIter<'a> = ArrayIter<&'a FixedSizeBinaryArray>;
 pub type GenericListArrayIter<'a, O> = ArrayIter<&'a GenericListArray<O>>;
 
-pub type BasicDecimalIter<'a, const BYTE_WIDTH: usize> =
-    ArrayIter<&'a BasicDecimalArray<BYTE_WIDTH>>;
+pub type DecimalIter<'a, T> = ArrayIter<&'a DecimalArray<T>>;
 /// an iterator that returns `Some(Decimal128)` or `None`, that can be used on a
-/// [`Decimal128Array`]
-pub type Decimal128Iter<'a> = BasicDecimalIter<'a, 16>;
+/// [`super::Decimal128Array`]
+pub type Decimal128Iter<'a> = DecimalIter<'a, Decimal128Type>;
 
 /// an iterator that returns `Some(Decimal256)` or `None`, that can be used on a
 /// [`super::Decimal256Array`]
-pub type Decimal256Iter<'a> = BasicDecimalIter<'a, 32>;
-/// an iterator that returns `Some(i128)` or `None`, that can be used on a
-/// [`Decimal128Array`]
-#[derive(Debug)]
-#[deprecated(note = "Please use `Decimal128Iter` instead. \
-    `DecimalIter` iterates `Decimal128` values as i128 values. \
-    This is kept mostly for back-compatibility purpose. Suggests to use `Decimal128Array.iter()` \
-    that returns `Decimal128Iter`.")]
-pub struct DecimalIter<'a> {
-    array: &'a Decimal128Array,
-    current: usize,
-    current_end: usize,
-}
-
-#[allow(deprecated)]
-impl<'a> DecimalIter<'a> {
-    pub fn new(array: &'a Decimal128Array) -> Self {
-        Self {
-            array,
-            current: 0,
-            current_end: array.len(),
-        }
-    }
-}
-
-#[allow(deprecated)]
-impl<'a> std::iter::Iterator for DecimalIter<'a> {
-    type Item = Option<i128>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current == self.current_end {
-            None
-        } else {
-            let old = self.current;
-            self.current += 1;
-            // TODO: Improve performance by avoiding bounds check here
-            // (by using adding a `value_unchecked, for example)
-            if self.array.is_null(old) {
-                Some(None)
-            } else {
-                Some(Some(self.array.value(old).as_i128()))
-            }
-        }
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remain = self.current_end - self.current;
-        (remain, Some(remain))
-    }
-}
-
-/// iterator has known size.
-#[allow(deprecated)]
-impl<'a> std::iter::ExactSizeIterator for DecimalIter<'a> {}
+pub type Decimal256Iter<'a> = DecimalIter<'a, Decimal256Type>;
 
 #[cfg(test)]
 mod tests {

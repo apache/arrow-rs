@@ -241,8 +241,8 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
 
-        let keys_builder = PrimitiveBuilder::<Int32Type>::new(10);
-        let values_builder = StringBuilder::new(10);
+        let keys_builder = PrimitiveBuilder::<Int32Type>::with_capacity(10);
+        let values_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
 
         builder.append("one")?;
@@ -317,7 +317,7 @@ mod tests {
         let field_type = DataType::FixedSizeBinary(3);
         let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
 
-        let mut builder = FixedSizeBinaryBuilder::new(3, 3);
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 3);
 
         builder.append_value(&[1, 2, 3]).unwrap();
         builder.append_null();
@@ -649,7 +649,7 @@ mod tests {
 
     #[test]
     fn test_pretty_format_dense_union() -> Result<()> {
-        let mut builder = UnionBuilder::new_dense(4);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Float64Type>("b", 3.2234).unwrap();
         builder.append_null::<Float64Type>("b").unwrap();
@@ -690,7 +690,7 @@ mod tests {
 
     #[test]
     fn test_pretty_format_sparse_union() -> Result<()> {
-        let mut builder = UnionBuilder::new_sparse(4);
+        let mut builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Float64Type>("b", 3.2234).unwrap();
         builder.append_null::<Float64Type>("b").unwrap();
@@ -732,7 +732,7 @@ mod tests {
     #[test]
     fn test_pretty_format_nested_union() -> Result<()> {
         //Inner UnionArray
-        let mut builder = UnionBuilder::new_dense(5);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("b", 1).unwrap();
         builder.append::<Float64Type>("c", 3.2234).unwrap();
         builder.append_null::<Float64Type>("c").unwrap();

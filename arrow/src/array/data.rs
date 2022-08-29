@@ -2676,8 +2676,8 @@ mod tests {
                 Field::new("b", DataType::Boolean, true),
             ],
             vec![
-                Box::new(Int32Builder::new(5)),
-                Box::new(BooleanBuilder::new(5)),
+                Box::new(Int32Builder::with_capacity(5)),
+                Box::new(BooleanBuilder::with_capacity(5)),
             ],
         );
 
@@ -2821,7 +2821,7 @@ mod tests {
     #[test]
     #[cfg(not(feature = "force_validate"))]
     fn test_decimal_full_validation() {
-        let values_builder = UInt8Builder::new(10);
+        let values_builder = UInt8Builder::with_capacity(10);
         let byte_width = 16;
         let mut fixed_size_builder =
             FixedSizeListBuilder::new(values_builder, byte_width);
@@ -2847,7 +2847,7 @@ mod tests {
 
     #[test]
     fn test_decimal_validation() {
-        let mut builder = Decimal128Builder::new(4, 10, 4);
+        let mut builder = Decimal128Builder::with_capacity(4, 10, 4);
         builder.append_value(10000).unwrap();
         builder.append_value(20000).unwrap();
         let array = builder.finish();

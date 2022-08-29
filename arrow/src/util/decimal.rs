@@ -18,50 +18,57 @@
 //! Decimal related utils
 
 use crate::datatypes::{
-    DataType, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
-    DECIMAL256_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
+    DataType, Decimal128Type, Decimal256Type, DecimalType, DECIMAL256_MAX_PRECISION,
+    DECIMAL_DEFAULT_SCALE,
 };
 use crate::error::{ArrowError, Result};
 use num::bigint::BigInt;
 use num::Signed;
 use std::cmp::{min, Ordering};
 
-#[derive(Debug)]
-pub struct BasicDecimal<const BYTE_WIDTH: usize> {
-    precision: usize,
-    scale: usize,
-    value: [u8; BYTE_WIDTH],
+/// [`Decimal`] is the generic representation of a single decimal value
+///
+/// See [`Decimal128`] and [`Decimal256`] for the value types of [`Decimal128Array`]
+/// and [`Decimal256Array`] respectively
+///
+/// [`Decimal128Array`]: [crate::array::Decimal128Array]
+/// [`Decimal256Array`]: [crate::array::Decimal256Array]
+pub struct Decimal<T: DecimalType> {
+    precision: u8,
+    scale: u8,
+    value: T::Native,
 }
 
-impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
-    #[allow(clippy::type_complexity)]
-    const MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE: (
-        usize,
-        usize,
-        fn(usize, usize) -> DataType,
-        DataType,
-    ) = match BYTE_WIDTH {
-        16 => (
-            DECIMAL128_MAX_PRECISION,
-            DECIMAL128_MAX_SCALE,
-            DataType::Decimal128,
-            DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
-        ),
-        32 => (
-            DECIMAL256_MAX_PRECISION,
-            DECIMAL256_MAX_SCALE,
-            DataType::Decimal256,
-            DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
-        ),
-        _ => panic!("invalid byte width"),
-    };
+/// Manually implement to avoid `T: Debug` bound
+impl<T: DecimalType> std::fmt::Debug for Decimal<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Decimal")
+            .field("scale", &self.precision)
+            .field("precision", &self.precision)
+            // TODO: Could format this better
+            .field("value", &self.value.as_ref())
+            .finish()
+    }
+}
 
-    pub const MAX_PRECISION: usize = Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.0;
-    pub const MAX_SCALE: usize = Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.1;
-    pub const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType =
-        Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.2;
-    pub const DEFAULT_TYPE: DataType =
-        Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.3;
+/// Manually implement to avoid `T: Debug` bound
+impl<T: DecimalType> Clone for Decimal<T> {
+    fn clone(&self) -> Self {
+        Self {
+            precision: self.precision,
+            scale: self.scale,
+            value: self.value,
+        }
+    }
+}
+
+impl<T: DecimalType> Copy for Decimal<T> {}
+
+impl<T: DecimalType> Decimal<T> {
+    pub const MAX_PRECISION: u8 = T::MAX_PRECISION;
+    pub const MAX_SCALE: u8 = T::MAX_SCALE;
+    pub const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType = T::TYPE_CONSTRUCTOR;
+    pub const DEFAULT_TYPE: DataType = T::DEFAULT_TYPE;
 
     /// Tries to create a decimal value from precision, scale and bytes.
     /// The bytes should be stored in little-endian order.
@@ -69,11 +76,7 @@ impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
     /// Safety:
     /// This method doesn't validate if the decimal value represented by the bytes
     /// can be fitted into the specified precision.
-    pub fn try_new_from_bytes(
-        precision: usize,
-        scale: usize,
-        bytes: &[u8; BYTE_WIDTH],
-    ) -> Result<Self>
+    pub fn try_new_from_bytes(precision: u8, scale: u8, bytes: &T::Native) -> Result<Self>
     where
         Self: Sized,
     {
@@ -99,15 +102,7 @@ impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
             )));
         }
 
-        if bytes.len() == BYTE_WIDTH {
-            Ok(Self::new(precision, scale, bytes))
-        } else {
-            Err(ArrowError::InvalidArgumentError(format!(
-                "Input to Decimal{} must be {} bytes",
-                BYTE_WIDTH * 8,
-                BYTE_WIDTH
-            )))
-        }
+        Ok(Self::new(precision, scale, bytes))
     }
 
     /// Creates a decimal value from precision, scale, and bytes.
@@ -115,7 +110,7 @@ impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
     /// Safety:
     /// This method doesn't check if the precision and scale are valid.
     /// Use `try_new_from_bytes` for safe constructor.
-    pub fn new(precision: usize, scale: usize, bytes: &[u8; BYTE_WIDTH]) -> Self {
+    pub fn new(precision: u8, scale: u8, bytes: &T::Native) -> Self {
         Self {
             precision,
             scale,
@@ -123,17 +118,17 @@ impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
         }
     }
     /// Returns the raw bytes of the integer representation of the decimal.
-    pub fn raw_value(&self) -> &[u8; BYTE_WIDTH] {
+    pub fn raw_value(&self) -> &T::Native {
         &self.value
     }
 
     /// Returns the precision of the decimal.
-    pub fn precision(&self) -> usize {
+    pub fn precision(&self) -> u8 {
         self.precision
     }
 
     /// Returns the scale of the decimal.
-    pub fn scale(&self) -> usize {
+    pub fn scale(&self) -> u8 {
         self.scale
     }
 
@@ -143,69 +138,73 @@ impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
     #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self) -> String {
         let raw_bytes = self.raw_value();
-        let integer = BigInt::from_signed_bytes_le(raw_bytes);
+        let integer = BigInt::from_signed_bytes_le(raw_bytes.as_ref());
         let value_str = integer.to_string();
         let (sign, rest) =
             value_str.split_at(if integer >= BigInt::from(0) { 0 } else { 1 });
-        let bound = min(self.precision(), rest.len()) + sign.len();
+        let bound = min(usize::from(self.precision()), rest.len()) + sign.len();
         let value_str = &value_str[0..bound];
+        let scale_usize = usize::from(self.scale());
 
         if self.scale() == 0 {
             value_str.to_string()
-        } else if rest.len() > self.scale() {
+        } else if rest.len() > scale_usize {
             // Decimal separator is in the middle of the string
-            let (whole, decimal) = value_str.split_at(value_str.len() - self.scale());
+            let (whole, decimal) = value_str.split_at(value_str.len() - scale_usize);
             format!("{}.{}", whole, decimal)
         } else {
             // String has to be padded
-            format!("{}0.{:0>width$}", sign, rest, width = self.scale())
+            format!("{}0.{:0>width$}", sign, rest, width = scale_usize)
         }
     }
 }
 
-impl<const BYTE_WIDTH: usize> PartialOrd for BasicDecimal<BYTE_WIDTH> {
+impl<T: DecimalType> PartialOrd for Decimal<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         assert_eq!(
             self.scale, other.scale,
             "Cannot compare two Decimals with different scale: {}, {}",
             self.scale, other.scale
         );
-        Some(singed_cmp_le_bytes(&self.value, &other.value))
+        Some(singed_cmp_le_bytes(
+            self.value.as_ref(),
+            other.value.as_ref(),
+        ))
     }
 }
 
-impl<const BYTE_WIDTH: usize> Ord for BasicDecimal<BYTE_WIDTH> {
+impl<T: DecimalType> Ord for Decimal<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         assert_eq!(
             self.scale, other.scale,
             "Cannot compare two Decimals with different scale: {}, {}",
             self.scale, other.scale
         );
-        singed_cmp_le_bytes(&self.value, &other.value)
+        singed_cmp_le_bytes(self.value.as_ref(), other.value.as_ref())
     }
 }
 
-impl<const BYTE_WIDTH: usize> PartialEq<Self> for BasicDecimal<BYTE_WIDTH> {
+impl<T: DecimalType> PartialEq<Self> for Decimal<T> {
     fn eq(&self, other: &Self) -> bool {
         assert_eq!(
             self.scale, other.scale,
             "Cannot compare two Decimals with different scale: {}, {}",
             self.scale, other.scale
         );
-        self.value.eq(&other.value)
+        self.value.as_ref().eq(other.value.as_ref())
     }
 }
 
-impl<const BYTE_WIDTH: usize> Eq for BasicDecimal<BYTE_WIDTH> {}
+impl<T: DecimalType> Eq for Decimal<T> {}
 
 /// Represents a decimal value with precision and scale.
 /// The decimal value could represented by a signed 128-bit integer.
-pub type Decimal128 = BasicDecimal<16>;
+pub type Decimal128 = Decimal<Decimal128Type>;
 
 impl Decimal128 {
     /// Creates `Decimal128` from an `i128` value.
     #[allow(dead_code)]
-    pub(crate) fn new_from_i128(precision: usize, scale: usize, value: i128) -> Self {
+    pub(crate) fn new_from_i128(precision: u8, scale: u8, value: i128) -> Self {
         Decimal128 {
             precision,
             scale,
@@ -227,15 +226,11 @@ impl From<Decimal128> for i128 {
 
 /// Represents a decimal value with precision and scale.
 /// The decimal value could be represented by a signed 256-bit integer.
-pub type Decimal256 = BasicDecimal<32>;
+pub type Decimal256 = Decimal<Decimal256Type>;
 
 impl Decimal256 {
     /// Constructs a `Decimal256` value from a `BigInt`.
-    pub fn from_big_int(
-        num: &BigInt,
-        precision: usize,
-        scale: usize,
-    ) -> Result<Decimal256> {
+    pub fn from_big_int(num: &BigInt, precision: u8, scale: u8) -> Result<Decimal256> {
         let mut bytes = if num.is_negative() {
             [255_u8; 32]
         } else {
@@ -247,7 +242,7 @@ impl Decimal256 {
     }
 
     /// Constructs a `BigInt` from this `Decimal256` value.
-    pub(crate) fn to_big_int(&self) -> BigInt {
+    pub(crate) fn to_big_int(self) -> BigInt {
         BigInt::from_signed_bytes_le(&self.value)
     }
 }

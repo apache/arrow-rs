@@ -336,6 +336,14 @@ impl<'a, T: Array> Array for &'a T {
 }
 
 /// A generic trait for accessing the values of an [`Array`]
+///
+/// # Validity
+///
+/// An [`ArrayAccessor`] must always return a well-defined value for an index that is
+/// within the bounds `0..Array::len`, including for null indexes where [`Array::is_null`] is true.
+///
+/// The value at null indexes is unspecified, and implementations must not rely on a specific
+/// value such as [`Default::default`] being returned, however, it must not be undefined
 pub trait ArrayAccessor: Array {
     type Item: Send + Sync;
 

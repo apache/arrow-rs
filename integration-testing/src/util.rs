@@ -22,19 +22,19 @@
 use hex::decode;
 use num::BigInt;
 use num::Signed;
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map as SJMap, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::array::*;
-use crate::buffer::{Buffer, MutableBuffer};
-use crate::compute;
-use crate::datatypes::*;
-use crate::error::{ArrowError, Result};
-use crate::record_batch::{RecordBatch, RecordBatchReader};
-use crate::util::bit_util;
-use crate::util::decimal::Decimal256;
+use arrow::array::*;
+use arrow::buffer::{Buffer, MutableBuffer};
+use arrow::compute;
+use arrow::datatypes::*;
+use arrow::error::{ArrowError, Result};
+use arrow::record_batch::{RecordBatch, RecordBatchReader};
+use arrow::util::bit_util;
+use arrow::util::decimal::Decimal256;
 
 /// A struct that represents an Arrow file with a schema and record batches
 #[derive(Deserialize, Serialize, Debug)]
@@ -284,7 +284,7 @@ pub fn array_from_json(
     match field.data_type() {
         DataType::Null => Ok(Arc::new(NullArray::new(json_col.count))),
         DataType::Boolean => {
-            let mut b = BooleanBuilder::new(json_col.count);
+            let mut b = BooleanBuilder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -300,7 +300,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::Int8 => {
-            let mut b = Int8Builder::new(json_col.count);
+            let mut b = Int8Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -321,7 +321,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::Int16 => {
-            let mut b = Int16Builder::new(json_col.count);
+            let mut b = Int16Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -340,7 +340,7 @@ pub fn array_from_json(
         | DataType::Date32
         | DataType::Time32(_)
         | DataType::Interval(IntervalUnit::YearMonth) => {
-            let mut b = Int32Builder::new(json_col.count);
+            let mut b = Int32Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -362,7 +362,7 @@ pub fn array_from_json(
         | DataType::Timestamp(_, _)
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime) => {
-            let mut b = Int64Builder::new(json_col.count);
+            let mut b = Int64Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -418,7 +418,7 @@ pub fn array_from_json(
             compute::cast(&array, field.data_type())
         }
         DataType::UInt8 => {
-            let mut b = UInt8Builder::new(json_col.count);
+            let mut b = UInt8Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -434,7 +434,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::UInt16 => {
-            let mut b = UInt16Builder::new(json_col.count);
+            let mut b = UInt16Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -450,7 +450,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::UInt32 => {
-            let mut b = UInt32Builder::new(json_col.count);
+            let mut b = UInt32Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -466,7 +466,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::UInt64 => {
-            let mut b = UInt64Builder::new(json_col.count);
+            let mut b = UInt64Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -498,7 +498,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::Interval(IntervalUnit::MonthDayNano) => {
-            let mut b = IntervalMonthDayNanoBuilder::new(json_col.count);
+            let mut b = IntervalMonthDayNanoBuilder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -541,7 +541,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::Float32 => {
-            let mut b = Float32Builder::new(json_col.count);
+            let mut b = Float32Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -557,7 +557,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::Float64 => {
-            let mut b = Float64Builder::new(json_col.count);
+            let mut b = Float64Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -573,7 +573,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::Binary => {
-            let mut b = BinaryBuilder::new(json_col.count);
+            let mut b = BinaryBuilder::with_capacity(json_col.count, 1024);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -592,7 +592,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::LargeBinary => {
-            let mut b = LargeBinaryBuilder::new(json_col.count);
+            let mut b = LargeBinaryBuilder::with_capacity(json_col.count, 1024);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -611,7 +611,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::Utf8 => {
-            let mut b = StringBuilder::new(json_col.count);
+            let mut b = StringBuilder::with_capacity(json_col.count, 1024);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -627,7 +627,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::LargeUtf8 => {
-            let mut b = LargeStringBuilder::new(json_col.count);
+            let mut b = LargeStringBuilder::with_capacity(json_col.count, 1024);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -643,7 +643,7 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::FixedSizeBinary(len) => {
-            let mut b = FixedSizeBinaryBuilder::new(json_col.count, *len);
+            let mut b = FixedSizeBinaryBuilder::with_capacity(json_col.count, *len);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -776,7 +776,8 @@ pub fn array_from_json(
             }
         }
         DataType::Decimal128(precision, scale) => {
-            let mut b = Decimal128Builder::new(json_col.count, *precision, *scale);
+            let mut b =
+                Decimal128Builder::with_capacity(json_col.count, *precision, *scale);
             // C++ interop tests involve incompatible decimal values
             unsafe {
                 b.disable_value_validation();
@@ -798,7 +799,8 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::Decimal256(precision, scale) => {
-            let mut b = Decimal256Builder::new(json_col.count, *precision, *scale);
+            let mut b =
+                Decimal256Builder::with_capacity(json_col.count, *precision, *scale);
             // C++ interop tests involve incompatible decimal values
             unsafe {
                 b.disable_value_validation();
@@ -1045,7 +1047,7 @@ mod tests {
     use std::io::Read;
     use std::sync::Arc;
 
-    use crate::buffer::Buffer;
+    use arrow::buffer::Buffer;
 
     #[test]
     fn test_schema_equality() {
@@ -1110,7 +1112,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // running forever
     fn test_arrow_data_equality() {
         let secs_tz = Some("Europe/Budapest".to_string());
         let millis_tz = Some("America/New_York".to_string());
@@ -1331,7 +1332,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let mut file = File::open("test/data/integration.json").unwrap();
+        let mut file = File::open("data/integration.json").unwrap();
         let mut json = String::new();
         file.read_to_string(&mut json).unwrap();
         let arrow_json: ArrowJson = serde_json::from_str(&json).unwrap();

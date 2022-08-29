@@ -28,7 +28,7 @@ use arrow::record_batch::{RecordBatch, RecordBatchReader};
 use arrow::{array::StructArray, error::ArrowError};
 
 use crate::arrow::array_reader::{
-    build_array_reader, ArrayReader, FileReaderRowGroupCollection,
+    build_array_reader, ArrayReader, FileReaderRowGroupCollection, RowGroupCollection,
 };
 use crate::arrow::schema::parquet_to_arrow_schema;
 use crate::arrow::schema::parquet_to_arrow_schema_by_columns;
@@ -115,7 +115,11 @@ impl<T> ArrowReaderBuilder<T> {
     }
 
     /// Set the size of [`RecordBatch`] to produce. Defaults to 1024
+    /// If the batch_size more than the file row count, use the file row count.
     pub fn with_batch_size(self, batch_size: usize) -> Self {
+        // Try to avoid allocate large buffer
+        let batch_size =
+            batch_size.min(self.metadata.file_metadata().num_rows() as usize);
         Self { batch_size, ..self }
     }
 
@@ -207,7 +211,7 @@ pub trait ArrowReader {
 #[derive(Debug, Clone, Default)]
 pub struct ArrowReaderOptions {
     skip_arrow_metadata: bool,
-    page_index: bool,
+    pub(crate) page_index: bool,
 }
 
 impl ArrowReaderOptions {
@@ -282,6 +286,8 @@ impl ArrowReader for ParquetFileArrowReader {
         let array_reader =
             build_array_reader(Arc::new(self.get_schema()?), mask, &self.file_reader)?;
 
+        // Try to avoid allocate large buffer
+        let batch_size = self.file_reader.num_rows().min(batch_size);
         Ok(ParquetRecordBatchReader::new(
             batch_size,
             array_reader,
@@ -404,6 +410,10 @@ impl<T: ChunkReader + 'static> ArrowReaderBuilder<SyncReader<T>> {
         let mut filter = self.filter;
         let mut selection = self.selection;
 
+        // Try to avoid allocate large buffer
+        let batch_size = self
+            .batch_size
+            .min(self.metadata.file_metadata().num_rows() as usize);
         if let Some(filter) = filter.as_mut() {
             for predicate in filter.predicates.iter_mut() {
                 if !selects_any(selection.as_ref()) {
@@ -415,7 +425,7 @@ impl<T: ChunkReader + 'static> ArrowReaderBuilder<SyncReader<T>> {
                     build_array_reader(Arc::clone(&self.schema), projection, &reader)?;
 
                 selection = Some(evaluate_predicate(
-                    self.batch_size,
+                    batch_size,
                     array_reader,
                     selection,
                     predicate.as_mut(),
@@ -431,7 +441,7 @@ impl<T: ChunkReader + 'static> ArrowReaderBuilder<SyncReader<T>> {
         }
 
         Ok(ParquetRecordBatchReader::new(
-            self.batch_size,
+            batch_size,
             array_reader,
             selection,
         ))
@@ -595,7 +605,6 @@ pub(crate) fn evaluate_predicate(
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
     use std::cmp::min;
     use std::collections::VecDeque;
     use std::fmt::Formatter;
@@ -604,6 +613,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use bytes::Bytes;
     use rand::{thread_rng, Rng, RngCore};
     use tempfile::tempfile;
 
@@ -617,15 +627,12 @@ mod tests {
         ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReader,
         ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
     };
-    use crate::arrow::buffer::converter::{
-        Converter, FixedSizeArrayConverter, IntervalDayTimeArrayConverter,
-    };
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
     use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
     use crate::data_type::{
         BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray,
-        FixedLenByteArrayType, Int32Type, Int64Type,
+        FixedLenByteArrayType, Int32Type, Int64Type, Int96Type,
     };
     use crate::errors::Result;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
@@ -733,37 +740,151 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_unsigned_primitive_single_column_reader_test() {
+        run_single_column_reader_tests::<Int32Type, _, Int32Type>(
+            2,
+            ConvertedType::UINT_32,
+            Some(ArrowDataType::UInt32),
+            |vals| {
+                Arc::new(UInt32Array::from_iter(
+                    vals.iter().map(|x| x.map(|x| x as u32)),
+                ))
+            },
+            &[
+                Encoding::PLAIN,
+                Encoding::RLE_DICTIONARY,
+                Encoding::DELTA_BINARY_PACKED,
+            ],
+        );
+        run_single_column_reader_tests::<Int64Type, _, Int64Type>(
+            2,
+            ConvertedType::UINT_64,
+            Some(ArrowDataType::UInt64),
+            |vals| {
+                Arc::new(UInt64Array::from_iter(
+                    vals.iter().map(|x| x.map(|x| x as u64)),
+                ))
+            },
+            &[
+                Encoding::PLAIN,
+                Encoding::RLE_DICTIONARY,
+                Encoding::DELTA_BINARY_PACKED,
+            ],
+        );
+    }
+
+    #[test]
+    fn test_unsigned_roundtrip() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("uint32", ArrowDataType::UInt32, true),
+            Field::new("uint64", ArrowDataType::UInt64, true),
+        ]));
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), None).unwrap();
+
+        let original = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(UInt32Array::from_iter_values([
+                    0,
+                    i32::MAX as u32,
+                    u32::MAX,
+                ])),
+                Arc::new(UInt64Array::from_iter_values([
+                    0,
+                    i64::MAX as u64,
+                    u64::MAX,
+                ])),
+            ],
+        )
+        .unwrap();
+
+        writer.write(&original).unwrap();
+        writer.close().unwrap();
+
+        let mut reader =
+            ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024).unwrap();
+        let ret = reader.next().unwrap().unwrap();
+        assert_eq!(ret, original);
+
+        // Check they can be downcast to the correct type
+        ret.column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+
+        ret.column(1)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+    }
+
     struct RandFixedLenGen {}
 
     impl RandGen<FixedLenByteArrayType> for RandFixedLenGen {
         fn gen(len: i32) -> FixedLenByteArray {
             let mut v = vec![0u8; len as usize];
-            rand::thread_rng().fill_bytes(&mut v);
+            thread_rng().fill_bytes(&mut v);
             ByteArray::from(v).into()
         }
     }
 
     #[test]
     fn test_fixed_length_binary_column_reader() {
-        let converter = FixedSizeArrayConverter::new(20);
         run_single_column_reader_tests::<FixedLenByteArrayType, _, RandFixedLenGen>(
             20,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(converter.convert(vals.to_vec()).unwrap()),
+            |vals| {
+                let mut builder = FixedSizeBinaryBuilder::with_capacity(vals.len(), 20);
+                for val in vals {
+                    match val {
+                        Some(b) => builder.append_value(b).unwrap(),
+                        None => builder.append_null(),
+                    }
+                }
+                Arc::new(builder.finish())
+            },
             &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
         );
     }
 
     #[test]
     fn test_interval_day_time_column_reader() {
-        let converter = IntervalDayTimeArrayConverter {};
         run_single_column_reader_tests::<FixedLenByteArrayType, _, RandFixedLenGen>(
             12,
             ConvertedType::INTERVAL,
             None,
-            |vals| Arc::new(converter.convert(vals.to_vec()).unwrap()),
+            |vals| {
+                Arc::new(
+                    vals.iter()
+                        .map(|x| {
+                            x.as_ref().map(|b| {
+                                i64::from_le_bytes(b.as_ref()[4..12].try_into().unwrap())
+                            })
+                        })
+                        .collect::<IntervalDayTimeArray>(),
+                )
+            },
             &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
+        );
+    }
+
+    #[test]
+    fn test_int96_single_column_reader_test() {
+        let encodings = &[Encoding::PLAIN, Encoding::RLE_DICTIONARY];
+        run_single_column_reader_tests::<Int96Type, _, Int96Type>(
+            2,
+            ConvertedType::NONE,
+            None,
+            |vals| {
+                Arc::new(TimestampNanosecondArray::from_iter(
+                    vals.iter().map(|x| x.map(|x| x.to_nanos())),
+                )) as _
+            },
+            encodings,
         );
     }
 
@@ -1248,6 +1369,10 @@ mod tests {
             TestOptions::new(2, 256, 91)
                 .with_null_percent(25)
                 .with_enabled_statistics(EnabledStatistics::None),
+            // Test with all null
+            TestOptions::new(2, 128, 91)
+                .with_null_percent(100)
+                .with_enabled_statistics(EnabledStatistics::None),
             // Test skip
 
             // choose record_batch_batch (15) so batches cross row
@@ -1289,12 +1414,19 @@ mod tests {
             // Test with nulls and row filter
             TestOptions::new(2, 256, 93)
                 .with_null_percent(25)
+                .with_max_data_page_size(10)
                 .with_row_filter(),
-            // Test with nulls and row filter
+            // Test with nulls and row filter and small pages
             TestOptions::new(2, 256, 93)
                 .with_null_percent(25)
+                .with_max_data_page_size(10)
                 .with_row_selections()
                 .with_row_filter(),
+            // Test with row selection and no offset index and small pages
+            TestOptions::new(2, 256, 93)
+                .with_enabled_statistics(EnabledStatistics::None)
+                .with_max_data_page_size(10)
+                .with_row_selections(),
         ];
 
         all_options.into_iter().for_each(|opts| {
@@ -1407,7 +1539,6 @@ mod tests {
 
         file.rewind().unwrap();
 
-        // TODO: Should be able to always enable page index (#2434)
         let options = ArrowReaderOptions::new()
             .with_page_index(opts.enabled_statistics == EnabledStatistics::Page);
 
@@ -1488,6 +1619,11 @@ mod tests {
 
                 assert_eq!(a.data_type(), b.data_type());
                 assert_eq!(a.data(), b.data(), "{:#?} vs {:#?}", a.data(), b.data());
+                assert_eq!(
+                    a.as_any().type_id(),
+                    b.as_any().type_id(),
+                    "incorrect type ids"
+                );
 
                 total_read = end;
             } else {
@@ -1972,7 +2108,8 @@ mod tests {
         )
         .unwrap();
         for _ in 0..2 {
-            let mut list_builder = ListBuilder::new(Int32Builder::new(batch_size));
+            let mut list_builder =
+                ListBuilder::new(Int32Builder::with_capacity(batch_size));
             for _ in 0..(batch_size) {
                 list_builder.append(true);
             }
@@ -2151,5 +2288,23 @@ mod tests {
                 .build()
                 .unwrap()
         }
+    }
+
+    #[test]
+    fn test_batch_size_overallocate() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        // `alltypes_plain.parquet` only have 8 rows
+        let path = format!("{}/alltypes_plain.parquet", testdata);
+        let test_file = File::open(&path).unwrap();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(test_file).unwrap();
+        let num_rows = builder.metadata.file_metadata().num_rows();
+        let reader = builder
+            .with_batch_size(1024)
+            .with_projection(ProjectionMask::all())
+            .build()
+            .unwrap();
+        assert_ne!(1024, num_rows);
+        assert_eq!(reader.batch_size, num_rows as usize);
     }
 }

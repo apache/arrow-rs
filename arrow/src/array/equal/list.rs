@@ -160,7 +160,7 @@ mod tests {
     #[test]
     fn list_array_non_zero_nulls() {
         // Tests handling of list arrays with non-empty null ranges
-        let mut builder = ListBuilder::new(Int64Builder::new(10));
+        let mut builder = ListBuilder::new(Int64Builder::with_capacity(10));
         builder.values().append_value(1);
         builder.values().append_value(2);
         builder.values().append_value(3);
@@ -168,7 +168,7 @@ mod tests {
         builder.append(false);
         let array1 = builder.finish();
 
-        let mut builder = ListBuilder::new(Int64Builder::new(10));
+        let mut builder = ListBuilder::new(Int64Builder::with_capacity(10));
         builder.values().append_value(1);
         builder.values().append_value(2);
         builder.values().append_value(3);

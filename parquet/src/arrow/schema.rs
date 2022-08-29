@@ -220,7 +220,7 @@ pub fn parquet_to_arrow_field(parquet_column: &ColumnDescriptor) -> Result<Field
     ))
 }
 
-pub fn decimal_length_from_precision(precision: usize) -> usize {
+pub fn decimal_length_from_precision(precision: u8) -> usize {
     (10.0_f64.powi(precision as i32).log2() / 8.0).ceil() as usize
 }
 

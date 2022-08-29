@@ -21,11 +21,9 @@ use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion};
 use num::FromPrimitive;
 use num_bigint::BigInt;
-use parquet::arrow::array_reader::ComplexObjectArrayReader;
-use parquet::arrow::buffer::converter::{
-    DecimalArrayConverter, DecimalByteArrayConvert, DecimalFixedLengthByteArrayConverter,
+use parquet::arrow::array_reader::{
+    make_byte_array_reader, make_fixed_len_byte_array_reader,
 };
-use parquet::arrow::schema::parquet_to_arrow_field;
 use parquet::basic::Type;
 use parquet::data_type::FixedLenByteArrayType;
 use parquet::util::{DataPageBuilder, DataPageBuilderImpl, InMemoryPageIterator};
@@ -435,51 +433,15 @@ fn create_decimal_byte_array_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
-    let data_type = parquet_to_arrow_field(column_desc.as_ref())
-        .unwrap()
-        .data_type()
-        .clone();
-
     let physical_type = column_desc.physical_type();
-
     match physical_type {
         Type::BYTE_ARRAY => {
-            match data_type {
-                DataType::Decimal128(precision, scale) => {
-                    // read decimal data from parquet binary physical type
-                    let convert = DecimalByteArrayConvert::new(
-                        DecimalArrayConverter::new(precision as i32, scale as i32),
-                    );
-                    Box::new(ComplexObjectArrayReader::<
-                        ByteArrayType,
-                        DecimalByteArrayConvert,
-                    >::new(
-                        Box::new(page_iterator), column_desc, convert, Some(data_type),
-                    ).unwrap())
-                }
-                _ => unimplemented!(),
-            }
+            make_byte_array_reader(Box::new(page_iterator), column_desc, None).unwrap()
         }
-        Type::FIXED_LEN_BYTE_ARRAY => match data_type {
-            DataType::Decimal128(precision, scale) => {
-                let converter = DecimalFixedLengthByteArrayConverter::new(
-                    DecimalArrayConverter::new(precision as i32, scale as i32),
-                );
-                Box::new(
-                    ComplexObjectArrayReader::<
-                        FixedLenByteArrayType,
-                        DecimalFixedLengthByteArrayConverter,
-                    >::new(
-                        Box::new(page_iterator),
-                        column_desc,
-                        converter,
-                        Some(data_type),
-                    )
-                    .unwrap(),
-                )
-            }
-            _ => unimplemented!(),
-        },
+        Type::FIXED_LEN_BYTE_ARRAY => {
+            make_fixed_len_byte_array_reader(Box::new(page_iterator), column_desc, None)
+                .unwrap()
+        }
         _ => unimplemented!(),
     }
 }
@@ -488,7 +450,6 @@ fn create_string_byte_array_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
-    use parquet::arrow::array_reader::make_byte_array_reader;
     make_byte_array_reader(Box::new(page_iterator), column_desc, None).unwrap()
 }
 
@@ -794,47 +755,47 @@ fn decimal_benches(c: &mut Criterion) {
     // parquet int32, logical type decimal(8,2)
     let mandatory_decimal1_leaf_desc = schema.column(6);
     let optional_decimal1_leaf_desc = schema.column(7);
-    // let mut group = c.benchmark_group("arrow_array_reader/INT32/Decimal128Array");
-    // bench_primitive::<Int32Type>(
-    //     &mut group,
-    //     &schema,
-    //     &mandatory_decimal1_leaf_desc,
-    //     &optional_decimal1_leaf_desc,
-    //     // precision is 8: the max is 99999999
-    //     9999000,
-    //     9999999,
-    // );
-    // group.finish();
+    let mut group = c.benchmark_group("arrow_array_reader/INT32/Decimal128Array");
+    bench_primitive::<Int32Type>(
+        &mut group,
+        &schema,
+        &mandatory_decimal1_leaf_desc,
+        &optional_decimal1_leaf_desc,
+        // precision is 8: the max is 99999999
+        9999000,
+        9999999,
+    );
+    group.finish();
 
     // parquet int64, logical type decimal(16,2)
-    // let mut group = c.benchmark_group("arrow_array_reader/INT64/Decimal128Array");
-    // let mandatory_decimal2_leaf_desc = schema.column(8);
-    // let optional_decimal2_leaf_desc = schema.column(9);
-    // bench_primitive::<Int64Type>(
-    //     &mut group,
-    //     &schema,
-    //     &mandatory_decimal2_leaf_desc,
-    //     &optional_decimal2_leaf_desc,
-    //     // precision is 16: the max is 9999999999999999
-    //     9999999999999000,
-    //     9999999999999999,
-    // );
-    // group.finish();
+    let mut group = c.benchmark_group("arrow_array_reader/INT64/Decimal128Array");
+    let mandatory_decimal2_leaf_desc = schema.column(8);
+    let optional_decimal2_leaf_desc = schema.column(9);
+    bench_primitive::<Int64Type>(
+        &mut group,
+        &schema,
+        &mandatory_decimal2_leaf_desc,
+        &optional_decimal2_leaf_desc,
+        // precision is 16: the max is 9999999999999999
+        9999999999999000,
+        9999999999999999,
+    );
+    group.finish();
 
     // parquet BYTE_ARRAY, logical type decimal(16,2)
-    // let mut group = c.benchmark_group("arrow_array_reader/BYTE_ARRAY/Decimal128Array");
-    // let mandatory_decimal3_leaf_desc = schema.column(10);
-    // let optional_decimal3_leaf_desc = schema.column(11);
-    // bench_byte_decimal::<ByteArrayType>(
-    //     &mut group,
-    //     &schema,
-    //     &mandatory_decimal3_leaf_desc,
-    //     &optional_decimal3_leaf_desc,
-    //     // precision is 16: the max is 9999999999999999
-    //     9999999999999000,
-    //     9999999999999999,
-    // );
-    // group.finish();
+    let mut group = c.benchmark_group("arrow_array_reader/BYTE_ARRAY/Decimal128Array");
+    let mandatory_decimal3_leaf_desc = schema.column(10);
+    let optional_decimal3_leaf_desc = schema.column(11);
+    bench_byte_decimal::<ByteArrayType>(
+        &mut group,
+        &schema,
+        &mandatory_decimal3_leaf_desc,
+        &optional_decimal3_leaf_desc,
+        // precision is 16: the max is 9999999999999999
+        9999999999999000,
+        9999999999999999,
+    );
+    group.finish();
 
     let mut group =
         c.benchmark_group("arrow_array_reader/FIXED_LENGTH_BYTE_ARRAY/Decimal128Array");
@@ -1038,7 +999,5 @@ fn add_benches(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches,
-    // add_benches,
-    decimal_benches,);
+criterion_group!(benches, add_benches, decimal_benches,);
 criterion_main!(benches);
