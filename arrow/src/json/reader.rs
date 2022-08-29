@@ -698,14 +698,20 @@ impl Decoder {
         }
 
         let rows = &rows[..];
-        let projection = self.options.projection.clone().unwrap_or_default();
-        let arrays = self.build_struct_array(rows, self.schema.fields(), &projection);
 
-        let projected_fields: Vec<Field> = projection
-            .iter()
-            .filter_map(|name| self.schema.column_with_name(name))
-            .map(|(_, field)| field.clone())
-            .collect();
+        let arrays =
+            self.build_struct_array(rows, self.schema.fields(), &self.options.projection);
+
+        let projected_fields = if let Some(projection) = self.options.projection.as_ref()
+        {
+            projection
+                .iter()
+                .filter_map(|name| self.schema.column_with_name(name))
+                .map(|(_, field)| field.clone())
+                .collect()
+        } else {
+            self.schema.fields().to_vec()
+        };
 
         let projected_schema = Arc::new(Schema::new(projected_fields));
 
@@ -1144,7 +1150,7 @@ impl Decoder {
                     })
                     .collect();
                 let arrays =
-                    self.build_struct_array(rows.as_slice(), fields.as_slice(), &[])?;
+                    self.build_struct_array(rows.as_slice(), fields.as_slice(), &None)?;
                 let data_type = DataType::Struct(fields.clone());
                 let buf = null_buffer.into();
                 unsafe {
@@ -1184,11 +1190,16 @@ impl Decoder {
         &self,
         rows: &[Value],
         struct_fields: &[Field],
-        projection: &[String],
+        projection: &Option<Vec<String>>,
     ) -> Result<Vec<ArrayRef>> {
         let arrays: Result<Vec<ArrayRef>> = struct_fields
             .iter()
-            .filter(|field| projection.contains(field.name()))
+            .filter(|field| {
+                projection
+                    .as_ref()
+                    .map(|p| p.contains(field.name()))
+                    .unwrap_or(true)
+            })
             .map(|field| {
                 match field.data_type() {
                     DataType::Null => {
@@ -1351,7 +1362,7 @@ impl Decoder {
                             })
                             .collect::<Vec<Value>>();
                         let arrays =
-                            self.build_struct_array(&struct_rows, fields, &[])?;
+                            self.build_struct_array(&struct_rows, fields, &None)?;
                         // construct a struct array's data in order to set null buffer
                         let data_type = DataType::Struct(fields.clone());
                         let data = ArrayDataBuilder::new(data_type)
@@ -1448,7 +1459,7 @@ impl Decoder {
         let struct_children = self.build_struct_array(
             struct_rows.as_slice(),
             &[key_field.clone(), value_field.clone()],
-            &[],
+            &None,
         )?;
 
         unsafe {
