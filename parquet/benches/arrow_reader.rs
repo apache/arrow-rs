@@ -74,7 +74,7 @@ pub fn seedable_rng() -> StdRng {
     StdRng::seed_from_u64(42)
 }
 
-// support BYTE_ARRAY for decimal
+// support byte array for decimal
 fn build_encoded_decimal_bytes_page_iterator<T>(
     schema: SchemaDescPtr,
     column_desc: ColumnDescPtr,
@@ -429,7 +429,7 @@ fn create_primitive_array_reader(
     }
 }
 
-fn create_decimal_byte_array_reader(
+fn create_decimal_by_bytes_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
@@ -494,7 +494,7 @@ fn bench_byte_decimal<T>(
     );
     group.bench_function("plain encoded, mandatory, no NULLs", |b| {
         b.iter(|| {
-            let array_reader = create_decimal_byte_array_reader(
+            let array_reader = create_decimal_by_bytes_reader(
                 data.clone(),
                 mandatory_column_desc.clone(),
             );
@@ -513,7 +513,7 @@ fn bench_byte_decimal<T>(
     );
     group.bench_function("plain encoded, optional, no NULLs", |b| {
         b.iter(|| {
-            let array_reader = create_decimal_byte_array_reader(
+            let array_reader = create_decimal_by_bytes_reader(
                 data.clone(),
                 optional_column_desc.clone(),
             );
@@ -533,7 +533,7 @@ fn bench_byte_decimal<T>(
     );
     group.bench_function("plain encoded, optional, half NULLs", |b| {
         b.iter(|| {
-            let array_reader = create_decimal_byte_array_reader(
+            let array_reader = create_decimal_by_bytes_reader(
                 data.clone(),
                 optional_column_desc.clone(),
             );
