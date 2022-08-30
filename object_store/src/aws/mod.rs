@@ -339,6 +339,7 @@ pub struct AmazonS3Builder {
     token: Option<String>,
     retry_config: RetryConfig,
     allow_http: bool,
+    imdsv1_fallback: bool,
 }
 
 impl AmazonS3Builder {
@@ -446,6 +447,23 @@ impl AmazonS3Builder {
         self
     }
 
+    /// By default instance credentials will only be fetched over [IMDSv2], as AWS recommends
+    /// against having IMDSv1 enabled on EC2 instances as it is vulnerable to [SSRF attack]
+    ///
+    /// However, certain deployment environments, such as those running old versions of kube2iam,
+    /// may not support IMDSv2. This option will enable automatic fallback to using IMDSv1
+    /// if the token endpoint returns a 403 error indicating that IMDSv2 is not supported.
+    ///
+    /// This option has no effect if not using instance credentials
+    ///
+    /// [IMDSv2]: [https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html]
+    /// [SSRF attack]: [https://aws.amazon.com/blogs/security/defense-in-depth-open-firewalls-reverse-proxies-ssrf-vulnerabilities-ec2-instance-metadata-service/]
+    ///
+    pub fn with_imdsv1_fallback(mut self) -> Self {
+        self.imdsv1_fallback = true;
+        self
+    }
+
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(self) -> Result<AmazonS3> {
@@ -503,6 +521,7 @@ impl AmazonS3Builder {
                         cache: Default::default(),
                         client,
                         retry_config: self.retry_config.clone(),
+                        imdsv1_fallback: self.imdsv1_fallback,
                     })
                 }
             },

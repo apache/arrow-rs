@@ -285,6 +285,7 @@ pub struct InstanceCredentialProvider {
     pub cache: TokenCache<Arc<AwsCredential>>,
     pub client: Client,
     pub retry_config: RetryConfig,
+    pub imdsv1_fallback: bool,
 }
 
 impl InstanceCredentialProvider {
@@ -292,11 +293,16 @@ impl InstanceCredentialProvider {
         self.cache
             .get_or_insert_with(|| {
                 const METADATA_ENDPOINT: &str = "http://169.254.169.254";
-                instance_creds(&self.client, &self.retry_config, METADATA_ENDPOINT)
-                    .map_err(|source| crate::Error::Generic {
-                        store: "S3",
-                        source,
-                    })
+                instance_creds(
+                    &self.client,
+                    &self.retry_config,
+                    METADATA_ENDPOINT,
+                    self.imdsv1_fallback,
+                )
+                .map_err(|source| crate::Error::Generic {
+                    store: "S3",
+                    source,
+                })
             })
             .await
     }
@@ -361,6 +367,7 @@ async fn instance_creds(
     client: &Client,
     retry_config: &RetryConfig,
     endpoint: &str,
+    imdsv1_fallback: bool,
 ) -> Result<TemporaryToken<Arc<AwsCredential>>, StdError> {
     const CREDENTIALS_PATH: &str = "latest/meta-data/iam/security-credentials";
     const AWS_EC2_METADATA_TOKEN_HEADER: &str = "X-aws-ec2-metadata-token";
@@ -375,7 +382,9 @@ async fn instance_creds(
 
     let token = match token_result {
         Ok(t) => Some(t.text().await?),
-        Err(e) if matches!(e.status(), Some(StatusCode::FORBIDDEN)) => {
+        Err(e)
+            if imdsv1_fallback && matches!(e.status(), Some(StatusCode::FORBIDDEN)) =>
+        {
             warn!("received 403 from metadata endpoint, falling back to IMDSv1");
             None
         }
@@ -582,7 +591,7 @@ mod tests {
             "Ensure metadata endpoint is set to only allow IMDSv2"
         );
 
-        let creds = instance_creds(&client, &retry_config, &endpoint)
+        let creds = instance_creds(&client, &retry_config, &endpoint, false)
             .await
             .unwrap();
 
@@ -633,7 +642,7 @@ mod tests {
             Response::new(Body::from(r#"{"AccessKeyId":"KEYID","Code":"Success","Expiration":"2022-08-30T10:51:04Z","LastUpdated":"2022-08-30T10:21:04Z","SecretAccessKey":"SECRET","Token":"TOKEN","Type":"AWS-HMAC"}"#))
         });
 
-        let creds = instance_creds(&client, &retry_config, endpoint)
+        let creds = instance_creds(&client, &retry_config, endpoint, true)
             .await
             .unwrap();
 
@@ -641,7 +650,7 @@ mod tests {
         assert_eq!(&creds.token.key_id, access_key_id);
         assert_eq!(&creds.token.secret_key, secret_access_key);
 
-        // Test IMDSv1
+        // Test IMDSv1 fallback
         server.push_fn(|req| {
             assert_eq!(req.uri().path(), "/latest/api/token");
             assert_eq!(req.method(), &Method::PUT);
@@ -666,12 +675,25 @@ mod tests {
             Response::new(Body::from(r#"{"AccessKeyId":"KEYID","Code":"Success","Expiration":"2022-08-30T10:51:04Z","LastUpdated":"2022-08-30T10:21:04Z","SecretAccessKey":"SECRET","Token":"TOKEN","Type":"AWS-HMAC"}"#))
         });
 
-        let creds = instance_creds(&client, &retry_config, endpoint)
+        let creds = instance_creds(&client, &retry_config, endpoint, true)
             .await
             .unwrap();
 
         assert_eq!(creds.token.token.as_deref().unwrap(), token);
         assert_eq!(&creds.token.key_id, access_key_id);
         assert_eq!(&creds.token.secret_key, secret_access_key);
+
+        // Test IMDSv1 fallback disabled
+        server.push(
+            Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Body::empty())
+                .unwrap(),
+        );
+
+        // Should fail
+        instance_creds(&client, &retry_config, endpoint, false)
+            .await
+            .unwrap_err();
     }
 }
