@@ -18,6 +18,8 @@
 //! Generic utilities reqwest based ObjectStore implementations
 
 pub mod backoff;
+#[cfg(test)]
+pub mod mock_server;
 pub mod pagination;
 pub mod retry;
 pub mod token;
