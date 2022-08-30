@@ -87,8 +87,6 @@ pyarrow = ["pyo3", "ffi"]
 force_validate = []
 # Enable ffi support
 ffi = []
-# Enable NaN-ordering behavior on comparison kernels
-nan_ordering = []
 # Enable dyn-comparison of dictionary arrays with other arrays
 # Note: this does not impact comparison against scalars
 dyn_cmp_dict = []
