@@ -23,11 +23,12 @@ use bytes::Buf;
 use chrono::{DateTime, Utc};
 use futures::TryFutureExt;
 use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Client, Method, Request, RequestBuilder};
+use reqwest::{Client, Method, Request, RequestBuilder, StatusCode};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
+use tracing::warn;
 
 type StdError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -365,31 +366,39 @@ async fn instance_creds(
     const AWS_EC2_METADATA_TOKEN_HEADER: &str = "X-aws-ec2-metadata-token";
 
     let token_url = format!("{}/latest/api/token", endpoint);
-    let token = client
+
+    let token_result = client
         .request(Method::PUT, token_url)
         .header("X-aws-ec2-metadata-token-ttl-seconds", "600") // 10 minute TTL
         .send_retry(retry_config)
-        .await?
-        .text()
-        .await?;
+        .await;
+
+    let token = match token_result {
+        Ok(t) => Some(t.text().await?),
+        Err(e) if matches!(e.status(), Some(StatusCode::FORBIDDEN)) => {
+            warn!("received 403 from metadata endpoint, falling back to IMDSv1");
+            None
+        }
+        Err(e) => return Err(e.into()),
+    };
 
     let role_url = format!("{}/{}/", endpoint, CREDENTIALS_PATH);
-    let role = client
-        .request(Method::GET, role_url)
-        .header(AWS_EC2_METADATA_TOKEN_HEADER, &token)
-        .send_retry(retry_config)
-        .await?
-        .text()
-        .await?;
+    let mut role_request = client.request(Method::GET, role_url);
+
+    if let Some(token) = &token {
+        role_request = role_request.header(AWS_EC2_METADATA_TOKEN_HEADER, token);
+    }
+
+    let role = role_request.send_retry(retry_config).await?.text().await?;
 
     let creds_url = format!("{}/{}/{}", endpoint, CREDENTIALS_PATH, role);
-    let creds: InstanceCredentials = client
-        .request(Method::GET, creds_url)
-        .header(AWS_EC2_METADATA_TOKEN_HEADER, &token)
-        .send_retry(retry_config)
-        .await?
-        .json()
-        .await?;
+    let mut creds_request = client.request(Method::GET, creds_url);
+    if let Some(token) = &token {
+        creds_request = creds_request.header(AWS_EC2_METADATA_TOKEN_HEADER, token);
+    }
+
+    let creds: InstanceCredentials =
+        creds_request.send_retry(retry_config).await?.json().await?;
 
     let now = Utc::now();
     let ttl = (creds.expiration - now).to_std().unwrap_or_default();
@@ -470,6 +479,8 @@ async fn web_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::mock_server::MockServer;
+    use hyper::{Body, Response};
     use reqwest::{Client, Method};
     use std::env;
 
@@ -567,7 +578,7 @@ mod tests {
 
         assert_eq!(
             resp.status(),
-            reqwest::StatusCode::UNAUTHORIZED,
+            StatusCode::UNAUTHORIZED,
             "Ensure metadata endpoint is set to only allow IMDSv2"
         );
 
@@ -582,5 +593,85 @@ mod tests {
         assert!(!id.is_empty());
         assert!(!secret.is_empty());
         assert!(!token.is_empty())
+    }
+
+    #[tokio::test]
+    async fn test_mock() {
+        let server = MockServer::new();
+
+        const IMDSV2_HEADER: &str = "X-aws-ec2-metadata-token";
+
+        let secret_access_key = "SECRET";
+        let access_key_id = "KEYID";
+        let token = "TOKEN";
+
+        let endpoint = server.url();
+        let client = Client::new();
+        let retry_config = RetryConfig::default();
+
+        // Test IMDSv2
+        server.push_fn(|req| {
+            assert_eq!(req.uri().path(), "/latest/api/token");
+            assert_eq!(req.method(), &Method::PUT);
+            Response::new(Body::from("cupcakes"))
+        });
+        server.push_fn(|req| {
+            assert_eq!(
+                req.uri().path(),
+                "/latest/meta-data/iam/security-credentials/"
+            );
+            assert_eq!(req.method(), &Method::GET);
+            let t = req.headers().get(IMDSV2_HEADER).unwrap().to_str().unwrap();
+            assert_eq!(t, "cupcakes");
+            Response::new(Body::from("myrole"))
+        });
+        server.push_fn(|req| {
+            assert_eq!(req.uri().path(), "/latest/meta-data/iam/security-credentials/myrole");
+            assert_eq!(req.method(), &Method::GET);
+            let t = req.headers().get(IMDSV2_HEADER).unwrap().to_str().unwrap();
+            assert_eq!(t, "cupcakes");
+            Response::new(Body::from(r#"{"AccessKeyId":"KEYID","Code":"Success","Expiration":"2022-08-30T10:51:04Z","LastUpdated":"2022-08-30T10:21:04Z","SecretAccessKey":"SECRET","Token":"TOKEN","Type":"AWS-HMAC"}"#))
+        });
+
+        let creds = instance_creds(&client, &retry_config, endpoint)
+            .await
+            .unwrap();
+
+        assert_eq!(creds.token.token.as_deref().unwrap(), token);
+        assert_eq!(&creds.token.key_id, access_key_id);
+        assert_eq!(&creds.token.secret_key, secret_access_key);
+
+        // Test IMDSv1
+        server.push_fn(|req| {
+            assert_eq!(req.uri().path(), "/latest/api/token");
+            assert_eq!(req.method(), &Method::PUT);
+            Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Body::empty())
+                .unwrap()
+        });
+        server.push_fn(|req| {
+            assert_eq!(
+                req.uri().path(),
+                "/latest/meta-data/iam/security-credentials/"
+            );
+            assert_eq!(req.method(), &Method::GET);
+            assert!(req.headers().get(IMDSV2_HEADER).is_none());
+            Response::new(Body::from("myrole"))
+        });
+        server.push_fn(|req| {
+            assert_eq!(req.uri().path(), "/latest/meta-data/iam/security-credentials/myrole");
+            assert_eq!(req.method(), &Method::GET);
+            assert!(req.headers().get(IMDSV2_HEADER).is_none());
+            Response::new(Body::from(r#"{"AccessKeyId":"KEYID","Code":"Success","Expiration":"2022-08-30T10:51:04Z","LastUpdated":"2022-08-30T10:21:04Z","SecretAccessKey":"SECRET","Token":"TOKEN","Type":"AWS-HMAC"}"#))
+        });
+
+        let creds = instance_creds(&client, &retry_config, endpoint)
+            .await
+            .unwrap();
+
+        assert_eq!(creds.token.token.as_deref().unwrap(), token);
+        assert_eq!(&creds.token.key_id, access_key_id);
+        assert_eq!(&creds.token.secret_key, secret_access_key);
     }
 }

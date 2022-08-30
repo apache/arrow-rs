@@ -180,54 +180,17 @@ impl RetryExt for reqwest::RequestBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::client::mock_server::MockServer;
     use crate::client::retry::RetryExt;
     use crate::RetryConfig;
     use hyper::header::LOCATION;
-    use hyper::service::{make_service_fn, service_fn};
-    use hyper::{Body, Response, Server};
-    use parking_lot::Mutex;
+    use hyper::{Body, Response};
     use reqwest::{Client, Method, StatusCode};
-    use std::collections::VecDeque;
-    use std::convert::Infallible;
-    use std::net::SocketAddr;
-    use std::sync::Arc;
     use std::time::Duration;
 
     #[tokio::test]
     async fn test_retry() {
-        let responses: Arc<Mutex<VecDeque<Response<Body>>>> =
-            Arc::new(Mutex::new(VecDeque::with_capacity(10)));
-
-        let r = Arc::clone(&responses);
-        let make_service = make_service_fn(move |_conn| {
-            let r = Arc::clone(&r);
-            async move {
-                Ok::<_, Infallible>(service_fn(move |_req| {
-                    let r = Arc::clone(&r);
-                    async move {
-                        Ok::<_, Infallible>(match r.lock().pop_front() {
-                            Some(r) => r,
-                            None => Response::new(Body::from("Hello World")),
-                        })
-                    }
-                }))
-            }
-        });
-
-        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let server =
-            Server::bind(&SocketAddr::from(([127, 0, 0, 1], 0))).serve(make_service);
-
-        let url = format!("http://{}", server.local_addr());
-
-        let server_handle = tokio::spawn(async move {
-            server
-                .with_graceful_shutdown(async {
-                    rx.await.ok();
-                })
-                .await
-                .unwrap()
-        });
+        let mock = MockServer::new();
 
         let retry = RetryConfig {
             backoff: Default::default(),
@@ -236,14 +199,14 @@ mod tests {
         };
 
         let client = Client::new();
-        let do_request = || client.request(Method::GET, &url).send_retry(&retry);
+        let do_request = || client.request(Method::GET, mock.url()).send_retry(&retry);
 
         // Simple request should work
         let r = do_request().await.unwrap();
         assert_eq!(r.status(), StatusCode::OK);
 
         // Returns client errors immediately with status message
-        responses.lock().push_back(
+        mock.push(
             Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .body(Body::from("cupcakes"))
@@ -256,7 +219,7 @@ mod tests {
         assert_eq!(&e.message, "cupcakes");
 
         // Handles client errors with no payload
-        responses.lock().push_back(
+        mock.push(
             Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .body(Body::empty())
@@ -269,7 +232,7 @@ mod tests {
         assert_eq!(&e.message, "No Body");
 
         // Should retry server error request
-        responses.lock().push_back(
+        mock.push(
             Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
                 .body(Body::empty())
@@ -280,7 +243,7 @@ mod tests {
         assert_eq!(r.status(), StatusCode::OK);
 
         // Accepts 204 status code
-        responses.lock().push_back(
+        mock.push(
             Response::builder()
                 .status(StatusCode::NO_CONTENT)
                 .body(Body::empty())
@@ -291,7 +254,7 @@ mod tests {
         assert_eq!(r.status(), StatusCode::NO_CONTENT);
 
         // Follows redirects
-        responses.lock().push_back(
+        mock.push(
             Response::builder()
                 .status(StatusCode::FOUND)
                 .header(LOCATION, "/foo")
@@ -305,7 +268,7 @@ mod tests {
 
         // Gives up after the retrying the specified number of times
         for _ in 0..=retry.max_retries {
-            responses.lock().push_back(
+            mock.push(
                 Response::builder()
                     .status(StatusCode::BAD_GATEWAY)
                     .body(Body::from("ignored"))
@@ -318,7 +281,6 @@ mod tests {
         assert_eq!(e.message, "502 Bad Gateway");
 
         // Shutdown
-        let _ = tx.send(());
-        server_handle.await.unwrap();
+        mock.shutdown().await
     }
 }
