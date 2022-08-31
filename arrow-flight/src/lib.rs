@@ -17,11 +17,9 @@
 
 use arrow::datatypes::Schema;
 use arrow::error::{ArrowError, Result as ArrowResult};
-use arrow::ipc::{
-    convert, size_prefixed_root_as_message, writer, writer::EncodedData,
-    writer::IpcWriteOptions,
-};
+use arrow::ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
 
+use arrow::ipc::convert::try_schema_from_ipc_buffer;
 use std::{
     convert::{TryFrom, TryInto},
     fmt,
@@ -298,7 +296,7 @@ fn schema_to_ipc_format(schema_ipc: SchemaAsIpc) -> ArrowResult<IpcMessage> {
 impl TryFrom<&FlightData> for Schema {
     type Error = ArrowError;
     fn try_from(data: &FlightData) -> ArrowResult<Self> {
-        convert::schema_from_bytes(&data.data_header[..]).map_err(|err| {
+        convert::try_schema_from_flatbuffer_bytes(&data.data_header[..]).map_err(|err| {
             ArrowError::ParseError(format!(
                 "Unable to convert flight data to Arrow schema: {}",
                 err
@@ -320,32 +318,14 @@ impl TryFrom<IpcMessage> for Schema {
     type Error = ArrowError;
 
     fn try_from(value: IpcMessage) -> ArrowResult<Self> {
-        // CONTINUATION TAKES 4 BYTES
-        // SIZE TAKES 4 BYTES (so read msg as size prefixed)
-        let msg = size_prefixed_root_as_message(&value.0[4..]).map_err(|err| {
-            ArrowError::ParseError(format!(
-                "Unable to convert flight info to a message: {}",
-                err
-            ))
-        })?;
-        let ipc_schema = msg.header_as_schema().ok_or_else(|| {
-            ArrowError::ParseError(
-                "Unable to convert flight info to a schema".to_string(),
-            )
-        })?;
-        Ok(convert::fb_to_schema(ipc_schema))
+        try_schema_from_ipc_buffer(value.0.as_slice())
     }
 }
 
 impl TryFrom<&SchemaResult> for Schema {
     type Error = ArrowError;
     fn try_from(data: &SchemaResult) -> ArrowResult<Self> {
-        convert::schema_from_bytes(&data.schema[..]).map_err(|err| {
-            ArrowError::ParseError(format!(
-                "Unable to convert schema result to Arrow schema: {}",
-                err
-            ))
-        })
+        try_schema_from_ipc_buffer(data.schema.as_slice())
     }
 }
 
@@ -416,6 +396,8 @@ impl<'a> SchemaAsIpc<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::datatypes::{DataType, Field, TimeUnit};
+    use arrow::ipc::MetadataVersion;
 
     struct TestVector(Vec<u8>, usize);
 
@@ -458,5 +440,32 @@ mod tests {
         let actual = format!("{}", input);
         let expected = format!("{:?}", vec![91; 9]);
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn ser_deser_schema_result() {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::Float64, true),
+            Field::new("c3", DataType::UInt32, false),
+            Field::new("c4", DataType::Boolean, true),
+            Field::new("c5", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+            Field::new("c6", DataType::Time32(TimeUnit::Second), false),
+        ]);
+        // V5
+        let option = IpcWriteOptions::default();
+        let schema_ipc = SchemaAsIpc::new(&schema, &option);
+        let result: SchemaResult = schema_ipc.try_into().unwrap();
+        //
+        let des_schema: Schema = (&result).try_into().unwrap();
+        assert_eq!(schema, des_schema);
+
+        // V4 with write_legacy_ipc_format = true
+        // This will write the continuation marker
+        let option = IpcWriteOptions::try_new(8, true, MetadataVersion::V4).unwrap();
+        let schema_ipc = SchemaAsIpc::new(&schema, &option);
+        let result: SchemaResult = schema_ipc.try_into().unwrap();
+        let des_schema: Schema = (&result).try_into().unwrap();
+        assert_eq!(schema, des_schema);
     }
 }
