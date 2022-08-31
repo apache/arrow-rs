@@ -156,7 +156,7 @@ pub fn try_schema_from_flatbuffer_bytes(bytes: &[u8]) -> Result<Schema> {
 
 /// Try deserialize the IPC format bytes into a schema
 pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema> {
-    // There are two type of protocal: https://issues.apache.org/jira/browse/ARROW-6313
+    // There are two protocal types: https://issues.apache.org/jira/browse/ARROW-6313
     // The original protocal is:
     //   4 bytes - the byte length of the payload
     //   a flatbuffer Message whose header is the Schema
@@ -169,9 +169,14 @@ pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema> {
         // check continuation maker
         let continuation_maker = &buffer[0..4];
         let begin_offset: usize = if continuation_maker.eq(&CONTINUATION_MARKER) {
+            // 4 bytes: CONTINUATION_MARKER
+            // 4 bytes: length
+            // buffer
             4
         } else {
             // backward compatibility for buffer without the continuation maker
+            // 4 bytes: length
+            // buffer
             0
         };
         let msg =
@@ -188,9 +193,9 @@ pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema> {
         })?;
         Ok(fb_to_schema(ipc_schema))
     } else {
-        Err(ArrowError::ParseError(format!(
-            "The buffer length is less than 4, parser buffer to Schema"
-        )))
+        Err(ArrowError::ParseError(
+            "The buffer length is less than 4 and missing the continuation maker or length of buffer".to_string()
+        ))
     }
 }
 

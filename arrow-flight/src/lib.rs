@@ -452,16 +452,16 @@ mod tests {
             Field::new("c5", DataType::Timestamp(TimeUnit::Millisecond, None), true),
             Field::new("c6", DataType::Time32(TimeUnit::Second), false),
         ]);
-        // V5
+        // V5 with write_legacy_ipc_format = false
+        // this will write the continuation marker
         let option = IpcWriteOptions::default();
         let schema_ipc = SchemaAsIpc::new(&schema, &option);
         let result: SchemaResult = schema_ipc.try_into().unwrap();
-        //
         let des_schema: Schema = (&result).try_into().unwrap();
         assert_eq!(schema, des_schema);
 
         // V4 with write_legacy_ipc_format = true
-        // This will write the continuation marker
+        // this will not write the continuation marker
         let option = IpcWriteOptions::try_new(8, true, MetadataVersion::V4).unwrap();
         let schema_ipc = SchemaAsIpc::new(&schema, &option);
         let result: SchemaResult = schema_ipc.try_into().unwrap();
