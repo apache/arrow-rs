@@ -24,8 +24,6 @@ pub mod bit_util;
 #[cfg(feature = "test_utils")]
 pub mod data_gen;
 pub mod display;
-#[cfg(any(test, feature = "test_utils"))]
-pub mod integration_util;
 #[cfg(feature = "prettyprint")]
 pub mod pretty;
 pub(crate) mod serialization;

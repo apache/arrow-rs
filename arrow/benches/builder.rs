@@ -98,7 +98,7 @@ fn bench_string(c: &mut Criterion) {
     ));
     group.bench_function("bench_string", |b| {
         b.iter(|| {
-            let mut builder = StringBuilder::new(64);
+            let mut builder = StringBuilder::new();
             for _ in 0..NUM_BATCHES * BATCH_SIZE {
                 builder.append_value(SAMPLE_STRING);
             }

@@ -108,8 +108,15 @@ impl<T: DecimalType> DecimalArray<T> {
     }
 
     /// Returns the element at index `i`.
+    /// # Panics
+    /// Panics if index `i` is out of bounds.
     pub fn value(&self, i: usize) -> Decimal<T> {
-        assert!(i < self.data().len(), "Out of bounds access");
+        assert!(
+            i < self.data().len(),
+            "Trying to access an element at index {} from a DecimalArray of length {}",
+            i,
+            self.len()
+        );
 
         unsafe { self.value_unchecked(i) }
     }
@@ -951,5 +958,15 @@ mod tests {
         assert!(array.is_null(1));
         assert_eq!(101_i128, array.value(2).into());
         assert!(!array.is_null(2));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Trying to access an element at index 4 from a DecimalArray of length 3"
+    )]
+    fn test_fixed_size_binary_array_get_value_index_out_of_bound() {
+        let array = Decimal128Array::from_iter_values(vec![-100, 0, 101].into_iter());
+
+        array.value(4);
     }
 }

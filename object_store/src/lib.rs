@@ -465,10 +465,6 @@ pub enum Error {
 
     #[snafu(display("Operation not yet implemented."))]
     NotImplemented,
-
-    #[cfg(feature = "gcp")]
-    #[snafu(display("OAuth error: {}", source), context(false))]
-    OAuth { source: client::oauth::Error },
 }
 
 impl From<Error> for std::io::Error {

@@ -110,6 +110,9 @@ enum Error {
 
     #[snafu(display("At least one authorization option must be specified"))]
     MissingCredentials {},
+
+    #[snafu(display("Azure credential error: {}", source), context(false))]
+    Credential { source: credential::Error },
 }
 
 impl From<Error> for super::Error {
@@ -188,7 +191,7 @@ impl ObjectStore for MicrosoftAzure {
             .await?
             .bytes()
             .await
-            .map_err(|source| client::Error::GetRequest {
+            .map_err(|source| client::Error::GetResponseBody {
                 source,
                 path: location.to_string(),
             })?;
@@ -539,13 +542,12 @@ impl MicrosoftAzureBuilder {
             } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
                 (client_id, client_secret, tenant_id)
             {
-                let client_credential =
-                    crate::client::oauth::ClientSecretOAuthProvider::new_azure(
-                        client_id,
-                        client_secret,
-                        tenant_id,
-                        authority_host,
-                    );
+                let client_credential = credential::ClientSecretOAuthProvider::new(
+                    client_id,
+                    client_secret,
+                    tenant_id,
+                    authority_host,
+                );
                 Ok(credential::CredentialProvider::ClientSecret(
                     client_credential,
                 ))

@@ -242,7 +242,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
 
         let keys_builder = PrimitiveBuilder::<Int32Type>::with_capacity(10);
-        let values_builder = StringBuilder::new(10);
+        let values_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
 
         builder.append("one")?;

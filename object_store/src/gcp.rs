@@ -48,12 +48,16 @@ use tokio::io::AsyncWrite;
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
 use crate::{
-    client::{oauth::OAuthProvider, token::TokenCache},
+    client::token::TokenCache,
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::{Path, DELIMITER},
     util::{format_http_range, format_prefix},
     GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result, RetryConfig,
 };
+
+use credential::OAuthProvider;
+
+mod credential;
 
 #[derive(Debug, Snafu)]
 enum Error {
@@ -72,28 +76,40 @@ enum Error {
     },
 
     #[snafu(display("Error performing list request: {}", source))]
-    ListRequest { source: reqwest::Error },
+    ListRequest { source: crate::client::retry::Error },
+
+    #[snafu(display("Error getting list response body: {}", source))]
+    ListResponseBody { source: reqwest::Error },
 
     #[snafu(display("Error performing get request {}: {}", path, source))]
     GetRequest {
+        source: crate::client::retry::Error,
+        path: String,
+    },
+
+    #[snafu(display("Error getting get response body {}: {}", path, source))]
+    GetResponseBody {
         source: reqwest::Error,
         path: String,
     },
 
     #[snafu(display("Error performing delete request {}: {}", path, source))]
     DeleteRequest {
-        source: reqwest::Error,
+        source: crate::client::retry::Error,
         path: String,
     },
 
     #[snafu(display("Error performing copy request {}: {}", path, source))]
     CopyRequest {
-        source: reqwest::Error,
+        source: crate::client::retry::Error,
         path: String,
     },
 
     #[snafu(display("Error performing put request: {}", source))]
-    PutRequest { source: reqwest::Error },
+    PutRequest { source: crate::client::retry::Error },
+
+    #[snafu(display("Error getting put response body: {}", source))]
+    PutResponseBody { source: reqwest::Error },
 
     #[snafu(display("Error decoding object size: {}", source))]
     InvalidSize { source: std::num::ParseIntError },
@@ -103,6 +119,9 @@ enum Error {
 
     #[snafu(display("Missing service account path"))]
     MissingServiceAccountPath,
+
+    #[snafu(display("GCP credential error: {}", source))]
+    Credential { source: credential::Error },
 }
 
 impl From<Error> for super::Error {
@@ -228,7 +247,8 @@ impl GoogleCloudStorageClient {
                 .get_or_insert_with(|| {
                     oauth_provider.fetch_token(&self.client, &self.retry_config)
                 })
-                .await?)
+                .await
+                .context(CredentialSnafu)?)
         } else {
             Ok("".to_owned())
         }
@@ -271,10 +291,6 @@ impl GoogleCloudStorageClient {
             .await
             .context(GetRequestSnafu {
                 path: path.as_ref(),
-            })?
-            .error_for_status()
-            .context(GetRequestSnafu {
-                path: path.as_ref(),
             })?;
 
         Ok(response)
@@ -297,8 +313,6 @@ impl GoogleCloudStorageClient {
             .body(payload)
             .send_retry(&self.retry_config)
             .await
-            .context(PutRequestSnafu)?
-            .error_for_status()
             .context(PutRequestSnafu)?;
 
         Ok(())
@@ -318,11 +332,9 @@ impl GoogleCloudStorageClient {
             .query(&[("uploads", "")])
             .send_retry(&self.retry_config)
             .await
-            .context(PutRequestSnafu)?
-            .error_for_status()
             .context(PutRequestSnafu)?;
 
-        let data = response.bytes().await.context(PutRequestSnafu)?;
+        let data = response.bytes().await.context(PutResponseBodySnafu)?;
         let result: InitiateMultipartUploadResult = quick_xml::de::from_reader(
             data.as_ref().reader(),
         )
@@ -352,8 +364,6 @@ impl GoogleCloudStorageClient {
             .query(&[("uploadId", multipart_id)])
             .send_retry(&self.retry_config)
             .await
-            .context(PutRequestSnafu)?
-            .error_for_status()
             .context(PutRequestSnafu)?;
 
         Ok(())
@@ -369,10 +379,6 @@ impl GoogleCloudStorageClient {
             .bearer_auth(token)
             .send_retry(&self.retry_config)
             .await
-            .context(DeleteRequestSnafu {
-                path: path.as_ref(),
-            })?
-            .error_for_status()
             .context(DeleteRequestSnafu {
                 path: path.as_ref(),
             })?;
@@ -412,10 +418,6 @@ impl GoogleCloudStorageClient {
             .bearer_auth(token)
             .send_retry(&self.retry_config)
             .await
-            .context(CopyRequestSnafu {
-                path: from.as_ref(),
-            })?
-            .error_for_status()
             .context(CopyRequestSnafu {
                 path: from.as_ref(),
             })?;
@@ -462,11 +464,9 @@ impl GoogleCloudStorageClient {
             .send_retry(&self.retry_config)
             .await
             .context(ListRequestSnafu)?
-            .error_for_status()
-            .context(ListRequestSnafu)?
             .json()
             .await
-            .context(ListRequestSnafu)?;
+            .context(ListResponseBodySnafu)?;
 
         Ok(response)
     }
@@ -486,27 +486,6 @@ impl GoogleCloudStorageClient {
             Ok((r, prefix, next_token))
         })
         .boxed()
-    }
-}
-
-fn reqwest_error_as_io(err: reqwest::Error) -> io::Error {
-    if err.is_builder() || err.is_request() {
-        io::Error::new(io::ErrorKind::InvalidInput, err)
-    } else if err.is_status() {
-        match err.status() {
-            Some(StatusCode::NOT_FOUND) => io::Error::new(io::ErrorKind::NotFound, err),
-            Some(StatusCode::BAD_REQUEST) => {
-                io::Error::new(io::ErrorKind::InvalidInput, err)
-            }
-            Some(_) => io::Error::new(io::ErrorKind::Other, err),
-            None => io::Error::new(io::ErrorKind::Other, err),
-        }
-    } else if err.is_timeout() {
-        io::Error::new(io::ErrorKind::TimedOut, err)
-    } else if err.is_connect() {
-        io::Error::new(io::ErrorKind::NotConnected, err)
-    } else {
-        io::Error::new(io::ErrorKind::Other, err)
     }
 }
 
@@ -549,10 +528,7 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
             .header(header::CONTENT_LENGTH, format!("{}", buf.len()))
             .body(buf)
             .send_retry(&self.client.retry_config)
-            .await
-            .map_err(reqwest_error_as_io)?
-            .error_for_status()
-            .map_err(reqwest_error_as_io)?;
+            .await?;
 
         let content_id = response
             .headers()
@@ -609,10 +585,7 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
             .query(&[("uploadId", upload_id)])
             .body(data)
             .send_retry(&self.client.retry_config)
-            .await
-            .map_err(reqwest_error_as_io)?
-            .error_for_status()
-            .map_err(reqwest_error_as_io)?;
+            .await?;
 
         Ok(())
     }
@@ -672,14 +645,14 @@ impl ObjectStore for GoogleCloudStorage {
             .client
             .get_request(location, Some(range), false)
             .await?;
-        Ok(response.bytes().await.context(GetRequestSnafu {
+        Ok(response.bytes().await.context(GetResponseBodySnafu {
             path: location.as_ref(),
         })?)
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         let response = self.client.get_request(location, None, true).await?;
-        let object = response.json().await.context(GetRequestSnafu {
+        let object = response.json().await.context(GetResponseBodySnafu {
             path: location.as_ref(),
         })?;
         convert_object_meta(&object)
@@ -853,7 +826,8 @@ impl GoogleCloudStorageBuilder {
                     audience,
                 )
             })
-            .transpose()?;
+            .transpose()
+            .context(CredentialSnafu)?;
 
         let encoded_bucket_name =
             percent_encode(bucket_name.as_bytes(), NON_ALPHANUMERIC).to_string();
@@ -1057,9 +1031,7 @@ mod test {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains(
-                "Error performing put request: HTTP status client error (404 Not Found)"
-            ),
+            err.contains("HTTP status client error (404 Not Found)"),
             "{}",
             err
         )

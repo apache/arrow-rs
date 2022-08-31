@@ -58,7 +58,7 @@ use serde_json::{map::Map as JsonMap, Value};
 use crate::buffer::MutableBuffer;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
-use crate::record_batch::RecordBatch;
+use crate::record_batch::{RecordBatch, RecordBatchOptions};
 use crate::util::bit_util;
 use crate::util::reader_parser::Parser;
 use crate::{array::*, buffer::Buffer};
@@ -698,22 +698,34 @@ impl Decoder {
         }
 
         let rows = &rows[..];
-        let projection = self.options.projection.clone().unwrap_or_default();
-        let arrays = self.build_struct_array(rows, self.schema.fields(), &projection);
 
-        let projected_fields: Vec<Field> = if projection.is_empty() {
-            self.schema.fields().to_vec()
-        } else {
+        let arrays =
+            self.build_struct_array(rows, self.schema.fields(), &self.options.projection);
+
+        let projected_fields = if let Some(projection) = self.options.projection.as_ref()
+        {
             projection
                 .iter()
                 .filter_map(|name| self.schema.column_with_name(name))
                 .map(|(_, field)| field.clone())
                 .collect()
+        } else {
+            self.schema.fields().to_vec()
         };
 
         let projected_schema = Arc::new(Schema::new(projected_fields));
 
-        arrays.and_then(|arr| RecordBatch::try_new(projected_schema, arr).map(Some))
+        arrays.and_then(|arr| {
+            RecordBatch::try_new_with_options(
+                projected_schema,
+                arr,
+                &RecordBatchOptions {
+                    match_field_names: true,
+                    row_count: Some(rows.len()),
+                },
+            )
+            .map(Some)
+        })
     }
 
     fn build_wrapped_list_array(
@@ -798,7 +810,8 @@ impl Decoder {
     {
         let mut builder: Box<dyn ArrayBuilder> = match data_type {
             DataType::Utf8 => {
-                let values_builder = StringBuilder::new(rows.len() * 5);
+                let values_builder =
+                    StringBuilder::with_capacity(rows.len(), rows.len() * 5);
                 Box::new(ListBuilder::new(values_builder))
             }
             DataType::Dictionary(_, _) => {
@@ -902,7 +915,7 @@ impl Decoder {
         T: ArrowPrimitiveType + ArrowDictionaryKeyType,
     {
         let key_builder = PrimitiveBuilder::<T>::with_capacity(row_len);
-        let values_builder = StringBuilder::new(row_len * 5);
+        let values_builder = StringBuilder::with_capacity(row_len, row_len * 5);
         StringDictionaryBuilder::new(key_builder, values_builder)
     }
 
@@ -1137,7 +1150,7 @@ impl Decoder {
                     })
                     .collect();
                 let arrays =
-                    self.build_struct_array(rows.as_slice(), fields.as_slice(), &[])?;
+                    self.build_struct_array(rows.as_slice(), fields.as_slice(), &None)?;
                 let data_type = DataType::Struct(fields.clone());
                 let buf = null_buffer.into();
                 unsafe {
@@ -1170,18 +1183,23 @@ impl Decoder {
     ///
     /// *Note*: The function is recursive, and will read nested structs.
     ///
-    /// If `projection` is not empty, then all values are returned. The first level of projection
+    /// If `projection` is &None, then all values are returned. The first level of projection
     /// occurs at the `RecordBatch` level. No further projection currently occurs, but would be
     /// useful if plucking values from a struct, e.g. getting `a.b.c.e` from `a.b.c.{d, e}`.
     fn build_struct_array(
         &self,
         rows: &[Value],
         struct_fields: &[Field],
-        projection: &[String],
+        projection: &Option<Vec<String>>,
     ) -> Result<Vec<ArrayRef>> {
         let arrays: Result<Vec<ArrayRef>> = struct_fields
             .iter()
-            .filter(|field| projection.is_empty() || projection.contains(field.name()))
+            .filter(|field| {
+                projection
+                    .as_ref()
+                    .map(|p| p.contains(field.name()))
+                    .unwrap_or(true)
+            })
             .map(|field| {
                 match field.data_type() {
                     DataType::Null => {
@@ -1344,7 +1362,7 @@ impl Decoder {
                             })
                             .collect::<Vec<Value>>();
                         let arrays =
-                            self.build_struct_array(&struct_rows, fields, &[])?;
+                            self.build_struct_array(&struct_rows, fields, &None)?;
                         // construct a struct array's data in order to set null buffer
                         let data_type = DataType::Struct(fields.clone());
                         let data = ArrayDataBuilder::new(data_type)
@@ -1441,7 +1459,7 @@ impl Decoder {
         let struct_children = self.build_struct_array(
             struct_rows.as_slice(),
             &[key_field.clone(), value_field.clone()],
-            &[],
+            &None,
         )?;
 
         unsafe {
@@ -1803,6 +1821,21 @@ mod tests {
             .unwrap();
         assert_eq!("4", dd.value(0));
         assert_eq!("text", dd.value(8));
+    }
+
+    #[test]
+    fn test_json_empty_projection() {
+        let builder = ReaderBuilder::new()
+            .infer_schema(None)
+            .with_batch_size(64)
+            .with_projection(vec![]);
+        let mut reader: Reader<File> = builder
+            .build::<File>(File::open("test/data/basic.json").unwrap())
+            .unwrap();
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(0, batch.num_columns());
+        assert_eq!(12, batch.num_rows());
     }
 
     #[test]

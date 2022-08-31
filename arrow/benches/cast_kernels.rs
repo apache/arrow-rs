@@ -45,7 +45,7 @@ fn build_utf8_date_array(size: usize, with_nulls: bool) -> ArrayRef {
 
     // use random numbers to avoid spurious compiler optimizations wrt to branching
     let mut rng = seedable_rng();
-    let mut builder = StringBuilder::new(size);
+    let mut builder = StringBuilder::new();
     let range = Uniform::new(0, 737776);
 
     for _ in 0..size {
@@ -66,7 +66,7 @@ fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
 
     // use random numbers to avoid spurious compiler optimizations wrt to branching
     let mut rng = seedable_rng();
-    let mut builder = StringBuilder::new(size);
+    let mut builder = StringBuilder::new();
     let range = Uniform::new(0, 1608071414123);
 
     for _ in 0..size {

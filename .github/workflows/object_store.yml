@@ -42,9 +42,22 @@ jobs:
           rustup toolchain install stable
           rustup default stable
           rustup component add clippy
-      - name: Run clippy
-        run: |
-          cargo clippy -p object_store --all-features --all-targets -- -D warnings
+      # Run different tests for the library on its own as well as
+      # all targets to ensure that it still works in the absence of
+      # features that might be enabled by dev-dependencies of other
+      # targets.
+      - name: Run clippy with default features
+        run: cargo clippy -p object_store -- -D warnings
+      - name: Run clippy with aws feature
+        run: cargo clippy -p object_store --features aws -- -D warnings
+      - name: Run clippy with gcp feature
+        run: cargo clippy -p object_store --features gcp -- -D warnings
+      - name: Run clippy with azure feature
+        run: cargo clippy -p object_store --features azure -- -D warnings
+      - name: Run clippy with all features
+        run: cargo clippy -p object_store --all-features -- -D warnings
+      - name: Run clippy with all features and all targets
+        run: cargo clippy -p object_store --all-features --all-targets -- -D warnings
 
   # test the crate
   linux-test:

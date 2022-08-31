@@ -313,6 +313,12 @@ impl From<ByteArray> for FixedLenByteArray {
     }
 }
 
+impl From<Vec<u8>> for FixedLenByteArray {
+    fn from(buf: Vec<u8>) -> FixedLenByteArray {
+        FixedLenByteArray(ByteArray::from(buf))
+    }
+}
+
 impl From<FixedLenByteArray> for ByteArray {
     fn from(other: FixedLenByteArray) -> Self {
         other.0
@@ -1141,9 +1147,9 @@ macro_rules! make_type {
             }
 
             fn get_column_reader(
-                column_writer: ColumnReader,
+                column_reader: ColumnReader,
             ) -> Option<ColumnReaderImpl<Self>> {
-                match column_writer {
+                match column_reader {
                     ColumnReader::$reader_ident(w) => Some(w),
                     _ => None,
                 }
@@ -1208,6 +1214,18 @@ make_type!(
     mem::size_of::<FixedLenByteArray>()
 );
 
+impl AsRef<[u8]> for ByteArray {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl AsRef<[u8]> for FixedLenByteArray {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
 impl FromBytes for Int96 {
     type Buffer = [u8; 12];
     fn from_le_bytes(bs: Self::Buffer) -> Self {
@@ -1236,29 +1254,29 @@ impl FromBytes for Int96 {
 // FIXME Needed to satisfy the constraint of many decoding functions but ByteArray does not
 // appear to actual be converted directly from bytes
 impl FromBytes for ByteArray {
-    type Buffer = [u8; 8];
+    type Buffer = Vec<u8>;
     fn from_le_bytes(bs: Self::Buffer) -> Self {
-        ByteArray::from(bs.to_vec())
+        ByteArray::from(bs)
     }
     fn from_be_bytes(_bs: Self::Buffer) -> Self {
         unreachable!()
     }
     fn from_ne_bytes(bs: Self::Buffer) -> Self {
-        ByteArray::from(bs.to_vec())
+        ByteArray::from(bs)
     }
 }
 
 impl FromBytes for FixedLenByteArray {
-    type Buffer = [u8; 8];
+    type Buffer = Vec<u8>;
 
     fn from_le_bytes(bs: Self::Buffer) -> Self {
-        Self(ByteArray::from(bs.to_vec()))
+        Self(ByteArray::from(bs))
     }
     fn from_be_bytes(_bs: Self::Buffer) -> Self {
         unreachable!()
     }
     fn from_ne_bytes(bs: Self::Buffer) -> Self {
-        Self(ByteArray::from(bs.to_vec()))
+        Self(ByteArray::from(bs))
     }
 }
 

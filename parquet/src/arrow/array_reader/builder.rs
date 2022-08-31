@@ -17,26 +17,20 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, IntervalUnit, SchemaRef};
+use arrow::datatypes::{DataType, SchemaRef};
 
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
+use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
 use crate::arrow::array_reader::{
     make_byte_array_dictionary_reader, make_byte_array_reader, ArrayReader,
-    ComplexObjectArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
-    PrimitiveArrayReader, RowGroupCollection, StructArrayReader,
-};
-use crate::arrow::buffer::converter::{
-    DecimalArrayConverter, DecimalFixedLengthByteArrayConverter,
-    FixedLenBinaryConverter, FixedSizeArrayConverter, IntervalDayTimeArrayConverter,
-    IntervalDayTimeConverter, IntervalYearMonthArrayConverter,
-    IntervalYearMonthConverter,
+    ListArrayReader, MapArrayReader, NullArrayReader, PrimitiveArrayReader,
+    RowGroupCollection, StructArrayReader,
 };
 use crate::arrow::schema::{convert_schema, ParquetField, ParquetFieldType};
 use crate::arrow::ProjectionMask;
 use crate::basic::Type as PhysicalType;
 use crate::data_type::{
-    BoolType, DoubleType, FixedLenByteArrayType, FloatType, Int32Type,
-    Int64Type, Int96Type,
+    BoolType, DoubleType, FloatType, Int32Type, Int64Type, Int96Type,
 };
 use crate::errors::Result;
 use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
@@ -127,14 +121,12 @@ fn build_primitive_reader(
     field: &ParquetField,
     row_groups: &dyn RowGroupCollection,
 ) -> Result<Box<dyn ArrayReader>> {
-    let (col_idx, primitive_type, type_len) = match &field.field_type {
+    let (col_idx, primitive_type) = match &field.field_type {
         ParquetFieldType::Primitive {
             col_idx,
             primitive_type,
         } => match primitive_type.as_ref() {
-            Type::PrimitiveType { type_length, .. } => {
-                (*col_idx, primitive_type.clone(), *type_length)
-            }
+            Type::PrimitiveType { .. } => (*col_idx, primitive_type.clone()),
             Type::GroupType { .. } => unreachable!(),
         },
         _ => unreachable!(),
@@ -204,61 +196,9 @@ fn build_primitive_reader(
             }
             _ => make_byte_array_reader(page_iterator, column_desc, arrow_type),
         },
-        PhysicalType::FIXED_LEN_BYTE_ARRAY => match field.arrow_type {
-            DataType::Decimal128(precision, scale) => {
-                let converter = DecimalFixedLengthByteArrayConverter::new(
-                    DecimalArrayConverter::new(precision, scale),
-                );
-                Ok(Box::new(ComplexObjectArrayReader::<
-                    FixedLenByteArrayType,
-                    DecimalFixedLengthByteArrayConverter,
-                >::new(
-                    page_iterator,
-                    column_desc,
-                    converter,
-                    arrow_type,
-                )?))
-            }
-            DataType::Interval(IntervalUnit::DayTime) => {
-                let converter =
-                    IntervalDayTimeConverter::new(IntervalDayTimeArrayConverter {});
-                Ok(Box::new(ComplexObjectArrayReader::<
-                    FixedLenByteArrayType,
-                    _,
-                >::new(
-                    page_iterator,
-                    column_desc,
-                    converter,
-                    arrow_type,
-                )?))
-            }
-            DataType::Interval(IntervalUnit::YearMonth) => {
-                let converter =
-                    IntervalYearMonthConverter::new(IntervalYearMonthArrayConverter {});
-                Ok(Box::new(ComplexObjectArrayReader::<
-                    FixedLenByteArrayType,
-                    _,
-                >::new(
-                    page_iterator,
-                    column_desc,
-                    converter,
-                    arrow_type,
-                )?))
-            }
-            _ => {
-                let converter =
-                    FixedLenBinaryConverter::new(FixedSizeArrayConverter::new(type_len));
-                Ok(Box::new(ComplexObjectArrayReader::<
-                    FixedLenByteArrayType,
-                    FixedLenBinaryConverter,
-                >::new(
-                    page_iterator,
-                    column_desc,
-                    converter,
-                    arrow_type,
-                )?))
-            }
-        },
+        PhysicalType::FIXED_LEN_BYTE_ARRAY => {
+            make_fixed_len_byte_array_reader(page_iterator, column_desc, arrow_type)
+        }
     }
 }
 

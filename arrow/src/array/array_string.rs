@@ -113,9 +113,16 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     }
 
     /// Returns the element at index `i` as &str
+    /// # Panics
+    /// Panics if index `i` is out of bounds.
     #[inline]
     pub fn value(&self, i: usize) -> &str {
-        assert!(i < self.data.len(), "StringArray out of bounds access");
+        assert!(
+            i < self.data.len(),
+            "Trying to access an element at index {} from a StringArray of length {}",
+            i,
+            self.len()
+        );
         // Safety:
         // `i < self.data.len()
         unsafe { self.value_unchecked(i) }
@@ -492,7 +499,7 @@ mod tests {
 
     #[test]
     fn test_nested_string_array() {
-        let string_builder = StringBuilder::new(3);
+        let string_builder = StringBuilder::with_capacity(3, 10);
         let mut list_of_string_builder = ListBuilder::new(string_builder);
 
         list_of_string_builder.values().append_value("foo");
@@ -521,7 +528,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "StringArray out of bounds access")]
+    #[should_panic(
+        expected = "Trying to access an element at index 4 from a StringArray of length 3"
+    )]
     fn test_string_array_get_value_index_out_of_bound() {
         let values: [u8; 12] = [
             b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
