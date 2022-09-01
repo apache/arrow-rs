@@ -17,7 +17,7 @@
 
 use std::{io::Read, sync::Arc};
 
-use parquet_format::{ColumnOrder as TColumnOrder, FileMetaData as TFileMetaData};
+use crate::format::{ColumnOrder as TColumnOrder, FileMetaData as TFileMetaData};
 use thrift::protocol::TCompactInputProtocol;
 
 use crate::basic::ColumnOrder;
@@ -150,7 +150,7 @@ mod tests {
     use crate::basic::SortOrder;
     use crate::basic::Type;
     use crate::schema::types::Type as SchemaType;
-    use parquet_format::TypeDefinedOrder;
+    use crate::format::TypeDefinedOrder;
 
     #[test]
     fn test_parse_metadata_size_smaller_than_footer() {

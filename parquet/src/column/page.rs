@@ -20,9 +20,9 @@
 use crate::basic::{Encoding, PageType};
 use crate::errors::{ParquetError, Result};
 use crate::file::{metadata::ColumnChunkMetaData, statistics::Statistics};
+use crate::format::PageHeader;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
 use crate::util::memory::ByteBufferPtr;
-use parquet_format::PageHeader;
 
 /// Parquet Page definition.
 ///
@@ -209,15 +209,15 @@ impl TryFrom<&PageHeader> for PageMetadata {
 
     fn try_from(value: &PageHeader) -> std::result::Result<Self, Self::Error> {
         match value.type_ {
-            parquet_format::PageType::DataPage => Ok(PageMetadata {
+            crate::format::PageType::DATA_PAGE => Ok(PageMetadata {
                 num_rows: value.data_page_header.as_ref().unwrap().num_values as usize,
                 is_dict: false,
             }),
-            parquet_format::PageType::DictionaryPage => Ok(PageMetadata {
+            crate::format::PageType::DICTIONARY_PAGE => Ok(PageMetadata {
                 num_rows: usize::MIN,
                 is_dict: true,
             }),
-            parquet_format::PageType::DataPageV2 => Ok(PageMetadata {
+            crate::format::PageType::DATA_PAGE_V2 => Ok(PageMetadata {
                 num_rows: value.data_page_header_v2.as_ref().unwrap().num_rows as usize,
                 is_dict: false,
             }),

@@ -61,6 +61,9 @@ macro_rules! experimental {
 pub mod errors;
 pub mod basic;
 
+#[allow(clippy::derivable_impls, clippy::match_single_binding)]
+pub mod format;
+
 #[macro_use]
 pub mod data_type;
 

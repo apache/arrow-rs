@@ -121,7 +121,7 @@ impl RowSelection {
     #[cfg(any(test, feature = "async"))]
     pub(crate) fn scan_ranges(
         &self,
-        page_locations: &[parquet_format::PageLocation],
+        page_locations: &[crate::format::PageLocation],
     ) -> Vec<Range<usize>> {
         let mut ranges = vec![];
         let mut row_offset = 0;
@@ -302,7 +302,7 @@ impl From<RowSelection> for VecDeque<RowSelector> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parquet_format::PageLocation;
+    use crate::format::PageLocation;
     use rand::{thread_rng, Rng};
 
     #[test]

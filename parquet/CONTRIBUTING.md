@@ -60,7 +60,18 @@ Run `cargo bench` for benchmarks.
 To build documentation, run `cargo doc --no-deps`.
 To compile and view in the browser, run `cargo doc --no-deps --open`.
 
-## Update Supported Parquet Version
+## Update Parquet Format
 
-To update Parquet format to a newer version, check if [parquet-format](https://github.com/sunchao/parquet-format-rs)
-version is available. Then simply update version of `parquet-format` crate in Cargo.toml.
+To generate the parquet format code run
+
+```
+$ git clone https://github.com/apache/thrift
+$ cd thrift
+$ git checkout v0.16.0
+# docker build just builds a docker image with thrift dependencies
+$ docker build -t thrift build/docker/ubuntu-bionic
+# build/docker/scripts/cmake.sh actually compiles thrift
+$ docker run -v $(pwd):/thrift/src -it thrift build/docker/scripts/cmake.sh && wget https://raw.githubusercontent.com/apache/parquet-format/apache-parquet-format-2.9.0/src/main/thrift/parquet.thrift && ./cmake_build/compiler/cpp/bin/thrift --gen rs parquet.thrift
+```
+
+Then copy the generated `parquet.rs` into `src/format.rs` and commit changes.

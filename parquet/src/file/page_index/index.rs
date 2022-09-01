@@ -20,7 +20,7 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::Int96;
 use crate::errors::ParquetError;
 use crate::util::bit_util::from_le_slice;
-use parquet_format::{BoundaryOrder, ColumnIndex};
+use crate::format::{BoundaryOrder, ColumnIndex};
 use std::fmt::Debug;
 
 /// The statistics in one page

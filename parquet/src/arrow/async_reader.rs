@@ -88,7 +88,7 @@ use bytes::{Buf, Bytes};
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;
 use futures::stream::Stream;
-use parquet_format::OffsetIndex;
+use crate::format::OffsetIndex;
 use thrift::protocol::TCompactInputProtocol;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};

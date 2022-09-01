@@ -16,7 +16,7 @@
 // under the License.
 
 //! Contains column writer API.
-use parquet_format::{ColumnIndex, OffsetIndex};
+use crate::format::{ColumnIndex, OffsetIndex};
 use std::collections::{BTreeSet, VecDeque};
 
 use crate::basic::{Compression, ConvertedType, Encoding, LogicalType, PageType, Type};
@@ -1089,8 +1089,8 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::format::BoundaryOrder;
     use bytes::Bytes;
-    use parquet_format::BoundaryOrder;
     use rand::distributions::uniform::SampleUniform;
     use std::sync::Arc;
 
@@ -2086,7 +2086,7 @@ mod tests {
         // column index
         assert_eq!(2, column_index.null_pages.len());
         assert_eq!(2, offset_index.page_locations.len());
-        assert_eq!(BoundaryOrder::Unordered, column_index.boundary_order);
+        assert_eq!(BoundaryOrder::UNORDERED, column_index.boundary_order);
         for idx in 0..2 {
             assert!(!column_index.null_pages[idx]);
             assert_eq!(0, column_index.null_counts.as_ref().unwrap()[idx]);

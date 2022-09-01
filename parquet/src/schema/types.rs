@@ -19,7 +19,7 @@
 
 use std::{collections::HashMap, convert::From, fmt, sync::Arc};
 
-use parquet_format::SchemaElement;
+use crate::format::SchemaElement;
 
 use crate::basic::{
     ConvertedType, LogicalType, Repetition, TimeUnit, Type as PhysicalType,
@@ -1042,7 +1042,7 @@ fn from_thrift_helper(
         ));
     }
     let element = &elements[index];
-    let converted_type = ConvertedType::from(element.converted_type);
+    let converted_type = ConvertedType::try_from(element.converted_type)?;
     // LogicalType is only present in v2 Parquet files. ConvertedType is always
     // populated, regardless of the version of the file (v1 or v2).
     let logical_type = element
@@ -1063,8 +1063,9 @@ fn from_thrift_helper(
                     "Repetition level must be defined for a primitive type"
                 ));
             }
-            let repetition = Repetition::from(elements[index].repetition_type.unwrap());
-            let physical_type = PhysicalType::from(elements[index].type_.unwrap());
+            let repetition =
+                Repetition::try_from(elements[index].repetition_type.unwrap())?;
+            let physical_type = PhysicalType::try_from(elements[index].type_.unwrap())?;
             let length = elements[index].type_length.unwrap_or(-1);
             let scale = elements[index].scale.unwrap_or(-1);
             let precision = elements[index].precision.unwrap_or(-1);
@@ -1082,7 +1083,11 @@ fn from_thrift_helper(
             Ok((index + 1, Arc::new(builder.build()?)))
         }
         Some(n) => {
-            let repetition = elements[index].repetition_type.map(Repetition::from);
+            let repetition = elements[index]
+                .repetition_type
+                .map(Repetition::try_from)
+                .transpose()?;
+
             let mut fields = vec![];
             let mut next_index = index + 1;
             for _ in 0..n {
