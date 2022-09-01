@@ -630,9 +630,8 @@ mod tests {
     <NextMarker />
 </EnumerationResults>";
 
-        let bytes = Bytes::from(S);
         let mut _list_blobs_response_internal: ListResultInternal =
-            quick_xml::de::from_slice(bytes.as_ref()).unwrap();
+            quick_xml::de::from_str(S).unwrap();
     }
 
     #[test]
@@ -702,9 +701,8 @@ mod tests {
     <NextMarker/>
 </EnumerationResults>";
 
-        let bytes = Bytes::from(S);
         let mut _list_blobs_response_internal: ListResultInternal =
-            quick_xml::de::from_slice(bytes.as_ref()).unwrap();
+            quick_xml::de::from_str(S).unwrap();
     }
 
     #[test]
