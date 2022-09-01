@@ -255,8 +255,26 @@ where
     T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type().clone() {
+        DataType::Dictionary(_, value_type) => {
+            hour_internal::<T, A>(array, value_type.as_ref().clone())
+        }
+        dt => hour_internal::<T, A>(array, dt),
+    }
+}
+
+/// Extracts the hours of a given temporal array as an array of integers
+fn hour_internal<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+    dt: DataType,
+) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::with_capacity(array.len());
+    match dt {
         DataType::Time32(_) | DataType::Time64(_) => {
             let iter = ArrayIter::new(array);
             _extract_component_from_array!(iter, b, hour, |value| as_time::<T>(
@@ -283,7 +301,7 @@ where
                 |value| as_datetime::<T>(i64::from(value))
             )
         }
-        dt => return_compute_error_with!("hour_array does not support", dt),
+        _ => return_compute_error_with!("hour does not support", array.data_type()),
     }
 
     Ok(b.finish())
@@ -296,15 +314,33 @@ where
     T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type().clone() {
+        DataType::Dictionary(_, value_type) => {
+            year_internal::<T, A>(array, value_type.as_ref().clone())
+        }
+        dt => year_internal::<T, A>(array, dt),
+    }
+}
+
+/// Extracts the years of a given temporal array as an array of integers
+fn year_internal<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+    dt: DataType,
+) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::with_capacity(array.len());
+    match dt {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
             let iter = ArrayIter::new(array);
             _extract_component_from_array!(iter, b, year, |value| as_datetime::<T>(
                 i64::from(value)
             ))
         }
-        dt => return_compute_error_with!("year does not support", dt),
+        _t => return_compute_error_with!("year does not support", array.data_type()),
     }
 
     Ok(b.finish())
@@ -317,8 +353,26 @@ where
     T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type().clone() {
+        DataType::Dictionary(_, value_type) => {
+            quarter_internal::<T, A>(array, value_type.as_ref().clone())
+        }
+        dt => quarter_internal::<T, A>(array, dt),
+    }
+}
+
+/// Extracts the quarter of a given temporal array as an array of integers
+fn quarter_internal<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+    dt: DataType,
+) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::with_capacity(array.len());
+    match dt {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
             _extract_component_from_array!(iter, b, quarter, |value| as_datetime::<T>(
@@ -339,7 +393,7 @@ where
                 |value| as_datetime::<T>(i64::from(value))
             )
         }
-        dt => return_compute_error_with!("quarter does not support", dt),
+        _ => return_compute_error_with!("quarter does not support", array.data_type()),
     }
 
     Ok(b.finish())
@@ -352,8 +406,26 @@ where
     T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type().clone() {
+        DataType::Dictionary(_, value_type) => {
+            month_internal::<T, A>(array, value_type.as_ref().clone())
+        }
+        dt => month_internal::<T, A>(array, dt),
+    }
+}
+
+/// Extracts the month of a given temporal array as an array of integers
+fn month_internal<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+    dt: DataType,
+) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::with_capacity(array.len());
+    match dt {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
             _extract_component_from_array!(iter, b, month, |value| as_datetime::<T>(
@@ -374,7 +446,7 @@ where
                 |value| as_datetime::<T>(i64::from(value))
             )
         }
-        dt => return_compute_error_with!("month does not support", dt),
+        _ => return_compute_error_with!("month does not support", array.data_type()),
     }
 
     Ok(b.finish())
@@ -394,8 +466,31 @@ where
     T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type().clone() {
+        DataType::Dictionary(_, value_type) => {
+            num_days_from_monday_internal::<T, A>(array, value_type.as_ref().clone())
+        }
+        dt => num_days_from_monday_internal::<T, A>(array, dt),
+    }
+}
+
+/// Extracts the day of week of a given temporal array as an array of
+/// integers.
+///
+/// Monday is encoded as `0`, Tuesday as `1`, etc.
+///
+/// See also [`num_days_from_sunday`] which starts at Sunday.
+fn num_days_from_monday_internal<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+    dt: DataType,
+) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::with_capacity(array.len());
+    match dt {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
             _extract_component_from_array!(iter, b, num_days_from_monday, |value| {
@@ -416,7 +511,7 @@ where
                 |value| as_datetime::<T>(i64::from(value))
             )
         }
-        dt => return_compute_error_with!("weekday does not support", dt),
+        _ => return_compute_error_with!("weekday does not support", array.data_type()),
     }
 
     Ok(b.finish())
@@ -436,8 +531,31 @@ where
     T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type().clone() {
+        DataType::Dictionary(_, value_type) => {
+            num_days_from_sunday_internal::<T, A>(array, value_type.as_ref().clone())
+        }
+        dt => num_days_from_sunday_internal::<T, A>(array, dt),
+    }
+}
+
+/// Extracts the day of week of a given temporal array as an array of
+/// integers, starting at Sunday.
+///
+/// Sunday is encoded as `0`, Monday as `1`, etc.
+///
+/// See also [`num_days_from_monday`] which starts at Monday.
+fn num_days_from_sunday_internal<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+    dt: DataType,
+) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::with_capacity(array.len());
+    match dt {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
             _extract_component_from_array!(iter, b, num_days_from_sunday, |value| {
@@ -458,7 +576,10 @@ where
                 |value| as_datetime::<T>(i64::from(value))
             )
         }
-        dt => return_compute_error_with!("num_days_from_sunday does not support", dt),
+        _ => return_compute_error_with!(
+            "num_days_from_sunday does not support",
+            array.data_type()
+        ),
     }
 
     Ok(b.finish())
@@ -471,8 +592,26 @@ where
     T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type().clone() {
+        DataType::Dictionary(_, value_type) => {
+            day_internal::<T, A>(array, value_type.as_ref().clone())
+        }
+        dt => day_internal::<T, A>(array, dt),
+    }
+}
+
+/// Extracts the day of a given temporal array as an array of integers
+fn day_internal<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+    dt: DataType,
+) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::with_capacity(array.len());
+    match dt {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
             _extract_component_from_array!(iter, b, day, |value| {
@@ -493,7 +632,7 @@ where
                 |value| as_datetime::<T>(i64::from(value))
             )
         }
-        dt => return_compute_error_with!("day does not support", dt),
+        _ => return_compute_error_with!("day does not support", array.data_type()),
     }
 
     Ok(b.finish())
@@ -507,8 +646,27 @@ where
     T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type().clone() {
+        DataType::Dictionary(_, value_type) => {
+            doy_internal::<T, A>(array, value_type.as_ref().clone())
+        }
+        dt => doy_internal::<T, A>(array, dt),
+    }
+}
+
+/// Extracts the day of year of a given temporal array as an array of integers
+/// The day of year that ranges from 1 to 366
+fn doy_internal<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+    dt: DataType,
+) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::with_capacity(array.len());
+    match dt {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
             _extract_component_from_array!(iter, b, ordinal, |value| {
@@ -529,7 +687,7 @@ where
                 |value| as_datetime::<T>(i64::from(value))
             )
         }
-        dt => return_compute_error_with!("doy does not support", dt),
+        _ => return_compute_error_with!("doy does not support", array.data_type()),
     }
 
     Ok(b.finish())
@@ -542,8 +700,26 @@ where
     T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type().clone() {
+        DataType::Dictionary(_, value_type) => {
+            minute_internal::<T, A>(array, value_type.as_ref().clone())
+        }
+        dt => minute_internal::<T, A>(array, dt),
+    }
+}
+
+/// Extracts the minutes of a given temporal array as an array of integers
+fn minute_internal<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+    dt: DataType,
+) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::with_capacity(array.len());
+    match dt {
         DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
             _extract_component_from_array!(iter, b, minute, |value| {
@@ -564,7 +740,7 @@ where
                 |value| as_datetime::<T>(i64::from(value))
             )
         }
-        dt => return_compute_error_with!("minute does not support", dt),
+        _ => return_compute_error_with!("minute does not support", array.data_type()),
     }
 
     Ok(b.finish())
@@ -577,16 +753,34 @@ where
     T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
+    match array.data_type().clone() {
+        DataType::Dictionary(_, value_type) => {
+            week_internal::<T, A>(array, value_type.as_ref().clone())
+        }
+        dt => week_internal::<T, A>(array, dt),
+    }
+}
+
+/// Extracts the week of a given temporal array as an array of integers
+fn week_internal<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+    dt: DataType,
+) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
+    i64: std::convert::From<T::Native>,
+{
     let mut b = Int32Builder::with_capacity(array.len());
 
-    match array.data_type().clone() {
+    match dt {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
             _extract_component_from_array!(iter, b, iso_week, week, |value| {
                 as_datetime::<T>(i64::from(value))
             })
         }
-        dt => return_compute_error_with!("week does not support", dt),
+        _ => return_compute_error_with!("week does not support", array.data_type()),
     }
 
     Ok(b.finish())
@@ -599,8 +793,26 @@ where
     T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
-    let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type().clone() {
+        DataType::Dictionary(_, value_type) => {
+            second_internal::<T, A>(array, value_type.as_ref().clone())
+        }
+        dt => second_internal::<T, A>(array, dt),
+    }
+}
+
+/// Extracts the seconds of a given temporal array as an array of integers
+fn second_internal<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+    dt: DataType,
+) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::with_capacity(array.len());
+    match dt {
         DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
             _extract_component_from_array!(iter, b, second, |value| {
@@ -621,7 +833,7 @@ where
                 |value| as_datetime::<T>(i64::from(value))
             )
         }
-        dt => return_compute_error_with!("second does not support", dt),
+        _ => return_compute_error_with!("second does not support", array.data_type()),
     }
 
     Ok(b.finish())
@@ -1121,19 +1333,115 @@ mod tests {
     }
 
     #[test]
-    fn test_hour_array() {
-        let a =
-            TimestampSecondArray::from_vec(vec![60 * 60 * 10], Some("01:00".to_string()));
-        assert!(matches!(
-            hour::<TimestampSecondType, _>(&a),
-            Err(ArrowError::ComputeError(_))
-        ));
-
+    fn test_hour_minute_second_dictionary_array() {
         let a = TimestampSecondArray::from_vec(
-            vec![60 * 60 * 10],
+            vec![60 * 60 * 10 + 61, 60 * 60 * 20 + 122, 60 * 60 * 30 + 183],
             Some("+01:00".to_string()),
         );
-        let b = hour::<TimestampSecondType, _>(&a).unwrap();
-        assert_eq!(11, b.value(0));
+
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 1]);
+        let dict = DictionaryArray::try_new(&keys, &a).unwrap();
+
+        let b = hour::<TimestampSecondType, _>(
+            dict.downcast_dict::<TimestampSecondArray>().unwrap(),
+        )
+        .unwrap();
+
+        let expected = Int32Array::from(vec![11, 11, 21, 7, 21]);
+        assert_eq!(expected, b);
+
+        let b = minute::<TimestampSecondType, _>(
+            dict.downcast_dict::<TimestampSecondArray>().unwrap(),
+        )
+        .unwrap();
+
+        let expected = Int32Array::from(vec![1, 1, 2, 3, 2]);
+        assert_eq!(expected, b);
+
+        let b = second::<TimestampSecondType, _>(
+            dict.downcast_dict::<TimestampSecondArray>().unwrap(),
+        )
+        .unwrap();
+
+        let expected = Int32Array::from(vec![1, 1, 2, 3, 2]);
+        assert_eq!(expected, b);
+    }
+
+    #[test]
+    fn test_year_dictionary_array() {
+        let a: PrimitiveArray<Date64Type> =
+            vec![Some(1514764800000), Some(1550636625000)].into();
+
+        let keys = Int8Array::from_iter_values([0_i8, 1, 1, 0]);
+        let dict = DictionaryArray::try_new(&keys, &a).unwrap();
+
+        let b =
+            year::<Date64Type, _>(dict.downcast_dict::<Date64Array>().unwrap()).unwrap();
+
+        let expected = Int32Array::from(vec![2018, 2019, 2019, 2018]);
+        assert_eq!(expected, b);
+    }
+
+    #[test]
+    fn test_quarter_month_dictionary_array() {
+        //1514764800000 -> 2018-01-01
+        //1566275025000 -> 2019-08-20
+        let a: PrimitiveArray<Date64Type> =
+            vec![Some(1514764800000), Some(1566275025000)].into();
+
+        let keys = Int8Array::from_iter_values([0_i8, 1, 1, 0]);
+        let dict = DictionaryArray::try_new(&keys, &a).unwrap();
+
+        let b = quarter::<Date64Type, _>(dict.downcast_dict::<Date64Array>().unwrap())
+            .unwrap();
+
+        let expected = Int32Array::from(vec![1, 3, 3, 1]);
+        assert_eq!(expected, b);
+
+        let b =
+            month::<Date64Type, _>(dict.downcast_dict::<Date64Array>().unwrap()).unwrap();
+
+        let expected = Int32Array::from(vec![1, 8, 8, 1]);
+        assert_eq!(expected, b);
+    }
+
+    #[test]
+    fn test_num_days_from_monday_sunday_day_doy_week_dictionary_array() {
+        //1514764800000 -> 2018-01-01 (Monday)
+        //1550636625000 -> 2019-02-20 (Wednesday)
+        let a: PrimitiveArray<Date64Type> =
+            vec![Some(1514764800000), Some(1550636625000)].into();
+
+        let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1), Some(0), None]);
+        let dict = DictionaryArray::try_new(&keys, &a).unwrap();
+
+        let b = num_days_from_monday::<Date64Type, _>(
+            dict.downcast_dict::<Date64Array>().unwrap(),
+        )
+        .unwrap();
+        let expected = Int32Array::from(vec![Some(0), Some(2), Some(2), Some(0), None]);
+        assert_eq!(expected, b);
+
+        let b = num_days_from_sunday::<Date64Type, _>(
+            dict.downcast_dict::<Date64Array>().unwrap(),
+        )
+        .unwrap();
+        let expected = Int32Array::from(vec![Some(1), Some(3), Some(3), Some(1), None]);
+        assert_eq!(expected, b);
+
+        let b =
+            day::<Date64Type, _>(dict.downcast_dict::<Date64Array>().unwrap()).unwrap();
+        let expected = Int32Array::from(vec![Some(1), Some(20), Some(20), Some(1), None]);
+        assert_eq!(expected, b);
+
+        let b =
+            doy::<Date64Type, _>(dict.downcast_dict::<Date64Array>().unwrap()).unwrap();
+        let expected = Int32Array::from(vec![Some(1), Some(51), Some(51), Some(1), None]);
+        assert_eq!(expected, b);
+
+        let b =
+            week::<Date64Type, _>(dict.downcast_dict::<Date64Array>().unwrap()).unwrap();
+        let expected = Int32Array::from(vec![Some(1), Some(8), Some(8), Some(1), None]);
+        assert_eq!(expected, b);
     }
 }
