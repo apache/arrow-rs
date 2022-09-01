@@ -1396,26 +1396,14 @@ impl DataType {
         use DataType::*;
         matches!(
             self,
-            Int8
-                | Int16
-                | Int32
-                | Int64
-                | Float32
-                | Float64
-                | Decimal128(_, _)
+            Int8 | Int16 | Int32 | Int64 | Float32 | Float64 | Decimal128(_, _)
         )
     }
 
     /// Returns true if this type is unsigned numeric: (UInt*).
     pub fn is_unsigned_numeric(&self) -> bool {
         use DataType::*;
-        matches!(
-            self,
-            UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-        )
+        matches!(self, UInt8 | UInt16 | UInt32 | UInt64)
     }
 
     /// Returns true if this type is (signed or unsigned) numeric.

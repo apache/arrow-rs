@@ -172,57 +172,11 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Date64, Utf8) | (Date64, LargeUtf8) => true,
         (_, Utf8 | LargeUtf8) => from_type.is_numeric() || from_type == &Binary,
 
-        // start numeric casts
+        // numeric casts
         (
-            UInt8,
-            UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
         ) => true,
-
-        (
-            UInt16,
-            UInt8 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
-        ) => true,
-
-        (
-            UInt32,
-            UInt8 | UInt16 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
-        ) => true,
-
-        (
-            UInt64,
-            UInt8 | UInt16 | UInt32 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
-        ) => true,
-
-        (
-            Int8,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int16 | Int32 | Int64 | Float32 | Float64,
-        ) => true,
-
-        (
-            Int16,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int32 | Int64 | Float32 | Float64,
-        ) => true,
-
-        (
-            Int32,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int64 | Float32 | Float64,
-        ) => true,
-
-        (
-            Int64,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Float32 | Float64,
-        ) => true,
-
-        (
-            Float32,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float64,
-        ) => true,
-
-        (
-            Float64,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32,
-        ) => true,
-        // end numeric casts
 
         // temporal casts
         (Int32, Date32 | Date64 | Time32(_)) => true,
