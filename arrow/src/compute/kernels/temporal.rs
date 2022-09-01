@@ -28,33 +28,33 @@ use chrono::format::{parse, Parsed};
 use chrono::FixedOffset;
 
 macro_rules! extract_component_from_array {
-    ($array:ident, $builder:ident, $extract_fn:ident, $using:ident) => {
+    ($array:ident, $builder:ident, $extract_fn:ident, $using:ident, $convert:expr) => {
         for i in 0..$array.len() {
             if $array.is_null(i) {
                 $builder.append_null();
             } else {
                 match $array.$using(i) {
-                    Some(dt) => $builder.append_value(dt.$extract_fn() as i32),
+                    Some(dt) => $builder.append_value($convert(dt.$extract_fn())),
                     None => $builder.append_null(),
                 }
             }
         }
     };
-    ($array:ident, $builder:ident, $extract_fn1:ident, $extract_fn2:ident, $using:ident) => {
+    ($array:ident, $builder:ident, $extract_fn1:ident, $extract_fn2:ident, $using:ident, $convert:expr) => {
         for i in 0..$array.len() {
             if $array.is_null(i) {
                 $builder.append_null();
             } else {
                 match $array.$using(i) {
                     Some(dt) => {
-                        $builder.append_value(dt.$extract_fn1().$extract_fn2() as i32);
+                        $builder.append_value($convert(dt.$extract_fn1().$extract_fn2()));
                     }
                     None => $builder.append_null(),
                 }
             }
         }
     };
-    ($array:ident, $builder:ident, $extract_fn:ident, $using:ident, $tz:ident, $parsed:ident) => {
+    ($array:ident, $builder:ident, $extract_fn:ident, $using:ident, $tz:ident, $parsed:ident, $convert:expr) => {
         if ($tz.starts_with('+') || $tz.starts_with('-')) && !$tz.contains(':') {
             return_compute_error_with!(
                 "Invalid timezone",
@@ -90,7 +90,7 @@ macro_rules! extract_component_from_array {
                             };
                             match $array.$using(i, fixed_offset) {
                                 Some(dt) => {
-                                    $builder.append_value(dt.$extract_fn() as i32);
+                                    $builder.append_value($convert(dt.$extract_fn()));
                                 }
                                 None => $builder.append_null(),
                             }
@@ -111,6 +111,9 @@ macro_rules! return_compute_error_with {
         return { Err(ArrowError::ComputeError(format!("{}: {:?}", $msg, $param))) }
     };
 }
+
+pub(crate) use extract_component_from_array;
+pub(crate) use return_compute_error_with;
 
 // Internal trait, which is used for mapping values from DateLike structures
 trait ChronoDateExt {
@@ -177,10 +180,10 @@ where
     let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Time32(_) | &DataType::Time64(_) => {
-            extract_component_from_array!(array, b, hour, value_as_time)
+            extract_component_from_array!(array, b, hour, value_as_time, |h| h as i32)
         }
         &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, hour, value_as_datetime)
+            extract_component_from_array!(array, b, hour, value_as_datetime, |h| h as i32)
         }
         &DataType::Timestamp(_, Some(ref tz)) => {
             let mut scratch = Parsed::new();
@@ -190,7 +193,8 @@ where
                 hour,
                 value_as_datetime_with_tz,
                 tz,
-                scratch
+                scratch,
+                |h| h as i32
             )
         }
         dt => return_compute_error_with!("hour does not support", dt),
@@ -208,7 +212,7 @@ where
     let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, _) => {
-            extract_component_from_array!(array, b, year, value_as_datetime)
+            extract_component_from_array!(array, b, year, value_as_datetime, |h| h as i32)
         }
         dt => return_compute_error_with!("year does not support", dt),
     }
@@ -225,7 +229,8 @@ where
     let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, quarter, value_as_datetime)
+            extract_component_from_array!(array, b, quarter, value_as_datetime, |h| h
+                as i32)
         }
         &DataType::Timestamp(_, Some(ref tz)) => {
             let mut scratch = Parsed::new();
@@ -235,7 +240,8 @@ where
                 quarter,
                 value_as_datetime_with_tz,
                 tz,
-                scratch
+                scratch,
+                |h| h as i32
             )
         }
         dt => return_compute_error_with!("quarter does not support", dt),
@@ -253,7 +259,8 @@ where
     let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, month, value_as_datetime)
+            extract_component_from_array!(array, b, month, value_as_datetime, |h| h
+                as i32)
         }
         &DataType::Timestamp(_, Some(ref tz)) => {
             let mut scratch = Parsed::new();
@@ -263,7 +270,8 @@ where
                 month,
                 value_as_datetime_with_tz,
                 tz,
-                scratch
+                scratch,
+                |h| h as i32
             )
         }
         dt => return_compute_error_with!("month does not support", dt),
@@ -290,7 +298,8 @@ where
                 array,
                 b,
                 num_days_from_monday,
-                value_as_datetime
+                value_as_datetime,
+                |h| h as i32
             )
         }
         &DataType::Timestamp(_, Some(ref tz)) => {
@@ -301,7 +310,8 @@ where
                 num_days_from_monday,
                 value_as_datetime_with_tz,
                 tz,
-                scratch
+                scratch,
+                |h| h as i32
             )
         }
         dt => return_compute_error_with!("weekday does not support", dt),
@@ -328,7 +338,8 @@ where
                 array,
                 b,
                 num_days_from_sunday,
-                value_as_datetime
+                value_as_datetime,
+                |h| h as i32
             )
         }
         &DataType::Timestamp(_, Some(ref tz)) => {
@@ -339,7 +350,8 @@ where
                 num_days_from_sunday,
                 value_as_datetime_with_tz,
                 tz,
-                scratch
+                scratch,
+                |h| h as i32
             )
         }
         dt => return_compute_error_with!("num_days_from_sunday does not support", dt),
@@ -357,7 +369,7 @@ where
     let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, day, value_as_datetime)
+            extract_component_from_array!(array, b, day, value_as_datetime, |h| h as i32)
         }
         &DataType::Timestamp(_, Some(ref tz)) => {
             let mut scratch = Parsed::new();
@@ -367,7 +379,8 @@ where
                 day,
                 value_as_datetime_with_tz,
                 tz,
-                scratch
+                scratch,
+                |h| h as i32
             )
         }
         dt => return_compute_error_with!("day does not support", dt),
@@ -386,7 +399,8 @@ where
     let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, ordinal, value_as_datetime)
+            extract_component_from_array!(array, b, ordinal, value_as_datetime, |h| h
+                as i32)
         }
         &DataType::Timestamp(_, Some(ref tz)) => {
             let mut scratch = Parsed::new();
@@ -396,7 +410,8 @@ where
                 ordinal,
                 value_as_datetime_with_tz,
                 tz,
-                scratch
+                scratch,
+                |h| h as i32
             )
         }
         dt => return_compute_error_with!("doy does not support", dt),
@@ -414,7 +429,8 @@ where
     let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, minute, value_as_datetime)
+            extract_component_from_array!(array, b, minute, value_as_datetime, |h| h
+                as i32)
         }
         &DataType::Timestamp(_, Some(ref tz)) => {
             let mut scratch = Parsed::new();
@@ -424,7 +440,8 @@ where
                 minute,
                 value_as_datetime_with_tz,
                 tz,
-                scratch
+                scratch,
+                |h| h as i32
             )
         }
         dt => return_compute_error_with!("minute does not support", dt),
@@ -443,7 +460,14 @@ where
 
     match array.data_type() {
         &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, iso_week, week, value_as_datetime)
+            extract_component_from_array!(
+                array,
+                b,
+                iso_week,
+                week,
+                value_as_datetime,
+                |h| h as i32
+            )
         }
         dt => return_compute_error_with!("week does not support", dt),
     }
@@ -460,7 +484,8 @@ where
     let mut b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
         &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, second, value_as_datetime)
+            extract_component_from_array!(array, b, second, value_as_datetime, |h| h
+                as i32)
         }
         &DataType::Timestamp(_, Some(ref tz)) => {
             let mut scratch = Parsed::new();
@@ -470,7 +495,8 @@ where
                 second,
                 value_as_datetime_with_tz,
                 tz,
-                scratch
+                scratch,
+                |h| h as i32
             )
         }
         dt => return_compute_error_with!("second does not support", dt),
