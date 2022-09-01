@@ -16,12 +16,8 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::default::Default;
 use std::fmt;
 use std::hash::Hash;
-
-use serde_derive::{Deserialize, Serialize};
-use serde_json::{json, Value};
 
 use crate::error::{ArrowError, Result};
 
@@ -31,12 +27,15 @@ use super::Field;
 ///
 /// Note that this information is only part of the meta-data and not part of the physical
 /// memory layout.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Schema {
     pub fields: Vec<Field>,
     /// A map of key-value pairs containing additional meta data.
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    #[serde(default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "HashMap::is_empty", default)
+    )]
     pub metadata: HashMap<String, String>,
 }
 
@@ -180,6 +179,7 @@ impl Schema {
 
     /// Returns a vector with references to all fields (including nested fields)
     #[inline]
+    #[cfg(feature = "ipc")]
     pub(crate) fn all_fields(&self) -> Vec<&Field> {
         self.fields.iter().flat_map(|f| f.fields()).collect()
     }
@@ -234,15 +234,18 @@ impl Schema {
     }
 
     /// Generate a JSON representation of the `Schema`.
-    pub fn to_json(&self) -> Value {
-        json!({
-            "fields": self.fields.iter().map(|field| field.to_json()).collect::<Vec<Value>>(),
+    #[cfg(feature = "json")]
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "fields": self.fields.iter().map(|field| field.to_json()).collect::<Vec<serde_json::Value>>(),
             "metadata": serde_json::to_value(&self.metadata).unwrap()
         })
     }
 
     /// Parse a `Schema` definition from a JSON representation.
-    pub fn from(json: &Value) -> Result<Self> {
+    #[cfg(feature = "json")]
+    pub fn from(json: &serde_json::Value) -> Result<Self> {
+        use serde_json::Value;
         match *json {
             Value::Object(ref schema) => {
                 let fields = if let Some(Value::Array(fields)) = schema.get("fields") {
@@ -269,7 +272,9 @@ impl Schema {
 
     /// Parse a `metadata` definition from a JSON representation.
     /// The JSON can either be an Object or an Array of Objects.
-    fn from_metadata(json: &Value) -> Result<HashMap<String, String>> {
+    #[cfg(feature = "json")]
+    fn from_metadata(json: &serde_json::Value) -> Result<HashMap<String, String>> {
+        use serde_json::Value;
         match json {
             Value::Array(_) => {
                 let mut hashmap = HashMap::new();
@@ -350,7 +355,8 @@ impl Hash for Schema {
     }
 }
 
-#[derive(Deserialize)]
+#[cfg(feature = "json")]
+#[derive(serde::Deserialize)]
 struct MetadataKeyValue {
     key: String,
     value: String,
@@ -363,6 +369,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "json")]
     fn test_ser_de_metadata() {
         // ser/de with empty metadata
         let schema = Schema::new(vec![
