@@ -149,8 +149,8 @@ mod tests {
 
     use crate::basic::SortOrder;
     use crate::basic::Type;
-    use crate::schema::types::Type as SchemaType;
     use crate::format::TypeDefinedOrder;
+    use crate::schema::types::Type as SchemaType;
 
     #[test]
     fn test_parse_metadata_size_smaller_than_footer() {
