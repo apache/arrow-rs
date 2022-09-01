@@ -1151,7 +1151,7 @@ fn write_array_data(
                 )?;
             }
         }
-    } else if DataType::is_numeric(data_type)
+    } else if data_type.is_numeric()
         || DataType::is_temporal(data_type)
         || matches!(
             array_data.data_type(),

@@ -140,8 +140,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Dictionary(_, value_type), _) => can_cast_types(value_type, to_type),
         (_, Dictionary(_, value_type)) => can_cast_types(from_type, value_type),
 
-        (_, Boolean) => DataType::is_numeric(from_type) || from_type == &Utf8,
-        (Boolean, _) => DataType::is_numeric(to_type) || to_type == &Utf8,
+        (_, Boolean) => from_type.is_numeric() || from_type == &Utf8,
+        (Boolean, _) => to_type.is_numeric() || to_type == &Utf8,
 
         (Utf8, LargeUtf8) => true,
         (LargeUtf8, Utf8) => true,
@@ -155,7 +155,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Time64(TimeUnit::Nanosecond)
             | Timestamp(TimeUnit::Nanosecond, None)
         ) => true,
-        (Utf8, _) => DataType::is_numeric(to_type),
+        (Utf8, _) => to_type.is_numeric(),
         (LargeUtf8,
             LargeBinary
             | Date32
@@ -166,11 +166,11 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Time64(TimeUnit::Nanosecond)
             | Timestamp(TimeUnit::Nanosecond, None)
         ) => true,
-        (LargeUtf8, _) => DataType::is_numeric(to_type),
+        (LargeUtf8, _) => to_type.is_numeric(),
         (Timestamp(_, _), Utf8) | (Timestamp(_, _), LargeUtf8) => true,
         (Date32, Utf8) | (Date32, LargeUtf8) => true,
         (Date64, Utf8) | (Date64, LargeUtf8) => true,
-        (_, Utf8 | LargeUtf8) => DataType::is_numeric(from_type) || from_type == &Binary,
+        (_, Utf8 | LargeUtf8) => from_type.is_numeric() || from_type == &Binary,
 
         // start numeric casts
         (

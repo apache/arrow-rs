@@ -1391,22 +1391,36 @@ impl DataType {
         }
     }
 
-    /// Returns true if this type is numeric: (UInt*, Int*, or Float*).
-    pub fn is_numeric(t: &DataType) -> bool {
+    /// Returns true if this type is signed numeric: (Int*, Float* or Decimal128).
+    pub fn is_signed_numeric(&self) -> bool {
         use DataType::*;
         matches!(
-            t,
-            UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Int8
+            self,
+            Int8
                 | Int16
                 | Int32
                 | Int64
                 | Float32
                 | Float64
+                | Decimal128(_, _)
         )
+    }
+
+    /// Returns true if this type is unsigned numeric: (UInt*).
+    pub fn is_unsigned_numeric(&self) -> bool {
+        use DataType::*;
+        matches!(
+            self,
+            UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+        )
+    }
+
+    /// Returns true if this type is (signed or unsigned) numeric.
+    pub fn is_numeric(&self) -> bool {
+        self.is_signed_numeric() || self.is_unsigned_numeric()
     }
 
     /// Returns true if this type is temporal: (Date*, Time*, Duration, or Interval).
