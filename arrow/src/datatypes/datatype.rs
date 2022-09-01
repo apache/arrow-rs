@@ -19,9 +19,6 @@ use num::BigInt;
 use std::cmp::Ordering;
 use std::fmt;
 
-use serde_derive::{Deserialize, Serialize};
-use serde_json::{json, Value, Value::String as VString};
-
 use crate::error::{ArrowError, Result};
 use crate::util::decimal::singed_cmp_le_bytes;
 
@@ -42,7 +39,8 @@ use super::Field;
 /// Nested types can themselves be nested within other arrays.
 /// For more information on these types please see
 /// [the physical memory layout of Apache Arrow](https://arrow.apache.org/docs/format/Columnar.html#physical-memory-layout).
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DataType {
     /// Null type
     Null,
@@ -222,7 +220,8 @@ pub enum DataType {
 }
 
 /// An absolute length of time in seconds, milliseconds, microseconds or nanoseconds.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TimeUnit {
     /// Time in seconds.
     Second,
@@ -235,7 +234,8 @@ pub enum TimeUnit {
 }
 
 /// YEAR_MONTH, DAY_TIME, MONTH_DAY_NANO interval in SQL style.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IntervalUnit {
     /// Indicates the number of elapsed whole months, stored as 4-byte integers.
     YearMonth,
@@ -253,7 +253,8 @@ pub enum IntervalUnit {
 }
 
 // Sparse or Dense union layouts
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum UnionMode {
     Sparse,
     Dense,
@@ -1052,7 +1053,9 @@ pub(crate) fn validate_decimal256_precision_with_lt_bytes(
 
 impl DataType {
     /// Parse a data type from a JSON representation.
-    pub(crate) fn from(json: &Value) -> Result<DataType> {
+    #[cfg(feature = "json")]
+    pub(crate) fn from(json: &serde_json::Value) -> Result<DataType> {
+        use serde_json::Value;
         let default_field = Field::new("", DataType::Boolean, true);
         match *json {
             Value::Object(ref map) => match map.get("name") {
@@ -1121,7 +1124,7 @@ impl DataType {
                     };
                     let tz = match map.get("timezone") {
                         None => Ok(None),
-                        Some(VString(tz)) => Ok(Some(tz.clone())),
+                        Some(serde_json::Value::String(tz)) => Ok(Some(tz.clone())),
                         _ => Err(ArrowError::ParseError(
                             "timezone must be a string".to_string(),
                         )),
@@ -1300,7 +1303,9 @@ impl DataType {
     }
 
     /// Generate a JSON representation of the data type.
-    pub fn to_json(&self) -> Value {
+    #[cfg(feature = "json")]
+    pub fn to_json(&self) -> serde_json::Value {
+        use serde_json::json;
         match self {
             DataType::Null => json!({"name": "null"}),
             DataType::Boolean => json!({"name": "bool"}),

@@ -15,14 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::{ArrowError, Result};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
-
-use serde_derive::{Deserialize, Serialize};
-use serde_json::{json, Value};
-
-use crate::error::{ArrowError, Result};
 
 use super::DataType;
 
@@ -30,7 +26,8 @@ use super::DataType;
 ///
 /// A [`Schema`](super::Schema) is an ordered collection of
 /// [`Field`] objects.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Field {
     name: String,
     data_type: DataType,
@@ -38,7 +35,7 @@ pub struct Field {
     dict_id: i64,
     dict_is_ordered: bool,
     /// A map of key-value pairs containing additional custom meta data.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     metadata: Option<BTreeMap<String, String>>,
 }
 
@@ -254,7 +251,9 @@ impl Field {
     }
 
     /// Parse a `Field` definition from a JSON representation.
-    pub fn from(json: &Value) -> Result<Self> {
+    #[cfg(feature = "json")]
+    pub fn from(json: &serde_json::Value) -> Result<Self> {
+        use serde_json::Value;
         match *json {
             Value::Object(ref map) => {
                 let name = match map.get("name") {
@@ -497,8 +496,9 @@ impl Field {
     }
 
     /// Generate a JSON representation of the `Field`.
-    pub fn to_json(&self) -> Value {
-        let children: Vec<Value> = match self.data_type() {
+    #[cfg(feature = "json")]
+    pub fn to_json(&self) -> serde_json::Value {
+        let children: Vec<serde_json::Value> = match self.data_type() {
             DataType::Struct(fields) => fields.iter().map(|f| f.to_json()).collect(),
             DataType::List(field)
             | DataType::LargeList(field)
@@ -507,7 +507,7 @@ impl Field {
             _ => vec![],
         };
         match self.data_type() {
-            DataType::Dictionary(ref index_type, ref value_type) => json!({
+            DataType::Dictionary(ref index_type, ref value_type) => serde_json::json!({
                 "name": self.name,
                 "nullable": self.nullable,
                 "type": value_type.to_json(),
@@ -518,7 +518,7 @@ impl Field {
                     "isOrdered": self.dict_is_ordered
                 }
             }),
-            _ => json!({
+            _ => serde_json::json!({
                 "name": self.name,
                 "nullable": self.nullable,
                 "type": self.data_type.to_json(),
