@@ -796,6 +796,25 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
+    /// Configure the object store to work with an emulated GCS service (fake-gcs).
+    ///
+    /// Configures the underlying http client to allow insecure connections.
+    /// Should not be used outside the context of integration testing.
+    pub fn with_use_emulator(mut self, use_emulator: bool) -> Self {
+        if use_emulator {
+            self.client = Some(
+                // ignore HTTPS errors in tests so we can use fake-gcs server
+                Client::builder()
+                    .danger_accept_invalid_certs(true)
+                    .build()
+                    .expect("Error creating http client for integration testing"),
+            );
+        } else {
+            self.client = None;
+        }
+        self
+    }
+
     /// Configure a connection to Google Cloud Storage, returning a
     /// new [`GoogleCloudStorage`] and consuming `self`
     pub fn build(self) -> Result<GoogleCloudStorage> {
@@ -923,13 +942,7 @@ mod test {
                         env::var("GOOGLE_SERVICE_ACCOUNT")
                             .expect("already checked GOOGLE_SERVICE_ACCOUNT")
                     )
-                    .with_client(
-                        // ignore HTTPS errors in tests so we can use fake-gcs server
-                        Client::builder()
-                            .danger_accept_invalid_certs(true)
-                            .build()
-                            .expect("Error creating http client for testing")
-                    )
+                    .with_use_emulator(true)
             }
         }};
     }
