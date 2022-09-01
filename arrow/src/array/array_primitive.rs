@@ -206,7 +206,7 @@ impl<'a, T: ArrowPrimitiveType> ArrayAccessor for &'a PrimitiveArray<T> {
     }
 }
 
-fn as_datetime<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDateTime> {
+pub(crate) fn as_datetime<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDateTime> {
     match T::DATA_TYPE {
         DataType::Date32 => Some(temporal_conversions::date32_to_datetime(v as i32)),
         DataType::Date64 => Some(temporal_conversions::date64_to_datetime(v)),
@@ -233,7 +233,7 @@ fn as_date<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDate> {
     as_datetime::<T>(v).map(|datetime| datetime.date())
 }
 
-fn as_time<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveTime> {
+pub(crate) fn as_time<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveTime> {
     match T::DATA_TYPE {
         DataType::Time32(unit) => {
             // safe to immediately cast to u32 as `self.value(i)` is positive i32
@@ -1123,13 +1123,13 @@ mod tests {
         use crate::compute::hour;
         let a: TimestampMicrosecondArray = vec![37800000000, 86339000000].into();
 
-        let b = hour(&a).unwrap();
+        let b = hour::<TimestampMicrosecondType, _>(&a).unwrap();
         assert_eq!(10, b.value(0));
         assert_eq!(23, b.value(1));
 
         let a = a.with_timezone(String::from("America/Los_Angeles"));
 
-        let b = hour(&a).unwrap();
+        let b = hour::<TimestampMicrosecondType, _>(&a).unwrap();
         assert_eq!(2, b.value(0));
         assert_eq!(15, b.value(1));
     }

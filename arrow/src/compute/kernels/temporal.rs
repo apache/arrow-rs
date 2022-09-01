@@ -19,6 +19,7 @@
 
 use chrono::{Datelike, Timelike};
 
+use crate::array::as_datetime;
 use crate::array::*;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
@@ -26,6 +27,85 @@ use crate::error::{ArrowError, Result};
 use chrono::format::strftime::StrftimeItems;
 use chrono::format::{parse, Parsed};
 use chrono::FixedOffset;
+
+macro_rules! _extract_component_from_array {
+    ($iter:ident, $builder:ident, $extract_fn:ident, $using:expr) => {
+        $iter.into_iter().for_each(|value| {
+            if let Some(value) = value {
+                match $using(value) {
+                    Some(dt) => $builder.append_value(dt.$extract_fn() as i32),
+                    None => $builder.append_null(),
+                }
+            } else {
+                $builder.append_null();
+            }
+        })
+    };
+    ($iter:ident, $builder:ident, $extract_fn1:ident, $extract_fn2:ident, $using:expr) => {
+        $iter.into_iter().for_each(|value| {
+            if let Some(value) = value {
+                match $using(value) {
+                    Some(dt) => {
+                        $builder.append_value(dt.$extract_fn1().$extract_fn2() as i32);
+                    }
+                    None => $builder.append_null(),
+                }
+            } else {
+                $builder.append_null();
+            }
+        })
+    };
+    ($iter:ident, $builder:ident, $extract_fn:ident, $using:expr, $tz:ident, $parsed:ident, $value_as_datetime:expr) => {
+        if ($tz.starts_with('+') || $tz.starts_with('-')) && !$tz.contains(':') {
+            return_compute_error_with!(
+                "Invalid timezone",
+                "Expected format [+-]XX:XX".to_string()
+            )
+        } else {
+            let tz_parse_result = parse(&mut $parsed, &$tz, StrftimeItems::new("%z"));
+            let fixed_offset_from_parsed = match tz_parse_result {
+                Ok(_) => match $parsed.to_fixed_offset() {
+                    Ok(fo) => Some(fo),
+                    err => return_compute_error_with!("Invalid timezone", err),
+                },
+                _ => None,
+            };
+
+            for value in $iter.into_iter() {
+                if let Some(value) = value {
+                    match $value_as_datetime(value) {
+                        Some(utc) => {
+                            let fixed_offset = match fixed_offset_from_parsed {
+                                Some(fo) => fo,
+                                None => match using_chrono_tz_and_utc_naive_date_time(
+                                    &$tz, utc,
+                                ) {
+                                    Some(fo) => fo,
+                                    err => return_compute_error_with!(
+                                        "Unable to parse timezone",
+                                        err
+                                    ),
+                                },
+                            };
+                            match $using(value, fixed_offset) {
+                                Some(dt) => {
+                                    $builder.append_value(dt.$extract_fn() as i32);
+                                }
+                                None => $builder.append_null(),
+                            }
+                        }
+                        err => return_compute_error_with!(
+                            "Unable to read value as datetime",
+                            err
+                        ),
+                    }
+                } else {
+                    $builder.append_null();
+                }
+            }
+        }
+    };
+}
 
 macro_rules! extract_component_from_array {
     ($array:ident, $builder:ident, $extract_fn:ident, $using:ident) => {
@@ -169,46 +249,60 @@ pub fn using_chrono_tz_and_utc_naive_date_time(
 }
 
 /// Extracts the hours of a given temporal array as an array of integers
-pub fn hour<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+pub fn hour<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
     let mut b = Int32Builder::with_capacity(array.len());
-    match array.data_type() {
-        &DataType::Time32(_) | &DataType::Time64(_) => {
-            extract_component_from_array!(array, b, hour, value_as_time)
+    match array.data_type().clone() {
+        DataType::Time32(_) | DataType::Time64(_) => {
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(iter, b, hour, |value| as_time::<T>(
+                i64::from(value)
+            ));
         }
-        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, hour, value_as_datetime)
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(iter, b, hour, |value| as_datetime::<T>(
+                i64::from(value)
+            ))
         }
-        &DataType::Timestamp(_, Some(ref tz)) => {
+        DataType::Timestamp(_, Some(tz)) => {
             let mut scratch = Parsed::new();
-            extract_component_from_array!(
-                array,
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(
+                iter,
                 b,
                 hour,
-                value_as_datetime_with_tz,
+                |value, tz| as_datetime::<T>(i64::from(value))
+                    .map(|datetime| datetime + tz),
                 tz,
-                scratch
+                scratch,
+                |value| as_datetime::<T>(i64::from(value))
             )
         }
-        dt => return_compute_error_with!("hour does not support", dt),
+        dt => return_compute_error_with!("hour_array does not support", dt),
     }
 
     Ok(b.finish())
 }
 
 /// Extracts the years of a given temporal array as an array of integers
-pub fn year<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+pub fn year<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
     let mut b = Int32Builder::with_capacity(array.len());
-    match array.data_type() {
-        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, _) => {
-            extract_component_from_array!(array, b, year, value_as_datetime)
+    match array.data_type().clone() {
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(iter, b, year, |value| as_datetime::<T>(
+                i64::from(value)
+            ))
         }
         dt => return_compute_error_with!("year does not support", dt),
     }
@@ -217,25 +311,32 @@ where
 }
 
 /// Extracts the quarter of a given temporal array as an array of integers
-pub fn quarter<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+pub fn quarter<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
     let mut b = Int32Builder::with_capacity(array.len());
-    match array.data_type() {
-        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, quarter, value_as_datetime)
+    match array.data_type().clone() {
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(iter, b, quarter, |value| as_datetime::<T>(
+                i64::from(value)
+            ))
         }
-        &DataType::Timestamp(_, Some(ref tz)) => {
+        DataType::Timestamp(_, Some(tz)) => {
             let mut scratch = Parsed::new();
-            extract_component_from_array!(
-                array,
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(
+                iter,
                 b,
                 quarter,
-                value_as_datetime_with_tz,
+                |value, tz| as_datetime::<T>(i64::from(value))
+                    .map(|datetime| datetime + tz),
                 tz,
-                scratch
+                scratch,
+                |value| as_datetime::<T>(i64::from(value))
             )
         }
         dt => return_compute_error_with!("quarter does not support", dt),
@@ -245,25 +346,32 @@ where
 }
 
 /// Extracts the month of a given temporal array as an array of integers
-pub fn month<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+pub fn month<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
     let mut b = Int32Builder::with_capacity(array.len());
-    match array.data_type() {
-        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, month, value_as_datetime)
+    match array.data_type().clone() {
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(iter, b, month, |value| as_datetime::<T>(
+                i64::from(value)
+            ))
         }
-        &DataType::Timestamp(_, Some(ref tz)) => {
+        DataType::Timestamp(_, Some(tz)) => {
             let mut scratch = Parsed::new();
-            extract_component_from_array!(
-                array,
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(
+                iter,
                 b,
                 month,
-                value_as_datetime_with_tz,
+                |value, tz| as_datetime::<T>(i64::from(value))
+                    .map(|datetime| datetime + tz),
                 tz,
-                scratch
+                scratch,
+                |value| as_datetime::<T>(i64::from(value))
             )
         }
         dt => return_compute_error_with!("month does not support", dt),
@@ -278,30 +386,34 @@ where
 /// Monday is encoded as `0`, Tuesday as `1`, etc.
 ///
 /// See also [`num_days_from_sunday`] which starts at Sunday.
-pub fn num_days_from_monday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+pub fn num_days_from_monday<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
     let mut b = Int32Builder::with_capacity(array.len());
-    match array.data_type() {
-        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(
-                array,
-                b,
-                num_days_from_monday,
-                value_as_datetime
-            )
+    match array.data_type().clone() {
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(iter, b, num_days_from_monday, |value| {
+                as_datetime::<T>(i64::from(value))
+            })
         }
-        &DataType::Timestamp(_, Some(ref tz)) => {
+        DataType::Timestamp(_, Some(tz)) => {
             let mut scratch = Parsed::new();
-            extract_component_from_array!(
-                array,
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(
+                iter,
                 b,
                 num_days_from_monday,
-                value_as_datetime_with_tz,
+                |value, tz| as_datetime::<T>(i64::from(value))
+                    .map(|datetime| datetime + tz),
                 tz,
-                scratch
+                scratch,
+                |value| as_datetime::<T>(i64::from(value))
             )
         }
         dt => return_compute_error_with!("weekday does not support", dt),
@@ -316,30 +428,34 @@ where
 /// Sunday is encoded as `0`, Monday as `1`, etc.
 ///
 /// See also [`num_days_from_monday`] which starts at Monday.
-pub fn num_days_from_sunday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+pub fn num_days_from_sunday<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
     let mut b = Int32Builder::with_capacity(array.len());
-    match array.data_type() {
-        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(
-                array,
-                b,
-                num_days_from_sunday,
-                value_as_datetime
-            )
+    match array.data_type().clone() {
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(iter, b, num_days_from_sunday, |value| {
+                as_datetime::<T>(i64::from(value))
+            })
         }
-        &DataType::Timestamp(_, Some(ref tz)) => {
+        DataType::Timestamp(_, Some(tz)) => {
             let mut scratch = Parsed::new();
-            extract_component_from_array!(
-                array,
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(
+                iter,
                 b,
                 num_days_from_sunday,
-                value_as_datetime_with_tz,
+                |value, tz| as_datetime::<T>(i64::from(value))
+                    .map(|datetime| datetime + tz),
                 tz,
-                scratch
+                scratch,
+                |value| as_datetime::<T>(i64::from(value))
             )
         }
         dt => return_compute_error_with!("num_days_from_sunday does not support", dt),
@@ -349,25 +465,32 @@ where
 }
 
 /// Extracts the day of a given temporal array as an array of integers
-pub fn day<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+pub fn day<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
     let mut b = Int32Builder::with_capacity(array.len());
-    match array.data_type() {
-        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, day, value_as_datetime)
+    match array.data_type().clone() {
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(iter, b, day, |value| {
+                as_datetime::<T>(i64::from(value))
+            })
         }
-        &DataType::Timestamp(_, Some(ref tz)) => {
+        DataType::Timestamp(_, Some(ref tz)) => {
             let mut scratch = Parsed::new();
-            extract_component_from_array!(
-                array,
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(
+                iter,
                 b,
                 day,
-                value_as_datetime_with_tz,
+                |value, tz| as_datetime::<T>(i64::from(value))
+                    .map(|datetime| datetime + tz),
                 tz,
-                scratch
+                scratch,
+                |value| as_datetime::<T>(i64::from(value))
             )
         }
         dt => return_compute_error_with!("day does not support", dt),
@@ -378,25 +501,32 @@ where
 
 /// Extracts the day of year of a given temporal array as an array of integers
 /// The day of year that ranges from 1 to 366
-pub fn doy<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+pub fn doy<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
     let mut b = Int32Builder::with_capacity(array.len());
-    match array.data_type() {
-        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, ordinal, value_as_datetime)
+    match array.data_type().clone() {
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(iter, b, ordinal, |value| {
+                as_datetime::<T>(i64::from(value))
+            })
         }
-        &DataType::Timestamp(_, Some(ref tz)) => {
+        DataType::Timestamp(_, Some(ref tz)) => {
             let mut scratch = Parsed::new();
-            extract_component_from_array!(
-                array,
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(
+                iter,
                 b,
                 ordinal,
-                value_as_datetime_with_tz,
+                |value, tz| as_datetime::<T>(i64::from(value))
+                    .map(|datetime| datetime + tz),
                 tz,
-                scratch
+                scratch,
+                |value| as_datetime::<T>(i64::from(value))
             )
         }
         dt => return_compute_error_with!("doy does not support", dt),
@@ -406,25 +536,32 @@ where
 }
 
 /// Extracts the minutes of a given temporal array as an array of integers
-pub fn minute<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+pub fn minute<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
     let mut b = Int32Builder::with_capacity(array.len());
-    match array.data_type() {
-        &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, minute, value_as_datetime)
+    match array.data_type().clone() {
+        DataType::Date64 | DataType::Timestamp(_, None) => {
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(iter, b, minute, |value| {
+                as_datetime::<T>(i64::from(value))
+            })
         }
-        &DataType::Timestamp(_, Some(ref tz)) => {
+        DataType::Timestamp(_, Some(tz)) => {
             let mut scratch = Parsed::new();
-            extract_component_from_array!(
-                array,
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(
+                iter,
                 b,
                 minute,
-                value_as_datetime_with_tz,
+                |value, tz| as_datetime::<T>(i64::from(value))
+                    .map(|datetime| datetime + tz),
                 tz,
-                scratch
+                scratch,
+                |value| as_datetime::<T>(i64::from(value))
             )
         }
         dt => return_compute_error_with!("minute does not support", dt),
@@ -434,16 +571,20 @@ where
 }
 
 /// Extracts the week of a given temporal array as an array of integers
-pub fn week<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+pub fn week<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
     let mut b = Int32Builder::with_capacity(array.len());
 
-    match array.data_type() {
-        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, iso_week, week, value_as_datetime)
+    match array.data_type().clone() {
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(iter, b, iso_week, week, |value| {
+                as_datetime::<T>(i64::from(value))
+            })
         }
         dt => return_compute_error_with!("week does not support", dt),
     }
@@ -452,25 +593,32 @@ where
 }
 
 /// Extracts the seconds of a given temporal array as an array of integers
-pub fn second<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+pub fn second<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
+    T::Native: ArrowNativeType,
     i64: std::convert::From<T::Native>,
 {
     let mut b = Int32Builder::with_capacity(array.len());
-    match array.data_type() {
-        &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, second, value_as_datetime)
+    match array.data_type().clone() {
+        DataType::Date64 | DataType::Timestamp(_, None) => {
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(iter, b, second, |value| {
+                as_datetime::<T>(i64::from(value))
+            })
         }
-        &DataType::Timestamp(_, Some(ref tz)) => {
+        DataType::Timestamp(_, Some(tz)) => {
             let mut scratch = Parsed::new();
-            extract_component_from_array!(
-                array,
+            let iter = ArrayIter::new(array);
+            _extract_component_from_array!(
+                iter,
                 b,
                 second,
-                value_as_datetime_with_tz,
+                |value, tz| as_datetime::<T>(i64::from(value))
+                    .map(|datetime| datetime + tz),
                 tz,
-                scratch
+                scratch,
+                |value| as_datetime::<T>(i64::from(value))
             )
         }
         dt => return_compute_error_with!("second does not support", dt),
@@ -490,7 +638,7 @@ mod tests {
         let a: PrimitiveArray<Date64Type> =
             vec![Some(1514764800000), None, Some(1550636625000)].into();
 
-        let b = hour(&a).unwrap();
+        let b = hour::<Date64Type, _>(&a).unwrap();
         assert_eq!(0, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(4, b.value(2));
@@ -500,7 +648,7 @@ mod tests {
     fn test_temporal_array_date32_hour() {
         let a: PrimitiveArray<Date32Type> = vec![Some(15147), None, Some(15148)].into();
 
-        let b = hour(&a).unwrap();
+        let b = hour::<Date32Type, _>(&a).unwrap();
         assert_eq!(0, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(0, b.value(2));
@@ -510,7 +658,7 @@ mod tests {
     fn test_temporal_array_time32_second_hour() {
         let a: PrimitiveArray<Time32SecondType> = vec![37800, 86339].into();
 
-        let b = hour(&a).unwrap();
+        let b = hour::<Time32SecondType, _>(&a).unwrap();
         assert_eq!(10, b.value(0));
         assert_eq!(23, b.value(1));
     }
@@ -520,7 +668,7 @@ mod tests {
         let a: PrimitiveArray<Time64MicrosecondType> =
             vec![37800000000, 86339000000].into();
 
-        let b = hour(&a).unwrap();
+        let b = hour::<Time64MicrosecondType, _>(&a).unwrap();
         assert_eq!(10, b.value(0));
         assert_eq!(23, b.value(1));
     }
@@ -529,7 +677,7 @@ mod tests {
     fn test_temporal_array_timestamp_micro_hour() {
         let a: TimestampMicrosecondArray = vec![37800000000, 86339000000].into();
 
-        let b = hour(&a).unwrap();
+        let b = hour::<TimestampMicrosecondType, _>(&a).unwrap();
         assert_eq!(10, b.value(0));
         assert_eq!(23, b.value(1));
     }
@@ -539,7 +687,7 @@ mod tests {
         let a: PrimitiveArray<Date64Type> =
             vec![Some(1514764800000), None, Some(1550636625000)].into();
 
-        let b = year(&a).unwrap();
+        let b = year::<Date64Type, _>(&a).unwrap();
         assert_eq!(2018, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(2019, b.value(2));
@@ -549,7 +697,7 @@ mod tests {
     fn test_temporal_array_date32_year() {
         let a: PrimitiveArray<Date32Type> = vec![Some(15147), None, Some(15448)].into();
 
-        let b = year(&a).unwrap();
+        let b = year::<Date32Type, _>(&a).unwrap();
         assert_eq!(2011, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(2012, b.value(2));
@@ -562,7 +710,7 @@ mod tests {
         let a: PrimitiveArray<Date64Type> =
             vec![Some(1514764800000), None, Some(1566275025000)].into();
 
-        let b = quarter(&a).unwrap();
+        let b = quarter::<Date64Type, _>(&a).unwrap();
         assert_eq!(1, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(3, b.value(2));
@@ -572,7 +720,7 @@ mod tests {
     fn test_temporal_array_date32_quarter() {
         let a: PrimitiveArray<Date32Type> = vec![Some(1), None, Some(300)].into();
 
-        let b = quarter(&a).unwrap();
+        let b = quarter::<Date32Type, _>(&a).unwrap();
         assert_eq!(1, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(4, b.value(2));
@@ -580,20 +728,14 @@ mod tests {
 
     #[test]
     fn test_temporal_array_timestamp_quarter_with_timezone() {
-        use std::sync::Arc;
-
         // 24 * 60 * 60 = 86400
-        let a = Arc::new(TimestampSecondArray::from_vec(
-            vec![86400 * 90],
-            Some("+00:00".to_string()),
-        ));
-        let b = quarter(&a).unwrap();
+        let a =
+            TimestampSecondArray::from_vec(vec![86400 * 90], Some("+00:00".to_string()));
+        let b = quarter::<TimestampSecondType, _>(&a).unwrap();
         assert_eq!(2, b.value(0));
-        let a = Arc::new(TimestampSecondArray::from_vec(
-            vec![86400 * 90],
-            Some("-10:00".to_string()),
-        ));
-        let b = quarter(&a).unwrap();
+        let a =
+            TimestampSecondArray::from_vec(vec![86400 * 90], Some("-10:00".to_string()));
+        let b = quarter::<TimestampSecondType, _>(&a).unwrap();
         assert_eq!(1, b.value(0));
     }
 
@@ -604,7 +746,7 @@ mod tests {
         let a: PrimitiveArray<Date64Type> =
             vec![Some(1514764800000), None, Some(1550636625000)].into();
 
-        let b = month(&a).unwrap();
+        let b = month::<Date64Type, _>(&a).unwrap();
         assert_eq!(1, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(2, b.value(2));
@@ -614,7 +756,7 @@ mod tests {
     fn test_temporal_array_date32_month() {
         let a: PrimitiveArray<Date32Type> = vec![Some(1), None, Some(31)].into();
 
-        let b = month(&a).unwrap();
+        let b = month::<Date32Type, _>(&a).unwrap();
         assert_eq!(1, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(2, b.value(2));
@@ -622,39 +764,25 @@ mod tests {
 
     #[test]
     fn test_temporal_array_timestamp_month_with_timezone() {
-        use std::sync::Arc;
-
         // 24 * 60 * 60 = 86400
-        let a = Arc::new(TimestampSecondArray::from_vec(
-            vec![86400 * 31],
-            Some("+00:00".to_string()),
-        ));
-        let b = month(&a).unwrap();
+        let a =
+            TimestampSecondArray::from_vec(vec![86400 * 31], Some("+00:00".to_string()));
+        let b = month::<TimestampSecondType, _>(&a).unwrap();
         assert_eq!(2, b.value(0));
-        let a = Arc::new(TimestampSecondArray::from_vec(
-            vec![86400 * 31],
-            Some("-10:00".to_string()),
-        ));
-        let b = month(&a).unwrap();
+        let a =
+            TimestampSecondArray::from_vec(vec![86400 * 31], Some("-10:00".to_string()));
+        let b = month::<TimestampSecondType, _>(&a).unwrap();
         assert_eq!(1, b.value(0));
     }
 
     #[test]
     fn test_temporal_array_timestamp_day_with_timezone() {
-        use std::sync::Arc;
-
         // 24 * 60 * 60 = 86400
-        let a = Arc::new(TimestampSecondArray::from_vec(
-            vec![86400],
-            Some("+00:00".to_string()),
-        ));
-        let b = day(&a).unwrap();
+        let a = TimestampSecondArray::from_vec(vec![86400], Some("+00:00".to_string()));
+        let b = day::<TimestampSecondType, _>(&a).unwrap();
         assert_eq!(2, b.value(0));
-        let a = Arc::new(TimestampSecondArray::from_vec(
-            vec![86400],
-            Some("-10:00".to_string()),
-        ));
-        let b = day(&a).unwrap();
+        let a = TimestampSecondArray::from_vec(vec![86400], Some("-10:00".to_string()));
+        let b = day::<TimestampSecondType, _>(&a).unwrap();
         assert_eq!(1, b.value(0));
     }
 
@@ -665,7 +793,7 @@ mod tests {
         let a: PrimitiveArray<Date64Type> =
             vec![Some(1514764800000), None, Some(1550636625000)].into();
 
-        let b = num_days_from_monday(&a).unwrap();
+        let b = num_days_from_monday::<Date64Type, _>(&a).unwrap();
         assert_eq!(0, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(2, b.value(2));
@@ -684,7 +812,7 @@ mod tests {
         ]
         .into();
 
-        let b = num_days_from_sunday(&a).unwrap();
+        let b = num_days_from_sunday::<Date64Type, _>(&a).unwrap();
         assert_eq!(0, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(1, b.value(2));
@@ -698,7 +826,7 @@ mod tests {
         let a: PrimitiveArray<Date64Type> =
             vec![Some(1514764800000), None, Some(1550636625000)].into();
 
-        let b = day(&a).unwrap();
+        let b = day::<Date64Type, _>(&a).unwrap();
         assert_eq!(1, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(20, b.value(2));
@@ -708,7 +836,7 @@ mod tests {
     fn test_temporal_array_date32_day() {
         let a: PrimitiveArray<Date32Type> = vec![Some(0), None, Some(31)].into();
 
-        let b = day(&a).unwrap();
+        let b = day::<Date32Type, _>(&a).unwrap();
         assert_eq!(1, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(1, b.value(2));
@@ -727,7 +855,7 @@ mod tests {
         ]
         .into();
 
-        let b = doy(&a).unwrap();
+        let b = doy::<Date64Type, _>(&a).unwrap();
         assert_eq!(1, b.value(0));
         assert_eq!(1, b.value(1));
         assert!(!b.is_valid(2));
@@ -739,7 +867,7 @@ mod tests {
         let a: TimestampMicrosecondArray =
             vec![Some(1612025847000000), None, Some(1722015847000000)].into();
 
-        let b = year(&a).unwrap();
+        let b = year::<TimestampMicrosecondType, _>(&a).unwrap();
         assert_eq!(2021, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(2024, b.value(2));
@@ -750,7 +878,7 @@ mod tests {
         let a: PrimitiveArray<Date64Type> =
             vec![Some(1514764800000), None, Some(1550636625000)].into();
 
-        let b = minute(&a).unwrap();
+        let b = minute::<Date64Type, _>(&a).unwrap();
         assert_eq!(0, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(23, b.value(2));
@@ -761,7 +889,7 @@ mod tests {
         let a: TimestampMicrosecondArray =
             vec![Some(1612025847000000), None, Some(1722015847000000)].into();
 
-        let b = minute(&a).unwrap();
+        let b = minute::<TimestampMicrosecondType, _>(&a).unwrap();
         assert_eq!(57, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(44, b.value(2));
@@ -771,7 +899,7 @@ mod tests {
     fn test_temporal_array_date32_week() {
         let a: PrimitiveArray<Date32Type> = vec![Some(0), None, Some(7)].into();
 
-        let b = week(&a).unwrap();
+        let b = week::<Date32Type, _>(&a).unwrap();
         assert_eq!(1, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(2, b.value(2));
@@ -789,7 +917,7 @@ mod tests {
         ]
         .into();
 
-        let b = week(&a).unwrap();
+        let b = week::<Date64Type, _>(&a).unwrap();
         assert_eq!(9, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(1, b.value(2));
@@ -803,7 +931,7 @@ mod tests {
         let a: TimestampMicrosecondArray =
             vec![Some(1612025847000000), None, Some(1722015847000000)].into();
 
-        let b = week(&a).unwrap();
+        let b = week::<TimestampMicrosecondType, _>(&a).unwrap();
         assert_eq!(4, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(30, b.value(2));
@@ -814,7 +942,7 @@ mod tests {
         let a: PrimitiveArray<Date64Type> =
             vec![Some(1514764800000), None, Some(1550636625000)].into();
 
-        let b = second(&a).unwrap();
+        let b = second::<Date64Type, _>(&a).unwrap();
         assert_eq!(0, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(45, b.value(2));
@@ -825,7 +953,7 @@ mod tests {
         let a: TimestampMicrosecondArray =
             vec![Some(1612025847000000), None, Some(1722015847000000)].into();
 
-        let b = second(&a).unwrap();
+        let b = second::<TimestampMicrosecondType, _>(&a).unwrap();
         assert_eq!(27, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(7, b.value(2));
@@ -833,97 +961,75 @@ mod tests {
 
     #[test]
     fn test_temporal_array_timestamp_second_with_timezone() {
-        use std::sync::Arc;
-
-        let a = Arc::new(TimestampSecondArray::from_vec(
-            vec![10, 20],
-            Some("+00:00".to_string()),
-        ));
-        let b = second(&a).unwrap();
+        let a = TimestampSecondArray::from_vec(vec![10, 20], Some("+00:00".to_string()));
+        let b = second::<TimestampSecondType, _>(&a).unwrap();
         assert_eq!(10, b.value(0));
         assert_eq!(20, b.value(1));
     }
 
     #[test]
     fn test_temporal_array_timestamp_minute_with_timezone() {
-        use std::sync::Arc;
-
-        let a = Arc::new(TimestampSecondArray::from_vec(
-            vec![0, 60],
-            Some("+00:50".to_string()),
-        ));
-        let b = minute(&a).unwrap();
+        let a = TimestampSecondArray::from_vec(vec![0, 60], Some("+00:50".to_string()));
+        let b = minute::<TimestampSecondType, _>(&a).unwrap();
         assert_eq!(50, b.value(0));
         assert_eq!(51, b.value(1));
     }
 
     #[test]
     fn test_temporal_array_timestamp_minute_with_negative_timezone() {
-        use std::sync::Arc;
-
-        let a = Arc::new(TimestampSecondArray::from_vec(
-            vec![60 * 55],
-            Some("-00:50".to_string()),
-        ));
-        let b = minute(&a).unwrap();
+        let a = TimestampSecondArray::from_vec(vec![60 * 55], Some("-00:50".to_string()));
+        let b = minute::<TimestampSecondType, _>(&a).unwrap();
         assert_eq!(5, b.value(0));
     }
 
     #[test]
     fn test_temporal_array_timestamp_hour_with_timezone() {
-        use std::sync::Arc;
-
-        let a = Arc::new(TimestampSecondArray::from_vec(
+        let a = TimestampSecondArray::from_vec(
             vec![60 * 60 * 10],
             Some("+01:00".to_string()),
-        ));
-        let b = hour(&a).unwrap();
+        );
+        let b = hour::<TimestampSecondType, _>(&a).unwrap();
         assert_eq!(11, b.value(0));
     }
 
     #[test]
     fn test_temporal_array_timestamp_hour_with_timezone_without_colon() {
-        use std::sync::Arc;
-
-        let a = Arc::new(TimestampSecondArray::from_vec(
-            vec![60 * 60 * 10],
-            Some("+0100".to_string()),
-        ));
-        assert!(matches!(hour(&a), Err(ArrowError::ComputeError(_))))
+        let a =
+            TimestampSecondArray::from_vec(vec![60 * 60 * 10], Some("+0100".to_string()));
+        assert!(matches!(
+            hour::<TimestampSecondType, _>(&a),
+            Err(ArrowError::ComputeError(_))
+        ))
     }
 
     #[test]
     fn test_temporal_array_timestamp_hour_with_timezone_without_initial_sign() {
-        use std::sync::Arc;
-
-        let a = Arc::new(TimestampSecondArray::from_vec(
-            vec![60 * 60 * 10],
-            Some("0100".to_string()),
-        ));
-        assert!(matches!(hour(&a), Err(ArrowError::ComputeError(_))))
+        let a =
+            TimestampSecondArray::from_vec(vec![60 * 60 * 10], Some("0100".to_string()));
+        assert!(matches!(
+            hour::<TimestampSecondType, _>(&a),
+            Err(ArrowError::ComputeError(_))
+        ))
     }
 
     #[test]
     fn test_temporal_array_timestamp_hour_with_timezone_with_only_colon() {
-        use std::sync::Arc;
-
-        let a = Arc::new(TimestampSecondArray::from_vec(
-            vec![60 * 60 * 10],
-            Some("01:00".to_string()),
-        ));
-        assert!(matches!(hour(&a), Err(ArrowError::ComputeError(_))))
+        let a =
+            TimestampSecondArray::from_vec(vec![60 * 60 * 10], Some("01:00".to_string()));
+        assert!(matches!(
+            hour::<TimestampSecondType, _>(&a),
+            Err(ArrowError::ComputeError(_))
+        ))
     }
 
     #[cfg(feature = "chrono-tz")]
     #[test]
     fn test_temporal_array_timestamp_hour_with_timezone_using_chrono_tz() {
-        use std::sync::Arc;
-
-        let a = Arc::new(TimestampSecondArray::from_vec(
+        let a = TimestampSecondArray::from_vec(
             vec![60 * 60 * 10],
             Some("Asia/Kolkata".to_string()),
-        ));
-        let b = hour(&a).unwrap();
+        );
+        let b = hour::<TimestampSecondType, _>(&a).unwrap();
         assert_eq!(15, b.value(0));
     }
 
@@ -939,20 +1045,21 @@ mod tests {
             vec![Some(1635577147000)],
             Some("Australia/Sydney".to_string()),
         );
-        let b = hour(&a).unwrap();
+        let b = hour::<TimestampMillisecondType, _>(&a).unwrap();
         assert_eq!(17, b.value(0));
     }
 
     #[cfg(not(feature = "chrono-tz"))]
     #[test]
     fn test_temporal_array_timestamp_hour_with_timezone_using_chrono_tz() {
-        use std::sync::Arc;
-
-        let a = Arc::new(TimestampSecondArray::from_vec(
+        let a = TimestampSecondArray::from_vec(
             vec![60 * 60 * 10],
             Some("Asia/Kolkatta".to_string()),
-        ));
-        assert!(matches!(hour(&a), Err(ArrowError::ComputeError(_))))
+        );
+        assert!(matches!(
+            hour::<TimestampSecondType, _>(&a),
+            Err(ArrowError::ComputeError(_))
+        ))
     }
 
     #[cfg(feature = "chrono-tz")]
@@ -1011,5 +1118,22 @@ mod tests {
             ),
             Some(sydney_offset_with_dst)
         );
+    }
+
+    #[test]
+    fn test_hour_array() {
+        let a =
+            TimestampSecondArray::from_vec(vec![60 * 60 * 10], Some("01:00".to_string()));
+        assert!(matches!(
+            hour::<TimestampSecondType, _>(&a),
+            Err(ArrowError::ComputeError(_))
+        ));
+
+        let a = TimestampSecondArray::from_vec(
+            vec![60 * 60 * 10],
+            Some("+01:00".to_string()),
+        );
+        let b = hour::<TimestampSecondType, _>(&a).unwrap();
+        assert_eq!(11, b.value(0));
     }
 }
