@@ -1502,6 +1502,9 @@ where
 
     if let Some(tz) = tz {
         let mut scratch = Parsed::new();
+        // The macro calls `value_as_datetime_with_tz` on timestamp values of the array.
+        // After applying timezone offset on the datatime, calling `to_string` to get
+        // the strings.
         extract_component_from_array!(
             array,
             builder,
@@ -1512,6 +1515,7 @@ where
             |h| h
         )
     } else {
+        // No timezone available. Calling `to_string` on the datatime value simply.
         extract_component_from_array!(array, builder, to_string, value_as_datetime, |h| h)
     }
 
