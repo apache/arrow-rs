@@ -190,11 +190,12 @@ use crate::datatypes::*;
 pub use self::array::Array;
 pub use self::array::ArrayAccessor;
 pub use self::array::ArrayRef;
-pub(crate) use self::data::layout;
 pub use self::data::ArrayData;
 pub use self::data::ArrayDataBuilder;
 pub use self::data::ArrayDataRef;
-pub(crate) use self::data::BufferSpec;
+
+#[cfg(feature = "ipc")]
+pub(crate) use self::data::{layout, BufferSpec};
 
 pub use self::array_binary::BinaryArray;
 pub use self::array_binary::LargeBinaryArray;

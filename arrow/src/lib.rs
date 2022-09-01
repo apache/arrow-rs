@@ -264,6 +264,7 @@ pub mod ffi;
 pub mod ffi_stream;
 #[cfg(feature = "ipc")]
 pub mod ipc;
+#[cfg(feature = "serde_json")]
 pub mod json;
 #[cfg(feature = "pyarrow")]
 pub mod pyarrow;

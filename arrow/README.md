@@ -42,6 +42,7 @@ However, for historical reasons, this crate uses versions with major numbers gre
 The `arrow` crate provides the following features which may be enabled in your `Cargo.toml`:
 
 - `csv` (default) - support for reading and writing Arrow arrays to/from csv files
+- `json` (default) - support for reading and writing Arrow array to/from json files
 - `ipc` (default) - support for reading [Arrow IPC Format](https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc), also used as the wire protocol in [arrow-flight](https://crates.io/crates/arrow-flight)
 - `ipc_compression`  - Enables reading and writing compressed IPC streams (also enables `ipc`)
 - `prettyprint` - support for formatting record batches as textual columns
@@ -52,6 +53,7 @@ The `arrow` crate provides the following features which may be enabled in your `
 - `chrono-tz` - support of parsing timezone using [chrono-tz](https://docs.rs/chrono-tz/0.6.0/chrono_tz/)
 - `ffi` - bindings for the Arrow C [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
 - `pyarrow` - bindings for pyo3 to call arrow-rs from python
+- `dyn_cmp_dict` - enables comparison of dictionary arrays within dyn comparison kernels
 
 ## Arrow Feature Status
 
