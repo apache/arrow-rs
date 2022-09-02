@@ -67,6 +67,9 @@ multiversion = { version = "0.6.1", default-features = false }
 bitflags = { version = "1.2.1", default-features = false }
 zstd = { version = "0.11.1", default-features = false, optional = true }
 
+[package.metadata.docs.rs]
+feature = ["prettyprint", "ipc_compression", "dyn_cmp_dict", "ffi", "pyarrow"]
+
 [features]
 default = ["csv", "ipc", "json"]
 ipc_compression = ["ipc", "zstd", "lz4"]
