@@ -29,7 +29,7 @@ use crate::error::{ArrowError, Result};
 use crate::record_batch::RecordBatch;
 use crate::util::bit_iterator::{BitIndexIterator, BitSliceIterator};
 use crate::util::bit_util;
-use crate::{downcast_dict_array, downcast_primitive_array};
+use crate::{downcast_dictionary_array, downcast_primitive_array};
 
 /// If the filter selects more than this fraction of rows, use
 /// [`SlicesIterator`] to copy ranges of values. Otherwise iterate
@@ -356,7 +356,7 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
                     .unwrap();
                 Ok(Arc::new(filter_string::<i64>(values, predicate)))
             }
-            DataType::Dictionary(_, _) => downcast_dict_array! {
+            DataType::Dictionary(_, _) => downcast_dictionary_array! {
                 values => Ok(Arc::new(filter_dict(values, predicate))),
                 t => unimplemented!("Filter not supported for dictionary type {:?}", t)
             }

@@ -264,15 +264,23 @@ where
 /// a number of subsequent patterns to match the data type
 ///
 /// ```
-/// # use arrow::downcast_dict_array;
-/// # use arrow::array::Array;
+/// # use arrow::downcast_dictionary_array;
+/// # use arrow::array::{Array, StringArray};
 /// # use arrow::datatypes::DataType;
 /// # use arrow::array::as_string_array;
 ///
-/// fn print_keys(array: &dyn Array) {
-///     downcast_dict_array!(
-///         array => {
-///             for v in array.keys() {
+/// fn print_strings(array: &dyn Array) {
+///     downcast_dictionary_array!(
+///         array => match array.values().data_type() {
+///             DataType::Utf8 => {
+///                 for v in array.downcast_dict::<StringArray>().unwrap() {
+///                     println!("{:?}", v);
+///                 }
+///             }
+///             t => println!("Unsupported dictionary value type {}", t),
+///         },
+///         DataType::Utf8 => {
+///             for v in as_string_array(array) {
 ///                 println!("{:?}", v);
 ///             }
 ///         }
@@ -281,9 +289,9 @@ where
 /// }
 /// ```
 #[macro_export]
-macro_rules! downcast_dict_array {
+macro_rules! downcast_dictionary_array {
     ($values:ident => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
-        downcast_dict_array!($values => {$e} $($p => $fallback)*)
+        downcast_dictionary_array!($values => {$e} $($p => $fallback)*)
     };
 
     ($values:ident => $e:block $($p:pat => $fallback:expr $(,)*)*) => {

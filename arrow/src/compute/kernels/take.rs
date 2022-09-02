@@ -27,7 +27,7 @@ use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
 use crate::{
-    array::*, buffer::buffer_bin_and, downcast_dict_array, downcast_primitive_array,
+    array::*, buffer::buffer_bin_and, downcast_dictionary_array, downcast_primitive_array,
 };
 
 use num::{ToPrimitive, Zero};
@@ -199,7 +199,7 @@ where
 
             Ok(Arc::new(StructArray::from((fields, is_valid))) as ArrayRef)
         }
-        DataType::Dictionary(_, _) => downcast_dict_array! {
+        DataType::Dictionary(_, _) => downcast_dictionary_array! {
             values => Ok(Arc::new(take_dict(values, indices)?)),
             t => unimplemented!("Take not supported for dictionary type {:?}", t)
         }
