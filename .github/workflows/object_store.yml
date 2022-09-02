@@ -68,6 +68,11 @@ jobs:
         image: fsouza/fake-gcs-server
         ports:
           - 4443:4443
+        env:
+          ENTRYPOINT: "fake-gcs-server -scheme=http"
+        options: --entrypoint /entrypoint.sh
+        volumes:
+          - $PWD/.github/workflows/service-entrypoint.sh:/entrypoint.sh
       localstack:
         image: localstack/localstack:0.14.4
         ports:
@@ -107,7 +112,7 @@ jobs:
       - name: Configure Fake GCS Server (GCP emulation)
         run: |
           curl --insecure -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "https://fake-gcs:4443/storage/v1/b"
-          echo '{"gcs_base_url": "https://fake-gcs:4443", "disable_oauth": true, "client_email": "", "private_key": ""}' > "$GOOGLE_SERVICE_ACCOUNT"
+          echo '{"gcs_base_url": "http://fake-gcs:4443", "disable_oauth": true, "client_email": "", "private_key": ""}' > "$GOOGLE_SERVICE_ACCOUNT"
 
       - name: Setup LocalStack (AWS emulation)
         env:
