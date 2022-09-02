@@ -160,7 +160,7 @@ pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema> {
     // The original protocal is:
     //   4 bytes - the byte length of the payload
     //   a flatbuffer Message whose header is the Schema
-    // The latest version of protocal is:
+    // The latest version of protocol is:
     // The schema of the dataset in its IPC form:
     //   4 bytes - an optional IPC_CONTINUATION_TOKEN prefix
     //   4 bytes - the byte length of the payload
