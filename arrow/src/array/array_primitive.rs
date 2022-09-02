@@ -1123,13 +1123,13 @@ mod tests {
         use crate::compute::hour;
         let a: TimestampMicrosecondArray = vec![37800000000, 86339000000].into();
 
-        let b = hour::<TimestampMicrosecondType, _>(&a).unwrap();
+        let b = hour(&a).unwrap();
         assert_eq!(10, b.value(0));
         assert_eq!(23, b.value(1));
 
         let a = a.with_timezone(String::from("America/Los_Angeles"));
 
-        let b = hour::<TimestampMicrosecondType, _>(&a).unwrap();
+        let b = hour(&a).unwrap();
         assert_eq!(2, b.value(0));
         assert_eq!(15, b.value(1));
     }
