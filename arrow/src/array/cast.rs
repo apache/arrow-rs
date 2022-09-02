@@ -20,6 +20,207 @@
 use crate::array::*;
 use crate::datatypes::*;
 
+/// Downcast an [`Array`] to a [`PrimitiveArray`] based on its [`DataType`], accepts
+/// a number of subsequent patterns to match the data type
+///
+/// ```
+/// # use arrow::downcast_primitive_array;
+/// # use arrow::array::Array;
+/// # use arrow::datatypes::DataType;
+/// # use arrow::array::as_string_array;
+///
+/// fn print_primitive(array: &dyn Array) {
+///     downcast_primitive_array!(
+///         array => {
+///             for v in array {
+///                 println!("{:?}", v);
+///             }
+///         }
+///         DataType::Utf8 => {
+///             for v in as_string_array(array) {
+///                 println!("{:?}", v);
+///             }
+///         }
+///         t => println!("Unsupported datatype {}", t)
+///     )
+/// }
+/// ```
+///
+#[macro_export]
+macro_rules! downcast_primitive_array {
+    ($values:ident => $e:expr, $($p:pat => $fallback:expr)*) => {
+        downcast_primitive_array!($values => {$e} $($p => $fallback)*)
+    };
+
+    ($values:ident => $e:block $($p:pat => $fallback:expr)*) => {
+        match $values.data_type() {
+            $crate::datatypes::DataType::Int8 => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::Int8Type,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Int16 => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::Int16Type,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Int32 => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::Int32Type,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Int64 => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::Int64Type,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::UInt8 => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::UInt8Type,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::UInt16 => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::UInt16Type,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::UInt32 => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::UInt32Type,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::UInt64 => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::UInt64Type,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Float32 => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::Float32Type,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Float64 => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::Float64Type,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Date32 => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::Date32Type,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Date64 => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::Date64Type,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Time32($crate::datatypes::TimeUnit::Second) => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::Time32SecondType,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Time32($crate::datatypes::TimeUnit::Millisecond) => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::Time32MillisecondType,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Time64($crate::datatypes::TimeUnit::Microsecond) => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::Time64MicrosecondType,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Time64($crate::datatypes::TimeUnit::Nanosecond) => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::Time64NanosecondType,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Timestamp($crate::datatypes::TimeUnit::Second, _) => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::TimestampSecondType,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Timestamp($crate::datatypes::TimeUnit::Millisecond, _) => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::TimestampMillisecondType,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Timestamp($crate::datatypes::TimeUnit::Microsecond, _) => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::TimestampMicrosecondType,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Timestamp($crate::datatypes::TimeUnit::Nanosecond, _) => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::TimestampNanosecondType,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Interval($crate::datatypes::IntervalUnit::YearMonth) => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::IntervalYearMonthType,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Interval($crate::datatypes::IntervalUnit::DayTime) => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::IntervalDayTimeType,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Interval($crate::datatypes::IntervalUnit::MonthDayNano) => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::IntervalMonthDayNanoType,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Duration($crate::datatypes::TimeUnit::Second) => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::DurationSecondType,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Duration($crate::datatypes::TimeUnit::Millisecond) => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::DurationMillisecondType,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Duration($crate::datatypes::TimeUnit::Microsecond) => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::DurationMicrosecondType,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Duration($crate::datatypes::TimeUnit::Nanosecond) => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::DurationNanosecondType,
+                >($values);
+                $e
+            }
+            $($p => $fallback,)*
+        }
+    };
+}
+
 /// Force downcast of an [`Array`], such as an [`ArrayRef`], to
 /// [`PrimitiveArray<T>`], panic'ing on failure.
 ///
@@ -51,6 +252,90 @@ where
     arr.as_any()
         .downcast_ref::<PrimitiveArray<T>>()
         .expect("Unable to downcast to primitive array")
+}
+
+/// Downcast an [`Array`] to a [`DictionaryArray`] based on its [`DataType`], accepts
+/// a number of subsequent patterns to match the data type
+///
+/// ```
+/// # use arrow::downcast_dict_array;
+/// # use arrow::array::Array;
+/// # use arrow::datatypes::DataType;
+/// # use arrow::array::as_string_array;
+///
+/// fn print_keys(array: &dyn Array) {
+///     downcast_dict_array!(
+///         array => {
+///             for v in array.keys() {
+///                 println!("{:?}", v);
+///             }
+///         }
+///         t => println!("Unsupported datatype {}", t)
+///     )
+/// }
+/// ```
+#[macro_export]
+macro_rules! downcast_dict_array {
+    ($values:ident => $e:expr, $($p:pat => $fallback:expr)*) => {
+        downcast_dict_array!($values => {$e} $($p => $fallback)*)
+    };
+
+    ($values:ident => $e:block $($p:pat => $fallback:expr)*) => {
+        match $values.data_type() {
+            $crate::datatypes::DataType::Dictionary(k, _) => match k.as_ref() {
+                $crate::datatypes::DataType::Int8 => {
+                    let $values = $crate::array::as_dictionary_array::<
+                        $crate::datatypes::Int8Type,
+                    >($values);
+                    $e
+                },
+                $crate::datatypes::DataType::Int16 => {
+                    let $values = $crate::array::as_dictionary_array::<
+                        $crate::datatypes::Int16Type,
+                    >($values);
+                    $e
+                },
+                $crate::datatypes::DataType::Int32 => {
+                    let $values = $crate::array::as_dictionary_array::<
+                        $crate::datatypes::Int32Type,
+                    >($values);
+                    $e
+                },
+                $crate::datatypes::DataType::Int64 => {
+                    let $values = $crate::array::as_dictionary_array::<
+                        $crate::datatypes::Int64Type,
+                    >($values);
+                    $e
+                },
+                $crate::datatypes::DataType::UInt8 => {
+                    let $values = $crate::array::as_dictionary_array::<
+                        $crate::datatypes::UInt8Type,
+                    >($values);
+                    $e
+                },
+                $crate::datatypes::DataType::UInt16 => {
+                    let $values = $crate::array::as_dictionary_array::<
+                        $crate::datatypes::UInt16Type,
+                    >($values);
+                    $e
+                },
+                $crate::datatypes::DataType::UInt32 => {
+                    let $values = $crate::array::as_dictionary_array::<
+                        $crate::datatypes::UInt32Type,
+                    >($values);
+                    $e
+                },
+                $crate::datatypes::DataType::UInt64 => {
+                    let $values = $crate::array::as_dictionary_array::<
+                        $crate::datatypes::UInt64Type,
+                    >($values);
+                    $e
+                },
+                k => unreachable!("unsupported dictionary key type: {}", k)
+            }
+            $($p => $fallback,)*
+        }
+    }
 }
 
 /// Force downcast of an [`Array`], such as an [`ArrayRef`] to

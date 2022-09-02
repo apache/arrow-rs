@@ -22,8 +22,6 @@ use std::sync::Arc;
 
 use num::Zero;
 
-use TimeUnit::*;
-
 use crate::array::*;
 use crate::buffer::{buffer_bin_and, Buffer, MutableBuffer};
 use crate::datatypes::*;
@@ -31,6 +29,7 @@ use crate::error::{ArrowError, Result};
 use crate::record_batch::RecordBatch;
 use crate::util::bit_iterator::{BitIndexIterator, BitSliceIterator};
 use crate::util::bit_util;
+use crate::{downcast_dict_array, downcast_primitive_array};
 
 /// If the filter selects more than this fraction of rows, use
 /// [`SlicesIterator`] to copy ranges of values. Otherwise iterate
@@ -39,27 +38,6 @@ use crate::util::bit_util;
 /// Threshold of 0.8 chosen based on <https://dl.acm.org/doi/abs/10.1145/3465998.3466009>
 ///
 const FILTER_SLICES_SELECTIVITY_THRESHOLD: f64 = 0.8;
-
-macro_rules! downcast_filter {
-    ($type: ty, $values: expr, $filter: expr) => {{
-        let values = $values
-            .as_any()
-            .downcast_ref::<PrimitiveArray<$type>>()
-            .expect("Unable to downcast to a primitive array");
-
-        Ok(Arc::new(filter_primitive::<$type>(&values, $filter)))
-    }};
-}
-
-macro_rules! downcast_dict_filter {
-    ($type: ty, $values: expr, $filter: expr) => {{
-        let values = $values
-            .as_any()
-            .downcast_ref::<DictionaryArray<$type>>()
-            .expect("Unable to downcast to a dictionary array");
-        Ok(Arc::new(filter_dict::<$type>(values, $filter)))
-    }};
-}
 
 /// An iterator of `(usize, usize)` each representing an interval
 /// `[start, end)` whose slots of a [BooleanArray] are true. Each
@@ -358,91 +336,11 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
         IterationStrategy::None => Ok(new_empty_array(values.data_type())),
         IterationStrategy::All => Ok(make_array(values.data().slice(0, predicate.count))),
         // actually filter
-        _ => match values.data_type() {
+        _ => downcast_primitive_array! {
+            values => Ok(Arc::new(filter_primitive(values, predicate))),
             DataType::Boolean => {
                 let values = values.as_any().downcast_ref::<BooleanArray>().unwrap();
                 Ok(Arc::new(filter_boolean(values, predicate)))
-            }
-            DataType::Int8 => {
-                downcast_filter!(Int8Type, values, predicate)
-            }
-            DataType::Int16 => {
-                downcast_filter!(Int16Type, values, predicate)
-            }
-            DataType::Int32 => {
-                downcast_filter!(Int32Type, values, predicate)
-            }
-            DataType::Int64 => {
-                downcast_filter!(Int64Type, values, predicate)
-            }
-            DataType::UInt8 => {
-                downcast_filter!(UInt8Type, values, predicate)
-            }
-            DataType::UInt16 => {
-                downcast_filter!(UInt16Type, values, predicate)
-            }
-            DataType::UInt32 => {
-                downcast_filter!(UInt32Type, values, predicate)
-            }
-            DataType::UInt64 => {
-                downcast_filter!(UInt64Type, values, predicate)
-            }
-            DataType::Float32 => {
-                downcast_filter!(Float32Type, values, predicate)
-            }
-            DataType::Float64 => {
-                downcast_filter!(Float64Type, values, predicate)
-            }
-            DataType::Date32 => {
-                downcast_filter!(Date32Type, values, predicate)
-            }
-            DataType::Date64 => {
-                downcast_filter!(Date64Type, values, predicate)
-            }
-            DataType::Time32(Second) => {
-                downcast_filter!(Time32SecondType, values, predicate)
-            }
-            DataType::Time32(Millisecond) => {
-                downcast_filter!(Time32MillisecondType, values, predicate)
-            }
-            DataType::Time64(Microsecond) => {
-                downcast_filter!(Time64MicrosecondType, values, predicate)
-            }
-            DataType::Time64(Nanosecond) => {
-                downcast_filter!(Time64NanosecondType, values, predicate)
-            }
-            DataType::Timestamp(Second, _) => {
-                downcast_filter!(TimestampSecondType, values, predicate)
-            }
-            DataType::Timestamp(Millisecond, _) => {
-                downcast_filter!(TimestampMillisecondType, values, predicate)
-            }
-            DataType::Timestamp(Microsecond, _) => {
-                downcast_filter!(TimestampMicrosecondType, values, predicate)
-            }
-            DataType::Timestamp(Nanosecond, _) => {
-                downcast_filter!(TimestampNanosecondType, values, predicate)
-            }
-            DataType::Interval(IntervalUnit::YearMonth) => {
-                downcast_filter!(IntervalYearMonthType, values, predicate)
-            }
-            DataType::Interval(IntervalUnit::DayTime) => {
-                downcast_filter!(IntervalDayTimeType, values, predicate)
-            }
-            DataType::Interval(IntervalUnit::MonthDayNano) => {
-                downcast_filter!(IntervalMonthDayNanoType, values, predicate)
-            }
-            DataType::Duration(TimeUnit::Second) => {
-                downcast_filter!(DurationSecondType, values, predicate)
-            }
-            DataType::Duration(TimeUnit::Millisecond) => {
-                downcast_filter!(DurationMillisecondType, values, predicate)
-            }
-            DataType::Duration(TimeUnit::Microsecond) => {
-                downcast_filter!(DurationMicrosecondType, values, predicate)
-            }
-            DataType::Duration(TimeUnit::Nanosecond) => {
-                downcast_filter!(DurationNanosecondType, values, predicate)
             }
             DataType::Utf8 => {
                 let values = values
@@ -458,19 +356,10 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
                     .unwrap();
                 Ok(Arc::new(filter_string::<i64>(values, predicate)))
             }
-            DataType::Dictionary(key_type, _) => match key_type.as_ref() {
-                DataType::Int8 => downcast_dict_filter!(Int8Type, values, predicate),
-                DataType::Int16 => downcast_dict_filter!(Int16Type, values, predicate),
-                DataType::Int32 => downcast_dict_filter!(Int32Type, values, predicate),
-                DataType::Int64 => downcast_dict_filter!(Int64Type, values, predicate),
-                DataType::UInt8 => downcast_dict_filter!(UInt8Type, values, predicate),
-                DataType::UInt16 => downcast_dict_filter!(UInt16Type, values, predicate),
-                DataType::UInt32 => downcast_dict_filter!(UInt32Type, values, predicate),
-                DataType::UInt64 => downcast_dict_filter!(UInt64Type, values, predicate),
-                t => {
-                    unimplemented!("Filter not supported for dictionary key type {:?}", t)
-                }
-            },
+            DataType::Dictionary(_, _) => downcast_dict_array! {
+                values => Ok(Arc::new(filter_dict(values, predicate))),
+                t => unimplemented!("Filter not supported for dictionary type {:?}", t)
+            }
             _ => {
                 // fallback to using MutableArrayData
                 let mut mutable = MutableArrayData::new(
