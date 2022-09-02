@@ -48,11 +48,11 @@ use crate::datatypes::*;
 ///
 #[macro_export]
 macro_rules! downcast_primitive_array {
-    ($values:ident => $e:expr, $($p:pat => $fallback:expr)*) => {
+    ($values:ident => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
         downcast_primitive_array!($values => {$e} $($p => $fallback)*)
     };
 
-    ($values:ident => $e:block $($p:pat => $fallback:expr)*) => {
+    ($values:ident => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
         match $values.data_type() {
             $crate::datatypes::DataType::Int8 => {
                 let $values = $crate::array::as_primitive_array::<
@@ -99,6 +99,12 @@ macro_rules! downcast_primitive_array {
             $crate::datatypes::DataType::UInt64 => {
                 let $values = $crate::array::as_primitive_array::<
                     $crate::datatypes::UInt64Type,
+                >($values);
+                $e
+            }
+            $crate::datatypes::DataType::Float16 => {
+                let $values = $crate::array::as_primitive_array::<
+                    $crate::datatypes::Float16Type,
                 >($values);
                 $e
             }
@@ -276,11 +282,11 @@ where
 /// ```
 #[macro_export]
 macro_rules! downcast_dict_array {
-    ($values:ident => $e:expr, $($p:pat => $fallback:expr)*) => {
+    ($values:ident => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
         downcast_dict_array!($values => {$e} $($p => $fallback)*)
     };
 
-    ($values:ident => $e:block $($p:pat => $fallback:expr)*) => {
+    ($values:ident => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
         match $values.data_type() {
             $crate::datatypes::DataType::Dictionary(k, _) => match k.as_ref() {
                 $crate::datatypes::DataType::Int8 => {
