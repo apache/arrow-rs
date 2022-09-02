@@ -69,7 +69,7 @@ git checkout master
 git pull
 git checkout -b make-release
 
-# Move the content of CHANGELOG.md to CHANGELOG-old.md
+# Copy the content of CHANGELOG.md to the beginning of CHANGELOG-old.md
 
 # manully edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
