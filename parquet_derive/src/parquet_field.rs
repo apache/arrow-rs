@@ -336,31 +336,19 @@ impl Type {
 
         match self.physical_type() {
             BasicType::BOOLEAN => {
-                syn::parse_quote!(
-                    ::parquet::column::writer::ColumnWriter::BoolColumnWriter
-                )
+                syn::parse_quote!(ColumnWriter::BoolColumnWriter)
             }
-            BasicType::INT32 => syn::parse_quote!(
-                ::parquet::column::writer::ColumnWriter::Int32ColumnWriter
-            ),
-            BasicType::INT64 => syn::parse_quote!(
-                ::parquet::column::writer::ColumnWriter::Int64ColumnWriter
-            ),
-            BasicType::INT96 => syn::parse_quote!(
-                ::parquet::column::writer::ColumnWriter::Int96ColumnWriter
-            ),
-            BasicType::FLOAT => syn::parse_quote!(
-                ::parquet::column::writer::ColumnWriter::FloatColumnWriter
-            ),
-            BasicType::DOUBLE => syn::parse_quote!(
-                ::parquet::column::writer::ColumnWriter::DoubleColumnWriter
-            ),
-            BasicType::BYTE_ARRAY => syn::parse_quote!(
-                ::parquet::column::writer::ColumnWriter::ByteArrayColumnWriter
-            ),
-            BasicType::FIXED_LEN_BYTE_ARRAY => syn::parse_quote!(
-                ::parquet::column::writer::ColumnWriter::FixedLenByteArrayColumnWriter
-            ),
+            BasicType::INT32 => syn::parse_quote!(ColumnWriter::Int32ColumnWriter),
+            BasicType::INT64 => syn::parse_quote!(ColumnWriter::Int64ColumnWriter),
+            BasicType::INT96 => syn::parse_quote!(ColumnWriter::Int96ColumnWriter),
+            BasicType::FLOAT => syn::parse_quote!(ColumnWriter::FloatColumnWriter),
+            BasicType::DOUBLE => syn::parse_quote!(ColumnWriter::DoubleColumnWriter),
+            BasicType::BYTE_ARRAY => {
+                syn::parse_quote!(ColumnWriter::ByteArrayColumnWriter)
+            }
+            BasicType::FIXED_LEN_BYTE_ARRAY => {
+                syn::parse_quote!(ColumnWriter::FixedLenByteArrayColumnWriter)
+            }
         }
     }
 
@@ -509,48 +497,48 @@ impl Type {
 
         match last_part.trim() {
             "bool" => quote! { None },
-            "u8" => quote! { Some(::parquet::basic::LogicalType::Integer {
+            "u8" => quote! { Some(LogicalType::Integer {
                 bit_width: 8,
                 is_signed: false,
             }) },
-            "u16" => quote! { Some(::parquet::basic::LogicalType::Integer {
+            "u16" => quote! { Some(LogicalType::Integer {
                 bit_width: 16,
                 is_signed: false,
             }) },
-            "u32" => quote! { Some(::parquet::basic::LogicalType::Integer {
+            "u32" => quote! { Some(LogicalType::Integer {
                 bit_width: 32,
                 is_signed: false,
             }) },
-            "u64" => quote! { Some(::parquet::basic::LogicalType::Integer {
+            "u64" => quote! { Some(LogicalType::Integer {
                 bit_width: 64,
                 is_signed: false,
             }) },
-            "i8" => quote! { Some(::parquet::basic::LogicalType::Integer {
+            "i8" => quote! { Some(LogicalType::Integer {
                 bit_width: 8,
                 is_signed: true,
             }) },
-            "i16" => quote! { Some(::parquet::basic::LogicalType::Integer {
+            "i16" => quote! { Some(LogicalType::Integer {
                 bit_width: 16,
                 is_signed: true,
             }) },
             "i32" | "i64" => quote! { None },
             "usize" => {
-                quote! { Some(::parquet::basic::LogicalType::Integer {
+                quote! { Some(LogicalType::Integer {
                     bit_width: usize::BITS as i8,
                     is_signed: false
                 }) }
             }
             "isize" => {
-                quote! { Some(::parquet::basic::LogicalType::Integer {
+                quote! { Some(LogicalType::Integer {
                     bit_width: usize::BITS as i8,
                     is_signed: true
                 }) }
             }
-            "NaiveDate" => quote! { Some(::parquet::basic::LogicalType::Date) },
+            "NaiveDate" => quote! { Some(LogicalType::Date) },
             "NaiveDateTime" => quote! { None },
             "f32" | "f64" => quote! { None },
-            "String" | "str" => quote! { Some(::parquet::basic::LogicalType::String) },
-            "Uuid" => quote! { Some(::parquet::basic::LogicalType::Uuid) },
+            "String" | "str" => quote! { Some(LogicalType::String) },
+            "Uuid" => quote! { Some(LogicalType::Uuid) },
             f => unimplemented!("{} currently is not supported", f),
         }
     }
@@ -670,7 +658,7 @@ mod test {
                         {
                             let vals : Vec < _ > = records . iter ( ) . map ( | rec | rec . counter as i64 ) . collect ( );
 
-                            if let ::parquet::column::writer::ColumnWriter::Int64ColumnWriter ( ref mut typed ) = column_writer.untyped() {
+                            if let ColumnWriter::Int64ColumnWriter ( ref mut typed ) = column_writer.untyped() {
                                 typed . write_batch ( & vals [ .. ] , None , None ) ?;
                             }  else {
                                 panic!("Schema and struct disagree on type for {}" , stringify!{ counter } )
@@ -707,7 +695,7 @@ mod test {
                     }
                 }).collect();
 
-                if let ::parquet::column::writer::ColumnWriter::ByteArrayColumnWriter ( ref mut typed ) = column_writer.untyped() {
+                if let ColumnWriter::ByteArrayColumnWriter ( ref mut typed ) = column_writer.untyped() {
                     typed . write_batch ( & vals [ .. ] , Some(&definition_levels[..]) , None ) ? ;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify ! { optional_str } )
@@ -731,7 +719,7 @@ mod test {
                             }
                         }).collect();
 
-                        if let ::parquet::column::writer::ColumnWriter::ByteArrayColumnWriter ( ref mut typed ) = column_writer.untyped() {
+                        if let ColumnWriter::ByteArrayColumnWriter ( ref mut typed ) = column_writer.untyped() {
                             typed . write_batch ( & vals [ .. ] , Some(&definition_levels[..]) , None ) ? ;
                         } else {
                             panic!("Schema and struct disagree on type for {}" , stringify ! { optional_string } )
@@ -754,7 +742,7 @@ mod test {
                             }
                         }).collect();
 
-                        if let ::parquet::column::writer::ColumnWriter::Int32ColumnWriter ( ref mut typed ) = column_writer.untyped() {
+                        if let ColumnWriter::Int32ColumnWriter ( ref mut typed ) = column_writer.untyped() {
                             typed . write_batch ( & vals [ .. ] , Some(&definition_levels[..]) , None ) ? ;
                         }  else {
                             panic!("Schema and struct disagree on type for {}" , stringify ! { optional_dumb_int } )
@@ -783,12 +771,8 @@ mod test {
         assert_eq!(
             column_writers,
             vec![
-                syn::parse_quote!(
-                    ::parquet::column::writer::ColumnWriter::BoolColumnWriter
-                ),
-                syn::parse_quote!(
-                    ::parquet::column::writer::ColumnWriter::ByteArrayColumnWriter
-                )
+                syn::parse_quote!(ColumnWriter::BoolColumnWriter),
+                syn::parse_quote!(ColumnWriter::ByteArrayColumnWriter)
             ]
         );
     }
@@ -873,10 +857,10 @@ mod test {
             a_buf: ::std::vec::Vec<u8>,
             a_number: i32,
             a_verbose_option: ::std::option::Option<bool>,
-            a_silly_string: ::std::string::String,
+            a_silly_string: String,
             a_fix_byte_buf: [u8; 10],
             a_complex_option: ::std::option::Option<&Vec<u8>>,
-            a_complex_vec: &::std::vec::Vec<&::std::option::Option<u8>>,
+            a_complex_vec: &::std::vec::Vec<&Option<u8>>,
           }
         };
 
@@ -979,7 +963,7 @@ mod test {
         assert_eq!(when.writer_snippet().to_string(),(quote!{
             {
                 let vals : Vec<_> = records.iter().map(|rec| rec.henceforth.timestamp_millis() ).collect();
-                if let ::parquet::column::writer::ColumnWriter::Int64ColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::Int64ColumnWriter(ref mut typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], None, None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ henceforth })
@@ -999,7 +983,7 @@ mod test {
                     }
                 }).collect();
 
-                if let ::parquet::column::writer::ColumnWriter::Int64ColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::Int64ColumnWriter(ref mut typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], Some(&definition_levels[..]), None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ maybe_happened })
@@ -1022,7 +1006,7 @@ mod test {
         assert_eq!(when.writer_snippet().to_string(),(quote!{
             {
                 let vals : Vec<_> = records.iter().map(|rec| rec.henceforth.signed_duration_since(::chrono::NaiveDate::from_ymd(1970, 1, 1)).num_days() as i32).collect();
-                if let ::parquet::column::writer::ColumnWriter::Int32ColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::Int32ColumnWriter(ref mut typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], None, None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ henceforth })
@@ -1042,7 +1026,7 @@ mod test {
                     }
                 }).collect();
 
-                if let ::parquet::column::writer::ColumnWriter::Int32ColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::Int32ColumnWriter(ref mut typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], Some(&definition_levels[..]), None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ maybe_happened })
@@ -1065,7 +1049,7 @@ mod test {
         assert_eq!(when.writer_snippet().to_string(),(quote!{
             {
                 let vals : Vec<_> = records.iter().map(|rec| (&rec.unique_id.to_string()[..]).into() ).collect();
-                if let ::parquet::column::writer::ColumnWriter::ByteArrayColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::ByteArrayColumnWriter(ref mut typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], None, None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ unique_id })
@@ -1085,7 +1069,7 @@ mod test {
                     }
                 }).collect();
 
-                if let ::parquet::column::writer::ColumnWriter::ByteArrayColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::ByteArrayColumnWriter(ref mut typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], Some(&definition_levels[..]), None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ maybe_unique_id })
