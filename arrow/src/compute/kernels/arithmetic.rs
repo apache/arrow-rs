@@ -921,15 +921,34 @@ where
 
 /// Perform `left - right` operation on two arrays. If either left or right value is null
 /// then the result is also null.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `subtract_checked` instead.
 pub fn subtract<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
     T: datatypes::ArrowNumericType,
-    T::Native: Sub<Output = T::Native>,
+    T::Native: ArrowNativeTypeOp,
 {
-    math_op(left, right, |a, b| a - b)
+    math_op(left, right, |a, b| a.wrapping_sub_if_applied(b))
+}
+
+/// Perform `left - right` operation on two arrays. If either left or right value is null
+/// then the result is also null.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `subtract` instead.
+pub fn subtract_checked<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>>
+where
+    T: datatypes::ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    math_checked_op(left, right, |a, b| a.checked_sub_if_applied(b))
 }
 
 /// Perform `left - right` operation on two arrays. If either left or right value is null
@@ -998,15 +1017,34 @@ where
 
 /// Perform `left * right` operation on two arrays. If either left or right value is null
 /// then the result is also null.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `multiply_check` instead.
 pub fn multiply<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
     T: datatypes::ArrowNumericType,
-    T::Native: Mul<Output = T::Native>,
+    T::Native: ArrowNativeTypeOp,
 {
-    math_op(left, right, |a, b| a * b)
+    math_op(left, right, |a, b| a.wrapping_mul_if_applied(b))
+}
+
+/// Perform `left * right` operation on two arrays. If either left or right value is null
+/// then the result is also null.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `multiply` instead.
+pub fn multiply_check<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>>
+where
+    T: datatypes::ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    math_checked_op(left, right, |a, b| a.checked_mul_if_applied(b))
 }
 
 /// Perform `left * right` operation on two arrays. If either left or right value is null
@@ -1078,18 +1116,21 @@ where
 /// Perform `left / right` operation on two arrays. If either left or right value is null
 /// then the result is also null. If any right hand value is zero then the result of this
 /// operation will be `Err(ArrowError::DivideByZero)`.
-pub fn divide<T>(
+///
+/// When `simd` feature is not enabled. This detects overflow and returns an `Err` for that.
+/// For an non-overflow-checking variant, use `divide` instead.
+pub fn divide_checked<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
     T: datatypes::ArrowNumericType,
-    T::Native: Div<Output = T::Native> + Zero + One,
+    T::Native: ArrowNativeTypeOp + Zero + One,
 {
     #[cfg(feature = "simd")]
     return simd_checked_divide_op(&left, &right, simd_checked_divide::<T>, |a, b| a / b);
     #[cfg(not(feature = "simd"))]
-    return math_checked_divide_op(left, right, |a, b| a / b);
+    return math_checked_op(left, right, |a, b| a.checked_div_if_applied(b));
 }
 
 /// Perform `left / right` operation on two arrays. If either left or right value is null
@@ -1107,15 +1148,18 @@ pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
 /// Perform `left / right` operation on two arrays without checking for division by zero.
 /// The result of dividing by zero follows normal floating point rules.
 /// If either left or right value is null then the result is also null. If any right hand value is zero then the result of this
-pub fn divide_unchecked<T>(
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `divide_checked` instead.
+pub fn divide<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
-    T: datatypes::ArrowFloatNumericType,
-    T::Native: Div<Output = T::Native>,
+    T: datatypes::ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
-    math_op(left, right, |a, b| a / b)
+    math_op(left, right, |a, b| a.wrapping_div_if_applied(b))
 }
 
 /// Modulus every value in an array by a scalar. If any value in the array is null then the
@@ -2095,6 +2139,45 @@ mod tests {
         assert_eq!(expected, wrapped.unwrap());
 
         let overflow = add_checked(&a, &b);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_subtract_wrapping_overflow() {
+        let a = Int32Array::from(vec![-2]);
+        let b = Int32Array::from(vec![i32::MAX]);
+
+        let wrapped = subtract(&a, &b);
+        let expected = Int32Array::from(vec![i32::MAX]);
+        assert_eq!(expected, wrapped.unwrap());
+
+        let overflow = subtract_checked(&a, &b);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_mul_wrapping_overflow() {
+        let a = Int32Array::from(vec![10]);
+        let b = Int32Array::from(vec![i32::MAX]);
+
+        let wrapped = multiply(&a, &b);
+        let expected = Int32Array::from(vec![-10]);
+        assert_eq!(expected, wrapped.unwrap());
+
+        let overflow = multiply_check(&a, &b);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_div_wrapping_overflow() {
+        let a = Int32Array::from(vec![i32::MIN]);
+        let b = Int32Array::from(vec![-1]);
+
+        let wrapped = divide(&a, &b);
+        let expected = Int32Array::from(vec![-2147483648]);
+        assert_eq!(expected, wrapped.unwrap());
+
+        let overflow = divide_checked(&a, &b);
         overflow.expect_err("overflow should be detected");
     }
 }
