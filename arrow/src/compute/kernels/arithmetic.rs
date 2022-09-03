@@ -1878,7 +1878,7 @@ mod tests {
     fn test_primitive_array_divide_with_nulls() {
         let a = Int32Array::from(vec![Some(15), None, Some(8), Some(1), Some(9), None]);
         let b = Int32Array::from(vec![Some(5), Some(6), Some(8), Some(9), None, None]);
-        let c = divide(&a, &b).unwrap();
+        let c = divide_checked(&a, &b).unwrap();
         assert_eq!(3, c.value(0));
         assert!(c.is_null(1));
         assert_eq!(1, c.value(2));
@@ -1963,7 +1963,7 @@ mod tests {
         let b = b.slice(8, 6);
         let b = b.as_any().downcast_ref::<Int32Array>().unwrap();
 
-        let c = divide(a, b).unwrap();
+        let c = divide_checked(a, b).unwrap();
         assert_eq!(6, c.len());
         assert_eq!(3, c.value(0));
         assert!(c.is_null(1));
@@ -2027,11 +2027,11 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "DivideByZero")]
+    #[should_panic(expected = "Overflow happened")]
     fn test_primitive_array_divide_by_zero() {
         let a = Int32Array::from(vec![15]);
         let b = Int32Array::from(vec![0]);
-        divide(&a, &b).unwrap();
+        divide_checked(&a, &b).unwrap();
     }
 
     #[test]
@@ -2169,6 +2169,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "simd"))]
     fn test_primitive_div_wrapping_overflow() {
         let a = Int32Array::from(vec![i32::MIN]);
         let b = Int32Array::from(vec![-1]);
