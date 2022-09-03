@@ -211,7 +211,7 @@ impl Field {
 
         if let Some(converted_type) = converted_type {
             quote! {
-                fields.push(::parquet::schema::types::Type::primitive_type_builder(#field_name, #physical_type)
+                fields.push(ParquetType::primitive_type_builder(#field_name, #physical_type)
                     .with_logical_type(#logical_type)
                     .with_repetition(#repetition)
                     .with_converted_type(#converted_type)
@@ -220,7 +220,7 @@ impl Field {
             }
         } else {
             quote! {
-                fields.push(::parquet::schema::types::Type::primitive_type_builder(#field_name, #physical_type)
+                fields.push(ParquetType::primitive_type_builder(#field_name, #physical_type)
                     .with_logical_type(#logical_type)
                     .with_repetition(#repetition)
                     .build().unwrap().into()

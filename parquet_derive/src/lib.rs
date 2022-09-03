@@ -122,14 +122,12 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
       fn schema(&self) -> Result<::parquet::schema::types::TypePtr, ::parquet::errors::ParquetError> {
         use ::parquet::schema::types::Type as ParquetType;
         use ::parquet::schema::types::TypePtr;
-        use ::parquet::basic::LogicalType;
-        use ::parquet::basic::*;
 
         let mut fields: ::std::vec::Vec<TypePtr> = ::std::vec::Vec::new();
         #(
           #field_types
         );*;
-        let group = ::parquet::schema::types::Type::group_type_builder("rust_schema")
+        let group = ParquetType::group_type_builder("rust_schema")
           .with_fields(&mut fields)
           .build()?;
         Ok(group.into())
