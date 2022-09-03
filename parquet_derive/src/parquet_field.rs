@@ -567,7 +567,7 @@ impl Type {
     }
 
     fn repetition(&self) -> proc_macro2::TokenStream {
-        match &self {
+        match self {
             Type::Option(_) => quote! { ::parquet::basic::Repetition::OPTIONAL },
             Type::Reference(_, ty) => ty.repetition(),
             _ => quote! { ::parquet::basic::Repetition::REQUIRED },
