@@ -105,8 +105,8 @@ where
 }
 
 /// This is similar to `math_op` as it performs given operation between two input primitive arrays.
-/// But the given can return `None` if overflow is detected. For the case, this function returns an
-/// `Err`.
+/// But the given operation can return `None` if overflow is detected. For the case, this function
+/// returns an `Err`.
 fn math_checked_op<LT, RT, F>(
     left: &PrimitiveArray<LT>,
     right: &PrimitiveArray<RT>,
@@ -137,6 +137,54 @@ where
                 } else {
                     // Overflow
                     Err(ArrowError::ComputeError("Overflow happened".to_string()))
+                }
+            } else {
+                Ok(None)
+            }
+        })
+        .collect();
+
+    let values = values?;
+
+    Ok(PrimitiveArray::<LT>::from_iter(values))
+}
+
+/// This is similar to `math_checked_op` but just for divide op.
+fn math_checked_divide<LT, RT, F>(
+    left: &PrimitiveArray<LT>,
+    right: &PrimitiveArray<RT>,
+    op: F,
+) -> Result<PrimitiveArray<LT>>
+where
+    LT: ArrowNumericType,
+    RT: ArrowNumericType,
+    RT::Native: One + Zero,
+    F: Fn(LT::Native, RT::Native) -> Option<LT::Native>,
+{
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform math operation on arrays of different length".to_string(),
+        ));
+    }
+
+    let left_iter = ArrayIter::new(left);
+    let right_iter = ArrayIter::new(right);
+
+    let values: Result<Vec<Option<<LT as ArrowPrimitiveType>::Native>>> = left_iter
+        .into_iter()
+        .zip(right_iter.into_iter())
+        .map(|(l, r)| {
+            if let (Some(l), Some(r)) = (l, r) {
+                let result = op(l, r);
+                if let Some(r) = result {
+                    Ok(Some(r))
+                } else {
+                    if r.is_zero() {
+                        Err(ArrowError::ComputeError("DivideByZero".to_string()))
+                    } else {
+                        // Overflow
+                        Err(ArrowError::ComputeError("Overflow happened".to_string()))
+                    }
                 }
             } else {
                 Ok(None)
@@ -1130,7 +1178,7 @@ where
     #[cfg(feature = "simd")]
     return simd_checked_divide_op(&left, &right, simd_checked_divide::<T>, |a, b| a / b);
     #[cfg(not(feature = "simd"))]
-    return math_checked_op(left, right, |a, b| a.checked_div_if_applied(b));
+    return math_checked_divide(left, right, |a, b| a.checked_div_if_applied(b));
 }
 
 /// Perform `left / right` operation on two arrays. If either left or right value is null
@@ -2027,7 +2075,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Overflow happened")]
+    #[should_panic(expected = "DivideByZero")]
     fn test_primitive_array_divide_by_zero() {
         let a = Int32Array::from(vec![15]);
         let b = Int32Array::from(vec![0]);
