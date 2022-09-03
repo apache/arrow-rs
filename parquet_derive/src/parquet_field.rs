@@ -336,7 +336,9 @@ impl Type {
 
         match self.physical_type() {
             BasicType::BOOLEAN => {
-                syn::parse_quote!(::parquet::column::writer::ColumnWriter::BoolColumnWriter)
+                syn::parse_quote!(
+                    ::parquet::column::writer::ColumnWriter::BoolColumnWriter
+                )
             }
             BasicType::INT32 => syn::parse_quote!(
                 ::parquet::column::writer::ColumnWriter::Int32ColumnWriter
@@ -557,7 +559,9 @@ impl Type {
         let last_part = self.last_part();
 
         match last_part.trim() {
-            "NaiveDateTime" => Some(quote! { ::parquet::basic::ConvertedType::TIMESTAMP_MILLIS }),
+            "NaiveDateTime" => {
+                Some(quote! { ::parquet::basic::ConvertedType::TIMESTAMP_MILLIS })
+            }
             _ => None,
         }
     }
