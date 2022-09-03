@@ -132,7 +132,7 @@ pub trait ArrowNativeTypeOp:
     }
 
     fn checked_sub_if_applied(self, rhs: Self) -> Option<Self> {
-        Some(self + rhs)
+        Some(self - rhs)
     }
 
     fn wrapping_sub_if_applied(self, rhs: Self) -> Self {
