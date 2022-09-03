@@ -17,6 +17,7 @@
 
 use super::DataType;
 use half::f16;
+use std::ops::Add;
 
 mod private {
     pub trait Sealed {}
@@ -113,6 +114,44 @@ pub trait ArrowPrimitiveType: 'static {
         Default::default()
     }
 }
+
+/// Trait for ArrowNativeType to provide overflow-aware operations.
+pub trait ArrowNativeTypeOp: ArrowNativeType + Add<Output = Self> {
+    fn checked_add_if_applied(self, rhs: Self) -> Option<Self> {
+        Some(self + rhs)
+    }
+
+    fn wrapping_add_if_applied(self, rhs: Self) -> Self {
+        self + rhs
+    }
+}
+
+macro_rules! native_type_op {
+    ($t:tt) => {
+        impl ArrowNativeTypeOp for $t {
+            fn checked_add_if_applied(self, rhs: Self) -> Option<Self> {
+                self.checked_add(rhs)
+            }
+
+            fn wrapping_add_if_applied(self, rhs: Self) -> Self {
+                self.wrapping_add(rhs)
+            }
+        }
+    };
+}
+
+native_type_op!(i8);
+native_type_op!(i16);
+native_type_op!(i32);
+native_type_op!(i64);
+native_type_op!(u8);
+native_type_op!(u16);
+native_type_op!(u32);
+native_type_op!(u64);
+
+impl ArrowNativeTypeOp for f16 {}
+impl ArrowNativeTypeOp for f32 {}
+impl ArrowNativeTypeOp for f64 {}
 
 impl private::Sealed for i8 {}
 impl ArrowNativeType for i8 {
