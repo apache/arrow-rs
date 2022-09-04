@@ -123,7 +123,7 @@ pub(crate) mod native_op {
     /// default implementations. Integer types that need to deal with overflow can implement
     /// this trait.
     ///
-    /// The APIs with `wrapping` suffix are the variant of non-overflow-checking. If overflow
+    /// The APIs with `_wrapping` suffix are the variant of non-overflow-checking. If overflow
     /// occurred, they will supposedly wrap around the boundary of the type.
     ///
     /// The APIs with `_checked` suffix are the variant of overflow-checking which return `None`
