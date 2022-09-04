@@ -1201,7 +1201,8 @@ pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
 }
 
 /// Perform `left / right` operation on two arrays without checking for division by zero.
-/// The result of dividing by zero follows normal floating point rules.
+/// For floating point types, the result of dividing by zero follows normal floating point
+/// rules. For other numeric types, dividing by zero will panic,
 /// If either left or right value is null then the result is also null. If any right hand value is zero then the result of this
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
