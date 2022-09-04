@@ -35,8 +35,8 @@ use crate::compute::unary_dyn;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes;
 use crate::datatypes::{
-    ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType, DataType, Date32Type,
-    Date64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    native_op::ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType, DataType,
+    Date32Type, Date64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
     IntervalYearMonthType,
 };
 use crate::datatypes::{
