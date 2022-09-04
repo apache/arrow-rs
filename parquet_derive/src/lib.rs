@@ -102,7 +102,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
         row_group_writer: &mut ::parquet::file::writer::SerializedRowGroupWriter<'_, W>
       ) -> Result<(), ::parquet::errors::ParquetError> {
         use ::parquet::column::writer::ColumnWriter;
-        
+
         let mut row_group_writer = row_group_writer;
         let records = &self; // Used by all the writer snippets to be more clear
 
@@ -124,6 +124,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
       fn schema(&self) -> Result<::parquet::schema::types::TypePtr, ::parquet::errors::ParquetError> {
         use ::parquet::schema::types::Type as ParquetType;
         use ::parquet::schema::types::TypePtr;
+        use ::parquet::basic::LogicalType;
 
         let mut fields: ::std::vec::Vec<TypePtr> = ::std::vec::Vec::new();
         #(
