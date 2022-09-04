@@ -181,19 +181,17 @@ where
                 let result = op(l, r);
                 if let Some(r) = result {
                     Ok(Some(r))
+                } else if r.is_zero() {
+                    Err(ArrowError::ComputeError(format!(
+                        "DivideByZero on: {:?}, {:?}",
+                        l, r
+                    )))
                 } else {
-                    if r.is_zero() {
-                        Err(ArrowError::ComputeError(format!(
-                            "DivideByZero on: {:?}, {:?}",
-                            l, r
-                        )))
-                    } else {
-                        // Overflow
-                        Err(ArrowError::ComputeError(format!(
-                            "Overflow happened on: {:?}, {:?}",
-                            l, r
-                        )))
-                    }
+                    // Overflow
+                    Err(ArrowError::ComputeError(format!(
+                        "Overflow happened on: {:?}, {:?}",
+                        l, r
+                    )))
                 }
             } else {
                 Ok(None)
