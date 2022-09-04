@@ -2176,6 +2176,50 @@ macro_rules! typed_dict_string_array_cmp {
 }
 
 #[cfg(feature = "dyn_cmp_dict")]
+macro_rules! typed_dict_binary_array_cmp {
+    ($LEFT: expr, $RIGHT: expr, $LEFT_KEY_TYPE: expr, $RIGHT_TYPE: tt, $OP: expr) => {{
+        match $LEFT_KEY_TYPE {
+            DataType::Int8 => {
+                let left = as_dictionary_array::<Int8Type>($LEFT);
+                cmp_dict_binary_array::<_, $RIGHT_TYPE, _>(left, $RIGHT, $OP)
+            }
+            DataType::Int16 => {
+                let left = as_dictionary_array::<Int16Type>($LEFT);
+                cmp_dict_binary_array::<_, $RIGHT_TYPE, _>(left, $RIGHT, $OP)
+            }
+            DataType::Int32 => {
+                let left = as_dictionary_array::<Int32Type>($LEFT);
+                cmp_dict_binary_array::<_, $RIGHT_TYPE, _>(left, $RIGHT, $OP)
+            }
+            DataType::Int64 => {
+                let left = as_dictionary_array::<Int64Type>($LEFT);
+                cmp_dict_binary_array::<_, $RIGHT_TYPE, _>(left, $RIGHT, $OP)
+            }
+            DataType::UInt8 => {
+                let left = as_dictionary_array::<UInt8Type>($LEFT);
+                cmp_dict_binary_array::<_, $RIGHT_TYPE, _>(left, $RIGHT, $OP)
+            }
+            DataType::UInt16 => {
+                let left = as_dictionary_array::<UInt16Type>($LEFT);
+                cmp_dict_binary_array::<_, $RIGHT_TYPE, _>(left, $RIGHT, $OP)
+            }
+            DataType::UInt32 => {
+                let left = as_dictionary_array::<UInt32Type>($LEFT);
+                cmp_dict_binary_array::<_, $RIGHT_TYPE, _>(left, $RIGHT, $OP)
+            }
+            DataType::UInt64 => {
+                let left = as_dictionary_array::<UInt64Type>($LEFT);
+                cmp_dict_binary_array::<_, $RIGHT_TYPE, _>(left, $RIGHT, $OP)
+            }
+            t => Err(ArrowError::NotYetImplemented(format!(
+                "Cannot compare dictionary array of key type {}",
+                t
+            ))),
+        }
+    }};
+}
+
+#[cfg(feature = "dyn_cmp_dict")]
 macro_rules! typed_dict_boolean_array_cmp {
     ($LEFT: expr, $RIGHT: expr, $LEFT_KEY_TYPE: expr, $OP: expr) => {{
         match $LEFT_KEY_TYPE {
@@ -2263,6 +2307,12 @@ macro_rules! typed_cmp_dict_non_dict {
                 }
                 (DataType::LargeUtf8, DataType::LargeUtf8) => {
                     typed_dict_string_array_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), i64, $OP)
+                }
+                (DataType::Binary, DataType::Binary) => {
+                    typed_dict_binary_array_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), i32, $OP)
+                }
+                (DataType::LargeBinary, DataType::LargeBinary) => {
+                    typed_dict_binary_array_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), i64, $OP)
                 }
                 (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                     "Comparing dictionary array of type {} with array of type {} is not yet implemented",
@@ -2671,6 +2721,29 @@ where
     compare_op(
         left.downcast_dict::<BooleanArray>().unwrap(),
         right.as_any().downcast_ref::<BooleanArray>().unwrap(),
+        op,
+    )
+}
+
+/// Perform given operation on `DictionaryArray` and `GenericBinaryArray`. The value
+/// type of `DictionaryArray` is same as `GenericBinaryArray`'s type.
+#[cfg(feature = "dyn_cmp_dict")]
+fn cmp_dict_binary_array<K, OffsetSize: OffsetSizeTrait, F>(
+    left: &DictionaryArray<K>,
+    right: &dyn Array,
+    op: F,
+) -> Result<BooleanArray>
+where
+    K: ArrowNumericType,
+    F: Fn(&[u8], &[u8]) -> bool,
+{
+    compare_op(
+        left.downcast_dict::<GenericBinaryArray<OffsetSize>>()
+            .unwrap(),
+        right
+            .as_any()
+            .downcast_ref::<GenericBinaryArray<OffsetSize>>()
+            .unwrap(),
         op,
     )
 }
@@ -6149,6 +6222,112 @@ mod tests {
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(true)])
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
+    fn test_eq_dyn_neq_dyn_dictionary_to_binary_array() {
+        let values: BinaryArray = ["hello", "", "parquet"]
+            .into_iter()
+            .map(|b| Some(b.as_bytes()))
+            .collect();
+
+        let keys = UInt64Array::from(vec![Some(0_u64), None, Some(2), Some(2)]);
+        let dict_array = DictionaryArray::<UInt64Type>::try_new(&keys, &values).unwrap();
+
+        let array: BinaryArray = ["hello", "", "parquet", "test"]
+            .into_iter()
+            .map(|b| Some(b.as_bytes()))
+            .collect();
+
+        let result = eq_dyn(&dict_array, &array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)])
+        );
+
+        let result = eq_dyn(&array, &dict_array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)])
+        );
+
+        let result = neq_dyn(&dict_array, &array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)])
+        );
+
+        let result = neq_dyn(&array, &dict_array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)])
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
+    fn test_lt_dyn_lt_eq_dyn_gt_dyn_gt_eq_dyn_dictionary_to_binary_array() {
+        let values: BinaryArray = ["hello", "", "parquet"]
+            .into_iter()
+            .map(|b| Some(b.as_bytes()))
+            .collect();
+
+        let keys = UInt64Array::from(vec![Some(0_u64), None, Some(2), Some(2)]);
+        let dict_array = DictionaryArray::<UInt64Type>::try_new(&keys, &values).unwrap();
+
+        let array: BinaryArray = ["hello", "", "parquet", "test"]
+            .into_iter()
+            .map(|b| Some(b.as_bytes()))
+            .collect();
+
+        let result = lt_dyn(&dict_array, &array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)])
+        );
+
+        let result = lt_dyn(&array, &dict_array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(false)])
+        );
+
+        let result = lt_eq_dyn(&dict_array, &array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(true)])
+        );
+
+        let result = lt_eq_dyn(&array, &dict_array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)])
+        );
+
+        let result = gt_dyn(&dict_array, &array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(false)])
+        );
+
+        let result = gt_dyn(&array, &dict_array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)])
+        );
+
+        let result = gt_eq_dyn(&dict_array, &array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)])
+        );
+
+        let result = gt_eq_dyn(&array, &dict_array);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(true)])
         );
     }
 
