@@ -115,7 +115,16 @@ pub trait ArrowPrimitiveType: 'static {
     }
 }
 
-/// Trait for ArrowNativeType to provide overflow-aware operations.
+/// Trait for ArrowNativeType to provide overflow-checking and non-overflow-checking
+/// variants for arithmetic operations. For floating point types, this provides some
+/// default implementations. Integer types that need to deal with overflow can implement
+/// this trait.
+///
+/// The APIs with `wrapping` suffix are the variant of non-overflow-checking. If overflow
+/// occurred, they will supposedly wrap around the boundary of the type.
+///
+/// The APIs with `_check` suffix are the variant of overflow-checking which return `None`
+/// if overflow occurred.
 pub trait ArrowNativeTypeOp:
     ArrowNativeType
     + Add<Output = Self>
@@ -123,35 +132,35 @@ pub trait ArrowNativeTypeOp:
     + Mul<Output = Self>
     + Div<Output = Self>
 {
-    fn checked_add_if_applied(self, rhs: Self) -> Option<Self> {
+    fn add_checked(self, rhs: Self) -> Option<Self> {
         Some(self + rhs)
     }
 
-    fn wrapping_add_if_applied(self, rhs: Self) -> Self {
+    fn add_wrapping(self, rhs: Self) -> Self {
         self + rhs
     }
 
-    fn checked_sub_if_applied(self, rhs: Self) -> Option<Self> {
+    fn sub_checked(self, rhs: Self) -> Option<Self> {
         Some(self - rhs)
     }
 
-    fn wrapping_sub_if_applied(self, rhs: Self) -> Self {
-        self + rhs
+    fn sub_wrapping(self, rhs: Self) -> Self {
+        self - rhs
     }
 
-    fn checked_mul_if_applied(self, rhs: Self) -> Option<Self> {
+    fn mul_checked(self, rhs: Self) -> Option<Self> {
         Some(self * rhs)
     }
 
-    fn wrapping_mul_if_applied(self, rhs: Self) -> Self {
+    fn mul_wrapping(self, rhs: Self) -> Self {
         self * rhs
     }
 
-    fn checked_div_if_applied(self, rhs: Self) -> Option<Self> {
+    fn div_checked(self, rhs: Self) -> Option<Self> {
         Some(self / rhs)
     }
 
-    fn wrapping_div_if_applied(self, rhs: Self) -> Self {
+    fn div_wrapping(self, rhs: Self) -> Self {
         self / rhs
     }
 }
@@ -159,35 +168,35 @@ pub trait ArrowNativeTypeOp:
 macro_rules! native_type_op {
     ($t:tt) => {
         impl ArrowNativeTypeOp for $t {
-            fn checked_add_if_applied(self, rhs: Self) -> Option<Self> {
+            fn add_checked(self, rhs: Self) -> Option<Self> {
                 self.checked_add(rhs)
             }
 
-            fn wrapping_add_if_applied(self, rhs: Self) -> Self {
+            fn add_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_add(rhs)
             }
 
-            fn checked_sub_if_applied(self, rhs: Self) -> Option<Self> {
+            fn sub_checked(self, rhs: Self) -> Option<Self> {
                 self.checked_sub(rhs)
             }
 
-            fn wrapping_sub_if_applied(self, rhs: Self) -> Self {
+            fn sub_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_sub(rhs)
             }
 
-            fn checked_mul_if_applied(self, rhs: Self) -> Option<Self> {
+            fn mul_checked(self, rhs: Self) -> Option<Self> {
                 self.checked_mul(rhs)
             }
 
-            fn wrapping_mul_if_applied(self, rhs: Self) -> Self {
+            fn mul_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_mul(rhs)
             }
 
-            fn checked_div_if_applied(self, rhs: Self) -> Option<Self> {
+            fn div_checked(self, rhs: Self) -> Option<Self> {
                 self.checked_div(rhs)
             }
 
-            fn wrapping_div_if_applied(self, rhs: Self) -> Self {
+            fn div_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_div(rhs)
             }
         }

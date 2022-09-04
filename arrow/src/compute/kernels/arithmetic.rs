@@ -136,7 +136,10 @@ where
                     Ok(Some(r))
                 } else {
                     // Overflow
-                    Err(ArrowError::ComputeError("Overflow happened".to_string()))
+                    Err(ArrowError::ComputeError(format!(
+                        "Overflow happened on: {:?}, {:?}",
+                        l, r
+                    )))
                 }
             } else {
                 Ok(None)
@@ -180,10 +183,16 @@ where
                     Ok(Some(r))
                 } else {
                     if r.is_zero() {
-                        Err(ArrowError::ComputeError("DivideByZero".to_string()))
+                        Err(ArrowError::ComputeError(format!(
+                            "DivideByZero on: {:?}, {:?}",
+                            l, r
+                        )))
                     } else {
                         // Overflow
-                        Err(ArrowError::ComputeError("Overflow happened".to_string()))
+                        Err(ArrowError::ComputeError(format!(
+                            "Overflow happened on: {:?}, {:?}",
+                            l, r
+                        )))
                     }
                 }
             } else {
@@ -865,7 +874,7 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
-    math_op(left, right, |a, b| a.wrapping_add_if_applied(b))
+    math_op(left, right, |a, b| a.add_wrapping(b))
 }
 
 /// Perform `left + right` operation on two arrays. If either left or right value is null
@@ -881,7 +890,7 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
-    math_checked_op(left, right, |a, b| a.checked_add_if_applied(b))
+    math_checked_op(left, right, |a, b| a.add_checked(b))
 }
 
 /// Perform `left + right` operation on two arrays. If either left or right value is null
@@ -980,7 +989,7 @@ where
     T: datatypes::ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
-    math_op(left, right, |a, b| a.wrapping_sub_if_applied(b))
+    math_op(left, right, |a, b| a.sub_wrapping(b))
 }
 
 /// Perform `left - right` operation on two arrays. If either left or right value is null
@@ -996,7 +1005,7 @@ where
     T: datatypes::ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
-    math_checked_op(left, right, |a, b| a.checked_sub_if_applied(b))
+    math_checked_op(left, right, |a, b| a.sub_checked(b))
 }
 
 /// Perform `left - right` operation on two arrays. If either left or right value is null
@@ -1076,7 +1085,7 @@ where
     T: datatypes::ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
-    math_op(left, right, |a, b| a.wrapping_mul_if_applied(b))
+    math_op(left, right, |a, b| a.mul_wrapping(b))
 }
 
 /// Perform `left * right` operation on two arrays. If either left or right value is null
@@ -1084,7 +1093,7 @@ where
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `multiply` instead.
-pub fn multiply_check<T>(
+pub fn multiply_checked<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
@@ -1092,7 +1101,7 @@ where
     T: datatypes::ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
-    math_checked_op(left, right, |a, b| a.checked_mul_if_applied(b))
+    math_checked_op(left, right, |a, b| a.mul_checked(b))
 }
 
 /// Perform `left * right` operation on two arrays. If either left or right value is null
@@ -1178,7 +1187,7 @@ where
     #[cfg(feature = "simd")]
     return simd_checked_divide_op(&left, &right, simd_checked_divide::<T>, |a, b| a / b);
     #[cfg(not(feature = "simd"))]
-    return math_checked_divide(left, right, |a, b| a.checked_div_if_applied(b));
+    return math_checked_divide(left, right, |a, b| a.div_checked(b));
 }
 
 /// Perform `left / right` operation on two arrays. If either left or right value is null
@@ -1207,7 +1216,7 @@ where
     T: datatypes::ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
-    math_op(left, right, |a, b| a.wrapping_div_if_applied(b))
+    math_op(left, right, |a, b| a.div_wrapping(b))
 }
 
 /// Modulus every value in an array by a scalar. If any value in the array is null then the
@@ -2212,7 +2221,7 @@ mod tests {
         let expected = Int32Array::from(vec![-10]);
         assert_eq!(expected, wrapped.unwrap());
 
-        let overflow = multiply_check(&a, &b);
+        let overflow = multiply_checked(&a, &b);
         overflow.expect_err("overflow should be detected");
     }
 
