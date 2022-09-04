@@ -60,6 +60,7 @@ where
         combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
 
     let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
+        // SAFETY: i in range 0..len
         op(left.value_unchecked(i), right.value_unchecked(i))
     });
 
@@ -89,6 +90,7 @@ where
         .map(|b| b.bit_slice(left.offset(), left.len()));
 
     let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
+        // SAFETY: i in range 0..len
         op(left.value_unchecked(i))
     });
 

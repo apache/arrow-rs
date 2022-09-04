@@ -391,6 +391,7 @@ impl MutableBuffer {
                 packed |= (f(i) as u8) << bit_idx;
             }
 
+            // SAFETY: Already allocated sufficient capacity
             unsafe { buffer.push_unchecked(packed) }
         }
 
@@ -400,6 +401,8 @@ impl MutableBuffer {
                 let i = bit_idx + chunks * 8;
                 packed |= (f(i) as u8) << bit_idx;
             }
+
+            // SAFETY: Already allocated sufficient capacity
             unsafe { buffer.push_unchecked(packed) }
         }
 
