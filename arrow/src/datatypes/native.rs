@@ -114,6 +114,112 @@ pub trait ArrowPrimitiveType: 'static {
     }
 }
 
+pub(crate) mod native_op {
+    use super::ArrowNativeType;
+    use std::ops::{Add, Div, Mul, Sub};
+
+    /// Trait for ArrowNativeType to provide overflow-checking and non-overflow-checking
+    /// variants for arithmetic operations. For floating point types, this provides some
+    /// default implementations. Integer types that need to deal with overflow can implement
+    /// this trait.
+    ///
+    /// The APIs with `_wrapping` suffix are the variant of non-overflow-checking. If overflow
+    /// occurred, they will supposedly wrap around the boundary of the type.
+    ///
+    /// The APIs with `_checked` suffix are the variant of overflow-checking which return `None`
+    /// if overflow occurred.
+    pub trait ArrowNativeTypeOp:
+        ArrowNativeType
+        + Add<Output = Self>
+        + Sub<Output = Self>
+        + Mul<Output = Self>
+        + Div<Output = Self>
+    {
+        fn add_checked(self, rhs: Self) -> Option<Self> {
+            Some(self + rhs)
+        }
+
+        fn add_wrapping(self, rhs: Self) -> Self {
+            self + rhs
+        }
+
+        fn sub_checked(self, rhs: Self) -> Option<Self> {
+            Some(self - rhs)
+        }
+
+        fn sub_wrapping(self, rhs: Self) -> Self {
+            self - rhs
+        }
+
+        fn mul_checked(self, rhs: Self) -> Option<Self> {
+            Some(self * rhs)
+        }
+
+        fn mul_wrapping(self, rhs: Self) -> Self {
+            self * rhs
+        }
+
+        fn div_checked(self, rhs: Self) -> Option<Self> {
+            Some(self / rhs)
+        }
+
+        fn div_wrapping(self, rhs: Self) -> Self {
+            self / rhs
+        }
+    }
+}
+
+macro_rules! native_type_op {
+    ($t:tt) => {
+        impl native_op::ArrowNativeTypeOp for $t {
+            fn add_checked(self, rhs: Self) -> Option<Self> {
+                self.checked_add(rhs)
+            }
+
+            fn add_wrapping(self, rhs: Self) -> Self {
+                self.wrapping_add(rhs)
+            }
+
+            fn sub_checked(self, rhs: Self) -> Option<Self> {
+                self.checked_sub(rhs)
+            }
+
+            fn sub_wrapping(self, rhs: Self) -> Self {
+                self.wrapping_sub(rhs)
+            }
+
+            fn mul_checked(self, rhs: Self) -> Option<Self> {
+                self.checked_mul(rhs)
+            }
+
+            fn mul_wrapping(self, rhs: Self) -> Self {
+                self.wrapping_mul(rhs)
+            }
+
+            fn div_checked(self, rhs: Self) -> Option<Self> {
+                self.checked_div(rhs)
+            }
+
+            fn div_wrapping(self, rhs: Self) -> Self {
+                self.wrapping_div(rhs)
+            }
+        }
+    };
+}
+
+native_type_op!(i8);
+native_type_op!(i16);
+native_type_op!(i32);
+native_type_op!(i64);
+native_type_op!(u8);
+native_type_op!(u16);
+native_type_op!(u32);
+native_type_op!(u64);
+
+impl native_op::ArrowNativeTypeOp for f16 {}
+impl native_op::ArrowNativeTypeOp for f32 {}
+impl native_op::ArrowNativeTypeOp for f64 {}
+
 impl private::Sealed for i8 {}
 impl ArrowNativeType for i8 {
     #[inline]

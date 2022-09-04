@@ -55,13 +55,13 @@ fn bench_multiply(arr_a: &ArrayRef, arr_b: &ArrayRef) {
 fn bench_divide(arr_a: &ArrayRef, arr_b: &ArrayRef) {
     let arr_a = arr_a.as_any().downcast_ref::<Float32Array>().unwrap();
     let arr_b = arr_b.as_any().downcast_ref::<Float32Array>().unwrap();
-    criterion::black_box(divide(arr_a, arr_b).unwrap());
+    criterion::black_box(divide_checked(arr_a, arr_b).unwrap());
 }
 
 fn bench_divide_unchecked(arr_a: &ArrayRef, arr_b: &ArrayRef) {
     let arr_a = arr_a.as_any().downcast_ref::<Float32Array>().unwrap();
     let arr_b = arr_b.as_any().downcast_ref::<Float32Array>().unwrap();
-    criterion::black_box(divide_unchecked(arr_a, arr_b).unwrap());
+    criterion::black_box(divide(arr_a, arr_b).unwrap());
 }
 
 fn bench_divide_scalar(array: &ArrayRef, divisor: f32) {
