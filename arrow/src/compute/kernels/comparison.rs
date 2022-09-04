@@ -59,12 +59,10 @@ where
     let null_bit_buffer =
         combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
 
-    // Safety:
-    // `i < $left.len()` and $left.len() == $right.len()
-    let comparison = (0..left.len())
-        .map(|i| unsafe { op(left.value_unchecked(i), right.value_unchecked(i)) });
-    // same size as $left.len() and $right.len()
-    let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
+    let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
+        // SAFETY: i in range 0..len
+        op(left.value_unchecked(i), right.value_unchecked(i))
+    });
 
     let data = unsafe {
         ArrayData::new_unchecked(
@@ -91,11 +89,10 @@ where
         .null_buffer()
         .map(|b| b.bit_slice(left.offset(), left.len()));
 
-    // Safety:
-    // `i < $left.len()`
-    let comparison = (0..left.len()).map(|i| unsafe { op(left.value_unchecked(i)) });
-    // same as $left.len()
-    let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
+    let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
+        // SAFETY: i in range 0..len
+        op(left.value_unchecked(i))
+    });
 
     let data = unsafe {
         ArrayData::new_unchecked(
