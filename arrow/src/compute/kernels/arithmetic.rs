@@ -1284,40 +1284,20 @@ where
 }
 
 /// Divide every value in an array by a scalar. If any value in the array is null then the
-/// result is also null. If the scalar is zero then it will panic. For a variant returning
-/// `Err` on division by zero, use `divide_scalar_checked` instead.
-///
-/// This doesn't detect overflow. Once overflowing, the result will wrap around.
-/// For an overflow-checking variant, use `divide_scalar_checked` instead.
+/// result is also null. If the scalar is zero then the result of this operation will be
+/// `Err(ArrowError::DivideByZero)`.
 pub fn divide_scalar<T>(
     array: &PrimitiveArray<T>,
     divisor: T::Native,
 ) -> Result<PrimitiveArray<T>>
 where
     T: datatypes::ArrowNumericType,
-    T::Native: ArrowNativeTypeOp + Zero,
-{
-    Ok(unary(array, |a| a.div_wrapping(divisor)))
-}
-
-/// Divide every value in an array by a scalar. If any value in the array is null then the
-/// result is also null. If the scalar is zero then the result of this operation will be
-/// `Err(ArrowError::DivideByZero)`.
-///
-/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
-/// use `divide_scalar` instead.
-pub fn divide_scalar_checked<T>(
-    array: &PrimitiveArray<T>,
-    divisor: T::Native,
-) -> Result<PrimitiveArray<T>>
-where
-    T: datatypes::ArrowNumericType,
-    T::Native: ArrowNativeTypeOp + Zero,
+    T::Native: Div<Output = T::Native> + Zero,
 {
     if divisor.is_zero() {
         return Err(ArrowError::DivideByZero);
     }
-    unary_checked(array, |a| a.div_checked(divisor))
+    Ok(unary(array, |a| a / divisor))
 }
 
 /// Divide every value in an array by a scalar. If any value in the array is null then the
@@ -2347,31 +2327,5 @@ mod tests {
 
         let overflow = multiply_scalar_checked(&a, i32::MAX);
         overflow.expect_err("overflow should be detected");
-    }
-
-    #[test]
-    fn test_primitive_div_scalar_wrapping_overflow() {
-        let a = Int32Array::from(vec![i32::MIN]);
-
-        let wrapped = divide_scalar(&a, -1);
-        let expected = Int32Array::from(vec![-2147483648]);
-        assert_eq!(expected, wrapped.unwrap());
-
-        let overflow = divide_scalar_checked(&a, -1);
-        overflow.expect_err("overflow should be detected");
-    }
-
-    #[test]
-    #[should_panic(expected = "attempt to divide by zero")]
-    fn test_primitive_div_scalar_divide_by_zero() {
-        let a = Int32Array::from(vec![10]);
-        divide_scalar(&a, 0).unwrap();
-    }
-
-    #[test]
-    fn test_primitive_div_scalar_checked_divide_by_zero() {
-        let a = Int32Array::from(vec![10]);
-        let err = divide_scalar_checked(&a, 0);
-        err.expect_err("division by zero should be detected");
     }
 }

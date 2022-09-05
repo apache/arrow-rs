@@ -95,31 +95,25 @@ where
     F: Fn(I::Native) -> Option<O::Native>,
     I::Native: ArrowNativeTypeOp,
 {
-    let values: Result<Vec<O::Native>> = array
-        .values()
-        .iter()
-        .map(|v| {
-            let result = op(*v);
-            if let Some(r) = result {
-                Ok(r)
-            } else {
-                // Overflow
-                Err(ArrowError::ComputeError(format!(
-                    "Overflow happened on: {:?}",
-                    *v
-                )))
-            }
-        })
-        .collect();
-
-    let values = values?;
+    let values = array.values().iter().map(|v| {
+        let result = op(*v);
+        if let Some(r) = result {
+            Ok(r)
+        } else {
+            // Overflow
+            Err(ArrowError::ComputeError(format!(
+                "Overflow happened on: {:?}",
+                *v
+            )))
+        }
+    });
 
     // JUSTIFICATION
     //  Benefit
     //      ~60% speedup
     //  Soundness
     //      `values` is an iterator with a known size because arrays are sized.
-    let buffer = unsafe { Buffer::from_trusted_len_iter(values.into_iter()) };
+    let buffer = unsafe { Buffer::try_from_trusted_len_iter(values) }?;
 
     let data = into_primitive_array_data::<_, O>(array, buffer);
     Ok(PrimitiveArray::<O>::from(data))
