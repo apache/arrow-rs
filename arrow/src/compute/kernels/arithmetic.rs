@@ -33,7 +33,6 @@ use crate::buffer::MutableBuffer;
 use crate::compute::kernels::arity::unary;
 use crate::compute::unary_dyn;
 use crate::compute::util::combine_option_bitmap;
-use crate::datatypes;
 use crate::datatypes::{
     native_op::ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType, DataType,
     Date32Type, Date64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
@@ -44,8 +43,8 @@ use crate::datatypes::{
     UInt32Type, UInt64Type, UInt8Type,
 };
 use crate::error::{ArrowError, Result};
+use crate::{datatypes, downcast_primitive_array};
 use num::traits::Pow;
-use std::any::type_name;
 #[cfg(feature = "simd")]
 use std::borrow::BorrowMut;
 #[cfg(feature = "simd")]
@@ -671,72 +670,6 @@ macro_rules! typed_dict_math_op {
     }};
 }
 
-macro_rules! typed_op {
-    ($LEFT: expr, $RIGHT: expr, $T: ident, $OP: expr, $MATH_OP: ident) => {{
-        let left = $LEFT
-            .as_any()
-            .downcast_ref::<PrimitiveArray<$T>>()
-            .ok_or_else(|| {
-                ArrowError::CastError(format!(
-                    "Left array cannot be cast to {}",
-                    type_name::<$T>()
-                ))
-            })?;
-        let right = $RIGHT
-            .as_any()
-            .downcast_ref::<PrimitiveArray<$T>>()
-            .ok_or_else(|| {
-                ArrowError::CastError(format!(
-                    "Right array cannot be cast to {}",
-                    type_name::<$T>(),
-                ))
-            })?;
-        let array = $MATH_OP(left, right, $OP)?;
-        Ok(Arc::new(array))
-    }};
-}
-
-macro_rules! typed_math_op {
-    ($LEFT: expr, $RIGHT: expr, $OP: expr, $MATH_OP: ident) => {{
-        match $LEFT.data_type() {
-            DataType::Int8 => {
-                typed_op!($LEFT, $RIGHT, Int8Type, $OP, $MATH_OP)
-            }
-            DataType::Int16 => {
-                typed_op!($LEFT, $RIGHT, Int16Type, $OP, $MATH_OP)
-            }
-            DataType::Int32 => {
-                typed_op!($LEFT, $RIGHT, Int32Type, $OP, $MATH_OP)
-            }
-            DataType::Int64 => {
-                typed_op!($LEFT, $RIGHT, Int64Type, $OP, $MATH_OP)
-            }
-            DataType::UInt8 => {
-                typed_op!($LEFT, $RIGHT, UInt8Type, $OP, $MATH_OP)
-            }
-            DataType::UInt16 => {
-                typed_op!($LEFT, $RIGHT, UInt16Type, $OP, $MATH_OP)
-            }
-            DataType::UInt32 => {
-                typed_op!($LEFT, $RIGHT, UInt32Type, $OP, $MATH_OP)
-            }
-            DataType::UInt64 => {
-                typed_op!($LEFT, $RIGHT, UInt64Type, $OP, $MATH_OP)
-            }
-            DataType::Float32 => {
-                typed_op!($LEFT, $RIGHT, Float32Type, $OP, $MATH_OP)
-            }
-            DataType::Float64 => {
-                typed_op!($LEFT, $RIGHT, Float64Type, $OP, $MATH_OP)
-            }
-            t => Err(ArrowError::CastError(format!(
-                "Cannot perform arithmetic operation on arrays of type {}",
-                t
-            ))),
-        }
-    }};
-}
-
 /// Helper function to perform math lambda function on values from two dictionary arrays, this
 /// version does not attempt to use SIMD explicitly (though the compiler may auto vectorize)
 macro_rules! math_dict_op {
@@ -946,7 +879,17 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
                 ))),
             }
         }
-        _ => typed_math_op!(left, right, |a, b| a + b, math_op),
+        _ => {
+            downcast_primitive_array!(
+                (left, right) => {
+                    math_op(left, right, |a, b| a + b).map(|a| Arc::new(a) as ArrayRef)
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Unsupported data type {}, {}",
+                    left.data_type(), right.data_type()
+                )))
+            )
+        }
     }
 }
 
@@ -1013,7 +956,17 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(left, right, |a, b| a - b, math_op_dict)
         }
-        _ => typed_math_op!(left, right, |a, b| a - b, math_op),
+        _ => {
+            downcast_primitive_array!(
+                (left, right) => {
+                    math_op(left, right, |a, b| a - b).map(|a| Arc::new(a) as ArrayRef)
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Unsupported data type {}, {}",
+                    left.data_type(), right.data_type()
+                )))
+            )
+        }
     }
 }
 
@@ -1109,7 +1062,17 @@ pub fn multiply_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(left, right, |a, b| a * b, math_op_dict)
         }
-        _ => typed_math_op!(left, right, |a, b| a * b, math_op),
+        _ => {
+            downcast_primitive_array!(
+                (left, right) => {
+                    math_op(left, right, |a, b| a * b).map(|a| Arc::new(a) as ArrayRef)
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Unsupported data type {}, {}",
+                    left.data_type(), right.data_type()
+                )))
+            )
+        }
     }
 }
 
@@ -1196,7 +1159,17 @@ pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(left, right, |a, b| a / b, math_divide_checked_op_dict)
         }
-        _ => typed_math_op!(left, right, |a, b| a / b, math_checked_divide_op),
+        _ => {
+            downcast_primitive_array!(
+                (left, right) => {
+                    math_checked_divide_op(left, right, |a, b| a / b).map(|a| Arc::new(a) as ArrayRef)
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Unsupported data type {}, {}",
+                    left.data_type(), right.data_type()
+                )))
+            )
+        }
     }
 }
 
