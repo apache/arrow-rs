@@ -181,7 +181,7 @@ impl Buffer {
         unsafe { self.data.ptr().as_ptr().add(self.offset) }
     }
 
-    /// View buffer as typed slice.
+    /// View buffer as a slice of a specific type.
     ///
     /// # Panics
     ///
