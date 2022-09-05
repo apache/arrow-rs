@@ -31,8 +31,8 @@ use crate::buffer::Buffer;
 #[cfg(feature = "simd")]
 use crate::buffer::MutableBuffer;
 use crate::compute::kernels::arity::unary;
-use crate::compute::unary_dyn;
 use crate::compute::util::combine_option_bitmap;
+use crate::compute::{unary_checked, unary_dyn};
 use crate::datatypes;
 use crate::datatypes::{
     native_op::ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType, DataType,
@@ -952,15 +952,34 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
 
 /// Add every value in an array by a scalar. If any value in the array is null then the
 /// result is also null.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `add_scalar_checked` instead.
 pub fn add_scalar<T>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
 ) -> Result<PrimitiveArray<T>>
 where
     T: datatypes::ArrowNumericType,
-    T::Native: Add<Output = T::Native>,
+    T::Native: ArrowNativeTypeOp,
 {
-    Ok(unary(array, |value| value + scalar))
+    Ok(unary(array, |value| value.add_wrapping(scalar)))
+}
+
+/// Add every value in an array by a scalar. If any value in the array is null then the
+/// result is also null.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `add_scalar` instead.
+pub fn add_scalar_checked<T>(
+    array: &PrimitiveArray<T>,
+    scalar: T::Native,
+) -> Result<PrimitiveArray<T>>
+where
+    T: datatypes::ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    unary_checked(array, |value| value.add_checked(scalar))
 }
 
 /// Add every value in an array by a scalar. If any value in the array is null then the
@@ -1019,19 +1038,34 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
 
 /// Subtract every value in an array by a scalar. If any value in the array is null then the
 /// result is also null.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `subtract_scalar_checked` instead.
 pub fn subtract_scalar<T>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
 ) -> Result<PrimitiveArray<T>>
 where
     T: datatypes::ArrowNumericType,
-    T::Native: Add<Output = T::Native>
-        + Sub<Output = T::Native>
-        + Mul<Output = T::Native>
-        + Div<Output = T::Native>
-        + Zero,
+    T::Native: ArrowNativeTypeOp + Zero,
 {
-    Ok(unary(array, |value| value - scalar))
+    Ok(unary(array, |value| value.sub_wrapping(scalar)))
+}
+
+/// Subtract every value in an array by a scalar. If any value in the array is null then the
+/// result is also null.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `subtract_scalar` instead.
+pub fn subtract_scalar_checked<T>(
+    array: &PrimitiveArray<T>,
+    scalar: T::Native,
+) -> Result<PrimitiveArray<T>>
+where
+    T: datatypes::ArrowNumericType,
+    T::Native: ArrowNativeTypeOp + Zero,
+{
+    unary_checked(array, |value| value.sub_checked(scalar))
 }
 
 /// Subtract every value in an array by a scalar. If any value in the array is null then the
@@ -1115,21 +1149,34 @@ pub fn multiply_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
 
 /// Multiply every value in an array by a scalar. If any value in the array is null then the
 /// result is also null.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `multiply_scalar_checked` instead.
 pub fn multiply_scalar<T>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
 ) -> Result<PrimitiveArray<T>>
 where
     T: datatypes::ArrowNumericType,
-    T::Native: Add<Output = T::Native>
-        + Sub<Output = T::Native>
-        + Mul<Output = T::Native>
-        + Div<Output = T::Native>
-        + Rem<Output = T::Native>
-        + Zero
-        + One,
+    T::Native: ArrowNativeTypeOp + Zero + One,
 {
-    Ok(unary(array, |value| value * scalar))
+    Ok(unary(array, |value| value.mul_wrapping(scalar)))
+}
+
+/// Multiply every value in an array by a scalar. If any value in the array is null then the
+/// result is also null.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `multiply_scalar` instead.
+pub fn multiply_scalar_checked<T>(
+    array: &PrimitiveArray<T>,
+    scalar: T::Native,
+) -> Result<PrimitiveArray<T>>
+where
+    T: datatypes::ArrowNumericType,
+    T::Native: ArrowNativeTypeOp + Zero + One,
+{
+    unary_checked(array, |value| value.mul_checked(scalar))
 }
 
 /// Multiply every value in an array by a scalar. If any value in the array is null then the
@@ -1237,20 +1284,40 @@ where
 }
 
 /// Divide every value in an array by a scalar. If any value in the array is null then the
-/// result is also null. If the scalar is zero then the result of this operation will be
-/// `Err(ArrowError::DivideByZero)`.
+/// result is also null. If the scalar is zero then it will panic. For a variant returning
+/// `Err` on division by zero, use `divide_scalar_checked` instead.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `divide_scalar_checked` instead.
 pub fn divide_scalar<T>(
     array: &PrimitiveArray<T>,
     divisor: T::Native,
 ) -> Result<PrimitiveArray<T>>
 where
     T: datatypes::ArrowNumericType,
-    T::Native: Div<Output = T::Native> + Zero,
+    T::Native: ArrowNativeTypeOp + Zero,
+{
+    Ok(unary(array, |a| a.div_wrapping(divisor)))
+}
+
+/// Divide every value in an array by a scalar. If any value in the array is null then the
+/// result is also null. If the scalar is zero then the result of this operation will be
+/// `Err(ArrowError::DivideByZero)`.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `divide_scalar` instead.
+pub fn divide_scalar_checked<T>(
+    array: &PrimitiveArray<T>,
+    divisor: T::Native,
+) -> Result<PrimitiveArray<T>>
+where
+    T: datatypes::ArrowNumericType,
+    T::Native: ArrowNativeTypeOp + Zero,
 {
     if divisor.is_zero() {
         return Err(ArrowError::DivideByZero);
     }
-    Ok(unary(array, |a| a / divisor))
+    unary_checked(array, |a| a.div_checked(divisor))
 }
 
 /// Divide every value in an array by a scalar. If any value in the array is null then the
@@ -2244,5 +2311,67 @@ mod tests {
 
         let overflow = divide_checked(&a, &b);
         overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_add_scalar_wrapping_overflow() {
+        let a = Int32Array::from(vec![i32::MAX, i32::MIN]);
+
+        let wrapped = add_scalar(&a, 1);
+        let expected = Int32Array::from(vec![-2147483648, -2147483647]);
+        assert_eq!(expected, wrapped.unwrap());
+
+        let overflow = add_scalar_checked(&a, 1);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_subtract_scalar_wrapping_overflow() {
+        let a = Int32Array::from(vec![-2]);
+
+        let wrapped = subtract_scalar(&a, i32::MAX);
+        let expected = Int32Array::from(vec![i32::MAX]);
+        assert_eq!(expected, wrapped.unwrap());
+
+        let overflow = subtract_scalar_checked(&a, i32::MAX);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_mul_scalar_wrapping_overflow() {
+        let a = Int32Array::from(vec![10]);
+
+        let wrapped = multiply_scalar(&a, i32::MAX);
+        let expected = Int32Array::from(vec![-10]);
+        assert_eq!(expected, wrapped.unwrap());
+
+        let overflow = multiply_scalar_checked(&a, i32::MAX);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_div_scalar_wrapping_overflow() {
+        let a = Int32Array::from(vec![i32::MIN]);
+
+        let wrapped = divide_scalar(&a, -1);
+        let expected = Int32Array::from(vec![-2147483648]);
+        assert_eq!(expected, wrapped.unwrap());
+
+        let overflow = divide_scalar_checked(&a, -1);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to divide by zero")]
+    fn test_primitive_div_scalar_divide_by_zero() {
+        let a = Int32Array::from(vec![10]);
+        divide_scalar(&a, 0).unwrap();
+    }
+
+    #[test]
+    fn test_primitive_div_scalar_checked_divide_by_zero() {
+        let a = Int32Array::from(vec![10]);
+        let err = divide_scalar_checked(&a, 0);
+        err.expect_err("division by zero should be detected");
     }
 }

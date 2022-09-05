@@ -19,6 +19,7 @@
 
 use crate::array::{Array, ArrayData, ArrayRef, DictionaryArray, PrimitiveArray};
 use crate::buffer::Buffer;
+use crate::datatypes::native_op::ArrowNativeTypeOp;
 use crate::datatypes::{
     ArrowNumericType, ArrowPrimitiveType, DataType, Int16Type, Int32Type, Int64Type,
     Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
@@ -81,6 +82,47 @@ where
 
     let data = into_primitive_array_data::<_, O>(array, buffer);
     PrimitiveArray::<O>::from(data)
+}
+
+/// A overflow-checking variant of `unary`.
+pub(crate) fn unary_checked<I, F, O>(
+    array: &PrimitiveArray<I>,
+    op: F,
+) -> Result<PrimitiveArray<O>>
+where
+    I: ArrowPrimitiveType,
+    O: ArrowPrimitiveType,
+    F: Fn(I::Native) -> Option<O::Native>,
+    I::Native: ArrowNativeTypeOp,
+{
+    let values: Result<Vec<O::Native>> = array
+        .values()
+        .iter()
+        .map(|v| {
+            let result = op(*v);
+            if let Some(r) = result {
+                Ok(r)
+            } else {
+                // Overflow
+                Err(ArrowError::ComputeError(format!(
+                    "Overflow happened on: {:?}",
+                    *v
+                )))
+            }
+        })
+        .collect();
+
+    let values = values?;
+
+    // JUSTIFICATION
+    //  Benefit
+    //      ~60% speedup
+    //  Soundness
+    //      `values` is an iterator with a known size because arrays are sized.
+    let buffer = unsafe { Buffer::from_trusted_len_iter(values.into_iter()) };
+
+    let data = into_primitive_array_data::<_, O>(array, buffer);
+    Ok(PrimitiveArray::<O>::from(data))
 }
 
 /// A helper function that applies an unary function to a dictionary array with primitive value type.
