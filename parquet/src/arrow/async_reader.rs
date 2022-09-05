@@ -995,6 +995,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_fuzz_async_reader_selection() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
