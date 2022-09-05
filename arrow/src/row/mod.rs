@@ -697,6 +697,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn fuzz_test() {
         for _ in 0..100 {
             let mut rng = thread_rng();

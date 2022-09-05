@@ -277,6 +277,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_interner() {
         test_intern_values(&[8, 6, 5, 7]);
 
