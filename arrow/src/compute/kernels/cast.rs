@@ -1632,14 +1632,14 @@ where
     TO::Native: num::NumCast,
 {
     if cast_options.safe {
-        // If can't cast to the `TO::Native`, return null
+        // If the value can't be casted to the `TO::Native`, return null
         Ok(Arc::new(numeric_cast::<FROM, TO>(
             from.as_any()
                 .downcast_ref::<PrimitiveArray<FROM>>()
                 .unwrap(),
         )))
     } else {
-        // If can't cast to the `TO::Native`, return error
+        // If the value can't be casted to the `TO::Native`, return error
         Ok(Arc::new(numeric_cast_with_error::<FROM, TO>(
             from.as_any()
                 .downcast_ref::<PrimitiveArray<FROM>>()
