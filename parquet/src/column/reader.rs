@@ -306,7 +306,7 @@ where
 
                 // If dictionary, we must read it
                 if metadata.is_dict {
-                    self.read_new_page()?;
+                    self.read_dictionary_page()?;
                     continue;
                 }
 
@@ -360,6 +360,24 @@ where
             remaining -= records_read;
         }
         Ok(num_records - remaining)
+    }
+
+    /// Read the next page as a dictionary page. If the next page is not a dictionary page,
+    /// this will return an error.
+    fn read_dictionary_page(&mut self) -> Result<()> {
+        match self.page_reader.get_next_page()? {
+            Some(Page::DictionaryPage {
+                buf,
+                num_values,
+                encoding,
+                is_sorted,
+            }) => self
+                .values_decoder
+                .set_dict(buf, num_values, encoding, is_sorted),
+            _ => Err(ParquetError::General(
+                "Invalid page. Expecting dictionary page".to_string(),
+            )),
+        }
     }
 
     /// Reads a new page and set up the decoders for levels, values or dictionary.
@@ -493,6 +511,28 @@ where
         }
     }
 
+    /// Check whether there is more data to read from this column,
+    /// If the current page is fully decoded, this will NOT load the next page
+    /// into the buffer
+    #[inline]
+    pub(crate) fn peek_next(&mut self) -> Result<bool> {
+        if self.num_buffered_values == 0
+            || self.num_buffered_values == self.num_decoded_values
+        {
+            // TODO: should we return false if read_new_page() = true and
+            // num_buffered_values = 0?
+            match self.page_reader.peek_next_page()? {
+                Some(next_page) => Ok(next_page.num_rows != 0),
+                None => Ok(false),
+            }
+        } else {
+            Ok(true)
+        }
+    }
+
+    /// Check whether there is more data to read from this column,
+    /// If the current page is fully decoded, this will load the next page
+    /// (if it exists) into the buffer
     #[inline]
     pub(crate) fn has_next(&mut self) -> Result<bool> {
         if self.num_buffered_values == 0
