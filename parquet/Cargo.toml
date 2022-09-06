@@ -74,7 +74,7 @@ arrow = ["dep:arrow", "base64"]
 # Enable CLI tools
 cli = ["json", "base64", "clap", "arrow/csv"]
 # Enable JSON APIs
-json = ["serde_json"]
+json = ["serde_json", "base64"]
 # Enable internal testing APIs
 test_common = ["arrow/test_utils"]
 # Experimental, unstable functionality primarily used for testing
