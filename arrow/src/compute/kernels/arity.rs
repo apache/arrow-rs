@@ -88,7 +88,7 @@ where
     F: Fn(T::Native) -> T::Native,
 {
     let dict_values = array.values().as_any().downcast_ref().unwrap();
-    let values = unary::<T, F, T>(&dict_values, op).into_data();
+    let values = unary::<T, F, T>(dict_values, op).into_data();
     let data = array.data().clone().into_builder().child_data(vec![values]);
 
     let new_dict: DictionaryArray<K> = unsafe { data.build_unchecked() }.into();
