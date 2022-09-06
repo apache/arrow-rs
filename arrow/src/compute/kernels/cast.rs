@@ -43,13 +43,13 @@ use std::str;
 use std::sync::Arc;
 
 use crate::buffer::MutableBuffer;
-use crate::compute::divide_scalar;
 use crate::compute::kernels::arithmetic::{divide, multiply};
 use crate::compute::kernels::arity::unary;
 use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use crate::compute::kernels::temporal::extract_component_from_array;
 use crate::compute::kernels::temporal::return_compute_error_with;
 use crate::compute::using_chrono_tz_and_utc_naive_date_time;
+use crate::compute::{divide_scalar, into_primitive_array_data};
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::temporal_conversions::{
@@ -1513,8 +1513,8 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
                             v.as_ref().and_then(|v| v.to_i128())
                                 .ok_or_else(|| {
                                     ArrowError::InvalidArgumentError(
-                                    format!("{:?} cannot be casted to 128-bit integer for Decimal128", v),
-                                )
+                                        format!("{:?} cannot be casted to 128-bit integer for Decimal128", v),
+                                    )
                                 })
                                 .map(Some)
                         }
@@ -1568,8 +1568,8 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
                             v.as_ref().and_then(|v| v.to_i128())
                                 .ok_or_else(|| {
                                     ArrowError::InvalidArgumentError(
-                                    format!("{:?} cannot be casted to 128-bit integer for Decimal128", v),
-                                )
+                                        format!("{:?} cannot be casted to 128-bit integer for Decimal128", v),
+                                    )
                                 })
                                 .map(Some)
                         }
@@ -1657,22 +1657,21 @@ where
     T::Native: num::NumCast,
     R::Native: num::NumCast,
 {
-    let iter = from
-        .iter()
-        .map(|v| match v {
-            None => Ok(None),
-            Some(value) => match num::cast::cast::<T::Native, R::Native>(value) {
+    let iter =
+        from.values()
+            .iter()
+            .map(|v| match num::cast::cast::<T::Native, R::Native>(*v) {
                 None => Err(ArrowError::CastError(format!(
                     "Can't cast value {:?} to type {}",
-                    value,
+                    v,
                     R::DATA_TYPE
                 ))),
-                Some(v) => Ok(Some(v)),
-            },
-        })
-        .collect::<Result<Vec<Option<R::Native>>>>()?;
+                Some(cast_v) => Ok(cast_v),
+            });
+    let buffer = unsafe { Buffer::try_from_trusted_len_iter(iter) }?;
 
-    Ok(unsafe { PrimitiveArray::<R>::from_trusted_len_iter(iter) })
+    let data = into_primitive_array_data::<_, R>(from, buffer);
+    Ok(PrimitiveArray::<R>::from(data))
 }
 
 // Natural cast between numeric types
