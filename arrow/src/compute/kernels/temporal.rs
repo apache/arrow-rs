@@ -368,7 +368,8 @@ where
     Ok(b.finish())
 }
 
-/// Extracts the month of a given temporal primitive array as an array of integers
+/// Extracts the month of a given temporal primitive array as an array of integers within
+/// the range of [1, 12].
 pub fn month<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
