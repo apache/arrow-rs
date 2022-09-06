@@ -870,105 +870,269 @@ pub fn cast_with_options(
         },
 
         // start numeric casts
-        (UInt8, UInt16) => cast_numeric_arrays::<UInt8Type, UInt16Type>(array),
-        (UInt8, UInt32) => cast_numeric_arrays::<UInt8Type, UInt32Type>(array),
-        (UInt8, UInt64) => cast_numeric_arrays::<UInt8Type, UInt64Type>(array),
-        (UInt8, Int8) => cast_numeric_arrays::<UInt8Type, Int8Type>(array),
-        (UInt8, Int16) => cast_numeric_arrays::<UInt8Type, Int16Type>(array),
-        (UInt8, Int32) => cast_numeric_arrays::<UInt8Type, Int32Type>(array),
-        (UInt8, Int64) => cast_numeric_arrays::<UInt8Type, Int64Type>(array),
-        (UInt8, Float32) => cast_numeric_arrays::<UInt8Type, Float32Type>(array),
-        (UInt8, Float64) => cast_numeric_arrays::<UInt8Type, Float64Type>(array),
+        (UInt8, UInt16) => {
+            cast_numeric_arrays::<UInt8Type, UInt16Type>(array, cast_options)
+        }
+        (UInt8, UInt32) => {
+            cast_numeric_arrays::<UInt8Type, UInt32Type>(array, cast_options)
+        }
+        (UInt8, UInt64) => {
+            cast_numeric_arrays::<UInt8Type, UInt64Type>(array, cast_options)
+        }
+        (UInt8, Int8) => cast_numeric_arrays::<UInt8Type, Int8Type>(array, cast_options),
+        (UInt8, Int16) => {
+            cast_numeric_arrays::<UInt8Type, Int16Type>(array, cast_options)
+        }
+        (UInt8, Int32) => {
+            cast_numeric_arrays::<UInt8Type, Int32Type>(array, cast_options)
+        }
+        (UInt8, Int64) => {
+            cast_numeric_arrays::<UInt8Type, Int64Type>(array, cast_options)
+        }
+        (UInt8, Float32) => {
+            cast_numeric_arrays::<UInt8Type, Float32Type>(array, cast_options)
+        }
+        (UInt8, Float64) => {
+            cast_numeric_arrays::<UInt8Type, Float64Type>(array, cast_options)
+        }
 
-        (UInt16, UInt8) => cast_numeric_arrays::<UInt16Type, UInt8Type>(array),
-        (UInt16, UInt32) => cast_numeric_arrays::<UInt16Type, UInt32Type>(array),
-        (UInt16, UInt64) => cast_numeric_arrays::<UInt16Type, UInt64Type>(array),
-        (UInt16, Int8) => cast_numeric_arrays::<UInt16Type, Int8Type>(array),
-        (UInt16, Int16) => cast_numeric_arrays::<UInt16Type, Int16Type>(array),
-        (UInt16, Int32) => cast_numeric_arrays::<UInt16Type, Int32Type>(array),
-        (UInt16, Int64) => cast_numeric_arrays::<UInt16Type, Int64Type>(array),
-        (UInt16, Float32) => cast_numeric_arrays::<UInt16Type, Float32Type>(array),
-        (UInt16, Float64) => cast_numeric_arrays::<UInt16Type, Float64Type>(array),
+        (UInt16, UInt8) => {
+            cast_numeric_arrays::<UInt16Type, UInt8Type>(array, cast_options)
+        }
+        (UInt16, UInt32) => {
+            cast_numeric_arrays::<UInt16Type, UInt32Type>(array, cast_options)
+        }
+        (UInt16, UInt64) => {
+            cast_numeric_arrays::<UInt16Type, UInt64Type>(array, cast_options)
+        }
+        (UInt16, Int8) => {
+            cast_numeric_arrays::<UInt16Type, Int8Type>(array, cast_options)
+        }
+        (UInt16, Int16) => {
+            cast_numeric_arrays::<UInt16Type, Int16Type>(array, cast_options)
+        }
+        (UInt16, Int32) => {
+            cast_numeric_arrays::<UInt16Type, Int32Type>(array, cast_options)
+        }
+        (UInt16, Int64) => {
+            cast_numeric_arrays::<UInt16Type, Int64Type>(array, cast_options)
+        }
+        (UInt16, Float32) => {
+            cast_numeric_arrays::<UInt16Type, Float32Type>(array, cast_options)
+        }
+        (UInt16, Float64) => {
+            cast_numeric_arrays::<UInt16Type, Float64Type>(array, cast_options)
+        }
 
-        (UInt32, UInt8) => cast_numeric_arrays::<UInt32Type, UInt8Type>(array),
-        (UInt32, UInt16) => cast_numeric_arrays::<UInt32Type, UInt16Type>(array),
-        (UInt32, UInt64) => cast_numeric_arrays::<UInt32Type, UInt64Type>(array),
-        (UInt32, Int8) => cast_numeric_arrays::<UInt32Type, Int8Type>(array),
-        (UInt32, Int16) => cast_numeric_arrays::<UInt32Type, Int16Type>(array),
-        (UInt32, Int32) => cast_numeric_arrays::<UInt32Type, Int32Type>(array),
-        (UInt32, Int64) => cast_numeric_arrays::<UInt32Type, Int64Type>(array),
-        (UInt32, Float32) => cast_numeric_arrays::<UInt32Type, Float32Type>(array),
-        (UInt32, Float64) => cast_numeric_arrays::<UInt32Type, Float64Type>(array),
+        (UInt32, UInt8) => {
+            cast_numeric_arrays::<UInt32Type, UInt8Type>(array, cast_options)
+        }
+        (UInt32, UInt16) => {
+            cast_numeric_arrays::<UInt32Type, UInt16Type>(array, cast_options)
+        }
+        (UInt32, UInt64) => {
+            cast_numeric_arrays::<UInt32Type, UInt64Type>(array, cast_options)
+        }
+        (UInt32, Int8) => {
+            cast_numeric_arrays::<UInt32Type, Int8Type>(array, cast_options)
+        }
+        (UInt32, Int16) => {
+            cast_numeric_arrays::<UInt32Type, Int16Type>(array, cast_options)
+        }
+        (UInt32, Int32) => {
+            cast_numeric_arrays::<UInt32Type, Int32Type>(array, cast_options)
+        }
+        (UInt32, Int64) => {
+            cast_numeric_arrays::<UInt32Type, Int64Type>(array, cast_options)
+        }
+        (UInt32, Float32) => {
+            cast_numeric_arrays::<UInt32Type, Float32Type>(array, cast_options)
+        }
+        (UInt32, Float64) => {
+            cast_numeric_arrays::<UInt32Type, Float64Type>(array, cast_options)
+        }
 
-        (UInt64, UInt8) => cast_numeric_arrays::<UInt64Type, UInt8Type>(array),
-        (UInt64, UInt16) => cast_numeric_arrays::<UInt64Type, UInt16Type>(array),
-        (UInt64, UInt32) => cast_numeric_arrays::<UInt64Type, UInt32Type>(array),
-        (UInt64, Int8) => cast_numeric_arrays::<UInt64Type, Int8Type>(array),
-        (UInt64, Int16) => cast_numeric_arrays::<UInt64Type, Int16Type>(array),
-        (UInt64, Int32) => cast_numeric_arrays::<UInt64Type, Int32Type>(array),
-        (UInt64, Int64) => cast_numeric_arrays::<UInt64Type, Int64Type>(array),
-        (UInt64, Float32) => cast_numeric_arrays::<UInt64Type, Float32Type>(array),
-        (UInt64, Float64) => cast_numeric_arrays::<UInt64Type, Float64Type>(array),
+        (UInt64, UInt8) => {
+            cast_numeric_arrays::<UInt64Type, UInt8Type>(array, cast_options)
+        }
+        (UInt64, UInt16) => {
+            cast_numeric_arrays::<UInt64Type, UInt16Type>(array, cast_options)
+        }
+        (UInt64, UInt32) => {
+            cast_numeric_arrays::<UInt64Type, UInt32Type>(array, cast_options)
+        }
+        (UInt64, Int8) => {
+            cast_numeric_arrays::<UInt64Type, Int8Type>(array, cast_options)
+        }
+        (UInt64, Int16) => {
+            cast_numeric_arrays::<UInt64Type, Int16Type>(array, cast_options)
+        }
+        (UInt64, Int32) => {
+            cast_numeric_arrays::<UInt64Type, Int32Type>(array, cast_options)
+        }
+        (UInt64, Int64) => {
+            cast_numeric_arrays::<UInt64Type, Int64Type>(array, cast_options)
+        }
+        (UInt64, Float32) => {
+            cast_numeric_arrays::<UInt64Type, Float32Type>(array, cast_options)
+        }
+        (UInt64, Float64) => {
+            cast_numeric_arrays::<UInt64Type, Float64Type>(array, cast_options)
+        }
 
-        (Int8, UInt8) => cast_numeric_arrays::<Int8Type, UInt8Type>(array),
-        (Int8, UInt16) => cast_numeric_arrays::<Int8Type, UInt16Type>(array),
-        (Int8, UInt32) => cast_numeric_arrays::<Int8Type, UInt32Type>(array),
-        (Int8, UInt64) => cast_numeric_arrays::<Int8Type, UInt64Type>(array),
-        (Int8, Int16) => cast_numeric_arrays::<Int8Type, Int16Type>(array),
-        (Int8, Int32) => cast_numeric_arrays::<Int8Type, Int32Type>(array),
-        (Int8, Int64) => cast_numeric_arrays::<Int8Type, Int64Type>(array),
-        (Int8, Float32) => cast_numeric_arrays::<Int8Type, Float32Type>(array),
-        (Int8, Float64) => cast_numeric_arrays::<Int8Type, Float64Type>(array),
+        (Int8, UInt8) => cast_numeric_arrays::<Int8Type, UInt8Type>(array, cast_options),
+        (Int8, UInt16) => {
+            cast_numeric_arrays::<Int8Type, UInt16Type>(array, cast_options)
+        }
+        (Int8, UInt32) => {
+            cast_numeric_arrays::<Int8Type, UInt32Type>(array, cast_options)
+        }
+        (Int8, UInt64) => {
+            cast_numeric_arrays::<Int8Type, UInt64Type>(array, cast_options)
+        }
+        (Int8, Int16) => cast_numeric_arrays::<Int8Type, Int16Type>(array, cast_options),
+        (Int8, Int32) => cast_numeric_arrays::<Int8Type, Int32Type>(array, cast_options),
+        (Int8, Int64) => cast_numeric_arrays::<Int8Type, Int64Type>(array, cast_options),
+        (Int8, Float32) => {
+            cast_numeric_arrays::<Int8Type, Float32Type>(array, cast_options)
+        }
+        (Int8, Float64) => {
+            cast_numeric_arrays::<Int8Type, Float64Type>(array, cast_options)
+        }
 
-        (Int16, UInt8) => cast_numeric_arrays::<Int16Type, UInt8Type>(array),
-        (Int16, UInt16) => cast_numeric_arrays::<Int16Type, UInt16Type>(array),
-        (Int16, UInt32) => cast_numeric_arrays::<Int16Type, UInt32Type>(array),
-        (Int16, UInt64) => cast_numeric_arrays::<Int16Type, UInt64Type>(array),
-        (Int16, Int8) => cast_numeric_arrays::<Int16Type, Int8Type>(array),
-        (Int16, Int32) => cast_numeric_arrays::<Int16Type, Int32Type>(array),
-        (Int16, Int64) => cast_numeric_arrays::<Int16Type, Int64Type>(array),
-        (Int16, Float32) => cast_numeric_arrays::<Int16Type, Float32Type>(array),
-        (Int16, Float64) => cast_numeric_arrays::<Int16Type, Float64Type>(array),
+        (Int16, UInt8) => {
+            cast_numeric_arrays::<Int16Type, UInt8Type>(array, cast_options)
+        }
+        (Int16, UInt16) => {
+            cast_numeric_arrays::<Int16Type, UInt16Type>(array, cast_options)
+        }
+        (Int16, UInt32) => {
+            cast_numeric_arrays::<Int16Type, UInt32Type>(array, cast_options)
+        }
+        (Int16, UInt64) => {
+            cast_numeric_arrays::<Int16Type, UInt64Type>(array, cast_options)
+        }
+        (Int16, Int8) => cast_numeric_arrays::<Int16Type, Int8Type>(array, cast_options),
+        (Int16, Int32) => {
+            cast_numeric_arrays::<Int16Type, Int32Type>(array, cast_options)
+        }
+        (Int16, Int64) => {
+            cast_numeric_arrays::<Int16Type, Int64Type>(array, cast_options)
+        }
+        (Int16, Float32) => {
+            cast_numeric_arrays::<Int16Type, Float32Type>(array, cast_options)
+        }
+        (Int16, Float64) => {
+            cast_numeric_arrays::<Int16Type, Float64Type>(array, cast_options)
+        }
 
-        (Int32, UInt8) => cast_numeric_arrays::<Int32Type, UInt8Type>(array),
-        (Int32, UInt16) => cast_numeric_arrays::<Int32Type, UInt16Type>(array),
-        (Int32, UInt32) => cast_numeric_arrays::<Int32Type, UInt32Type>(array),
-        (Int32, UInt64) => cast_numeric_arrays::<Int32Type, UInt64Type>(array),
-        (Int32, Int8) => cast_numeric_arrays::<Int32Type, Int8Type>(array),
-        (Int32, Int16) => cast_numeric_arrays::<Int32Type, Int16Type>(array),
-        (Int32, Int64) => cast_numeric_arrays::<Int32Type, Int64Type>(array),
-        (Int32, Float32) => cast_numeric_arrays::<Int32Type, Float32Type>(array),
-        (Int32, Float64) => cast_numeric_arrays::<Int32Type, Float64Type>(array),
+        (Int32, UInt8) => {
+            cast_numeric_arrays::<Int32Type, UInt8Type>(array, cast_options)
+        }
+        (Int32, UInt16) => {
+            cast_numeric_arrays::<Int32Type, UInt16Type>(array, cast_options)
+        }
+        (Int32, UInt32) => {
+            cast_numeric_arrays::<Int32Type, UInt32Type>(array, cast_options)
+        }
+        (Int32, UInt64) => {
+            cast_numeric_arrays::<Int32Type, UInt64Type>(array, cast_options)
+        }
+        (Int32, Int8) => cast_numeric_arrays::<Int32Type, Int8Type>(array, cast_options),
+        (Int32, Int16) => {
+            cast_numeric_arrays::<Int32Type, Int16Type>(array, cast_options)
+        }
+        (Int32, Int64) => {
+            cast_numeric_arrays::<Int32Type, Int64Type>(array, cast_options)
+        }
+        (Int32, Float32) => {
+            cast_numeric_arrays::<Int32Type, Float32Type>(array, cast_options)
+        }
+        (Int32, Float64) => {
+            cast_numeric_arrays::<Int32Type, Float64Type>(array, cast_options)
+        }
 
-        (Int64, UInt8) => cast_numeric_arrays::<Int64Type, UInt8Type>(array),
-        (Int64, UInt16) => cast_numeric_arrays::<Int64Type, UInt16Type>(array),
-        (Int64, UInt32) => cast_numeric_arrays::<Int64Type, UInt32Type>(array),
-        (Int64, UInt64) => cast_numeric_arrays::<Int64Type, UInt64Type>(array),
-        (Int64, Int8) => cast_numeric_arrays::<Int64Type, Int8Type>(array),
-        (Int64, Int16) => cast_numeric_arrays::<Int64Type, Int16Type>(array),
-        (Int64, Int32) => cast_numeric_arrays::<Int64Type, Int32Type>(array),
-        (Int64, Float32) => cast_numeric_arrays::<Int64Type, Float32Type>(array),
-        (Int64, Float64) => cast_numeric_arrays::<Int64Type, Float64Type>(array),
+        (Int64, UInt8) => {
+            cast_numeric_arrays::<Int64Type, UInt8Type>(array, cast_options)
+        }
+        (Int64, UInt16) => {
+            cast_numeric_arrays::<Int64Type, UInt16Type>(array, cast_options)
+        }
+        (Int64, UInt32) => {
+            cast_numeric_arrays::<Int64Type, UInt32Type>(array, cast_options)
+        }
+        (Int64, UInt64) => {
+            cast_numeric_arrays::<Int64Type, UInt64Type>(array, cast_options)
+        }
+        (Int64, Int8) => cast_numeric_arrays::<Int64Type, Int8Type>(array, cast_options),
+        (Int64, Int16) => {
+            cast_numeric_arrays::<Int64Type, Int16Type>(array, cast_options)
+        }
+        (Int64, Int32) => {
+            cast_numeric_arrays::<Int64Type, Int32Type>(array, cast_options)
+        }
+        (Int64, Float32) => {
+            cast_numeric_arrays::<Int64Type, Float32Type>(array, cast_options)
+        }
+        (Int64, Float64) => {
+            cast_numeric_arrays::<Int64Type, Float64Type>(array, cast_options)
+        }
 
-        (Float32, UInt8) => cast_numeric_arrays::<Float32Type, UInt8Type>(array),
-        (Float32, UInt16) => cast_numeric_arrays::<Float32Type, UInt16Type>(array),
-        (Float32, UInt32) => cast_numeric_arrays::<Float32Type, UInt32Type>(array),
-        (Float32, UInt64) => cast_numeric_arrays::<Float32Type, UInt64Type>(array),
-        (Float32, Int8) => cast_numeric_arrays::<Float32Type, Int8Type>(array),
-        (Float32, Int16) => cast_numeric_arrays::<Float32Type, Int16Type>(array),
-        (Float32, Int32) => cast_numeric_arrays::<Float32Type, Int32Type>(array),
-        (Float32, Int64) => cast_numeric_arrays::<Float32Type, Int64Type>(array),
-        (Float32, Float64) => cast_numeric_arrays::<Float32Type, Float64Type>(array),
+        (Float32, UInt8) => {
+            cast_numeric_arrays::<Float32Type, UInt8Type>(array, cast_options)
+        }
+        (Float32, UInt16) => {
+            cast_numeric_arrays::<Float32Type, UInt16Type>(array, cast_options)
+        }
+        (Float32, UInt32) => {
+            cast_numeric_arrays::<Float32Type, UInt32Type>(array, cast_options)
+        }
+        (Float32, UInt64) => {
+            cast_numeric_arrays::<Float32Type, UInt64Type>(array, cast_options)
+        }
+        (Float32, Int8) => {
+            cast_numeric_arrays::<Float32Type, Int8Type>(array, cast_options)
+        }
+        (Float32, Int16) => {
+            cast_numeric_arrays::<Float32Type, Int16Type>(array, cast_options)
+        }
+        (Float32, Int32) => {
+            cast_numeric_arrays::<Float32Type, Int32Type>(array, cast_options)
+        }
+        (Float32, Int64) => {
+            cast_numeric_arrays::<Float32Type, Int64Type>(array, cast_options)
+        }
+        (Float32, Float64) => {
+            cast_numeric_arrays::<Float32Type, Float64Type>(array, cast_options)
+        }
 
-        (Float64, UInt8) => cast_numeric_arrays::<Float64Type, UInt8Type>(array),
-        (Float64, UInt16) => cast_numeric_arrays::<Float64Type, UInt16Type>(array),
-        (Float64, UInt32) => cast_numeric_arrays::<Float64Type, UInt32Type>(array),
-        (Float64, UInt64) => cast_numeric_arrays::<Float64Type, UInt64Type>(array),
-        (Float64, Int8) => cast_numeric_arrays::<Float64Type, Int8Type>(array),
-        (Float64, Int16) => cast_numeric_arrays::<Float64Type, Int16Type>(array),
-        (Float64, Int32) => cast_numeric_arrays::<Float64Type, Int32Type>(array),
-        (Float64, Int64) => cast_numeric_arrays::<Float64Type, Int64Type>(array),
-        (Float64, Float32) => cast_numeric_arrays::<Float64Type, Float32Type>(array),
+        (Float64, UInt8) => {
+            cast_numeric_arrays::<Float64Type, UInt8Type>(array, cast_options)
+        }
+        (Float64, UInt16) => {
+            cast_numeric_arrays::<Float64Type, UInt16Type>(array, cast_options)
+        }
+        (Float64, UInt32) => {
+            cast_numeric_arrays::<Float64Type, UInt32Type>(array, cast_options)
+        }
+        (Float64, UInt64) => {
+            cast_numeric_arrays::<Float64Type, UInt64Type>(array, cast_options)
+        }
+        (Float64, Int8) => {
+            cast_numeric_arrays::<Float64Type, Int8Type>(array, cast_options)
+        }
+        (Float64, Int16) => {
+            cast_numeric_arrays::<Float64Type, Int16Type>(array, cast_options)
+        }
+        (Float64, Int32) => {
+            cast_numeric_arrays::<Float64Type, Int32Type>(array, cast_options)
+        }
+        (Float64, Int64) => {
+            cast_numeric_arrays::<Float64Type, Int64Type>(array, cast_options)
+        }
+        (Float64, Float32) => {
+            cast_numeric_arrays::<Float64Type, Float32Type>(array, cast_options)
+        }
         // end numeric casts
 
         // temporal casts
@@ -1229,9 +1393,10 @@ pub fn cast_with_options(
         }
         (Duration(_), Int64) => cast_array_data::<Int64Type>(array, to_type.clone()),
         (Interval(from_type), Int64) => match from_type {
-            IntervalUnit::YearMonth => {
-                cast_numeric_arrays::<IntervalYearMonthType, Int64Type>(array)
-            }
+            IntervalUnit::YearMonth => cast_numeric_arrays::<
+                IntervalYearMonthType,
+                Int64Type,
+            >(array, cast_options),
             IntervalUnit::DayTime => cast_array_data::<Int64Type>(array, to_type.clone()),
             IntervalUnit::MonthDayNano => Err(ArrowError::CastError(format!(
                 "Casting from {:?} to {:?} not supported",
@@ -1456,21 +1621,62 @@ where
 }
 
 /// Convert Array into a PrimitiveArray of type, and apply numeric cast
-fn cast_numeric_arrays<FROM, TO>(from: &ArrayRef) -> Result<ArrayRef>
+fn cast_numeric_arrays<FROM, TO>(
+    from: &ArrayRef,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef>
 where
     FROM: ArrowNumericType,
     TO: ArrowNumericType,
     FROM::Native: num::NumCast,
     TO::Native: num::NumCast,
 {
-    Ok(Arc::new(numeric_cast::<FROM, TO>(
-        from.as_any()
-            .downcast_ref::<PrimitiveArray<FROM>>()
-            .unwrap(),
-    )))
+    if cast_options.safe {
+        // If the value can't be casted to the `TO::Native`, return null
+        Ok(Arc::new(numeric_cast::<FROM, TO>(
+            from.as_any()
+                .downcast_ref::<PrimitiveArray<FROM>>()
+                .unwrap(),
+        )))
+    } else {
+        // If the value can't be casted to the `TO::Native`, return error
+        Ok(Arc::new(numeric_cast_with_error::<FROM, TO>(
+            from.as_any()
+                .downcast_ref::<PrimitiveArray<FROM>>()
+                .unwrap(),
+        )?))
+    }
 }
 
-/// Natural cast between numeric types
+// Natural cast between numeric types
+// If the value of T can't be casted to R, will throw error
+fn numeric_cast_with_error<T, R>(from: &PrimitiveArray<T>) -> Result<PrimitiveArray<R>>
+where
+    T: ArrowNumericType,
+    R: ArrowNumericType,
+    T::Native: num::NumCast,
+    R::Native: num::NumCast,
+{
+    let iter = from
+        .iter()
+        .map(|v| match v {
+            None => Ok(None),
+            Some(value) => match num::cast::cast::<T::Native, R::Native>(value) {
+                None => Err(ArrowError::CastError(format!(
+                    "Can't cast value {:?} to type {}",
+                    value,
+                    R::DATA_TYPE
+                ))),
+                Some(v) => Ok(Some(v)),
+            },
+        })
+        .collect::<Result<Vec<Option<R::Native>>>>()?;
+
+    Ok(unsafe { PrimitiveArray::<R>::from_trusted_len_iter(iter) })
+}
+
+// Natural cast between numeric types
+// If the value of T can't be casted to R, it will be converted to null
 fn numeric_cast<T, R>(from: &PrimitiveArray<T>) -> PrimitiveArray<R>
 where
     T: ArrowNumericType,
@@ -3007,6 +3213,18 @@ mod tests {
         assert_eq!(8, c.value(3));
         // overflows return None
         assert!(!c.is_valid(4));
+    }
+
+    #[test]
+    #[should_panic(expected = "Can't cast value -5 to type UInt8")]
+    fn test_cast_int32_to_u8_with_error() {
+        let a = Int32Array::from(vec![-5, 6, -7, 8, 100000000]);
+        let array = Arc::new(a) as ArrayRef;
+        // overflow with the error
+        let cast_option = CastOptions { safe: false };
+        let result = cast_with_options(&array, &DataType::UInt8, &cast_option);
+        assert!(result.is_err());
+        result.unwrap();
     }
 
     #[test]
