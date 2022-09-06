@@ -19,10 +19,8 @@
 
 use crate::array::{Array, ArrayData, ArrayRef, DictionaryArray, PrimitiveArray};
 use crate::buffer::Buffer;
-use crate::datatypes::{
-    ArrowNumericType, ArrowPrimitiveType, DataType, Int16Type, Int32Type, Int64Type,
-    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-};
+use crate::datatypes::{ArrowNumericType, ArrowPrimitiveType};
+use crate::downcast_dictionary_array;
 use crate::error::{ArrowError, Result};
 use std::sync::Arc;
 
@@ -128,73 +126,21 @@ where
     T: ArrowPrimitiveType,
     F: Fn(T::Native) -> T::Native,
 {
-    match array.data_type() {
-        DataType::Dictionary(key_type, _) => match key_type.as_ref() {
-            DataType::Int8 => unary_dict::<_, F, T>(
-                array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<Int8Type>>()
-                    .unwrap(),
-                op,
-            ),
-            DataType::Int16 => unary_dict::<_, F, T>(
-                array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<Int16Type>>()
-                    .unwrap(),
-                op,
-            ),
-            DataType::Int32 => unary_dict::<_, F, T>(
-                array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<Int32Type>>()
-                    .unwrap(),
-                op,
-            ),
-            DataType::Int64 => unary_dict::<_, F, T>(
-                array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<Int64Type>>()
-                    .unwrap(),
-                op,
-            ),
-            DataType::UInt8 => unary_dict::<_, F, T>(
-                array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<UInt8Type>>()
-                    .unwrap(),
-                op,
-            ),
-            DataType::UInt16 => unary_dict::<_, F, T>(
-                array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<UInt16Type>>()
-                    .unwrap(),
-                op,
-            ),
-            DataType::UInt32 => unary_dict::<_, F, T>(
-                array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<UInt32Type>>()
-                    .unwrap(),
-                op,
-            ),
-            DataType::UInt64 => unary_dict::<_, F, T>(
-                array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<UInt64Type>>()
-                    .unwrap(),
-                op,
-            ),
-            t => Err(ArrowError::NotYetImplemented(format!(
-                "Cannot perform unary operation on dictionary array of key type {}.",
-                t
-            ))),
-        },
-        _ => Ok(Arc::new(unary::<T, F, T>(
-            array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap(),
-            op,
-        ))),
+    downcast_dictionary_array! {
+        array => unary_dict::<_, F, T>(array, op),
+        t => {
+            if t == &T::DATA_TYPE {
+                Ok(Arc::new(unary::<T, F, T>(
+                    array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap(),
+                    op,
+                )))
+            } else {
+                Err(ArrowError::NotYetImplemented(format!(
+                    "Cannot perform unary operation on array of type {}",
+                    t
+                )))
+            }
+        }
     }
 }
 
