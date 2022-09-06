@@ -172,7 +172,8 @@ pub fn using_chrono_tz_and_utc_naive_date_time(
         .ok()
 }
 
-/// Extracts the hours of a given temporal primitive array as an array of integers
+/// Extracts the hours of a given temporal primitive array as an array of integers within
+/// the range of [0, 23].
 pub fn hour<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -181,7 +182,8 @@ where
     hour_generic::<T, _>(array)
 }
 
-/// Extracts the hours of a given temporal array as an array of integers
+/// Extracts the hours of a given temporal array as an array of integers within
+/// the range of [0, 23].
 pub fn hour_generic<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -297,7 +299,8 @@ where
     Ok(b.finish())
 }
 
-/// Extracts the quarter of a given temporal primitive array as an array of integers
+/// Extracts the quarter of a given temporal primitive array as an array of integers within
+/// the range of [1, 4].
 pub fn quarter<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -306,7 +309,8 @@ where
     quarter_generic::<T, _>(array)
 }
 
-/// Extracts the quarter of a given temporal array as an array of integers
+/// Extracts the quarter of a given temporal array as an array of integersa within
+/// the range of [1, 4].
 pub fn quarter_generic<T, A: ArrayAccessor<Item = T::Native>>(
     array: A,
 ) -> Result<Int32Array>

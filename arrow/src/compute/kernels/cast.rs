@@ -1511,15 +1511,11 @@ where
             iter,
             builder,
             to_string,
-            |value, tz| as_datetime::<T>(<i64 as From<
-                <T as ArrowPrimitiveType>::Native,
-            >>::from(value))
-            .map(|datetime| datetime + tz),
+            |value, tz| as_datetime::<T>(<i64 as From<_>>::from(value))
+                .map(|datetime| datetime + tz),
             tz,
             scratch,
-            |value| as_datetime::<T>(
-                <i64 as From<<T as ArrowPrimitiveType>::Native>>::from(value)
-            ),
+            |value| as_datetime::<T>(<i64 as From<_>>::from(value)),
             |h| h
         )
     } else {
@@ -1529,9 +1525,7 @@ where
             iter,
             builder,
             to_string,
-            |value| as_datetime::<T>(
-                <i64 as From<<T as ArrowPrimitiveType>::Native>>::from(value)
-            ),
+            |value| as_datetime::<T>(<i64 as From<_>>::from(value)),
             |h| h
         )
     }
