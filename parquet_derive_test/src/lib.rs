@@ -17,12 +17,7 @@
 
 #![allow(clippy::approx_constant)]
 
-extern crate parquet;
-
-#[macro_use]
-extern crate parquet_derive;
-
-use parquet::record::RecordWriter;
+use parquet_derive::ParquetRecordWriter;
 
 #[derive(ParquetRecordWriter)]
 struct ACompleteRecord<'a> {
@@ -53,11 +48,13 @@ struct ACompleteRecord<'a> {
 mod tests {
     use super::*;
 
+    use std::{env, fs, io::Write, sync::Arc};
+
     use parquet::{
         file::{properties::WriterProperties, writer::SerializedFileWriter},
+        record::RecordWriter,
         schema::parser::parse_message_type,
     };
-    use std::{env, fs, io::Write, sync::Arc};
 
     #[test]
     fn test_parquet_derive_hello() {
