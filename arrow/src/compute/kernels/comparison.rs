@@ -34,6 +34,8 @@ use crate::datatypes::{
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
+#[allow(unused_imports)]
+use crate::downcast_dictionary_array;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
 use regex::Regex;
@@ -2176,101 +2178,22 @@ macro_rules! typed_dict_string_array_cmp {
 }
 
 #[cfg(feature = "dyn_cmp_dict")]
-macro_rules! typed_dict_binary_array_cmp {
-    ($LEFT: expr, $RIGHT: expr, $LEFT_KEY_TYPE: expr, $RIGHT_TYPE: tt, $OP: expr) => {{
-        match $LEFT_KEY_TYPE {
-            DataType::Int8 => {
-                let left = as_dictionary_array::<Int8Type>($LEFT);
-                cmp_dict_binary_array::<_, $RIGHT_TYPE, _>(left, $RIGHT, $OP)
-            }
-            DataType::Int16 => {
-                let left = as_dictionary_array::<Int16Type>($LEFT);
-                cmp_dict_binary_array::<_, $RIGHT_TYPE, _>(left, $RIGHT, $OP)
-            }
-            DataType::Int32 => {
-                let left = as_dictionary_array::<Int32Type>($LEFT);
-                cmp_dict_binary_array::<_, $RIGHT_TYPE, _>(left, $RIGHT, $OP)
-            }
-            DataType::Int64 => {
-                let left = as_dictionary_array::<Int64Type>($LEFT);
-                cmp_dict_binary_array::<_, $RIGHT_TYPE, _>(left, $RIGHT, $OP)
-            }
-            DataType::UInt8 => {
-                let left = as_dictionary_array::<UInt8Type>($LEFT);
-                cmp_dict_binary_array::<_, $RIGHT_TYPE, _>(left, $RIGHT, $OP)
-            }
-            DataType::UInt16 => {
-                let left = as_dictionary_array::<UInt16Type>($LEFT);
-                cmp_dict_binary_array::<_, $RIGHT_TYPE, _>(left, $RIGHT, $OP)
-            }
-            DataType::UInt32 => {
-                let left = as_dictionary_array::<UInt32Type>($LEFT);
-                cmp_dict_binary_array::<_, $RIGHT_TYPE, _>(left, $RIGHT, $OP)
-            }
-            DataType::UInt64 => {
-                let left = as_dictionary_array::<UInt64Type>($LEFT);
-                cmp_dict_binary_array::<_, $RIGHT_TYPE, _>(left, $RIGHT, $OP)
-            }
-            t => Err(ArrowError::NotYetImplemented(format!(
-                "Cannot compare dictionary array of key type {}",
-                t
-            ))),
-        }
-    }};
-}
-
-#[cfg(feature = "dyn_cmp_dict")]
-macro_rules! typed_dict_boolean_array_cmp {
-    ($LEFT: expr, $RIGHT: expr, $LEFT_KEY_TYPE: expr, $OP: expr) => {{
-        match $LEFT_KEY_TYPE {
-            DataType::Int8 => {
-                let left = as_dictionary_array::<Int8Type>($LEFT);
-                cmp_dict_boolean_array::<_, _>(left, $RIGHT, $OP)
-            }
-            DataType::Int16 => {
-                let left = as_dictionary_array::<Int16Type>($LEFT);
-                cmp_dict_boolean_array::<_, _>(left, $RIGHT, $OP)
-            }
-            DataType::Int32 => {
-                let left = as_dictionary_array::<Int32Type>($LEFT);
-                cmp_dict_boolean_array::<_, _>(left, $RIGHT, $OP)
-            }
-            DataType::Int64 => {
-                let left = as_dictionary_array::<Int64Type>($LEFT);
-                cmp_dict_boolean_array::<_, _>(left, $RIGHT, $OP)
-            }
-            DataType::UInt8 => {
-                let left = as_dictionary_array::<UInt8Type>($LEFT);
-                cmp_dict_boolean_array::<_, _>(left, $RIGHT, $OP)
-            }
-            DataType::UInt16 => {
-                let left = as_dictionary_array::<UInt16Type>($LEFT);
-                cmp_dict_boolean_array::<_, _>(left, $RIGHT, $OP)
-            }
-            DataType::UInt32 => {
-                let left = as_dictionary_array::<UInt32Type>($LEFT);
-                cmp_dict_boolean_array::<_, _>(left, $RIGHT, $OP)
-            }
-            DataType::UInt64 => {
-                let left = as_dictionary_array::<UInt64Type>($LEFT);
-                cmp_dict_boolean_array::<_, _>(left, $RIGHT, $OP)
-            }
-            t => Err(ArrowError::NotYetImplemented(format!(
-                "Cannot compare dictionary array of key type {}",
-                t
-            ))),
-        }
-    }};
-}
-
-#[cfg(feature = "dyn_cmp_dict")]
 macro_rules! typed_cmp_dict_non_dict {
     ($LEFT: expr, $RIGHT: expr, $OP_BOOL: expr, $OP: expr, $OP_FLOAT: expr) => {{
        match ($LEFT.data_type(), $RIGHT.data_type()) {
         (DataType::Dictionary(left_key_type, left_value_type), right_type) => {
             match (left_value_type.as_ref(), right_type) {
                 (DataType::Boolean, DataType::Boolean) => {
-                    typed_dict_boolean_array_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), $OP_BOOL)
+                    let left = $LEFT;
+                    downcast_dictionary_array!(
+                        left => {
+                            cmp_dict_boolean_array::<_, _>(left, $RIGHT, $OP)
+                        }
+                        _ => Err(ArrowError::NotYetImplemented(format!(
+                            "Cannot compare dictionary array of key type {}",
+                            left_key_type.as_ref()
+                        ))),
+                    )
                 }
                 (DataType::Int8, DataType::Int8) => {
                     typed_dict_non_dict_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), Int8Type, $OP_BOOL, $OP)
@@ -2309,10 +2232,28 @@ macro_rules! typed_cmp_dict_non_dict {
                     typed_dict_string_array_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), i64, $OP)
                 }
                 (DataType::Binary, DataType::Binary) => {
-                    typed_dict_binary_array_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), i32, $OP)
+                    let left = $LEFT;
+                    downcast_dictionary_array!(
+                        left => {
+                            cmp_dict_binary_array::<_, i32, _>(left, $RIGHT, $OP)
+                        }
+                        _ => Err(ArrowError::NotYetImplemented(format!(
+                            "Cannot compare dictionary array of key type {}",
+                            left_key_type.as_ref()
+                        ))),
+                    )
                 }
                 (DataType::LargeBinary, DataType::LargeBinary) => {
-                    typed_dict_binary_array_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), i64, $OP)
+                    let left = $LEFT;
+                    downcast_dictionary_array!(
+                        left => {
+                            cmp_dict_binary_array::<_, i64, _>(left, $RIGHT, $OP)
+                        }
+                        _ => Err(ArrowError::NotYetImplemented(format!(
+                            "Cannot compare dictionary array of key type {}",
+                            left_key_type.as_ref()
+                        ))),
+                    )
                 }
                 (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                     "Comparing dictionary array of type {} with array of type {} is not yet implemented",
