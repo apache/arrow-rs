@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::util::bit_chunk_iterator::{UnalignedBitChunk, UnalignedBitChunkIterator};
+use std::result::Result;
 
 /// Iterator of contiguous ranges of set bits within a provided packed bitmask
 ///
@@ -154,6 +155,47 @@ impl<'a> Iterator for BitIndexIterator<'a> {
             self.current_chunk = self.iter.next()?;
             self.chunk_offset += 64;
         }
+    }
+}
+
+/// Calls the provided closure for each index in the provided null mask that is set,
+/// using an adaptive strategy based on the null count
+///
+/// Ideally this would be encapsulated in an [`Iterator`] that would determine the optimal
+/// strategy up front, and then yield indexes based on this.
+///
+/// Unfortunately, external iteration based on the resulting [`Iterator`] would match the strategy
+/// variant on each call to [`Iterator::next`], and LLVM generally cannot eliminate this.
+///
+/// One solution to this might be internal iteration, e.g. [`Iterator::try_fold`], however,
+/// it is currently [not possible] to override this for custom iterators in stable Rust.
+///
+/// As such this is the next best option
+///
+/// [not possible]: https://github.com/rust-lang/rust/issues/69595
+#[inline]
+pub fn try_for_each_valid_idx<E, F: FnMut(usize) -> Result<(), E>>(
+    len: usize,
+    offset: usize,
+    null_count: usize,
+    nulls: Option<&[u8]>,
+    f: F,
+) -> Result<(), E> {
+    let valid_count = len - null_count;
+
+    if valid_count == len {
+        (0..len).try_for_each(f)
+    } else if null_count != len {
+        let selectivity = valid_count as f64 / len as f64;
+        if selectivity > 0.8 {
+            BitSliceIterator::new(nulls.unwrap(), offset, len)
+                .flat_map(|(start, end)| start..end)
+                .try_for_each(f)
+        } else {
+            BitIndexIterator::new(nulls.unwrap(), offset, len).try_for_each(f)
+        }
+    } else {
+        Ok(())
     }
 }
 
