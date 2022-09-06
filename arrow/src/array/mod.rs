@@ -194,8 +194,10 @@ pub use self::data::ArrayData;
 pub use self::data::ArrayDataBuilder;
 pub use self::data::ArrayDataRef;
 
+#[cfg(any(feature = "ipc", feature = "ffi"))]
+pub(crate) use self::data::layout;
 #[cfg(feature = "ipc")]
-pub(crate) use self::data::{layout, BufferSpec};
+pub(crate) use self::data::BufferSpec;
 
 pub use self::array_binary::BinaryArray;
 pub use self::array_binary::LargeBinaryArray;
