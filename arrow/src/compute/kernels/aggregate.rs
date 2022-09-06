@@ -41,7 +41,7 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeType,
 {
-    min_max_helper(array, |a, b| (is_nan(*a) & !is_nan(*b)) || a > b)
+    min_max_helper::<T::Native, _, _>(array, |a, b| (is_nan(*a) & !is_nan(*b)) || a > b)
 }
 
 /// Returns the maximum value in the array, according to the natural order.
@@ -52,44 +52,7 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeType,
 {
-    min_max_helper(array, |a, b| (!is_nan(*a) & is_nan(*b)) || a < b)
-}
-
-/// Helper function to perform min/max lambda function on values from a numeric array.
-#[multiversion]
-#[clone(target = "x86_64+avx")]
-fn min_max_helper<T, F>(array: &PrimitiveArray<T>, cmp: F) -> Option<T::Native>
-where
-    T: ArrowNumericType,
-    F: Fn(&T::Native, &T::Native) -> bool,
-{
-    let null_count = array.null_count();
-
-    // Includes case array.len() == 0
-    if null_count == array.len() {
-        return None;
-    }
-
-    let data = array.data();
-    let m = array.values();
-    let mut n;
-
-    if null_count == 0 {
-        // optimized path for arrays without null values
-        n = m[1..]
-            .iter()
-            .fold(m[0], |max, item| if cmp(&max, item) { *item } else { max });
-    } else {
-        n = T::default_value();
-        let mut has_value = false;
-        for (i, item) in m.iter().enumerate() {
-            if data.is_valid(i) && (!has_value || cmp(&n, item)) {
-                has_value = true;
-                n = *item
-            }
-        }
-    }
-    Some(n)
+    min_max_helper::<T::Native, _, _>(array, |a, b| (!is_nan(*a) & is_nan(*b)) || a < b)
 }
 
 /// Returns the minimum value in the boolean array.
@@ -142,46 +105,48 @@ pub fn max_boolean(array: &BooleanArray) -> Option<bool> {
         .or(Some(false))
 }
 
-/// Helper to compute min/max of [`GenericStringArray`] and [`GenericBinaryArray`]
-macro_rules! min_max_binary_string {
-    ($array: expr, $cmp: expr) => {{
-        let null_count = $array.null_count();
-        if null_count == $array.len() {
-            None
-        } else if null_count == 0 {
-            // JUSTIFICATION
-            //  Benefit:  ~8% speedup
-            //  Soundness: `i` is always within the array bounds
-            (0..$array.len())
-                .map(|i| unsafe { $array.value_unchecked(i) })
-                .reduce(|acc, item| if $cmp(acc, item) { item } else { acc })
-        } else {
-            $array
-                .iter()
-                .flatten()
-                .reduce(|acc, item| if $cmp(acc, item) { item } else { acc })
-        }
-    }};
+/// Helper to compute min/max of [`ArrayAccessor`].
+#[multiversion]
+#[clone(target = "x86_64+avx")]
+fn min_max_helper<T, A: ArrayAccessor<Item = T>, F>(array: A, cmp: F) -> Option<T>
+where
+    F: Fn(&T, &T) -> bool,
+{
+    let null_count = array.null_count();
+    if null_count == array.len() {
+        None
+    } else if null_count == 0 {
+        // JUSTIFICATION
+        //  Benefit:  ~8% speedup
+        //  Soundness: `i` is always within the array bounds
+        (0..array.len())
+            .map(|i| unsafe { array.value_unchecked(i) })
+            .reduce(|acc, item| if cmp(&acc, &item) { item } else { acc })
+    } else {
+        let iter = ArrayIter::new(array);
+        iter.flatten()
+            .reduce(|acc, item| if cmp(&acc, &item) { item } else { acc })
+    }
 }
 
 /// Returns the maximum value in the binary array, according to the natural order.
 pub fn max_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&[u8]> {
-    min_max_binary_string!(array, |a, b| a < b)
+    min_max_helper::<&[u8], _, _>(array, |a, b| *a < *b)
 }
 
 /// Returns the minimum value in the binary array, according to the natural order.
 pub fn min_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&[u8]> {
-    min_max_binary_string!(array, |a, b| a > b)
+    min_max_helper::<&[u8], _, _>(array, |a, b| *a > *b)
 }
 
 /// Returns the maximum value in the string array, according to the natural order.
 pub fn max_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&str> {
-    min_max_binary_string!(array, |a, b| a < b)
+    min_max_helper::<&str, _, _>(array, |a, b| *a < *b)
 }
 
 /// Returns the minimum value in the string array, according to the natural order.
 pub fn min_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&str> {
-    min_max_binary_string!(array, |a, b| a > b)
+    min_max_helper::<&str, _, _>(array, |a, b| *a > *b)
 }
 
 /// Returns the sum of values in the array.
@@ -215,7 +180,8 @@ where
     }
 }
 
-/// Returns the min of values in the array.
+/// Returns the min of values in the array of `ArrowNumericType` type, or dictionary
+/// array with value of `ArrowNumericType` type.
 pub fn min_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
 where
     T: ArrowNumericType,
@@ -223,12 +189,13 @@ where
 {
     min_max_array_helper::<T, A, _, _>(
         array,
-        |a, b| (!is_nan(*a) & is_nan(*b)) || a < b,
+        |a, b| (is_nan(*a) & !is_nan(*b)) || a > b,
         min,
     )
 }
 
-/// Returns the max of values in the array.
+/// Returns the max of values in the array of `ArrowNumericType` type, or dictionary
+/// array with value of `ArrowNumericType` type.
 pub fn max_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
 where
     T: ArrowNumericType,
@@ -236,7 +203,7 @@ where
 {
     min_max_array_helper::<T, A, _, _>(
         array,
-        |a, b| (is_nan(*a) & !is_nan(*b)) || a > b,
+        |a, b| (!is_nan(*a) & is_nan(*b)) || a < b,
         max,
     )
 }
@@ -252,27 +219,7 @@ where
     M: Fn(&PrimitiveArray<T>) -> Option<T::Native>,
 {
     match array.data_type() {
-        DataType::Dictionary(_, _) => {
-            let null_count = array.null_count();
-
-            if null_count == array.len() {
-                return None;
-            }
-
-            let mut has_value = false;
-            let mut n = T::default_value();
-            let iter = ArrayIter::new(array);
-            iter.into_iter().for_each(|value| {
-                if let Some(value) = value {
-                    if !has_value || cmp(&value, &n) {
-                        has_value = true;
-                        n = value;
-                    }
-                }
-            });
-
-            Some(n)
-        }
+        DataType::Dictionary(_, _) => min_max_helper::<T::Native, _, _>(array, cmp),
         _ => m(as_primitive_array(&array)),
     }
 }
