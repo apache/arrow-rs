@@ -42,6 +42,7 @@ use std::ops::{Div, Mul};
 use std::str;
 use std::sync::Arc;
 
+use crate::array::as_datetime;
 use crate::buffer::MutableBuffer;
 use crate::compute::divide_scalar;
 use crate::compute::kernels::arithmetic::{divide, multiply};
@@ -1708,21 +1709,31 @@ where
 
     if let Some(tz) = tz {
         let mut scratch = Parsed::new();
-        // The macro calls `value_as_datetime_with_tz` on timestamp values of the array.
+        // The macro calls `as_datetime` on timestamp values of the array.
         // After applying timezone offset on the datatime, calling `to_string` to get
         // the strings.
+        let iter = ArrayIter::new(array);
         extract_component_from_array!(
-            array,
+            iter,
             builder,
             to_string,
-            value_as_datetime_with_tz,
+            |value, tz| as_datetime::<T>(<i64 as From<_>>::from(value))
+                .map(|datetime| datetime + tz),
             tz,
             scratch,
+            |value| as_datetime::<T>(<i64 as From<_>>::from(value)),
             |h| h
         )
     } else {
         // No timezone available. Calling `to_string` on the datatime value simply.
-        extract_component_from_array!(array, builder, to_string, value_as_datetime, |h| h)
+        let iter = ArrayIter::new(array);
+        extract_component_from_array!(
+            iter,
+            builder,
+            to_string,
+            |value| as_datetime::<T>(<i64 as From<_>>::from(value)),
+            |h| h
+        )
     }
 
     Ok(Arc::new(builder.finish()) as ArrayRef)

@@ -223,6 +223,8 @@ pub use self::array::make_array;
 pub use self::array::new_empty_array;
 pub use self::array::new_null_array;
 
+pub(crate) use self::array_primitive::{as_datetime, as_time};
+
 ///
 /// # Example: Using `collect`
 /// ```
