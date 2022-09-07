@@ -17,7 +17,7 @@
 
 use std::mem::size_of;
 
-use crate::array::{data::count_nulls, ArrayData};
+use crate::array::{data::contains_nulls, ArrayData};
 use crate::util::bit_util::get_bit;
 
 use super::utils::equal_len;
@@ -33,10 +33,9 @@ pub(super) fn primitive_equal<T>(
     let lhs_values = &lhs.buffers()[0].as_slice()[lhs.offset() * byte_width..];
     let rhs_values = &rhs.buffers()[0].as_slice()[rhs.offset() * byte_width..];
 
-    let lhs_null_count = count_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
-    let rhs_null_count = count_nulls(rhs.null_buffer(), rhs_start + rhs.offset(), len);
+    let has_nulls = contains_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
 
-    if lhs_null_count == 0 && rhs_null_count == 0 {
+    if !has_nulls {
         // without nulls, we just need to compare slices
         equal_len(
             lhs_values,
