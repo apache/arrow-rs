@@ -33,9 +33,9 @@ pub(super) fn primitive_equal<T>(
     let lhs_values = &lhs.buffers()[0].as_slice()[lhs.offset() * byte_width..];
     let rhs_values = &rhs.buffers()[0].as_slice()[rhs.offset() * byte_width..];
 
-    let has_nulls = contains_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
-
-    if !has_nulls {
+    // Only checking one null mask here because by the time the control flow reaches
+    // this point, the equality of the two masks would have already been verified.
+    if !contains_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len) {
         // without nulls, we just need to compare slices
         equal_len(
             lhs_values,

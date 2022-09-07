@@ -43,9 +43,9 @@ pub(super) fn struct_equal(
     rhs_start: usize,
     len: usize,
 ) -> bool {
-    let has_nulls = contains_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
-
-    if !has_nulls {
+    // Only checking one null mask here because by the time the control flow reaches
+    // this point, the equality of the two masks would have already been verified.
+    if !contains_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len) {
         equal_child_values(lhs, rhs, lhs_start, rhs_start, len)
     } else {
         // get a ref of the null buffer bytes, to use in testing for nullness

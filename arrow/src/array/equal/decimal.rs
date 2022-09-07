@@ -37,9 +37,9 @@ pub(super) fn decimal_equal(
     let lhs_values = &lhs.buffers()[0].as_slice()[lhs.offset() * size..];
     let rhs_values = &rhs.buffers()[0].as_slice()[rhs.offset() * size..];
 
-    let has_nulls = contains_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
-
-    if !has_nulls {
+    // Only checking one null mask here because by the time the control flow reaches
+    // this point, the equality of the two masks would have already been verified.
+    if !contains_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len) {
         equal_len(
             lhs_values,
             rhs_values,

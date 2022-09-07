@@ -34,9 +34,9 @@ pub(super) fn dictionary_equal<T: ArrowNativeType>(
     let lhs_values = &lhs.child_data()[0];
     let rhs_values = &rhs.child_data()[0];
 
-    let has_nulls = contains_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
-
-    if !has_nulls {
+    // Only checking one null mask here because by the time the control flow reaches
+    // this point, the equality of the two masks would have already been verified.
+    if !contains_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len) {
         (0..len).all(|i| {
             let lhs_pos = lhs_start + i;
             let rhs_pos = rhs_start + i;
