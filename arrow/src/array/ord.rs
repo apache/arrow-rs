@@ -80,6 +80,31 @@ where
     Box::new(move |i, j| left.value(i).cmp(right.value(j)))
 }
 
+fn compare_dict_primitive<K, V>(left: &dyn Array, right: &dyn Array) -> DynComparator
+where
+    K: ArrowDictionaryKeyType,
+    V: ArrowPrimitiveType,
+    V::Native: Ord,
+{
+    let left = left.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
+    let right = right.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
+
+    let left_keys: PrimitiveArray<K> = PrimitiveArray::from(left.keys().data().clone());
+    let right_keys: PrimitiveArray<K> = PrimitiveArray::from(right.keys().data().clone());
+    let left_values: PrimitiveArray<V> =
+        PrimitiveArray::from(left.values().data().clone());
+    let right_values: PrimitiveArray<V> =
+        PrimitiveArray::from(right.values().data().clone());
+
+    Box::new(move |i: usize, j: usize| {
+        let key_left = left_keys.value(i).to_usize().unwrap();
+        let key_right = right_keys.value(j).to_usize().unwrap();
+        let left = left_values.value(key_left);
+        let right = right_values.value(key_right);
+        left.cmp(&right)
+    })
+}
+
 fn compare_dict_string<T>(left: &dyn Array, right: &dyn Array) -> DynComparator
 where
     T: ArrowDictionaryKeyType,
@@ -99,6 +124,27 @@ where
         let right = right_values.value(key_right);
         left.cmp(right)
     })
+}
+
+macro_rules! cmp_dict_primitive {
+    ($KEY_TYPE:expr, $VALUE_TYPE:ident, $LEFT:ident, $RIGHT:ident) => {
+        match $KEY_TYPE {
+            UInt8 => compare_dict_primitive::<UInt8Type, $VALUE_TYPE>($LEFT, $RIGHT),
+            UInt16 => compare_dict_primitive::<UInt16Type, $VALUE_TYPE>($LEFT, $RIGHT),
+            UInt32 => compare_dict_primitive::<UInt32Type, $VALUE_TYPE>($LEFT, $RIGHT),
+            UInt64 => compare_dict_primitive::<UInt64Type, $VALUE_TYPE>($LEFT, $RIGHT),
+            Int8 => compare_dict_primitive::<Int8Type, $VALUE_TYPE>($LEFT, $RIGHT),
+            Int16 => compare_dict_primitive::<Int16Type, $VALUE_TYPE>($LEFT, $RIGHT),
+            Int32 => compare_dict_primitive::<Int32Type, $VALUE_TYPE>($LEFT, $RIGHT),
+            Int64 => compare_dict_primitive::<Int64Type, $VALUE_TYPE>($LEFT, $RIGHT),
+            t => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Dictionaries do not support keys of type {:?}",
+                    t
+                )));
+            }
+        }
+    };
 }
 
 /// returns a comparison function that compares two values at two different positions
@@ -195,32 +241,57 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
             Dictionary(key_type_lhs, value_type_lhs),
             Dictionary(key_type_rhs, value_type_rhs),
         ) => {
-            if value_type_lhs.as_ref() != &DataType::Utf8
-                || value_type_rhs.as_ref() != &DataType::Utf8
-            {
+            if key_type_lhs != key_type_rhs || value_type_lhs != value_type_rhs {
                 return Err(ArrowError::InvalidArgumentError(
-                    "Arrow still does not support comparisons of non-string dictionary arrays"
-                        .to_string(),
+                    "Can't compare arrays of different types".to_string(),
                 ));
             }
-            match (key_type_lhs.as_ref(), key_type_rhs.as_ref()) {
-                (a, b) if a != b => {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "Can't compare arrays of different types".to_string(),
-                    ));
+
+            let key_type_lhs = key_type_lhs.as_ref();
+
+            match value_type_lhs.as_ref() {
+                Int8 => cmp_dict_primitive!(key_type_lhs, Int8Type, left, right),
+                Int16 => {
+                    cmp_dict_primitive!(key_type_lhs, Int16Type, left, right)
                 }
-                (UInt8, UInt8) => compare_dict_string::<UInt8Type>(left, right),
-                (UInt16, UInt16) => compare_dict_string::<UInt16Type>(left, right),
-                (UInt32, UInt32) => compare_dict_string::<UInt32Type>(left, right),
-                (UInt64, UInt64) => compare_dict_string::<UInt64Type>(left, right),
-                (Int8, Int8) => compare_dict_string::<Int8Type>(left, right),
-                (Int16, Int16) => compare_dict_string::<Int16Type>(left, right),
-                (Int32, Int32) => compare_dict_string::<Int32Type>(left, right),
-                (Int64, Int64) => compare_dict_string::<Int64Type>(left, right),
-                (lhs, _) => {
+                Int32 => {
+                    cmp_dict_primitive!(key_type_lhs, Int32Type, left, right)
+                }
+                Int64 => {
+                    cmp_dict_primitive!(key_type_lhs, Int64Type, left, right)
+                }
+                UInt8 => {
+                    cmp_dict_primitive!(key_type_lhs, UInt8Type, left, right)
+                }
+                UInt16 => {
+                    cmp_dict_primitive!(key_type_lhs, UInt16Type, left, right)
+                }
+                UInt32 => {
+                    cmp_dict_primitive!(key_type_lhs, UInt32Type, left, right)
+                }
+                UInt64 => {
+                    cmp_dict_primitive!(key_type_lhs, UInt64Type, left, right)
+                }
+                Utf8 => match key_type_lhs {
+                    UInt8 => compare_dict_string::<UInt8Type>(left, right),
+                    UInt16 => compare_dict_string::<UInt16Type>(left, right),
+                    UInt32 => compare_dict_string::<UInt32Type>(left, right),
+                    UInt64 => compare_dict_string::<UInt64Type>(left, right),
+                    Int8 => compare_dict_string::<Int8Type>(left, right),
+                    Int16 => compare_dict_string::<Int16Type>(left, right),
+                    Int32 => compare_dict_string::<Int32Type>(left, right),
+                    Int64 => compare_dict_string::<Int64Type>(left, right),
+                    lhs => {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Dictionaries do not support keys of type {:?}",
+                            lhs
+                        )));
+                    }
+                },
+                t => {
                     return Err(ArrowError::InvalidArgumentError(format!(
-                        "Dictionaries do not support keys of type {:?}",
-                        lhs
+                        "Dictionaries of value data type {:?} are not supported",
+                        t
                     )));
                 }
             }
@@ -337,6 +408,26 @@ pub mod tests {
         assert_eq!(Ordering::Less, (cmp)(0, 0));
         assert_eq!(Ordering::Equal, (cmp)(0, 3));
         assert_eq!(Ordering::Greater, (cmp)(1, 3));
+        Ok(())
+    }
+
+    #[test]
+    fn test_primitive_dict() -> Result<()> {
+        let values = Int32Array::from(vec![1_i32, 0, 2, 5]);
+        let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
+        let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let values = Int32Array::from(vec![2_i32, 3, 4, 5]);
+        let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
+        let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let cmp = build_compare(&array1, &array2)?;
+
+        assert_eq!(Ordering::Less, (cmp)(0, 0));
+        assert_eq!(Ordering::Less, (cmp)(0, 3));
+        assert_eq!(Ordering::Equal, (cmp)(3, 3));
+        assert_eq!(Ordering::Greater, (cmp)(3, 1));
+        assert_eq!(Ordering::Greater, (cmp)(3, 2));
         Ok(())
     }
 }
