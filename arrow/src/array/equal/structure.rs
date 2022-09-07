@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{array::data::count_nulls, array::ArrayData, util::bit_util::get_bit};
+use crate::{array::data::contains_nulls, array::ArrayData, util::bit_util::get_bit};
 
 use super::equal_range;
 
@@ -43,11 +43,9 @@ pub(super) fn struct_equal(
     rhs_start: usize,
     len: usize,
 ) -> bool {
-    // we have to recalculate null counts from the null buffers
-    let lhs_null_count = count_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
-    let rhs_null_count = count_nulls(rhs.null_buffer(), rhs_start + rhs.offset(), len);
-
-    if lhs_null_count == 0 && rhs_null_count == 0 {
+    // Only checking one null mask here because by the time the control flow reaches
+    // this point, the equality of the two masks would have already been verified.
+    if !contains_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len) {
         equal_child_values(lhs, rhs, lhs_start, rhs_start, len)
     } else {
         // get a ref of the null buffer bytes, to use in testing for nullness
