@@ -718,8 +718,7 @@ mod tests {
 
     fn generate_column(len: usize) -> ArrayRef {
         let mut rng = thread_rng();
-        // Cannot test PrimitiveDictionary because of #2687
-        match rng.gen_range(0..8) {
+        match rng.gen_range(0..9) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(len, 0.8)),
             2 => Arc::new(generate_primitive_array::<Int64Type>(len, 0.8)),
@@ -728,7 +727,17 @@ mod tests {
             5 => Arc::new(generate_primitive_array::<Float64Type>(len, 0.8)),
             6 => Arc::new(generate_strings::<i32>(len, 0.8)),
             7 => Arc::new(generate_dictionary::<Int64Type>(
-                Arc::new(generate_strings::<i32>(rng.gen_range(1..len), 0.9)),
+                // Cannot test dictionaries containing null values because of #2687
+                Arc::new(generate_strings::<i32>(rng.gen_range(1..len), 1.0)),
+                len,
+                0.8,
+            )),
+            8 => Arc::new(generate_dictionary::<Int64Type>(
+                // Cannot test dictionaries containing null values because of #2687
+                Arc::new(generate_primitive_array::<Int64Type>(
+                    rng.gen_range(1..len),
+                    1.0,
+                )),
                 len,
                 0.8,
             )),
