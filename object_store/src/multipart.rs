@@ -94,11 +94,10 @@ where
         if self.tasks.is_empty() {
             return Ok(());
         }
-        let total_parts = self.completed_parts.len();
         while let Poll::Ready(Some(res)) = self.tasks.poll_next_unpin(cx) {
             let (part_idx, part) = res?;
             self.completed_parts
-                .resize(std::cmp::max(part_idx + 1, total_parts), None);
+                .resize(std::cmp::max(part_idx + 1, self.completed_parts.len()), None);
             self.completed_parts[part_idx] = Some(part);
         }
         Ok(())
