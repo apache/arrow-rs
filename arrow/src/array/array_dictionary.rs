@@ -22,8 +22,8 @@ use std::iter::IntoIterator;
 use std::{convert::From, iter::FromIterator};
 
 use super::{
-    make_array, Array, ArrayData, ArrayRef, PrimitiveArray, PrimitiveBuilder,
-    StringArray, StringBuilder, StringDictionaryBuilder,
+    make_array, Array, ArrayData, ArrayRef, PrimitiveArray, StringArray,
+    StringDictionaryBuilder,
 };
 use crate::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, ArrowPrimitiveType, DataType,
@@ -329,9 +329,7 @@ impl<'a, T: ArrowDictionaryKeyType> FromIterator<Option<&'a str>> for Dictionary
     fn from_iter<I: IntoIterator<Item = Option<&'a str>>>(iter: I) -> Self {
         let it = iter.into_iter();
         let (lower, _) = it.size_hint();
-        let key_builder = PrimitiveBuilder::<T>::with_capacity(lower);
-        let value_builder = StringBuilder::with_capacity(256, 1024);
-        let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = StringDictionaryBuilder::with_capacity(lower, 256, 1024);
         it.for_each(|i| {
             if let Some(i) = i {
                 // Note: impl ... for Result<DictionaryArray<T>> fails with
@@ -367,9 +365,7 @@ impl<'a, T: ArrowDictionaryKeyType> FromIterator<&'a str> for DictionaryArray<T>
     fn from_iter<I: IntoIterator<Item = &'a str>>(iter: I) -> Self {
         let it = iter.into_iter();
         let (lower, _) = it.size_hint();
-        let key_builder = PrimitiveBuilder::<T>::with_capacity(lower);
-        let value_builder = StringBuilder::with_capacity(256, 1024);
-        let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = StringDictionaryBuilder::with_capacity(lower, 256, 1024);
         it.for_each(|i| {
             builder
                 .append(i)
@@ -589,9 +585,8 @@ mod tests {
 
     #[test]
     fn test_dictionary_array_fmt_debug() {
-        let key_builder = PrimitiveBuilder::<UInt8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<UInt32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder =
+            PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::with_capacity(3, 2);
         builder.append(12345678).unwrap();
         builder.append_null();
         builder.append(22345678).unwrap();
@@ -601,9 +596,8 @@ mod tests {
             format!("{:?}", array)
         );
 
-        let key_builder = PrimitiveBuilder::<UInt8Type>::with_capacity(20);
-        let value_builder = PrimitiveBuilder::<UInt32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder =
+            PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::with_capacity(20, 2);
         for _ in 0..20 {
             builder.append(1).unwrap();
         }

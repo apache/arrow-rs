@@ -108,10 +108,10 @@ mod tests {
     use crate::{
         array::{
             self, new_null_array, Array, Date32Array, Date64Array,
-            FixedSizeBinaryBuilder, Float16Array, Int32Array, PrimitiveBuilder,
-            StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
-            Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-            Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+            FixedSizeBinaryBuilder, Float16Array, Int32Array, StringArray,
+            StringDictionaryBuilder, StructArray, Time32MillisecondArray,
+            Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+            TimestampMicrosecondArray, TimestampMillisecondArray,
             TimestampNanosecondArray, TimestampSecondArray, UnionArray, UnionBuilder,
         },
         buffer::Buffer,
@@ -241,9 +241,7 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
 
-        let keys_builder = PrimitiveBuilder::<Int32Type>::with_capacity(10);
-        let values_builder = StringBuilder::new();
-        let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
+        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
 
         builder.append("one")?;
         builder.append_null();

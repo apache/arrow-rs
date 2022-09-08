@@ -675,8 +675,8 @@ mod tests {
         array::{
             Array, ArrayData, ArrayRef, BooleanArray, DictionaryArray,
             FixedSizeBinaryArray, Int16Array, Int16Type, Int32Array, Int64Array,
-            Int64Builder, ListBuilder, MapBuilder, NullArray, PrimitiveBuilder,
-            StringArray, StringDictionaryBuilder, StructArray, UInt8Array,
+            Int64Builder, ListBuilder, MapBuilder, NullArray, StringArray,
+            StringDictionaryBuilder, StructArray, UInt8Array,
         },
         buffer::Buffer,
         datatypes::Field,
@@ -963,8 +963,8 @@ mod tests {
 
     fn create_dictionary_array(values: &[&str], keys: &[Option<&str>]) -> ArrayData {
         let values = StringArray::from(values.to_vec());
-        let mut builder = StringDictionaryBuilder::new_with_dictionary(
-            PrimitiveBuilder::<Int16Type>::with_capacity(3),
+        let mut builder = StringDictionaryBuilder::<Int16Type>::new_with_dictionary(
+            keys.len(),
             &values,
         )
         .unwrap();

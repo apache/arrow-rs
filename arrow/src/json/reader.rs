@@ -914,9 +914,7 @@ impl Decoder {
     where
         T: ArrowPrimitiveType + ArrowDictionaryKeyType,
     {
-        let key_builder = PrimitiveBuilder::<T>::with_capacity(row_len);
-        let values_builder = StringBuilder::with_capacity(row_len, row_len * 5);
-        StringDictionaryBuilder::new(key_builder, values_builder)
+        StringDictionaryBuilder::with_capacity(row_len, row_len, row_len * 5)
     }
 
     #[inline(always)]
