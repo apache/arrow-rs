@@ -199,6 +199,16 @@ impl RecordBatch {
 
     /// Projects the schema onto the specified columns
     pub fn project(&self, indices: &[usize]) -> Result<RecordBatch> {
+        if indices.is_empty() {
+            return RecordBatch::try_new_with_options(
+                Arc::new(Schema::empty()),
+                vec![],
+                &RecordBatchOptions {
+                    match_field_names: true,
+                    row_count: Some(self.row_count),
+                },
+            );
+        }
         let projected_schema = self.schema.project(indices)?;
         let batch_fields = indices
             .iter()
@@ -959,6 +969,26 @@ mod tests {
             .expect("valid conversion");
 
         assert_eq!(expected, record_batch.project(&[0, 2]).unwrap());
+    }
+
+    #[test]
+    fn project_empty() {
+        let c: ArrayRef = Arc::new(StringArray::from(vec!["d", "e", "f"]));
+
+        let record_batch =
+            RecordBatch::try_from_iter(vec![("c", c.clone())]).expect("valid conversion");
+
+        let expected = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &RecordBatchOptions {
+                match_field_names: true,
+                row_count: Some(3),
+            },
+        )
+        .expect("valid conversion");
+
+        assert_eq!(expected, record_batch.project(&[]).unwrap());
     }
 
     #[test]
