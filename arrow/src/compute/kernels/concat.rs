@@ -104,7 +104,10 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef> {
 }
 
 /// Concatenates `batches` together into a single record batch.
-pub fn concat_batches(schema: &SchemaRef, batches: &[RecordBatch]) -> Result<RecordBatch> {
+pub fn concat_batches(
+    schema: &SchemaRef,
+    batches: &[RecordBatch],
+) -> Result<RecordBatch> {
     if batches.is_empty() {
         return Ok(RecordBatch::new_empty(schema.clone()));
     }
@@ -613,7 +616,7 @@ mod tests {
                 Arc::new(StringArray::from(vec!["a", "b"])),
             ],
         )
-            .unwrap();
+        .unwrap();
         let batch2 = RecordBatch::try_new(
             schema.clone(),
             vec![
@@ -621,8 +624,8 @@ mod tests {
                 Arc::new(StringArray::from(vec!["c", "d"])),
             ],
         )
-            .unwrap();
-        let new_batch = RecordBatch::concat(&schema, &[batch1, batch2]).unwrap();
+        .unwrap();
+        let new_batch = concat_batches(&schema, &[batch1, batch2]).unwrap();
         assert_eq!(new_batch.schema().as_ref(), schema.as_ref());
         assert_eq!(2, new_batch.num_columns());
         assert_eq!(4, new_batch.num_rows());
@@ -634,7 +637,7 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Utf8, false),
         ]));
-        let batch = RecordBatch::concat(&schema, &[]).unwrap();
+        let batch = concat_batches(&schema, &[]).unwrap();
         assert_eq!(batch.schema().as_ref(), schema.as_ref());
         assert_eq!(0, batch.num_rows());
     }
@@ -656,7 +659,7 @@ mod tests {
                 Arc::new(StringArray::from(vec!["a", "b"])),
             ],
         )
-            .unwrap();
+        .unwrap();
         let batch2 = RecordBatch::try_new(
             schema2,
             vec![
@@ -664,8 +667,8 @@ mod tests {
                 Arc::new(StringArray::from(vec!["c", "d"])),
             ],
         )
-            .unwrap();
-        let error = RecordBatch::concat(&schema1, &[batch1, batch2]).unwrap_err();
+        .unwrap();
+        let error = concat_batches(&schema1, &[batch1, batch2]).unwrap_err();
         assert_eq!(
             error.to_string(),
             "Invalid argument error: batches[1] schema is different with argument schema.",
