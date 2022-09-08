@@ -167,7 +167,9 @@ impl RowConverter {
 
                 let mapping: Vec<_> = compute_dictionary_mapping(interner, values)
                     .into_iter()
-                    .map(|interned| interner.normalized_key(interned))
+                    .map(|maybe_interned| {
+                        maybe_interned.map(|interned| interner.normalized_key(interned))
+                    })
                     .collect();
 
                 Some(mapping)
@@ -229,26 +231,25 @@ impl<'a> AsRef<[u8]> for Row<'a> {
 fn compute_dictionary_mapping(
     interner: &mut OrderPreservingInterner,
     values: &ArrayRef,
-) -> Vec<Interned> {
+) -> Vec<Option<Interned>> {
     use fixed::FixedLengthEncoding;
     downcast_primitive_array! {
         values => interner
-            .intern(values.iter().map(|x| x.map(|x| x.encode())
-            .unwrap_or_default())),
+            .intern(values.iter().map(|x| x.map(|x| x.encode()))),
         DataType::Binary => {
-            let iter = as_generic_binary_array::<i64>(values).iter().map(|x| x.unwrap_or_default());
+            let iter = as_generic_binary_array::<i64>(values).iter();
             interner.intern(iter)
         }
         DataType::LargeBinary => {
-            let iter = as_generic_binary_array::<i64>(values).iter().map(|x| x.unwrap_or_default());
+            let iter = as_generic_binary_array::<i64>(values).iter();
             interner.intern(iter)
         }
         DataType::Utf8 => {
-            let iter = as_string_array(values).iter().map(|x| x.unwrap_or_default().as_bytes());
+            let iter = as_string_array(values).iter().map(|x| x.map(|x| x.as_bytes()));
             interner.intern(iter)
         }
         DataType::LargeUtf8 => {
-            let iter = as_largestring_array(values).iter().map(|x| x.unwrap_or_default().as_bytes());
+            let iter = as_largestring_array(values).iter().map(|x| x.map(|x| x.as_bytes()));
             interner.intern(iter)
         }
         t => unreachable!("dictionary value {} is not supported", t)
@@ -256,7 +257,10 @@ fn compute_dictionary_mapping(
 }
 
 /// Computes the length of each encoded [`Rows`] and returns an empty [`Rows`]
-fn new_empty_rows(cols: &[ArrayRef], dictionaries: &[Option<Vec<&[u8]>>]) -> Rows {
+fn new_empty_rows(
+    cols: &[ArrayRef],
+    dictionaries: &[Option<Vec<Option<&[u8]>>>],
+) -> Rows {
     let num_rows = cols.first().map(|x| x.len()).unwrap_or(0);
     let mut lengths = vec![0; num_rows];
 
@@ -291,8 +295,8 @@ fn new_empty_rows(cols: &[ArrayRef], dictionaries: &[Option<Vec<&[u8]>>]) -> Row
                 array => {
                     let dict = dict.as_ref().unwrap();
                     for (v, length) in array.keys().iter().zip(lengths.iter_mut()) {
-                        match v {
-                            Some(v) => *length += dict[v as usize].len() + 1,
+                        match v.and_then(|v| dict[v as usize]) {
+                            Some(k) => *length += k.len() + 1,
                             None => *length += 1,
                         }
                     }
@@ -325,7 +329,7 @@ fn encode_column(
     out: &mut Rows,
     array: &ArrayRef,
     opts: SortOptions,
-    dictionary: Option<&[&[u8]]>,
+    dictionary: Option<&[Option<&[u8]>]>,
 ) {
     downcast_primitive_array! {
         array => fixed::encode(out, array, opts),
@@ -365,9 +369,8 @@ fn encode_column(
             array => {
                 let dict = dictionary.unwrap();
                 for (offset, k) in out.offsets.iter_mut().skip(1).zip(array.keys()) {
-                    match k {
-                        Some(k) => {
-                            let v = &dict[k as usize];
+                    match k.and_then(|k| dict[k as usize]) {
+                        Some(v) => {
                             let end_offset = *offset + 1 + v.len();
                             out.buffer[*offset] = 1;
                             out.buffer[*offset+1..end_offset].copy_from_slice(v);
@@ -396,7 +399,8 @@ mod tests {
     use super::*;
     use crate::array::{
         BinaryArray, BooleanArray, DictionaryArray, Float32Array, GenericStringArray,
-        Int16Array, OffsetSizeTrait, PrimitiveArray, StringArray,
+        Int16Array, Int32Array, Int32Builder, OffsetSizeTrait, PrimitiveArray,
+        PrimitiveDictionaryBuilder, StringArray,
     };
     use crate::compute::{LexicographicalComparator, SortColumn};
     use crate::util::display::array_value_to_string;
@@ -551,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dictionary() {
+    fn test_string_dictionary() {
         let mut converter = RowConverter::new(vec![Default::default()]);
 
         let a = Arc::new(DictionaryArray::<Int32Type>::from_iter([
@@ -597,6 +601,57 @@ mod tests {
         assert!(rows_c.row(2) > rows_c.row(1));
         assert!(rows_c.row(0) > rows_c.row(1));
         assert!(rows_c.row(3) > rows_c.row(0));
+    }
+
+    #[test]
+    fn test_primitive_dictionary() {
+        let mut converter = RowConverter::new(vec![Default::default()]);
+
+        let mut builder =
+            PrimitiveDictionaryBuilder::new(Int32Builder::new(), Int32Builder::new());
+        builder.append(2).unwrap();
+        builder.append(3).unwrap();
+        builder.append(0).unwrap();
+        builder.append_null();
+        builder.append(5).unwrap();
+        builder.append(3).unwrap();
+        builder.append(-1).unwrap();
+
+        let rows = converter.convert(&[Arc::new(builder.finish())]);
+        assert!(rows.row(0) < rows.row(1));
+        assert!(rows.row(2) < rows.row(0));
+        assert!(rows.row(3) < rows.row(2));
+        assert!(rows.row(6) < rows.row(2));
+        assert!(rows.row(3) < rows.row(6));
+    }
+
+    #[test]
+    fn test_dictionary_nulls() {
+        let mut converter = RowConverter::new(vec![Default::default()]);
+
+        let values =
+            Int32Array::from_iter([Some(1), Some(-1), None, Some(4), None]).into_data();
+        let keys =
+            Int32Array::from_iter([Some(0), Some(0), Some(1), Some(2), Some(4), None])
+                .into_data();
+
+        let data = keys
+            .into_builder()
+            .data_type(DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Int32),
+            ))
+            .child_data(vec![values])
+            .build()
+            .unwrap();
+
+        let rows =
+            converter.convert(&[Arc::new(DictionaryArray::<Int32Type>::from(data))]);
+
+        assert_eq!(rows.row(0), rows.row(1));
+        assert_eq!(rows.row(3), rows.row(4));
+        assert_eq!(rows.row(4), rows.row(5));
+        assert!(rows.row(3) < rows.row(0));
     }
 
     fn generate_primitive_array<K>(len: usize, valid_percent: f64) -> PrimitiveArray<K>
@@ -663,6 +718,7 @@ mod tests {
 
     fn generate_column(len: usize) -> ArrayRef {
         let mut rng = thread_rng();
+        // Cannot test PrimitiveDictionary because of #2687
         match rng.gen_range(0..8) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(len, 0.8)),

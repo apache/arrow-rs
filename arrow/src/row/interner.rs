@@ -18,10 +18,11 @@
 use hashbrown::hash_map::RawEntryMut;
 use hashbrown::HashMap;
 use std::cmp::Ordering;
+use std::num::NonZeroU32;
 use std::ops::Index;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct Interned(u32);
+pub struct Interned(NonZeroU32);
 
 /// A byte array interner that generates normalized keys that are sorted with respect
 /// to the interned values, e.g. `inter(a) < intern(b) => a < b`
@@ -39,9 +40,9 @@ impl OrderPreservingInterner {
     /// Interns an iterator of values returning a list of [`Interned`] which can be
     /// used with [`Self::normalized_key`] to retrieve the normalized keys with a
     /// lifetime not tied to the mutable borrow passed to this method
-    pub fn intern<I, V>(&mut self, input: I) -> Vec<Interned>
+    pub fn intern<I, V>(&mut self, input: I) -> Vec<Option<Interned>>
     where
-        I: IntoIterator<Item = V>,
+        I: IntoIterator<Item = Option<V>>,
         V: AsRef<[u8]>,
     {
         let iter = input.into_iter();
@@ -50,7 +51,15 @@ impl OrderPreservingInterner {
         let mut to_intern: Vec<(usize, u64, V)> = Vec::with_capacity(capacity);
         let mut to_intern_len = 0;
 
-        for (idx, value) in iter.enumerate() {
+        for (idx, item) in iter.enumerate() {
+            let value: V = match item {
+                Some(value) => value,
+                None => {
+                    out.push(None);
+                    continue;
+                }
+            };
+
             let v = value.as_ref();
             let hash = self.hasher.hash_one(v);
             let entry = self
@@ -59,10 +68,10 @@ impl OrderPreservingInterner {
                 .from_hash(hash, |a| &self.values[*a] == v);
 
             match entry {
-                RawEntryMut::Occupied(o) => out.push(*o.key()),
+                RawEntryMut::Occupied(o) => out.push(Some(*o.key())),
                 RawEntryMut::Vacant(_) => {
                     // Push placeholder
-                    out.push(Interned(0));
+                    out.push(None);
                     to_intern_len += v.len();
                     to_intern.push((idx, hash, value));
                 }
@@ -86,7 +95,7 @@ impl OrderPreservingInterner {
 
             match entry {
                 RawEntryMut::Occupied(o) => {
-                    out[idx] = *o.key();
+                    out[idx] = Some(*o.key());
                 }
                 RawEntryMut::Vacant(v) => {
                     let val = value.as_ref();
@@ -100,7 +109,7 @@ impl OrderPreservingInterner {
                     v.insert_with_hasher(hash, interned, (), |key| {
                         hasher.hash_one(&values[*key])
                     });
-                    out[idx] = interned;
+                    out[idx] = Some(interned);
                 }
             }
         }
@@ -141,8 +150,8 @@ impl InternBuffer {
     /// Appends the next value based on data written to `self.values`
     /// returning the corresponding [`Interned`]
     fn append(&mut self) -> Interned {
-        let idx = self.offsets.len() - 1;
-        let key = Interned(idx.try_into().unwrap());
+        let idx: u32 = self.offsets.len().try_into().unwrap();
+        let key = Interned(NonZeroU32::new(idx).unwrap());
         self.offsets.push(self.values.len());
         key
     }
@@ -152,9 +161,9 @@ impl Index<Interned> for InternBuffer {
     type Output = [u8];
 
     fn index(&self, key: Interned) -> &Self::Output {
-        let index = key.0 as usize;
-        let end = self.offsets[index + 1];
-        let start = self.offsets[index];
+        let index = key.0.get() as usize;
+        let end = self.offsets[index];
+        let start = self.offsets[index - 1];
         unsafe { self.values.get_unchecked(start..end) }
     }
 }
@@ -255,7 +264,8 @@ mod tests {
         // Intern a single value at a time to check ordering
         let interned: Vec<_> = values
             .iter()
-            .flat_map(|v| interner.intern([&v.to_be_bytes()]))
+            .flat_map(|v| interner.intern([Some(&v.to_be_bytes())]))
+            .map(Option::unwrap)
             .collect();
 
         let interned: Vec<_> = interned
@@ -295,7 +305,8 @@ mod tests {
         let values = vec![0_u8, 1, 8, 4, 1, 0];
         let mut interner = OrderPreservingInterner::default();
 
-        let interned = interner.intern(values.iter().map(std::slice::from_ref));
+        let interned = interner.intern(values.iter().map(std::slice::from_ref).map(Some));
+        let interned: Vec<_> = interned.into_iter().map(Option::unwrap).collect();
 
         assert_eq!(interned[0], interned[5]);
         assert_eq!(interned[1], interned[4]);
