@@ -122,9 +122,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::{
-        as_primitive_array, Float64Array, PrimitiveBuilder, PrimitiveDictionaryBuilder,
-    };
+    use crate::array::{as_primitive_array, Float64Array, PrimitiveDictionaryBuilder};
     use crate::datatypes::{Float64Type, Int32Type, Int8Type};
 
     #[test]
@@ -149,9 +147,7 @@ mod tests {
 
     #[test]
     fn test_unary_dict_and_unary_dyn() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
         builder.append(6).unwrap();
         builder.append(7).unwrap();
@@ -160,9 +156,7 @@ mod tests {
         builder.append(9).unwrap();
         let dictionary_array = builder.finish();
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(6).unwrap();
         builder.append(7).unwrap();
         builder.append(8).unwrap();

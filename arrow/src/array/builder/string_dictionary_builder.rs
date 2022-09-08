@@ -42,9 +42,7 @@ use std::sync::Arc;
 /// // Create a dictionary array indexed by bytes whose values are Strings.
 /// // It can thus hold up to 256 distinct string values.
 ///
-/// let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(100);
-/// let value_builder = StringBuilder::new();
-/// let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
+/// let mut builder = StringDictionaryBuilder::<Int8Type>::new();
 ///
 /// // The builder builds the dictionary value by value
 /// builder.append("abc").unwrap();
@@ -84,17 +82,46 @@ where
     values_builder: StringBuilder,
 }
 
+impl<K> Default for StringDictionaryBuilder<K>
+where
+    K: ArrowDictionaryKeyType,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K> StringDictionaryBuilder<K>
 where
     K: ArrowDictionaryKeyType,
 {
-    /// Creates a new `StringDictionaryBuilder` from a keys builder and a value builder.
-    pub fn new(keys_builder: PrimitiveBuilder<K>, values_builder: StringBuilder) -> Self {
+    /// Creates a new `StringDictionaryBuilder`
+    pub fn new() -> Self {
+        let keys_builder = PrimitiveBuilder::new();
+        let values_builder = StringBuilder::new();
         Self {
             state: Default::default(),
             dedup: HashMap::with_capacity_and_hasher(keys_builder.capacity(), ()),
             keys_builder,
             values_builder,
+        }
+    }
+
+    /// Creates a new `StringDictionaryBuilder` with the provided capacities
+    ///
+    /// `keys_capacity`: the number of keys, i.e. length of array to build
+    /// `value_capacity`: the number of distinct dictionary values, i.e. size of dictionary
+    /// `string_capacity`: the total number of bytes of all distinct strings in the dictionary
+    pub fn with_capacity(
+        keys_capacity: usize,
+        value_capacity: usize,
+        string_capacity: usize,
+    ) -> Self {
+        Self {
+            state: Default::default(),
+            dedup: Default::default(),
+            keys_builder: PrimitiveBuilder::with_capacity(keys_capacity),
+            values_builder: StringBuilder::with_capacity(value_capacity, string_capacity),
         }
     }
 
@@ -111,7 +138,7 @@ where
     ///
     /// let dictionary_values = StringArray::from(vec![None, Some("abc"), Some("def")]);
     ///
-    /// let mut builder = StringDictionaryBuilder::new_with_dictionary(PrimitiveBuilder::<Int16Type>::with_capacity(3), &dictionary_values).unwrap();
+    /// let mut builder = StringDictionaryBuilder::new_with_dictionary(3, &dictionary_values).unwrap();
     /// builder.append("def").unwrap();
     /// builder.append_null();
     /// builder.append("abc").unwrap();
@@ -123,7 +150,7 @@ where
     /// assert_eq!(keys, &Int16Array::from(vec![Some(2), None, Some(1)]));
     /// ```
     pub fn new_with_dictionary(
-        keys_builder: PrimitiveBuilder<K>,
+        keys_capacity: usize,
         dictionary_values: &StringArray,
     ) -> Result<Self> {
         let state = ahash::RandomState::default();
@@ -162,7 +189,7 @@ where
         Ok(Self {
             state,
             dedup,
-            keys_builder,
+            keys_builder: PrimitiveBuilder::with_capacity(keys_capacity),
             values_builder,
         })
     }
@@ -290,9 +317,7 @@ mod tests {
 
     #[test]
     fn test_string_dictionary_builder() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(5);
-        let value_builder = StringBuilder::new();
-        let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
         builder.append("abc").unwrap();
         builder.append_null();
         builder.append("def").unwrap();
@@ -317,10 +342,8 @@ mod tests {
     fn test_string_dictionary_builder_with_existing_dictionary() {
         let dictionary = StringArray::from(vec![None, Some("def"), Some("abc")]);
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(6);
         let mut builder =
-            StringDictionaryBuilder::new_with_dictionary(key_builder, &dictionary)
-                .unwrap();
+            StringDictionaryBuilder::new_with_dictionary(6, &dictionary).unwrap();
         builder.append("abc").unwrap();
         builder.append_null();
         builder.append("def").unwrap();
@@ -349,9 +372,8 @@ mod tests {
         let dictionary: Vec<Option<&str>> = vec![None];
         let dictionary = StringArray::from(dictionary);
 
-        let key_builder = PrimitiveBuilder::<Int16Type>::with_capacity(4);
         let mut builder =
-            StringDictionaryBuilder::new_with_dictionary(key_builder, &dictionary)
+            StringDictionaryBuilder::<Int16Type>::new_with_dictionary(4, &dictionary)
                 .unwrap();
         builder.append("abc").unwrap();
         builder.append_null();
