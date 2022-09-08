@@ -96,8 +96,9 @@ where
         }
         while let Poll::Ready(Some(res)) = self.tasks.poll_next_unpin(cx) {
             let (part_idx, part) = res?;
+            let total_parts = self.completed_parts.len();
             self.completed_parts
-                .resize(std::cmp::max(part_idx + 1, self.completed_parts.len()), None);
+                .resize(std::cmp::max(part_idx + 1, total_parts), None);
             self.completed_parts[part_idx] = Some(part);
         }
         Ok(())
