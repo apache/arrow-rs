@@ -26,30 +26,11 @@ use crate::compute::util::{
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
-use crate::{array::*, buffer::buffer_bin_and};
+use crate::{
+    array::*, buffer::buffer_bin_and, downcast_dictionary_array, downcast_primitive_array,
+};
 
 use num::{ToPrimitive, Zero};
-use TimeUnit::*;
-
-macro_rules! downcast_take {
-    ($type: ty, $values: expr, $indices: expr) => {{
-        let values = $values
-            .as_any()
-            .downcast_ref::<PrimitiveArray<$type>>()
-            .expect("Unable to downcast to a primitive array");
-        Ok(Arc::new(take_primitive::<$type, _>(&values, $indices)?))
-    }};
-}
-
-macro_rules! downcast_dict_take {
-    ($type: ty, $values: expr, $indices: expr) => {{
-        let values = $values
-            .as_any()
-            .downcast_ref::<DictionaryArray<$type>>()
-            .expect("Unable to downcast to a dictionary array");
-        Ok(Arc::new(take_dict::<$type, _>(values, $indices)?))
-    }};
-}
 
 /// Take elements by index from [Array], creating a new [Array] from those indexes.
 ///
@@ -141,7 +122,9 @@ where
             })?
         }
     }
-    match values.data_type() {
+
+    downcast_primitive_array! {
+        values => Ok(Arc::new(take_primitive(values, indices)?)),
         DataType::Boolean => {
             let values = values.as_any().downcast_ref::<BooleanArray>().unwrap();
             Ok(Arc::new(take_boolean(values, indices)?))
@@ -150,61 +133,6 @@ where
             let decimal_values =
                 values.as_any().downcast_ref::<Decimal128Array>().unwrap();
             Ok(Arc::new(take_decimal128(decimal_values, indices)?))
-        }
-        DataType::Int8 => downcast_take!(Int8Type, values, indices),
-        DataType::Int16 => downcast_take!(Int16Type, values, indices),
-        DataType::Int32 => downcast_take!(Int32Type, values, indices),
-        DataType::Int64 => downcast_take!(Int64Type, values, indices),
-        DataType::UInt8 => downcast_take!(UInt8Type, values, indices),
-        DataType::UInt16 => downcast_take!(UInt16Type, values, indices),
-        DataType::UInt32 => downcast_take!(UInt32Type, values, indices),
-        DataType::UInt64 => downcast_take!(UInt64Type, values, indices),
-        DataType::Float32 => downcast_take!(Float32Type, values, indices),
-        DataType::Float64 => downcast_take!(Float64Type, values, indices),
-        DataType::Date32 => downcast_take!(Date32Type, values, indices),
-        DataType::Date64 => downcast_take!(Date64Type, values, indices),
-        DataType::Time32(Second) => downcast_take!(Time32SecondType, values, indices),
-        DataType::Time32(Millisecond) => {
-            downcast_take!(Time32MillisecondType, values, indices)
-        }
-        DataType::Time64(Microsecond) => {
-            downcast_take!(Time64MicrosecondType, values, indices)
-        }
-        DataType::Time64(Nanosecond) => {
-            downcast_take!(Time64NanosecondType, values, indices)
-        }
-        DataType::Timestamp(Second, _) => {
-            downcast_take!(TimestampSecondType, values, indices)
-        }
-        DataType::Timestamp(Millisecond, _) => {
-            downcast_take!(TimestampMillisecondType, values, indices)
-        }
-        DataType::Timestamp(Microsecond, _) => {
-            downcast_take!(TimestampMicrosecondType, values, indices)
-        }
-        DataType::Timestamp(Nanosecond, _) => {
-            downcast_take!(TimestampNanosecondType, values, indices)
-        }
-        DataType::Interval(IntervalUnit::YearMonth) => {
-            downcast_take!(IntervalYearMonthType, values, indices)
-        }
-        DataType::Interval(IntervalUnit::DayTime) => {
-            downcast_take!(IntervalDayTimeType, values, indices)
-        }
-        DataType::Interval(IntervalUnit::MonthDayNano) => {
-            downcast_take!(IntervalMonthDayNanoType, values, indices)
-        }
-        DataType::Duration(TimeUnit::Second) => {
-            downcast_take!(DurationSecondType, values, indices)
-        }
-        DataType::Duration(TimeUnit::Millisecond) => {
-            downcast_take!(DurationMillisecondType, values, indices)
-        }
-        DataType::Duration(TimeUnit::Microsecond) => {
-            downcast_take!(DurationMicrosecondType, values, indices)
-        }
-        DataType::Duration(TimeUnit::Nanosecond) => {
-            downcast_take!(DurationNanosecondType, values, indices)
         }
         DataType::Utf8 => {
             let values = values
@@ -271,17 +199,10 @@ where
 
             Ok(Arc::new(StructArray::from((fields, is_valid))) as ArrayRef)
         }
-        DataType::Dictionary(key_type, _) => match key_type.as_ref() {
-            DataType::Int8 => downcast_dict_take!(Int8Type, values, indices),
-            DataType::Int16 => downcast_dict_take!(Int16Type, values, indices),
-            DataType::Int32 => downcast_dict_take!(Int32Type, values, indices),
-            DataType::Int64 => downcast_dict_take!(Int64Type, values, indices),
-            DataType::UInt8 => downcast_dict_take!(UInt8Type, values, indices),
-            DataType::UInt16 => downcast_dict_take!(UInt16Type, values, indices),
-            DataType::UInt32 => downcast_dict_take!(UInt32Type, values, indices),
-            DataType::UInt64 => downcast_dict_take!(UInt64Type, values, indices),
-            t => unimplemented!("Take not supported for dictionary key type {:?}", t),
-        },
+        DataType::Dictionary(_, _) => downcast_dictionary_array! {
+            values => Ok(Arc::new(take_dict(values, indices)?)),
+            t => unimplemented!("Take not supported for dictionary type {:?}", t)
+        }
         DataType::Binary => {
             let values = values
                 .as_any()
@@ -314,7 +235,7 @@ where
                 Ok(new_null_array(&DataType::Null, indices.len()))
             }
         }
-        t => unimplemented!("Take not supported for data type {:?}", t),
+        t => unimplemented!("Take not supported for data type {:?}", t)
     }
 }
 

@@ -288,7 +288,7 @@ impl MutableBuffer {
         Buffer::from_bytes(bytes)
     }
 
-    /// View this buffer as a slice of a specific type.
+    /// View this buffer as a mutable slice of a specific type.
     ///
     /// # Panics
     ///
@@ -300,6 +300,21 @@ impl MutableBuffer {
         // implementation outside this crate, and this method checks alignment
         let (prefix, offsets, suffix) =
             unsafe { self.as_slice_mut().align_to_mut::<T>() };
+        assert!(prefix.is_empty() && suffix.is_empty());
+        offsets
+    }
+
+    /// View buffer as a immutable slice of a specific type.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the underlying buffer is not aligned
+    /// correctly for type `T`.
+    pub fn typed_data<T: ArrowNativeType>(&self) -> &[T] {
+        // SAFETY
+        // ArrowNativeType is trivially transmutable, is sealed to prevent potentially incorrect
+        // implementation outside this crate, and this method checks alignment
+        let (prefix, offsets, suffix) = unsafe { self.as_slice().align_to::<T>() };
         assert!(prefix.is_empty() && suffix.is_empty());
         offsets
     }
@@ -372,6 +387,41 @@ impl MutableBuffer {
     pub(crate) unsafe fn set_len(&mut self, len: usize) {
         assert!(len <= self.capacity());
         self.len = len;
+    }
+
+    /// Invokes `f` with values `0..len` collecting the boolean results into a new `MutableBuffer`
+    ///
+    /// This is similar to `from_trusted_len_iter_bool`, however, can be significantly faster
+    /// as it eliminates the conditional `Iterator::next`
+    #[inline]
+    pub(crate) fn collect_bool<F: FnMut(usize) -> bool>(len: usize, mut f: F) -> Self {
+        let mut buffer = Self::new(bit_util::ceil(len, 8));
+
+        let chunks = len / 8;
+        let remainder = len % 8;
+        for chunk in 0..chunks {
+            let mut packed = 0;
+            for bit_idx in 0..8 {
+                let i = bit_idx + chunk * 8;
+                packed |= (f(i) as u8) << bit_idx;
+            }
+
+            // SAFETY: Already allocated sufficient capacity
+            unsafe { buffer.push_unchecked(packed) }
+        }
+
+        if remainder != 0 {
+            let mut packed = 0;
+            for bit_idx in 0..remainder {
+                let i = bit_idx + chunks * 8;
+                packed |= (f(i) as u8) << bit_idx;
+            }
+
+            // SAFETY: Already allocated sufficient capacity
+            unsafe { buffer.push_unchecked(packed) }
+        }
+
+        buffer
     }
 }
 
@@ -496,38 +546,9 @@ impl MutableBuffer {
         mut iterator: I,
     ) -> Self {
         let (_, upper) = iterator.size_hint();
-        let upper = upper.expect("from_trusted_len_iter requires an upper limit");
+        let len = upper.expect("from_trusted_len_iter requires an upper limit");
 
-        let mut result = {
-            let byte_capacity: usize = upper.saturating_add(7) / 8;
-            MutableBuffer::new(byte_capacity)
-        };
-
-        'a: loop {
-            let mut byte_accum: u8 = 0;
-            let mut mask: u8 = 1;
-
-            //collect (up to) 8 bits into a byte
-            while mask != 0 {
-                if let Some(value) = iterator.next() {
-                    byte_accum |= match value {
-                        true => mask,
-                        false => 0,
-                    };
-                    mask <<= 1;
-                } else {
-                    if mask != 1 {
-                        // Add last byte
-                        result.push_unchecked(byte_accum);
-                    }
-                    break 'a;
-                }
-            }
-
-            // Soundness: from_trusted_len
-            result.push_unchecked(byte_accum);
-        }
-        result
+        Self::collect_bool(len, |_| iterator.next().unwrap())
     }
 
     /// Creates a [`MutableBuffer`] from an [`Iterator`] with a trusted (upper) length or errors

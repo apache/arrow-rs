@@ -33,18 +33,18 @@ use crate::buffer::MutableBuffer;
 use crate::compute::kernels::arity::unary;
 use crate::compute::unary_dyn;
 use crate::compute::util::combine_option_bitmap;
-use crate::datatypes;
 use crate::datatypes::{
-    ArrowNumericType, DataType, Date32Type, Date64Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
+    native_op::ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType, DataType,
+    Date32Type, Date64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    IntervalYearMonthType,
 };
 use crate::datatypes::{
     Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
     UInt32Type, UInt64Type, UInt8Type,
 };
 use crate::error::{ArrowError, Result};
+use crate::{datatypes, downcast_primitive_array};
 use num::traits::Pow;
-use std::any::type_name;
 #[cfg(feature = "simd")]
 use std::borrow::BorrowMut;
 #[cfg(feature = "simd")]
@@ -101,6 +101,106 @@ where
         )
     };
     Ok(PrimitiveArray::<LT>::from(data))
+}
+
+/// This is similar to `math_op` as it performs given operation between two input primitive arrays.
+/// But the given operation can return `None` if overflow is detected. For the case, this function
+/// returns an `Err`.
+fn math_checked_op<LT, RT, F>(
+    left: &PrimitiveArray<LT>,
+    right: &PrimitiveArray<RT>,
+    op: F,
+) -> Result<PrimitiveArray<LT>>
+where
+    LT: ArrowNumericType,
+    RT: ArrowNumericType,
+    F: Fn(LT::Native, RT::Native) -> Option<LT::Native>,
+{
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform math operation on arrays of different length".to_string(),
+        ));
+    }
+
+    let left_iter = ArrayIter::new(left);
+    let right_iter = ArrayIter::new(right);
+
+    let values: Result<Vec<Option<<LT as ArrowPrimitiveType>::Native>>> = left_iter
+        .into_iter()
+        .zip(right_iter.into_iter())
+        .map(|(l, r)| {
+            if let (Some(l), Some(r)) = (l, r) {
+                let result = op(l, r);
+                if let Some(r) = result {
+                    Ok(Some(r))
+                } else {
+                    // Overflow
+                    Err(ArrowError::ComputeError(format!(
+                        "Overflow happened on: {:?}, {:?}",
+                        l, r
+                    )))
+                }
+            } else {
+                Ok(None)
+            }
+        })
+        .collect();
+
+    let values = values?;
+
+    Ok(PrimitiveArray::<LT>::from_iter(values))
+}
+
+/// This is similar to `math_checked_op` but just for divide op.
+fn math_checked_divide<LT, RT, F>(
+    left: &PrimitiveArray<LT>,
+    right: &PrimitiveArray<RT>,
+    op: F,
+) -> Result<PrimitiveArray<LT>>
+where
+    LT: ArrowNumericType,
+    RT: ArrowNumericType,
+    RT::Native: One + Zero,
+    F: Fn(LT::Native, RT::Native) -> Option<LT::Native>,
+{
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform math operation on arrays of different length".to_string(),
+        ));
+    }
+
+    let left_iter = ArrayIter::new(left);
+    let right_iter = ArrayIter::new(right);
+
+    let values: Result<Vec<Option<<LT as ArrowPrimitiveType>::Native>>> = left_iter
+        .into_iter()
+        .zip(right_iter.into_iter())
+        .map(|(l, r)| {
+            if let (Some(l), Some(r)) = (l, r) {
+                let result = op(l, r);
+                if let Some(r) = result {
+                    Ok(Some(r))
+                } else if r.is_zero() {
+                    Err(ArrowError::ComputeError(format!(
+                        "DivideByZero on: {:?}, {:?}",
+                        l, r
+                    )))
+                } else {
+                    // Overflow
+                    Err(ArrowError::ComputeError(format!(
+                        "Overflow happened on: {:?}, {:?}",
+                        l, r
+                    )))
+                }
+            } else {
+                Ok(None)
+            }
+        })
+        .collect();
+
+    let values = values?;
+
+    Ok(PrimitiveArray::<LT>::from_iter(values))
 }
 
 /// Helper function for operations where a valid `0` on the right array should
@@ -570,72 +670,6 @@ macro_rules! typed_dict_math_op {
     }};
 }
 
-macro_rules! typed_op {
-    ($LEFT: expr, $RIGHT: expr, $T: ident, $OP: expr, $MATH_OP: ident) => {{
-        let left = $LEFT
-            .as_any()
-            .downcast_ref::<PrimitiveArray<$T>>()
-            .ok_or_else(|| {
-                ArrowError::CastError(format!(
-                    "Left array cannot be cast to {}",
-                    type_name::<$T>()
-                ))
-            })?;
-        let right = $RIGHT
-            .as_any()
-            .downcast_ref::<PrimitiveArray<$T>>()
-            .ok_or_else(|| {
-                ArrowError::CastError(format!(
-                    "Right array cannot be cast to {}",
-                    type_name::<$T>(),
-                ))
-            })?;
-        let array = $MATH_OP(left, right, $OP)?;
-        Ok(Arc::new(array))
-    }};
-}
-
-macro_rules! typed_math_op {
-    ($LEFT: expr, $RIGHT: expr, $OP: expr, $MATH_OP: ident) => {{
-        match $LEFT.data_type() {
-            DataType::Int8 => {
-                typed_op!($LEFT, $RIGHT, Int8Type, $OP, $MATH_OP)
-            }
-            DataType::Int16 => {
-                typed_op!($LEFT, $RIGHT, Int16Type, $OP, $MATH_OP)
-            }
-            DataType::Int32 => {
-                typed_op!($LEFT, $RIGHT, Int32Type, $OP, $MATH_OP)
-            }
-            DataType::Int64 => {
-                typed_op!($LEFT, $RIGHT, Int64Type, $OP, $MATH_OP)
-            }
-            DataType::UInt8 => {
-                typed_op!($LEFT, $RIGHT, UInt8Type, $OP, $MATH_OP)
-            }
-            DataType::UInt16 => {
-                typed_op!($LEFT, $RIGHT, UInt16Type, $OP, $MATH_OP)
-            }
-            DataType::UInt32 => {
-                typed_op!($LEFT, $RIGHT, UInt32Type, $OP, $MATH_OP)
-            }
-            DataType::UInt64 => {
-                typed_op!($LEFT, $RIGHT, UInt64Type, $OP, $MATH_OP)
-            }
-            DataType::Float32 => {
-                typed_op!($LEFT, $RIGHT, Float32Type, $OP, $MATH_OP)
-            }
-            DataType::Float64 => {
-                typed_op!($LEFT, $RIGHT, Float64Type, $OP, $MATH_OP)
-            }
-            t => Err(ArrowError::CastError(format!(
-                "Cannot perform arithmetic operation on arrays of type {}",
-                t
-            ))),
-        }
-    }};
-}
-
 /// Helper function to perform math lambda function on values from two dictionary arrays, this
 /// version does not attempt to use SIMD explicitly (though the compiler may auto vectorize)
 macro_rules! math_dict_op {
@@ -760,15 +794,34 @@ where
 
 /// Perform `left + right` operation on two arrays. If either left or right value is null
 /// then the result is also null.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `add_checked` instead.
 pub fn add<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
     T: ArrowNumericType,
-    T::Native: Add<Output = T::Native>,
+    T::Native: ArrowNativeTypeOp,
 {
-    math_op(left, right, |a, b| a + b)
+    math_op(left, right, |a, b| a.add_wrapping(b))
+}
+
+/// Perform `left + right` operation on two arrays. If either left or right value is null
+/// then the result is also null. Once
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `add` instead.
+pub fn add_checked<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    math_checked_op(left, right, |a, b| a.add_checked(b))
 }
 
 /// Perform `left + right` operation on two arrays. If either left or right value is null
@@ -826,7 +879,17 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
                 ))),
             }
         }
-        _ => typed_math_op!(left, right, |a, b| a + b, math_op),
+        _ => {
+            downcast_primitive_array!(
+                (left, right) => {
+                    math_op(left, right, |a, b| a + b).map(|a| Arc::new(a) as ArrayRef)
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Unsupported data type {}, {}",
+                    left.data_type(), right.data_type()
+                )))
+            )
+        }
     }
 }
 
@@ -856,15 +919,34 @@ where
 
 /// Perform `left - right` operation on two arrays. If either left or right value is null
 /// then the result is also null.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `subtract_checked` instead.
 pub fn subtract<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
     T: datatypes::ArrowNumericType,
-    T::Native: Sub<Output = T::Native>,
+    T::Native: ArrowNativeTypeOp,
 {
-    math_op(left, right, |a, b| a - b)
+    math_op(left, right, |a, b| a.sub_wrapping(b))
+}
+
+/// Perform `left - right` operation on two arrays. If either left or right value is null
+/// then the result is also null.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `subtract` instead.
+pub fn subtract_checked<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>>
+where
+    T: datatypes::ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    math_checked_op(left, right, |a, b| a.sub_checked(b))
 }
 
 /// Perform `left - right` operation on two arrays. If either left or right value is null
@@ -874,7 +956,17 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(left, right, |a, b| a - b, math_op_dict)
         }
-        _ => typed_math_op!(left, right, |a, b| a - b, math_op),
+        _ => {
+            downcast_primitive_array!(
+                (left, right) => {
+                    math_op(left, right, |a, b| a - b).map(|a| Arc::new(a) as ArrayRef)
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Unsupported data type {}, {}",
+                    left.data_type(), right.data_type()
+                )))
+            )
+        }
     }
 }
 
@@ -933,15 +1025,34 @@ where
 
 /// Perform `left * right` operation on two arrays. If either left or right value is null
 /// then the result is also null.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `multiply_check` instead.
 pub fn multiply<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
     T: datatypes::ArrowNumericType,
-    T::Native: Mul<Output = T::Native>,
+    T::Native: ArrowNativeTypeOp,
 {
-    math_op(left, right, |a, b| a * b)
+    math_op(left, right, |a, b| a.mul_wrapping(b))
+}
+
+/// Perform `left * right` operation on two arrays. If either left or right value is null
+/// then the result is also null.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `multiply` instead.
+pub fn multiply_checked<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>>
+where
+    T: datatypes::ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    math_checked_op(left, right, |a, b| a.mul_checked(b))
 }
 
 /// Perform `left * right` operation on two arrays. If either left or right value is null
@@ -951,7 +1062,17 @@ pub fn multiply_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(left, right, |a, b| a * b, math_op_dict)
         }
-        _ => typed_math_op!(left, right, |a, b| a * b, math_op),
+        _ => {
+            downcast_primitive_array!(
+                (left, right) => {
+                    math_op(left, right, |a, b| a * b).map(|a| Arc::new(a) as ArrayRef)
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Unsupported data type {}, {}",
+                    left.data_type(), right.data_type()
+                )))
+            )
+        }
     }
 }
 
@@ -1013,18 +1134,21 @@ where
 /// Perform `left / right` operation on two arrays. If either left or right value is null
 /// then the result is also null. If any right hand value is zero then the result of this
 /// operation will be `Err(ArrowError::DivideByZero)`.
-pub fn divide<T>(
+///
+/// When `simd` feature is not enabled. This detects overflow and returns an `Err` for that.
+/// For an non-overflow-checking variant, use `divide` instead.
+pub fn divide_checked<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
     T: datatypes::ArrowNumericType,
-    T::Native: Div<Output = T::Native> + Zero + One,
+    T::Native: ArrowNativeTypeOp + Zero + One,
 {
     #[cfg(feature = "simd")]
     return simd_checked_divide_op(&left, &right, simd_checked_divide::<T>, |a, b| a / b);
     #[cfg(not(feature = "simd"))]
-    return math_checked_divide_op(left, right, |a, b| a / b);
+    return math_checked_divide(left, right, |a, b| a.div_checked(b));
 }
 
 /// Perform `left / right` operation on two arrays. If either left or right value is null
@@ -1035,22 +1159,36 @@ pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(left, right, |a, b| a / b, math_divide_checked_op_dict)
         }
-        _ => typed_math_op!(left, right, |a, b| a / b, math_checked_divide_op),
+        _ => {
+            downcast_primitive_array!(
+                (left, right) => {
+                    math_checked_divide_op(left, right, |a, b| a / b).map(|a| Arc::new(a) as ArrayRef)
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Unsupported data type {}, {}",
+                    left.data_type(), right.data_type()
+                )))
+            )
+        }
     }
 }
 
 /// Perform `left / right` operation on two arrays without checking for division by zero.
-/// The result of dividing by zero follows normal floating point rules.
+/// For floating point types, the result of dividing by zero follows normal floating point
+/// rules. For other numeric types, dividing by zero will panic,
 /// If either left or right value is null then the result is also null. If any right hand value is zero then the result of this
-pub fn divide_unchecked<T>(
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `divide_checked` instead.
+pub fn divide<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
-    T: datatypes::ArrowFloatNumericType,
-    T::Native: Div<Output = T::Native>,
+    T: datatypes::ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
-    math_op(left, right, |a, b| a / b)
+    math_op(left, right, |a, b| a.div_wrapping(b))
 }
 
 /// Modulus every value in an array by a scalar. If any value in the array is null then the
@@ -1769,7 +1907,7 @@ mod tests {
     fn test_primitive_array_divide_with_nulls() {
         let a = Int32Array::from(vec![Some(15), None, Some(8), Some(1), Some(9), None]);
         let b = Int32Array::from(vec![Some(5), Some(6), Some(8), Some(9), None, None]);
-        let c = divide(&a, &b).unwrap();
+        let c = divide_checked(&a, &b).unwrap();
         assert_eq!(3, c.value(0));
         assert!(c.is_null(1));
         assert_eq!(1, c.value(2));
@@ -1854,7 +1992,7 @@ mod tests {
         let b = b.slice(8, 6);
         let b = b.as_any().downcast_ref::<Int32Array>().unwrap();
 
-        let c = divide(a, b).unwrap();
+        let c = divide_checked(a, b).unwrap();
         assert_eq!(6, c.len());
         assert_eq!(3, c.value(0));
         assert!(c.is_null(1));
@@ -1919,6 +2057,14 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "DivideByZero")]
+    fn test_primitive_array_divide_by_zero_with_checked() {
+        let a = Int32Array::from(vec![15]);
+        let b = Int32Array::from(vec![0]);
+        divide_checked(&a, &b).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to divide by zero")]
     fn test_primitive_array_divide_by_zero() {
         let a = Int32Array::from(vec![15]);
         let b = Int32Array::from(vec![0]);
@@ -2018,5 +2164,58 @@ mod tests {
         let actual = powf_scalar(&a, 2.0).unwrap();
         let expected = Float64Array::from(vec![Some(1.0), None, Some(9.0)]);
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_primitive_add_wrapping_overflow() {
+        let a = Int32Array::from(vec![i32::MAX, i32::MIN]);
+        let b = Int32Array::from(vec![1, 1]);
+
+        let wrapped = add(&a, &b);
+        let expected = Int32Array::from(vec![-2147483648, -2147483647]);
+        assert_eq!(expected, wrapped.unwrap());
+
+        let overflow = add_checked(&a, &b);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_subtract_wrapping_overflow() {
+        let a = Int32Array::from(vec![-2]);
+        let b = Int32Array::from(vec![i32::MAX]);
+
+        let wrapped = subtract(&a, &b);
+        let expected = Int32Array::from(vec![i32::MAX]);
+        assert_eq!(expected, wrapped.unwrap());
+
+        let overflow = subtract_checked(&a, &b);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_mul_wrapping_overflow() {
+        let a = Int32Array::from(vec![10]);
+        let b = Int32Array::from(vec![i32::MAX]);
+
+        let wrapped = multiply(&a, &b);
+        let expected = Int32Array::from(vec![-10]);
+        assert_eq!(expected, wrapped.unwrap());
+
+        let overflow = multiply_checked(&a, &b);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    #[cfg(not(feature = "simd"))]
+    fn test_primitive_div_wrapping_overflow() {
+        let a = Int32Array::from(vec![i32::MIN]);
+        let b = Int32Array::from(vec![-1]);
+
+        let wrapped = divide(&a, &b);
+        let expected = Int32Array::from(vec![-2147483648]);
+        assert_eq!(expected, wrapped.unwrap());
+
+        let overflow = divide_checked(&a, &b);
+        overflow.expect_err("overflow should be detected");
     }
 }

@@ -85,6 +85,7 @@ impl From<::std::string::FromUtf8Error> for ArrowError {
     }
 }
 
+#[cfg(feature = "json")]
 impl From<serde_json::Error> for ArrowError {
     fn from(error: serde_json::Error) -> Self {
         ArrowError::JsonError(error.to_string())

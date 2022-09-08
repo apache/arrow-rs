@@ -26,6 +26,7 @@ use flatbuffers::{
 };
 use std::collections::{BTreeMap, HashMap};
 
+use crate::ipc::{size_prefixed_root_as_message, CONTINUATION_MARKER};
 use DataType::*;
 
 /// Serialize a schema in IPC format
@@ -103,7 +104,7 @@ impl<'a> From<ipc::Field<'a>> for Field {
     }
 }
 
-/// Deserialize a Schema table from IPC format to Schema data type
+/// Deserialize a Schema table from flat buffer format to Schema data type
 pub fn fb_to_schema(fb: ipc::Schema) -> Schema {
     let mut fields: Vec<Field> = vec![];
     let c_fields = fb.fields().unwrap();
@@ -136,8 +137,8 @@ pub fn fb_to_schema(fb: ipc::Schema) -> Schema {
     Schema::new_with_metadata(fields, metadata)
 }
 
-/// Deserialize an IPC message into a schema
-pub fn schema_from_bytes(bytes: &[u8]) -> Result<Schema> {
+/// Try deserialize flat buffer format bytes into a schema
+pub fn try_schema_from_flatbuffer_bytes(bytes: &[u8]) -> Result<Schema> {
     if let Ok(ipc) = ipc::root_as_message(bytes) {
         if let Some(schema) = ipc.header_as_schema().map(fb_to_schema) {
             Ok(schema)
@@ -149,6 +150,51 @@ pub fn schema_from_bytes(bytes: &[u8]) -> Result<Schema> {
     } else {
         Err(ArrowError::IoError(
             "Unable to get root as message".to_string(),
+        ))
+    }
+}
+
+/// Try deserialize the IPC format bytes into a schema
+pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema> {
+    // There are two protocol types: https://issues.apache.org/jira/browse/ARROW-6313
+    // The original protocal is:
+    //   4 bytes - the byte length of the payload
+    //   a flatbuffer Message whose header is the Schema
+    // The latest version of protocol is:
+    // The schema of the dataset in its IPC form:
+    //   4 bytes - an optional IPC_CONTINUATION_TOKEN prefix
+    //   4 bytes - the byte length of the payload
+    //   a flatbuffer Message whose header is the Schema
+    if buffer.len() >= 4 {
+        // check continuation maker
+        let continuation_maker = &buffer[0..4];
+        let begin_offset: usize = if continuation_maker.eq(&CONTINUATION_MARKER) {
+            // 4 bytes: CONTINUATION_MARKER
+            // 4 bytes: length
+            // buffer
+            4
+        } else {
+            // backward compatibility for buffer without the continuation maker
+            // 4 bytes: length
+            // buffer
+            0
+        };
+        let msg =
+            size_prefixed_root_as_message(&buffer[begin_offset..]).map_err(|err| {
+                ArrowError::ParseError(format!(
+                    "Unable to convert flight info to a message: {}",
+                    err
+                ))
+            })?;
+        let ipc_schema = msg.header_as_schema().ok_or_else(|| {
+            ArrowError::ParseError(
+                "Unable to convert flight info to a schema".to_string(),
+            )
+        })?;
+        Ok(fb_to_schema(ipc_schema))
+    } else {
+        Err(ArrowError::ParseError(
+            "The buffer length is less than 4 and missing the continuation maker or length of buffer".to_string()
         ))
     }
 }

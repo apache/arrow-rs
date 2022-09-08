@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow"
-version = "21.0.0"
+version = "22.0.0"
 description = "Rust implementation of Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -44,9 +44,8 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
-serde = { version = "1.0", default-features = false }
-serde_derive = { version = "1.0", default-features = false }
-serde_json = { version = "1.0", default-features = false, features = ["std"] }
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
+serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 indexmap = { version = "1.9", default-features = false, features = ["std"] }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
@@ -68,11 +67,15 @@ multiversion = { version = "0.6.1", default-features = false }
 bitflags = { version = "1.2.1", default-features = false }
 zstd = { version = "0.11.1", default-features = false, optional = true }
 
+[package.metadata.docs.rs]
+features = ["prettyprint", "ipc_compression", "dyn_cmp_dict", "ffi", "pyarrow"]
+
 [features]
-default = ["csv", "ipc"]
+default = ["csv", "ipc", "json"]
 ipc_compression = ["ipc", "zstd", "lz4"]
 csv = ["csv_crate"]
 ipc = ["flatbuffers"]
+json = ["serde", "serde_json"]
 simd = ["packed_simd"]
 prettyprint = ["comfy-table"]
 # The test utils feature enables code used in benchmarks and tests but
@@ -103,6 +106,16 @@ tempfile = { version = "3", default-features = false }
 name = "dynamic_types"
 required-features = ["prettyprint"]
 path = "./examples/dynamic_types.rs"
+
+[[example]]
+name = "read_csv"
+required-features = ["prettyprint", "csv"]
+path = "./examples/read_csv.rs"
+
+[[example]]
+name = "read_csv_infer_schema"
+required-features = ["prettyprint", "csv"]
+path = "./examples/read_csv_infer_schema.rs"
 
 [[bench]]
 name = "aggregate_kernels"
@@ -177,10 +190,12 @@ required-features = ["test_utils"]
 [[bench]]
 name = "csv_writer"
 harness = false
+required-features = ["csv"]
 
 [[bench]]
 name = "json_reader"
 harness = false
+required-features = ["json"]
 
 [[bench]]
 name = "equal"

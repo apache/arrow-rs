@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This library demonstrates a minimal usage of Rust's C data interface to pass
+//! This module demonstrates a minimal usage of Rust's C data interface to pass
 //! arrays from and to Python.
 
 use std::convert::{From, TryFrom};

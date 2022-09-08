@@ -97,6 +97,9 @@ jobs:
       - name: Check compilation --no-default-features --all-targets --features test_utils
         run: |
           cargo check -p arrow --no-default-features --all-targets --features test_utils
+      - name: Check compilation --no-default-features --all-targets --features --ffi
+        run: |
+          cargo check -p arrow --no-default-features --all-targets --features ffi
 
   # test the --features "simd" of the arrow crate. This requires nightly Rust.
   linux-test-simd:
@@ -155,8 +158,8 @@ jobs:
       - name: Build
         run: |
           cd arrow
-          cargo build --no-default-features --features=csv,ipc,simd,ffi --target wasm32-unknown-unknown
-          cargo build --no-default-features --features=csv,ipc,simd,ffi --target wasm32-wasi
+          cargo build --no-default-features --features=json,csv,ipc,simd,ffi --target wasm32-unknown-unknown
+          cargo build --no-default-features --features=json,csv,ipc,simd,ffi --target wasm32-wasi
 
   clippy:
     name: Clippy

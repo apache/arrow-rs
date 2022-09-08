@@ -50,12 +50,15 @@ pub type SchemaRef = Arc<Schema>;
 mod tests {
     use super::*;
     use crate::error::Result;
+    use std::collections::{BTreeMap, HashMap};
+
+    #[cfg(feature = "json")]
     use crate::json::JsonSerializable;
-    use serde_json::Value::{Bool, Number as VNumber, String as VString};
-    use serde_json::{Number, Value};
-    use std::{
-        collections::{BTreeMap, HashMap},
-        f32::NAN,
+
+    #[cfg(feature = "json")]
+    use serde_json::{
+        Number, Value,
+        Value::{Bool, Number as VNumber, String as VString},
     };
 
     #[test]
@@ -107,6 +110,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "json")]
     fn create_struct_type() {
         let _person = DataType::Struct(vec![
             Field::new("first_name", DataType::Utf8, false),
@@ -123,6 +127,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "json")]
     fn serde_struct_type() {
         let kv_array = [("k".to_string(), "v".to_string())];
         let field_metadata: BTreeMap<String, String> = kv_array.iter().cloned().collect();
@@ -170,6 +175,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "json")]
     fn struct_field_to_json() {
         let f = Field::new(
             "address",
@@ -213,6 +219,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "json")]
     fn map_field_to_json() {
         let f = Field::new(
             "my_map",
@@ -273,6 +280,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "json")]
     fn primitive_field_to_json() {
         let f = Field::new("first_name", DataType::Utf8, false);
         let value: Value = serde_json::from_str(
@@ -289,6 +297,7 @@ mod tests {
         assert_eq!(value, f.to_json());
     }
     #[test]
+    #[cfg(feature = "json")]
     fn parse_struct_from_json() {
         let json = r#"
         {
@@ -335,6 +344,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "json")]
     fn parse_map_from_json() {
         let json = r#"
         {
@@ -398,6 +408,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "json")]
     fn parse_union_from_json() {
         let json = r#"
         {
@@ -453,6 +464,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "json")]
     fn parse_utf8_from_json() {
         let json = "{\"name\":\"utf8\"}";
         let value: Value = serde_json::from_str(json).unwrap();
@@ -461,6 +473,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "json")]
     fn parse_int32_from_json() {
         let json = "{\"name\": \"int\", \"isSigned\": true, \"bitWidth\": 32}";
         let value: Value = serde_json::from_str(json).unwrap();
@@ -469,6 +482,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "json")]
     fn schema_json() {
         // Add some custom metadata
         let metadata: HashMap<String, String> =
@@ -1229,6 +1243,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "json")]
     fn test_arrow_native_type_to_json() {
         assert_eq!(Some(Bool(true)), true.into_json_value());
         assert_eq!(Some(VNumber(Number::from(1))), 1i8.into_json_value());
@@ -1248,7 +1263,7 @@ mod tests {
             Some(VNumber(Number::from_f64(0.01f64).unwrap())),
             0.01f64.into_json_value()
         );
-        assert_eq!(None, NAN.into_json_value());
+        assert_eq!(None, f32::NAN.into_json_value());
     }
 
     fn person_schema() -> Schema {

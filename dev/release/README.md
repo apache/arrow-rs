@@ -69,7 +69,7 @@ git checkout master
 git pull
 git checkout -b make-release
 
-# Move the content of CHANGELOG.md to CHANGELOG-old.md
+# Copy the content of CHANGELOG.md to the beginning of CHANGELOG-old.md
 
 # manully edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
@@ -78,7 +78,7 @@ CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
 git commit -a -m 'Create changelog'
 
 # update versions
-sed -i '' -e 's/14.0.0/21.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
+sed -i '' -e 's/14.0.0/22.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
 git commit -a -m 'Update version'
 ```
 

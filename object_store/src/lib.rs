@@ -290,6 +290,10 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Copy an object from one path to another, only if destination is empty.
     ///
     /// Will return an error if the destination already has an object.
+    ///
+    /// Performs an atomic operation if the underlying object storage supports it.
+    /// If atomic operations are not supported by the underlying object storage (like S3)
+    /// it will return an error.
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()>;
 
     /// Move an object from one path to another in the same object store.

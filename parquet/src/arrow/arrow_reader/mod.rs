@@ -484,6 +484,12 @@ impl Iterator for ParquetRecordBatchReader {
                         continue;
                     }
 
+                    //Currently, when RowSelectors with row_count = 0 are included then its interpreted as end of reader.
+                    //Fix is to skip such entries. See https://github.com/apache/arrow-rs/issues/2669
+                    if front.row_count == 0 {
+                        continue;
+                    }
+
                     // try to read record
                     let need_read = self.batch_size - read_records;
                     let to_read = match front.row_count.checked_sub(need_read) {
