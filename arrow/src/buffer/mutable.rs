@@ -288,7 +288,7 @@ impl MutableBuffer {
         Buffer::from_bytes(bytes)
     }
 
-    /// View this buffer as a slice of a specific type.
+    /// View this buffer as a mutable slice of a specific type.
     ///
     /// # Panics
     ///
@@ -300,6 +300,21 @@ impl MutableBuffer {
         // implementation outside this crate, and this method checks alignment
         let (prefix, offsets, suffix) =
             unsafe { self.as_slice_mut().align_to_mut::<T>() };
+        assert!(prefix.is_empty() && suffix.is_empty());
+        offsets
+    }
+
+    /// View buffer as a immutable slice of a specific type.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the underlying buffer is not aligned
+    /// correctly for type `T`.
+    pub fn typed_data<T: ArrowNativeType>(&self) -> &[T] {
+        // SAFETY
+        // ArrowNativeType is trivially transmutable, is sealed to prevent potentially incorrect
+        // implementation outside this crate, and this method checks alignment
+        let (prefix, offsets, suffix) = unsafe { self.as_slice().align_to::<T>() };
         assert!(prefix.is_empty() && suffix.is_empty());
         offsets
     }

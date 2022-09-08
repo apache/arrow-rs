@@ -111,6 +111,9 @@ jobs:
       - name: Check compilation  --all-targets --all-features
         run: |
           cargo check -p parquet --all-targets --all-features
+      - name: Check compilation  --all-targets --no-default-features --features json
+        run: |
+          cargo check -p parquet --all-targets --no-default-features --features json
 
   clippy:
     name: Clippy
