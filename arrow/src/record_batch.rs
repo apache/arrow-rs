@@ -199,16 +199,6 @@ impl RecordBatch {
 
     /// Projects the schema onto the specified columns
     pub fn project(&self, indices: &[usize]) -> Result<RecordBatch> {
-        if indices.is_empty() {
-            return RecordBatch::try_new_with_options(
-                Arc::new(Schema::empty()),
-                vec![],
-                &RecordBatchOptions {
-                    match_field_names: true,
-                    row_count: Some(self.row_count),
-                },
-            );
-        }
         let projected_schema = self.schema.project(indices)?;
         let batch_fields = indices
             .iter()
@@ -223,7 +213,14 @@ impl RecordBatch {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        RecordBatch::try_new(SchemaRef::new(projected_schema), batch_fields)
+        RecordBatch::try_new_with_options(
+            SchemaRef::new(projected_schema),
+            batch_fields,
+            &RecordBatchOptions {
+                match_field_names: true,
+                row_count: Some(self.row_count),
+            },
+        )
     }
 
     /// Returns the number of columns in the record batch.
