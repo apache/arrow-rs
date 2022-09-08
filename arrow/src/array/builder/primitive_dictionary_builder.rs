@@ -108,7 +108,7 @@ where
     K: ArrowPrimitiveType,
     V: ArrowPrimitiveType,
 {
-    /// Creates a new `PrimitiveDictionaryBuilder` from a keys builder and a value builder.
+    /// Creates a new `PrimitiveDictionaryBuilder`.
     pub fn new() -> Self {
         Self {
             keys_builder: PrimitiveBuilder::new(),

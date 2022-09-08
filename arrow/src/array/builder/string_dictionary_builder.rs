@@ -125,7 +125,7 @@ where
         }
     }
 
-    /// Creates a new `StringDictionaryBuilder` from a keys builder and a dictionary
+    /// Creates a new `StringDictionaryBuilder` from a keys capacity and a dictionary
     /// which is initialized with the given values.
     /// The indices of those dictionary values are used as keys.
     ///
