@@ -129,8 +129,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     }
 
     /// Convert a list array to a string array.
-    /// This method is unsound because it does
-    /// not check the utf-8 validation for each element.
     fn from_list(v: GenericListArray<OffsetSize>) -> Self {
         assert_eq!(
             v.data_ref().child_data().len(),
@@ -164,8 +162,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
             .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
             .null_bit_buffer(v.data().null_buffer().cloned());
 
-        let array_data = unsafe { builder.build_unchecked() };
-        Self::from(array_data)
+        Self::from(builder.build().unwrap())
     }
 
     /// Creates a [`GenericStringArray`] based on an iterator of values without nulls
@@ -352,8 +349,7 @@ impl<OffsetSize: OffsetSizeTrait> From<GenericBinaryArray<OffsetSize>>
 {
     fn from(v: GenericBinaryArray<OffsetSize>) -> Self {
         let builder = v.into_data().into_builder().data_type(Self::DATA_TYPE);
-        let data = unsafe { builder.build_unchecked() };
-        Self::from(data)
+        Self::from(builder.build().unwrap())
     }
 }
 
