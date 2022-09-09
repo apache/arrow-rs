@@ -22,6 +22,8 @@ use crate::row::Rows;
 use crate::util::decimal::{Decimal128, Decimal256};
 use half::f16;
 
+/// Encodes a value of a particular fixed width type into bytes according to the rules
+/// described on [`super::RowConverter`]
 pub trait FixedLengthEncoding<const N: usize>: Copy {
     fn encode(self) -> [u8; N];
 }
@@ -37,7 +39,7 @@ macro_rules! encode_signed {
         impl FixedLengthEncoding<$n> for $t {
             fn encode(self) -> [u8; $n] {
                 let mut b = self.to_be_bytes();
-                // Toggle top bit
+                // Toggle top "sign" bit to ensure consistent sort order
                 b[0] ^= 0x80;
                 b
             }
@@ -96,7 +98,9 @@ impl FixedLengthEncoding<8> for f64 {
 impl FixedLengthEncoding<16> for Decimal128 {
     fn encode(self) -> [u8; 16] {
         let mut val = *self.raw_value();
+        // Convert to big endian representation
         val.reverse();
+        // Toggle top "sign" bit to ensure consistent sort order
         val[0] ^= 0x80;
         val
     }
@@ -105,12 +109,15 @@ impl FixedLengthEncoding<16> for Decimal128 {
 impl FixedLengthEncoding<32> for Decimal256 {
     fn encode(self) -> [u8; 32] {
         let mut val = *self.raw_value();
+        // Convert to big endian representation
         val.reverse();
+        // Toggle top "sign" bit to ensure consistent sort order
         val[0] ^= 0x80;
         val
     }
 }
 
+/// Returns the total encoded length (including null byte) for a value of type `T::Native`
 pub const fn encoded_len<T: ArrowPrimitiveType>(_col: &PrimitiveArray<T>) -> usize {
     std::mem::size_of::<T::Native>() + 1
 }
@@ -135,6 +142,7 @@ pub fn encode<
             to_write[0] = 1;
             let mut encoded = val.encode();
             if opts.descending {
+                // Flip bits to reverse order
                 encoded.iter_mut().for_each(|v| *v = !*v)
             }
             to_write[1..].copy_from_slice(&encoded)

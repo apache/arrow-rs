@@ -21,17 +21,22 @@ use std::cmp::Ordering;
 use std::num::NonZeroU32;
 use std::ops::Index;
 
+/// An interned value
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct Interned(NonZeroU32);
+pub struct Interned(NonZeroU32); // We use NonZeroU32 so that `Option<Interned>` is 32 bits
 
 /// A byte array interner that generates normalized keys that are sorted with respect
 /// to the interned values, e.g. `inter(a) < intern(b) => a < b`
 #[derive(Debug, Default)]
 pub struct OrderPreservingInterner {
+    /// Provides a lookup from [`Interned`] to the normalized key
     keys: InternBuffer,
+    /// Provides a lookup from [`Interned`] to the normalized value
     values: InternBuffer,
+    /// Key allocation data structure
     bucket: Box<Bucket>,
 
+    // A hash table used to perform faster re-keying, and detect duplicates
     hasher: ahash::RandomState,
     lookup: HashMap<Interned, (), ()>,
 }
@@ -48,6 +53,8 @@ impl OrderPreservingInterner {
         let iter = input.into_iter();
         let capacity = iter.size_hint().0;
         let mut out = Vec::with_capacity(capacity);
+
+        // (index in output, hash value, value)
         let mut to_intern: Vec<(usize, u64, V)> = Vec::with_capacity(capacity);
         let mut to_intern_len = 0;
 
@@ -127,7 +134,9 @@ impl OrderPreservingInterner {
 /// A buffer of `[u8]` indexed by `[Interned]`
 #[derive(Debug)]
 struct InternBuffer {
+    /// Raw values
     values: Vec<u8>,
+    /// The ith value is `&values[offsets[i]..offsets[i+1]]`
     offsets: Vec<usize>,
 }
 
@@ -164,6 +173,9 @@ impl Index<Interned> for InternBuffer {
         let index = key.0.get() as usize;
         let end = self.offsets[index];
         let start = self.offsets[index - 1];
+        // SAFETY:
+        // self.values is never reduced in size and values appended
+        // to self.offsets are always less than self.values at the time
         unsafe { self.values.get_unchecked(start..end) }
     }
 }
@@ -175,11 +187,122 @@ impl Index<Interned> for InternBuffer {
 #[derive(Debug, Default, Clone)]
 struct Slot {
     value: Option<Interned>,
-    /// Child values smaller than `self.value` if any
+    /// Child values less than `self.value` if any
     child: Option<Box<Bucket>>,
 }
 
-/// Each bucket corresponds to a single byte in the normalized key
+/// Bucket is the root of the data-structure used to allocate normalized keys
+///
+/// In particular it needs to generate keys that
+///
+/// * Contain no `0` bytes other than the null terminator
+/// * Compare lexicographically in the same manner as the encoded `data`
+///
+/// The data structure consists of 255 slots, each of which can store a value.
+/// Additionally each slot may contain a child bucket, containing values smaller
+/// than the value within the slot
+///
+/// # Allocation Strategy
+///
+/// To find the insertion point within a Bucket we perform a binary search of the slots, but
+/// capping the search range at 4. Visualizing this as a search tree, the root would have 64
+/// children, with subsequent non-leaf nodes each containing two children.
+///
+/// The insertion point is the first empty slot we encounter, otherwise it is the first slot
+/// that contains a value greater than the value being inserted
+///
+/// For example, initially all slots are empty
+///
+/// ```ignore
+/// 0:
+/// 1:
+/// .
+/// .
+/// 254:
+/// ```
+///
+/// Insert `1000`
+///
+/// ```ignore
+/// 0:
+/// 1:
+/// 2:
+/// 3: 1000 <- 1. slot is empty, insert here
+/// 4:
+/// .
+/// .
+/// 254:
+/// ```
+///
+/// Insert `500`
+///
+/// ```ignore
+/// 0:
+/// 1: 500 <- 2. slot is empty, insert here
+/// 2:
+/// 3: 1000 <- 1. compare against slot value
+/// 4.
+/// .
+/// .
+/// 254:
+/// ```
+///
+/// Insert `600`
+///
+/// ```ignore
+/// 0:
+/// 1: 500 <- 2. compare against slot value
+/// 2: 600 <- 3. slot is empty, insert here
+/// 3: 1000 <- 1. compare against slot value
+/// 4.
+/// .
+/// .
+/// 254:
+/// ```
+///
+/// Insert `400`
+///
+/// ```ignore
+/// 0: 400 <- 3. slot is empty, insert here
+/// 1: 500 <- 2. compare against slot value
+/// 2: 600
+/// 3: 1000 <- 1. compare against slot value
+/// 4.
+/// .
+/// .
+/// 254:
+/// ```
+///
+/// Insert `700`
+///
+/// ```ignore
+/// 0: 400
+/// 1: 500 <- 2. compare against slot value
+/// 2: 600 <- 3. slot is occupied and end of search
+/// 3: 1000 <- 1. compare against slot value
+/// 4.
+/// .
+/// .
+/// 254:
+/// ```
+///
+/// In this case we reach the end of our search and need to insert a value between
+/// slots 2 and 3. To do this we create a new bucket under slot 3, and repeat
+/// the process for that bucket.
+///
+/// The final key will consists of the slot indexes visited incremented by 1,
+/// with the final value incremented by 2, followed by a null terminator.
+///
+/// So in the above example we would have
+///
+/// ```ignore
+/// 400: &[2, 0]
+/// 500: &[3, 0]
+/// 600: &[4, 0]
+/// 700: &[4, 5, 0]
+/// 1000: &[5, 0]
+/// ```
+///
 #[derive(Debug, Clone)]
 struct Bucket {
     slots: Box<[Slot]>,
@@ -236,7 +359,9 @@ impl Bucket {
             Ok(_) => unreachable!("value already exists"),
             Err(idx) => {
                 let slot = &mut self.slots[idx];
-                // Must always spill final slot so can always create a value less than
+                // Cannot insert a value into slot 254 as would overflow byte, but also
+                // would prevent inserting any larger values, as the child bucket can
+                // only contain values less than the slot
                 if idx != 254 && slot.value.is_none() {
                     out.push(idx as u8 + 2);
                     slot.value = Some(values_buf.insert(data))

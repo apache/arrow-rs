@@ -22,7 +22,7 @@ use crate::util::bit_util::ceil;
 /// The block size of the variable length encoding
 pub const BLOCK_SIZE: usize = 32;
 
-/// Returns the length of the encoded representation of a byte array
+/// Returns the length of the encoded representation of a byte array, including the null byte
 pub fn encoded_len(a: Option<&[u8]>) -> usize {
     match a {
         Some(a) => 1 + ceil(a.len(), BLOCK_SIZE) * (BLOCK_SIZE + 1),
@@ -32,9 +32,15 @@ pub fn encoded_len(a: Option<&[u8]>) -> usize {
 
 /// Variable length values are encoded as
 ///
-/// - leading `0` bit if null otherwise `1`
-/// - 31 bits big endian length
-/// - length bytes of value data
+/// - single `0_u8` if null
+/// - single `1_u8` if empty array
+/// - `2_u8` if not empty, followed by one or more blocks
+///
+/// where a block is encoded as
+///
+/// - [`BLOCK_SIZE`] bytes of string data, padded with 0s
+/// - `0xFF_u8` if this is not the last block for this string
+/// - otherwise the length of the block as a `u8`
 pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
     out: &mut Rows,
     i: I,
@@ -54,7 +60,7 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
                 let end_offset = *offset + 1 + block_count * (BLOCK_SIZE + 1);
                 let to_write = &mut out.buffer[*offset..end_offset];
 
-                // Set validity
+                // Write validity byte to demarcate as non-empty string
                 to_write[0] = 2;
 
                 let chunks = val.chunks_exact(BLOCK_SIZE);
@@ -68,6 +74,8 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
                         (&mut output[..BLOCK_SIZE]).try_into().unwrap();
 
                     *out_block = *input;
+
+                    // Indicate that there are further blocks to follow
                     output[BLOCK_SIZE] = u8::MAX;
                 }
 
@@ -77,12 +85,14 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
                         .copy_from_slice(remainder);
                     *to_write.last_mut().unwrap() = remainder.len() as u8;
                 } else {
+                    // We must overwrite the continuation marker written by the loop above
                     *to_write.last_mut().unwrap() = BLOCK_SIZE as u8;
                 }
 
                 *offset = end_offset;
 
                 if opts.descending {
+                    // Invert bits
                     to_write.iter_mut().for_each(|v| *v = !*v)
                 }
             }

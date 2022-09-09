@@ -120,7 +120,7 @@ mod variable;
 /// ## Reconstruction
 ///
 /// Given a schema it would theoretically be possible to reconstruct the columnar data from
-/// the row format, however, this is currently not supported. It is recommended that the row
+/// the row format, however, this is currently not implemented. It is recommended that the row
 /// format is instead used to obtain a sorted list of row indices, which can then be used
 /// with [`take`](crate::compute::take) to obtain a sorted [`Array`]
 ///
@@ -132,12 +132,14 @@ mod variable;
 /// [byte stuffing]:[https://en.wikipedia.org/wiki/High-Level_Data_Link_Control#Asynchronous_framing]
 #[derive(Debug)]
 pub struct RowConverter {
+    /// Sort options for column `i`
     options: Vec<SortOptions>,
+    /// interning state for column `i`, if column`i` is a dictionary
     dictionaries: Vec<Option<Box<OrderPreservingInterner>>>,
 }
 
 impl RowConverter {
-    /// Create a new [`RowConverter`] with the following schema and options
+    /// Create a new [`RowConverter`] with the following options
     pub fn new(options: Vec<SortOptions>) -> Self {
         let dictionaries = (0..options.len()).map(|_| None).collect();
         Self {
@@ -146,7 +148,9 @@ impl RowConverter {
         }
     }
 
-    /// Convert `cols` into [`Rows`]
+    /// Convert [`ArrayRef`]s into [`Rows`]
+    ///
+    /// See [`Row`] for information on when [`Row`] can be compared
     ///
     /// # Panics
     ///
@@ -201,7 +205,9 @@ impl RowConverter {
 /// See [`RowConverter`]
 #[derive(Debug)]
 pub struct Rows {
+    /// Underlying row bytes
     buffer: Box<[u8]>,
+    /// Row `i` has data `&buffer[offsets[i]..offsets[i+1]]`
     offsets: Box<[usize]>,
 }
 
@@ -217,7 +223,13 @@ impl Rows {
     }
 }
 
-/// A comparable representation of a row, see [`Rows`]
+/// A comparable representation of a row
+///
+/// Two [`Row`] can be compared if they both belong to [`Rows`] returned by calls to
+/// [`RowConvert::converter`] on the same [`RowConverter`], with the same number of arrays,
+/// with the data types of each array index remaining consistent.
+///
+/// Otherwise any ordering established by comparing the [`Row`] is arbitrary
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Row<'a>(&'a [u8]);
 
@@ -310,6 +322,21 @@ fn new_empty_rows(
     let mut offsets = Vec::with_capacity(num_rows + 1);
     offsets.push(0);
 
+    // We initialize the offsets shifted down by one row index.
+    //
+    // As the rows are appended to the offsets will be incremented to match
+    //
+    // For example, consider the case of 3 rows of length 3, 4, and 6 respectively.
+    // The offsets would be initialized to `0, 0, 3, 7`
+    //
+    // Writing the first row entirely would yield `0, 3, 3, 7`
+    // The second, `0, 3, 7, 7`
+    // The third, `0, 3, 7, 13`
+    //
+    // This would be the final offsets for reading
+    //
+    // In this way offsets tracks the position during writing whilst eventually serving
+    // as identifying the offsets of the written rows
     let mut cur_offset = 0_usize;
     for l in lengths {
         offsets.push(cur_offset);
