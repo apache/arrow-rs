@@ -20,7 +20,7 @@ use crate::alloc::Deallocation;
 use crate::{
     alloc,
     bytes::Bytes,
-    datatypes::{ArrowNativeType, ToByteSlice},
+    native::{ArrowNativeType, ToByteSlice},
     util::bit_util,
 };
 use std::ptr::NonNull;
@@ -36,7 +36,7 @@ use std::ptr::NonNull;
 /// # Example
 ///
 /// ```
-/// # use arrow::buffer::{Buffer, MutableBuffer};
+/// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
 /// let mut buffer = MutableBuffer::new(0);
 /// buffer.push(256u32);
 /// buffer.extend_from_slice(&[1u32]);
@@ -75,7 +75,7 @@ impl MutableBuffer {
     /// all bytes are guaranteed to be `0u8`.
     /// # Example
     /// ```
-    /// # use arrow::buffer::{Buffer, MutableBuffer};
+    /// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
     /// let mut buffer = MutableBuffer::from_len_zeroed(127);
     /// assert_eq!(buffer.len(), 127);
     /// assert!(buffer.capacity() >= 127);
@@ -131,7 +131,7 @@ impl MutableBuffer {
     /// `self.len + additional > capacity`.
     /// # Example
     /// ```
-    /// # use arrow::buffer::{Buffer, MutableBuffer};
+    /// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
     /// let mut buffer = MutableBuffer::new(0);
     /// buffer.reserve(253); // allocates for the first time
     /// (0..253u8).for_each(|i| buffer.push(i)); // no reallocation
@@ -171,7 +171,7 @@ impl MutableBuffer {
     /// growing it (potentially reallocating it) and writing `value` in the newly available bytes.
     /// # Example
     /// ```
-    /// # use arrow::buffer::{Buffer, MutableBuffer};
+    /// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
     /// let mut buffer = MutableBuffer::new(0);
     /// buffer.resize(253, 2); // allocates for the first time
     /// assert_eq!(buffer.as_slice()[252], 2u8);
@@ -195,7 +195,7 @@ impl MutableBuffer {
     ///
     /// # Example
     /// ```
-    /// # use arrow::buffer::{Buffer, MutableBuffer};
+    /// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
     /// // 2 cache lines
     /// let mut buffer = MutableBuffer::new(128);
     /// assert_eq!(buffer.capacity(), 128);
@@ -322,7 +322,7 @@ impl MutableBuffer {
     /// Extends this buffer from a slice of items that can be represented in bytes, increasing its capacity if needed.
     /// # Example
     /// ```
-    /// # use arrow::buffer::MutableBuffer;
+    /// # use arrow_buffer::buffer::MutableBuffer;
     /// let mut buffer = MutableBuffer::new(0);
     /// buffer.extend_from_slice(&[2u32, 0]);
     /// assert_eq!(buffer.len(), 8) // u32 has 4 bytes
@@ -346,7 +346,7 @@ impl MutableBuffer {
     /// Extends the buffer with a new item, increasing its capacity if needed.
     /// # Example
     /// ```
-    /// # use arrow::buffer::MutableBuffer;
+    /// # use arrow_buffer::buffer::MutableBuffer;
     /// let mut buffer = MutableBuffer::new(0);
     /// buffer.push(256u32);
     /// assert_eq!(buffer.len(), 4) // u32 has 4 bytes
@@ -384,7 +384,7 @@ impl MutableBuffer {
     /// # Safety
     /// The caller must ensure that the buffer was properly initialized up to `len`.
     #[inline]
-    pub(crate) unsafe fn set_len(&mut self, len: usize) {
+    pub unsafe fn set_len(&mut self, len: usize) {
         assert!(len <= self.capacity());
         self.len = len;
     }
@@ -394,7 +394,7 @@ impl MutableBuffer {
     /// This is similar to `from_trusted_len_iter_bool`, however, can be significantly faster
     /// as it eliminates the conditional `Iterator::next`
     #[inline]
-    pub(crate) fn collect_bool<F: FnMut(usize) -> bool>(len: usize, mut f: F) -> Self {
+    pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, mut f: F) -> Self {
         let mut buffer = Self::new(bit_util::ceil(len, 8));
 
         let chunks = len / 8;
@@ -484,7 +484,7 @@ impl MutableBuffer {
     /// Prefer this to `collect` whenever possible, as it is faster ~60% faster.
     /// # Example
     /// ```
-    /// # use arrow::buffer::MutableBuffer;
+    /// # use arrow_buffer::buffer::MutableBuffer;
     /// let v = vec![1u32];
     /// let iter = v.iter().map(|x| x * 2);
     /// let buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
@@ -525,10 +525,10 @@ impl MutableBuffer {
     }
 
     /// Creates a [`MutableBuffer`] from a boolean [`Iterator`] with a trusted (upper) length.
-    /// # use arrow::buffer::MutableBuffer;
+    /// # use arrow_buffer::buffer::MutableBuffer;
     /// # Example
     /// ```
-    /// # use arrow::buffer::MutableBuffer;
+    /// # use arrow_buffer::buffer::MutableBuffer;
     /// let v = vec![false, true, false];
     /// let iter = v.iter().map(|x| *x || true);
     /// let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(iter) };

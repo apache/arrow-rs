@@ -248,11 +248,10 @@
 #![deny(clippy::redundant_clone)]
 #![warn(missing_debug_implementations)]
 
-pub mod alloc;
+pub use arrow_buffer::{alloc, buffer};
+
 pub mod array;
 pub mod bitmap;
-pub mod buffer;
-mod bytes;
 pub mod compute;
 #[cfg(feature = "csv")]
 pub mod csv;

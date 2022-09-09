@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::buffer::Buffer;
-use crate::datatypes::ArrowNativeType;
+use crate::native::ArrowNativeType;
 use std::ops::Deref;
 
 /// Provides a safe API for interpreting a [`Buffer`] as a slice of [`ArrowNativeType`]
