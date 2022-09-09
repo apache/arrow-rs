@@ -23,6 +23,7 @@ use crate::array::{
 };
 use crate::compute::SortOptions;
 use crate::datatypes::*;
+use crate::error::{ArrowError, Result};
 use crate::row::interner::{Interned, OrderPreservingInterner};
 use crate::{downcast_dictionary_array, downcast_primitive_array};
 
@@ -155,32 +156,32 @@ impl RowConverter {
     /// # Panics
     ///
     /// Panics if the schema of `cols` does not match that provided to [`RowConverter::new`]
-    pub fn convert(&mut self, arrays: &[ArrayRef]) -> Rows {
+    pub fn convert(&mut self, arrays: &[ArrayRef]) -> Result<Rows> {
         assert_eq!(arrays.len(), self.options.len(), "column count mismatch");
 
-        let dictionaries: Vec<_> = arrays
+        let dictionaries = arrays
             .iter()
             .zip(&mut self.dictionaries)
             .map(|(array, dictionary)| {
                 let values = downcast_dictionary_array! {
                     array => array.values(),
-                    _ => return None
+                    _ => return Ok(None)
                 };
 
                 let interner = dictionary.get_or_insert_with(Default::default);
 
-                let mapping: Vec<_> = compute_dictionary_mapping(interner, values)
+                let mapping: Vec<_> = compute_dictionary_mapping(interner, values)?
                     .into_iter()
                     .map(|maybe_interned| {
                         maybe_interned.map(|interned| interner.normalized_key(interned))
                     })
                     .collect();
 
-                Some(mapping)
+                Ok(Some(mapping))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
-        let mut rows = new_empty_rows(arrays, &dictionaries);
+        let mut rows = new_empty_rows(arrays, &dictionaries)?;
 
         for ((array, options), dictionary) in
             arrays.iter().zip(&self.options).zip(dictionaries)
@@ -196,7 +197,7 @@ impl RowConverter {
                 .for_each(|w| assert!(w[0] < w[1], "offsets should be monotonic"));
         }
 
-        rows
+        Ok(rows)
     }
 }
 
@@ -243,9 +244,9 @@ impl<'a> AsRef<[u8]> for Row<'a> {
 fn compute_dictionary_mapping(
     interner: &mut OrderPreservingInterner,
     values: &ArrayRef,
-) -> Vec<Option<Interned>> {
+) -> Result<Vec<Option<Interned>>> {
     use fixed::FixedLengthEncoding;
-    downcast_primitive_array! {
+    Ok(downcast_primitive_array! {
         values => interner
             .intern(values.iter().map(|x| x.map(|x| x.encode()))),
         DataType::Binary => {
@@ -264,15 +265,15 @@ fn compute_dictionary_mapping(
             let iter = as_largestring_array(values).iter().map(|x| x.map(|x| x.as_bytes()));
             interner.intern(iter)
         }
-        t => unreachable!("dictionary value {} is not supported", t)
-    }
+        t => return Err(ArrowError::NotYetImplemented(format!("dictionary value {} is not supported", t))),
+    })
 }
 
 /// Computes the length of each encoded [`Rows`] and returns an empty [`Rows`]
 fn new_empty_rows(
     cols: &[ArrayRef],
     dictionaries: &[Option<Vec<Option<&[u8]>>>],
-) -> Rows {
+) -> Result<Rows> {
     let num_rows = cols.first().map(|x| x.len()).unwrap_or(0);
     let mut lengths = vec![0; num_rows];
 
@@ -315,7 +316,7 @@ fn new_empty_rows(
                 }
                 _ => unreachable!(),
             }
-            t => unimplemented!("not yet implemented: {}", t)
+            t => return Err(ArrowError::NotYetImplemented(format!("not yet implemented: {}", t)))
         }
     }
 
@@ -345,10 +346,10 @@ fn new_empty_rows(
 
     let buffer = vec![0_u8; cur_offset];
 
-    Rows {
+    Ok(Rows {
         buffer: buffer.into(),
         offsets: offsets.into(),
-    }
+    })
 }
 
 /// Encodes a column to the provided [`Rows`] incrementing the offsets as it progresses
@@ -461,7 +462,7 @@ mod tests {
 
         let mut converter =
             RowConverter::new(vec![Default::default(), Default::default()]);
-        let rows = converter.convert(&cols);
+        let rows = converter.convert(&cols).unwrap();
 
         assert_eq!(rows.offsets.as_ref(), &[0, 8, 16, 24, 32, 40, 48, 56]);
         assert_eq!(
@@ -496,7 +497,7 @@ mod tests {
         let mut converter = RowConverter::new(vec![Default::default()]);
 
         let col = Arc::new(BooleanArray::from_iter([None, Some(false), Some(true)]));
-        let rows = converter.convert(&[col]);
+        let rows = converter.convert(&[col]).unwrap();
         assert!(rows.row(2) > rows.row(1));
         assert!(rows.row(2) > rows.row(0));
         assert!(rows.row(1) > rows.row(0));
@@ -507,7 +508,7 @@ mod tests {
         }]);
 
         let col = Arc::new(BooleanArray::from_iter([None, Some(false), Some(true)]));
-        let rows = converter.convert(&[col]);
+        let rows = converter.convert(&[col]).unwrap();
         assert!(rows.row(2) < rows.row(1));
         assert!(rows.row(2) < rows.row(0));
         assert!(rows.row(1) < rows.row(0));
@@ -524,7 +525,7 @@ mod tests {
         ]));
 
         let mut converter = RowConverter::new(vec![(Default::default())]);
-        let rows = converter.convert(&[col]);
+        let rows = converter.convert(&[col]).unwrap();
 
         assert!(rows.row(1) < rows.row(0));
         assert!(rows.row(2) < rows.row(4));
@@ -546,7 +547,7 @@ mod tests {
         ])) as ArrayRef;
 
         let mut converter = RowConverter::new(vec![Default::default()]);
-        let rows = converter.convert(&[Arc::clone(&col)]);
+        let rows = converter.convert(&[Arc::clone(&col)]).unwrap();
 
         for i in 0..rows.num_rows() {
             for j in i + 1..rows.num_rows() {
@@ -565,7 +566,7 @@ mod tests {
             descending: true,
             nulls_first: false,
         }]);
-        let rows = converter.convert(&[col]);
+        let rows = converter.convert(&[col]).unwrap();
 
         for i in 0..rows.num_rows() {
             for j in i + 1..rows.num_rows() {
@@ -596,7 +597,7 @@ mod tests {
             Some("hello"),
         ])) as ArrayRef;
 
-        let rows_a = converter.convert(&[Arc::clone(&a)]);
+        let rows_a = converter.convert(&[Arc::clone(&a)]).unwrap();
 
         assert!(rows_a.row(3) < rows_a.row(5));
         assert!(rows_a.row(2) < rows_a.row(1));
@@ -613,7 +614,7 @@ mod tests {
             Some("cupcakes"),
         ]));
 
-        let rows_b = converter.convert(&[b]);
+        let rows_b = converter.convert(&[b]).unwrap();
         assert_eq!(rows_a.row(1), rows_b.row(0));
         assert_eq!(rows_a.row(3), rows_b.row(1));
         assert!(rows_b.row(2) < rows_a.row(0));
@@ -623,7 +624,7 @@ mod tests {
             nulls_first: false,
         }]);
 
-        let rows_c = converter.convert(&[a]);
+        let rows_c = converter.convert(&[a]).unwrap();
         assert!(rows_c.row(3) > rows_c.row(5));
         assert!(rows_c.row(2) > rows_c.row(1));
         assert!(rows_c.row(0) > rows_c.row(1));
@@ -644,7 +645,7 @@ mod tests {
         builder.append(3).unwrap();
         builder.append(-1).unwrap();
 
-        let rows = converter.convert(&[Arc::new(builder.finish())]);
+        let rows = converter.convert(&[Arc::new(builder.finish())]).unwrap();
         assert!(rows.row(0) < rows.row(1));
         assert!(rows.row(2) < rows.row(0));
         assert!(rows.row(3) < rows.row(2));
@@ -672,8 +673,9 @@ mod tests {
             .build()
             .unwrap();
 
-        let rows =
-            converter.convert(&[Arc::new(DictionaryArray::<Int32Type>::from(data))]);
+        let rows = converter
+            .convert(&[Arc::new(DictionaryArray::<Int32Type>::from(data))])
+            .unwrap();
 
         assert_eq!(rows.row(0), rows.row(1));
         assert_eq!(rows.row(3), rows.row(4));
@@ -817,7 +819,7 @@ mod tests {
             let comparator = LexicographicalComparator::try_new(&sort_columns).unwrap();
 
             let mut converter = RowConverter::new(options);
-            let rows = converter.convert(&columns);
+            let rows = converter.convert(&columns).unwrap();
 
             for i in 0..len {
                 for j in 0..len {
