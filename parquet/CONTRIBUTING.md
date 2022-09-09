@@ -62,16 +62,8 @@ To compile and view in the browser, run `cargo doc --no-deps --open`.
 
 ## Update Parquet Format
 
-To generate the parquet format code run
+To generate the parquet format code run from the repository root run
 
 ```
-$ git clone https://github.com/apache/thrift
-$ cd thrift
-$ git checkout v0.16.0
-# docker build just builds a docker image with thrift dependencies
-$ docker build -t thrift build/docker/ubuntu-bionic
-# build/docker/scripts/cmake.sh actually compiles thrift
-$ docker run -v $(pwd):/thrift/src -it thrift build/docker/scripts/cmake.sh && wget https://raw.githubusercontent.com/apache/parquet-format/apache-parquet-format-2.9.0/src/main/thrift/parquet.thrift && ./cmake_build/compiler/cpp/bin/thrift --gen rs parquet.thrift
+$ docker run -v $(pwd):/thrift/src -it archlinux pacman -Sy --noconfirm thrift  && wget https://raw.githubusercontent.com/apache/parquet-format/apache-parquet-format-2.9.0/src/main/thrift/parquet.thrift -O /tmp/parquet.thrift && thrift --gen rs /tmp/parquet.thrift && sed -i '/use thrift::server::TProcessor;/d' parquet.rs && mv parquet.rs parquet/src/format.rs
 ```
-
-Then copy the generated `parquet.rs` into `src/format.rs` and commit changes.
