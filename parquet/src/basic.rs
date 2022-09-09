@@ -509,7 +509,7 @@ impl TryFrom<parquet::Type> for Type {
             parquet::Type::DOUBLE => Type::DOUBLE,
             parquet::Type::BYTE_ARRAY => Type::BYTE_ARRAY,
             parquet::Type::FIXED_LEN_BYTE_ARRAY => Type::FIXED_LEN_BYTE_ARRAY,
-            _ => return Err(general_err!("unexpected type: {}", value.0)),
+            _ => return Err(general_err!("unexpected parquet type: {}", value.0)),
         })
     }
 }
@@ -565,7 +565,7 @@ impl TryFrom<Option<parquet::ConvertedType>> for ConvertedType {
                 parquet::ConvertedType::JSON => ConvertedType::JSON,
                 parquet::ConvertedType::BSON => ConvertedType::BSON,
                 parquet::ConvertedType::INTERVAL => ConvertedType::INTERVAL,
-                _ => return Err(general_err!("unexpected converted type: {}", value.0)),
+                _ => return Err(general_err!("unexpected parquet converted type: {}", value.0)),
             },
         })
     }
@@ -744,7 +744,7 @@ impl TryFrom<parquet::FieldRepetitionType> for Repetition {
             parquet::FieldRepetitionType::REQUIRED => Repetition::REQUIRED,
             parquet::FieldRepetitionType::OPTIONAL => Repetition::OPTIONAL,
             parquet::FieldRepetitionType::REPEATED => Repetition::REPEATED,
-            _ => return Err(general_err!("unexpected repetition type: {}", value.0)),
+            _ => return Err(general_err!("unexpected parquet repetition type: {}", value.0)),
         })
     }
 }
@@ -778,7 +778,7 @@ impl TryFrom<parquet::Encoding> for Encoding {
             parquet::Encoding::DELTA_BYTE_ARRAY => Encoding::DELTA_BYTE_ARRAY,
             parquet::Encoding::RLE_DICTIONARY => Encoding::RLE_DICTIONARY,
             parquet::Encoding::BYTE_STREAM_SPLIT => Encoding::BYTE_STREAM_SPLIT,
-            _ => return Err(general_err!("unexpected encoding: {}", value.0)),
+            _ => return Err(general_err!("unexpected parquet encoding: {}", value.0)),
         })
     }
 }
@@ -816,7 +816,7 @@ impl TryFrom<parquet::CompressionCodec> for Compression {
             parquet::CompressionCodec::BROTLI => Compression::BROTLI,
             parquet::CompressionCodec::LZ4 => Compression::LZ4,
             parquet::CompressionCodec::ZSTD => Compression::ZSTD,
-            _ => return Err(general_err!("unexpected compression codec: {}", value.0)),
+            _ => return Err(general_err!("unexpected parquet compression codec: {}", value.0)),
         })
     }
 }
@@ -847,7 +847,7 @@ impl TryFrom<parquet::PageType> for PageType {
             parquet::PageType::INDEX_PAGE => PageType::INDEX_PAGE,
             parquet::PageType::DICTIONARY_PAGE => PageType::DICTIONARY_PAGE,
             parquet::PageType::DATA_PAGE_V2 => PageType::DATA_PAGE_V2,
-            _ => return Err(general_err!("unexpected page type: {}", value.0)),
+            _ => return Err(general_err!("unexpected parquet page type: {}", value.0)),
         })
     }
 }
@@ -874,7 +874,7 @@ impl str::FromStr for Repetition {
             "REQUIRED" => Ok(Repetition::REQUIRED),
             "OPTIONAL" => Ok(Repetition::OPTIONAL),
             "REPEATED" => Ok(Repetition::REPEATED),
-            other => Err(general_err!("Invalid repetition {}", other)),
+            other => Err(general_err!("Invalid parquet repetition {}", other)),
         }
     }
 }
@@ -892,7 +892,7 @@ impl str::FromStr for Type {
             "DOUBLE" => Ok(Type::DOUBLE),
             "BYTE_ARRAY" | "BINARY" => Ok(Type::BYTE_ARRAY),
             "FIXED_LEN_BYTE_ARRAY" => Ok(Type::FIXED_LEN_BYTE_ARRAY),
-            other => Err(general_err!("Invalid type {}", other)),
+            other => Err(general_err!("Invalid parquet type {}", other)),
         }
     }
 }
@@ -925,7 +925,7 @@ impl str::FromStr for ConvertedType {
             "JSON" => Ok(ConvertedType::JSON),
             "BSON" => Ok(ConvertedType::BSON),
             "INTERVAL" => Ok(ConvertedType::INTERVAL),
-            other => Err(general_err!("Invalid converted type {}", other)),
+            other => Err(general_err!("Invalid parquet converted type {}", other)),
         }
     }
 }
@@ -961,8 +961,8 @@ impl str::FromStr for LogicalType {
             "BSON" => Ok(LogicalType::Bson),
             "UUID" => Ok(LogicalType::Uuid),
             "UNKNOWN" => Ok(LogicalType::Unknown),
-            "INTERVAL" => Err(general_err!("Interval logical type not yet supported")),
-            other => Err(general_err!("Invalid logical type {}", other)),
+            "INTERVAL" => Err(general_err!("Interval parquet logical type not yet supported")),
+            other => Err(general_err!("Invalid parquet logical type {}", other)),
         }
     }
 }
