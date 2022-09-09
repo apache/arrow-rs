@@ -427,7 +427,7 @@ mod tests {
     use super::*;
     use crate::array::{
         BinaryArray, BooleanArray, DictionaryArray, Float32Array, GenericStringArray,
-        Int16Array, Int32Array, Int32Builder, OffsetSizeTrait, PrimitiveArray,
+        Int16Array, Int32Array, OffsetSizeTrait, PrimitiveArray,
         PrimitiveDictionaryBuilder, StringArray,
     };
     use crate::compute::{LexicographicalComparator, SortColumn};
@@ -635,8 +635,7 @@ mod tests {
     fn test_primitive_dictionary() {
         let mut converter = RowConverter::new(vec![Default::default()]);
 
-        let mut builder =
-            PrimitiveDictionaryBuilder::new(Int32Builder::new(), Int32Builder::new());
+        let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
         builder.append(2).unwrap();
         builder.append(3).unwrap();
         builder.append(0).unwrap();
