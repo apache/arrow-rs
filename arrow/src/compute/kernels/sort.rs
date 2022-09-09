@@ -318,42 +318,42 @@ pub fn sort_to_indices(
                     DataType::Int8 => {
                         let dict_values = values.values();
                         let sorted_value_indices = sort_to_indices(dict_values, Some(SortOptions::default()), None)?;
-                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices, v, n, &options, limit, cmp)
+                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices, v, n, options, limit, cmp)
                     },
                     DataType::Int16 => {
                         let dict_values = values.values();
                         let sorted_value_indices = sort_to_indices(dict_values, Some(SortOptions::default()), None)?;
-                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices, v, n, &options, limit, cmp)
+                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices, v, n, options, limit, cmp)
                     },
                     DataType::Int32 => {
                         let dict_values = values.values();
                         let sorted_value_indices = sort_to_indices(dict_values, Some(SortOptions::default()), None)?;
-                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices, v, n, &options, limit, cmp)
+                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices, v, n, options, limit, cmp)
                     },
                     DataType::Int64 => {
                         let dict_values = values.values();
                         let sorted_value_indices = sort_to_indices(dict_values, Some(SortOptions::default()), None)?;
-                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices,v, n, &options, limit, cmp)
+                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices,v, n, options, limit, cmp)
                     },
                     DataType::UInt8 => {
                         let dict_values = values.values();
                         let sorted_value_indices = sort_to_indices(dict_values, Some(SortOptions::default()), None)?;
-                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices,v, n, &options, limit, cmp)
+                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices,v, n, options, limit, cmp)
                     },
                     DataType::UInt16 => {
                         let dict_values = values.values();
                         let sorted_value_indices = sort_to_indices(dict_values, Some(SortOptions::default()), None)?;
-                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices,v, n, &options, limit, cmp)
+                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices,v, n, options, limit, cmp)
                     },
                     DataType::UInt32 => {
                         let dict_values = values.values();
                         let sorted_value_indices = sort_to_indices(dict_values, Some(SortOptions::default()), None)?;
-                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices,v, n, &options, limit, cmp)
+                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices,v, n, options, limit, cmp)
                     },
                     DataType::UInt64 => {
                         let dict_values = values.values();
                         let sorted_value_indices = sort_to_indices(dict_values, Some(SortOptions::default()), None)?;
-                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices, v, n, &options, limit, cmp)
+                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices, v, n, options, limit, cmp)
                     },
                     DataType::Utf8 => sort_string_dictionary::<_>(values, v, n, &options, limit),
                     t => return Err(ArrowError::ComputeError(format!(
@@ -548,7 +548,7 @@ fn sort_primitive_dictionary<K, F>(
     sorted_value_indices: &UInt32Array,
     value_indices: Vec<u32>,
     null_indices: Vec<u32>,
-    options: &SortOptions,
+    options: SortOptions,
     limit: Option<usize>,
     cmp: F,
 ) -> UInt32Array
@@ -567,7 +567,7 @@ where
         })
         .collect::<Vec<(u32, u32)>>();
 
-    sort_primitive_inner::<_, _>(keys.len(), null_indices, cmp, options, limit, valids)
+    sort_primitive_inner::<_, _>(keys.len(), null_indices, cmp, &options, limit, valids)
 }
 
 // sort is instantiated a lot so we only compile this inner version for each native type
