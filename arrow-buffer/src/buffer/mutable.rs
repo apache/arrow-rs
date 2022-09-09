@@ -31,7 +31,7 @@ use std::ptr::NonNull;
 /// Use [MutableBuffer::push] to insert an item, [MutableBuffer::extend_from_slice]
 /// to insert many items, and `into` to convert it to [`Buffer`].
 ///
-/// For a safe, strongly typed API consider using [`crate::array::BufferBuilder`]
+/// For a safe, strongly typed API consider using `arrow::array::BufferBuilder`
 ///
 /// # Example
 ///
