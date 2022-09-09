@@ -212,7 +212,14 @@ impl RecordBatch {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        RecordBatch::try_new(SchemaRef::new(projected_schema), batch_fields)
+        RecordBatch::try_new_with_options(
+            SchemaRef::new(projected_schema),
+            batch_fields,
+            &RecordBatchOptions {
+                match_field_names: true,
+                row_count: Some(self.row_count),
+            },
+        )
     }
 
     /// Returns the number of columns in the record batch.
@@ -863,6 +870,26 @@ mod tests {
             .expect("valid conversion");
 
         assert_eq!(expected, record_batch.project(&[0, 2]).unwrap());
+    }
+
+    #[test]
+    fn project_empty() {
+        let c: ArrayRef = Arc::new(StringArray::from(vec!["d", "e", "f"]));
+
+        let record_batch =
+            RecordBatch::try_from_iter(vec![("c", c.clone())]).expect("valid conversion");
+
+        let expected = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &RecordBatchOptions {
+                match_field_names: true,
+                row_count: Some(3),
+            },
+        )
+        .expect("valid conversion");
+
+        assert_eq!(expected, record_batch.project(&[]).unwrap());
     }
 
     #[test]
