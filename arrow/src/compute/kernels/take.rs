@@ -1960,10 +1960,7 @@ mod tests {
 
     #[test]
     fn test_take_dict() {
-        let keys_builder = Int16Builder::new();
-        let values_builder = StringBuilder::new();
-
-        let mut dict_builder = StringDictionaryBuilder::new(keys_builder, values_builder);
+        let mut dict_builder = StringDictionaryBuilder::<Int16Type>::new();
 
         dict_builder.append("foo").unwrap();
         dict_builder.append("bar").unwrap();
