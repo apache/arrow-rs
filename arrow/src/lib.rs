@@ -269,6 +269,7 @@ pub mod json;
 #[cfg(feature = "pyarrow")]
 pub mod pyarrow;
 pub mod record_batch;
+pub mod row;
 pub mod temporal_conversions;
 pub mod tensor;
 pub mod util;

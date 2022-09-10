@@ -1071,13 +1071,13 @@ type LexicographicalCompareItem<'a> = (
 
 /// A lexicographical comparator that wraps given array data (columns) and can lexicographically compare data
 /// at given two indices. The lifetime is the same at the data wrapped.
-pub(super) struct LexicographicalComparator<'a> {
+pub(crate) struct LexicographicalComparator<'a> {
     compare_items: Vec<LexicographicalCompareItem<'a>>,
 }
 
 impl LexicographicalComparator<'_> {
     /// lexicographically compare values at the wrapped columns with given indices.
-    pub(super) fn compare<'a, 'b>(
+    pub(crate) fn compare<'a, 'b>(
         &'a self,
         a_idx: &'b usize,
         b_idx: &'b usize,
@@ -1121,7 +1121,7 @@ impl LexicographicalComparator<'_> {
 
     /// Create a new lex comparator that will wrap the given sort columns and give comparison
     /// results with two indices.
-    pub(super) fn try_new(
+    pub(crate) fn try_new(
         columns: &[SortColumn],
     ) -> Result<LexicographicalComparator<'_>> {
         let compare_items = columns
