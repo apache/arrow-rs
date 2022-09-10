@@ -565,7 +565,12 @@ impl TryFrom<Option<parquet::ConvertedType>> for ConvertedType {
                 parquet::ConvertedType::JSON => ConvertedType::JSON,
                 parquet::ConvertedType::BSON => ConvertedType::BSON,
                 parquet::ConvertedType::INTERVAL => ConvertedType::INTERVAL,
-                _ => return Err(general_err!("unexpected parquet converted type: {}", value.0)),
+                _ => {
+                    return Err(general_err!(
+                        "unexpected parquet converted type: {}",
+                        value.0
+                    ))
+                }
             },
         })
     }
@@ -744,7 +749,12 @@ impl TryFrom<parquet::FieldRepetitionType> for Repetition {
             parquet::FieldRepetitionType::REQUIRED => Repetition::REQUIRED,
             parquet::FieldRepetitionType::OPTIONAL => Repetition::OPTIONAL,
             parquet::FieldRepetitionType::REPEATED => Repetition::REPEATED,
-            _ => return Err(general_err!("unexpected parquet repetition type: {}", value.0)),
+            _ => {
+                return Err(general_err!(
+                    "unexpected parquet repetition type: {}",
+                    value.0
+                ))
+            }
         })
     }
 }
@@ -816,7 +826,12 @@ impl TryFrom<parquet::CompressionCodec> for Compression {
             parquet::CompressionCodec::BROTLI => Compression::BROTLI,
             parquet::CompressionCodec::LZ4 => Compression::LZ4,
             parquet::CompressionCodec::ZSTD => Compression::ZSTD,
-            _ => return Err(general_err!("unexpected parquet compression codec: {}", value.0)),
+            _ => {
+                return Err(general_err!(
+                    "unexpected parquet compression codec: {}",
+                    value.0
+                ))
+            }
         })
     }
 }
@@ -961,7 +976,9 @@ impl str::FromStr for LogicalType {
             "BSON" => Ok(LogicalType::Bson),
             "UUID" => Ok(LogicalType::Uuid),
             "UNKNOWN" => Ok(LogicalType::Unknown),
-            "INTERVAL" => Err(general_err!("Interval parquet logical type not yet supported")),
+            "INTERVAL" => Err(general_err!(
+                "Interval parquet logical type not yet supported"
+            )),
             other => Err(general_err!("Invalid parquet logical type {}", other)),
         }
     }
