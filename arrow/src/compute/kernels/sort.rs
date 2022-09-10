@@ -419,7 +419,18 @@ pub fn sort_to_indices(
                         let value_indices_map = prepare_indices_map(&sorted_value_indices);
                         sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
                     },
-                    DataType::Utf8 => sort_string_dictionary::<_>(values, v, n, &options, limit),
+                    DataType::Utf8 => {
+                        let dict_values = values.values();
+                        let value_null_first = if options.descending {
+                            !options.nulls_first
+                        } else {
+                            options.nulls_first
+                        };
+                        let value_options = Some(SortOptions { descending: false, nulls_first: value_null_first });
+                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
+                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
+                        sort_string_dictionary::<_>(values, &value_indices_map, v, n, &options, limit)
+                    },
                     t => return Err(ArrowError::ComputeError(format!(
                         "Unsupported dictionary value type {}", t
                     ))),
@@ -753,6 +764,7 @@ fn sort_string<Offset: OffsetSizeTrait>(
 /// Sort dictionary encoded strings
 fn sort_string_dictionary<T: ArrowDictionaryKeyType>(
     values: &DictionaryArray<T>,
+    value_indices_map: &HashMap<usize, u32>,
     value_indices: Vec<u32>,
     null_indices: Vec<u32>,
     options: &SortOptions,
@@ -760,20 +772,17 @@ fn sort_string_dictionary<T: ArrowDictionaryKeyType>(
 ) -> UInt32Array {
     let keys: &PrimitiveArray<T> = values.keys();
 
-    let dict = values.values();
-    let dict: &StringArray = as_string_array(dict);
+    // create tuples that are used for sorting
+    let valids = value_indices
+        .into_iter()
+        .map(|index| {
+            let key: T::Native = keys.value(index as usize);
+            let value_order = value_indices_map.get(&key.to_usize().unwrap()).unwrap();
+            (index, *value_order)
+        })
+        .collect::<Vec<(u32, u32)>>();
 
-    sort_string_helper(
-        keys,
-        value_indices,
-        null_indices,
-        options,
-        limit,
-        |array: &PrimitiveArray<T>, idx| -> &str {
-            let key: T::Native = array.value(idx as usize);
-            dict.value(key.to_usize().unwrap())
-        },
-    )
+    sort_primitive_inner::<_, _>(keys.len(), null_indices, cmp, options, limit, valids)
 }
 
 /// shared implementation between dictionary encoded and plain string arrays
