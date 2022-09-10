@@ -129,6 +129,13 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     }
 
     /// Convert a list array to a string array.
+    ///
+    /// Note: this performs potentially expensive UTF-8 validation, consider using
+    /// [`StringBuilder`][crate::array::StringBuilder] to avoid this
+    ///
+    /// # Panics
+    ///
+    /// This method panics if the array contains non-UTF-8 data
     fn from_list(v: GenericListArray<OffsetSize>) -> Self {
         assert_eq!(
             v.data_ref().child_data().len(),
