@@ -260,8 +260,7 @@ impl Rows {
 /// A comparable representation of a row
 ///
 /// Two [`Row`] can be compared if they both belong to [`Rows`] returned by calls to
-/// [`RowConvert::converter`] on the same [`RowConverter`], with the same number of arrays,
-/// with the data types of each array index remaining consistent.
+/// [`RowConverter::convert_columns`] on the same [`RowConverter`]
 ///
 /// Otherwise any ordering established by comparing the [`Row`] is arbitrary
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
