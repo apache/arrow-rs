@@ -319,6 +319,13 @@ pub fn sort_to_indices(
                     DataType::Int8 => {
                         let dict_values = values.values();
                         let value_null_first = if options.descending {
+                            // When sorting dictionary in descending order, we take inverse of of null ordering
+                            // when sorting the values. Because if `nulls_first` is true, null must be in front
+                            // of non-null value. As we take the sorted order of value array to sort dictionary
+                            // keys, these null values will be treated as smallest ones and be sorted to the end
+                            // of sorted result. So we set `nulls_first` to false when sorting dictionary value
+                            // array to make them as largest ones, then null values will be put at the beginning
+                            // of sorted dictionary result.
                             !options.nulls_first
                         } else {
                             options.nulls_first
@@ -3447,11 +3454,11 @@ mod tests {
             keys,
             values,
             Some(SortOptions {
-                descending: false,
+                descending: true,
                 nulls_first: true,
             }),
             Some(3),
-            vec![None, None, Some(1)],
+            vec![None, None, Some(5)],
         );
 
         // Values have `None`.
