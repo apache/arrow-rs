@@ -782,7 +782,7 @@ fn sort_string_dictionary<T: ArrowDictionaryKeyType>(
         })
         .collect::<Vec<(u32, u32)>>();
 
-    sort_primitive_inner::<_, _>(keys.len(), null_indices, cmp, &options, limit, valids)
+    sort_primitive_inner::<_, _>(keys.len(), null_indices, cmp, options, limit, valids)
 }
 
 /// shared implementation between dictionary encoded and plain string arrays
