@@ -1367,9 +1367,7 @@ mod tests {
 
     #[test]
     fn test_primitive_array_add_dyn_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
         builder.append(6).unwrap();
         builder.append(7).unwrap();
@@ -1377,9 +1375,7 @@ mod tests {
         builder.append(9).unwrap();
         let a = builder.finish();
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(6).unwrap();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
@@ -1408,9 +1404,7 @@ mod tests {
         assert!(c.is_null(3));
         assert_eq!(10, c.value(4));
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
         builder.append_null();
         builder.append(7).unwrap();
@@ -1451,9 +1445,7 @@ mod tests {
 
     #[test]
     fn test_primitive_array_subtract_dyn_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(15).unwrap();
         builder.append(8).unwrap();
         builder.append(7).unwrap();
@@ -1461,9 +1453,7 @@ mod tests {
         builder.append(20).unwrap();
         let a = builder.finish();
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(6).unwrap();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
@@ -1492,9 +1482,7 @@ mod tests {
         assert!(c.is_null(3));
         assert_eq!(8, c.value(4));
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
         builder.append_null();
         builder.append(7).unwrap();
@@ -1535,9 +1523,7 @@ mod tests {
 
     #[test]
     fn test_primitive_array_multiply_dyn_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
         builder.append(6).unwrap();
         builder.append(7).unwrap();
@@ -1545,9 +1531,7 @@ mod tests {
         builder.append(9).unwrap();
         let a = builder.finish();
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(6).unwrap();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
@@ -1579,9 +1563,7 @@ mod tests {
 
     #[test]
     fn test_primitive_array_divide_dyn_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(15).unwrap();
         builder.append(6).unwrap();
         builder.append(1).unwrap();
@@ -1589,9 +1571,7 @@ mod tests {
         builder.append(9).unwrap();
         let a = builder.finish();
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
         builder.append(3).unwrap();
         builder.append(1).unwrap();
@@ -1620,9 +1600,7 @@ mod tests {
         assert!(c.is_null(3));
         assert_eq!(18, c.value(4));
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
         builder.append_null();
         builder.append(7).unwrap();
@@ -1806,9 +1784,7 @@ mod tests {
         assert!(c.is_null(3));
         assert_eq!(4, c.value(4));
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
         builder.append_null();
         builder.append(7).unwrap();
@@ -2082,15 +2058,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "DivideByZero")]
     fn test_primitive_array_divide_dyn_by_zero_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(1);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(1);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(1, 1);
         builder.append(15).unwrap();
         let a = builder.finish();
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(1);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(1);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(1, 1);
         builder.append(0).unwrap();
         let b = builder.finish();
 
