@@ -60,7 +60,7 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
                 let end_offset = *offset + 1 + block_count * (BLOCK_SIZE + 1);
                 let to_write = &mut out.buffer[*offset..end_offset];
 
-                // Write validity byte to demarcate as non-empty string
+                // Write `2_u8` to demarcate as non-empty, non-null string
                 to_write[0] = 2;
 
                 let chunks = val.chunks_exact(BLOCK_SIZE);

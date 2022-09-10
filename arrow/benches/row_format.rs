@@ -20,8 +20,8 @@ extern crate criterion;
 extern crate core;
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::{Int64Type, UInt64Type};
-use arrow::row::RowConverter;
+use arrow::datatypes::{DataType, Int64Type, UInt64Type};
+use arrow::row::{RowConverter, SortField};
 use arrow::util::bench_util::{create_primitive_array, create_string_array_with_len};
 use criterion::{black_box, Criterion};
 use std::sync::Arc;
@@ -30,41 +30,59 @@ fn row_bench(c: &mut Criterion) {
     let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.)) as ArrayRef];
 
     c.bench_function("row_batch 4096 u64(0)", |b| {
-        b.iter(|| black_box(RowConverter::new(vec![Default::default()]).convert(&cols)));
+        b.iter(|| {
+            let mut converter = RowConverter::new(vec![SortField::new(DataType::UInt64)]);
+            black_box(converter.convert_columns(&cols))
+        });
     });
 
     let cols = vec![Arc::new(create_primitive_array::<Int64Type>(4096, 0.)) as ArrayRef];
 
     c.bench_function("row_batch 4096 i64(0)", |b| {
-        b.iter(|| black_box(RowConverter::new(vec![Default::default()]).convert(&cols)));
+        b.iter(|| {
+            let mut converter = RowConverter::new(vec![SortField::new(DataType::Int64)]);
+            black_box(converter.convert_columns(&cols))
+        });
     });
 
     let cols =
         vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 10)) as ArrayRef];
 
     c.bench_function("row_batch 4096 string(10, 0)", |b| {
-        b.iter(|| black_box(RowConverter::new(vec![Default::default()]).convert(&cols)));
+        b.iter(|| {
+            let mut converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]);
+            black_box(converter.convert_columns(&cols))
+        });
     });
 
     let cols =
         vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 30)) as ArrayRef];
 
     c.bench_function("row_batch 4096 string(30, 0)", |b| {
-        b.iter(|| black_box(RowConverter::new(vec![Default::default()]).convert(&cols)));
+        b.iter(|| {
+            let mut converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]);
+            black_box(converter.convert_columns(&cols))
+        });
     });
 
     let cols =
         vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 100)) as ArrayRef];
 
     c.bench_function("row_batch 4096 string(100, 0)", |b| {
-        b.iter(|| black_box(RowConverter::new(vec![Default::default()]).convert(&cols)));
+        b.iter(|| {
+            let mut converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]);
+            black_box(converter.convert_columns(&cols))
+        });
     });
 
     let cols =
         vec![Arc::new(create_string_array_with_len::<i32>(4096, 0.5, 100)) as ArrayRef];
 
     c.bench_function("row_batch 4096 string(100, 0.5)", |b| {
-        b.iter(|| black_box(RowConverter::new(vec![Default::default()]).convert(&cols)));
+        b.iter(|| {
+            let mut converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]);
+            black_box(converter.convert_columns(&cols))
+        });
     });
 
     let cols = [
@@ -74,11 +92,19 @@ fn row_bench(c: &mut Criterion) {
         Arc::new(create_primitive_array::<Int64Type>(4096, 0.)) as ArrayRef,
     ];
 
+    let fields = [
+        SortField::new(DataType::Utf8),
+        SortField::new(DataType::Utf8),
+        SortField::new(DataType::Utf8),
+        SortField::new(DataType::Int64),
+    ];
+
     c.bench_function(
         "row_batch 4096 string(20, 0.5), string(30, 0), string(100, 0), i64(0)",
         |b| {
             b.iter(|| {
-                black_box(RowConverter::new(vec![Default::default()]).convert(&cols))
+                let mut converter = RowConverter::new(fields.to_vec());
+                black_box(converter.convert_columns(&cols))
             });
         },
     );

@@ -25,6 +25,8 @@ use half::f16;
 /// Encodes a value of a particular fixed width type into bytes according to the rules
 /// described on [`super::RowConverter`]
 pub trait FixedLengthEncoding<const N: usize>: Copy {
+    const ENCODED_LEN: usize = 1 + N;
+
     fn encode(self) -> [u8; N];
 }
 
@@ -118,8 +120,12 @@ impl FixedLengthEncoding<32> for Decimal256 {
 }
 
 /// Returns the total encoded length (including null byte) for a value of type `T::Native`
-pub const fn encoded_len<T: ArrowPrimitiveType>(_col: &PrimitiveArray<T>) -> usize {
-    std::mem::size_of::<T::Native>() + 1
+pub const fn encoded_len<const N: usize, T>(_col: &PrimitiveArray<T>) -> usize
+where
+    T: ArrowPrimitiveType,
+    T::Native: FixedLengthEncoding<N>,
+{
+    T::Native::ENCODED_LEN
 }
 
 /// Fixed width types are encoded as
