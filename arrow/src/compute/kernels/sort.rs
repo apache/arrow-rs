@@ -24,6 +24,7 @@ use crate::datatypes::*;
 use crate::downcast_dictionary_array;
 use crate::error::{ArrowError, Result};
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use TimeUnit::*;
 
 /// Sort the `ArrayRef` using `SortOptions`.
@@ -317,43 +318,59 @@ pub fn sort_to_indices(
                 values => match values.values().data_type() {
                     DataType::Int8 => {
                         let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, Some(SortOptions::default()), None)?;
-                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices, v, n, options, limit, cmp)
+                        let value_options = Some(SortOptions { descending: false, nulls_first: options.nulls_first });
+                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
+                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
+                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
                     },
                     DataType::Int16 => {
                         let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, Some(SortOptions::default()), None)?;
-                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices, v, n, options, limit, cmp)
+                        let value_options = Some(SortOptions { descending: false, nulls_first: options.nulls_first });
+                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
+                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
+                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
                     },
                     DataType::Int32 => {
                         let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, Some(SortOptions::default()), None)?;
-                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices, v, n, options, limit, cmp)
+                        let value_options = Some(SortOptions { descending: false, nulls_first: options.nulls_first });
+                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
+                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
+                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
                     },
                     DataType::Int64 => {
                         let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, Some(SortOptions::default()), None)?;
-                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices,v, n, options, limit, cmp)
+                        let value_options = Some(SortOptions { descending: false, nulls_first: options.nulls_first });
+                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
+                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
+                        sort_primitive_dictionary::<_, _>(values, &value_indices_map,v, n, options, limit, cmp)
                     },
                     DataType::UInt8 => {
                         let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, Some(SortOptions::default()), None)?;
-                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices,v, n, options, limit, cmp)
+                        let value_options = Some(SortOptions { descending: false, nulls_first: options.nulls_first });
+                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
+                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
+                        sort_primitive_dictionary::<_, _>(values, &value_indices_map,v, n, options, limit, cmp)
                     },
                     DataType::UInt16 => {
                         let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, Some(SortOptions::default()), None)?;
-                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices,v, n, options, limit, cmp)
+                        let value_options = Some(SortOptions { descending: false, nulls_first: options.nulls_first });
+                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
+                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
+                        sort_primitive_dictionary::<_, _>(values, &value_indices_map,v, n, options, limit, cmp)
                     },
                     DataType::UInt32 => {
                         let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, Some(SortOptions::default()), None)?;
-                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices,v, n, options, limit, cmp)
+                        let value_options = Some(SortOptions { descending: false, nulls_first: options.nulls_first });
+                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
+                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
+                        sort_primitive_dictionary::<_, _>(values, &value_indices_map,v, n, options, limit, cmp)
                     },
                     DataType::UInt64 => {
                         let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, Some(SortOptions::default()), None)?;
-                        sort_primitive_dictionary::<_, _>(values, &sorted_value_indices, v, n, options, limit, cmp)
+                        let value_options = Some(SortOptions { descending: false, nulls_first: options.nulls_first });
+                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
+                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
+                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
                     },
                     DataType::Utf8 => sort_string_dictionary::<_>(values, v, n, &options, limit),
                     t => return Err(ArrowError::ComputeError(format!(
@@ -542,10 +559,24 @@ where
     sort_primitive_inner(values.len(), null_indices, cmp, options, limit, valids)
 }
 
+/// A helper function used to convert sorted value indices to a map that we can look up sorted order
+/// for a value index later.
+fn prepare_indices_map(sorted_value_indices: &UInt32Array) -> HashMap<usize, u32> {
+    sorted_value_indices
+        .into_iter()
+        .enumerate()
+        .map(|(idx, index)| {
+            // Indices don't have None value
+            let index = index.unwrap();
+            (index as usize, idx as u32)
+        })
+        .collect::<HashMap<usize, u32>>()
+}
+
 /// Sort dictionary encoded primitive values
 fn sort_primitive_dictionary<K, F>(
     values: &DictionaryArray<K>,
-    sorted_value_indices: &UInt32Array,
+    value_indices_map: &HashMap<usize, u32>,
     value_indices: Vec<u32>,
     null_indices: Vec<u32>,
     options: SortOptions,
@@ -563,7 +594,8 @@ where
         .into_iter()
         .map(|index| {
             let key: K::Native = keys.value(index as usize);
-            (index, sorted_value_indices.value(key.to_usize().unwrap()))
+            let value_order = value_indices_map.get(&key.to_usize().unwrap()).unwrap();
+            (index, *value_order)
         })
         .collect::<Vec<(u32, u32)>>();
 
@@ -1328,8 +1360,9 @@ mod tests {
         let sorted_values: PrimitiveArray<T> = From::<Vec<Option<T::Native>>>::from(
             (0..sorted.len())
                 .map(|i| {
-                    if sorted.is_valid(i) {
-                        Some(sorted_dict.value(sorted_keys.value(i).to_usize().unwrap()))
+                    let key = sorted_keys.value(i).to_usize().unwrap();
+                    if sorted.is_valid(i) && sorted_dict.is_valid(key) {
+                        Some(sorted_dict.value(key))
                     } else {
                         None
                     }
@@ -3379,6 +3412,25 @@ mod tests {
             }),
             Some(3),
             vec![None, None, Some(1)],
+        );
+
+        // Values have `None`.
+        let keys = Int8Array::from(vec![
+            Some(1_i8),
+            None,
+            Some(3),
+            None,
+            Some(2),
+            Some(3),
+            Some(0),
+        ]);
+        let values = Int8Array::from(vec![Some(1), Some(3), None, Some(5)]);
+        test_sort_primitive_dict_arrays::<Int8Type, Int8Type>(
+            keys,
+            values,
+            None,
+            None,
+            vec![None, None, None, Some(1), Some(3), Some(5), Some(5)],
         );
     }
 }
