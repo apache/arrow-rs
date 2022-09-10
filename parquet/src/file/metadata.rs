@@ -35,7 +35,7 @@
 
 use std::sync::Arc;
 
-use parquet_format::{
+use crate::format::{
     BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation,
     RowGroup,
 };
@@ -122,7 +122,7 @@ impl ParquetMetaData {
     }
 }
 
-pub type KeyValue = parquet_format::KeyValue;
+pub type KeyValue = crate::format::KeyValue;
 
 /// Reference counted pointer for [`FileMetaData`].
 pub type FileMetaDataPtr = Arc<FileMetaData>;
@@ -553,14 +553,14 @@ impl ColumnChunkMetaData {
             return Err(general_err!("Expected to have column metadata"));
         }
         let mut col_metadata: ColumnMetaData = cc.meta_data.unwrap();
-        let column_type = Type::from(col_metadata.type_);
+        let column_type = Type::try_from(col_metadata.type_)?;
         let column_path = ColumnPath::new(col_metadata.path_in_schema);
         let encodings = col_metadata
             .encodings
             .drain(0..)
-            .map(Encoding::from)
-            .collect();
-        let compression = Compression::from(col_metadata.codec);
+            .map(Encoding::try_from)
+            .collect::<Result<_>>()?;
+        let compression = Compression::try_from(col_metadata.codec)?;
         let file_path = cc.file_path;
         let file_offset = cc.file_offset;
         let num_values = col_metadata.num_values;
@@ -573,7 +573,12 @@ impl ColumnChunkMetaData {
         let encoding_stats = col_metadata
             .encoding_stats
             .as_ref()
-            .map(|vec| vec.iter().map(page_encoding_stats::from_thrift).collect());
+            .map(|vec| {
+                vec.iter()
+                    .map(page_encoding_stats::try_from_thrift)
+                    .collect::<Result<_>>()
+            })
+            .transpose()?;
         let bloom_filter_offset = col_metadata.bloom_filter_offset;
         let offset_index_offset = cc.offset_index_offset;
         let offset_index_length = cc.offset_index_length;
@@ -846,7 +851,7 @@ impl ColumnIndexBuilder {
             null_pages: Vec::new(),
             min_values: Vec::new(),
             max_values: Vec::new(),
-            boundary_order: BoundaryOrder::Unordered,
+            boundary_order: BoundaryOrder::UNORDERED,
             null_counts: Vec::new(),
             valid: true,
         }

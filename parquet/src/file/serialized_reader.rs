@@ -22,8 +22,8 @@ use std::collections::VecDeque;
 use std::io::Cursor;
 use std::{convert::TryFrom, fs::File, io::Read, path::Path, sync::Arc};
 
+use crate::format::{PageHeader, PageLocation, PageType};
 use bytes::{Buf, Bytes};
-use parquet_format::{PageHeader, PageLocation, PageType};
 use thrift::protocol::TCompactInputProtocol;
 
 use crate::basic::{Encoding, Type};
@@ -436,37 +436,37 @@ pub(crate) fn decode_page(
     };
 
     let result = match page_header.type_ {
-        PageType::DictionaryPage => {
+        PageType::DICTIONARY_PAGE => {
             assert!(page_header.dictionary_page_header.is_some());
             let dict_header = page_header.dictionary_page_header.as_ref().unwrap();
             let is_sorted = dict_header.is_sorted.unwrap_or(false);
             Page::DictionaryPage {
                 buf: buffer,
                 num_values: dict_header.num_values as u32,
-                encoding: Encoding::from(dict_header.encoding),
+                encoding: Encoding::try_from(dict_header.encoding)?,
                 is_sorted,
             }
         }
-        PageType::DataPage => {
+        PageType::DATA_PAGE => {
             assert!(page_header.data_page_header.is_some());
             let header = page_header.data_page_header.unwrap();
             Page::DataPage {
                 buf: buffer,
                 num_values: header.num_values as u32,
-                encoding: Encoding::from(header.encoding),
-                def_level_encoding: Encoding::from(header.definition_level_encoding),
-                rep_level_encoding: Encoding::from(header.repetition_level_encoding),
+                encoding: Encoding::try_from(header.encoding)?,
+                def_level_encoding: Encoding::try_from(header.definition_level_encoding)?,
+                rep_level_encoding: Encoding::try_from(header.repetition_level_encoding)?,
                 statistics: statistics::from_thrift(physical_type, header.statistics),
             }
         }
-        PageType::DataPageV2 => {
+        PageType::DATA_PAGE_V2 => {
             assert!(page_header.data_page_header_v2.is_some());
             let header = page_header.data_page_header_v2.unwrap();
             let is_compressed = header.is_compressed.unwrap_or(true);
             Page::DataPageV2 {
                 buf: buffer,
                 num_values: header.num_values as u32,
-                encoding: Encoding::from(header.encoding),
+                encoding: Encoding::try_from(header.encoding)?,
                 num_nulls: header.num_nulls as u32,
                 num_rows: header.num_rows as u32,
                 def_levels_byte_len: header.definition_levels_byte_length as u32,
@@ -600,7 +600,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     *offset += data_len;
                     *remaining -= data_len;
 
-                    if header.type_ == PageType::IndexPage {
+                    if header.type_ == PageType::INDEX_PAGE {
                         continue;
                     }
 
@@ -754,7 +754,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 mod tests {
     use std::sync::Arc;
 
-    use parquet_format::BoundaryOrder;
+    use crate::format::BoundaryOrder;
 
     use crate::basic::{self, ColumnOrder};
     use crate::data_type::private::ParquetValueType;
@@ -1281,7 +1281,7 @@ mod tests {
             unreachable!()
         };
 
-        assert_eq!(index.boundary_order, BoundaryOrder::Ascending);
+        assert_eq!(index.boundary_order, BoundaryOrder::ASCENDING);
         let index_in_pages = &index.indexes;
 
         //only one page group
@@ -1330,7 +1330,7 @@ mod tests {
                 index,
                 325,
                 get_row_group_min_max_bytes(row_group_metadata, 0),
-                BoundaryOrder::Unordered,
+                BoundaryOrder::UNORDERED,
             );
             assert_eq!(row_group_offset_indexes[0].len(), 325);
         } else {
@@ -1349,7 +1349,7 @@ mod tests {
                 index,
                 325,
                 get_row_group_min_max_bytes(row_group_metadata, 2),
-                BoundaryOrder::Ascending,
+                BoundaryOrder::ASCENDING,
             );
             assert_eq!(row_group_offset_indexes[2].len(), 325);
         } else {
@@ -1361,7 +1361,7 @@ mod tests {
                 index,
                 325,
                 get_row_group_min_max_bytes(row_group_metadata, 3),
-                BoundaryOrder::Ascending,
+                BoundaryOrder::ASCENDING,
             );
             assert_eq!(row_group_offset_indexes[3].len(), 325);
         } else {
@@ -1373,7 +1373,7 @@ mod tests {
                 index,
                 325,
                 get_row_group_min_max_bytes(row_group_metadata, 4),
-                BoundaryOrder::Ascending,
+                BoundaryOrder::ASCENDING,
             );
             assert_eq!(row_group_offset_indexes[4].len(), 325);
         } else {
@@ -1385,7 +1385,7 @@ mod tests {
                 index,
                 528,
                 get_row_group_min_max_bytes(row_group_metadata, 5),
-                BoundaryOrder::Unordered,
+                BoundaryOrder::UNORDERED,
             );
             assert_eq!(row_group_offset_indexes[5].len(), 528);
         } else {
@@ -1397,7 +1397,7 @@ mod tests {
                 index,
                 325,
                 get_row_group_min_max_bytes(row_group_metadata, 6),
-                BoundaryOrder::Ascending,
+                BoundaryOrder::ASCENDING,
             );
             assert_eq!(row_group_offset_indexes[6].len(), 325);
         } else {
@@ -1409,7 +1409,7 @@ mod tests {
                 index,
                 528,
                 get_row_group_min_max_bytes(row_group_metadata, 7),
-                BoundaryOrder::Unordered,
+                BoundaryOrder::UNORDERED,
             );
             assert_eq!(row_group_offset_indexes[7].len(), 528);
         } else {
@@ -1421,7 +1421,7 @@ mod tests {
                 index,
                 974,
                 get_row_group_min_max_bytes(row_group_metadata, 8),
-                BoundaryOrder::Unordered,
+                BoundaryOrder::UNORDERED,
             );
             assert_eq!(row_group_offset_indexes[8].len(), 974);
         } else {
@@ -1433,7 +1433,7 @@ mod tests {
                 index,
                 352,
                 get_row_group_min_max_bytes(row_group_metadata, 9),
-                BoundaryOrder::Ascending,
+                BoundaryOrder::ASCENDING,
             );
             assert_eq!(row_group_offset_indexes[9].len(), 352);
         } else {
@@ -1452,7 +1452,7 @@ mod tests {
                 index,
                 325,
                 get_row_group_min_max_bytes(row_group_metadata, 11),
-                BoundaryOrder::Ascending,
+                BoundaryOrder::ASCENDING,
             );
             assert_eq!(row_group_offset_indexes[11].len(), 325);
         } else {
@@ -1464,7 +1464,7 @@ mod tests {
                 index,
                 325,
                 get_row_group_min_max_bytes(row_group_metadata, 12),
-                BoundaryOrder::Unordered,
+                BoundaryOrder::UNORDERED,
             );
             assert_eq!(row_group_offset_indexes[12].len(), 325);
         } else {
