@@ -28,16 +28,17 @@ pub struct GenericStringBuilder<OffsetSize: OffsetSizeTrait> {
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
-    /// Creates a new [`GenericStringBuilder`],
+    /// Creates a new [`GenericStringBuilder`].
     pub fn new() -> Self {
         Self {
             builder: GenericBinaryBuilder::new(),
         }
     }
 
-    /// Creates a new [`GenericStringBuilder`],
-    /// `data_capacity` is the number of bytes of string data to pre-allocate space for in this builder
-    /// `item_capacity` is the number of items to pre-allocate space for in this builder
+    /// Creates a new [`GenericStringBuilder`].
+    ///
+    /// - `item_capacity` is the number of items to pre-allocate (the size of the buffer of offsets).
+    /// - `data_capacity` is the total number of bytes of string data for all items to pre-allocate.
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         Self {
             builder: GenericBinaryBuilder::with_capacity(item_capacity, data_capacity),
@@ -50,13 +51,13 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
         self.builder.append_value(value.as_ref().as_bytes());
     }
 
-    /// Append a null value to the array.
+    /// Append a null value into the builder.
     #[inline]
     pub fn append_null(&mut self) {
         self.builder.append_null()
     }
 
-    /// Append an `Option` value to the array.
+    /// Append an `Option` value into the builder.
     #[inline]
     pub fn append_option(&mut self, value: Option<impl AsRef<str>>) {
         match value {
@@ -70,12 +71,12 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
         GenericStringArray::<OffsetSize>::from(self.builder.finish())
     }
 
-    /// Returns the current values buffer as a slice
+    /// Returns the current values buffer as a slice.
     pub fn values_slice(&self) -> &[u8] {
         self.builder.values_slice()
     }
 
-    /// Returns the current offsets buffer as a slice
+    /// Returns the current offsets buffer as a slice.
     pub fn offsets_slice(&self) -> &[OffsetSize] {
         self.builder.offsets_slice()
     }

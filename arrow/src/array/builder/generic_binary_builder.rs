@@ -38,9 +38,10 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
         Self::with_capacity(1024, 1024)
     }
 
-    /// Creates a new [`GenericBinaryBuilder`],
-    /// `item_capacity` is the number of items to pre-allocate space for in this builder
-    /// `data_capacity` is the number of bytes to pre-allocate space for in this builder
+    /// Creates a new [`GenericBinaryBuilder`].
+    ///
+    /// - `item_capacity` is the number of items to pre-allocate (the size of the buffer of offsets).
+    /// - `data_capacity` is the total number of bytes of string data for all items to pre-allocate.
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         let mut offsets_builder = BufferBuilder::<OffsetSize>::new(item_capacity + 1);
         offsets_builder.append(OffsetSize::zero());
@@ -60,7 +61,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
             .append(OffsetSize::from_usize(self.value_builder.len()).unwrap());
     }
 
-    /// Append a null value to the array.
+    /// Append a null value into the builder.
     #[inline]
     pub fn append_null(&mut self) {
         self.null_buffer_builder.append(false);
