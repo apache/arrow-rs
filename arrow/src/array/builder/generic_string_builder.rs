@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{ArrayBuilder, ArrayRef, GenericStringArray, OffsetSizeTrait};
+use crate::array::{Array, ArrayBuilder, ArrayRef, GenericStringArray, OffsetSizeTrait};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -67,7 +67,15 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
 
     /// Builds the [`GenericStringArray`] and reset this builder.
     pub fn finish(&mut self) -> GenericStringArray<OffsetSize> {
-        GenericStringArray::<OffsetSize>::from(self.builder.finish())
+        let t = GenericStringArray::<OffsetSize>::DATA_TYPE;
+        let v = self.builder.finish();
+        let builder = v.into_data().into_builder().data_type(t);
+
+        // SAFETY:
+        // Data must be UTF-8 as only support writing `str`
+        // Offsets must be valid as guaranteed by `GenericBinaryBuilder`
+        let data = unsafe { builder.build_unchecked() };
+        data.into()
     }
 
     /// Returns the current values buffer as a slice
