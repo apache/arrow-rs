@@ -155,7 +155,7 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_built_filter(&sparse_filter, &data_array))
     });
 
-    let data_array = create_string_dict_array::<Int32Type>(size, 0.0);
+    let data_array = create_string_dict_array::<Int32Type>(size, 0.0, 4);
     c.bench_function("filter context string dictionary (kept 1/2)", |b| {
         b.iter(|| bench_built_filter(&filter, &data_array))
     });
@@ -168,7 +168,7 @@ fn add_benchmark(c: &mut Criterion) {
         |b| b.iter(|| bench_built_filter(&sparse_filter, &data_array)),
     );
 
-    let data_array = create_string_dict_array::<Int32Type>(size, 0.5);
+    let data_array = create_string_dict_array::<Int32Type>(size, 0.5, 4);
     c.bench_function("filter context string dictionary w NULLs (kept 1/2)", |b| {
         b.iter(|| bench_built_filter(&filter, &data_array))
     });

@@ -84,11 +84,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::format::OffsetIndex;
 use bytes::{Buf, Bytes};
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;
 use futures::stream::Stream;
-use parquet_format::OffsetIndex;
 use thrift::protocol::TCompactInputProtocol;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
@@ -995,7 +995,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_fuzz_async_reader_selection() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
@@ -1015,7 +1014,7 @@ mod tests {
             let mut selectors = vec![];
 
             while total_rows < 7300 {
-                let row_count: usize = rand.gen_range(0..100);
+                let row_count: usize = rand.gen_range(1..100);
 
                 let row_count = row_count.min(7300 - total_rows);
 
@@ -1059,6 +1058,75 @@ mod tests {
 
             assert_eq!(actual_rows, expected_rows);
         }
+    }
+
+    #[tokio::test]
+    async fn test_async_reader_zero_row_selector() {
+        //See https://github.com/apache/arrow-rs/issues/2669
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let data = Bytes::from(std::fs::read(path).unwrap());
+
+        let metadata = parse_metadata(&data).unwrap();
+        let metadata = Arc::new(metadata);
+
+        assert_eq!(metadata.num_row_groups(), 1);
+
+        let mut rand = thread_rng();
+
+        let mut expected_rows = 0;
+        let mut total_rows = 0;
+        let mut skip = false;
+        let mut selectors = vec![];
+
+        selectors.push(RowSelector {
+            row_count: 0,
+            skip: false,
+        });
+
+        while total_rows < 7300 {
+            let row_count: usize = rand.gen_range(1..100);
+
+            let row_count = row_count.min(7300 - total_rows);
+
+            selectors.push(RowSelector { row_count, skip });
+
+            total_rows += row_count;
+            if !skip {
+                expected_rows += row_count;
+            }
+
+            skip = !skip;
+        }
+
+        let selection = RowSelection::from(selectors);
+
+        let async_reader = TestReader {
+            data: data.clone(),
+            metadata: metadata.clone(),
+            requests: Default::default(),
+        };
+
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let builder =
+            ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
+                .await
+                .unwrap();
+
+        let col_idx: usize = rand.gen_range(0..13);
+        let mask = ProjectionMask::leaves(builder.parquet_schema(), vec![col_idx]);
+
+        let stream = builder
+            .with_projection(mask.clone())
+            .with_row_selection(selection.clone())
+            .build()
+            .expect("building stream");
+
+        let async_batches: Vec<_> = stream.try_collect().await.unwrap();
+
+        let actual_rows: usize = async_batches.into_iter().map(|b| b.num_rows()).sum();
+
+        assert_eq!(actual_rows, expected_rows);
     }
 
     #[tokio::test]

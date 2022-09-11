@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 use crate::errors::ParquetError;
-use parquet_format::PageLocation;
+use crate::format::PageLocation;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::RangeInclusive;
@@ -284,7 +284,7 @@ mod tests {
     use crate::basic::Type::INT32;
     use crate::file::page_index::index::{NativeIndex, PageIndex};
     use crate::file::page_index::range::{compute_row_ranges, Range, RowRanges};
-    use parquet_format::{BoundaryOrder, PageLocation};
+    use crate::format::{BoundaryOrder, PageLocation};
 
     #[test]
     fn test_binary_search_overlap() {
@@ -445,7 +445,7 @@ mod tests {
                     null_count: Some(0),
                 },
             ],
-            boundary_order: BoundaryOrder::Ascending,
+            boundary_order: BoundaryOrder::ASCENDING,
         };
         let locations = &[
             PageLocation {

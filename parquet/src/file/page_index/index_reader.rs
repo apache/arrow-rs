@@ -21,7 +21,7 @@ use crate::errors::ParquetError;
 use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::page_index::index::{BooleanIndex, ByteArrayIndex, Index, NativeIndex};
 use crate::file::reader::ChunkReader;
-use parquet_format::{ColumnIndex, OffsetIndex, PageLocation};
+use crate::format::{ColumnIndex, OffsetIndex, PageLocation};
 use std::io::{Cursor, Read};
 use thrift::protocol::TCompactInputProtocol;
 

@@ -18,14 +18,14 @@
 //! Contains Rust mappings for Thrift definition.
 //! Refer to `parquet.thrift` file to see raw definitions.
 
-use std::{fmt, result, str};
+use std::{fmt, str};
 
-use parquet_format as parquet;
+use crate::format as parquet;
 
-use crate::errors::ParquetError;
+use crate::errors::{ParquetError, Result};
 
-// Re-export parquet_format types used in this module
-pub use parquet_format::{
+// Re-export crate::format types used in this module
+pub use crate::format::{
     BsonType, DateType, DecimalType, EnumType, IntType, JsonType, ListType, MapType,
     NullType, StringType, TimeType, TimeUnit, TimestampType, UUIDType,
 };
@@ -496,32 +496,35 @@ impl fmt::Display for ColumnOrder {
 // ----------------------------------------------------------------------
 // parquet::Type <=> Type conversion
 
-impl From<parquet::Type> for Type {
-    fn from(value: parquet::Type) -> Self {
-        match value {
-            parquet::Type::Boolean => Type::BOOLEAN,
-            parquet::Type::Int32 => Type::INT32,
-            parquet::Type::Int64 => Type::INT64,
-            parquet::Type::Int96 => Type::INT96,
-            parquet::Type::Float => Type::FLOAT,
-            parquet::Type::Double => Type::DOUBLE,
-            parquet::Type::ByteArray => Type::BYTE_ARRAY,
-            parquet::Type::FixedLenByteArray => Type::FIXED_LEN_BYTE_ARRAY,
-        }
+impl TryFrom<parquet::Type> for Type {
+    type Error = ParquetError;
+
+    fn try_from(value: parquet::Type) -> Result<Self> {
+        Ok(match value {
+            parquet::Type::BOOLEAN => Type::BOOLEAN,
+            parquet::Type::INT32 => Type::INT32,
+            parquet::Type::INT64 => Type::INT64,
+            parquet::Type::INT96 => Type::INT96,
+            parquet::Type::FLOAT => Type::FLOAT,
+            parquet::Type::DOUBLE => Type::DOUBLE,
+            parquet::Type::BYTE_ARRAY => Type::BYTE_ARRAY,
+            parquet::Type::FIXED_LEN_BYTE_ARRAY => Type::FIXED_LEN_BYTE_ARRAY,
+            _ => return Err(general_err!("unexpected parquet type: {}", value.0)),
+        })
     }
 }
 
 impl From<Type> for parquet::Type {
     fn from(value: Type) -> Self {
         match value {
-            Type::BOOLEAN => parquet::Type::Boolean,
-            Type::INT32 => parquet::Type::Int32,
-            Type::INT64 => parquet::Type::Int64,
-            Type::INT96 => parquet::Type::Int96,
-            Type::FLOAT => parquet::Type::Float,
-            Type::DOUBLE => parquet::Type::Double,
-            Type::BYTE_ARRAY => parquet::Type::ByteArray,
-            Type::FIXED_LEN_BYTE_ARRAY => parquet::Type::FixedLenByteArray,
+            Type::BOOLEAN => parquet::Type::BOOLEAN,
+            Type::INT32 => parquet::Type::INT32,
+            Type::INT64 => parquet::Type::INT64,
+            Type::INT96 => parquet::Type::INT96,
+            Type::FLOAT => parquet::Type::FLOAT,
+            Type::DOUBLE => parquet::Type::DOUBLE,
+            Type::BYTE_ARRAY => parquet::Type::BYTE_ARRAY,
+            Type::FIXED_LEN_BYTE_ARRAY => parquet::Type::FIXED_LEN_BYTE_ARRAY,
         }
     }
 }
@@ -529,39 +532,47 @@ impl From<Type> for parquet::Type {
 // ----------------------------------------------------------------------
 // parquet::ConvertedType <=> ConvertedType conversion
 
-impl From<Option<parquet::ConvertedType>> for ConvertedType {
-    fn from(option: Option<parquet::ConvertedType>) -> Self {
-        match option {
+impl TryFrom<Option<parquet::ConvertedType>> for ConvertedType {
+    type Error = ParquetError;
+
+    fn try_from(option: Option<parquet::ConvertedType>) -> Result<Self> {
+        Ok(match option {
             None => ConvertedType::NONE,
             Some(value) => match value {
-                parquet::ConvertedType::Utf8 => ConvertedType::UTF8,
-                parquet::ConvertedType::Map => ConvertedType::MAP,
-                parquet::ConvertedType::MapKeyValue => ConvertedType::MAP_KEY_VALUE,
-                parquet::ConvertedType::List => ConvertedType::LIST,
-                parquet::ConvertedType::Enum => ConvertedType::ENUM,
-                parquet::ConvertedType::Decimal => ConvertedType::DECIMAL,
-                parquet::ConvertedType::Date => ConvertedType::DATE,
-                parquet::ConvertedType::TimeMillis => ConvertedType::TIME_MILLIS,
-                parquet::ConvertedType::TimeMicros => ConvertedType::TIME_MICROS,
-                parquet::ConvertedType::TimestampMillis => {
+                parquet::ConvertedType::UTF8 => ConvertedType::UTF8,
+                parquet::ConvertedType::MAP => ConvertedType::MAP,
+                parquet::ConvertedType::MAP_KEY_VALUE => ConvertedType::MAP_KEY_VALUE,
+                parquet::ConvertedType::LIST => ConvertedType::LIST,
+                parquet::ConvertedType::ENUM => ConvertedType::ENUM,
+                parquet::ConvertedType::DECIMAL => ConvertedType::DECIMAL,
+                parquet::ConvertedType::DATE => ConvertedType::DATE,
+                parquet::ConvertedType::TIME_MILLIS => ConvertedType::TIME_MILLIS,
+                parquet::ConvertedType::TIME_MICROS => ConvertedType::TIME_MICROS,
+                parquet::ConvertedType::TIMESTAMP_MILLIS => {
                     ConvertedType::TIMESTAMP_MILLIS
                 }
-                parquet::ConvertedType::TimestampMicros => {
+                parquet::ConvertedType::TIMESTAMP_MICROS => {
                     ConvertedType::TIMESTAMP_MICROS
                 }
-                parquet::ConvertedType::Uint8 => ConvertedType::UINT_8,
-                parquet::ConvertedType::Uint16 => ConvertedType::UINT_16,
-                parquet::ConvertedType::Uint32 => ConvertedType::UINT_32,
-                parquet::ConvertedType::Uint64 => ConvertedType::UINT_64,
-                parquet::ConvertedType::Int8 => ConvertedType::INT_8,
-                parquet::ConvertedType::Int16 => ConvertedType::INT_16,
-                parquet::ConvertedType::Int32 => ConvertedType::INT_32,
-                parquet::ConvertedType::Int64 => ConvertedType::INT_64,
-                parquet::ConvertedType::Json => ConvertedType::JSON,
-                parquet::ConvertedType::Bson => ConvertedType::BSON,
-                parquet::ConvertedType::Interval => ConvertedType::INTERVAL,
+                parquet::ConvertedType::UINT_8 => ConvertedType::UINT_8,
+                parquet::ConvertedType::UINT_16 => ConvertedType::UINT_16,
+                parquet::ConvertedType::UINT_32 => ConvertedType::UINT_32,
+                parquet::ConvertedType::UINT_64 => ConvertedType::UINT_64,
+                parquet::ConvertedType::INT_8 => ConvertedType::INT_8,
+                parquet::ConvertedType::INT_16 => ConvertedType::INT_16,
+                parquet::ConvertedType::INT_32 => ConvertedType::INT_32,
+                parquet::ConvertedType::INT_64 => ConvertedType::INT_64,
+                parquet::ConvertedType::JSON => ConvertedType::JSON,
+                parquet::ConvertedType::BSON => ConvertedType::BSON,
+                parquet::ConvertedType::INTERVAL => ConvertedType::INTERVAL,
+                _ => {
+                    return Err(general_err!(
+                        "unexpected parquet converted type: {}",
+                        value.0
+                    ))
+                }
             },
-        }
+        })
     }
 }
 
@@ -569,32 +580,32 @@ impl From<ConvertedType> for Option<parquet::ConvertedType> {
     fn from(value: ConvertedType) -> Self {
         match value {
             ConvertedType::NONE => None,
-            ConvertedType::UTF8 => Some(parquet::ConvertedType::Utf8),
-            ConvertedType::MAP => Some(parquet::ConvertedType::Map),
-            ConvertedType::MAP_KEY_VALUE => Some(parquet::ConvertedType::MapKeyValue),
-            ConvertedType::LIST => Some(parquet::ConvertedType::List),
-            ConvertedType::ENUM => Some(parquet::ConvertedType::Enum),
-            ConvertedType::DECIMAL => Some(parquet::ConvertedType::Decimal),
-            ConvertedType::DATE => Some(parquet::ConvertedType::Date),
-            ConvertedType::TIME_MILLIS => Some(parquet::ConvertedType::TimeMillis),
-            ConvertedType::TIME_MICROS => Some(parquet::ConvertedType::TimeMicros),
+            ConvertedType::UTF8 => Some(parquet::ConvertedType::UTF8),
+            ConvertedType::MAP => Some(parquet::ConvertedType::MAP),
+            ConvertedType::MAP_KEY_VALUE => Some(parquet::ConvertedType::MAP_KEY_VALUE),
+            ConvertedType::LIST => Some(parquet::ConvertedType::LIST),
+            ConvertedType::ENUM => Some(parquet::ConvertedType::ENUM),
+            ConvertedType::DECIMAL => Some(parquet::ConvertedType::DECIMAL),
+            ConvertedType::DATE => Some(parquet::ConvertedType::DATE),
+            ConvertedType::TIME_MILLIS => Some(parquet::ConvertedType::TIME_MILLIS),
+            ConvertedType::TIME_MICROS => Some(parquet::ConvertedType::TIME_MICROS),
             ConvertedType::TIMESTAMP_MILLIS => {
-                Some(parquet::ConvertedType::TimestampMillis)
+                Some(parquet::ConvertedType::TIMESTAMP_MILLIS)
             }
             ConvertedType::TIMESTAMP_MICROS => {
-                Some(parquet::ConvertedType::TimestampMicros)
+                Some(parquet::ConvertedType::TIMESTAMP_MICROS)
             }
-            ConvertedType::UINT_8 => Some(parquet::ConvertedType::Uint8),
-            ConvertedType::UINT_16 => Some(parquet::ConvertedType::Uint16),
-            ConvertedType::UINT_32 => Some(parquet::ConvertedType::Uint32),
-            ConvertedType::UINT_64 => Some(parquet::ConvertedType::Uint64),
-            ConvertedType::INT_8 => Some(parquet::ConvertedType::Int8),
-            ConvertedType::INT_16 => Some(parquet::ConvertedType::Int16),
-            ConvertedType::INT_32 => Some(parquet::ConvertedType::Int32),
-            ConvertedType::INT_64 => Some(parquet::ConvertedType::Int64),
-            ConvertedType::JSON => Some(parquet::ConvertedType::Json),
-            ConvertedType::BSON => Some(parquet::ConvertedType::Bson),
-            ConvertedType::INTERVAL => Some(parquet::ConvertedType::Interval),
+            ConvertedType::UINT_8 => Some(parquet::ConvertedType::UINT_8),
+            ConvertedType::UINT_16 => Some(parquet::ConvertedType::UINT_16),
+            ConvertedType::UINT_32 => Some(parquet::ConvertedType::UINT_32),
+            ConvertedType::UINT_64 => Some(parquet::ConvertedType::UINT_64),
+            ConvertedType::INT_8 => Some(parquet::ConvertedType::INT_8),
+            ConvertedType::INT_16 => Some(parquet::ConvertedType::INT_16),
+            ConvertedType::INT_32 => Some(parquet::ConvertedType::INT_32),
+            ConvertedType::INT_64 => Some(parquet::ConvertedType::INT_64),
+            ConvertedType::JSON => Some(parquet::ConvertedType::JSON),
+            ConvertedType::BSON => Some(parquet::ConvertedType::BSON),
+            ConvertedType::INTERVAL => Some(parquet::ConvertedType::INTERVAL),
         }
     }
 }
@@ -730,22 +741,30 @@ impl From<Option<LogicalType>> for ConvertedType {
 // ----------------------------------------------------------------------
 // parquet::FieldRepetitionType <=> Repetition conversion
 
-impl From<parquet::FieldRepetitionType> for Repetition {
-    fn from(value: parquet::FieldRepetitionType) -> Self {
-        match value {
-            parquet::FieldRepetitionType::Required => Repetition::REQUIRED,
-            parquet::FieldRepetitionType::Optional => Repetition::OPTIONAL,
-            parquet::FieldRepetitionType::Repeated => Repetition::REPEATED,
-        }
+impl TryFrom<parquet::FieldRepetitionType> for Repetition {
+    type Error = ParquetError;
+
+    fn try_from(value: parquet::FieldRepetitionType) -> Result<Self> {
+        Ok(match value {
+            parquet::FieldRepetitionType::REQUIRED => Repetition::REQUIRED,
+            parquet::FieldRepetitionType::OPTIONAL => Repetition::OPTIONAL,
+            parquet::FieldRepetitionType::REPEATED => Repetition::REPEATED,
+            _ => {
+                return Err(general_err!(
+                    "unexpected parquet repetition type: {}",
+                    value.0
+                ))
+            }
+        })
     }
 }
 
 impl From<Repetition> for parquet::FieldRepetitionType {
     fn from(value: Repetition) -> Self {
         match value {
-            Repetition::REQUIRED => parquet::FieldRepetitionType::Required,
-            Repetition::OPTIONAL => parquet::FieldRepetitionType::Optional,
-            Repetition::REPEATED => parquet::FieldRepetitionType::Repeated,
+            Repetition::REQUIRED => parquet::FieldRepetitionType::REQUIRED,
+            Repetition::OPTIONAL => parquet::FieldRepetitionType::OPTIONAL,
+            Repetition::REPEATED => parquet::FieldRepetitionType::REPEATED,
         }
     }
 }
@@ -753,34 +772,41 @@ impl From<Repetition> for parquet::FieldRepetitionType {
 // ----------------------------------------------------------------------
 // parquet::Encoding <=> Encoding conversion
 
-impl From<parquet::Encoding> for Encoding {
-    fn from(value: parquet::Encoding) -> Self {
-        match value {
-            parquet::Encoding::Plain => Encoding::PLAIN,
-            parquet::Encoding::PlainDictionary => Encoding::PLAIN_DICTIONARY,
-            parquet::Encoding::Rle => Encoding::RLE,
-            parquet::Encoding::BitPacked => Encoding::BIT_PACKED,
-            parquet::Encoding::DeltaBinaryPacked => Encoding::DELTA_BINARY_PACKED,
-            parquet::Encoding::DeltaLengthByteArray => Encoding::DELTA_LENGTH_BYTE_ARRAY,
-            parquet::Encoding::DeltaByteArray => Encoding::DELTA_BYTE_ARRAY,
-            parquet::Encoding::RleDictionary => Encoding::RLE_DICTIONARY,
-            parquet::Encoding::ByteStreamSplit => Encoding::BYTE_STREAM_SPLIT,
-        }
+impl TryFrom<parquet::Encoding> for Encoding {
+    type Error = ParquetError;
+
+    fn try_from(value: parquet::Encoding) -> Result<Self> {
+        Ok(match value {
+            parquet::Encoding::PLAIN => Encoding::PLAIN,
+            parquet::Encoding::PLAIN_DICTIONARY => Encoding::PLAIN_DICTIONARY,
+            parquet::Encoding::RLE => Encoding::RLE,
+            parquet::Encoding::BIT_PACKED => Encoding::BIT_PACKED,
+            parquet::Encoding::DELTA_BINARY_PACKED => Encoding::DELTA_BINARY_PACKED,
+            parquet::Encoding::DELTA_LENGTH_BYTE_ARRAY => {
+                Encoding::DELTA_LENGTH_BYTE_ARRAY
+            }
+            parquet::Encoding::DELTA_BYTE_ARRAY => Encoding::DELTA_BYTE_ARRAY,
+            parquet::Encoding::RLE_DICTIONARY => Encoding::RLE_DICTIONARY,
+            parquet::Encoding::BYTE_STREAM_SPLIT => Encoding::BYTE_STREAM_SPLIT,
+            _ => return Err(general_err!("unexpected parquet encoding: {}", value.0)),
+        })
     }
 }
 
 impl From<Encoding> for parquet::Encoding {
     fn from(value: Encoding) -> Self {
         match value {
-            Encoding::PLAIN => parquet::Encoding::Plain,
-            Encoding::PLAIN_DICTIONARY => parquet::Encoding::PlainDictionary,
-            Encoding::RLE => parquet::Encoding::Rle,
-            Encoding::BIT_PACKED => parquet::Encoding::BitPacked,
-            Encoding::DELTA_BINARY_PACKED => parquet::Encoding::DeltaBinaryPacked,
-            Encoding::DELTA_LENGTH_BYTE_ARRAY => parquet::Encoding::DeltaLengthByteArray,
-            Encoding::DELTA_BYTE_ARRAY => parquet::Encoding::DeltaByteArray,
-            Encoding::RLE_DICTIONARY => parquet::Encoding::RleDictionary,
-            Encoding::BYTE_STREAM_SPLIT => parquet::Encoding::ByteStreamSplit,
+            Encoding::PLAIN => parquet::Encoding::PLAIN,
+            Encoding::PLAIN_DICTIONARY => parquet::Encoding::PLAIN_DICTIONARY,
+            Encoding::RLE => parquet::Encoding::RLE,
+            Encoding::BIT_PACKED => parquet::Encoding::BIT_PACKED,
+            Encoding::DELTA_BINARY_PACKED => parquet::Encoding::DELTA_BINARY_PACKED,
+            Encoding::DELTA_LENGTH_BYTE_ARRAY => {
+                parquet::Encoding::DELTA_LENGTH_BYTE_ARRAY
+            }
+            Encoding::DELTA_BYTE_ARRAY => parquet::Encoding::DELTA_BYTE_ARRAY,
+            Encoding::RLE_DICTIONARY => parquet::Encoding::RLE_DICTIONARY,
+            Encoding::BYTE_STREAM_SPLIT => parquet::Encoding::BYTE_STREAM_SPLIT,
         }
     }
 }
@@ -788,30 +814,38 @@ impl From<Encoding> for parquet::Encoding {
 // ----------------------------------------------------------------------
 // parquet::CompressionCodec <=> Compression conversion
 
-impl From<parquet::CompressionCodec> for Compression {
-    fn from(value: parquet::CompressionCodec) -> Self {
-        match value {
-            parquet::CompressionCodec::Uncompressed => Compression::UNCOMPRESSED,
-            parquet::CompressionCodec::Snappy => Compression::SNAPPY,
-            parquet::CompressionCodec::Gzip => Compression::GZIP,
-            parquet::CompressionCodec::Lzo => Compression::LZO,
-            parquet::CompressionCodec::Brotli => Compression::BROTLI,
-            parquet::CompressionCodec::Lz4 => Compression::LZ4,
-            parquet::CompressionCodec::Zstd => Compression::ZSTD,
-        }
+impl TryFrom<parquet::CompressionCodec> for Compression {
+    type Error = ParquetError;
+
+    fn try_from(value: parquet::CompressionCodec) -> Result<Self> {
+        Ok(match value {
+            parquet::CompressionCodec::UNCOMPRESSED => Compression::UNCOMPRESSED,
+            parquet::CompressionCodec::SNAPPY => Compression::SNAPPY,
+            parquet::CompressionCodec::GZIP => Compression::GZIP,
+            parquet::CompressionCodec::LZO => Compression::LZO,
+            parquet::CompressionCodec::BROTLI => Compression::BROTLI,
+            parquet::CompressionCodec::LZ4 => Compression::LZ4,
+            parquet::CompressionCodec::ZSTD => Compression::ZSTD,
+            _ => {
+                return Err(general_err!(
+                    "unexpected parquet compression codec: {}",
+                    value.0
+                ))
+            }
+        })
     }
 }
 
 impl From<Compression> for parquet::CompressionCodec {
     fn from(value: Compression) -> Self {
         match value {
-            Compression::UNCOMPRESSED => parquet::CompressionCodec::Uncompressed,
-            Compression::SNAPPY => parquet::CompressionCodec::Snappy,
-            Compression::GZIP => parquet::CompressionCodec::Gzip,
-            Compression::LZO => parquet::CompressionCodec::Lzo,
-            Compression::BROTLI => parquet::CompressionCodec::Brotli,
-            Compression::LZ4 => parquet::CompressionCodec::Lz4,
-            Compression::ZSTD => parquet::CompressionCodec::Zstd,
+            Compression::UNCOMPRESSED => parquet::CompressionCodec::UNCOMPRESSED,
+            Compression::SNAPPY => parquet::CompressionCodec::SNAPPY,
+            Compression::GZIP => parquet::CompressionCodec::GZIP,
+            Compression::LZO => parquet::CompressionCodec::LZO,
+            Compression::BROTLI => parquet::CompressionCodec::BROTLI,
+            Compression::LZ4 => parquet::CompressionCodec::LZ4,
+            Compression::ZSTD => parquet::CompressionCodec::ZSTD,
         }
     }
 }
@@ -819,24 +853,27 @@ impl From<Compression> for parquet::CompressionCodec {
 // ----------------------------------------------------------------------
 // parquet::PageType <=> PageType conversion
 
-impl From<parquet::PageType> for PageType {
-    fn from(value: parquet::PageType) -> Self {
-        match value {
-            parquet::PageType::DataPage => PageType::DATA_PAGE,
-            parquet::PageType::IndexPage => PageType::INDEX_PAGE,
-            parquet::PageType::DictionaryPage => PageType::DICTIONARY_PAGE,
-            parquet::PageType::DataPageV2 => PageType::DATA_PAGE_V2,
-        }
+impl TryFrom<parquet::PageType> for PageType {
+    type Error = ParquetError;
+
+    fn try_from(value: parquet::PageType) -> Result<Self> {
+        Ok(match value {
+            parquet::PageType::DATA_PAGE => PageType::DATA_PAGE,
+            parquet::PageType::INDEX_PAGE => PageType::INDEX_PAGE,
+            parquet::PageType::DICTIONARY_PAGE => PageType::DICTIONARY_PAGE,
+            parquet::PageType::DATA_PAGE_V2 => PageType::DATA_PAGE_V2,
+            _ => return Err(general_err!("unexpected parquet page type: {}", value.0)),
+        })
     }
 }
 
 impl From<PageType> for parquet::PageType {
     fn from(value: PageType) -> Self {
         match value {
-            PageType::DATA_PAGE => parquet::PageType::DataPage,
-            PageType::INDEX_PAGE => parquet::PageType::IndexPage,
-            PageType::DICTIONARY_PAGE => parquet::PageType::DictionaryPage,
-            PageType::DATA_PAGE_V2 => parquet::PageType::DataPageV2,
+            PageType::DATA_PAGE => parquet::PageType::DATA_PAGE,
+            PageType::INDEX_PAGE => parquet::PageType::INDEX_PAGE,
+            PageType::DICTIONARY_PAGE => parquet::PageType::DICTIONARY_PAGE,
+            PageType::DATA_PAGE_V2 => parquet::PageType::DATA_PAGE_V2,
         }
     }
 }
@@ -847,12 +884,12 @@ impl From<PageType> for parquet::PageType {
 impl str::FromStr for Repetition {
     type Err = ParquetError;
 
-    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self> {
         match s {
             "REQUIRED" => Ok(Repetition::REQUIRED),
             "OPTIONAL" => Ok(Repetition::OPTIONAL),
             "REPEATED" => Ok(Repetition::REPEATED),
-            other => Err(general_err!("Invalid repetition {}", other)),
+            other => Err(general_err!("Invalid parquet repetition {}", other)),
         }
     }
 }
@@ -860,7 +897,7 @@ impl str::FromStr for Repetition {
 impl str::FromStr for Type {
     type Err = ParquetError;
 
-    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self> {
         match s {
             "BOOLEAN" => Ok(Type::BOOLEAN),
             "INT32" => Ok(Type::INT32),
@@ -870,7 +907,7 @@ impl str::FromStr for Type {
             "DOUBLE" => Ok(Type::DOUBLE),
             "BYTE_ARRAY" | "BINARY" => Ok(Type::BYTE_ARRAY),
             "FIXED_LEN_BYTE_ARRAY" => Ok(Type::FIXED_LEN_BYTE_ARRAY),
-            other => Err(general_err!("Invalid type {}", other)),
+            other => Err(general_err!("Invalid parquet type {}", other)),
         }
     }
 }
@@ -878,7 +915,7 @@ impl str::FromStr for Type {
 impl str::FromStr for ConvertedType {
     type Err = ParquetError;
 
-    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self> {
         match s {
             "NONE" => Ok(ConvertedType::NONE),
             "UTF8" => Ok(ConvertedType::UTF8),
@@ -903,7 +940,7 @@ impl str::FromStr for ConvertedType {
             "JSON" => Ok(ConvertedType::JSON),
             "BSON" => Ok(ConvertedType::BSON),
             "INTERVAL" => Ok(ConvertedType::INTERVAL),
-            other => Err(general_err!("Invalid converted type {}", other)),
+            other => Err(general_err!("Invalid parquet converted type {}", other)),
         }
     }
 }
@@ -911,7 +948,7 @@ impl str::FromStr for ConvertedType {
 impl str::FromStr for LogicalType {
     type Err = ParquetError;
 
-    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self> {
         match s {
             // The type is a placeholder that gets updated elsewhere
             "INTEGER" => Ok(LogicalType::Integer {
@@ -939,8 +976,10 @@ impl str::FromStr for LogicalType {
             "BSON" => Ok(LogicalType::Bson),
             "UUID" => Ok(LogicalType::Uuid),
             "UNKNOWN" => Ok(LogicalType::Unknown),
-            "INTERVAL" => Err(general_err!("Interval logical type not yet supported")),
-            other => Err(general_err!("Invalid logical type {}", other)),
+            "INTERVAL" => Err(general_err!(
+                "Interval parquet logical type not yet supported"
+            )),
+            other => Err(general_err!("Invalid parquet logical type {}", other)),
         }
     }
 }
@@ -966,30 +1005,36 @@ mod tests {
 
     #[test]
     fn test_from_type() {
-        assert_eq!(Type::from(parquet::Type::Boolean), Type::BOOLEAN);
-        assert_eq!(Type::from(parquet::Type::Int32), Type::INT32);
-        assert_eq!(Type::from(parquet::Type::Int64), Type::INT64);
-        assert_eq!(Type::from(parquet::Type::Int96), Type::INT96);
-        assert_eq!(Type::from(parquet::Type::Float), Type::FLOAT);
-        assert_eq!(Type::from(parquet::Type::Double), Type::DOUBLE);
-        assert_eq!(Type::from(parquet::Type::ByteArray), Type::BYTE_ARRAY);
         assert_eq!(
-            Type::from(parquet::Type::FixedLenByteArray),
+            Type::try_from(parquet::Type::BOOLEAN).unwrap(),
+            Type::BOOLEAN
+        );
+        assert_eq!(Type::try_from(parquet::Type::INT32).unwrap(), Type::INT32);
+        assert_eq!(Type::try_from(parquet::Type::INT64).unwrap(), Type::INT64);
+        assert_eq!(Type::try_from(parquet::Type::INT96).unwrap(), Type::INT96);
+        assert_eq!(Type::try_from(parquet::Type::FLOAT).unwrap(), Type::FLOAT);
+        assert_eq!(Type::try_from(parquet::Type::DOUBLE).unwrap(), Type::DOUBLE);
+        assert_eq!(
+            Type::try_from(parquet::Type::BYTE_ARRAY).unwrap(),
+            Type::BYTE_ARRAY
+        );
+        assert_eq!(
+            Type::try_from(parquet::Type::FIXED_LEN_BYTE_ARRAY).unwrap(),
             Type::FIXED_LEN_BYTE_ARRAY
         );
     }
 
     #[test]
     fn test_into_type() {
-        assert_eq!(parquet::Type::Boolean, Type::BOOLEAN.into());
-        assert_eq!(parquet::Type::Int32, Type::INT32.into());
-        assert_eq!(parquet::Type::Int64, Type::INT64.into());
-        assert_eq!(parquet::Type::Int96, Type::INT96.into());
-        assert_eq!(parquet::Type::Float, Type::FLOAT.into());
-        assert_eq!(parquet::Type::Double, Type::DOUBLE.into());
-        assert_eq!(parquet::Type::ByteArray, Type::BYTE_ARRAY.into());
+        assert_eq!(parquet::Type::BOOLEAN, Type::BOOLEAN.into());
+        assert_eq!(parquet::Type::INT32, Type::INT32.into());
+        assert_eq!(parquet::Type::INT64, Type::INT64.into());
+        assert_eq!(parquet::Type::INT96, Type::INT96.into());
+        assert_eq!(parquet::Type::FLOAT, Type::FLOAT.into());
+        assert_eq!(parquet::Type::DOUBLE, Type::DOUBLE.into());
+        assert_eq!(parquet::Type::BYTE_ARRAY, Type::BYTE_ARRAY.into());
         assert_eq!(
-            parquet::Type::FixedLenByteArray,
+            parquet::Type::FIXED_LEN_BYTE_ARRAY,
             Type::FIXED_LEN_BYTE_ARRAY.into()
         );
     }
@@ -1072,97 +1117,102 @@ mod tests {
     #[test]
     fn test_from_converted_type() {
         let parquet_conv_none: Option<parquet::ConvertedType> = None;
-        assert_eq!(ConvertedType::from(parquet_conv_none), ConvertedType::NONE);
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Utf8)),
+            ConvertedType::try_from(parquet_conv_none).unwrap(),
+            ConvertedType::NONE
+        );
+        assert_eq!(
+            ConvertedType::try_from(Some(parquet::ConvertedType::UTF8)).unwrap(),
             ConvertedType::UTF8
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Map)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::MAP)).unwrap(),
             ConvertedType::MAP
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::MapKeyValue)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::MAP_KEY_VALUE)).unwrap(),
             ConvertedType::MAP_KEY_VALUE
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::List)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::LIST)).unwrap(),
             ConvertedType::LIST
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Enum)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::ENUM)).unwrap(),
             ConvertedType::ENUM
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Decimal)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::DECIMAL)).unwrap(),
             ConvertedType::DECIMAL
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Date)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::DATE)).unwrap(),
             ConvertedType::DATE
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::TimeMillis)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::TIME_MILLIS)).unwrap(),
             ConvertedType::TIME_MILLIS
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::TimeMicros)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::TIME_MICROS)).unwrap(),
             ConvertedType::TIME_MICROS
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::TimestampMillis)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::TIMESTAMP_MILLIS))
+                .unwrap(),
             ConvertedType::TIMESTAMP_MILLIS
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::TimestampMicros)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::TIMESTAMP_MICROS))
+                .unwrap(),
             ConvertedType::TIMESTAMP_MICROS
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Uint8)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::UINT_8)).unwrap(),
             ConvertedType::UINT_8
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Uint16)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::UINT_16)).unwrap(),
             ConvertedType::UINT_16
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Uint32)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::UINT_32)).unwrap(),
             ConvertedType::UINT_32
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Uint64)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::UINT_64)).unwrap(),
             ConvertedType::UINT_64
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Int8)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::INT_8)).unwrap(),
             ConvertedType::INT_8
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Int16)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::INT_16)).unwrap(),
             ConvertedType::INT_16
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Int32)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::INT_32)).unwrap(),
             ConvertedType::INT_32
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Int64)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::INT_64)).unwrap(),
             ConvertedType::INT_64
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Json)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::JSON)).unwrap(),
             ConvertedType::JSON
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Bson)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::BSON)).unwrap(),
             ConvertedType::BSON
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Interval)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::INTERVAL)).unwrap(),
             ConvertedType::INTERVAL
         );
         assert_eq!(
-            ConvertedType::from(Some(parquet::ConvertedType::Decimal)),
+            ConvertedType::try_from(Some(parquet::ConvertedType::DECIMAL)).unwrap(),
             ConvertedType::DECIMAL
         )
     }
@@ -1172,92 +1222,92 @@ mod tests {
         let converted_type: Option<parquet::ConvertedType> = None;
         assert_eq!(converted_type, ConvertedType::NONE.into());
         assert_eq!(
-            Some(parquet::ConvertedType::Utf8),
+            Some(parquet::ConvertedType::UTF8),
             ConvertedType::UTF8.into()
         );
-        assert_eq!(Some(parquet::ConvertedType::Map), ConvertedType::MAP.into());
+        assert_eq!(Some(parquet::ConvertedType::MAP), ConvertedType::MAP.into());
         assert_eq!(
-            Some(parquet::ConvertedType::MapKeyValue),
+            Some(parquet::ConvertedType::MAP_KEY_VALUE),
             ConvertedType::MAP_KEY_VALUE.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::List),
+            Some(parquet::ConvertedType::LIST),
             ConvertedType::LIST.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::Enum),
+            Some(parquet::ConvertedType::ENUM),
             ConvertedType::ENUM.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::Decimal),
+            Some(parquet::ConvertedType::DECIMAL),
             ConvertedType::DECIMAL.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::Date),
+            Some(parquet::ConvertedType::DATE),
             ConvertedType::DATE.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::TimeMillis),
+            Some(parquet::ConvertedType::TIME_MILLIS),
             ConvertedType::TIME_MILLIS.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::TimeMicros),
+            Some(parquet::ConvertedType::TIME_MICROS),
             ConvertedType::TIME_MICROS.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::TimestampMillis),
+            Some(parquet::ConvertedType::TIMESTAMP_MILLIS),
             ConvertedType::TIMESTAMP_MILLIS.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::TimestampMicros),
+            Some(parquet::ConvertedType::TIMESTAMP_MICROS),
             ConvertedType::TIMESTAMP_MICROS.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::Uint8),
+            Some(parquet::ConvertedType::UINT_8),
             ConvertedType::UINT_8.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::Uint16),
+            Some(parquet::ConvertedType::UINT_16),
             ConvertedType::UINT_16.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::Uint32),
+            Some(parquet::ConvertedType::UINT_32),
             ConvertedType::UINT_32.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::Uint64),
+            Some(parquet::ConvertedType::UINT_64),
             ConvertedType::UINT_64.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::Int8),
+            Some(parquet::ConvertedType::INT_8),
             ConvertedType::INT_8.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::Int16),
+            Some(parquet::ConvertedType::INT_16),
             ConvertedType::INT_16.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::Int32),
+            Some(parquet::ConvertedType::INT_32),
             ConvertedType::INT_32.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::Int64),
+            Some(parquet::ConvertedType::INT_64),
             ConvertedType::INT_64.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::Json),
+            Some(parquet::ConvertedType::JSON),
             ConvertedType::JSON.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::Bson),
+            Some(parquet::ConvertedType::BSON),
             ConvertedType::BSON.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::Interval),
+            Some(parquet::ConvertedType::INTERVAL),
             ConvertedType::INTERVAL.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::Decimal),
+            Some(parquet::ConvertedType::DECIMAL),
             ConvertedType::DECIMAL.into()
         )
     }
@@ -1591,15 +1641,15 @@ mod tests {
     #[test]
     fn test_from_repetition() {
         assert_eq!(
-            Repetition::from(parquet::FieldRepetitionType::Required),
+            Repetition::try_from(parquet::FieldRepetitionType::REQUIRED).unwrap(),
             Repetition::REQUIRED
         );
         assert_eq!(
-            Repetition::from(parquet::FieldRepetitionType::Optional),
+            Repetition::try_from(parquet::FieldRepetitionType::OPTIONAL).unwrap(),
             Repetition::OPTIONAL
         );
         assert_eq!(
-            Repetition::from(parquet::FieldRepetitionType::Repeated),
+            Repetition::try_from(parquet::FieldRepetitionType::REPEATED).unwrap(),
             Repetition::REPEATED
         );
     }
@@ -1607,15 +1657,15 @@ mod tests {
     #[test]
     fn test_into_repetition() {
         assert_eq!(
-            parquet::FieldRepetitionType::Required,
+            parquet::FieldRepetitionType::REQUIRED,
             Repetition::REQUIRED.into()
         );
         assert_eq!(
-            parquet::FieldRepetitionType::Optional,
+            parquet::FieldRepetitionType::OPTIONAL,
             Repetition::OPTIONAL.into()
         );
         assert_eq!(
-            parquet::FieldRepetitionType::Repeated,
+            parquet::FieldRepetitionType::REPEATED,
             Repetition::REPEATED.into()
         );
     }
@@ -1665,49 +1715,55 @@ mod tests {
 
     #[test]
     fn test_from_encoding() {
-        assert_eq!(Encoding::from(parquet::Encoding::Plain), Encoding::PLAIN);
         assert_eq!(
-            Encoding::from(parquet::Encoding::PlainDictionary),
+            Encoding::try_from(parquet::Encoding::PLAIN).unwrap(),
+            Encoding::PLAIN
+        );
+        assert_eq!(
+            Encoding::try_from(parquet::Encoding::PLAIN_DICTIONARY).unwrap(),
             Encoding::PLAIN_DICTIONARY
         );
-        assert_eq!(Encoding::from(parquet::Encoding::Rle), Encoding::RLE);
         assert_eq!(
-            Encoding::from(parquet::Encoding::BitPacked),
+            Encoding::try_from(parquet::Encoding::RLE).unwrap(),
+            Encoding::RLE
+        );
+        assert_eq!(
+            Encoding::try_from(parquet::Encoding::BIT_PACKED).unwrap(),
             Encoding::BIT_PACKED
         );
         assert_eq!(
-            Encoding::from(parquet::Encoding::DeltaBinaryPacked),
+            Encoding::try_from(parquet::Encoding::DELTA_BINARY_PACKED).unwrap(),
             Encoding::DELTA_BINARY_PACKED
         );
         assert_eq!(
-            Encoding::from(parquet::Encoding::DeltaLengthByteArray),
+            Encoding::try_from(parquet::Encoding::DELTA_LENGTH_BYTE_ARRAY).unwrap(),
             Encoding::DELTA_LENGTH_BYTE_ARRAY
         );
         assert_eq!(
-            Encoding::from(parquet::Encoding::DeltaByteArray),
+            Encoding::try_from(parquet::Encoding::DELTA_BYTE_ARRAY).unwrap(),
             Encoding::DELTA_BYTE_ARRAY
         );
     }
 
     #[test]
     fn test_into_encoding() {
-        assert_eq!(parquet::Encoding::Plain, Encoding::PLAIN.into());
+        assert_eq!(parquet::Encoding::PLAIN, Encoding::PLAIN.into());
         assert_eq!(
-            parquet::Encoding::PlainDictionary,
+            parquet::Encoding::PLAIN_DICTIONARY,
             Encoding::PLAIN_DICTIONARY.into()
         );
-        assert_eq!(parquet::Encoding::Rle, Encoding::RLE.into());
-        assert_eq!(parquet::Encoding::BitPacked, Encoding::BIT_PACKED.into());
+        assert_eq!(parquet::Encoding::RLE, Encoding::RLE.into());
+        assert_eq!(parquet::Encoding::BIT_PACKED, Encoding::BIT_PACKED.into());
         assert_eq!(
-            parquet::Encoding::DeltaBinaryPacked,
+            parquet::Encoding::DELTA_BINARY_PACKED,
             Encoding::DELTA_BINARY_PACKED.into()
         );
         assert_eq!(
-            parquet::Encoding::DeltaLengthByteArray,
+            parquet::Encoding::DELTA_LENGTH_BYTE_ARRAY,
             Encoding::DELTA_LENGTH_BYTE_ARRAY.into()
         );
         assert_eq!(
-            parquet::Encoding::DeltaByteArray,
+            parquet::Encoding::DELTA_BYTE_ARRAY,
             Encoding::DELTA_BYTE_ARRAY.into()
         );
     }
@@ -1726,31 +1782,31 @@ mod tests {
     #[test]
     fn test_from_compression() {
         assert_eq!(
-            Compression::from(parquet::CompressionCodec::Uncompressed),
+            Compression::try_from(parquet::CompressionCodec::UNCOMPRESSED).unwrap(),
             Compression::UNCOMPRESSED
         );
         assert_eq!(
-            Compression::from(parquet::CompressionCodec::Snappy),
+            Compression::try_from(parquet::CompressionCodec::SNAPPY).unwrap(),
             Compression::SNAPPY
         );
         assert_eq!(
-            Compression::from(parquet::CompressionCodec::Gzip),
+            Compression::try_from(parquet::CompressionCodec::GZIP).unwrap(),
             Compression::GZIP
         );
         assert_eq!(
-            Compression::from(parquet::CompressionCodec::Lzo),
+            Compression::try_from(parquet::CompressionCodec::LZO).unwrap(),
             Compression::LZO
         );
         assert_eq!(
-            Compression::from(parquet::CompressionCodec::Brotli),
+            Compression::try_from(parquet::CompressionCodec::BROTLI).unwrap(),
             Compression::BROTLI
         );
         assert_eq!(
-            Compression::from(parquet::CompressionCodec::Lz4),
+            Compression::try_from(parquet::CompressionCodec::LZ4).unwrap(),
             Compression::LZ4
         );
         assert_eq!(
-            Compression::from(parquet::CompressionCodec::Zstd),
+            Compression::try_from(parquet::CompressionCodec::ZSTD).unwrap(),
             Compression::ZSTD
         );
     }
@@ -1758,21 +1814,21 @@ mod tests {
     #[test]
     fn test_into_compression() {
         assert_eq!(
-            parquet::CompressionCodec::Uncompressed,
+            parquet::CompressionCodec::UNCOMPRESSED,
             Compression::UNCOMPRESSED.into()
         );
         assert_eq!(
-            parquet::CompressionCodec::Snappy,
+            parquet::CompressionCodec::SNAPPY,
             Compression::SNAPPY.into()
         );
-        assert_eq!(parquet::CompressionCodec::Gzip, Compression::GZIP.into());
-        assert_eq!(parquet::CompressionCodec::Lzo, Compression::LZO.into());
+        assert_eq!(parquet::CompressionCodec::GZIP, Compression::GZIP.into());
+        assert_eq!(parquet::CompressionCodec::LZO, Compression::LZO.into());
         assert_eq!(
-            parquet::CompressionCodec::Brotli,
+            parquet::CompressionCodec::BROTLI,
             Compression::BROTLI.into()
         );
-        assert_eq!(parquet::CompressionCodec::Lz4, Compression::LZ4.into());
-        assert_eq!(parquet::CompressionCodec::Zstd, Compression::ZSTD.into());
+        assert_eq!(parquet::CompressionCodec::LZ4, Compression::LZ4.into());
+        assert_eq!(parquet::CompressionCodec::ZSTD, Compression::ZSTD.into());
     }
 
     #[test]
@@ -1786,32 +1842,35 @@ mod tests {
     #[test]
     fn test_from_page_type() {
         assert_eq!(
-            PageType::from(parquet::PageType::DataPage),
+            PageType::try_from(parquet::PageType::DATA_PAGE).unwrap(),
             PageType::DATA_PAGE
         );
         assert_eq!(
-            PageType::from(parquet::PageType::IndexPage),
+            PageType::try_from(parquet::PageType::INDEX_PAGE).unwrap(),
             PageType::INDEX_PAGE
         );
         assert_eq!(
-            PageType::from(parquet::PageType::DictionaryPage),
+            PageType::try_from(parquet::PageType::DICTIONARY_PAGE).unwrap(),
             PageType::DICTIONARY_PAGE
         );
         assert_eq!(
-            PageType::from(parquet::PageType::DataPageV2),
+            PageType::try_from(parquet::PageType::DATA_PAGE_V2).unwrap(),
             PageType::DATA_PAGE_V2
         );
     }
 
     #[test]
     fn test_into_page_type() {
-        assert_eq!(parquet::PageType::DataPage, PageType::DATA_PAGE.into());
-        assert_eq!(parquet::PageType::IndexPage, PageType::INDEX_PAGE.into());
+        assert_eq!(parquet::PageType::DATA_PAGE, PageType::DATA_PAGE.into());
+        assert_eq!(parquet::PageType::INDEX_PAGE, PageType::INDEX_PAGE.into());
         assert_eq!(
-            parquet::PageType::DictionaryPage,
+            parquet::PageType::DICTIONARY_PAGE,
             PageType::DICTIONARY_PAGE.into()
         );
-        assert_eq!(parquet::PageType::DataPageV2, PageType::DATA_PAGE_V2.into());
+        assert_eq!(
+            parquet::PageType::DATA_PAGE_V2,
+            PageType::DATA_PAGE_V2.into()
+        );
     }
 
     #[test]

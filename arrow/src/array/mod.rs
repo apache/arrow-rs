@@ -194,8 +194,10 @@ pub use self::data::ArrayData;
 pub use self::data::ArrayDataBuilder;
 pub use self::data::ArrayDataRef;
 
+#[cfg(any(feature = "ipc", feature = "ffi"))]
+pub(crate) use self::data::layout;
 #[cfg(feature = "ipc")]
-pub(crate) use self::data::{layout, BufferSpec};
+pub(crate) use self::data::BufferSpec;
 
 pub use self::array_binary::BinaryArray;
 pub use self::array_binary::LargeBinaryArray;
@@ -220,6 +222,8 @@ pub use self::null::NullArray;
 pub use self::array::make_array;
 pub use self::array::new_empty_array;
 pub use self::array::new_null_array;
+
+pub(crate) use self::array_primitive::{as_datetime, as_time};
 
 ///
 /// # Example: Using `collect`

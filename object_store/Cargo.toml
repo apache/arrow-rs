@@ -17,7 +17,7 @@
 
 [package]
 name = "object_store"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 license = "MIT/Apache-2.0"
 readme = "README.md"
@@ -44,7 +44,7 @@ walkdir = "2"
 
 # Cloud storage support
 base64 = { version = "0.13", default-features = false, optional = true }
-quick-xml = { version = "0.24.0", features = ["serialize"], optional = true }
+quick-xml = { version = "0.25.0", features = ["serialize"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, optional = true }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }

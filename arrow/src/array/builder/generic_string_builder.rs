@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{ArrayBuilder, ArrayRef, GenericStringArray, OffsetSizeTrait};
+use crate::array::{Array, ArrayBuilder, ArrayRef, GenericStringArray, OffsetSizeTrait};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -28,16 +28,19 @@ pub struct GenericStringBuilder<OffsetSize: OffsetSizeTrait> {
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
-    /// Creates a new [`GenericStringBuilder`],
+    /// Creates a new [`GenericStringBuilder`].
     pub fn new() -> Self {
         Self {
             builder: GenericBinaryBuilder::new(),
         }
     }
 
-    /// Creates a new [`GenericStringBuilder`],
-    /// `data_capacity` is the number of bytes of string data to pre-allocate space for in this builder
-    /// `item_capacity` is the number of items to pre-allocate space for in this builder
+    /// Creates a new [`GenericStringBuilder`].
+    ///
+    /// - `item_capacity` is the number of items to pre-allocate.
+    ///   The size of the preallocated buffer of offsets is the number of items plus one.
+    /// - `data_capacity` is the total number of bytes of string data to pre-allocate
+    ///   (for all items, not per item).
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         Self {
             builder: GenericBinaryBuilder::with_capacity(item_capacity, data_capacity),
@@ -50,13 +53,13 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
         self.builder.append_value(value.as_ref().as_bytes());
     }
 
-    /// Append a null value to the array.
+    /// Append a null value into the builder.
     #[inline]
     pub fn append_null(&mut self) {
         self.builder.append_null()
     }
 
-    /// Append an `Option` value to the array.
+    /// Append an `Option` value into the builder.
     #[inline]
     pub fn append_option(&mut self, value: Option<impl AsRef<str>>) {
         match value {
@@ -67,15 +70,23 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
 
     /// Builds the [`GenericStringArray`] and reset this builder.
     pub fn finish(&mut self) -> GenericStringArray<OffsetSize> {
-        GenericStringArray::<OffsetSize>::from(self.builder.finish())
+        let t = GenericStringArray::<OffsetSize>::DATA_TYPE;
+        let v = self.builder.finish();
+        let builder = v.into_data().into_builder().data_type(t);
+
+        // SAFETY:
+        // Data must be UTF-8 as only support writing `str`
+        // Offsets must be valid as guaranteed by `GenericBinaryBuilder`
+        let data = unsafe { builder.build_unchecked() };
+        data.into()
     }
 
-    /// Returns the current values buffer as a slice
+    /// Returns the current values buffer as a slice.
     pub fn values_slice(&self) -> &[u8] {
         self.builder.values_slice()
     }
 
-    /// Returns the current offsets buffer as a slice
+    /// Returns the current offsets buffer as a slice.
     pub fn offsets_slice(&self) -> &[OffsetSize] {
         self.builder.offsets_slice()
     }

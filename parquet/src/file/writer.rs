@@ -20,8 +20,8 @@
 
 use std::{io::Write, sync::Arc};
 
-use parquet_format as parquet;
-use parquet_format::{ColumnIndex, OffsetIndex, RowGroup};
+use crate::format as parquet;
+use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
 use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol};
 
 use crate::basic::PageType;
@@ -1110,7 +1110,7 @@ mod tests {
     fn test_file_roundtrip(
         file: File,
         data: Vec<Vec<i32>>,
-    ) -> parquet_format::FileMetaData {
+    ) -> crate::format::FileMetaData {
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
                 .with_fields(&mut vec![Arc::new(

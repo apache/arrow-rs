@@ -206,7 +206,7 @@ impl<'a, T: ArrowPrimitiveType> ArrayAccessor for &'a PrimitiveArray<T> {
     }
 }
 
-fn as_datetime<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDateTime> {
+pub(crate) fn as_datetime<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDateTime> {
     match T::DATA_TYPE {
         DataType::Date32 => Some(temporal_conversions::date32_to_datetime(v as i32)),
         DataType::Date64 => Some(temporal_conversions::date64_to_datetime(v)),
@@ -233,7 +233,7 @@ fn as_date<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDate> {
     as_datetime::<T>(v).map(|datetime| datetime.date())
 }
 
-fn as_time<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveTime> {
+pub(crate) fn as_time<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveTime> {
     match T::DATA_TYPE {
         DataType::Time32(unit) => {
             // safe to immediately cast to u32 as `self.value(i)` is positive i32

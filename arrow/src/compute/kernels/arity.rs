@@ -17,41 +17,41 @@
 
 //! Defines kernels suitable to perform operations to primitive arrays.
 
-use crate::array::{Array, ArrayData, ArrayRef, DictionaryArray, PrimitiveArray};
-use crate::buffer::Buffer;
-use crate::datatypes::native_op::ArrowNativeTypeOp;
-use crate::datatypes::{
-    ArrowNumericType, ArrowPrimitiveType, DataType, Int16Type, Int32Type, Int64Type,
-    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+use crate::array::{
+    Array, ArrayData, ArrayRef, BufferBuilder, DictionaryArray, PrimitiveArray,
 };
+use crate::buffer::Buffer;
+use crate::compute::util::combine_option_bitmap;
+use crate::datatypes::{ArrowNumericType, ArrowPrimitiveType};
+use crate::downcast_dictionary_array;
 use crate::error::{ArrowError, Result};
+use crate::util::bit_iterator::try_for_each_valid_idx;
 use std::sync::Arc;
 
 #[inline]
-fn into_primitive_array_data<I: ArrowPrimitiveType, O: ArrowPrimitiveType>(
-    array: &PrimitiveArray<I>,
+unsafe fn build_primitive_array<O: ArrowPrimitiveType>(
+    len: usize,
     buffer: Buffer,
-) -> ArrayData {
-    unsafe {
-        ArrayData::new_unchecked(
-            O::DATA_TYPE,
-            array.len(),
-            None,
-            array
-                .data_ref()
-                .null_buffer()
-                .map(|b| b.bit_slice(array.offset(), array.len())),
-            0,
-            vec![buffer],
-            vec![],
-        )
-    }
+    null_count: usize,
+    null_buffer: Option<Buffer>,
+) -> PrimitiveArray<O> {
+    PrimitiveArray::from(ArrayData::new_unchecked(
+        O::DATA_TYPE,
+        len,
+        Some(null_count),
+        null_buffer,
+        0,
+        vec![buffer],
+        vec![],
+    ))
 }
 
 /// Applies an unary and infallible function to a primitive array.
 /// This is the fastest way to perform an operation on a primitive array when
-/// the benefits of a vectorized operation outweights the cost of branching nulls and non-nulls.
+/// the benefits of a vectorized operation outweigh the cost of branching nulls and non-nulls.
+///
 /// # Implementation
+///
 /// This will apply the function for all values, including those on null slots.
 /// This implies that the operation must be infallible for any value of the corresponding type
 /// or this function may panic.
@@ -72,6 +72,14 @@ where
     O: ArrowPrimitiveType,
     F: Fn(I::Native) -> O::Native,
 {
+    let data = array.data();
+    let len = data.len();
+    let null_count = data.null_count();
+
+    let null_buffer = data
+        .null_buffer()
+        .map(|b| b.bit_slice(data.offset(), data.len()));
+
     let values = array.values().iter().map(|v| op(*v));
     // JUSTIFICATION
     //  Benefit
@@ -79,80 +87,52 @@ where
     //  Soundness
     //      `values` is an iterator with a known size because arrays are sized.
     let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
-
-    let data = into_primitive_array_data::<_, O>(array, buffer);
-    PrimitiveArray::<O>::from(data)
+    unsafe { build_primitive_array(len, buffer, null_count, null_buffer) }
 }
 
-/// A overflow-checking variant of `unary`.
-pub(crate) fn unary_checked<I, F, O>(
-    array: &PrimitiveArray<I>,
-    op: F,
-) -> Result<PrimitiveArray<O>>
+/// Applies a unary and fallible function to all valid values in a primitive array
+///
+/// This is unlike [`unary`] which will apply an infallible function to all rows regardless
+/// of validity, in many cases this will be significantly faster and should be preferred
+/// if `op` is infallible.
+///
+/// Note: LLVM is currently unable to effectively vectorize fallible operations
+pub fn try_unary<I, F, O>(array: &PrimitiveArray<I>, op: F) -> Result<PrimitiveArray<O>>
 where
     I: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
-    F: Fn(I::Native) -> Option<O::Native>,
-    I::Native: ArrowNativeTypeOp,
+    F: Fn(I::Native) -> Result<O::Native>,
 {
-    let values = array.values().iter().map(|v| {
-        let result = op(*v);
-        if let Some(r) = result {
-            Ok(r)
-        } else {
-            // Overflow
-            Err(ArrowError::ComputeError(format!(
-                "Overflow happened on: {:?}",
-                *v
-            )))
-        }
-    });
+    let len = array.len();
+    let null_count = array.null_count();
 
-    // JUSTIFICATION
-    //  Benefit
-    //      ~60% speedup
-    //  Soundness
-    //      `values` is an iterator with a known size because arrays are sized.
-    let buffer = unsafe { Buffer::try_from_trusted_len_iter(values) }?;
+    let mut buffer = BufferBuilder::<O::Native>::new(len);
+    buffer.append_n_zeroed(array.len());
+    let slice = buffer.as_slice_mut();
 
-    let data = into_primitive_array_data::<_, O>(array, buffer);
-    Ok(PrimitiveArray::<O>::from(data))
+    let null_buffer = array
+        .data_ref()
+        .null_buffer()
+        .map(|b| b.bit_slice(array.offset(), array.len()));
+
+    try_for_each_valid_idx(array.len(), 0, null_count, null_buffer.as_deref(), |idx| {
+        unsafe { *slice.get_unchecked_mut(idx) = op(array.value_unchecked(idx))? };
+        Ok::<_, ArrowError>(())
+    })?;
+
+    Ok(unsafe { build_primitive_array(len, buffer.finish(), null_count, null_buffer) })
 }
 
 /// A helper function that applies an unary function to a dictionary array with primitive value type.
-#[allow(clippy::redundant_closure)]
 fn unary_dict<K, F, T>(array: &DictionaryArray<K>, op: F) -> Result<ArrayRef>
 where
     K: ArrowNumericType,
     T: ArrowPrimitiveType,
     F: Fn(T::Native) -> T::Native,
 {
-    let dict_values = array
-        .values()
-        .as_any()
-        .downcast_ref::<PrimitiveArray<T>>()
-        .unwrap();
-
-    let values = dict_values
-        .iter()
-        .map(|v| v.map(|value| op(value)))
-        .collect::<PrimitiveArray<T>>();
-
-    let keys = array.keys();
-
-    let mut data = ArrayData::builder(array.data_type().clone())
-        .len(keys.len())
-        .add_buffer(keys.data().buffers()[0].clone())
-        .add_child_data(values.data().clone());
-
-    match keys.data().null_buffer() {
-        Some(buffer) if keys.data().null_count() > 0 => {
-            data = data
-                .null_bit_buffer(Some(buffer.clone()))
-                .null_count(keys.data().null_count());
-        }
-        _ => data = data.null_count(0),
-    }
+    let dict_values = array.values().as_any().downcast_ref().unwrap();
+    let values = unary::<T, F, T>(dict_values, op).into_data();
+    let data = array.data().clone().into_builder().child_data(vec![values]);
 
     let new_dict: DictionaryArray<K> = unsafe { data.build_unchecked() }.into();
     Ok(Arc::new(new_dict))
@@ -164,82 +144,123 @@ where
     T: ArrowPrimitiveType,
     F: Fn(T::Native) -> T::Native,
 {
-    match array.data_type() {
-        DataType::Dictionary(key_type, _) => match key_type.as_ref() {
-            DataType::Int8 => unary_dict::<_, F, T>(
-                array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<Int8Type>>()
-                    .unwrap(),
-                op,
-            ),
-            DataType::Int16 => unary_dict::<_, F, T>(
-                array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<Int16Type>>()
-                    .unwrap(),
-                op,
-            ),
-            DataType::Int32 => unary_dict::<_, F, T>(
-                array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<Int32Type>>()
-                    .unwrap(),
-                op,
-            ),
-            DataType::Int64 => unary_dict::<_, F, T>(
-                array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<Int64Type>>()
-                    .unwrap(),
-                op,
-            ),
-            DataType::UInt8 => unary_dict::<_, F, T>(
-                array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<UInt8Type>>()
-                    .unwrap(),
-                op,
-            ),
-            DataType::UInt16 => unary_dict::<_, F, T>(
-                array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<UInt16Type>>()
-                    .unwrap(),
-                op,
-            ),
-            DataType::UInt32 => unary_dict::<_, F, T>(
-                array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<UInt32Type>>()
-                    .unwrap(),
-                op,
-            ),
-            DataType::UInt64 => unary_dict::<_, F, T>(
-                array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<UInt64Type>>()
-                    .unwrap(),
-                op,
-            ),
-            t => Err(ArrowError::NotYetImplemented(format!(
-                "Cannot perform unary operation on dictionary array of key type {}.",
-                t
-            ))),
-        },
-        _ => Ok(Arc::new(unary::<T, F, T>(
-            array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap(),
-            op,
-        ))),
+    downcast_dictionary_array! {
+        array => unary_dict::<_, F, T>(array, op),
+        t => {
+            if t == &T::DATA_TYPE {
+                Ok(Arc::new(unary::<T, F, T>(
+                    array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap(),
+                    op,
+                )))
+            } else {
+                Err(ArrowError::NotYetImplemented(format!(
+                    "Cannot perform unary operation on array of type {}",
+                    t
+                )))
+            }
+        }
     }
+}
+
+/// Given two arrays of length `len`, calls `op(a[i], b[i])` for `i` in `0..len`, collecting
+/// the results in a [`PrimitiveArray`]. If any index is null in either `a` or `b`, the
+/// corresponding index in the result will also be null
+///
+/// Like [`unary`] the provided function is evaluated for every index, ignoring validity. This
+/// is beneficial when the cost of the operation is low compared to the cost of branching, and
+/// especially when the operation can be vectorised, however, requires `op` to be infallible
+/// for all possible values of its inputs
+///
+/// # Panic
+///
+/// Panics if the arrays have different lengths
+pub fn binary<A, B, F, O>(
+    a: &PrimitiveArray<A>,
+    b: &PrimitiveArray<B>,
+    op: F,
+) -> PrimitiveArray<O>
+where
+    A: ArrowPrimitiveType,
+    B: ArrowPrimitiveType,
+    O: ArrowPrimitiveType,
+    F: Fn(A::Native, B::Native) -> O::Native,
+{
+    assert_eq!(a.len(), b.len());
+    let len = a.len();
+
+    if a.is_empty() {
+        return PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE));
+    }
+
+    let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
+    let null_count = null_buffer
+        .as_ref()
+        .map(|x| len - x.count_set_bits())
+        .unwrap_or_default();
+
+    let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
+    // JUSTIFICATION
+    //  Benefit
+    //      ~60% speedup
+    //  Soundness
+    //      `values` is an iterator with a known size from a PrimitiveArray
+    let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
+
+    unsafe { build_primitive_array(len, buffer, null_count, null_buffer) }
+}
+
+/// Applies the provided fallible binary operation across `a` and `b`, returning any error,
+/// and collecting the results into a [`PrimitiveArray`]. If any index is null in either `a`
+/// or `b`, the corresponding index in the result will also be null
+///
+/// Like [`try_unary`] the function is only evaluated for non-null indices
+///
+/// # Panic
+///
+/// Panics if the arrays have different lengths
+pub fn try_binary<A, B, F, O>(
+    a: &PrimitiveArray<A>,
+    b: &PrimitiveArray<B>,
+    op: F,
+) -> Result<PrimitiveArray<O>>
+where
+    A: ArrowPrimitiveType,
+    B: ArrowPrimitiveType,
+    O: ArrowPrimitiveType,
+    F: Fn(A::Native, B::Native) -> Result<O::Native>,
+{
+    assert_eq!(a.len(), b.len());
+    let len = a.len();
+
+    if a.is_empty() {
+        return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
+    }
+
+    let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
+    let null_count = null_buffer
+        .as_ref()
+        .map(|x| len - x.count_set_bits())
+        .unwrap_or_default();
+
+    let mut buffer = BufferBuilder::<O::Native>::new(len);
+    buffer.append_n_zeroed(len);
+    let slice = buffer.as_slice_mut();
+
+    try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+        unsafe {
+            *slice.get_unchecked_mut(idx) =
+                op(a.value_unchecked(idx), b.value_unchecked(idx))?
+        };
+        Ok::<_, ArrowError>(())
+    })?;
+
+    Ok(unsafe { build_primitive_array(len, buffer.finish(), null_count, null_buffer) })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::{
-        as_primitive_array, Float64Array, PrimitiveBuilder, PrimitiveDictionaryBuilder,
-    };
+    use crate::array::{as_primitive_array, Float64Array, PrimitiveDictionaryBuilder};
     use crate::datatypes::{Float64Type, Int32Type, Int8Type};
 
     #[test]
@@ -264,9 +285,7 @@ mod tests {
 
     #[test]
     fn test_unary_dict_and_unary_dyn() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
         builder.append(6).unwrap();
         builder.append(7).unwrap();
@@ -275,9 +294,7 @@ mod tests {
         builder.append(9).unwrap();
         let dictionary_array = builder.finish();
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(6).unwrap();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
