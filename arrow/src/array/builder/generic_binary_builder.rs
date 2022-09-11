@@ -40,8 +40,10 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
 
     /// Creates a new [`GenericBinaryBuilder`].
     ///
-    /// - `item_capacity` is the number of items to pre-allocate (the size of the buffer of offsets).
-    /// - `data_capacity` is the total number of bytes of string data for all items to pre-allocate.
+    /// - `item_capacity` is the number of items to pre-allocate.
+    ///   The size of the preallocated buffer of offsets is the number of items plus one.
+    /// - `data_capacity` is the total number of bytes of string data to pre-allocate
+    ///   (for all items, not per item).
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         let mut offsets_builder = BufferBuilder::<OffsetSize>::new(item_capacity + 1);
         offsets_builder.append(OffsetSize::zero());

@@ -37,8 +37,10 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
 
     /// Creates a new [`GenericStringBuilder`].
     ///
-    /// - `item_capacity` is the number of items to pre-allocate (the size of the buffer of offsets).
-    /// - `data_capacity` is the total number of bytes of string data for all items to pre-allocate.
+    /// - `item_capacity` is the number of items to pre-allocate.
+    ///   The size of the preallocated buffer of offsets is the number of items plus one.
+    /// - `data_capacity` is the total number of bytes of string data to pre-allocate
+    ///   (for all items, not per item).
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         Self {
             builder: GenericBinaryBuilder::with_capacity(item_capacity, data_capacity),
