@@ -22,7 +22,7 @@
 //! `RUSTFLAGS="-C target-feature=+avx2"` for example.  See the documentation
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 
-use std::ops::{Add, Div, Mul, Neg, Rem, Sub};
+use std::ops::{Div, Neg, Rem};
 
 use num::{One, Zero};
 
@@ -32,7 +32,7 @@ use crate::buffer::Buffer;
 use crate::buffer::MutableBuffer;
 use crate::compute::kernels::arity::unary;
 use crate::compute::util::combine_option_bitmap;
-use crate::compute::{binary, try_binary, try_unary, unary_dyn};
+use crate::compute::{binary, try_binary, try_unary, try_unary_dyn, unary_dyn};
 use crate::datatypes::{
     native_op::ArrowNativeTypeOp, ArrowNumericType, DataType, Date32Type, Date64Type,
     IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
@@ -834,12 +834,34 @@ where
 /// Add every value in an array by a scalar. If any value in the array is null then the
 /// result is also null. The given array must be a `PrimitiveArray` of the type same as
 /// the scalar, or a `DictionaryArray` of the value type same as the scalar.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `add_scalar_checked_dyn` instead.
 pub fn add_scalar_dyn<T>(array: &dyn Array, scalar: T::Native) -> Result<ArrayRef>
 where
     T: ArrowNumericType,
-    T::Native: Add<Output = T::Native>,
+    T::Native: ArrowNativeTypeOp,
 {
-    unary_dyn::<_, T>(array, |value| value + scalar)
+    unary_dyn::<_, T>(array, |value| value.add_wrapping(scalar))
+}
+
+/// Add every value in an array by a scalar. If any value in the array is null then the
+/// result is also null. The given array must be a `PrimitiveArray` of the type same as
+/// the scalar, or a `DictionaryArray` of the value type same as the scalar.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `add_scalar_dyn` instead.
+pub fn add_scalar_checked_dyn<T>(array: &dyn Array, scalar: T::Native) -> Result<ArrayRef>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    try_unary_dyn::<_, T>(array, |value| {
+        value.add_checked(scalar).ok_or_else(|| {
+            ArrowError::CastError(format!("Overflow: adding {:?} to {:?}", scalar, value))
+        })
+    })
+    .map(|a| Arc::new(a) as ArrayRef)
 }
 
 /// Perform `left - right` operation on two arrays. If either left or right value is null
@@ -937,16 +959,40 @@ where
 /// Subtract every value in an array by a scalar. If any value in the array is null then the
 /// result is also null. The given array must be a `PrimitiveArray` of the type same as
 /// the scalar, or a `DictionaryArray` of the value type same as the scalar.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `subtract_scalar_checked_dyn` instead.
 pub fn subtract_scalar_dyn<T>(array: &dyn Array, scalar: T::Native) -> Result<ArrayRef>
 where
-    T: datatypes::ArrowNumericType,
-    T::Native: Add<Output = T::Native>
-        + Sub<Output = T::Native>
-        + Mul<Output = T::Native>
-        + Div<Output = T::Native>
-        + Zero,
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
-    unary_dyn::<_, T>(array, |value| value - scalar)
+    unary_dyn::<_, T>(array, |value| value.sub_wrapping(scalar))
+}
+
+/// Subtract every value in an array by a scalar. If any value in the array is null then the
+/// result is also null. The given array must be a `PrimitiveArray` of the type same as
+/// the scalar, or a `DictionaryArray` of the value type same as the scalar.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `subtract_scalar_dyn` instead.
+pub fn subtract_scalar_checked_dyn<T>(
+    array: &dyn Array,
+    scalar: T::Native,
+) -> Result<ArrayRef>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    try_unary_dyn::<_, T>(array, |value| {
+        value.sub_checked(scalar).ok_or_else(|| {
+            ArrowError::CastError(format!(
+                "Overflow: subtracting {:?} from {:?}",
+                scalar, value
+            ))
+        })
+    })
+    .map(|a| Arc::new(a) as ArrayRef)
 }
 
 /// Perform `-` operation on an array. If value is null then the result is also null.
@@ -1065,18 +1111,40 @@ where
 /// Multiply every value in an array by a scalar. If any value in the array is null then the
 /// result is also null. The given array must be a `PrimitiveArray` of the type same as
 /// the scalar, or a `DictionaryArray` of the value type same as the scalar.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `multiply_scalar_checked_dyn` instead.
 pub fn multiply_scalar_dyn<T>(array: &dyn Array, scalar: T::Native) -> Result<ArrayRef>
 where
     T: ArrowNumericType,
-    T::Native: Add<Output = T::Native>
-        + Sub<Output = T::Native>
-        + Mul<Output = T::Native>
-        + Div<Output = T::Native>
-        + Rem<Output = T::Native>
-        + Zero
-        + One,
+    T::Native: ArrowNativeTypeOp,
 {
-    unary_dyn::<_, T>(array, |value| value * scalar)
+    unary_dyn::<_, T>(array, |value| value.mul_wrapping(scalar))
+}
+
+/// Subtract every value in an array by a scalar. If any value in the array is null then the
+/// result is also null. The given array must be a `PrimitiveArray` of the type same as
+/// the scalar, or a `DictionaryArray` of the value type same as the scalar.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `multiply_scalar_dyn` instead.
+pub fn multiply_scalar_checked_dyn<T>(
+    array: &dyn Array,
+    scalar: T::Native,
+) -> Result<ArrayRef>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    try_unary_dyn::<_, T>(array, |value| {
+        value.mul_checked(scalar).ok_or_else(|| {
+            ArrowError::CastError(format!(
+                "Overflow: multiplying {:?} by {:?}",
+                value, scalar
+            ))
+        })
+    })
+    .map(|a| Arc::new(a) as ArrayRef)
 }
 
 /// Perform `left % right` operation on two arrays. If either left or right value is null
@@ -1197,15 +1265,48 @@ where
 /// result is also null. If the scalar is zero then the result of this operation will be
 /// `Err(ArrowError::DivideByZero)`. The given array must be a `PrimitiveArray` of the type
 /// same as the scalar, or a `DictionaryArray` of the value type same as the scalar.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `divide_scalar_checked_dyn` instead.
 pub fn divide_scalar_dyn<T>(array: &dyn Array, divisor: T::Native) -> Result<ArrayRef>
 where
     T: ArrowNumericType,
-    T::Native: Div<Output = T::Native> + Zero,
+    T::Native: ArrowNativeTypeOp + Zero,
 {
     if divisor.is_zero() {
         return Err(ArrowError::DivideByZero);
     }
-    unary_dyn::<_, T>(array, |value| value / divisor)
+    unary_dyn::<_, T>(array, |value| value.div_wrapping(divisor))
+}
+
+/// Divide every value in an array by a scalar. If any value in the array is null then the
+/// result is also null. If the scalar is zero then the result of this operation will be
+/// `Err(ArrowError::DivideByZero)`. The given array must be a `PrimitiveArray` of the type
+/// same as the scalar, or a `DictionaryArray` of the value type same as the scalar.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `divide_scalar_dyn` instead.
+pub fn divide_scalar_checked_dyn<T>(
+    array: &dyn Array,
+    divisor: T::Native,
+) -> Result<ArrayRef>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp + Zero,
+{
+    if divisor.is_zero() {
+        return Err(ArrowError::DivideByZero);
+    }
+
+    try_unary_dyn::<_, T>(array, |value| {
+        value.div_checked(divisor).ok_or_else(|| {
+            ArrowError::CastError(format!(
+                "Overflow: dividing {:?} by {:?}",
+                value, divisor
+            ))
+        })
+    })
+    .map(|a| Arc::new(a) as ArrayRef)
 }
 
 #[cfg(test)]
@@ -2193,6 +2294,55 @@ mod tests {
         assert_eq!(expected, wrapped.unwrap());
 
         let overflow = multiply_scalar_checked(&a, i32::MAX);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_add_scalar_dyn_wrapping_overflow() {
+        let a = Int32Array::from(vec![i32::MAX, i32::MIN]);
+
+        let wrapped = add_scalar_dyn::<Int32Type>(&a, 1).unwrap();
+        let expected =
+            Arc::new(Int32Array::from(vec![-2147483648, -2147483647])) as ArrayRef;
+        assert_eq!(&expected, &wrapped);
+
+        let overflow = add_scalar_checked_dyn::<Int32Type>(&a, 1);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_subtract_scalar_dyn_wrapping_overflow() {
+        let a = Int32Array::from(vec![-2]);
+
+        let wrapped = subtract_scalar_dyn::<Int32Type>(&a, i32::MAX).unwrap();
+        let expected = Arc::new(Int32Array::from(vec![i32::MAX])) as ArrayRef;
+        assert_eq!(&expected, &wrapped);
+
+        let overflow = subtract_scalar_checked_dyn::<Int32Type>(&a, i32::MAX);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_mul_scalar_dyn_wrapping_overflow() {
+        let a = Int32Array::from(vec![10]);
+
+        let wrapped = multiply_scalar_dyn::<Int32Type>(&a, i32::MAX).unwrap();
+        let expected = Arc::new(Int32Array::from(vec![-10])) as ArrayRef;
+        assert_eq!(&expected, &wrapped);
+
+        let overflow = multiply_scalar_checked_dyn::<Int32Type>(&a, i32::MAX);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_div_scalar_dyn_wrapping_overflow() {
+        let a = Int32Array::from(vec![i32::MIN]);
+
+        let wrapped = divide_scalar_dyn::<Int32Type>(&a, -1).unwrap();
+        let expected = Arc::new(Int32Array::from(vec![-2147483648])) as ArrayRef;
+        assert_eq!(&expected, &wrapped);
+
+        let overflow = divide_scalar_checked_dyn::<Int32Type>(&a, -1);
         overflow.expect_err("overflow should be detected");
     }
 }
