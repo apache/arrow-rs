@@ -18,7 +18,7 @@
 //! Defines kernels suitable to perform operations to primitive arrays.
 
 use crate::array::{
-    Array, ArrayData, ArrayRef, BufferBuilder, DictionaryArray, PrimitiveArray,
+    Array, ArrayData, ArrayIter, ArrayRef, BufferBuilder, DictionaryArray, PrimitiveArray,
 };
 use crate::buffer::Buffer;
 use crate::compute::util::combine_option_bitmap;
@@ -255,6 +255,50 @@ where
     })?;
 
     Ok(unsafe { build_primitive_array(len, buffer.finish(), null_count, null_buffer) })
+}
+
+/// Applies the provided binary operation across `a` and `b`, collecting the optional results
+/// into a [`PrimitiveArray`]. If any index is null in either `a` or `b`, the corresponding
+/// index in the result will also be null. The binary operation could return `None` which
+/// results in a new null in the collected [`PrimitiveArray`].
+///
+/// The function is only evaluated for non-null indices
+///
+/// # Panic
+///
+/// Panics if the arrays have different lengths
+pub(crate) fn binary_opt<A, B, F, O>(
+    a: &PrimitiveArray<A>,
+    b: &PrimitiveArray<B>,
+    op: F,
+) -> PrimitiveArray<O>
+where
+    A: ArrowPrimitiveType,
+    B: ArrowPrimitiveType,
+    O: ArrowPrimitiveType,
+    F: Fn(A::Native, B::Native) -> Option<O::Native>,
+{
+    assert_eq!(a.len(), b.len());
+
+    if a.is_empty() {
+        return PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE));
+    }
+
+    let iter_a = ArrayIter::new(a);
+    let iter_b = ArrayIter::new(b);
+
+    let values = iter_a
+        .into_iter()
+        .zip(iter_b.into_iter())
+        .map(|(item_a, item_b)| {
+            if let (Some(a), Some(b)) = (item_a, item_b) {
+                op(a, b)
+            } else {
+                None
+            }
+        });
+
+    values.collect()
 }
 
 #[cfg(test)]
