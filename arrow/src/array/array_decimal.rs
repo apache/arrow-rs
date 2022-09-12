@@ -549,9 +549,8 @@ impl<'a, T: DecimalType> DecimalArray<T> {
 #[cfg(test)]
 mod tests {
     use crate::array::Decimal256Builder;
-    use crate::util::decimal::{
-        Decimal128, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
-    };
+    use crate::datatypes::{DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
+    use crate::util::decimal::Decimal128;
     use crate::{array::Decimal128Builder, datatypes::Field};
     use num::{BigInt, Num};
 

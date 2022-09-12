@@ -807,7 +807,7 @@ pub(crate) fn validate_decimal256_precision_with_lt_bytes(
 
 #[cfg(test)]
 mod test {
-    use crate::datatypes::MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION;
+    use super::*;
     use crate::util::decimal::Decimal256;
     use num::{BigInt, Num};
 
