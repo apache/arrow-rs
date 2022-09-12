@@ -27,13 +27,14 @@ use super::{
 use super::{BooleanBufferBuilder, DecimalIter, FixedSizeBinaryArray};
 #[allow(deprecated)]
 use crate::buffer::{Buffer, MutableBuffer};
-use crate::datatypes::validate_decimal_precision;
 use crate::datatypes::{
-    validate_decimal256_precision_with_lt_bytes, DataType, Decimal128Type,
-    Decimal256Type, DecimalType, NativeDecimalType,
+    DataType, Decimal128Type, Decimal256Type, DecimalType, NativeDecimalType,
 };
 use crate::error::{ArrowError, Result};
-use crate::util::decimal::{Decimal, Decimal256};
+use crate::util::decimal::{
+    validate_decimal256_precision_with_lt_bytes, validate_decimal_precision, Decimal,
+    Decimal256,
+};
 
 /// `Decimal128Array` stores fixed width decimal numbers,
 /// with a fixed precision and scale.
@@ -549,8 +550,9 @@ impl<'a, T: DecimalType> DecimalArray<T> {
 #[cfg(test)]
 mod tests {
     use crate::array::Decimal256Builder;
-    use crate::datatypes::{DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
-    use crate::util::decimal::Decimal128;
+    use crate::util::decimal::{
+        Decimal128, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
+    };
     use crate::{array::Decimal128Builder, datatypes::Field};
     use num::{BigInt, Num};
 

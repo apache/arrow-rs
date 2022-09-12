@@ -26,17 +26,15 @@ use std::sync::Arc;
 
 mod native;
 pub use native::*;
-mod field;
-pub use field::*;
-mod schema;
-pub use schema::*;
 mod numeric;
 pub use numeric::*;
 mod types;
 pub use types::*;
-mod datatype;
-pub use datatype::*;
 mod delta;
+
+pub use arrow_schema::datatype::*;
+pub use arrow_schema::field::*;
+pub use arrow_schema::schema::*;
 
 #[cfg(feature = "ffi")]
 mod ffi;

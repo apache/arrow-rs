@@ -21,6 +21,9 @@ use std::io::Write;
 
 use std::error::Error;
 
+// Re-export ArrowSchemaError
+pub use arrow_schema::error::ArrowSchemaError;
+
 /// Many different operations in the `arrow` crate return this error type.
 #[derive(Debug)]
 pub enum ArrowError {
@@ -30,7 +33,7 @@ pub enum ArrowError {
     CastError(String),
     MemoryError(String),
     ParseError(String),
-    SchemaError(String),
+    SchemaError(ArrowSchemaError),
     ComputeError(String),
     DivideByZero,
     CsvError(String),
@@ -55,6 +58,12 @@ impl ArrowError {
 impl From<::std::io::Error> for ArrowError {
     fn from(error: std::io::Error) -> Self {
         ArrowError::IoError(error.to_string())
+    }
+}
+
+impl From<ArrowSchemaError> for ArrowError {
+    fn from(error: ArrowSchemaError) -> Self {
+        Self::SchemaError(error)
     }
 }
 

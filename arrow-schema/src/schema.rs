@@ -19,9 +19,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 
-use crate::error::{ArrowError, Result};
-
-use super::Field;
+use crate::error::ArrowSchemaError;
+use crate::field::Field;
 
 /// Describes the meta-data of an ordered sequence of relative types.
 ///
@@ -53,7 +52,9 @@ impl Schema {
     /// # Example
     ///
     /// ```
-    /// # use arrow::datatypes::{Field, DataType, Schema};
+    /// # use arrow_schema::field::Field;
+    /// # use arrow_schema::datatype::DataType;
+    /// # use arrow_schema::schema::Schema;
     /// let field_a = Field::new("a", DataType::Int64, false);
     /// let field_b = Field::new("b", DataType::Boolean, false);
     ///
@@ -69,7 +70,9 @@ impl Schema {
     /// # Example
     ///
     /// ```
-    /// # use arrow::datatypes::{Field, DataType, Schema};
+    /// # use arrow_schema::field::Field;
+    /// # use arrow_schema::datatype::DataType;
+    /// # use arrow_schema::schema::Schema;
     /// # use std::collections::HashMap;
     /// let field_a = Field::new("a", DataType::Int64, false);
     /// let field_b = Field::new("b", DataType::Boolean, false);
@@ -95,19 +98,19 @@ impl Schema {
 
     /// Returns a new schema with only the specified columns in the new schema
     /// This carries metadata from the parent schema over as well
-    pub fn project(&self, indices: &[usize]) -> Result<Schema> {
+    pub fn project(&self, indices: &[usize]) -> Result<Schema, ArrowSchemaError> {
         let new_fields = indices
             .iter()
             .map(|i| {
                 self.fields.get(*i).cloned().ok_or_else(|| {
-                    ArrowError::SchemaError(format!(
+                    ArrowSchemaError::Field(format!(
                         "project index {} out of bounds, max field {}",
                         i,
                         self.fields().len()
                     ))
                 })
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self::new_with_metadata(new_fields, self.metadata.clone()))
     }
 
@@ -116,7 +119,9 @@ impl Schema {
     /// Example:
     ///
     /// ```
-    /// use arrow::datatypes::*;
+    /// # use arrow_schema::field::Field;
+    /// # use arrow_schema::datatype::DataType;
+    /// # use arrow_schema::schema::Schema;
     ///
     /// let merged = Schema::try_merge(vec![
     ///     Schema::new(vec![
@@ -139,7 +144,9 @@ impl Schema {
     ///     ]),
     /// );
     /// ```
-    pub fn try_merge(schemas: impl IntoIterator<Item = Self>) -> Result<Self> {
+    pub fn try_merge(
+        schemas: impl IntoIterator<Item = Self>,
+    ) -> Result<Self, ArrowSchemaError> {
         schemas
             .into_iter()
             .try_fold(Self::empty(), |mut merged, schema| {
@@ -148,7 +155,7 @@ impl Schema {
                     // merge metadata
                     if let Some(old_val) = merged.metadata.get(&key) {
                         if old_val != &value {
-                            return Err(ArrowError::SchemaError(format!(
+                            return Err(ArrowSchemaError::Merge(format!(
                                 "Fail to merge schema due to conflicting metadata. \
                                          Key '{}' has different values '{}' and '{}'",
                                 key, old_val, value
@@ -179,8 +186,7 @@ impl Schema {
 
     /// Returns a vector with references to all fields (including nested fields)
     #[inline]
-    #[cfg(feature = "ipc")]
-    pub(crate) fn all_fields(&self) -> Vec<&Field> {
+    pub fn all_fields(&self) -> Vec<&Field> {
         self.fields.iter().flat_map(|f| f.fields()).collect()
     }
 
@@ -191,7 +197,7 @@ impl Schema {
     }
 
     /// Returns an immutable reference of a specific [`Field`] instance selected by name.
-    pub fn field_with_name(&self, name: &str) -> Result<&Field> {
+    pub fn field_with_name(&self, name: &str) -> Result<&Field, ArrowSchemaError> {
         Ok(&self.fields[self.index_of(name)?])
     }
 
@@ -205,13 +211,13 @@ impl Schema {
     }
 
     /// Find the index of the column with the given name.
-    pub fn index_of(&self, name: &str) -> Result<usize> {
+    pub fn index_of(&self, name: &str) -> Result<usize, ArrowSchemaError> {
         (0..self.fields.len())
             .find(|idx| self.fields[*idx].name() == name)
             .ok_or_else(|| {
                 let valid_fields: Vec<String> =
                     self.fields.iter().map(|f| f.name().clone()).collect();
-                ArrowError::InvalidArgumentError(format!(
+                ArrowSchemaError::Field(format!(
                     "Unable to get field named \"{}\". Valid fields: {:?}",
                     name, valid_fields
                 ))
@@ -244,14 +250,14 @@ impl Schema {
 
     /// Parse a `Schema` definition from a JSON representation.
     #[cfg(feature = "json")]
-    pub fn from(json: &serde_json::Value) -> Result<Self> {
+    pub fn from(json: &serde_json::Value) -> Result<Self, ArrowSchemaError> {
         use serde_json::Value;
         match *json {
             Value::Object(ref schema) => {
                 let fields = if let Some(Value::Array(fields)) = schema.get("fields") {
-                    fields.iter().map(Field::from).collect::<Result<_>>()?
+                    fields.iter().map(Field::from).collect::<Result<_, _>>()?
                 } else {
-                    return Err(ArrowError::ParseError(
+                    return Err(ArrowSchemaError::Parse(
                         "Schema fields should be an array".to_string(),
                     ));
                 };
@@ -264,7 +270,7 @@ impl Schema {
 
                 Ok(Self { fields, metadata })
             }
-            _ => Err(ArrowError::ParseError(
+            _ => Err(ArrowSchemaError::Parse(
                 "Invalid json value type for schema".to_string(),
             )),
         }
@@ -273,14 +279,16 @@ impl Schema {
     /// Parse a `metadata` definition from a JSON representation.
     /// The JSON can either be an Object or an Array of Objects.
     #[cfg(feature = "json")]
-    fn from_metadata(json: &serde_json::Value) -> Result<HashMap<String, String>> {
+    fn from_metadata(
+        json: &serde_json::Value,
+    ) -> Result<HashMap<String, String>, ArrowSchemaError> {
         use serde_json::Value;
         match json {
             Value::Array(_) => {
                 let mut hashmap = HashMap::new();
                 let values: Vec<MetadataKeyValue> = serde_json::from_value(json.clone())
                     .map_err(|_| {
-                        ArrowError::JsonError(
+                        ArrowSchemaError::Parse(
                             "Unable to parse object into key-value pair".to_string(),
                         )
                     })?;
@@ -295,13 +303,13 @@ impl Schema {
                     if let Value::String(v) = v {
                         Ok((k.to_string(), v.to_string()))
                     } else {
-                        Err(ArrowError::ParseError(
+                        Err(ArrowSchemaError::Parse(
                             "metadata `value` field must be a string".to_string(),
                         ))
                     }
                 })
-                .collect::<Result<_>>(),
-            _ => Err(ArrowError::ParseError(
+                .collect::<Result<_, _>>(),
+            _ => Err(ArrowSchemaError::Parse(
                 "`metadata` field must be an object".to_string(),
             )),
         }
@@ -364,9 +372,8 @@ struct MetadataKeyValue {
 
 #[cfg(test)]
 mod tests {
-    use crate::datatypes::DataType;
-
     use super::*;
+    use crate::datatype::DataType;
 
     #[test]
     #[cfg(feature = "json")]
@@ -424,7 +431,7 @@ mod tests {
         ])
         .with_metadata(metadata);
 
-        let projected: Result<Schema> = schema.project(&[0, 3]);
+        let projected = schema.project(&[0, 3]);
 
         assert!(projected.is_err());
         if let Err(e) = projected {

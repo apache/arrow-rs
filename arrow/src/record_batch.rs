@@ -18,6 +18,7 @@
 //! A two-dimensional batch of column-oriented data with a defined
 //! [schema](crate::datatypes::Schema).
 
+use arrow_schema::error::ArrowSchemaError;
 use std::sync::Arc;
 
 use crate::array::*;
@@ -203,11 +204,11 @@ impl RecordBatch {
             .iter()
             .map(|f| {
                 self.columns.get(*f).cloned().ok_or_else(|| {
-                    ArrowError::SchemaError(format!(
+                    ArrowError::SchemaError(ArrowSchemaError::Field(format!(
                         "project index {} out of bounds, max field {}",
                         f,
                         self.columns.len()
-                    ))
+                    )))
                 })
             })
             .collect::<Result<Vec<_>>>()?;

@@ -44,6 +44,7 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
+arrow-schema = { version = "22.0.0", path = "../arrow-schema" }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 indexmap = { version = "1.9", default-features = false, features = ["std"] }
@@ -75,7 +76,7 @@ default = ["csv", "ipc", "json"]
 ipc_compression = ["ipc", "zstd", "lz4"]
 csv = ["csv_crate"]
 ipc = ["flatbuffers"]
-json = ["serde", "serde_json"]
+json = ["serde", "serde_json", "arrow-schema/json"]
 simd = ["packed_simd"]
 prettyprint = ["comfy-table"]
 # The test utils feature enables code used in benchmarks and tests but

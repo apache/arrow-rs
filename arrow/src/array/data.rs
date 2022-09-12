@@ -18,12 +18,12 @@
 //! Contains `ArrayData`, a generic representation of Arrow array data which encapsulates
 //! common attributes and operations for Arrow array.
 
-use crate::datatypes::{
-    validate_decimal256_precision_with_lt_bytes, validate_decimal_precision, DataType,
-    IntervalUnit, UnionMode,
-};
+use crate::datatypes::{DataType, IntervalUnit, UnionMode};
 use crate::error::{ArrowError, Result};
 use crate::util::bit_iterator::BitSliceIterator;
+use crate::util::decimal::{
+    validate_decimal256_precision_with_lt_bytes, validate_decimal_precision,
+};
 use crate::{bitmap::Bitmap, datatypes::ArrowNativeType};
 use crate::{
     buffer::{Buffer, MutableBuffer},

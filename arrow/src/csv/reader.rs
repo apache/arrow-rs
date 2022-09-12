@@ -58,6 +58,7 @@ use crate::error::{ArrowError, Result};
 use crate::record_batch::{RecordBatch, RecordBatchOptions};
 use crate::util::reader_parser::Parser;
 
+use crate::util::decimal::validate_decimal_precision;
 use csv_crate::{ByteRecord, StringRecord};
 use std::ops::Neg;
 
@@ -289,7 +290,7 @@ pub fn infer_schema_from_files(
         }
     }
 
-    Schema::try_merge(schemas)
+    Ok(Schema::try_merge(schemas)?)
 }
 
 // optional bounds of the reader, of the form (min line, max line).
