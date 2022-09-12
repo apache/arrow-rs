@@ -570,7 +570,7 @@ impl ParquetRecordBatchReader {
             batch_size,
             array_reader,
             schema: Arc::new(schema),
-            selection: selection.map(Into::into),
+            selection: selection.map(|s| s.trim().into()),
         }
     }
 }
