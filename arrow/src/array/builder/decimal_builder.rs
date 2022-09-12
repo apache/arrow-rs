@@ -25,9 +25,10 @@ use crate::array::{ArrayBuilder, FixedSizeBinaryBuilder};
 
 use crate::error::{ArrowError, Result};
 
-use crate::util::decimal::{
-    validate_decimal256_precision_with_lt_bytes, validate_decimal_precision, Decimal256,
+use crate::datatypes::{
+    validate_decimal256_precision_with_lt_bytes, validate_decimal_precision,
 };
+use crate::util::decimal::Decimal256;
 
 /// Array Builder for [`Decimal128Array`]
 ///

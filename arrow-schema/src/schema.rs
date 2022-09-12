@@ -432,7 +432,8 @@ mod tests {
         if let Err(e) = projected {
             assert_eq!(
                 e.to_string(),
-                "Error indexing field: project index 3 out of bounds, max field 3".to_string()
+                "Error indexing field: project index 3 out of bounds, max field 3"
+                    .to_string()
             )
         }
     }

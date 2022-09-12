@@ -58,7 +58,6 @@ use crate::error::{ArrowError, Result};
 use crate::record_batch::{RecordBatch, RecordBatchOptions};
 use crate::util::reader_parser::Parser;
 
-use crate::util::decimal::validate_decimal_precision;
 use csv_crate::{ByteRecord, StringRecord};
 use std::ops::Neg;
 

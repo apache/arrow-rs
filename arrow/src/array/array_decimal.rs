@@ -27,14 +27,13 @@ use super::{
 use super::{BooleanBufferBuilder, DecimalIter, FixedSizeBinaryArray};
 #[allow(deprecated)]
 use crate::buffer::{Buffer, MutableBuffer};
+use crate::datatypes::validate_decimal_precision;
 use crate::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, DecimalType, NativeDecimalType,
+    validate_decimal256_precision_with_lt_bytes, DataType, Decimal128Type,
+    Decimal256Type, DecimalType, NativeDecimalType,
 };
 use crate::error::{ArrowError, Result};
-use crate::util::decimal::{
-    validate_decimal256_precision_with_lt_bytes, validate_decimal_precision, Decimal,
-    Decimal256,
-};
+use crate::util::decimal::{Decimal, Decimal256};
 
 /// `Decimal128Array` stores fixed width decimal numbers,
 /// with a fixed precision and scale.
