@@ -1641,7 +1641,7 @@ where
         )))
     } else {
         // If the value can't be casted to the `TO::Native`, return error
-        Ok(Arc::new(numeric_cast_with_error::<FROM, TO>(
+        Ok(Arc::new(try_numeric_cast::<FROM, TO>(
             from.as_any()
                 .downcast_ref::<PrimitiveArray<FROM>>()
                 .unwrap(),
@@ -1651,7 +1651,7 @@ where
 
 // Natural cast between numeric types
 // If the value of T can't be casted to R, will throw error
-fn numeric_cast_with_error<T, R>(from: &PrimitiveArray<T>) -> Result<PrimitiveArray<R>>
+fn try_numeric_cast<T, R>(from: &PrimitiveArray<T>) -> Result<PrimitiveArray<R>>
 where
     T: ArrowNumericType,
     R: ArrowNumericType,
@@ -1661,7 +1661,7 @@ where
     try_unary(from, |value| {
         num::cast::cast::<T::Native, R::Native>(value).ok_or_else(|| {
             ArrowError::CastError(format!(
-                "Can not cast value {:?} to type {}",
+                "Can't cast value {:?} to type {}",
                 value,
                 R::DATA_TYPE
             ))
