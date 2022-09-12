@@ -53,7 +53,7 @@ hashbrown = { version = "0.12", default-features = false }
 
 [dev-dependencies]
 base64 = { version = "0.13", default-features = false, features = ["std"] }
-criterion = { version = "0.3", default-features = false }
+criterion = { version = "0.4", default-features = false }
 snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
 brotli = { version = "3.3", default-features = false, features = ["std"] }
