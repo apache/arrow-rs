@@ -25,6 +25,7 @@ use crate::array::{
     GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
 use crate::datatypes::{ArrowNativeType, ArrowNumericType, DataType};
+use crate::util::bit_iterator::BitIndexIterator;
 
 /// Generic test for NaN, the optimizer should be able to remove this for integer types.
 #[inline]
@@ -123,9 +124,27 @@ where
             .map(|i| unsafe { array.value_unchecked(i) })
             .reduce(|acc, item| if cmp(&acc, &item) { item } else { acc })
     } else {
-        let iter = ArrayIter::new(array);
-        iter.flatten()
-            .reduce(|acc, item| if cmp(&acc, &item) { item } else { acc })
+        let null_buffer = array
+            .data_ref()
+            .null_buffer()
+            .map(|b| b.bit_slice(array.offset(), array.len()));
+        let iter = BitIndexIterator::new(
+            null_buffer.as_deref().unwrap(),
+            array.offset(),
+            array.len(),
+        );
+        unsafe {
+            let idx = iter.reduce(|acc_idx, idx| {
+                let acc = array.value_unchecked(acc_idx);
+                let item = array.value_unchecked(idx);
+                if cmp(&acc, &item) {
+                    idx
+                } else {
+                    acc_idx
+                }
+            });
+            idx.map(|idx| array.value_unchecked(idx))
+        }
     }
 }
 

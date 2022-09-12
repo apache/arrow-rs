@@ -124,6 +124,7 @@ pub fn create_string_array_with_len<Offset: OffsetSizeTrait>(
 pub fn create_string_dict_array<K: ArrowDictionaryKeyType>(
     size: usize,
     null_density: f32,
+    str_len: usize,
 ) -> DictionaryArray<K> {
     let rng = &mut seedable_rng();
 
@@ -132,7 +133,7 @@ pub fn create_string_dict_array<K: ArrowDictionaryKeyType>(
             if rng.gen::<f32>() < null_density {
                 None
             } else {
-                let value = rng.sample_iter(&Alphanumeric).take(4).collect();
+                let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
                 let value = String::from_utf8(value).unwrap();
                 Some(value)
             }

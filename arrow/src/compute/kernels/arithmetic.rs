@@ -31,12 +31,11 @@ use crate::buffer::Buffer;
 #[cfg(feature = "simd")]
 use crate::buffer::MutableBuffer;
 use crate::compute::kernels::arity::unary;
-use crate::compute::unary_dyn;
 use crate::compute::util::combine_option_bitmap;
+use crate::compute::{binary, try_binary, unary_dyn};
 use crate::datatypes::{
-    native_op::ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType, DataType,
-    Date32Type, Date64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-    IntervalYearMonthType,
+    native_op::ArrowNativeTypeOp, ArrowNumericType, DataType, Date32Type, Date64Type,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
 };
 use crate::datatypes::{
     Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
@@ -74,33 +73,7 @@ where
         ));
     }
 
-    let null_bit_buffer =
-        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
-
-    let values = left
-        .values()
-        .iter()
-        .zip(right.values().iter())
-        .map(|(l, r)| op(*l, *r));
-    // JUSTIFICATION
-    //  Benefit
-    //      ~60% speedup
-    //  Soundness
-    //      `values` is an iterator with a known size from a PrimitiveArray
-    let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            LT::DATA_TYPE,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![buffer],
-            vec![],
-        )
-    };
-    Ok(PrimitiveArray::<LT>::from(data))
+    Ok(binary(left, right, op))
 }
 
 /// This is similar to `math_op` as it performs given operation between two input primitive arrays.
@@ -122,37 +95,22 @@ where
         ));
     }
 
-    let left_iter = ArrayIter::new(left);
-    let right_iter = ArrayIter::new(right);
-
-    let values: Result<Vec<Option<<LT as ArrowPrimitiveType>::Native>>> = left_iter
-        .into_iter()
-        .zip(right_iter.into_iter())
-        .map(|(l, r)| {
-            if let (Some(l), Some(r)) = (l, r) {
-                let result = op(l, r);
-                if let Some(r) = result {
-                    Ok(Some(r))
-                } else {
-                    // Overflow
-                    Err(ArrowError::ComputeError(format!(
-                        "Overflow happened on: {:?}, {:?}",
-                        l, r
-                    )))
-                }
-            } else {
-                Ok(None)
-            }
+    try_binary(left, right, |a, b| {
+        op(a, b).ok_or_else(|| {
+            ArrowError::ComputeError(format!("Overflow happened on: {:?}, {:?}", a, b))
         })
-        .collect();
-
-    let values = values?;
-
-    Ok(PrimitiveArray::<LT>::from_iter(values))
+    })
 }
 
-/// This is similar to `math_checked_op` but just for divide op.
-fn math_checked_divide<LT, RT, F>(
+/// Helper function for operations where a valid `0` on the right array should
+/// result in an [ArrowError::DivideByZero], namely the division and modulo operations
+///
+/// # Errors
+///
+/// This function errors if:
+/// * the arrays have different lengths
+/// * there is an element where both left and right values are valid and the right value is `0`
+fn math_checked_divide_op<LT, RT, F>(
     left: &PrimitiveArray<LT>,
     right: &PrimitiveArray<RT>,
     op: F,
@@ -169,74 +127,18 @@ where
         ));
     }
 
-    let left_iter = ArrayIter::new(left);
-    let right_iter = ArrayIter::new(right);
-
-    let values: Result<Vec<Option<<LT as ArrowPrimitiveType>::Native>>> = left_iter
-        .into_iter()
-        .zip(right_iter.into_iter())
-        .map(|(l, r)| {
-            if let (Some(l), Some(r)) = (l, r) {
-                let result = op(l, r);
-                if let Some(r) = result {
-                    Ok(Some(r))
-                } else if r.is_zero() {
-                    Err(ArrowError::ComputeError(format!(
-                        "DivideByZero on: {:?}, {:?}",
-                        l, r
-                    )))
-                } else {
-                    // Overflow
-                    Err(ArrowError::ComputeError(format!(
-                        "Overflow happened on: {:?}, {:?}",
-                        l, r
-                    )))
-                }
-            } else {
-                Ok(None)
-            }
-        })
-        .collect();
-
-    let values = values?;
-
-    Ok(PrimitiveArray::<LT>::from_iter(values))
-}
-
-/// Helper function for operations where a valid `0` on the right array should
-/// result in an [ArrowError::DivideByZero], namely the division and modulo operations
-///
-/// # Errors
-///
-/// This function errors if:
-/// * the arrays have different lengths
-/// * there is an element where both left and right values are valid and the right value is `0`
-fn math_checked_divide_op<T, F>(
-    left: &PrimitiveArray<T>,
-    right: &PrimitiveArray<T>,
-    op: F,
-) -> Result<PrimitiveArray<T>>
-where
-    T: ArrowNumericType,
-    T::Native: One + Zero,
-    F: Fn(T::Native, T::Native) -> T::Native,
-{
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform math operation on arrays of different length".to_string(),
-        ));
-    }
-
-    let null_bit_buffer =
-        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
-
-    math_checked_divide_op_on_iters(
-        left.into_iter(),
-        right.into_iter(),
-        op,
-        left.len(),
-        null_bit_buffer,
-    )
+    try_binary(left, right, |l, r| {
+        if r.is_zero() {
+            Err(ArrowError::DivideByZero)
+        } else {
+            op(l, r).ok_or_else(|| {
+                ArrowError::ComputeError(format!(
+                    "Overflow happened on: {:?}, {:?}",
+                    l, r
+                ))
+            })
+        }
+    })
 }
 
 /// Helper function for operations where a valid `0` on the right array should
@@ -900,7 +802,7 @@ pub fn add_scalar<T>(
     scalar: T::Native,
 ) -> Result<PrimitiveArray<T>>
 where
-    T: datatypes::ArrowNumericType,
+    T: ArrowNumericType,
     T::Native: Add<Output = T::Native>,
 {
     Ok(unary(array, |value| value + scalar))
@@ -911,7 +813,7 @@ where
 /// the scalar, or a `DictionaryArray` of the value type same as the scalar.
 pub fn add_scalar_dyn<T>(array: &dyn Array, scalar: T::Native) -> Result<ArrayRef>
 where
-    T: datatypes::ArrowNumericType,
+    T: ArrowNumericType,
     T::Native: Add<Output = T::Native>,
 {
     unary_dyn::<_, T>(array, |value| value + scalar)
@@ -927,7 +829,7 @@ pub fn subtract<T>(
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
-    T: datatypes::ArrowNumericType,
+    T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
     math_op(left, right, |a, b| a.sub_wrapping(b))
@@ -943,7 +845,7 @@ pub fn subtract_checked<T>(
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
-    T: datatypes::ArrowNumericType,
+    T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
     math_checked_op(left, right, |a, b| a.sub_checked(b))
@@ -1033,7 +935,7 @@ pub fn multiply<T>(
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
-    T: datatypes::ArrowNumericType,
+    T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
     math_op(left, right, |a, b| a.mul_wrapping(b))
@@ -1049,7 +951,7 @@ pub fn multiply_checked<T>(
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
-    T: datatypes::ArrowNumericType,
+    T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
     math_checked_op(left, right, |a, b| a.mul_checked(b))
@@ -1100,7 +1002,7 @@ where
 /// the scalar, or a `DictionaryArray` of the value type same as the scalar.
 pub fn multiply_scalar_dyn<T>(array: &dyn Array, scalar: T::Native) -> Result<ArrayRef>
 where
-    T: datatypes::ArrowNumericType,
+    T: ArrowNumericType,
     T::Native: Add<Output = T::Native>
         + Sub<Output = T::Native>
         + Mul<Output = T::Native>
@@ -1120,7 +1022,7 @@ pub fn modulus<T>(
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
-    T: datatypes::ArrowNumericType,
+    T: ArrowNumericType,
     T::Native: Rem<Output = T::Native> + Zero + One,
 {
     #[cfg(feature = "simd")]
@@ -1128,7 +1030,7 @@ where
         a % b
     });
     #[cfg(not(feature = "simd"))]
-    return math_checked_divide_op(left, right, |a, b| a % b);
+    return math_checked_divide_op(left, right, |a, b| Some(a % b));
 }
 
 /// Perform `left / right` operation on two arrays. If either left or right value is null
@@ -1148,7 +1050,7 @@ where
     #[cfg(feature = "simd")]
     return simd_checked_divide_op(&left, &right, simd_checked_divide::<T>, |a, b| a / b);
     #[cfg(not(feature = "simd"))]
-    return math_checked_divide(left, right, |a, b| a.div_checked(b));
+    return math_checked_divide_op(left, right, |a, b| a.div_checked(b));
 }
 
 /// Perform `left / right` operation on two arrays. If either left or right value is null
@@ -1162,7 +1064,7 @@ pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
         _ => {
             downcast_primitive_array!(
                 (left, right) => {
-                    math_checked_divide_op(left, right, |a, b| a / b).map(|a| Arc::new(a) as ArrayRef)
+                    math_checked_divide_op(left, right, |a, b| Some(a / b)).map(|a| Arc::new(a) as ArrayRef)
                 }
                 _ => Err(ArrowError::CastError(format!(
                     "Unsupported data type {}, {}",
@@ -1199,7 +1101,7 @@ pub fn modulus_scalar<T>(
     modulo: T::Native,
 ) -> Result<PrimitiveArray<T>>
 where
-    T: datatypes::ArrowNumericType,
+    T: ArrowNumericType,
     T::Native: Rem<Output = T::Native> + Zero,
 {
     if modulo.is_zero() {
@@ -1217,7 +1119,7 @@ pub fn divide_scalar<T>(
     divisor: T::Native,
 ) -> Result<PrimitiveArray<T>>
 where
-    T: datatypes::ArrowNumericType,
+    T: ArrowNumericType,
     T::Native: Div<Output = T::Native> + Zero,
 {
     if divisor.is_zero() {
@@ -1232,7 +1134,7 @@ where
 /// same as the scalar, or a `DictionaryArray` of the value type same as the scalar.
 pub fn divide_scalar_dyn<T>(array: &dyn Array, divisor: T::Native) -> Result<ArrayRef>
 where
-    T: datatypes::ArrowNumericType,
+    T: ArrowNumericType,
     T::Native: Div<Output = T::Native> + Zero,
 {
     if divisor.is_zero() {
@@ -1367,9 +1269,7 @@ mod tests {
 
     #[test]
     fn test_primitive_array_add_dyn_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
         builder.append(6).unwrap();
         builder.append(7).unwrap();
@@ -1377,9 +1277,7 @@ mod tests {
         builder.append(9).unwrap();
         let a = builder.finish();
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(6).unwrap();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
@@ -1408,9 +1306,7 @@ mod tests {
         assert!(c.is_null(3));
         assert_eq!(10, c.value(4));
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
         builder.append_null();
         builder.append(7).unwrap();
@@ -1451,9 +1347,7 @@ mod tests {
 
     #[test]
     fn test_primitive_array_subtract_dyn_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(15).unwrap();
         builder.append(8).unwrap();
         builder.append(7).unwrap();
@@ -1461,9 +1355,7 @@ mod tests {
         builder.append(20).unwrap();
         let a = builder.finish();
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(6).unwrap();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
@@ -1492,9 +1384,7 @@ mod tests {
         assert!(c.is_null(3));
         assert_eq!(8, c.value(4));
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
         builder.append_null();
         builder.append(7).unwrap();
@@ -1535,9 +1425,7 @@ mod tests {
 
     #[test]
     fn test_primitive_array_multiply_dyn_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
         builder.append(6).unwrap();
         builder.append(7).unwrap();
@@ -1545,9 +1433,7 @@ mod tests {
         builder.append(9).unwrap();
         let a = builder.finish();
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(6).unwrap();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
@@ -1579,9 +1465,7 @@ mod tests {
 
     #[test]
     fn test_primitive_array_divide_dyn_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(15).unwrap();
         builder.append(6).unwrap();
         builder.append(1).unwrap();
@@ -1589,9 +1473,7 @@ mod tests {
         builder.append(9).unwrap();
         let a = builder.finish();
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
         builder.append(3).unwrap();
         builder.append(1).unwrap();
@@ -1620,9 +1502,7 @@ mod tests {
         assert!(c.is_null(3));
         assert_eq!(18, c.value(4));
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
         builder.append_null();
         builder.append(7).unwrap();
@@ -1806,9 +1686,7 @@ mod tests {
         assert!(c.is_null(3));
         assert_eq!(4, c.value(4));
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
         builder.append_null();
         builder.append(7).unwrap();
@@ -2082,15 +1960,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "DivideByZero")]
     fn test_primitive_array_divide_dyn_by_zero_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(1);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(1);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(1, 1);
         builder.append(15).unwrap();
         let a = builder.finish();
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(1);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(1);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(1, 1);
         builder.append(0).unwrap();
         let b = builder.finish();
 

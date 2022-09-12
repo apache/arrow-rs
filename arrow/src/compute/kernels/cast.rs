@@ -42,14 +42,15 @@ use std::ops::{Div, Mul};
 use std::str;
 use std::sync::Arc;
 
+use crate::array::as_datetime;
 use crate::buffer::MutableBuffer;
+use crate::compute::divide_scalar;
 use crate::compute::kernels::arithmetic::{divide, multiply};
 use crate::compute::kernels::arity::unary;
 use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use crate::compute::kernels::temporal::extract_component_from_array;
 use crate::compute::kernels::temporal::return_compute_error_with;
-use crate::compute::using_chrono_tz_and_utc_naive_date_time;
-use crate::compute::{divide_scalar, into_primitive_array_data};
+use crate::compute::{try_unary, using_chrono_tz_and_utc_naive_date_time};
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::temporal_conversions::{
@@ -1657,21 +1658,15 @@ where
     T::Native: num::NumCast,
     R::Native: num::NumCast,
 {
-    let iter =
-        from.values()
-            .iter()
-            .map(|v| match num::cast::cast::<T::Native, R::Native>(*v) {
-                None => Err(ArrowError::CastError(format!(
-                    "Can't cast value {:?} to type {}",
-                    v,
-                    R::DATA_TYPE
-                ))),
-                Some(cast_v) => Ok(cast_v),
-            });
-    let buffer = unsafe { Buffer::try_from_trusted_len_iter(iter) }?;
-
-    let data = into_primitive_array_data::<_, R>(from, buffer);
-    Ok(PrimitiveArray::<R>::from(data))
+    try_unary(from, |value| {
+        num::cast::cast::<T::Native, R::Native>(value).ok_or_else(|| {
+            ArrowError::CastError(format!(
+                "Can not cast value {:?} to type {}",
+                value,
+                R::DATA_TYPE
+            ))
+        })
+    })
 }
 
 // Natural cast between numeric types
@@ -1707,21 +1702,31 @@ where
 
     if let Some(tz) = tz {
         let mut scratch = Parsed::new();
-        // The macro calls `value_as_datetime_with_tz` on timestamp values of the array.
+        // The macro calls `as_datetime` on timestamp values of the array.
         // After applying timezone offset on the datatime, calling `to_string` to get
         // the strings.
+        let iter = ArrayIter::new(array);
         extract_component_from_array!(
-            array,
+            iter,
             builder,
             to_string,
-            value_as_datetime_with_tz,
+            |value, tz| as_datetime::<T>(<i64 as From<_>>::from(value))
+                .map(|datetime| datetime + tz),
             tz,
             scratch,
+            |value| as_datetime::<T>(<i64 as From<_>>::from(value)),
             |h| h
         )
     } else {
         // No timezone available. Calling `to_string` on the datatime value simply.
-        extract_component_from_array!(array, builder, to_string, value_as_datetime, |h| h)
+        let iter = ArrayIter::new(array);
+        extract_component_from_array!(
+            iter,
+            builder,
+            to_string,
+            |value| as_datetime::<T>(<i64 as From<_>>::from(value)),
+            |h| h
+        )
     }
 
     Ok(Arc::new(builder.finish()) as ArrayRef)
@@ -2551,9 +2556,8 @@ where
         .downcast_ref::<PrimitiveArray<V>>()
         .unwrap();
 
-    let keys_builder = PrimitiveBuilder::<K>::with_capacity(values.len());
-    let values_builder = PrimitiveBuilder::<V>::with_capacity(values.len());
-    let mut b = PrimitiveDictionaryBuilder::new(keys_builder, values_builder);
+    let mut b =
+        PrimitiveDictionaryBuilder::<K, V>::with_capacity(values.len(), values.len());
 
     // copy each element one at a time
     for i in 0..values.len() {
@@ -2577,10 +2581,7 @@ where
 {
     let cast_values = cast_with_options(array, &DataType::Utf8, cast_options)?;
     let values = cast_values.as_any().downcast_ref::<StringArray>().unwrap();
-
-    let keys_builder = PrimitiveBuilder::<K>::with_capacity(values.len());
-    let values_builder = StringBuilder::with_capacity(1024, values.len());
-    let mut b = StringDictionaryBuilder::new(keys_builder, values_builder);
+    let mut b = StringDictionaryBuilder::<K>::with_capacity(values.len(), 1024, 1024);
 
     // copy each element one at a time
     for i in 0..values.len() {
@@ -4989,9 +4990,7 @@ mod tests {
         // FROM a dictionary with of Utf8 values
         use DataType::*;
 
-        let keys_builder = PrimitiveBuilder::<Int8Type>::new();
-        let values_builder = StringBuilder::new();
-        let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
+        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
         builder.append("one").unwrap();
         builder.append_null();
         builder.append("three").unwrap();
@@ -5050,9 +5049,7 @@ mod tests {
         // that are out of bounds for a particular other kind of
         // index.
 
-        let keys_builder = PrimitiveBuilder::<Int32Type>::new();
-        let values_builder = PrimitiveBuilder::<Int64Type>::new();
-        let mut builder = PrimitiveDictionaryBuilder::new(keys_builder, values_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int64Type>::new();
 
         // add 200 distinct values (which can be stored by a
         // dictionary indexed by int32, but not a dictionary indexed
@@ -5081,9 +5078,7 @@ mod tests {
         // Same test as test_cast_dict_to_dict_bad_index_value but use
         // string values (and encode the expected behavior here);
 
-        let keys_builder = PrimitiveBuilder::<Int32Type>::new();
-        let values_builder = StringBuilder::new();
-        let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
+        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
 
         // add 200 distinct values (which can be stored by a
         // dictionary indexed by int32, but not a dictionary indexed
@@ -5112,9 +5107,7 @@ mod tests {
         // FROM a dictionary with of INT32 values
         use DataType::*;
 
-        let keys_builder = PrimitiveBuilder::<Int8Type>::new();
-        let values_builder = PrimitiveBuilder::<Int32Type>::new();
-        let mut builder = PrimitiveDictionaryBuilder::new(keys_builder, values_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(1).unwrap();
         builder.append_null();
         builder.append(3).unwrap();

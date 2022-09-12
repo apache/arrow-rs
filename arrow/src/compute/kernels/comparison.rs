@@ -4884,9 +4884,8 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
         builder.append(123).unwrap();
         builder.append_null();
         builder.append(23).unwrap();
@@ -4928,9 +4927,8 @@ mod tests {
 
     #[test]
     fn test_lt_dyn_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
         builder.append(123).unwrap();
         builder.append_null();
         builder.append(23).unwrap();
@@ -4971,9 +4969,8 @@ mod tests {
     }
     #[test]
     fn test_lt_eq_dyn_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = PrimitiveBuilder::<Int32Type>::new();
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
         builder.append(123).unwrap();
         builder.append_null();
         builder.append(23).unwrap();
@@ -5015,9 +5012,8 @@ mod tests {
 
     #[test]
     fn test_gt_dyn_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
         builder.append(123).unwrap();
         builder.append_null();
         builder.append(23).unwrap();
@@ -5059,9 +5055,8 @@ mod tests {
 
     #[test]
     fn test_gt_eq_dyn_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = PrimitiveBuilder::<Int32Type>::new();
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
         builder.append(22).unwrap();
         builder.append_null();
         builder.append(23).unwrap();
@@ -5103,9 +5098,8 @@ mod tests {
 
     #[test]
     fn test_neq_dyn_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = PrimitiveBuilder::<Int32Type>::new();
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
         builder.append(22).unwrap();
         builder.append_null();
         builder.append(23).unwrap();
@@ -5247,9 +5241,7 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_utf8_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new();
-        let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
         builder.append("abc").unwrap();
         builder.append_null();
         builder.append("def").unwrap();
@@ -5275,9 +5267,7 @@ mod tests {
     }
     #[test]
     fn test_lt_dyn_utf8_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new();
-        let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
         builder.append("abc").unwrap();
         builder.append_null();
         builder.append("def").unwrap();
@@ -5304,9 +5294,7 @@ mod tests {
     }
     #[test]
     fn test_lt_eq_dyn_utf8_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new();
-        let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
         builder.append("abc").unwrap();
         builder.append_null();
         builder.append("def").unwrap();
@@ -5333,9 +5321,7 @@ mod tests {
     }
     #[test]
     fn test_gt_eq_dyn_utf8_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new();
-        let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
         builder.append("abc").unwrap();
         builder.append_null();
         builder.append("def").unwrap();
@@ -5363,9 +5349,7 @@ mod tests {
 
     #[test]
     fn test_gt_dyn_utf8_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new();
-        let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
         builder.append("abc").unwrap();
         builder.append_null();
         builder.append("def").unwrap();
@@ -5392,9 +5376,7 @@ mod tests {
     }
     #[test]
     fn test_neq_dyn_utf8_scalar_with_dict() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new();
-        let value_builder = StringBuilder::new();
-        let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
         builder.append("abc").unwrap();
         builder.append_null();
         builder.append("def").unwrap();

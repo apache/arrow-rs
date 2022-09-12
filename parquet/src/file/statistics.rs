@@ -39,7 +39,7 @@
 
 use std::fmt;
 
-use parquet_format::Statistics as TStatistics;
+use crate::format::Statistics as TStatistics;
 
 use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;

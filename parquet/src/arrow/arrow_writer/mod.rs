@@ -230,7 +230,7 @@ impl<W: Write> ArrowWriter<W> {
     }
 
     /// Close and finalize the underlying Parquet writer
-    pub fn close(mut self) -> Result<parquet_format::FileMetaData> {
+    pub fn close(mut self) -> Result<crate::format::FileMetaData> {
         self.flush()?;
         self.writer.close()
     }
@@ -1653,9 +1653,7 @@ mod tests {
         )]));
 
         // create some data
-        let key_builder = PrimitiveBuilder::<UInt8Type>::with_capacity(3);
-        let value_builder = PrimitiveBuilder::<UInt32Type>::with_capacity(2);
-        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        let mut builder = PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::new();
         builder.append(12345678).unwrap();
         builder.append_null();
         builder.append(22345678).unwrap();

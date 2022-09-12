@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{data::count_nulls, ArrayData};
+use crate::array::{data::contains_nulls, ArrayData};
 use crate::datatypes::DataType;
 use crate::util::bit_util::get_bit;
 
@@ -37,10 +37,9 @@ pub(super) fn decimal_equal(
     let lhs_values = &lhs.buffers()[0].as_slice()[lhs.offset() * size..];
     let rhs_values = &rhs.buffers()[0].as_slice()[rhs.offset() * size..];
 
-    let lhs_null_count = count_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
-    let rhs_null_count = count_nulls(rhs.null_buffer(), rhs_start + rhs.offset(), len);
-
-    if lhs_null_count == 0 && rhs_null_count == 0 {
+    // Only checking one null mask here because by the time the control flow reaches
+    // this point, the equality of the two masks would have already been verified.
+    if !contains_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len) {
         equal_len(
             lhs_values,
             rhs_values,
