@@ -41,8 +41,6 @@ pub fn allocate_aligned(size: usize) -> NonNull<u8> {
         if size == 0 {
             null_pointer()
         } else {
-            let size = size;
-
             let layout = Layout::from_size_align_unchecked(size, ALIGNMENT);
             let raw_ptr = std::alloc::alloc(layout);
             NonNull::new(raw_ptr).unwrap_or_else(|| handle_alloc_error(layout))
