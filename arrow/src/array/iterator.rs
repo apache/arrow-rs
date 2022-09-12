@@ -24,8 +24,51 @@ use super::{
     PrimitiveArray,
 };
 
-/// an iterator that returns Some(T) or None, that can be used on any [`ArrayAccessor`]
-// Note: This implementation is based on std's [Vec]s' [IntoIter].
+/// An iterator that returns Some(T) or None, that can be used on any [`ArrayAccessor`]
+///
+/// # Performance
+///
+/// [`ArrayIter`] provides an idiomatic way to iterate over an array, however, this
+/// comes at the cost of performance. In particular the interleaved handling of
+/// the null mask is often sub-optimal.
+///
+/// If performing an infallible operation, it is typically faster to perform the operation
+/// on every index of the array, and handle the null mask separately. For [`PrimitiveArray`]
+/// this functionality is provided by [`compute::unary`]
+///
+/// ```
+/// # use arrow::array::PrimitiveArray;
+/// # use arrow::compute::unary;
+/// # use arrow::datatypes::Int32Type;
+///
+/// fn add(a: &PrimitiveArray<Int32Type>, b: i32) -> PrimitiveArray<Int32Type> {
+///     unary(a, |a| a + b)
+/// }
+/// ```
+///
+/// If performing a fallible operation, it isn't possible to perform the operation independently
+/// of the null mask, as this might result in a spurious failure on a null index. However,
+/// there are more efficient ways to iterate over just the non-null indices, this functionality
+/// is provided by [`compute::try_unary`]
+///
+/// ```
+/// # use arrow::array::PrimitiveArray;
+/// # use arrow::compute::try_unary;
+/// # use arrow::datatypes::Int32Type;
+/// # use arrow::error::{ArrowError, Result};
+///
+/// fn checked_add(a: &PrimitiveArray<Int32Type>, b: i32) -> Result<PrimitiveArray<Int32Type>> {
+///     try_unary(a, |a| {
+///         a.checked_add(b).ok_or_else(|| {
+///             ArrowError::CastError(format!("overflow adding {} to {}", a, b))
+///         })
+///     })
+/// }
+/// ```
+///
+/// [`PrimitiveArray`]: [crate::array::PrimitiveArray]
+/// [`compute::unary`]: [crate::compute::unary]
+/// [`compute::try_unary`]: [crate::compute::try_unary]
 #[derive(Debug)]
 pub struct ArrayIter<T: ArrayAccessor> {
     array: T,

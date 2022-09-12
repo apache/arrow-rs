@@ -31,9 +31,8 @@ rust-version = "1.62"
 
 [dependencies]
 ahash = "0.8"
-parquet-format = { version = "4.0.0", default-features = false }
 bytes = { version = "1.1", default-features = false, features = ["std"] }
-thrift = { version = "0.13", default-features = false }
+thrift = { version = "0.16", default-features = false }
 snap = { version = "1.0", default-features = false, optional = true }
 brotli = { version = "3.3", default-features = false, features = ["std"], optional = true }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"], optional = true }
@@ -54,7 +53,7 @@ hashbrown = { version = "0.12", default-features = false }
 
 [dev-dependencies]
 base64 = { version = "0.13", default-features = false, features = ["std"] }
-criterion = { version = "0.3", default-features = false }
+criterion = { version = "0.4", default-features = false }
 snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
 brotli = { version = "3.3", default-features = false, features = ["std"] }

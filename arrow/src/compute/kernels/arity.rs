@@ -17,37 +17,41 @@
 
 //! Defines kernels suitable to perform operations to primitive arrays.
 
-use crate::array::{Array, ArrayData, ArrayRef, DictionaryArray, PrimitiveArray};
+use crate::array::{
+    Array, ArrayData, ArrayRef, BufferBuilder, DictionaryArray, PrimitiveArray,
+};
 use crate::buffer::Buffer;
+use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{ArrowNumericType, ArrowPrimitiveType};
 use crate::downcast_dictionary_array;
 use crate::error::{ArrowError, Result};
+use crate::util::bit_iterator::try_for_each_valid_idx;
 use std::sync::Arc;
 
 #[inline]
-fn into_primitive_array_data<I: ArrowPrimitiveType, O: ArrowPrimitiveType>(
-    array: &PrimitiveArray<I>,
+unsafe fn build_primitive_array<O: ArrowPrimitiveType>(
+    len: usize,
     buffer: Buffer,
-) -> ArrayData {
-    let data = array.data();
-    unsafe {
-        ArrayData::new_unchecked(
-            O::DATA_TYPE,
-            array.len(),
-            Some(data.null_count()),
-            data.null_buffer()
-                .map(|b| b.bit_slice(array.offset(), array.len())),
-            0,
-            vec![buffer],
-            vec![],
-        )
-    }
+    null_count: usize,
+    null_buffer: Option<Buffer>,
+) -> PrimitiveArray<O> {
+    PrimitiveArray::from(ArrayData::new_unchecked(
+        O::DATA_TYPE,
+        len,
+        Some(null_count),
+        null_buffer,
+        0,
+        vec![buffer],
+        vec![],
+    ))
 }
 
 /// Applies an unary and infallible function to a primitive array.
 /// This is the fastest way to perform an operation on a primitive array when
-/// the benefits of a vectorized operation outweights the cost of branching nulls and non-nulls.
+/// the benefits of a vectorized operation outweigh the cost of branching nulls and non-nulls.
+///
 /// # Implementation
+///
 /// This will apply the function for all values, including those on null slots.
 /// This implies that the operation must be infallible for any value of the corresponding type
 /// or this function may panic.
@@ -68,6 +72,14 @@ where
     O: ArrowPrimitiveType,
     F: Fn(I::Native) -> O::Native,
 {
+    let data = array.data();
+    let len = data.len();
+    let null_count = data.null_count();
+
+    let null_buffer = data
+        .null_buffer()
+        .map(|b| b.bit_slice(data.offset(), data.len()));
+
     let values = array.values().iter().map(|v| op(*v));
     // JUSTIFICATION
     //  Benefit
@@ -75,9 +87,40 @@ where
     //  Soundness
     //      `values` is an iterator with a known size because arrays are sized.
     let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
+    unsafe { build_primitive_array(len, buffer, null_count, null_buffer) }
+}
 
-    let data = into_primitive_array_data::<_, O>(array, buffer);
-    PrimitiveArray::<O>::from(data)
+/// Applies a unary and fallible function to all valid values in a primitive array
+///
+/// This is unlike [`unary`] which will apply an infallible function to all rows regardless
+/// of validity, in many cases this will be significantly faster and should be preferred
+/// if `op` is infallible.
+///
+/// Note: LLVM is currently unable to effectively vectorize fallible operations
+pub fn try_unary<I, F, O>(array: &PrimitiveArray<I>, op: F) -> Result<PrimitiveArray<O>>
+where
+    I: ArrowPrimitiveType,
+    O: ArrowPrimitiveType,
+    F: Fn(I::Native) -> Result<O::Native>,
+{
+    let len = array.len();
+    let null_count = array.null_count();
+
+    let mut buffer = BufferBuilder::<O::Native>::new(len);
+    buffer.append_n_zeroed(array.len());
+    let slice = buffer.as_slice_mut();
+
+    let null_buffer = array
+        .data_ref()
+        .null_buffer()
+        .map(|b| b.bit_slice(array.offset(), array.len()));
+
+    try_for_each_valid_idx(array.len(), 0, null_count, null_buffer.as_deref(), |idx| {
+        unsafe { *slice.get_unchecked_mut(idx) = op(array.value_unchecked(idx))? };
+        Ok::<_, ArrowError>(())
+    })?;
+
+    Ok(unsafe { build_primitive_array(len, buffer.finish(), null_count, null_buffer) })
 }
 
 /// A helper function that applies an unary function to a dictionary array with primitive value type.
@@ -117,6 +160,101 @@ where
             }
         }
     }
+}
+
+/// Given two arrays of length `len`, calls `op(a[i], b[i])` for `i` in `0..len`, collecting
+/// the results in a [`PrimitiveArray`]. If any index is null in either `a` or `b`, the
+/// corresponding index in the result will also be null
+///
+/// Like [`unary`] the provided function is evaluated for every index, ignoring validity. This
+/// is beneficial when the cost of the operation is low compared to the cost of branching, and
+/// especially when the operation can be vectorised, however, requires `op` to be infallible
+/// for all possible values of its inputs
+///
+/// # Panic
+///
+/// Panics if the arrays have different lengths
+pub fn binary<A, B, F, O>(
+    a: &PrimitiveArray<A>,
+    b: &PrimitiveArray<B>,
+    op: F,
+) -> PrimitiveArray<O>
+where
+    A: ArrowPrimitiveType,
+    B: ArrowPrimitiveType,
+    O: ArrowPrimitiveType,
+    F: Fn(A::Native, B::Native) -> O::Native,
+{
+    assert_eq!(a.len(), b.len());
+    let len = a.len();
+
+    if a.is_empty() {
+        return PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE));
+    }
+
+    let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
+    let null_count = null_buffer
+        .as_ref()
+        .map(|x| len - x.count_set_bits())
+        .unwrap_or_default();
+
+    let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
+    // JUSTIFICATION
+    //  Benefit
+    //      ~60% speedup
+    //  Soundness
+    //      `values` is an iterator with a known size from a PrimitiveArray
+    let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
+
+    unsafe { build_primitive_array(len, buffer, null_count, null_buffer) }
+}
+
+/// Applies the provided fallible binary operation across `a` and `b`, returning any error,
+/// and collecting the results into a [`PrimitiveArray`]. If any index is null in either `a`
+/// or `b`, the corresponding index in the result will also be null
+///
+/// Like [`try_unary`] the function is only evaluated for non-null indices
+///
+/// # Panic
+///
+/// Panics if the arrays have different lengths
+pub fn try_binary<A, B, F, O>(
+    a: &PrimitiveArray<A>,
+    b: &PrimitiveArray<B>,
+    op: F,
+) -> Result<PrimitiveArray<O>>
+where
+    A: ArrowPrimitiveType,
+    B: ArrowPrimitiveType,
+    O: ArrowPrimitiveType,
+    F: Fn(A::Native, B::Native) -> Result<O::Native>,
+{
+    assert_eq!(a.len(), b.len());
+    let len = a.len();
+
+    if a.is_empty() {
+        return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
+    }
+
+    let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
+    let null_count = null_buffer
+        .as_ref()
+        .map(|x| len - x.count_set_bits())
+        .unwrap_or_default();
+
+    let mut buffer = BufferBuilder::<O::Native>::new(len);
+    buffer.append_n_zeroed(len);
+    let slice = buffer.as_slice_mut();
+
+    try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+        unsafe {
+            *slice.get_unchecked_mut(idx) =
+                op(a.value_unchecked(idx), b.value_unchecked(idx))?
+        };
+        Ok::<_, ArrowError>(())
+    })?;
+
+    Ok(unsafe { build_primitive_array(len, buffer.finish(), null_count, null_buffer) })
 }
 
 #[cfg(test)]

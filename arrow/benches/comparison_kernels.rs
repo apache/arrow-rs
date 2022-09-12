@@ -287,8 +287,8 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "xx$"))
     });
 
-    let dict_arr_a = create_string_dict_array::<Int32Type>(size, 0.0);
-    let dict_arr_b = create_string_dict_array::<Int32Type>(size, 0.0);
+    let dict_arr_a = create_string_dict_array::<Int32Type>(size, 0.0, 4);
+    let dict_arr_b = create_string_dict_array::<Int32Type>(size, 0.0, 4);
 
     c.bench_function("dict eq string", |b| {
         b.iter(|| bench_dict_eq(&dict_arr_a, &dict_arr_b))
