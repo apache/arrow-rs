@@ -32,9 +32,7 @@ mod types;
 pub use types::*;
 mod delta;
 
-pub use arrow_schema::datatype::*;
-pub use arrow_schema::field::*;
-pub use arrow_schema::schema::*;
+pub use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode};
 
 #[cfg(feature = "ffi")]
 mod ffi;

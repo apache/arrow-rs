@@ -145,8 +145,7 @@ impl Field {
     /// Set the name of the [`Field`] and returns self.
     ///
     /// ```
-    /// # use arrow_schema::field::Field;
-    /// # use arrow_schema::datatype::DataType;
+    /// # use arrow_schema::*;
     /// let field = Field::new("c1", DataType::Int64, false)
     ///    .with_name("c2");
     ///
@@ -166,8 +165,7 @@ impl Field {
     /// Set [`DataType`] of the [`Field`] and returns self.
     ///
     /// ```
-    /// # use arrow_schema::field::Field;
-    /// # use arrow_schema::datatype::DataType;
+    /// # use arrow_schema::*;
     /// let field = Field::new("c1", DataType::Int64, false)
     ///    .with_data_type(DataType::Utf8);
     ///
@@ -187,8 +185,7 @@ impl Field {
     /// Set `nullable` of the [`Field`] and returns self.
     ///
     /// ```
-    /// # use arrow_schema::field::Field;
-    /// # use arrow_schema::datatype::DataType;
+    /// # use arrow_schema::*;
     /// let field = Field::new("c1", DataType::Int64, false)
     ///    .with_nullable(true);
     ///
@@ -541,8 +538,7 @@ impl Field {
     /// Example:
     ///
     /// ```
-    /// # use arrow_schema::field::Field;
-    /// # use arrow_schema::datatype::DataType;
+    /// # use arrow_schema::*;
     /// let mut field = Field::new("c1", DataType::Int64, false);
     /// assert!(field.try_merge(&Field::new("c1", DataType::Int64, true)).is_ok());
     /// assert!(field.is_nullable());

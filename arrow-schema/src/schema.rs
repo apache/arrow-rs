@@ -52,9 +52,7 @@ impl Schema {
     /// # Example
     ///
     /// ```
-    /// # use arrow_schema::field::Field;
-    /// # use arrow_schema::datatype::DataType;
-    /// # use arrow_schema::schema::Schema;
+    /// # use arrow_schema::*;
     /// let field_a = Field::new("a", DataType::Int64, false);
     /// let field_b = Field::new("b", DataType::Boolean, false);
     ///
@@ -70,10 +68,9 @@ impl Schema {
     /// # Example
     ///
     /// ```
-    /// # use arrow_schema::field::Field;
-    /// # use arrow_schema::datatype::DataType;
-    /// # use arrow_schema::schema::Schema;
+    /// # use arrow_schema::*;
     /// # use std::collections::HashMap;
+    ///
     /// let field_a = Field::new("a", DataType::Int64, false);
     /// let field_b = Field::new("b", DataType::Boolean, false);
     ///
@@ -119,9 +116,7 @@ impl Schema {
     /// Example:
     ///
     /// ```
-    /// # use arrow_schema::field::Field;
-    /// # use arrow_schema::datatype::DataType;
-    /// # use arrow_schema::schema::Schema;
+    /// # use arrow_schema::*;
     ///
     /// let merged = Schema::try_merge(vec![
     ///     Schema::new(vec![
@@ -437,7 +432,7 @@ mod tests {
         if let Err(e) = projected {
             assert_eq!(
                 e.to_string(),
-                "Schema error: project index 3 out of bounds, max field 3".to_string()
+                "Error indexing field: project index 3 out of bounds, max field 3".to_string()
             )
         }
     }

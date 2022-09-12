@@ -17,7 +17,11 @@
 
 //! Arrow logical types
 
-pub mod datatype;
-pub mod error;
-pub mod field;
-pub mod schema;
+mod datatype;
+pub use datatype::*;
+mod error;
+pub use error::*;
+mod field;
+pub use field::*;
+mod schema;
+pub use schema::*;

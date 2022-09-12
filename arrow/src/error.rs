@@ -22,7 +22,7 @@ use std::io::Write;
 use std::error::Error;
 
 // Re-export ArrowSchemaError
-pub use arrow_schema::error::ArrowSchemaError;
+pub use arrow_schema::ArrowSchemaError;
 
 /// Many different operations in the `arrow` crate return this error type.
 #[derive(Debug)]

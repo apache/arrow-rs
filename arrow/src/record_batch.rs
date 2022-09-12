@@ -18,7 +18,7 @@
 //! A two-dimensional batch of column-oriented data with a defined
 //! [schema](crate::datatypes::Schema).
 
-use arrow_schema::error::ArrowSchemaError;
+use arrow_schema::ArrowSchemaError;
 use std::sync::Arc;
 
 use crate::array::*;
