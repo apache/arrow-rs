@@ -643,7 +643,6 @@ impl DataType {
     }
 
     /// Returns true if this type is valid as a dictionary key
-    /// (e.g. [`super::ArrowDictionaryKeyType`]
     pub fn is_dictionary_key_type(t: &DataType) -> bool {
         use DataType::*;
         matches!(
