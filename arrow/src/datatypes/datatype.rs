@@ -1439,7 +1439,7 @@ impl DataType {
         )
     }
 
-    /// Returns true if this type is nested (FixedSizeList, LargeList, Struct, Union, or Map)
+    /// Returns true if this type is nested (List, FixedSizeList, LargeList, Struct, Union, or Map)
     pub fn is_nested(t: &DataType) -> bool {
         use DataType::*;
         matches!(
