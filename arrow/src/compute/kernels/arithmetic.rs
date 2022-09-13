@@ -1123,6 +1123,10 @@ where
 ///
 /// If any right hand value is zero, the operation value will be replaced with null in the
 /// result.
+///
+/// Unlike `divide` or `divide_checked`, division by zero will get a null value instead
+/// returning an `Err`, this also doesn't check overflowing, overflowing will just wrap
+/// the result around.
 pub fn divide_opt<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
