@@ -1951,9 +1951,10 @@ mod tests {
     fn test_float_array_divide_by_zero_with_checked() {
         let a = Float32Array::from(vec![1.0, 0.0, -1.0]);
         let b = Float32Array::from(vec![0.0, 0.0, 0.0]);
-        let expected =
-            Float32Array::from(vec![f32::INFINITY, f32::NAN, f32::NEG_INFINITY]);
-        assert_eq!(expected, divide_checked(&a, &b).unwrap())
+        let result = divide_checked(&a, &b).unwrap();
+        assert_eq!(result.value(0), f32::INFINITY);
+        assert!(result.value(1).is_nan());
+        assert_eq!(result.value(2), f32::NEG_INFINITY);
     }
 
     #[test]
@@ -1968,9 +1969,10 @@ mod tests {
     fn test_float_array_divide_by_zero() {
         let a = Float32Array::from(vec![1.0, 0.0, -1.0]);
         let b = Float32Array::from(vec![0.0, 0.0, 0.0]);
-        let expected =
-            Float32Array::from(vec![f32::INFINITY, f32::NAN, f32::NEG_INFINITY]);
-        assert_eq!(expected, divide(&a, &b).unwrap())
+        let result = divide(&a, &b).unwrap();
+        assert_eq!(result.value(0), f32::INFINITY);
+        assert!(result.value(1).is_nan());
+        assert_eq!(result.value(2), f32::NEG_INFINITY);
     }
 
     #[test]
@@ -1985,12 +1987,11 @@ mod tests {
     fn test_float_array_divide_dyn_by_zero() {
         let a = Float32Array::from(vec![1.0, 0.0, -1.0]);
         let b = Float32Array::from(vec![0.0, 0.0, 0.0]);
-        let expected =
-            Float32Array::from(vec![f32::INFINITY, f32::NAN, f32::NEG_INFINITY]);
-        assert_eq!(
-            &expected,
-            as_primitive_array::<Float32Type>(&divide_dyn(&a, &b).unwrap())
-        )
+        let result = &divide_dyn(&a, &b).unwrap();
+        let result = as_primitive_array::<Float32Type>(result);
+        assert_eq!(result.value(0), f32::INFINITY);
+        assert!(result.value(1).is_nan());
+        assert_eq!(result.value(2), f32::NEG_INFINITY);
     }
 
     #[test]
@@ -2025,13 +2026,11 @@ mod tests {
         builder.append(0.0).unwrap();
         let b = builder.finish();
 
-        let expected =
-            Float32Array::from(vec![f32::INFINITY, f32::NAN, f32::NEG_INFINITY]);
-
-        assert_eq!(
-            &expected,
-            as_primitive_array::<Float32Type>(&divide_dyn(&a, &b).unwrap())
-        )
+        let result = &divide_dyn(&a, &b).unwrap();
+        let result = as_primitive_array::<Float32Type>(result);
+        assert_eq!(result.value(0), f32::INFINITY);
+        assert!(result.value(1).is_nan());
+        assert_eq!(result.value(2), f32::NEG_INFINITY);
     }
 
     #[test]
