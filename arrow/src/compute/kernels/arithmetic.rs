@@ -837,6 +837,8 @@ where
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `add_scalar_checked_dyn` instead.
+///
+/// This returns an `Err` when the input array is not supported for adding operation.
 pub fn add_scalar_dyn<T>(array: &dyn Array, scalar: T::Native) -> Result<ArrayRef>
 where
     T: ArrowNumericType,
@@ -851,6 +853,9 @@ where
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `add_scalar_dyn` instead.
+///
+/// As this kernel has the branching costs and also prevents LLVM from vectorising it correctly,
+/// it is usually much slower than non-checking variant.
 pub fn add_scalar_checked_dyn<T>(array: &dyn Array, scalar: T::Native) -> Result<ArrayRef>
 where
     T: ArrowNumericType,
