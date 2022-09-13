@@ -284,21 +284,30 @@ where
         return PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE));
     }
 
-    let iter_a = ArrayIter::new(a);
-    let iter_b = ArrayIter::new(b);
+    if a.null_count() == 0 && b.null_count() == 0 {
+        a.values()
+            .iter()
+            .zip(b.values().iter())
+            .map(|(a, b)| op(*a, *b))
+            .collect()
+    } else {
+        let iter_a = ArrayIter::new(a);
+        let iter_b = ArrayIter::new(b);
 
-    let values = iter_a
-        .into_iter()
-        .zip(iter_b.into_iter())
-        .map(|(item_a, item_b)| {
-            if let (Some(a), Some(b)) = (item_a, item_b) {
-                op(a, b)
-            } else {
-                None
-            }
-        });
+        let values =
+            iter_a
+                .into_iter()
+                .zip(iter_b.into_iter())
+                .map(|(item_a, item_b)| {
+                    if let (Some(a), Some(b)) = (item_a, item_b) {
+                        op(a, b)
+                    } else {
+                        None
+                    }
+                });
 
-    values.collect()
+        values.collect()
+    }
 }
 
 #[cfg(test)]
