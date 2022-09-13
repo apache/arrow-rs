@@ -92,16 +92,16 @@ mod tests {
     #[test]
     fn test_bitwise_and_array_scalar() -> Result<()> {
         // unsigned value
-        let left = UInt64Array::from(vec![Some(1), Some(2), None, Some(4)]);
+        let left = UInt64Array::from(vec![Some(15), Some(2), None, Some(4)]);
         let scalar = 7;
-        let expected = UInt64Array::from(vec![Some(1), Some(2), None, Some(4)]);
+        let expected = UInt64Array::from(vec![Some(7), Some(2), None, Some(4)]);
         let result = bitwise_and_scalar(&left, scalar)?;
         assert_eq!(expected, result);
 
         // signed value
         let left = Int32Array::from(vec![Some(1), Some(2), None, Some(4)]);
-        let scalar = 7;
-        let expected = Int32Array::from(vec![Some(1), Some(2), None, Some(4)]);
+        let scalar = 20;
+        let expected = Int32Array::from(vec![Some(0), Some(0), None, Some(4)]);
         let result = bitwise_and_scalar(&left, scalar)?;
         assert_eq!(expected, result);
         Ok(())
