@@ -215,9 +215,10 @@ where
 ///
 /// Like [`try_unary`] the function is only evaluated for non-null indices
 ///
-/// # Panic
+/// # Error
 ///
-/// Panics if the arrays have different lengths
+/// Return an error if the arrays have different lengths or
+/// the operation is under erroneous
 pub fn try_binary<A, B, F, O>(
     a: &PrimitiveArray<A>,
     b: &PrimitiveArray<B>,
@@ -229,13 +230,16 @@ where
     O: ArrowPrimitiveType,
     F: Fn(A::Native, B::Native) -> Result<O::Native>,
 {
-    assert_eq!(a.len(), b.len());
-    let len = a.len();
-
+    if a.len() != b.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform a binary operation on arrays of different length".to_string(),
+        ));
+    }
     if a.is_empty() {
         return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
 
+    let len = a.len();
     let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
     let null_count = null_buffer
         .as_ref()

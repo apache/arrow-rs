@@ -76,32 +76,6 @@ where
     Ok(binary(left, right, op))
 }
 
-/// This is similar to `math_op` as it performs given operation between two input primitive arrays.
-/// But the given operation can return `None` if overflow is detected. For the case, this function
-/// returns an `Err`.
-fn math_checked_op<LT, RT, F>(
-    left: &PrimitiveArray<LT>,
-    right: &PrimitiveArray<RT>,
-    op: F,
-) -> Result<PrimitiveArray<LT>>
-where
-    LT: ArrowNumericType,
-    RT: ArrowNumericType,
-    F: Fn(LT::Native, RT::Native) -> Option<LT::Native>,
-{
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform math operation on arrays of different length".to_string(),
-        ));
-    }
-
-    try_binary(left, right, |a, b| {
-        op(a, b).ok_or_else(|| {
-            ArrowError::ComputeError(format!("Overflow happened on: {:?}, {:?}", a, b))
-        })
-    })
-}
-
 /// Helper function for operations where a valid `0` on the right array should
 /// result in an [ArrowError::DivideByZero], namely the division and modulo operations
 ///
@@ -119,7 +93,7 @@ where
     LT: ArrowNumericType,
     RT: ArrowNumericType,
     RT::Native: One + Zero,
-    F: Fn(LT::Native, RT::Native) -> Option<LT::Native>,
+    F: Fn(LT::Native, RT::Native) -> Result<LT::Native>,
 {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
@@ -131,12 +105,7 @@ where
         if r.is_zero() {
             Err(ArrowError::DivideByZero)
         } else {
-            op(l, r).ok_or_else(|| {
-                ArrowError::ComputeError(format!(
-                    "Overflow happened on: {:?}, {:?}",
-                    l, r
-                ))
-            })
+            op(l, r)
         }
     })
 }
@@ -723,7 +692,7 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
-    math_checked_op(left, right, |a, b| a.add_checked(b))
+    try_binary(left, right, |a, b| a.add_checked(b))
 }
 
 /// Perform `left + right` operation on two arrays. If either left or right value is null
@@ -824,11 +793,7 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
-    try_unary(array, |value| {
-        value.add_checked(scalar).ok_or_else(|| {
-            ArrowError::CastError(format!("Overflow: adding {:?} to {:?}", scalar, value))
-        })
-    })
+    try_unary(array, |value| value.add_checked(scalar))
 }
 
 /// Add every value in an array by a scalar. If any value in the array is null then the
@@ -871,7 +836,7 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
-    math_checked_op(left, right, |a, b| a.sub_checked(b))
+    try_binary(left, right, |a, b| a.sub_checked(b))
 }
 
 /// Perform `left - right` operation on two arrays. If either left or right value is null
@@ -924,14 +889,7 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp + Zero,
 {
-    try_unary(array, |value| {
-        value.sub_checked(scalar).ok_or_else(|| {
-            ArrowError::CastError(format!(
-                "Overflow: subtracting {:?} from {:?}",
-                scalar, value
-            ))
-        })
-    })
+    try_unary(array, |value| value.sub_checked(scalar))
 }
 
 /// Subtract every value in an array by a scalar. If any value in the array is null then the
@@ -999,7 +957,7 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
-    math_checked_op(left, right, |a, b| a.mul_checked(b))
+    try_binary(left, right, |a, b| a.mul_checked(b))
 }
 
 /// Perform `left * right` operation on two arrays. If either left or right value is null
@@ -1052,14 +1010,7 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp + Zero + One,
 {
-    try_unary(array, |value| {
-        value.mul_checked(scalar).ok_or_else(|| {
-            ArrowError::CastError(format!(
-                "Overflow: multiplying {:?} by {:?}",
-                value, scalar,
-            ))
-        })
-    })
+    try_unary(array, |value| value.mul_checked(scalar))
 }
 
 /// Multiply every value in an array by a scalar. If any value in the array is null then the
@@ -1095,7 +1046,7 @@ where
         a % b
     });
     #[cfg(not(feature = "simd"))]
-    return math_checked_divide_op(left, right, |a, b| Some(a % b));
+    return math_checked_divide_op(left, right, |a, b| Ok(a % b));
 }
 
 /// Perform `left / right` operation on two arrays. If either left or right value is null
@@ -1129,7 +1080,7 @@ pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
         _ => {
             downcast_primitive_array!(
                 (left, right) => {
-                    math_checked_divide_op(left, right, |a, b| Some(a / b)).map(|a| Arc::new(a) as ArrayRef)
+                    math_checked_divide_op(left, right, |a, b| Ok(a / b)).map(|a| Arc::new(a) as ArrayRef)
                 }
                 _ => Err(ArrowError::CastError(format!(
                     "Unsupported data type {}, {}",

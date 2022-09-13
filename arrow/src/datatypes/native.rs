@@ -16,7 +16,9 @@
 // under the License.
 
 use super::DataType;
+use crate::error::{ArrowError, Result};
 use half::f16;
+use num::Zero;
 
 mod private {
     pub trait Sealed {}
@@ -116,6 +118,7 @@ pub trait ArrowPrimitiveType: 'static {
 
 pub(crate) mod native_op {
     use super::ArrowNativeType;
+    use crate::error::Result;
     use std::ops::{Add, Div, Mul, Sub};
 
     /// Trait for ArrowNativeType to provide overflow-checking and non-overflow-checking
@@ -135,32 +138,32 @@ pub(crate) mod native_op {
         + Mul<Output = Self>
         + Div<Output = Self>
     {
-        fn add_checked(self, rhs: Self) -> Option<Self> {
-            Some(self + rhs)
+        fn add_checked(self, rhs: Self) -> Result<Self> {
+            Ok(self + rhs)
         }
 
         fn add_wrapping(self, rhs: Self) -> Self {
             self + rhs
         }
 
-        fn sub_checked(self, rhs: Self) -> Option<Self> {
-            Some(self - rhs)
+        fn sub_checked(self, rhs: Self) -> Result<Self> {
+            Ok(self - rhs)
         }
 
         fn sub_wrapping(self, rhs: Self) -> Self {
             self - rhs
         }
 
-        fn mul_checked(self, rhs: Self) -> Option<Self> {
-            Some(self * rhs)
+        fn mul_checked(self, rhs: Self) -> Result<Self> {
+            Ok(self * rhs)
         }
 
         fn mul_wrapping(self, rhs: Self) -> Self {
             self * rhs
         }
 
-        fn div_checked(self, rhs: Self) -> Option<Self> {
-            Some(self / rhs)
+        fn div_checked(self, rhs: Self) -> Result<Self> {
+            Ok(self / rhs)
         }
 
         fn div_wrapping(self, rhs: Self) -> Self {
@@ -172,32 +175,56 @@ pub(crate) mod native_op {
 macro_rules! native_type_op {
     ($t:tt) => {
         impl native_op::ArrowNativeTypeOp for $t {
-            fn add_checked(self, rhs: Self) -> Option<Self> {
-                self.checked_add(rhs)
+            fn add_checked(self, rhs: Self) -> Result<Self> {
+                self.checked_add(rhs).ok_or_else(|| {
+                    ArrowError::ComputeError(format!(
+                        "Overflow happened on: {:?} + {:?}",
+                        self, rhs
+                    ))
+                })
             }
 
             fn add_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_add(rhs)
             }
 
-            fn sub_checked(self, rhs: Self) -> Option<Self> {
-                self.checked_sub(rhs)
+            fn sub_checked(self, rhs: Self) -> Result<Self> {
+                self.checked_sub(rhs).ok_or_else(|| {
+                    ArrowError::ComputeError(format!(
+                        "Overflow happened on: {:?} - {:?}",
+                        self, rhs
+                    ))
+                })
             }
 
             fn sub_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_sub(rhs)
             }
 
-            fn mul_checked(self, rhs: Self) -> Option<Self> {
-                self.checked_mul(rhs)
+            fn mul_checked(self, rhs: Self) -> Result<Self> {
+                self.checked_mul(rhs).ok_or_else(|| {
+                    ArrowError::ComputeError(format!(
+                        "Overflow happened on: {:?} * {:?}",
+                        self, rhs
+                    ))
+                })
             }
 
             fn mul_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_mul(rhs)
             }
 
-            fn div_checked(self, rhs: Self) -> Option<Self> {
-                self.checked_div(rhs)
+            fn div_checked(self, rhs: Self) -> Result<Self> {
+                if rhs.is_zero() {
+                    Err(ArrowError::DivideByZero)
+                } else {
+                    self.checked_div(rhs).ok_or_else(|| {
+                        ArrowError::ComputeError(format!(
+                            "Overflow happened on: {:?} / {:?}",
+                            self, rhs
+                        ))
+                    })
+                }
             }
 
             fn div_wrapping(self, rhs: Self) -> Self {
