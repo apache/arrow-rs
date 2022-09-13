@@ -1439,6 +1439,20 @@ impl DataType {
         )
     }
 
+    /// Returns true if this type is nested (List, FixedSizeList, LargeList, Struct, Union, or Map)
+    pub fn is_nested(t: &DataType) -> bool {
+        use DataType::*;
+        matches!(
+            t,
+            List(_)
+                | FixedSizeList(_, _)
+                | LargeList(_)
+                | Struct(_)
+                | Union(_, _, _)
+                | Map(_, _)
+        )
+    }
+
     /// Compares the datatype with another, ignoring nested field names
     /// and metadata.
     pub fn equals_datatype(&self, other: &DataType) -> bool {
