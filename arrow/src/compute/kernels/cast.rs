@@ -50,7 +50,7 @@ use crate::compute::kernels::arity::unary;
 use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use crate::compute::kernels::temporal::extract_component_from_array;
 use crate::compute::kernels::temporal::return_compute_error_with;
-use crate::compute::using_chrono_tz_and_utc_naive_date_time;
+use crate::compute::{try_unary, using_chrono_tz_and_utc_naive_date_time};
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::temporal_conversions::{
@@ -1514,8 +1514,8 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
                             v.as_ref().and_then(|v| v.to_i128())
                                 .ok_or_else(|| {
                                     ArrowError::InvalidArgumentError(
-                                    format!("{:?} cannot be casted to 128-bit integer for Decimal128", v),
-                                )
+                                        format!("{:?} cannot be casted to 128-bit integer for Decimal128", v),
+                                    )
                                 })
                                 .map(Some)
                         }
@@ -1569,8 +1569,8 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
                             v.as_ref().and_then(|v| v.to_i128())
                                 .ok_or_else(|| {
                                     ArrowError::InvalidArgumentError(
-                                    format!("{:?} cannot be casted to 128-bit integer for Decimal128", v),
-                                )
+                                        format!("{:?} cannot be casted to 128-bit integer for Decimal128", v),
+                                    )
                                 })
                                 .map(Some)
                         }
@@ -1641,7 +1641,7 @@ where
         )))
     } else {
         // If the value can't be casted to the `TO::Native`, return error
-        Ok(Arc::new(numeric_cast_with_error::<FROM, TO>(
+        Ok(Arc::new(try_numeric_cast::<FROM, TO>(
             from.as_any()
                 .downcast_ref::<PrimitiveArray<FROM>>()
                 .unwrap(),
@@ -1651,29 +1651,22 @@ where
 
 // Natural cast between numeric types
 // If the value of T can't be casted to R, will throw error
-fn numeric_cast_with_error<T, R>(from: &PrimitiveArray<T>) -> Result<PrimitiveArray<R>>
+fn try_numeric_cast<T, R>(from: &PrimitiveArray<T>) -> Result<PrimitiveArray<R>>
 where
     T: ArrowNumericType,
     R: ArrowNumericType,
     T::Native: num::NumCast,
     R::Native: num::NumCast,
 {
-    let iter = from
-        .iter()
-        .map(|v| match v {
-            None => Ok(None),
-            Some(value) => match num::cast::cast::<T::Native, R::Native>(value) {
-                None => Err(ArrowError::CastError(format!(
-                    "Can't cast value {:?} to type {}",
-                    value,
-                    R::DATA_TYPE
-                ))),
-                Some(v) => Ok(Some(v)),
-            },
+    try_unary(from, |value| {
+        num::cast::cast::<T::Native, R::Native>(value).ok_or_else(|| {
+            ArrowError::CastError(format!(
+                "Can't cast value {:?} to type {}",
+                value,
+                R::DATA_TYPE
+            ))
         })
-        .collect::<Result<Vec<Option<R::Native>>>>()?;
-
-    Ok(unsafe { PrimitiveArray::<R>::from_trusted_len_iter(iter) })
+    })
 }
 
 // Natural cast between numeric types
