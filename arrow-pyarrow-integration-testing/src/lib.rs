@@ -28,7 +28,7 @@ use arrow::compute::kernels;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::error::ArrowError;
 use arrow::ffi_stream::ArrowArrayStreamReader;
-use arrow::pyarrow::PyArrowConvert;
+use arrow::pyarrow::{PyArrowConvert, PyArrowType};
 use arrow::record_batch::RecordBatch;
 
 /// Returns `array + array` of an int64 array.
@@ -66,20 +66,23 @@ fn double_py(lambda: &PyAny, py: Python) -> PyResult<bool> {
 
 /// Returns the substring
 #[pyfunction]
-fn substring(array: ArrayData, start: i64) -> PyResult<ArrayData> {
+fn substring(
+    array: PyArrowType<ArrayData>,
+    start: i64,
+) -> PyResult<PyArrowType<ArrayData>> {
     // import
-    let array = ArrayRef::from(array);
+    let array = ArrayRef::from(array.0);
 
     // substring
     let array = kernels::substring::substring(array.as_ref(), start, None)?;
 
-    Ok(array.data().to_owned())
+    Ok(array.data().to_owned().into())
 }
 
 /// Returns the concatenate
 #[pyfunction]
-fn concatenate(array: ArrayData, py: Python) -> PyResult<PyObject> {
-    let array = ArrayRef::from(array);
+fn concatenate(array: PyArrowType<ArrayData>, py: Python) -> PyResult<PyObject> {
+    let array = ArrayRef::from(array.0);
 
     // concat
     let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()])?;
@@ -88,34 +91,36 @@ fn concatenate(array: ArrayData, py: Python) -> PyResult<PyObject> {
 }
 
 #[pyfunction]
-fn round_trip_type(obj: DataType) -> PyResult<DataType> {
+fn round_trip_type(obj: PyArrowType<DataType>) -> PyResult<PyArrowType<DataType>> {
     Ok(obj)
 }
 
 #[pyfunction]
-fn round_trip_field(obj: Field) -> PyResult<Field> {
+fn round_trip_field(obj: PyArrowType<Field>) -> PyResult<PyArrowType<Field>> {
     Ok(obj)
 }
 
 #[pyfunction]
-fn round_trip_schema(obj: Schema) -> PyResult<Schema> {
+fn round_trip_schema(obj: PyArrowType<Schema>) -> PyResult<PyArrowType<Schema>> {
     Ok(obj)
 }
 
 #[pyfunction]
-fn round_trip_array(obj: ArrayData) -> PyResult<ArrayData> {
+fn round_trip_array(obj: PyArrowType<ArrayData>) -> PyResult<PyArrowType<ArrayData>> {
     Ok(obj)
 }
 
 #[pyfunction]
-fn round_trip_record_batch(obj: RecordBatch) -> PyResult<RecordBatch> {
+fn round_trip_record_batch(
+    obj: PyArrowType<RecordBatch>,
+) -> PyResult<PyArrowType<RecordBatch>> {
     Ok(obj)
 }
 
 #[pyfunction]
 fn round_trip_record_batch_reader(
-    obj: ArrowArrayStreamReader,
-) -> PyResult<ArrowArrayStreamReader> {
+    obj: PyArrowType<ArrowArrayStreamReader>,
+) -> PyResult<PyArrowType<ArrowArrayStreamReader>> {
     Ok(obj)
 }
 
