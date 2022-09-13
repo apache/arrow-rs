@@ -236,26 +236,3 @@ impl PyArrowConvert for ArrowArrayStreamReader {
         Ok(PyObject::from(reader))
     }
 }
-
-macro_rules! add_conversion {
-    ($typ:ty) => {
-        impl<'source> FromPyObject<'source> for $typ {
-            fn extract(value: &'source PyAny) -> PyResult<Self> {
-                Self::from_pyarrow(value)
-            }
-        }
-
-        impl<'a> IntoPy<PyObject> for $typ {
-            fn into_py(self, py: Python) -> PyObject {
-                self.to_pyarrow(py).unwrap()
-            }
-        }
-    };
-}
-
-add_conversion!(DataType);
-add_conversion!(Field);
-add_conversion!(Schema);
-add_conversion!(ArrayData);
-add_conversion!(RecordBatch);
-add_conversion!(ArrowArrayStreamReader);
