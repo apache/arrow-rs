@@ -95,19 +95,7 @@ where
     RT::Native: One + Zero,
     F: Fn(LT::Native, RT::Native) -> Result<LT::Native>,
 {
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform math operation on arrays of different length".to_string(),
-        ));
-    }
-
-    try_binary(left, right, |l, r| {
-        if r.is_zero() {
-            Err(ArrowError::DivideByZero)
-        } else {
-            op(l, r)
-        }
-    })
+    try_binary(left, right, op)
 }
 
 /// Helper function for operations where a valid `0` on the right array should
@@ -128,16 +116,12 @@ fn math_checked_divide_op_on_iters<T, F>(
 where
     T: ArrowNumericType,
     T::Native: One + Zero,
-    F: Fn(T::Native, T::Native) -> T::Native,
+    F: Fn(T::Native, T::Native) -> Result<T::Native>,
 {
     let buffer = if null_bit_buffer.is_some() {
         let values = left.zip(right).map(|(left, right)| {
             if let (Some(l), Some(r)) = (left, right) {
-                if r.is_zero() {
-                    Err(ArrowError::DivideByZero)
-                } else {
-                    Ok(op(l, r))
-                }
+                op(l, r)
             } else {
                 Ok(T::default_value())
             }
@@ -146,15 +130,10 @@ where
         unsafe { Buffer::try_from_trusted_len_iter(values) }
     } else {
         // no value is null
-        let values = left.map(|l| l.unwrap()).zip(right.map(|r| r.unwrap())).map(
-            |(left, right)| {
-                if right.is_zero() {
-                    Err(ArrowError::DivideByZero)
-                } else {
-                    Ok(op(left, right))
-                }
-            },
-        );
+        let values = left
+            .map(|l| l.unwrap())
+            .zip(right.map(|r| r.unwrap()))
+            .map(|(left, right)| op(left, right));
         // Safety: Iterator comes from a PrimitiveArray which reports its size correctly
         unsafe { Buffer::try_from_trusted_len_iter(values) }
     }?;
@@ -621,7 +600,7 @@ where
     K: ArrowNumericType,
     T: ArrowNumericType,
     T::Native: One + Zero,
-    F: Fn(T::Native, T::Native) -> T::Native,
+    F: Fn(T::Native, T::Native) -> Result<T::Native>,
 {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(format!(
@@ -1046,7 +1025,13 @@ where
         a % b
     });
     #[cfg(not(feature = "simd"))]
-    return math_checked_divide_op(left, right, |a, b| Ok(a % b));
+    return try_binary(left, right, |a, b| {
+        if b.is_zero() {
+            Err(ArrowError::DivideByZero)
+        } else {
+            Ok(a % b)
+        }
+    });
 }
 
 /// Perform `left / right` operation on two arrays. If either left or right value is null
@@ -1075,12 +1060,17 @@ where
 pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_math_op!(left, right, |a, b| a / b, math_divide_checked_op_dict)
+            typed_dict_math_op!(
+                left,
+                right,
+                |a, b| a.div_checked(b),
+                math_divide_checked_op_dict
+            )
         }
         _ => {
             downcast_primitive_array!(
                 (left, right) => {
-                    math_checked_divide_op(left, right, |a, b| Ok(a / b)).map(|a| Arc::new(a) as ArrayRef)
+                    math_checked_divide_op(left, right, |a, b| a.div_checked(b)).map(|a| Arc::new(a) as ArrayRef)
                 }
                 _ => Err(ArrowError::CastError(format!(
                     "Unsupported data type {}, {}",
@@ -1951,31 +1941,61 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "DivideByZero")]
-    fn test_primitive_array_divide_by_zero_with_checked() {
+    fn test_int_array_divide_by_zero_with_checked() {
         let a = Int32Array::from(vec![15]);
         let b = Int32Array::from(vec![0]);
         divide_checked(&a, &b).unwrap();
     }
 
     #[test]
+    fn test_float_array_divide_by_zero_with_checked() {
+        let a = Float32Array::from(vec![1.0, 0.0, -1.0]);
+        let b = Float32Array::from(vec![0.0, 0.0, 0.0]);
+        let expected =
+            Float32Array::from(vec![f32::INFINITY, f32::NAN, f32::NEG_INFINITY]);
+        assert_eq!(expected, divide_checked(&a, &b).unwrap())
+    }
+
+    #[test]
     #[should_panic(expected = "attempt to divide by zero")]
-    fn test_primitive_array_divide_by_zero() {
+    fn test_int_array_divide_by_zero() {
         let a = Int32Array::from(vec![15]);
         let b = Int32Array::from(vec![0]);
         divide(&a, &b).unwrap();
     }
 
     #[test]
+    fn test_float_array_divide_by_zero() {
+        let a = Float32Array::from(vec![1.0, 0.0, -1.0]);
+        let b = Float32Array::from(vec![0.0, 0.0, 0.0]);
+        let expected =
+            Float32Array::from(vec![f32::INFINITY, f32::NAN, f32::NEG_INFINITY]);
+        assert_eq!(expected, divide(&a, &b).unwrap())
+    }
+
+    #[test]
     #[should_panic(expected = "DivideByZero")]
-    fn test_primitive_array_divide_dyn_by_zero() {
+    fn test_int_array_divide_dyn_by_zero() {
         let a = Int32Array::from(vec![15]);
         let b = Int32Array::from(vec![0]);
         divide_dyn(&a, &b).unwrap();
     }
 
     #[test]
+    fn test_float_array_divide_dyn_by_zero() {
+        let a = Float32Array::from(vec![1.0, 0.0, -1.0]);
+        let b = Float32Array::from(vec![0.0, 0.0, 0.0]);
+        let expected =
+            Float32Array::from(vec![f32::INFINITY, f32::NAN, f32::NEG_INFINITY]);
+        assert_eq!(
+            &expected,
+            as_primitive_array::<Float32Type>(&divide_dyn(&a, &b).unwrap())
+        )
+    }
+
+    #[test]
     #[should_panic(expected = "DivideByZero")]
-    fn test_primitive_array_divide_dyn_by_zero_dict() {
+    fn test_int_array_divide_dyn_by_zero_dict() {
         let mut builder =
             PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(1, 1);
         builder.append(15).unwrap();
@@ -1987,6 +2007,31 @@ mod tests {
         let b = builder.finish();
 
         divide_dyn(&a, &b).unwrap();
+    }
+
+    #[test]
+    fn test_float_array_divide_dyn_by_zero_dict() {
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Float32Type>::with_capacity(1, 1);
+        builder.append(15.0).unwrap();
+        builder.append(0.0).unwrap();
+        builder.append(-1.5).unwrap();
+        let a = builder.finish();
+
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Float32Type>::with_capacity(1, 1);
+        builder.append(0.0).unwrap();
+        builder.append(0.0).unwrap();
+        builder.append(0.0).unwrap();
+        let b = builder.finish();
+
+        let expected =
+            Float32Array::from(vec![f32::INFINITY, f32::NAN, f32::NEG_INFINITY]);
+
+        assert_eq!(
+            &expected,
+            as_primitive_array::<Float32Type>(&divide_dyn(&a, &b).unwrap())
+        )
     }
 
     #[test]
