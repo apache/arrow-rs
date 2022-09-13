@@ -28,14 +28,9 @@ use super::Field;
 /// Note that this information is only part of the meta-data and not part of the physical
 /// memory layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Schema {
     pub fields: Vec<Field>,
     /// A map of key-value pairs containing additional meta data.
-    #[cfg_attr(
-        feature = "serde",
-        serde(skip_serializing_if = "HashMap::is_empty", default)
-    )]
     pub metadata: HashMap<String, String>,
 }
 
@@ -275,17 +270,28 @@ impl Schema {
     #[cfg(feature = "json")]
     fn from_metadata(json: &serde_json::Value) -> Result<HashMap<String, String>> {
         use serde_json::Value;
+        use ArrowError::ParseError;
         match json {
-            Value::Array(_) => {
-                let mut hashmap = HashMap::new();
-                let values: Vec<MetadataKeyValue> = serde_json::from_value(json.clone())
-                    .map_err(|_| {
-                        ArrowError::JsonError(
-                            "Unable to parse object into key-value pair".to_string(),
-                        )
+            Value::Array(values) => {
+                let mut hashmap = HashMap::with_capacity(values.len());
+                for value in values {
+                    let object = value.as_object().ok_or_else(|| {
+                        ParseError("expected list of objects".to_string())
                     })?;
-                for meta in values {
-                    hashmap.insert(meta.key.clone(), meta.value);
+
+                    let key = object
+                        .get("key")
+                        .ok_or_else(|| ParseError("key not found".to_string()))?
+                        .as_str()
+                        .ok_or_else(|| ParseError("expected string key".to_string()))?;
+
+                    let value = object
+                        .get("value")
+                        .ok_or_else(|| ParseError("value not found".to_string()))?
+                        .as_str()
+                        .ok_or_else(|| ParseError("expected string value".to_string()))?;
+
+                    hashmap.insert(key.to_string(), value.to_string());
                 }
                 Ok(hashmap)
             }
@@ -295,15 +301,13 @@ impl Schema {
                     if let Value::String(v) = v {
                         Ok((k.to_string(), v.to_string()))
                     } else {
-                        Err(ArrowError::ParseError(
+                        Err(ParseError(
                             "metadata `value` field must be a string".to_string(),
                         ))
                     }
                 })
                 .collect::<Result<_>>(),
-            _ => Err(ArrowError::ParseError(
-                "`metadata` field must be an object".to_string(),
-            )),
+            _ => Err(ParseError("`metadata` field must be an object".to_string())),
         }
     }
 
@@ -355,13 +359,6 @@ impl Hash for Schema {
     }
 }
 
-#[cfg(feature = "json")]
-#[derive(serde::Deserialize)]
-struct MetadataKeyValue {
-    key: String,
-    value: String,
-}
-
 #[cfg(test)]
 mod tests {
     use crate::datatypes::DataType;
@@ -378,16 +375,16 @@ mod tests {
             Field::new("priority", DataType::UInt8, false),
         ]);
 
-        let json = serde_json::to_string(&schema).unwrap();
-        let de_schema = serde_json::from_str(&json).unwrap();
+        let json = schema.to_json();
+        let de_schema = Schema::from(&json).unwrap();
 
         assert_eq!(schema, de_schema);
 
         // ser/de with non-empty metadata
         let schema = schema
             .with_metadata([("key".to_owned(), "val".to_owned())].into_iter().collect());
-        let json = serde_json::to_string(&schema).unwrap();
-        let de_schema = serde_json::from_str(&json).unwrap();
+        let json = schema.to_json();
+        let de_schema = Schema::from(&json).unwrap();
 
         assert_eq!(schema, de_schema);
     }

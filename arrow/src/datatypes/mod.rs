@@ -153,7 +153,7 @@ mod tests {
             ),
         ]);
 
-        let serialized = serde_json::to_string(&person).unwrap();
+        let serialized = person.to_json();
 
         // NOTE that this is testing the default (derived) serialization format, not the
         // JSON format specified in metadata.md
@@ -169,7 +169,7 @@ mod tests {
             serialized
         );
 
-        let deserialized = serde_json::from_str(&serialized).unwrap();
+        let deserialized = DataType::from(&serialized).unwrap();
 
         assert_eq!(person, deserialized);
     }

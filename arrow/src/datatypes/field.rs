@@ -27,7 +27,6 @@ use super::DataType;
 /// A [`Schema`](super::Schema) is an ordered collection of
 /// [`Field`] objects.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Field {
     name: String,
     data_type: DataType,
@@ -35,7 +34,6 @@ pub struct Field {
     dict_id: i64,
     dict_is_ordered: bool,
     /// A map of key-value pairs containing additional custom meta data.
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     metadata: Option<BTreeMap<String, String>>,
 }
 
