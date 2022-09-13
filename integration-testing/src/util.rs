@@ -256,7 +256,7 @@ impl ArrowJsonField {
     fn to_arrow_field(&self) -> Result<Field> {
         // a bit regressive, but we have to convert the field to JSON in order to convert it
         let field = serde_json::to_value(self)?;
-        Field::from(&field)
+        Ok(Field::from(&field)?)
     }
 }
 
