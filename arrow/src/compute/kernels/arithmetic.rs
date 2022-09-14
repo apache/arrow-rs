@@ -32,7 +32,7 @@ use crate::buffer::Buffer;
 use crate::buffer::MutableBuffer;
 use crate::compute::kernels::arity::unary;
 use crate::compute::util::combine_option_bitmap;
-use crate::compute::{binary, try_binary, try_unary, unary_dyn};
+use crate::compute::{binary, binary_opt, try_binary, try_unary, unary_dyn};
 use crate::datatypes::{
     native_op::ArrowNativeTypeOp, ArrowNumericType, DataType, Date32Type, Date64Type,
     IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
@@ -659,7 +659,7 @@ where
 }
 
 /// Perform `left + right` operation on two arrays. If either left or right value is null
-/// then the result is also null. Once
+/// then the result is also null.
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `add` instead.
@@ -1055,6 +1055,32 @@ where
 }
 
 /// Perform `left / right` operation on two arrays. If either left or right value is null
+/// then the result is also null.
+///
+/// If any right hand value is zero, the operation value will be replaced with null in the
+/// result.
+///
+/// Unlike `divide` or `divide_checked`, division by zero will get a null value instead
+/// returning an `Err`, this also doesn't check overflowing, overflowing will just wrap
+/// the result around.
+pub fn divide_opt<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp + Zero + One,
+{
+    Ok(binary_opt(left, right, |a, b| {
+        if b.is_zero() {
+            None
+        } else {
+            Some(a.div_wrapping(b))
+        }
+    }))
+}
+
+/// Perform `left / right` operation on two arrays. If either left or right value is null
 /// then the result is also null. If any right hand value is zero then the result of this
 /// operation will be `Err(ArrowError::DivideByZero)`.
 pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
@@ -1093,7 +1119,7 @@ pub fn divide<T>(
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
-    T: datatypes::ArrowNumericType,
+    T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
     math_op(left, right, |a, b| a.div_wrapping(b))
@@ -2189,5 +2215,24 @@ mod tests {
 
         let overflow = multiply_scalar_checked(&a, i32::MAX);
         overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_div_opt_overflow_division_by_zero() {
+        let a = Int32Array::from(vec![i32::MIN]);
+        let b = Int32Array::from(vec![-1]);
+
+        let wrapped = divide(&a, &b);
+        let expected = Int32Array::from(vec![-2147483648]);
+        assert_eq!(expected, wrapped.unwrap());
+
+        let overflow = divide_opt(&a, &b);
+        let expected = Int32Array::from(vec![-2147483648]);
+        assert_eq!(expected, overflow.unwrap());
+
+        let b = Int32Array::from(vec![0]);
+        let overflow = divide_opt(&a, &b);
+        let expected = Int32Array::from(vec![None]);
+        assert_eq!(expected, overflow.unwrap());
     }
 }
