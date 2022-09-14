@@ -233,80 +233,6 @@ impl Schema {
             .find(|&(_, c)| c.name() == name)
     }
 
-    /// Generate a JSON representation of the `Schema`.
-    #[cfg(feature = "json")]
-    pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "fields": self.fields.iter().map(|field| field.to_json()).collect::<Vec<serde_json::Value>>(),
-            "metadata": serde_json::to_value(&self.metadata).unwrap()
-        })
-    }
-
-    /// Parse a `Schema` definition from a JSON representation.
-    #[cfg(feature = "json")]
-    pub fn from(json: &serde_json::Value) -> Result<Self> {
-        use serde_json::Value;
-        match *json {
-            Value::Object(ref schema) => {
-                let fields = if let Some(Value::Array(fields)) = schema.get("fields") {
-                    fields.iter().map(Field::from).collect::<Result<_>>()?
-                } else {
-                    return Err(ArrowError::ParseError(
-                        "Schema fields should be an array".to_string(),
-                    ));
-                };
-
-                let metadata = if let Some(value) = schema.get("metadata") {
-                    Self::from_metadata(value)?
-                } else {
-                    HashMap::default()
-                };
-
-                Ok(Self { fields, metadata })
-            }
-            _ => Err(ArrowError::ParseError(
-                "Invalid json value type for schema".to_string(),
-            )),
-        }
-    }
-
-    /// Parse a `metadata` definition from a JSON representation.
-    /// The JSON can either be an Object or an Array of Objects.
-    #[cfg(feature = "json")]
-    fn from_metadata(json: &serde_json::Value) -> Result<HashMap<String, String>> {
-        use serde_json::Value;
-        match json {
-            Value::Array(_) => {
-                let mut hashmap = HashMap::new();
-                let values: Vec<MetadataKeyValue> = serde_json::from_value(json.clone())
-                    .map_err(|_| {
-                        ArrowError::JsonError(
-                            "Unable to parse object into key-value pair".to_string(),
-                        )
-                    })?;
-                for meta in values {
-                    hashmap.insert(meta.key.clone(), meta.value);
-                }
-                Ok(hashmap)
-            }
-            Value::Object(md) => md
-                .iter()
-                .map(|(k, v)| {
-                    if let Value::String(v) = v {
-                        Ok((k.to_string(), v.to_string()))
-                    } else {
-                        Err(ArrowError::ParseError(
-                            "metadata `value` field must be a string".to_string(),
-                        ))
-                    }
-                })
-                .collect::<Result<_>>(),
-            _ => Err(ArrowError::ParseError(
-                "`metadata` field must be an object".to_string(),
-            )),
-        }
-    }
-
     /// Check to see if `self` is a superset of `other` schema. Here are the comparison rules:
     ///
     /// * `self` and `other` should contain the same number of fields
@@ -353,13 +279,6 @@ impl Hash for Schema {
             self.metadata.get(k).expect("key valid").hash(state);
         }
     }
-}
-
-#[cfg(feature = "json")]
-#[derive(serde::Deserialize)]
-struct MetadataKeyValue {
-    key: String,
-    value: String,
 }
 
 #[cfg(test)]
