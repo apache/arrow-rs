@@ -80,7 +80,7 @@ impl RecordBatch {
     /// # }
     /// ```
     pub fn try_new(schema: SchemaRef, columns: Vec<ArrayRef>) -> Result<Self> {
-        let options = RecordBatchOptions::default();
+        let options = RecordBatchOptionsBuilder::new().build();
         Self::try_new_impl(schema, columns, &options)
     }
 
@@ -412,16 +412,42 @@ pub struct RecordBatchOptions {
     /// Optional row count, useful for specifying a row count for a RecordBatch with no columns
     pub row_count: Option<usize>,
 }
+/// Builder to create new RecordBatchOptions object
+#[derive(Debug)]
+pub struct RecordBatchOptionsBuilder {
+    /// Match field names of structs and lists. If set to `true`, the names must match.
+    match_field_names: bool,
 
-impl Default for RecordBatchOptions {
-    fn default() -> Self {
+    /// Optional row count, useful for specifying a row count for a RecordBatch with no columns
+    row_count: Option<usize>,
+}
+
+impl RecordBatchOptionsBuilder {
+    pub fn new() -> Self {
         Self {
             match_field_names: true,
             row_count: None,
         }
     }
+    pub fn match_field_names(mut self, match_field_names: bool) -> Self {
+        self.match_field_names = match_field_names;
+        self
+    }
+    pub fn row_count(mut self, row_count: usize) -> Self {
+        self.row_count = Some(row_count);
+        self
+    }
+    pub fn build(self) -> RecordBatchOptions {
+        let Self {
+            match_field_names,
+            row_count,
+        } = self;
+        RecordBatchOptions {
+            match_field_names,
+            row_count,
+        }
+    }
 }
-
 impl From<&StructArray> for RecordBatch {
     /// Create a record batch from struct array, where each field of
     /// the `StructArray` becomes a `Field` in the schema.
@@ -901,10 +927,7 @@ mod tests {
             .to_string()
             .contains("must either specify a row count or at least one column"));
 
-        let options = RecordBatchOptions {
-            row_count: Some(10),
-            ..Default::default()
-        };
+        let options = RecordBatchOptionsBuilder::new().row_count(10).build();
 
         let ok =
             RecordBatch::try_new_with_options(schema.clone(), vec![], &options).unwrap();
@@ -928,5 +951,14 @@ mod tests {
             vec![Arc::new(Int32Array::from(vec![Some(1), None]))],
         );
         assert_eq!("Invalid argument error: Column 'a' is declared as non-nullable but contains null values", format!("{}", maybe_batch.err().unwrap()));
+    }
+    #[test]
+    fn test_record_batch_options_builder() {
+        let options = RecordBatchOptionsBuilder::new()
+            .match_field_names(false)
+            .row_count(20)
+            .build();
+        assert_eq!(options.match_field_names, false);
+        assert_eq!(options.row_count.unwrap(), 20)
     }
 }

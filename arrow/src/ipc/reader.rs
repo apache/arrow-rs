@@ -31,7 +31,7 @@ use crate::compute::cast;
 use crate::datatypes::{DataType, Field, IntervalUnit, Schema, SchemaRef, UnionMode};
 use crate::error::{ArrowError, Result};
 use crate::ipc;
-use crate::record_batch::{RecordBatch, RecordBatchOptions, RecordBatchReader};
+use crate::record_batch::{RecordBatch, RecordBatchOptionsBuilder, RecordBatchReader};
 
 use crate::ipc::compression::CompressionCodec;
 use ipc::CONTINUATION_MARKER;
@@ -578,10 +578,9 @@ pub fn read_record_batch(
     let mut node_index = 0;
     let mut arrays = vec![];
 
-    let options = RecordBatchOptions {
-        row_count: Some(batch.length() as usize),
-        ..Default::default()
-    };
+    let options = RecordBatchOptionsBuilder::new()
+        .row_count(batch.length() as usize)
+        .build();
 
     if let Some(projection) = projection {
         // project fields
@@ -1692,10 +1691,10 @@ mod tests {
     #[test]
     fn test_no_columns_batch() {
         let schema = Arc::new(Schema::new(vec![]));
-        let options = RecordBatchOptions {
-            match_field_names: true,
-            row_count: Some(10),
-        };
+        let options = RecordBatchOptionsBuilder::new()
+            .match_field_names(true)
+            .row_count(10)
+            .build();
         let input_batch =
             RecordBatch::try_new_with_options(schema, vec![], &options).unwrap();
         let output_batch = roundtrip_ipc_stream(&input_batch);
