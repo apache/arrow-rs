@@ -1974,6 +1974,14 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "DivideByZero")]
+    fn test_f32_array_divide_by_zero_with_checked() {
+        let a = Float32Array::from(vec![15.0]);
+        let b = Float32Array::from(vec![0.0]);
+        divide_checked(&a, &b).unwrap();
+    }
+
+    #[test]
     #[should_panic(expected = "attempt to divide by zero")]
     fn test_int_array_divide_by_zero() {
         let a = Int32Array::from(vec![15]);
@@ -1982,10 +1990,28 @@ mod tests {
     }
 
     #[test]
+    fn test_f32_array_divide_by_zero() {
+        let a = Float32Array::from(vec![1.5, 0.0, -1.5]);
+        let b = Float32Array::from(vec![0.0, 0.0, 0.0]);
+        let result = divide(&a, &b).unwrap();
+        assert_eq!(result.value(0), f32::INFINITY);
+        assert!(result.value(1).is_nan());
+        assert_eq!(result.value(2), f32::NEG_INFINITY);
+    }
+
+    #[test]
     #[should_panic(expected = "DivideByZero")]
     fn test_int_array_divide_dyn_by_zero() {
         let a = Int32Array::from(vec![15]);
         let b = Int32Array::from(vec![0]);
+        divide_dyn(&a, &b).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "DivideByZero")]
+    fn test_f32_array_divide_dyn_by_zero() {
+        let a = Float32Array::from(vec![1.5]);
+        let b = Float32Array::from(vec![0.0]);
         divide_dyn(&a, &b).unwrap();
     }
 
@@ -2007,14 +2033,38 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "DivideByZero")]
-    fn test_primitive_array_modulus_by_zero() {
+    fn test_f32_dict_array_divide_dyn_by_zero() {
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Float32Type>::with_capacity(1, 1);
+        builder.append(1.5).unwrap();
+        let a = builder.finish();
+
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Float32Type>::with_capacity(1, 1);
+        builder.append(0.0).unwrap();
+        let b = builder.finish();
+
+        divide_dyn(&a, &b).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "DivideByZero")]
+    fn test_i32_array_modulus_by_zero() {
         let a = Int32Array::from(vec![15]);
         let b = Int32Array::from(vec![0]);
         modulus(&a, &b).unwrap();
     }
 
     #[test]
-    fn test_primitive_array_divide_f64() {
+    #[should_panic(expected = "DivideByZero")]
+    fn test_f32_array_modulus_by_zero() {
+        let a = Float32Array::from(vec![1.5]);
+        let b = Float32Array::from(vec![0.0]);
+        modulus(&a, &b).unwrap();
+    }
+
+    #[test]
+    fn test_f64_array_divide() {
         let a = Float64Array::from(vec![15.0, 15.0, 8.0]);
         let b = Float64Array::from(vec![5.0, 6.0, 8.0]);
         let c = divide(&a, &b).unwrap();

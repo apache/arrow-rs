@@ -165,7 +165,7 @@ pub(crate) mod native_op {
         }
 
         fn div_checked(self, rhs: Self) -> Result<Self> {
-            if self.is_zero() {
+            if rhs.is_zero() {
                 Err(ArrowError::DivideByZero)
             } else {
                 Ok(self / rhs)
