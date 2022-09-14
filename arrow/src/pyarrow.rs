@@ -39,10 +39,8 @@ use crate::record_batch::RecordBatch;
 import_exception!(pyarrow, ArrowException);
 pub type PyArrowException = ArrowException;
 
-impl From<ArrowError> for PyErr {
-    fn from(err: ArrowError) -> PyErr {
-        PyArrowException::new_err(err.to_string())
-    }
+fn to_py_err(err: ArrowError) -> PyErr {
+    PyArrowException::new_err(err.to_string())
 }
 
 pub trait PyArrowConvert: Sized {
@@ -55,12 +53,12 @@ impl PyArrowConvert for DataType {
         let c_schema = FFI_ArrowSchema::empty();
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         value.call_method1("_export_to_c", (c_schema_ptr as Py_uintptr_t,))?;
-        let dtype = DataType::try_from(&c_schema)?;
+        let dtype = DataType::try_from(&c_schema).map_err(to_py_err)?;
         Ok(dtype)
     }
 
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
-        let c_schema = FFI_ArrowSchema::try_from(self)?;
+        let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
         let class = module.getattr("DataType")?;
@@ -75,12 +73,12 @@ impl PyArrowConvert for Field {
         let c_schema = FFI_ArrowSchema::empty();
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         value.call_method1("_export_to_c", (c_schema_ptr as Py_uintptr_t,))?;
-        let field = Field::try_from(&c_schema)?;
+        let field = Field::try_from(&c_schema).map_err(to_py_err)?;
         Ok(field)
     }
 
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
-        let c_schema = FFI_ArrowSchema::try_from(self)?;
+        let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
         let class = module.getattr("Field")?;
@@ -95,12 +93,12 @@ impl PyArrowConvert for Schema {
         let c_schema = FFI_ArrowSchema::empty();
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         value.call_method1("_export_to_c", (c_schema_ptr as Py_uintptr_t,))?;
-        let schema = Schema::try_from(&c_schema)?;
+        let schema = Schema::try_from(&c_schema).map_err(to_py_err)?;
         Ok(schema)
     }
 
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
-        let c_schema = FFI_ArrowSchema::try_from(self)?;
+        let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
         let class = module.getattr("Schema")?;
@@ -127,15 +125,17 @@ impl PyArrowConvert for ArrayData {
             ),
         )?;
 
-        let ffi_array =
-            unsafe { ffi::ArrowArray::try_from_raw(array_pointer, schema_pointer)? };
-        let data = ArrayData::try_from(ffi_array)?;
+        let ffi_array = unsafe {
+            ffi::ArrowArray::try_from_raw(array_pointer, schema_pointer)
+                .map_err(to_py_err)?
+        };
+        let data = ArrayData::try_from(ffi_array).map_err(to_py_err)?;
 
         Ok(data)
     }
 
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
-        let array = ffi::ArrowArray::try_from(self.clone())?;
+        let array = ffi::ArrowArray::try_from(self.clone()).map_err(to_py_err)?;
         let (array_pointer, schema_pointer) = ffi::ArrowArray::into_raw(array);
 
         let module = py.import("pyarrow")?;
@@ -176,7 +176,7 @@ impl PyArrowConvert for RecordBatch {
             .map(ArrayRef::from_pyarrow)
             .collect::<PyResult<_>>()?;
 
-        let batch = RecordBatch::try_new(schema, arrays)?;
+        let batch = RecordBatch::try_new(schema, arrays).map_err(to_py_err)?;
         Ok(batch)
     }
 
