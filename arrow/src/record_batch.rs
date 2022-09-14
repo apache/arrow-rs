@@ -963,7 +963,7 @@ mod tests {
             .match_field_names(false)
             .row_count(20)
             .build();
-        assert_eq!(options.match_field_names, false);
+        assert!(!options.match_field_names);
         assert_eq!(options.row_count.unwrap(), 20)
     }
 }
