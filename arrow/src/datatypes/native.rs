@@ -118,7 +118,8 @@ pub trait ArrowPrimitiveType: 'static {
 
 pub(crate) mod native_op {
     use super::ArrowNativeType;
-    use crate::error::Result;
+    use crate::error::{ArrowError, Result};
+    use num::Zero;
     use std::ops::{Add, Div, Mul, Sub};
 
     /// Trait for ArrowNativeType to provide overflow-checking and non-overflow-checking
@@ -137,6 +138,7 @@ pub(crate) mod native_op {
         + Sub<Output = Self>
         + Mul<Output = Self>
         + Div<Output = Self>
+        + Zero
     {
         fn add_checked(self, rhs: Self) -> Result<Self> {
             Ok(self + rhs)
@@ -163,7 +165,11 @@ pub(crate) mod native_op {
         }
 
         fn div_checked(self, rhs: Self) -> Result<Self> {
-            Ok(self / rhs)
+            if self.is_zero() {
+                Err(ArrowError::DivideByZero)
+            } else {
+                Ok(self / rhs)
+            }
         }
 
         fn div_wrapping(self, rhs: Self) -> Self {

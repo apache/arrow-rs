@@ -1974,16 +1974,6 @@ mod tests {
     }
 
     #[test]
-    fn test_float_array_divide_by_zero_with_checked() {
-        let a = Float32Array::from(vec![1.0, 0.0, -1.0]);
-        let b = Float32Array::from(vec![0.0, 0.0, 0.0]);
-        let result = divide_checked(&a, &b).unwrap();
-        assert_eq!(result.value(0), f32::INFINITY);
-        assert!(result.value(1).is_nan());
-        assert_eq!(result.value(2), f32::NEG_INFINITY);
-    }
-
-    #[test]
     #[should_panic(expected = "attempt to divide by zero")]
     fn test_int_array_divide_by_zero() {
         let a = Int32Array::from(vec![15]);
@@ -1992,32 +1982,11 @@ mod tests {
     }
 
     #[test]
-    fn test_float_array_divide_by_zero() {
-        let a = Float32Array::from(vec![1.0, 0.0, -1.0]);
-        let b = Float32Array::from(vec![0.0, 0.0, 0.0]);
-        let result = divide(&a, &b).unwrap();
-        assert_eq!(result.value(0), f32::INFINITY);
-        assert!(result.value(1).is_nan());
-        assert_eq!(result.value(2), f32::NEG_INFINITY);
-    }
-
-    #[test]
     #[should_panic(expected = "DivideByZero")]
     fn test_int_array_divide_dyn_by_zero() {
         let a = Int32Array::from(vec![15]);
         let b = Int32Array::from(vec![0]);
         divide_dyn(&a, &b).unwrap();
-    }
-
-    #[test]
-    fn test_float_array_divide_dyn_by_zero() {
-        let a = Float32Array::from(vec![1.0, 0.0, -1.0]);
-        let b = Float32Array::from(vec![0.0, 0.0, 0.0]);
-        let result = &divide_dyn(&a, &b).unwrap();
-        let result = as_primitive_array::<Float32Type>(result);
-        assert_eq!(result.value(0), f32::INFINITY);
-        assert!(result.value(1).is_nan());
-        assert_eq!(result.value(2), f32::NEG_INFINITY);
     }
 
     #[test]
@@ -2034,29 +2003,6 @@ mod tests {
         let b = builder.finish();
 
         divide_dyn(&a, &b).unwrap();
-    }
-
-    #[test]
-    fn test_float_array_divide_dyn_by_zero_dict() {
-        let mut builder =
-            PrimitiveDictionaryBuilder::<Int8Type, Float32Type>::with_capacity(1, 1);
-        builder.append(15.0).unwrap();
-        builder.append(0.0).unwrap();
-        builder.append(-1.5).unwrap();
-        let a = builder.finish();
-
-        let mut builder =
-            PrimitiveDictionaryBuilder::<Int8Type, Float32Type>::with_capacity(1, 1);
-        builder.append(0.0).unwrap();
-        builder.append(0.0).unwrap();
-        builder.append(0.0).unwrap();
-        let b = builder.finish();
-
-        let result = &divide_dyn(&a, &b).unwrap();
-        let result = as_primitive_array::<Float32Type>(result);
-        assert_eq!(result.value(0), f32::INFINITY);
-        assert!(result.value(1).is_nan());
-        assert_eq!(result.value(2), f32::NEG_INFINITY);
     }
 
     #[test]
