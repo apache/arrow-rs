@@ -75,7 +75,7 @@ default = ["csv", "ipc", "json"]
 ipc_compression = ["ipc", "zstd", "lz4"]
 csv = ["csv_crate"]
 ipc = ["flatbuffers"]
-json = ["serde_json", "arrow-schema/serde"]
+json = ["serde_json"]
 simd = ["packed_simd"]
 prettyprint = ["comfy-table"]
 # The test utils feature enables code used in benchmarks and tests but

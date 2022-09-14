@@ -288,6 +288,30 @@ mod tests {
     use crate::datatype::DataType;
 
     #[test]
+    #[cfg(feature = "serde")]
+    fn test_ser_de_metadata() {
+        // ser/de with empty metadata
+        let schema = Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("address", DataType::Utf8, false),
+            Field::new("priority", DataType::UInt8, false),
+        ]);
+
+        let json = serde_json::to_string(&schema).unwrap();
+        let de_schema = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(schema, de_schema);
+
+        // ser/de with non-empty metadata
+        let schema = schema
+            .with_metadata([("key".to_owned(), "val".to_owned())].into_iter().collect());
+        let json = serde_json::to_string(&schema).unwrap();
+        let de_schema = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(schema, de_schema);
+    }
+
+    #[test]
     fn test_projection() {
         let mut metadata = HashMap::new();
         metadata.insert("meta".to_string(), "data".to_string());
