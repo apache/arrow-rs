@@ -184,7 +184,14 @@ where
     F: Fn(T::Native) -> Result<T::Native>,
 {
     downcast_dictionary_array! {
-        array => try_unary_dict::<_, F, T>(array, op),
+        array => if array.values().data_type() == &T::DATA_TYPE {
+            try_unary_dict::<_, F, T>(array, op)
+        } else {
+            Err(ArrowError::NotYetImplemented(format!(
+                "Cannot perform unary operation on dictionary array of type {}",
+                array.data_type()
+            )))
+        },
         t => {
             if t == &T::DATA_TYPE {
                 Ok(Arc::new(try_unary::<T, F, T>(
