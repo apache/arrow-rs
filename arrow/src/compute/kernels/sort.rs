@@ -332,15 +332,7 @@ pub fn sort_to_indices(
             });
             downcast_dictionary_array!(
                 values => match values.values().data_type() {
-                    DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 | DataType::UInt8 |
-                    DataType::UInt16 | DataType::UInt32 | DataType::UInt64 | DataType::Float32 | DataType::Float64 |
-                    DataType::Date32 | DataType::Date64 | DataType::Time32(Second) | DataType::Time32(Millisecond) |
-                    DataType::Time64(Microsecond) | DataType::Time64(Nanosecond) | DataType::Timestamp(Second, _) |
-                    DataType::Timestamp(Millisecond, _) | DataType::Timestamp(Microsecond, _) | DataType::Timestamp(Nanosecond, _) |
-                    DataType::Interval(IntervalUnit::YearMonth) | DataType::Interval(IntervalUnit::DayTime) |
-                    DataType::Interval(IntervalUnit::MonthDayNano) | DataType::Duration(TimeUnit::Second) |
-                    DataType::Duration(TimeUnit::Millisecond) | DataType::Duration(TimeUnit::Microsecond) |
-                    DataType::Duration(TimeUnit::Nanosecond) => {
+                    dt if DataType::is_primitive(dt) => {
                         let dict_values = values.values();
                         let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
                         let value_indices_map = prepare_indices_map(&sorted_value_indices);
