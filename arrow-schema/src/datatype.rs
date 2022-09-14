@@ -20,7 +20,7 @@ use std::fmt;
 use crate::field::Field;
 
 #[cfg(feature = "json")]
-use crate::error::ArrowSchemaError;
+use crate::error::ArrowError;
 
 /// The set of datatypes that are supported by this implementation of Apache Arrow.
 ///
@@ -267,7 +267,7 @@ impl fmt::Display for DataType {
 impl DataType {
     /// Parse a data type from a JSON representation.
     #[cfg(feature = "json")]
-    pub fn from(json: &serde_json::Value) -> Result<DataType, ArrowSchemaError> {
+    pub fn from(json: &serde_json::Value) -> Result<DataType, ArrowError> {
         use serde_json::Value;
         let default_field = Field::new("", DataType::Boolean, true);
         match *json {
@@ -283,7 +283,7 @@ impl DataType {
                     if let Some(Value::Number(size)) = map.get("byteWidth") {
                         Ok(DataType::FixedSizeBinary(size.as_i64().unwrap() as i32))
                     } else {
-                        Err(ArrowSchemaError::Parse(
+                        Err(ArrowError::ParseError(
                             "Expecting a byteWidth for fixedsizebinary".to_string(),
                         ))
                     }
@@ -292,13 +292,13 @@ impl DataType {
                     // return a list with any type as its child isn't defined in the map
                     let precision = match map.get("precision") {
                         Some(p) => Ok(p.as_u64().unwrap().try_into().unwrap()),
-                        None => Err(ArrowSchemaError::Parse(
+                        None => Err(ArrowError::ParseError(
                             "Expecting a precision for decimal".to_string(),
                         )),
                     }?;
                     let scale = match map.get("scale") {
                         Some(s) => Ok(s.as_u64().unwrap().try_into().unwrap()),
-                        _ => Err(ArrowSchemaError::Parse(
+                        _ => Err(ArrowError::ParseError(
                             "Expecting a scale for decimal".to_string(),
                         )),
                     }?;
@@ -312,7 +312,7 @@ impl DataType {
                     } else if bit_width == 256 {
                         Ok(DataType::Decimal256(precision, scale))
                     } else {
-                        Err(ArrowSchemaError::Parse(
+                        Err(ArrowError::ParseError(
                             "Decimal bit_width invalid".to_string(),
                         ))
                     }
@@ -321,7 +321,7 @@ impl DataType {
                     Some(p) if p == "HALF" => Ok(DataType::Float16),
                     Some(p) if p == "SINGLE" => Ok(DataType::Float32),
                     Some(p) if p == "DOUBLE" => Ok(DataType::Float64),
-                    _ => Err(ArrowSchemaError::Parse(
+                    _ => Err(ArrowError::ParseError(
                         "floatingpoint precision missing or invalid".to_string(),
                     )),
                 },
@@ -331,14 +331,14 @@ impl DataType {
                         Some(p) if p == "MILLISECOND" => Ok(TimeUnit::Millisecond),
                         Some(p) if p == "MICROSECOND" => Ok(TimeUnit::Microsecond),
                         Some(p) if p == "NANOSECOND" => Ok(TimeUnit::Nanosecond),
-                        _ => Err(ArrowSchemaError::Parse(
+                        _ => Err(ArrowError::ParseError(
                             "timestamp unit missing or invalid".to_string(),
                         )),
                     };
                     let tz = match map.get("timezone") {
                         None => Ok(None),
                         Some(Value::String(tz)) => Ok(Some(tz.clone())),
-                        _ => Err(ArrowSchemaError::Parse(
+                        _ => Err(ArrowError::ParseError(
                             "timezone must be a string".to_string(),
                         )),
                     };
@@ -347,7 +347,7 @@ impl DataType {
                 Some(s) if s == "date" => match map.get("unit") {
                     Some(p) if p == "DAY" => Ok(DataType::Date32),
                     Some(p) if p == "MILLISECOND" => Ok(DataType::Date64),
-                    _ => Err(ArrowSchemaError::Parse(
+                    _ => Err(ArrowError::ParseError(
                         "date unit missing or invalid".to_string(),
                     )),
                 },
@@ -357,14 +357,14 @@ impl DataType {
                         Some(p) if p == "MILLISECOND" => Ok(TimeUnit::Millisecond),
                         Some(p) if p == "MICROSECOND" => Ok(TimeUnit::Microsecond),
                         Some(p) if p == "NANOSECOND" => Ok(TimeUnit::Nanosecond),
-                        _ => Err(ArrowSchemaError::Parse(
+                        _ => Err(ArrowError::ParseError(
                             "time unit missing or invalid".to_string(),
                         )),
                     };
                     match map.get("bitWidth") {
                         Some(p) if p == 32 => Ok(DataType::Time32(unit?)),
                         Some(p) if p == 64 => Ok(DataType::Time64(unit?)),
-                        _ => Err(ArrowSchemaError::Parse(
+                        _ => Err(ArrowError::ParseError(
                             "time bitWidth missing or invalid".to_string(),
                         )),
                     }
@@ -380,7 +380,7 @@ impl DataType {
                     Some(p) if p == "NANOSECOND" => {
                         Ok(DataType::Duration(TimeUnit::Nanosecond))
                     }
-                    _ => Err(ArrowSchemaError::Parse(
+                    _ => Err(ArrowError::ParseError(
                         "time unit missing or invalid".to_string(),
                     )),
                 },
@@ -394,7 +394,7 @@ impl DataType {
                     Some(p) if p == "MONTH_DAY_NANO" => {
                         Ok(DataType::Interval(IntervalUnit::MonthDayNano))
                     }
-                    _ => Err(ArrowSchemaError::Parse(
+                    _ => Err(ArrowError::ParseError(
                         "interval unit missing or invalid".to_string(),
                     )),
                 },
@@ -405,11 +405,11 @@ impl DataType {
                             Some(16) => Ok(DataType::Int16),
                             Some(32) => Ok(DataType::Int32),
                             Some(64) => Ok(DataType::Int64),
-                            _ => Err(ArrowSchemaError::Parse(
+                            _ => Err(ArrowError::ParseError(
                                 "int bitWidth missing or invalid".to_string(),
                             )),
                         },
-                        _ => Err(ArrowSchemaError::Parse(
+                        _ => Err(ArrowError::ParseError(
                             "int bitWidth missing or invalid".to_string(),
                         )),
                     },
@@ -419,15 +419,15 @@ impl DataType {
                             Some(16) => Ok(DataType::UInt16),
                             Some(32) => Ok(DataType::UInt32),
                             Some(64) => Ok(DataType::UInt64),
-                            _ => Err(ArrowSchemaError::Parse(
+                            _ => Err(ArrowError::ParseError(
                                 "int bitWidth missing or invalid".to_string(),
                             )),
                         },
-                        _ => Err(ArrowSchemaError::Parse(
+                        _ => Err(ArrowError::ParseError(
                             "int bitWidth missing or invalid".to_string(),
                         )),
                     },
-                    _ => Err(ArrowSchemaError::Parse(
+                    _ => Err(ArrowError::ParseError(
                         "int signed missing or invalid".to_string(),
                     )),
                 },
@@ -447,7 +447,7 @@ impl DataType {
                             size.as_i64().unwrap() as i32,
                         ))
                     } else {
-                        Err(ArrowSchemaError::Parse(
+                        Err(ArrowError::ParseError(
                             "Expecting a listSize for fixedsizelist".to_string(),
                         ))
                     }
@@ -461,7 +461,7 @@ impl DataType {
                         // Return a map with an empty type as its children aren't defined in the map
                         Ok(DataType::Map(Box::new(default_field), *keys_sorted))
                     } else {
-                        Err(ArrowSchemaError::Parse(
+                        Err(ArrowError::ParseError(
                             "Expecting a keysSorted for map".to_string(),
                         ))
                     }
@@ -473,7 +473,7 @@ impl DataType {
                         } else if mode == "DENSE" {
                             UnionMode::Dense
                         } else {
-                            return Err(ArrowSchemaError::Parse(format!(
+                            return Err(ArrowError::ParseError(format!(
                                 "Unknown union mode {:?} for union",
                                 mode
                             )));
@@ -493,23 +493,23 @@ impl DataType {
 
                             Ok(DataType::Union(default_fields, type_ids, union_mode))
                         } else {
-                            Err(ArrowSchemaError::Parse(
+                            Err(ArrowError::ParseError(
                                 "Expecting a typeIds for union ".to_string(),
                             ))
                         }
                     } else {
-                        Err(ArrowSchemaError::Parse(
+                        Err(ArrowError::ParseError(
                             "Expecting a mode for union".to_string(),
                         ))
                     }
                 }
-                Some(other) => Err(ArrowSchemaError::Parse(format!(
+                Some(other) => Err(ArrowError::ParseError(format!(
                     "invalid or unsupported type name: {} in {:?}",
                     other, json
                 ))),
-                None => Err(ArrowSchemaError::Parse("type name missing".to_string())),
+                None => Err(ArrowError::ParseError("type name missing".to_string())),
             },
-            _ => Err(ArrowSchemaError::Parse(
+            _ => Err(ArrowError::ParseError(
                 "invalid json value type".to_string(),
             )),
         }

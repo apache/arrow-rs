@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::ArrowSchemaError;
+use crate::error::ArrowError;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
@@ -252,14 +252,14 @@ impl Field {
 
     /// Parse a `Field` definition from a JSON representation.
     #[cfg(feature = "json")]
-    pub fn from(json: &serde_json::Value) -> Result<Self, ArrowSchemaError> {
+    pub fn from(json: &serde_json::Value) -> Result<Self, ArrowError> {
         use serde_json::Value;
         match *json {
             Value::Object(ref map) => {
                 let name = match map.get("name") {
                     Some(&Value::String(ref name)) => name.to_string(),
                     _ => {
-                        return Err(ArrowSchemaError::Parse(
+                        return Err(ArrowError::ParseError(
                             "Field missing 'name' attribute".to_string(),
                         ));
                     }
@@ -267,7 +267,7 @@ impl Field {
                 let nullable = match map.get("nullable") {
                     Some(&Value::Bool(b)) => b,
                     _ => {
-                        return Err(ArrowSchemaError::Parse(
+                        return Err(ArrowError::ParseError(
                             "Field missing 'nullable' attribute".to_string(),
                         ));
                     }
@@ -275,7 +275,7 @@ impl Field {
                 let data_type = match map.get("type") {
                     Some(t) => DataType::from(t)?,
                     _ => {
-                        return Err(ArrowSchemaError::Parse(
+                        return Err(ArrowError::ParseError(
                             "Field missing 'type' attribute".to_string(),
                         ));
                     }
@@ -289,7 +289,7 @@ impl Field {
                             match value.as_object() {
                                 Some(map) => {
                                     if map.len() != 2 {
-                                        return Err(ArrowSchemaError::Parse(
+                                        return Err(ArrowError::ParseError(
                                             "Field 'metadata' must have exact two entries for each key-value map".to_string(),
                                         ));
                                     }
@@ -304,14 +304,14 @@ impl Field {
                                                 v_str.to_string().clone(),
                                             );
                                         } else {
-                                            return Err(ArrowSchemaError::Parse("Field 'metadata' must have map value of string type".to_string()));
+                                            return Err(ArrowError::ParseError("Field 'metadata' must have map value of string type".to_string()));
                                         }
                                     } else {
-                                        return Err(ArrowSchemaError::Parse("Field 'metadata' lacks map keys named \"key\" or \"value\"".to_string()));
+                                        return Err(ArrowError::ParseError("Field 'metadata' lacks map keys named \"key\" or \"value\"".to_string()));
                                     }
                                 }
                                 _ => {
-                                    return Err(ArrowSchemaError::Parse(
+                                    return Err(ArrowError::ParseError(
                                         "Field 'metadata' contains non-object key-value pair".to_string(),
                                     ));
                                 }
@@ -327,7 +327,7 @@ impl Field {
                             if let Some(str_value) = v.as_str() {
                                 res.insert(k.clone(), str_value.to_string().clone());
                             } else {
-                                return Err(ArrowSchemaError::Parse(
+                                return Err(ArrowError::ParseError(
                                     format!("Field 'metadata' contains non-string value for key {}", k),
                                 ));
                             }
@@ -335,7 +335,7 @@ impl Field {
                         Some(res)
                     }
                     Some(_) => {
-                        return Err(ArrowSchemaError::Parse(
+                        return Err(ArrowError::ParseError(
                             "Field `metadata` is not json array".to_string(),
                         ));
                     }
@@ -349,7 +349,7 @@ impl Field {
                     | DataType::FixedSizeList(_, _) => match map.get("children") {
                         Some(Value::Array(values)) => {
                             if values.len() != 1 {
-                                return Err(ArrowSchemaError::Parse(
+                                return Err(ArrowError::ParseError(
                                     "Field 'children' must have one element for a list data type".to_string(),
                                 ));
                             }
@@ -370,12 +370,12 @@ impl Field {
                                 }
                         }
                         Some(_) => {
-                            return Err(ArrowSchemaError::Parse(
+                            return Err(ArrowError::ParseError(
                                 "Field 'children' must be an array".to_string(),
                             ))
                         }
                         None => {
-                            return Err(ArrowSchemaError::Parse(
+                            return Err(ArrowError::ParseError(
                                 "Field missing 'children' attribute".to_string(),
                             ));
                         }
@@ -388,12 +388,12 @@ impl Field {
                             DataType::Struct(fields)
                         }
                         Some(_) => {
-                            return Err(ArrowSchemaError::Parse(
+                            return Err(ArrowError::ParseError(
                                 "Field 'children' must be an array".to_string(),
                             ))
                         }
                         None => {
-                            return Err(ArrowSchemaError::Parse(
+                            return Err(ArrowError::ParseError(
                                 "Field missing 'children' attribute".to_string(),
                             ));
                         }
@@ -408,20 +408,20 @@ impl Field {
                                         DataType::Map(Box::new(child), keys_sorted)
                                     }
                                     t  => {
-                                        return Err(ArrowSchemaError::Parse(
+                                        return Err(ArrowError::ParseError(
                                             format!("Map children should be a struct with 2 fields, found {:?}",  t)
                                         ))
                                     }
                                 }
                             }
                             Some(_) => {
-                                return Err(ArrowSchemaError::Parse(
+                                return Err(ArrowError::ParseError(
                                     "Field 'children' must be an array with 1 element"
                                         .to_string(),
                                 ))
                             }
                             None => {
-                                return Err(ArrowSchemaError::Parse(
+                                return Err(ArrowError::ParseError(
                                     "Field missing 'children' attribute".to_string(),
                                 ));
                             }
@@ -436,12 +436,12 @@ impl Field {
                             DataType::Union(union_fields, type_ids, mode)
                         }
                         Some(_) => {
-                            return Err(ArrowSchemaError::Parse(
+                            return Err(ArrowError::ParseError(
                                 "Field 'children' must be an array".to_string(),
                             ))
                         }
                         None => {
-                            return Err(ArrowSchemaError::Parse(
+                            return Err(ArrowError::ParseError(
                                 "Field missing 'children' attribute".to_string(),
                             ));
                         }
@@ -457,7 +457,7 @@ impl Field {
                         let index_type = match dictionary.get("indexType") {
                             Some(t) => DataType::from(t)?,
                             _ => {
-                                return Err(ArrowSchemaError::Parse(
+                                return Err(ArrowError::ParseError(
                                     "Field missing 'indexType' attribute".to_string(),
                                 ));
                             }
@@ -465,7 +465,7 @@ impl Field {
                         dict_id = match dictionary.get("id") {
                             Some(Value::Number(n)) => n.as_i64().unwrap(),
                             _ => {
-                                return Err(ArrowSchemaError::Parse(
+                                return Err(ArrowError::ParseError(
                                     "Field missing 'id' attribute".to_string(),
                                 ));
                             }
@@ -473,7 +473,7 @@ impl Field {
                         dict_is_ordered = match dictionary.get("isOrdered") {
                             Some(&Value::Bool(n)) => n,
                             _ => {
-                                return Err(ArrowSchemaError::Parse(
+                                return Err(ArrowError::ParseError(
                                     "Field missing 'isOrdered' attribute".to_string(),
                                 ));
                             }
@@ -491,7 +491,7 @@ impl Field {
                     metadata,
                 })
             }
-            _ => Err(ArrowSchemaError::Parse(
+            _ => Err(ArrowError::ParseError(
                 "Invalid json value type for field".to_string(),
             )),
         }
@@ -543,14 +543,14 @@ impl Field {
     /// assert!(field.try_merge(&Field::new("c1", DataType::Int64, true)).is_ok());
     /// assert!(field.is_nullable());
     /// ```
-    pub fn try_merge(&mut self, from: &Field) -> Result<(), ArrowSchemaError> {
+    pub fn try_merge(&mut self, from: &Field) -> Result<(), ArrowError> {
         if from.dict_id != self.dict_id {
-            return Err(ArrowSchemaError::Merge(
+            return Err(ArrowError::SchemaError(
                 "Fail to merge schema Field due to conflicting dict_id".to_string(),
             ));
         }
         if from.dict_is_ordered != self.dict_is_ordered {
-            return Err(ArrowSchemaError::Merge(
+            return Err(ArrowError::SchemaError(
                 "Fail to merge schema Field due to conflicting dict_is_ordered"
                     .to_string(),
             ));
@@ -562,7 +562,7 @@ impl Field {
                 for (key, from_value) in from_metadata {
                     if let Some(self_value) = self_metadata.get(key) {
                         if self_value != from_value {
-                            return Err(ArrowSchemaError::Merge(format!(
+                            return Err(ArrowError::SchemaError(format!(
                                 "Fail to merge field due to conflicting metadata data value for key {}", key),
                             ));
                         }
@@ -591,7 +591,7 @@ impl Field {
                     }
                 }
                 _ => {
-                    return Err(ArrowSchemaError::Merge(
+                    return Err(ArrowError::SchemaError(
                         "Fail to merge schema Field due to conflicting datatype"
                             .to_string(),
                     ));
@@ -611,7 +611,7 @@ impl Field {
                                 // If the nested fields in two unions are the same, they must have same
                                 // type id.
                                 if self_type_id != field_type_id {
-                                    return Err(ArrowSchemaError::Merge(
+                                    return Err(ArrowError::SchemaError(
                                         "Fail to merge schema Field due to conflicting type ids in union datatype"
                                             .to_string(),
                                     ));
@@ -629,7 +629,7 @@ impl Field {
                     }
                 }
                 _ => {
-                    return Err(ArrowSchemaError::Merge(
+                    return Err(ArrowError::SchemaError(
                         "Fail to merge schema Field due to conflicting datatype"
                             .to_string(),
                     ));
@@ -668,7 +668,7 @@ impl Field {
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _) => {
                 if self.data_type != from.data_type {
-                    return Err(ArrowSchemaError::Merge(
+                    return Err(ArrowError::SchemaError(
                         "Fail to merge schema Field due to conflicting datatype"
                             .to_string(),
                     ));

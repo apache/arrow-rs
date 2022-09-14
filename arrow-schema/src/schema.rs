@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 
-use crate::error::ArrowSchemaError;
+use crate::error::ArrowError;
 use crate::field::Field;
 
 /// Describes the meta-data of an ordered sequence of relative types.
@@ -95,12 +95,12 @@ impl Schema {
 
     /// Returns a new schema with only the specified columns in the new schema
     /// This carries metadata from the parent schema over as well
-    pub fn project(&self, indices: &[usize]) -> Result<Schema, ArrowSchemaError> {
+    pub fn project(&self, indices: &[usize]) -> Result<Schema, ArrowError> {
         let new_fields = indices
             .iter()
             .map(|i| {
                 self.fields.get(*i).cloned().ok_or_else(|| {
-                    ArrowSchemaError::Field(format!(
+                    ArrowError::SchemaError(format!(
                         "project index {} out of bounds, max field {}",
                         i,
                         self.fields().len()
@@ -141,7 +141,7 @@ impl Schema {
     /// ```
     pub fn try_merge(
         schemas: impl IntoIterator<Item = Self>,
-    ) -> Result<Self, ArrowSchemaError> {
+    ) -> Result<Self, ArrowError> {
         schemas
             .into_iter()
             .try_fold(Self::empty(), |mut merged, schema| {
@@ -150,7 +150,7 @@ impl Schema {
                     // merge metadata
                     if let Some(old_val) = merged.metadata.get(&key) {
                         if old_val != &value {
-                            return Err(ArrowSchemaError::Merge(format!(
+                            return Err(ArrowError::SchemaError(format!(
                                 "Fail to merge schema due to conflicting metadata. \
                                          Key '{}' has different values '{}' and '{}'",
                                 key, old_val, value
@@ -192,7 +192,7 @@ impl Schema {
     }
 
     /// Returns an immutable reference of a specific [`Field`] instance selected by name.
-    pub fn field_with_name(&self, name: &str) -> Result<&Field, ArrowSchemaError> {
+    pub fn field_with_name(&self, name: &str) -> Result<&Field, ArrowError> {
         Ok(&self.fields[self.index_of(name)?])
     }
 
@@ -206,13 +206,13 @@ impl Schema {
     }
 
     /// Find the index of the column with the given name.
-    pub fn index_of(&self, name: &str) -> Result<usize, ArrowSchemaError> {
+    pub fn index_of(&self, name: &str) -> Result<usize, ArrowError> {
         (0..self.fields.len())
             .find(|idx| self.fields[*idx].name() == name)
             .ok_or_else(|| {
                 let valid_fields: Vec<String> =
                     self.fields.iter().map(|f| f.name().clone()).collect();
-                ArrowSchemaError::Field(format!(
+                ArrowError::SchemaError(format!(
                     "Unable to get field named \"{}\". Valid fields: {:?}",
                     name, valid_fields
                 ))
@@ -245,14 +245,14 @@ impl Schema {
 
     /// Parse a `Schema` definition from a JSON representation.
     #[cfg(feature = "json")]
-    pub fn from(json: &serde_json::Value) -> Result<Self, ArrowSchemaError> {
+    pub fn from(json: &serde_json::Value) -> Result<Self, ArrowError> {
         use serde_json::Value;
         match *json {
             Value::Object(ref schema) => {
                 let fields = if let Some(Value::Array(fields)) = schema.get("fields") {
                     fields.iter().map(Field::from).collect::<Result<_, _>>()?
                 } else {
-                    return Err(ArrowSchemaError::Parse(
+                    return Err(ArrowError::ParseError(
                         "Schema fields should be an array".to_string(),
                     ));
                 };
@@ -265,7 +265,7 @@ impl Schema {
 
                 Ok(Self { fields, metadata })
             }
-            _ => Err(ArrowSchemaError::Parse(
+            _ => Err(ArrowError::ParseError(
                 "Invalid json value type for schema".to_string(),
             )),
         }
@@ -276,14 +276,14 @@ impl Schema {
     #[cfg(feature = "json")]
     fn from_metadata(
         json: &serde_json::Value,
-    ) -> Result<HashMap<String, String>, ArrowSchemaError> {
+    ) -> Result<HashMap<String, String>, ArrowError> {
         use serde_json::Value;
         match json {
             Value::Array(_) => {
                 let mut hashmap = HashMap::new();
                 let values: Vec<MetadataKeyValue> = serde_json::from_value(json.clone())
                     .map_err(|_| {
-                        ArrowSchemaError::Parse(
+                        ArrowError::ParseError(
                             "Unable to parse object into key-value pair".to_string(),
                         )
                     })?;
@@ -298,13 +298,13 @@ impl Schema {
                     if let Value::String(v) = v {
                         Ok((k.to_string(), v.to_string()))
                     } else {
-                        Err(ArrowSchemaError::Parse(
+                        Err(ArrowError::ParseError(
                             "metadata `value` field must be a string".to_string(),
                         ))
                     }
                 })
                 .collect::<Result<_, _>>(),
-            _ => Err(ArrowSchemaError::Parse(
+            _ => Err(ArrowError::ParseError(
                 "`metadata` field must be an object".to_string(),
             )),
         }

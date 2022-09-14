@@ -58,6 +58,7 @@ use crate::error::{ArrowError, Result};
 use crate::record_batch::{RecordBatch, RecordBatchOptions};
 use crate::util::reader_parser::Parser;
 
+use crate::csv::map_csv_error;
 use csv_crate::{ByteRecord, StringRecord};
 use std::ops::Neg;
 
@@ -187,10 +188,10 @@ fn infer_reader_schema_with_csv_options<R: Read>(
     // get or create header names
     // when has_header is false, creates default column names with column_ prefix
     let headers: Vec<String> = if roptions.has_header {
-        let headers = &csv_reader.headers()?.clone();
+        let headers = &csv_reader.headers().map_err(map_csv_error)?.clone();
         headers.iter().map(|s| s.to_string()).collect()
     } else {
-        let first_record_count = &csv_reader.headers()?.len();
+        let first_record_count = &csv_reader.headers().map_err(map_csv_error)?.len();
         (0..*first_record_count)
             .map(|i| format!("column_{}", i + 1))
             .collect()
@@ -208,7 +209,7 @@ fn infer_reader_schema_with_csv_options<R: Read>(
     let mut record = StringRecord::new();
     let max_records = roptions.max_read_records.unwrap_or(usize::MAX);
     while records_count < max_records {
-        if !csv_reader.read_record(&mut record)? {
+        if !csv_reader.read_record(&mut record).map_err(map_csv_error)? {
             break;
         }
         records_count += 1;
@@ -289,7 +290,7 @@ pub fn infer_schema_from_files(
         }
     }
 
-    Ok(Schema::try_merge(schemas)?)
+    Schema::try_merge(schemas)
 }
 
 // optional bounds of the reader, of the form (min line, max line).
