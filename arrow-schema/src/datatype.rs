@@ -347,3 +347,122 @@ impl DataType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn serde_struct_type() {
+        use std::collections::BTreeMap;
+
+        let kv_array = [("k".to_string(), "v".to_string())];
+        let field_metadata: BTreeMap<String, String> = kv_array.iter().cloned().collect();
+
+        // Non-empty map: should be converted as JSON obj { ... }
+        let first_name = Field::new("first_name", DataType::Utf8, false)
+            .with_metadata(Some(field_metadata));
+
+        // Empty map: should be omitted.
+        let last_name = Field::new("last_name", DataType::Utf8, false)
+            .with_metadata(Some(BTreeMap::default()));
+
+        let person = DataType::Struct(vec![
+            first_name,
+            last_name,
+            Field::new(
+                "address",
+                DataType::Struct(vec![
+                    Field::new("street", DataType::Utf8, false),
+                    Field::new("zip", DataType::UInt16, false),
+                ]),
+                false,
+            ),
+        ]);
+
+        let serialized = serde_json::to_string(&person).unwrap();
+
+        // NOTE that this is testing the default (derived) serialization format, not the
+        // JSON format specified in metadata.md
+
+        assert_eq!(
+            "{\"Struct\":[\
+             {\"name\":\"first_name\",\"data_type\":\"Utf8\",\"nullable\":false,\"dict_id\":0,\"dict_is_ordered\":false,\"metadata\":{\"k\":\"v\"}},\
+             {\"name\":\"last_name\",\"data_type\":\"Utf8\",\"nullable\":false,\"dict_id\":0,\"dict_is_ordered\":false},\
+             {\"name\":\"address\",\"data_type\":{\"Struct\":\
+             [{\"name\":\"street\",\"data_type\":\"Utf8\",\"nullable\":false,\"dict_id\":0,\"dict_is_ordered\":false},\
+             {\"name\":\"zip\",\"data_type\":\"UInt16\",\"nullable\":false,\"dict_id\":0,\"dict_is_ordered\":false}\
+             ]},\"nullable\":false,\"dict_id\":0,\"dict_is_ordered\":false}]}",
+            serialized
+        );
+
+        let deserialized = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(person, deserialized);
+    }
+
+    #[test]
+    fn test_list_datatype_equality() {
+        // tests that list type equality is checked while ignoring list names
+        let list_a = DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+        let list_b = DataType::List(Box::new(Field::new("array", DataType::Int32, true)));
+        let list_c = DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+        let list_d = DataType::List(Box::new(Field::new("item", DataType::UInt32, true)));
+        assert!(list_a.equals_datatype(&list_b));
+        assert!(!list_a.equals_datatype(&list_c));
+        assert!(!list_b.equals_datatype(&list_c));
+        assert!(!list_a.equals_datatype(&list_d));
+
+        let list_e =
+            DataType::FixedSizeList(Box::new(Field::new("item", list_a, false)), 3);
+        let list_f =
+            DataType::FixedSizeList(Box::new(Field::new("array", list_b, false)), 3);
+        let list_g = DataType::FixedSizeList(
+            Box::new(Field::new("item", DataType::FixedSizeBinary(3), true)),
+            3,
+        );
+        assert!(list_e.equals_datatype(&list_f));
+        assert!(!list_e.equals_datatype(&list_g));
+        assert!(!list_f.equals_datatype(&list_g));
+
+        let list_h = DataType::Struct(vec![Field::new("f1", list_e, true)]);
+        let list_i = DataType::Struct(vec![Field::new("f1", list_f.clone(), true)]);
+        let list_j = DataType::Struct(vec![Field::new("f1", list_f.clone(), false)]);
+        let list_k = DataType::Struct(vec![
+            Field::new("f1", list_f.clone(), false),
+            Field::new("f2", list_g.clone(), false),
+            Field::new("f3", DataType::Utf8, true),
+        ]);
+        let list_l = DataType::Struct(vec![
+            Field::new("ff1", list_f.clone(), false),
+            Field::new("ff2", list_g.clone(), false),
+            Field::new("ff3", DataType::LargeUtf8, true),
+        ]);
+        let list_m = DataType::Struct(vec![
+            Field::new("ff1", list_f, false),
+            Field::new("ff2", list_g, false),
+            Field::new("ff3", DataType::Utf8, true),
+        ]);
+        assert!(list_h.equals_datatype(&list_i));
+        assert!(!list_h.equals_datatype(&list_j));
+        assert!(!list_k.equals_datatype(&list_l));
+        assert!(list_k.equals_datatype(&list_m));
+    }
+
+    #[test]
+    fn create_struct_type() {
+        let _person = DataType::Struct(vec![
+            Field::new("first_name", DataType::Utf8, false),
+            Field::new("last_name", DataType::Utf8, false),
+            Field::new(
+                "address",
+                DataType::Struct(vec![
+                    Field::new("street", DataType::Utf8, false),
+                    Field::new("zip", DataType::UInt16, false),
+                ]),
+                false,
+            ),
+        ]);
+    }
+}
