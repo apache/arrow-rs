@@ -28,8 +28,12 @@ use arrow::compute::kernels;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::error::ArrowError;
 use arrow::ffi_stream::ArrowArrayStreamReader;
-use arrow::pyarrow::{PyArrowConvert, PyArrowType};
+use arrow::pyarrow::{PyArrowConvert, PyArrowException, PyArrowType};
 use arrow::record_batch::RecordBatch;
+
+fn to_py_err(err: ArrowError) -> PyErr {
+    PyArrowException::new_err(err.to_string())
+}
 
 /// Returns `array + array` of an int64 array.
 #[pyfunction]
@@ -41,8 +45,10 @@ fn double(array: &PyAny, py: Python) -> PyResult<PyObject> {
     let array = array
         .as_any()
         .downcast_ref::<Int64Array>()
-        .ok_or(ArrowError::ParseError("Expects an int64".to_string()))?;
-    let array = kernels::arithmetic::add(array, array)?;
+        .ok_or_else(|| ArrowError::ParseError("Expects an int64".to_string()))
+        .map_err(to_py_err)?;
+
+    let array = kernels::arithmetic::add(array, array).map_err(to_py_err)?;
 
     // export
     array.to_pyarrow(py)
@@ -74,7 +80,7 @@ fn substring(
     let array = ArrayRef::from(array.0);
 
     // substring
-    let array = kernels::substring::substring(array.as_ref(), start, None)?;
+    let array = kernels::substring::substring(array.as_ref(), start, None).map_err(to_py_err)?;
 
     Ok(array.data().to_owned().into())
 }
@@ -85,7 +91,7 @@ fn concatenate(array: PyArrowType<ArrayData>, py: Python) -> PyResult<PyObject> 
     let array = ArrayRef::from(array.0);
 
     // concat
-    let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()])?;
+    let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).map_err(to_py_err)?;
 
     array.to_pyarrow(py)
 }
