@@ -332,163 +332,14 @@ pub fn sort_to_indices(
             });
             downcast_dictionary_array!(
                 values => match values.values().data_type() {
-                    DataType::Int8 => {
-                        let dict_values = values.values();
-                        let value_options = Some(SortOptions { descending: false, nulls_first: value_null_first });
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Int16 => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Int32 => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Int64 => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map,v, n, options, limit, cmp)
-                    },
-                    DataType::UInt8 => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map,v, n, options, limit, cmp)
-                    },
-                    DataType::UInt16 => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map,v, n, options, limit, cmp)
-                    },
-                    DataType::UInt32 => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map,v, n, options, limit, cmp)
-                    },
-                    DataType::UInt64 => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Float32 => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Float64 => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Date32 => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Date64 => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Time32(Second) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Time32(Millisecond) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Time64(Microsecond) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Time64(Nanosecond) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Timestamp(Second, _) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Timestamp(Millisecond, _) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Timestamp(Microsecond, _) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Timestamp(Nanosecond, _) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Interval(IntervalUnit::YearMonth) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Interval(IntervalUnit::DayTime) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Interval(IntervalUnit::MonthDayNano) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Duration(TimeUnit::Second) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Duration(TimeUnit::Millisecond) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Duration(TimeUnit::Microsecond) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
+                    DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 | DataType::UInt8 |
+                    DataType::UInt16 | DataType::UInt32 | DataType::UInt64 | DataType::Float32 | DataType::Float64 |
+                    DataType::Date32 | DataType::Date64 | DataType::Time32(Second) | DataType::Time32(Millisecond) |
+                    DataType::Time64(Microsecond) | DataType::Time64(Nanosecond) | DataType::Timestamp(Second, _) |
+                    DataType::Timestamp(Millisecond, _) | DataType::Timestamp(Microsecond, _) | DataType::Timestamp(Nanosecond, _) |
+                    DataType::Interval(IntervalUnit::YearMonth) | DataType::Interval(IntervalUnit::DayTime) |
+                    DataType::Interval(IntervalUnit::MonthDayNano) | DataType::Duration(TimeUnit::Second) |
+                    DataType::Duration(TimeUnit::Millisecond) | DataType::Duration(TimeUnit::Microsecond) |
                     DataType::Duration(TimeUnit::Nanosecond) => {
                         let dict_values = values.values();
                         let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
@@ -497,12 +348,6 @@ pub fn sort_to_indices(
                     },
                     DataType::Utf8 => {
                         let dict_values = values.values();
-                        let value_null_first = if options.descending {
-                            !options.nulls_first
-                        } else {
-                            options.nulls_first
-                        };
-                        let value_options = Some(SortOptions { descending: false, nulls_first: value_null_first });
                         let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
                         let value_indices_map = prepare_indices_map(&sorted_value_indices);
                         sort_string_dictionary::<_>(values, &value_indices_map, v, n, &options, limit)
