@@ -211,6 +211,7 @@ native_type_op!(i8);
 native_type_op!(i16);
 native_type_op!(i32);
 native_type_op!(i64);
+native_type_op!(i128);
 native_type_op!(u8);
 native_type_op!(u16);
 native_type_op!(u32);
