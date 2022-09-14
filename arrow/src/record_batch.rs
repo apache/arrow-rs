@@ -421,6 +421,11 @@ pub struct RecordBatchOptionsBuilder {
     /// Optional row count, useful for specifying a row count for a RecordBatch with no columns
     row_count: Option<usize>,
 }
+impl Default for RecordBatchOptionsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl RecordBatchOptionsBuilder {
     pub fn new() -> Self {
