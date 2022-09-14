@@ -50,7 +50,7 @@ pub fn read_json_file(json_name: &str) -> Result<ArrowFile> {
     let json_file = File::open(json_name)?;
     let reader = BufReader::new(json_file);
     let arrow_json: Value = serde_json::from_reader(reader).unwrap();
-    let schema = Schema::from(&arrow_json["schema"])?;
+    let schema = schema_from_json(&arrow_json["schema"])?;
     // read dictionaries
     let mut dictionaries = HashMap::new();
     if let Some(dicts) = arrow_json.get("dictionaries") {

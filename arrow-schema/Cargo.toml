@@ -38,15 +38,10 @@ path = "src/lib.rs"
 bench = false
 
 [dependencies]
-serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
-serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
-
-[package.metadata.docs.rs]
-features = ["json"]
+serde = { version = "1.0", default-features = false, features = ["derive", "std"], optional = true }
 
 [features]
 default = []
-json = ["serde", "serde_json"]
 
 [dev-dependencies]
 
