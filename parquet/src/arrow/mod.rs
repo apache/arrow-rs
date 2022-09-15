@@ -80,7 +80,6 @@
 //! #     Field::new("id", DataType::Int32, false),
 //! # ]));
 //! #
-//! # // Write to a memory buffer (can also write to a File)
 //! # let file = File::create("data.parquet").unwrap();
 //! #
 //! # let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(ids)]).unwrap();
