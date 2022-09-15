@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub use arrow_buffer::util::{bit_chunk_iterator, bit_util};
+pub use arrow_buffer::{bit_chunk_iterator, bit_util};
 
 #[cfg(feature = "test_utils")]
 pub mod bench_util;

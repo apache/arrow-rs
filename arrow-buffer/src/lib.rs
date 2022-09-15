@@ -19,6 +19,11 @@
 
 pub mod alloc;
 pub mod buffer;
+pub use buffer::{Buffer, MutableBuffer};
+
 mod bytes;
-pub mod native;
-pub mod util;
+mod native;
+
+pub use native::*;
+mod util;
+pub use util::*;

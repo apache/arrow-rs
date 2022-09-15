@@ -17,12 +17,11 @@
 
 //! Defines [Bitmap] for tracking validity bitmaps
 
-use crate::buffer::Buffer;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
 use std::mem;
 
-use arrow_buffer::buffer::{buffer_bin_and, buffer_bin_or};
+use arrow_buffer::buffer::{Buffer, buffer_bin_and, buffer_bin_or};
 use std::ops::{BitAnd, BitOr};
 
 #[derive(Debug, Clone)]
