@@ -436,7 +436,6 @@ impl Default for RecordBatchOptions {
         Self::new()
     }
 }
-/// Builder to create new RecordBatchOptions object
 impl From<&StructArray> for RecordBatch {
     /// Create a record batch from struct array, where each field of
     /// the `StructArray` becomes a `Field` in the schema.
