@@ -42,7 +42,8 @@ OLD_OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG-old.md"
 sed -i.bak '1,21d' "${OUTPUT_PATH}"
 sed -i.bak '1,21d' "${OLD_OUTPUT_PATH}"
 # remove the github-changelog-generator footer from the old CHANGELOG.md
-tac "${OUTPUT_PATH}" | sed '1,3 d' | tac > "${OUTPUT_PATH}"
+LINE_COUNT=$(wc -l <"${OUTPUT_PATH}")
+sed -i.bak2 "$(( $LINE_COUNT-3+1 )),$ d" "${OUTPUT_PATH}"
 
 # Copy the previous CHANGELOG.md to CHANGELOG-old.md
 echo '<!---
