@@ -104,7 +104,5 @@ echo '<!---
   specific language governing permissions and limitations
   under the License.
 -->
-
-# Changelog
 ' | cat - "${OUTPUT_PATH}" > "${OUTPUT_PATH}".tmp
 mv "${OUTPUT_PATH}".tmp "${OUTPUT_PATH}"
