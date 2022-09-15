@@ -66,26 +66,24 @@
 //! # Example of reading parquet file into arrow record batch
 //!
 //! ```rust
-//! use arrow::record_batch::RecordBatchReader;
-//! use parquet::file::reader::{FileReader, SerializedFileReader};
-//! use parquet::arrow::{ParquetFileArrowReader, ArrowReader, ProjectionMask};
-//! use std::sync::Arc;
 //! use std::fs::File;
+//! use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 //!
+//! # use std::sync::Arc;
 //! # use arrow::array::Int32Array;
 //! # use arrow::datatypes::{DataType, Field, Schema};
 //! # use arrow::record_batch::RecordBatch;
 //! # use parquet::arrow::arrow_writer::ArrowWriter;
+//! #
 //! # let ids = Int32Array::from(vec![1, 2, 3, 4]);
 //! # let schema = Arc::new(Schema::new(vec![
-//! #    Field::new("id", DataType::Int32, false),
+//! #     Field::new("id", DataType::Int32, false),
 //! # ]));
 //! #
 //! # // Write to a memory buffer (can also write to a File)
 //! # let file = File::create("data.parquet").unwrap();
 //! #
-//! # let batch =
-//! #    RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(ids)]).unwrap();
+//! # let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(ids)]).unwrap();
 //! # let batches = vec![batch];
 //! #
 //! # let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), None).unwrap();
@@ -97,26 +95,14 @@
 //!
 //! let file = File::open("data.parquet").unwrap();
 //!
-//! let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-//! let mask = ProjectionMask::leaves(arrow_reader.parquet_schema(), [0]);
+//! let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+//! println!("Converted arrow schema is: {}", builder.schema());
 //!
-//! println!("Converted arrow schema is: {}", arrow_reader.get_schema().unwrap());
-//! println!("Arrow schema after projection is: {}",
-//! arrow_reader.get_schema_by_columns(mask.clone()).unwrap());
+//! let mut reader = builder.build().unwrap();
 //!
-//! let mut unprojected = arrow_reader.get_record_reader(2048).unwrap();
-//! println!("Unprojected reader schema: {}", unprojected.schema());
+//! let record_batch = reader.next().unwrap().unwrap();
 //!
-//! let mut record_batch_reader = arrow_reader.get_record_reader_by_columns(mask, 2048).unwrap();
-//!
-//! for maybe_record_batch in record_batch_reader {
-//!    let record_batch = maybe_record_batch.unwrap();
-//!    if record_batch.num_rows() > 0 {
-//!        println!("Read {} records.", record_batch.num_rows());
-//!    } else {
-//!        println!("End of file!");
-//!    }
-//!}
+//! println!("Read {} records.", record_batch.num_rows());
 //! ```
 
 experimental!(mod array_reader);
