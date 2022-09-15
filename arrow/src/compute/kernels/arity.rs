@@ -18,7 +18,8 @@
 //! Defines kernels suitable to perform operations to primitive arrays.
 
 use crate::array::{
-    Array, ArrayData, ArrayIter, ArrayRef, BufferBuilder, DictionaryArray, PrimitiveArray,
+    Array, ArrayAccessor, ArrayData, ArrayIter, ArrayRef, BufferBuilder, DictionaryArray,
+    PrimitiveArray,
 };
 use crate::buffer::Buffer;
 use crate::compute::util::combine_option_bitmap;
@@ -218,16 +219,14 @@ where
 /// # Panic
 ///
 /// Panics if the arrays have different lengths
-pub fn try_binary<A, B, F, O>(
-    a: &PrimitiveArray<A>,
-    b: &PrimitiveArray<B>,
+pub fn try_binary<A: ArrayAccessor, B: ArrayAccessor, F, O>(
+    a: A,
+    b: B,
     op: F,
 ) -> Result<PrimitiveArray<O>>
 where
-    A: ArrowPrimitiveType,
-    B: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
-    F: Fn(A::Native, B::Native) -> Result<O::Native>,
+    F: Fn(A::Item, B::Item) -> Result<O::Native>,
 {
     assert_eq!(a.len(), b.len());
     let len = a.len();

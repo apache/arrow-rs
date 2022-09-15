@@ -639,13 +639,17 @@ macro_rules! math_dict_checked_op {
         // Safety justification: Since the inputs are valid Arrow arrays, all values are
         // valid indexes into the dictionary (which is verified during construction)
 
-        let left = $left.values().as_any().downcast_ref::<$value_ty>().unwrap();
+        // let left = $left.values().as_any().downcast_ref::<$value_ty>().unwrap();
+        let left = $left.downcast_dict::<$value_ty>().unwrap();
+        let right = $right.downcast_dict::<$value_ty>().unwrap();
 
+        /*
         let right = $right
             .values()
             .as_any()
             .downcast_ref::<$value_ty>()
             .unwrap();
+         */
 
         try_binary(left, right, |a, b| {
             $op(a, b).ok_or_else(|| {
@@ -2494,6 +2498,128 @@ mod tests {
         assert_eq!(&expected, &wrapped);
 
         let overflow = add_dyn_checked(&a, &b);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_dictionary_add_dyn_wrapping_overflow() {
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(2, 2);
+        builder.append(i32::MAX).unwrap();
+        builder.append(i32::MIN).unwrap();
+        let a = builder.finish();
+
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(2, 2);
+        builder.append(1).unwrap();
+        builder.append(1).unwrap();
+        let b = builder.finish();
+
+        let wrapped = add_dyn(&a, &b).unwrap();
+        let expected =
+            Arc::new(Int32Array::from(vec![-2147483648, -2147483647])) as ArrayRef;
+        assert_eq!(&expected, &wrapped);
+
+        let overflow = add_dyn_checked(&a, &b);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_subtract_dyn_wrapping_overflow() {
+        let a = Int32Array::from(vec![-2]);
+        let b = Int32Array::from(vec![i32::MAX]);
+
+        let wrapped = subtract_dyn(&a, &b).unwrap();
+        let expected = Arc::new(Int32Array::from(vec![i32::MAX])) as ArrayRef;
+        assert_eq!(&expected, &wrapped);
+
+        let overflow = subtract_dyn_checked(&a, &b);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_dictionary_subtract_dyn_wrapping_overflow() {
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(1, 1);
+        builder.append(-2).unwrap();
+        let a = builder.finish();
+
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(1, 1);
+        builder.append(i32::MAX).unwrap();
+        let b = builder.finish();
+
+        let wrapped = subtract_dyn(&a, &b).unwrap();
+        let expected = Arc::new(Int32Array::from(vec![i32::MAX])) as ArrayRef;
+        assert_eq!(&expected, &wrapped);
+
+        let overflow = subtract_dyn_checked(&a, &b);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_mul_dyn_wrapping_overflow() {
+        let a = Int32Array::from(vec![10]);
+        let b = Int32Array::from(vec![i32::MAX]);
+
+        let wrapped = multiply_dyn(&a, &b).unwrap();
+        let expected = Arc::new(Int32Array::from(vec![-10])) as ArrayRef;
+        assert_eq!(&expected, &wrapped);
+
+        let overflow = multiply_dyn_checked(&a, &b);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_dictionary_mul_dyn_wrapping_overflow() {
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(1, 1);
+        builder.append(10).unwrap();
+        let a = builder.finish();
+
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(1, 1);
+        builder.append(i32::MAX).unwrap();
+        let b = builder.finish();
+
+        let wrapped = multiply_dyn(&a, &b).unwrap();
+        let expected = Arc::new(Int32Array::from(vec![-10])) as ArrayRef;
+        assert_eq!(&expected, &wrapped);
+
+        let overflow = multiply_dyn_checked(&a, &b);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_primitive_div_dyn_wrapping_overflow() {
+        let a = Int32Array::from(vec![i32::MIN]);
+        let b = Int32Array::from(vec![-1]);
+
+        let wrapped = divide_dyn(&a, &b).unwrap();
+        let expected = Arc::new(Int32Array::from(vec![-2147483648])) as ArrayRef;
+        assert_eq!(&expected, &wrapped);
+
+        let overflow = divide_dyn_checked(&a, &b);
+        overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_dictionary_div_dyn_wrapping_overflow() {
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(1, 1);
+        builder.append(i32::MIN).unwrap();
+        let a = builder.finish();
+
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(1, 1);
+        builder.append(-1).unwrap();
+        let b = builder.finish();
+
+        let wrapped = divide_dyn(&a, &b).unwrap();
+        let expected = Arc::new(Int32Array::from(vec![-2147483648])) as ArrayRef;
+        assert_eq!(&expected, &wrapped);
+
+        let overflow = divide_dyn_checked(&a, &b);
         overflow.expect_err("overflow should be detected");
     }
 }
