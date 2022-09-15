@@ -39,10 +39,10 @@ OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG.md"
 OLD_OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG-old.md"
 
 # remove license header so github-changelog-generator has a clean base to append
-sed -i.bak '1,20d' "${OUTPUT_PATH}"
+sed -i.bak '1,21d' "${OUTPUT_PATH}"
 sed -i.bak '1,21d' "${OLD_OUTPUT_PATH}"
 # remove the github-changelog-generator footer from the old CHANGELOG.md
-tac "${OUTPUT_PATH}" | sed '1,5 d' | tac > "${OUTPUT_PATH}"
+tac "${OUTPUT_PATH}" | sed '1,3 d' | tac > "${OUTPUT_PATH}"
 
 # Copy the previous CHANGELOG.md to CHANGELOG-old.md
 echo '<!---
