@@ -395,15 +395,15 @@ impl MutableBuffer {
     /// as it eliminates the conditional `Iterator::next`
     #[inline]
     pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, mut f: F) -> Self {
-        let mut buffer = Self::new(bit_util::ceil(len, 8));
+        let mut buffer = Self::new(bit_util::ceil(len, 64) * 8);
 
-        let chunks = len / 8;
-        let remainder = len % 8;
+        let chunks = len / 64;
+        let remainder = len % 64;
         for chunk in 0..chunks {
             let mut packed = 0;
-            for bit_idx in 0..8 {
-                let i = bit_idx + chunk * 8;
-                packed |= (f(i) as u8) << bit_idx;
+            for bit_idx in 0..64 {
+                let i = bit_idx + chunk * 64;
+                packed |= (f(i) as u64) << bit_idx;
             }
 
             // SAFETY: Already allocated sufficient capacity
@@ -413,14 +413,15 @@ impl MutableBuffer {
         if remainder != 0 {
             let mut packed = 0;
             for bit_idx in 0..remainder {
-                let i = bit_idx + chunks * 8;
-                packed |= (f(i) as u8) << bit_idx;
+                let i = bit_idx + chunks * 64;
+                packed |= (f(i) as u64) << bit_idx;
             }
 
             // SAFETY: Already allocated sufficient capacity
             unsafe { buffer.push_unchecked(packed) }
         }
 
+        buffer.truncate(bit_util::ceil(len, 8));
         buffer
     }
 }
