@@ -639,41 +639,22 @@ macro_rules! math_dict_checked_op {
         // Safety justification: Since the inputs are valid Arrow arrays, all values are
         // valid indexes into the dictionary (which is verified during construction)
 
-        let left_iter = unsafe {
-            $left
-                .values()
-                .as_any()
-                .downcast_ref::<$value_ty>()
-                .unwrap()
-                .take_iter_unchecked($left.keys_iter())
-        };
+        let left = $left.values().as_any().downcast_ref::<$value_ty>().unwrap();
 
-        let right_iter = unsafe {
-            $right
-                .values()
-                .as_any()
-                .downcast_ref::<$value_ty>()
-                .unwrap()
-                .take_iter_unchecked($right.keys_iter())
-        };
+        let right = $right
+            .values()
+            .as_any()
+            .downcast_ref::<$value_ty>()
+            .unwrap();
 
-        let result = left_iter
-            .zip(right_iter)
-            .map(|(left_value, right_value)| {
-                if let (Some(left), Some(right)) = (left_value, right_value) {
-                    Some($op(left, right).ok_or_else(|| {
-                        ArrowError::ComputeError(format!(
-                            "Overflow happened on: {:?}, {:?}",
-                            left, right
-                        ))
-                    }))
-                } else {
-                    None
-                }
+        try_binary(left, right, |a, b| {
+            $op(a, b).ok_or_else(|| {
+                ArrowError::ComputeError(format!(
+                    "Overflow happened on: {:?}, {:?}",
+                    a, b
+                ))
             })
-            .collect();
-
-        Ok(result)
+        })
     }};
 }
 
@@ -804,11 +785,11 @@ where
 /// then the result is also null.
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
-/// For an overflow-checking variant, use `add_checked_dyn` instead.
+/// For an overflow-checking variant, use `add_dyn_checked` instead.
 pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_math_op!(left, right, |a, b| a + b, math_op_dict)
+            typed_dict_math_op!(left, right, |a, b| a.add_wrapping(b), math_op_dict)
         }
         DataType::Date32 => {
             let l = as_primitive_array::<Date32Type>(left);
@@ -877,7 +858,7 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `add_dyn` instead.
-pub fn add_checked_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+pub fn add_dyn_checked(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(
@@ -1030,15 +1011,47 @@ where
 
 /// Perform `left - right` operation on two arrays. If either left or right value is null
 /// then the result is also null.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `subtract_dyn_checked` instead.
 pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_math_op!(left, right, |a, b| a - b, math_op_dict)
+            typed_dict_math_op!(left, right, |a, b| a.sub_wrapping(b), math_op_dict)
         }
         _ => {
             downcast_primitive_array!(
                 (left, right) => {
-                    math_op(left, right, |a, b| a - b).map(|a| Arc::new(a) as ArrayRef)
+                    math_op(left, right, |a, b| a.sub_wrapping(b)).map(|a| Arc::new(a) as ArrayRef)
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Unsupported data type {}, {}",
+                    left.data_type(), right.data_type()
+                )))
+            )
+        }
+    }
+}
+
+/// Perform `left - right` operation on two arrays. If either left or right value is null
+/// then the result is also null.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `subtract_dyn` instead.
+pub fn subtract_dyn_checked(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+    match left.data_type() {
+        DataType::Dictionary(_, _) => {
+            typed_dict_math_op!(
+                left,
+                right,
+                |a, b| a.sub_checked(b),
+                math_checked_op_dict
+            )
+        }
+        _ => {
+            downcast_primitive_array!(
+                (left, right) => {
+                    math_checked_op(left, right, |a, b| a.sub_checked(b)).map(|a| Arc::new(a) as ArrayRef)
                 }
                 _ => Err(ArrowError::CastError(format!(
                     "Unsupported data type {}, {}",
@@ -1158,15 +1171,47 @@ where
 
 /// Perform `left * right` operation on two arrays. If either left or right value is null
 /// then the result is also null.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `multiply_dyn_checked` instead.
 pub fn multiply_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_math_op!(left, right, |a, b| a * b, math_op_dict)
+            typed_dict_math_op!(left, right, |a, b| a.mul_wrapping(b), math_op_dict)
         }
         _ => {
             downcast_primitive_array!(
                 (left, right) => {
-                    math_op(left, right, |a, b| a * b).map(|a| Arc::new(a) as ArrayRef)
+                    math_op(left, right, |a, b| a.mul_wrapping(b)).map(|a| Arc::new(a) as ArrayRef)
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Unsupported data type {}, {}",
+                    left.data_type(), right.data_type()
+                )))
+            )
+        }
+    }
+}
+
+/// Perform `left * right` operation on two arrays. If either left or right value is null
+/// then the result is also null.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `multiply_dyn` instead.
+pub fn multiply_dyn_checked(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+    match left.data_type() {
+        DataType::Dictionary(_, _) => {
+            typed_dict_math_op!(
+                left,
+                right,
+                |a, b| a.mul_checked(b),
+                math_checked_op_dict
+            )
+        }
+        _ => {
+            downcast_primitive_array!(
+                (left, right) => {
+                    math_checked_op(left, right, |a, b| a.mul_checked(b)).map(|a| Arc::new(a) as ArrayRef)
                 }
                 _ => Err(ArrowError::CastError(format!(
                     "Unsupported data type {}, {}",
@@ -1302,6 +1347,33 @@ where
 /// then the result is also null. If any right hand value is zero then the result of this
 /// operation will be `Err(ArrowError::DivideByZero)`.
 pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+    match left.data_type() {
+        DataType::Dictionary(_, _) => {
+            typed_dict_math_op!(
+                left,
+                right,
+                |a, b| a.div_wrapping(b),
+                math_divide_checked_op_dict
+            )
+        }
+        _ => {
+            downcast_primitive_array!(
+                (left, right) => {
+                    math_checked_divide_op(left, right, |a, b| Some(a.div_wrapping(b))).map(|a| Arc::new(a) as ArrayRef)
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Unsupported data type {}, {}",
+                    left.data_type(), right.data_type()
+                )))
+            )
+        }
+    }
+}
+
+/// Perform `left / right` operation on two arrays. If either left or right value is null
+/// then the result is also null. If any right hand value is zero then the result of this
+/// operation will be `Err(ArrowError::DivideByZero)`.
+pub fn divide_dyn_checked(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(left, right, |a, b| a / b, math_divide_checked_op_dict)
@@ -2393,5 +2465,19 @@ mod tests {
         let overflow = divide_opt(&a, &b);
         let expected = Int32Array::from(vec![None]);
         assert_eq!(expected, overflow.unwrap());
+    }
+
+    #[test]
+    fn test_primitive_add_dyn_wrapping_overflow() {
+        let a = Int32Array::from(vec![i32::MAX, i32::MIN]);
+        let b = Int32Array::from(vec![1, 1]);
+
+        let wrapped = add_dyn(&a, &b).unwrap();
+        let expected =
+            Arc::new(Int32Array::from(vec![-2147483648, -2147483647])) as ArrayRef;
+        assert_eq!(&expected, &wrapped);
+
+        let overflow = add_dyn_checked(&a, &b);
+        overflow.expect_err("overflow should be detected");
     }
 }
