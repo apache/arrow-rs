@@ -163,7 +163,7 @@ fn math_checked_divide_op_on_iters<T, F>(
 where
     T: ArrowNumericType,
     T::Native: One + Zero,
-    F: Fn(T::Native, T::Native) -> T::Native,
+    F: Fn(T::Native, T::Native) -> Result<T::Native>,
 {
     let buffer = if null_bit_buffer.is_some() {
         let values = left.zip(right).map(|(left, right)| {
@@ -171,7 +171,7 @@ where
                 if r.is_zero() {
                     Err(ArrowError::DivideByZero)
                 } else {
-                    Ok(op(l, r))
+                    op(l, r)
                 }
             } else {
                 Ok(T::default_value())
@@ -186,7 +186,7 @@ where
                 if right.is_zero() {
                     Err(ArrowError::DivideByZero)
                 } else {
-                    Ok(op(left, right))
+                    op(left, right)
                 }
             },
         );
@@ -707,7 +707,7 @@ where
     K: ArrowNumericType,
     T: ArrowNumericType,
     T::Native: One + Zero,
-    F: Fn(T::Native, T::Native) -> T::Native,
+    F: Fn(T::Native, T::Native) -> Result<T::Native>,
 {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(format!(
@@ -1346,13 +1346,16 @@ where
 /// Perform `left / right` operation on two arrays. If either left or right value is null
 /// then the result is also null. If any right hand value is zero then the result of this
 /// operation will be `Err(ArrowError::DivideByZero)`.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `divide_dyn_checked` instead.
 pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(
                 left,
                 right,
-                |a, b| a.div_wrapping(b),
+                |a, b| Ok(a.div_wrapping(b)),
                 math_divide_checked_op_dict
             )
         }
@@ -1373,15 +1376,28 @@ pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
 /// Perform `left / right` operation on two arrays. If either left or right value is null
 /// then the result is also null. If any right hand value is zero then the result of this
 /// operation will be `Err(ArrowError::DivideByZero)`.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `divide_dyn` instead.
 pub fn divide_dyn_checked(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_math_op!(left, right, |a, b| a / b, math_divide_checked_op_dict)
+            typed_dict_math_op!(
+                left,
+                right,
+                |a, b| a.div_checked(b).ok_or_else(|| {
+                    ArrowError::ComputeError(format!(
+                        "Overflow happened on: {:?}, {:?}",
+                        a, b
+                    ))
+                }),
+                math_divide_checked_op_dict
+            )
         }
         _ => {
             downcast_primitive_array!(
                 (left, right) => {
-                    math_checked_divide_op(left, right, |a, b| Some(a / b)).map(|a| Arc::new(a) as ArrayRef)
+                    math_checked_divide_op(left, right, |a, b| a.div_checked(b)).map(|a| Arc::new(a) as ArrayRef)
                 }
                 _ => Err(ArrowError::CastError(format!(
                     "Unsupported data type {}, {}",
