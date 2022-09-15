@@ -22,8 +22,6 @@
 //! `RUSTFLAGS="-C target-feature=+avx2"` for example.  See the documentation
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 
-use std::ops::Not;
-
 use crate::array::{Array, ArrayData, BooleanArray, PrimitiveArray};
 use crate::buffer::{
     bitwise_bin_op_helper, bitwise_quaternary_op_helper, buffer_bin_and, buffer_bin_or,
@@ -85,14 +83,13 @@ pub(crate) fn build_null_buffer_for_and_kleene(
             // The final null bits are:
             // (a | (c & !d)) & (c | (a & !b))
             Some(bitwise_quaternary_op_helper(
-                left_null_buffer,
-                left_offset,
-                left_buffer,
-                left_offset,
-                right_null_buffer,
-                right_offset,
-                right_buffer,
-                right_offset,
+                [
+                    left_null_buffer,
+                    left_buffer,
+                    right_null_buffer,
+                    right_buffer,
+                ],
+                [left_offset, left_offset, right_offset, right_offset],
                 len_in_bits,
                 |a, b, c, d| (a | (c & !d)) & (c | (a & !b)),
             ))
@@ -163,14 +160,13 @@ pub(crate) fn build_null_buffer_for_or_kleene(
             // The final null bits are:
             // (a | (c & d)) & (c | (a & b))
             Some(bitwise_quaternary_op_helper(
-                left_null_buffer,
-                left_offset,
-                left_buffer,
-                left_offset,
-                right_null_buffer,
-                right_offset,
-                right_buffer,
-                right_offset,
+                [
+                    left_null_buffer,
+                    left_buffer,
+                    right_null_buffer,
+                    right_buffer,
+                ],
+                [left_offset, left_offset, right_offset, right_offset],
                 len_in_bits,
                 |a, b, c, d| (a | (c & d)) & (c | (a & b)),
             ))
@@ -493,7 +489,6 @@ where
         ));
     }
     let left_data = left.data();
-    let right_data = right.data();
 
     // If left has no bitmap, create a new one with all values set for nullity op later
     // left=0 (null)   right=null       output bitmap=null
@@ -507,33 +502,31 @@ where
     //
     // Do the right expression !(right_values & right_bitmap) first since there are two steps
     // TRICK: convert BooleanArray buffer as a bitmap for faster operation
-    let right_combo_buffer = match right.data().null_bitmap() {
+    let rcb = match right.data().null_bitmap() {
         Some(right_bitmap) => {
-            // NOTE: right values and bitmaps are combined and stay at bit offset right.offset()
-            (right.values() & &right_bitmap.bits).ok().map(|b| b.not())
+            let and = buffer_bin_and(
+                right.values(),
+                right.offset(),
+                &right_bitmap.bits,
+                right.offset(),
+                right.len(),
+            );
+            buffer_unary_not(&and, 0, right.len())
         }
-        None => Some(!right.values()),
+        None => buffer_unary_not(right.values(), right.offset(), right.len()),
     };
 
     // AND of original left null bitmap with right expression
     // Here we take care of the possible offsets of the left and right arrays all at once.
     let modified_null_buffer = match left_data.null_bitmap() {
-        Some(left_null_bitmap) => match right_combo_buffer {
-            Some(rcb) => Some(buffer_bin_and(
-                &left_null_bitmap.bits,
-                left_data.offset(),
-                &rcb,
-                right_data.offset(),
-                left_data.len(),
-            )),
-            None => Some(
-                left_null_bitmap
-                    .bits
-                    .bit_slice(left_data.offset(), left.len()),
-            ),
-        },
-        None => right_combo_buffer
-            .map(|rcb| rcb.bit_slice(right_data.offset(), right_data.len())),
+        Some(left_null_bitmap) => buffer_bin_and(
+            &left_null_bitmap.bits,
+            left_data.offset(),
+            &rcb,
+            0,
+            left_data.len(),
+        ),
+        None => rcb,
     };
 
     // Align/shift left data on offset as needed, since new bitmaps are shifted and aligned to 0 already
@@ -556,7 +549,7 @@ where
             T::DATA_TYPE,
             left.len(),
             None, // force new to compute the number of null bits
-            modified_null_buffer,
+            Some(modified_null_buffer),
             0, // No need for offset since left data has been shifted
             data_buffers,
             left_data.child_data().to_vec(),
