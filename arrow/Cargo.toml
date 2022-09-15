@@ -240,3 +240,8 @@ harness = false
 name = "row_format"
 harness = false
 required-features = ["test_utils"]
+
+[[bench]]
+name = "bitwise_kernel"
+harness = false
+required-features = ["test_utils"]
