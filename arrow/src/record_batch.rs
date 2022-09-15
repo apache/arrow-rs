@@ -420,7 +420,7 @@ impl RecordBatchOptions {
             row_count: None,
         }
     }
-    //Sets the row_count of RecordBatchOptions and returns self
+    /// Sets the row_count of RecordBatchOptions and returns self
     pub fn with_row_count(mut self, row_count: Option<usize>) -> Self {
         self.row_count = row_count;
         self
