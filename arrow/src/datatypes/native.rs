@@ -16,7 +16,7 @@
 // under the License.
 
 use super::DataType;
-pub use arrow_buffer::native::{ArrowNativeType, ToByteSlice};
+pub use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use half::f16;
 
 /// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
