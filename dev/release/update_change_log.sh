@@ -29,8 +29,8 @@
 
 set -e
 
-SINCE_TAG="21.0.0"
-FUTURE_RELEASE="22.0.0"
+SINCE_TAG="22.0.0"
+FUTURE_RELEASE="23.0.0"
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
@@ -39,8 +39,11 @@ OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG.md"
 OLD_OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG-old.md"
 
 # remove license header so github-changelog-generator has a clean base to append
-sed -i.bak '1,21d' "${OUTPUT_PATH}"
+sed -i.bak '1,20d' "${OUTPUT_PATH}"
 sed -i.bak '1,21d' "${OLD_OUTPUT_PATH}"
+# remove the github-changelog-generator footer from the old CHANGELOG.md
+head -n -5 "${OUTPUT_PATH}" > "${OUTPUT_PATH}".tmp
+mv "${OUTPUT_PATH}".tmp "${OUTPUT_PATH}"
 
 # Copy the previous CHANGELOG.md to CHANGELOG-old.md
 echo '<!---
