@@ -18,10 +18,11 @@
 //! Defines [Bitmap] for tracking validity bitmaps
 
 use crate::buffer::Buffer;
-use crate::error::Result;
+use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
 use std::mem;
 
+use arrow_buffer::buffer::{buffer_bin_and, buffer_bin_or};
 use std::ops::{BitAnd, BitOr};
 
 #[derive(Debug, Clone)]
@@ -79,7 +80,18 @@ impl<'a, 'b> BitAnd<&'b Bitmap> for &'a Bitmap {
     type Output = Result<Bitmap>;
 
     fn bitand(self, rhs: &'b Bitmap) -> Result<Bitmap> {
-        Ok(Bitmap::from((&self.bits & &rhs.bits)?))
+        if self.bits.len() != rhs.bits.len() {
+            return Err(ArrowError::ComputeError(
+                "Buffers must be the same size to apply Bitwise AND.".to_string(),
+            ));
+        }
+        Ok(Bitmap::from(buffer_bin_and(
+            &self.bits,
+            0,
+            &rhs.bits,
+            0,
+            self.bit_len(),
+        )))
     }
 }
 
@@ -87,7 +99,18 @@ impl<'a, 'b> BitOr<&'b Bitmap> for &'a Bitmap {
     type Output = Result<Bitmap>;
 
     fn bitor(self, rhs: &'b Bitmap) -> Result<Bitmap> {
-        Ok(Bitmap::from((&self.bits | &rhs.bits)?))
+        if self.bits.len() != rhs.bits.len() {
+            return Err(ArrowError::ComputeError(
+                "Buffers must be the same size to apply Bitwise OR.".to_string(),
+            ));
+        }
+        Ok(Bitmap::from(buffer_bin_or(
+            &self.bits,
+            0,
+            &rhs.bits,
+            0,
+            self.bit_len(),
+        )))
     }
 }
 

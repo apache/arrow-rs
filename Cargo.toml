@@ -19,10 +19,11 @@
 members = [
         "arrow",
         "arrow-schema",
+        "arrow-buffer",
+        "arrow-flight",
         "parquet",
         "parquet_derive",
         "parquet_derive_test",
-        "arrow-flight",
         "integration-testing",
         "object_store",
 ]
