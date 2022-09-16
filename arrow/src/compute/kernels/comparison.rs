@@ -233,13 +233,14 @@ pub fn like_utf8<OffsetSize: OffsetSizeTrait>(
 }
 
 #[inline]
-fn like_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
+fn like_scalar_op<'a, F: Fn(bool) -> bool, L: ArrayAccessor<Item = &'a str>>(
     left: L,
     right: &str,
+    op: F,
 ) -> Result<BooleanArray> {
     if !right.contains(is_like_pattern) {
         // fast path, can use equals
-        return compare_op_scalar(left, |item| item == right);
+        compare_op_scalar(left, |item| op(item == right))
     } else if right.ends_with('%')
         && !right.ends_with("\\%")
         && !right[..right.len() - 1].contains(is_like_pattern)
@@ -252,7 +253,7 @@ fn like_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
         // fast path, can use ends_with
         let ends_with = &right[1..];
 
-        compare_op_scalar(left, |item| item.ends_with(ends_with))
+        compare_op_scalar(left, |item| op(item.ends_with(ends_with)))
     } else if right.starts_with('%')
         && right.ends_with('%')
         && !right.ends_with("\\%")
@@ -260,7 +261,7 @@ fn like_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
     {
         let contains = &right[1..right.len() - 1];
 
-        compare_op_scalar(left, |item| item.contains(contains))
+        compare_op_scalar(left, |item| op(item.contains(contains)))
     } else {
         let re_pattern = replace_like_wildcards(right)?;
         let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
@@ -270,8 +271,16 @@ fn like_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
             ))
         })?;
 
-        compare_op_scalar(left, |item| re.is_match(item))
+        compare_op_scalar(left, |item| op(re.is_match(item)))
     }
+}
+
+#[inline]
+fn like_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
+    left: L,
+    right: &str,
+) -> Result<BooleanArray> {
+    like_scalar_op(left, right, |x|x)
 }
 
 /// Perform SQL `left LIKE right` operation on [`StringArray`] /
@@ -370,41 +379,7 @@ fn nlike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
     left: L,
     right: &str,
 ) -> Result<BooleanArray> {
-    if !right.contains(is_like_pattern) {
-        // fast path, can use equals
-        compare_op_scalar(left, |item| item == right)
-    } else if right.ends_with('%')
-        && !right.ends_with("\\%")
-        && !right[..right.len() - 1].contains(is_like_pattern)
-    {
-        // fast path, can use starts_with
-        let starts_with = &right[..right.len() - 1];
-
-        compare_op_scalar(left, |item| !item.starts_with(starts_with))
-    } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
-        // fast path, can use ends_with
-        let ends_with = &right[1..];
-
-        compare_op_scalar(left, |item| !item.ends_with(ends_with))
-    } else if right.starts_with('%')
-        && right.ends_with('%')
-        && !right.ends_with("\\%")
-        && !right[1..right.len() - 1].contains(is_like_pattern)
-    {
-        let contains = &right[1..right.len() - 1];
-
-        compare_op_scalar(left, |item| !item.contains(contains))
-    } else {
-        let re_pattern = replace_like_wildcards(right)?;
-        let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
-            ArrowError::ComputeError(format!(
-                "Unable to build regex from LIKE pattern: {}",
-                e
-            ))
-        })?;
-
-        compare_op_scalar(left, |item| !re.is_match(item))
-    }
+    like_scalar_op(left, right, |x|!x)
 }
 
 /// Perform SQL `left NOT LIKE right` operation on [`StringArray`] /
