@@ -44,6 +44,8 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
+arrow-buffer = { path = "../arrow-buffer", version = "22.0.0" }
+
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 indexmap = { version = "1.9", default-features = false, features = ["std"] }
@@ -236,5 +238,10 @@ harness = false
 
 [[bench]]
 name = "row_format"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "bitwise_kernel"
 harness = false
 required-features = ["test_utils"]

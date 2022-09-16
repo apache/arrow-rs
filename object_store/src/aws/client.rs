@@ -411,7 +411,7 @@ impl S3Client {
     pub async fn create_multipart(&self, location: &Path) -> Result<MultipartId> {
         let credential = self.get_credential().await?;
         let url = format!(
-            "{}/{}/{}?uploads",
+            "{}/{}/{}?uploads=",
             self.config.endpoint,
             self.config.bucket,
             encode_path(location)
