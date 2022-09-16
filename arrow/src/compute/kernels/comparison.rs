@@ -4462,6 +4462,15 @@ mod tests {
         vec![true, false]
     );
 
+    test_utf8_scalar!(
+        test_utf8_scalar_like_escape_contains,
+        vec!["ba%", "ba\\x"],
+        "%a\\%",
+        like_utf8_scalar,
+        vec![true, false]
+    );
+
+
     test_utf8!(
         test_utf8_scalar_ilike_regex,
         vec!["%%%"],
