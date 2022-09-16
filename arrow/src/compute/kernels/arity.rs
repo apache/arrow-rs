@@ -292,19 +292,16 @@ where
         .map(|x| len - x.count_set_bits())
         .unwrap_or_default();
 
-    let mut buffer = BufferBuilder::<O::Native>::new(len);
-    buffer.append_n_zeroed(len);
-    let slice = buffer.as_slice_mut();
+    let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
 
-    try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
-        unsafe {
-            *slice.get_unchecked_mut(idx) =
-                op(a.value_unchecked(idx), b.value_unchecked(idx))?
-        };
-        Ok::<_, ArrowError>(())
-    })?;
+    // JUSTIFICATION
+    //  Benefit
+    //      ~60% speedup
+    //  Soundness
+    //      `values` is an iterator with a known size from a PrimitiveArray
+    let buffer = unsafe { Buffer::try_from_trusted_len_iter(values) }?;
 
-    Ok(unsafe { build_primitive_array(len, buffer.finish(), null_count, null_buffer) })
+    Ok(unsafe { build_primitive_array(len, buffer, null_count, null_buffer) })
 }
 
 /// Applies the provided binary operation across `a` and `b`, collecting the optional results
