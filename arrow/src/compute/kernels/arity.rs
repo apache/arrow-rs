@@ -106,14 +106,25 @@ where
     let len = array.len();
     let null_count = array.null_count();
 
-    let mut buffer = BufferBuilder::<O::Native>::new(len);
-    buffer.append_n_zeroed(array.len());
-    let slice = buffer.as_slice_mut();
-
     let null_buffer = array
         .data_ref()
         .null_buffer()
         .map(|b| b.bit_slice(array.offset(), array.len()));
+
+    if array.null_count() == 0 {
+        let values = array.values().iter().map(|v| op(*v));
+        // JUSTIFICATION
+        //  Benefit
+        //      ~60% speedup
+        //  Soundness
+        //      `values` is an iterator with a known size because arrays are sized.
+        let buffer = unsafe { Buffer::try_from_trusted_len_iter(values)? };
+        return Ok(unsafe { build_primitive_array(len, buffer, 0, None) });
+    }
+
+    let mut buffer = BufferBuilder::<O::Native>::new(len);
+    buffer.append_n_zeroed(array.len());
+    let slice = buffer.as_slice_mut();
 
     try_for_each_valid_idx(array.len(), 0, null_count, null_buffer.as_deref(), |idx| {
         unsafe { *slice.get_unchecked_mut(idx) = op(array.value_unchecked(idx))? };
@@ -284,24 +295,39 @@ where
     if a.is_empty() {
         return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
-
     let len = a.len();
+
+    if a.null_count() == 0 && b.null_count() == 0 {
+        let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
+        let buffer = unsafe { Buffer::try_from_trusted_len_iter(values) }?;
+        // JUSTIFICATION
+        //  Benefit
+        //      ~75% speedup
+        //  Soundness
+        //      `values` is an iterator with a known size from a PrimitiveArray
+        return Ok(unsafe { build_primitive_array(len, buffer, 0, None) });
+    }
+
     let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
+
     let null_count = null_buffer
         .as_ref()
         .map(|x| len - x.count_set_bits())
         .unwrap_or_default();
 
-    let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
+    let mut buffer = BufferBuilder::<O::Native>::new(len);
+    buffer.append_n_zeroed(len);
+    let slice = buffer.as_slice_mut();
 
-    // JUSTIFICATION
-    //  Benefit
-    //      ~60% speedup
-    //  Soundness
-    //      `values` is an iterator with a known size from a PrimitiveArray
-    let buffer = unsafe { Buffer::try_from_trusted_len_iter(values) }?;
+    try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+        unsafe {
+            *slice.get_unchecked_mut(idx) =
+                op(a.value_unchecked(idx), b.value_unchecked(idx))?
+        };
+        Ok::<_, ArrowError>(())
+    })?;
 
-    Ok(unsafe { build_primitive_array(len, buffer, null_count, null_buffer) })
+    Ok(unsafe { build_primitive_array(len, buffer.finish(), null_count, null_buffer) })
 }
 
 /// Applies the provided binary operation across `a` and `b`, collecting the optional results
