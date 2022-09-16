@@ -20,26 +20,19 @@ use crate::util::bit_util::ceil;
 
 /// Apply a bitwise operation `op` to four inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn bitwise_quaternary_op_helper<F>(
-    first: &Buffer,
-    first_offset_in_bits: usize,
-    second: &Buffer,
-    second_offset_in_bits: usize,
-    third: &Buffer,
-    third_offset_in_bits: usize,
-    fourth: &Buffer,
-    fourth_offset_in_bits: usize,
+pub fn bitwise_quaternary_op_helper<F>(
+    buffers: [&Buffer; 4],
+    offsets: [usize; 4],
     len_in_bits: usize,
     op: F,
 ) -> Buffer
 where
     F: Fn(u64, u64, u64, u64) -> u64,
 {
-    let first_chunks = first.bit_chunks(first_offset_in_bits, len_in_bits);
-    let second_chunks = second.bit_chunks(second_offset_in_bits, len_in_bits);
-    let third_chunks = third.bit_chunks(third_offset_in_bits, len_in_bits);
-    let fourth_chunks = fourth.bit_chunks(fourth_offset_in_bits, len_in_bits);
+    let first_chunks = buffers[0].bit_chunks(offsets[0], len_in_bits);
+    let second_chunks = buffers[1].bit_chunks(offsets[1], len_in_bits);
+    let third_chunks = buffers[2].bit_chunks(offsets[2], len_in_bits);
+    let fourth_chunks = buffers[3].bit_chunks(offsets[3], len_in_bits);
 
     let chunks = first_chunks
         .iter()

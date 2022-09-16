@@ -153,7 +153,7 @@ impl<'a> UnalignedBitChunk<'a> {
         self.chunks
     }
 
-    pub(crate) fn iter(&self) -> UnalignedBitChunkIterator<'a> {
+    pub fn iter(&self) -> UnalignedBitChunkIterator<'a> {
         self.prefix
             .into_iter()
             .chain(self.chunks.iter().cloned())
@@ -166,7 +166,7 @@ impl<'a> UnalignedBitChunk<'a> {
     }
 }
 
-pub(crate) type UnalignedBitChunkIterator<'a> = std::iter::Chain<
+pub type UnalignedBitChunkIterator<'a> = std::iter::Chain<
     std::iter::Chain<
         std::option::IntoIter<u64>,
         std::iter::Cloned<std::slice::Iter<'a, u64>>,

@@ -20,7 +20,7 @@ __blobstorage__
 
 # .bak files
 *.bak
-
+*.bak2
 # OS-specific .gitignores
 
 # Mac .gitignore

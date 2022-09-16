@@ -36,7 +36,17 @@ use arrow::record_batch::{RecordBatch, RecordBatchReader};
 use arrow::util::bit_util;
 use arrow::util::decimal::Decimal256;
 
+mod datatype;
+mod field;
+mod schema;
+
+use crate::util::datatype::data_type_to_json;
+use crate::util::field::field_from_json;
+pub use schema::*;
+
 /// A struct that represents an Arrow file with a schema and record batches
+///
+/// See <https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format>
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ArrowJson {
     pub schema: ArrowJsonSchema,
@@ -90,7 +100,7 @@ impl From<&Field> for ArrowJsonField {
 
         Self {
             name: field.name().to_string(),
-            field_type: field.data_type().to_json(),
+            field_type: data_type_to_json(field.data_type()),
             nullable: field.is_nullable(),
             children: vec![],
             dictionary: None, // TODO: not enough info
@@ -256,7 +266,7 @@ impl ArrowJsonField {
     fn to_arrow_field(&self) -> Result<Field> {
         // a bit regressive, but we have to convert the field to JSON in order to convert it
         let field = serde_json::to_value(self)?;
-        Field::from(&field)
+        field_from_json(&field)
     }
 }
 

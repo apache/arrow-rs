@@ -38,15 +38,15 @@ fn create_buffer(size: usize) -> Buffer {
 }
 
 fn bench_buffer_and(left: &Buffer, right: &Buffer) {
-    criterion::black_box((left & right).unwrap());
+    criterion::black_box(buffer_bin_and(left, 0, right, 0, left.len() * 8));
 }
 
 fn bench_buffer_or(left: &Buffer, right: &Buffer) {
-    criterion::black_box((left | right).unwrap());
+    criterion::black_box(buffer_bin_or(left, 0, right, 0, left.len() * 8));
 }
 
 fn bench_buffer_not(buffer: &Buffer) {
-    criterion::black_box(!buffer);
+    criterion::black_box(buffer_unary_not(buffer, 0, buffer.len() * 8));
 }
 
 fn bench_buffer_and_with_offsets(

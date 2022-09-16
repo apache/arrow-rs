@@ -111,7 +111,7 @@ impl Drop for Bytes {
     fn drop(&mut self) {
         match &self.deallocation {
             Deallocation::Arrow(capacity) => {
-                unsafe { alloc::free_aligned::<u8>(self.ptr, *capacity) };
+                unsafe { alloc::free_aligned(self.ptr, *capacity) };
             }
             // The automatic drop implementation will free the memory once the reference count reaches zero
             Deallocation::Custom(_allocation) => (),
