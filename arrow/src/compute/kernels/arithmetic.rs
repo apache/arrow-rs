@@ -807,12 +807,8 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
-    try_unary_dyn::<_, T>(array, |value| {
-        value.add_checked(scalar).ok_or_else(|| {
-            ArrowError::CastError(format!("Overflow: adding {:?} to {:?}", scalar, value))
-        })
-    })
-    .map(|a| Arc::new(a) as ArrayRef)
+    try_unary_dyn::<_, T>(array, |value| value.add_checked(scalar))
+        .map(|a| Arc::new(a) as ArrayRef)
 }
 
 /// Perform `left - right` operation on two arrays. If either left or right value is null
@@ -928,15 +924,8 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
-    try_unary_dyn::<_, T>(array, |value| {
-        value.sub_checked(scalar).ok_or_else(|| {
-            ArrowError::CastError(format!(
-                "Overflow: subtracting {:?} from {:?}",
-                scalar, value
-            ))
-        })
-    })
-    .map(|a| Arc::new(a) as ArrayRef)
+    try_unary_dyn::<_, T>(array, |value| value.sub_checked(scalar))
+        .map(|a| Arc::new(a) as ArrayRef)
 }
 
 /// Perform `-` operation on an array. If value is null then the result is also null.
@@ -1073,15 +1062,8 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
-    try_unary_dyn::<_, T>(array, |value| {
-        value.mul_checked(scalar).ok_or_else(|| {
-            ArrowError::CastError(format!(
-                "Overflow: multiplying {:?} by {:?}",
-                value, scalar
-            ))
-        })
-    })
-    .map(|a| Arc::new(a) as ArrayRef)
+    try_unary_dyn::<_, T>(array, |value| value.mul_checked(scalar))
+        .map(|a| Arc::new(a) as ArrayRef)
 }
 
 /// Perform `left % right` operation on two arrays. If either left or right value is null
@@ -1272,15 +1254,8 @@ where
         return Err(ArrowError::DivideByZero);
     }
 
-    try_unary_dyn::<_, T>(array, |value| {
-        value.div_checked(divisor).ok_or_else(|| {
-            ArrowError::CastError(format!(
-                "Overflow: dividing {:?} by {:?}",
-                value, divisor
-            ))
-        })
-    })
-    .map(|a| Arc::new(a) as ArrayRef)
+    try_unary_dyn::<_, T>(array, |value| value.div_checked(divisor))
+        .map(|a| Arc::new(a) as ArrayRef)
 }
 
 #[cfg(test)]
