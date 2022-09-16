@@ -248,7 +248,7 @@ fn like_scalar_op<'a, F: Fn(bool) -> bool, L: ArrayAccessor<Item = &'a str>>(
         // fast path, can use starts_with
         let starts_with = &right[..right.len() - 1];
 
-        compare_op_scalar(left, |item| item.starts_with(starts_with))
+        compare_op_scalar(left, |item| op(item.starts_with(starts_with)))
     } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
         // fast path, can use ends_with
         let ends_with = &right[1..];
