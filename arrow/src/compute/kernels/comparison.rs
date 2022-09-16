@@ -280,7 +280,7 @@ fn like_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
     left: L,
     right: &str,
 ) -> Result<BooleanArray> {
-    like_scalar_op(left, right, |x|x)
+    like_scalar_op(left, right, |x| x)
 }
 
 /// Perform SQL `left LIKE right` operation on [`StringArray`] /
@@ -379,7 +379,7 @@ fn nlike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
     left: L,
     right: &str,
 ) -> Result<BooleanArray> {
-    like_scalar_op(left, right, |x|!x)
+    like_scalar_op(left, right, |x| !x)
 }
 
 /// Perform SQL `left NOT LIKE right` operation on [`StringArray`] /
@@ -4469,7 +4469,6 @@ mod tests {
         like_utf8_scalar,
         vec![true, false]
     );
-
 
     test_utf8!(
         test_utf8_scalar_ilike_regex,
