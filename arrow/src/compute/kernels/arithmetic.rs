@@ -101,7 +101,7 @@ where
         ));
     }
 
-    try_binary(left, right, |a, b| op(a, b))
+    try_binary(left, right, op)
 }
 
 /// Helper function for operations where a valid `0` on the right array should
