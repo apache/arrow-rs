@@ -69,13 +69,7 @@ where
     RT: ArrowNumericType,
     F: Fn(LT::Native, RT::Native) -> LT::Native,
 {
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform math operation on arrays of different length".to_string(),
-        ));
-    }
-
-    Ok(binary(left, right, op))
+    binary(left, right, op)
 }
 
 /// Helper function for operations where a valid `0` on the right array should
@@ -1128,13 +1122,13 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp + Zero + One,
 {
-    Ok(binary_opt(left, right, |a, b| {
+    binary_opt(left, right, |a, b| {
         if b.is_zero() {
             None
         } else {
             Some(a.div_wrapping(b))
         }
-    }))
+    })
 }
 
 /// Perform `left / right` operation on two arrays. If either left or right value is null
@@ -1670,7 +1664,7 @@ mod tests {
         let b = Int32Array::from(vec![6, 7, 8]);
         let e = add(&a, &b).expect_err("should have failed due to different lengths");
         assert_eq!(
-            "ComputeError(\"Cannot perform math operation on arrays of different length\")",
+            "ComputeError(\"Cannot perform binary operation on arrays of different length\")",
             format!("{:?}", e)
         );
     }

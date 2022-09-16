@@ -18,7 +18,7 @@
 use crate::array::PrimitiveArray;
 use crate::compute::{binary, unary};
 use crate::datatypes::ArrowNumericType;
-use crate::error::{ArrowError, Result};
+use crate::error::Result;
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 // The helper function for bitwise operation with two array
@@ -31,12 +31,7 @@ where
     T: ArrowNumericType,
     F: Fn(T::Native, T::Native) -> T::Native,
 {
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform bitwise operation on arrays of different length".to_string(),
-        ));
-    }
-    Ok(binary(left, right, op))
+    binary(left, right, op)
 }
 
 /// Perform `left & right` operation on two arrays. If either left or right value is null
