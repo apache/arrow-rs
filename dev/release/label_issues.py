@@ -147,9 +147,5 @@ if __name__ == '__main__':
     print('getting github repo...')
     arrow_repo = github.get_repo('apache/arrow-rs')
 
-    counter = 0
     for issue in issues:
         relabel_issue(arrow_repo, issue)
-        counter = counter + 1
-        if counter > 1:
-            break
