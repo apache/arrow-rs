@@ -106,12 +106,7 @@ where
     let len = array.len();
     let null_count = array.null_count();
 
-    let null_buffer = array
-        .data_ref()
-        .null_buffer()
-        .map(|b| b.bit_slice(array.offset(), array.len()));
-
-    if array.null_count() == 0 {
+    if null_count == 0 {
         let values = array.values().iter().map(|v| op(*v));
         // JUSTIFICATION
         //  Benefit
@@ -121,6 +116,11 @@ where
         let buffer = unsafe { Buffer::try_from_trusted_len_iter(values)? };
         return Ok(unsafe { build_primitive_array(len, buffer, 0, None) });
     }
+
+    let null_buffer = array
+        .data_ref()
+        .null_buffer()
+        .map(|b| b.bit_slice(array.offset(), array.len()));
 
     let mut buffer = BufferBuilder::<O::Native>::new(len);
     buffer.append_n_zeroed(array.len());
