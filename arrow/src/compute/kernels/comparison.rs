@@ -971,6 +971,33 @@ pub fn eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
 ) -> Result<BooleanArray> {
+    if right.is_empty() {
+        let null_bit_buffer = left
+            .data()
+            .null_buffer()
+            .map(|b| b.bit_slice(left.offset(), left.len()));
+
+        let buffer = unsafe {
+            MutableBuffer::from_trusted_len_iter_bool(
+                left.value_offsets()
+                    .windows(2)
+                    .map(|offset| offset[1].to_usize().unwrap() - offset[0].to_usize().unwrap() == 0),
+            )
+        };
+
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::Boolean,
+                left.len(),
+                None,
+                null_bit_buffer,
+                0,
+                vec![Buffer::from(buffer)],
+                vec![],
+            )
+        };
+        return Ok(BooleanArray::from(data));
+    }
     compare_op_scalar(left, |a| a == right)
 }
 
