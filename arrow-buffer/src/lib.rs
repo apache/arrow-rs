@@ -15,24 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub use arrow_buffer::{bit_chunk_iterator, bit_util};
+//! Buffer abstractions for [Apache Arrow](https://docs.rs/arrow)
 
-#[cfg(feature = "test_utils")]
-pub mod bench_util;
-pub mod bit_iterator;
-pub(crate) mod bit_mask;
-#[cfg(feature = "test_utils")]
-pub mod data_gen;
-pub mod display;
-#[cfg(feature = "prettyprint")]
-pub mod pretty;
-pub(crate) mod serialization;
-pub mod string_writer;
-#[cfg(any(test, feature = "test_utils"))]
-pub mod test_util;
+pub mod alloc;
+pub mod buffer;
+pub use buffer::{Buffer, MutableBuffer};
 
-mod trusted_len;
-pub(crate) use trusted_len::trusted_len_unzip;
+mod bytes;
+mod native;
 
-pub mod decimal;
-pub(crate) mod reader_parser;
+pub use native::*;
+mod util;
+pub use util::*;

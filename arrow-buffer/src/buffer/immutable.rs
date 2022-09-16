@@ -23,7 +23,7 @@ use std::{convert::AsRef, usize};
 
 use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
-use crate::{bytes::Bytes, datatypes::ArrowNativeType};
+use crate::{bytes::Bytes, native::ArrowNativeType};
 
 use super::ops::bitwise_unary_op_helper;
 use super::MutableBuffer;
@@ -271,7 +271,7 @@ impl Buffer {
     /// Prefer this to `collect` whenever possible, as it is ~60% faster.
     /// # Example
     /// ```
-    /// # use arrow::buffer::Buffer;
+    /// # use arrow_buffer::buffer::Buffer;
     /// let v = vec![1u32];
     /// let iter = v.iter().map(|x| x * 2);
     /// let buffer = unsafe { Buffer::from_trusted_len_iter(iter) };

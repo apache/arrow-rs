@@ -1070,6 +1070,30 @@ impl DataType {
         )
     }
 
+    /// Returns true if the type is primitive: (numeric, temporal).
+    pub fn is_primitive(t: &DataType) -> bool {
+        use DataType::*;
+        matches!(
+            t,
+            Int8 | Int16
+                | Int32
+                | Int64
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Float32
+                | Float64
+                | Date32
+                | Date64
+                | Time32(_)
+                | Time64(_)
+                | Timestamp(_, _)
+                | Interval(_)
+                | Duration(_)
+        )
+    }
+
     /// Returns true if this type is temporal: (Date*, Time*, Duration, or Interval).
     pub fn is_temporal(t: &DataType) -> bool {
         use DataType::*;

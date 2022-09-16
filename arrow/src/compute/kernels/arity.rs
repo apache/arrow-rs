@@ -123,7 +123,7 @@ where
     Ok(unsafe { build_primitive_array(len, buffer.finish(), null_count, null_buffer) })
 }
 
-/// A helper function that applies an unary function to a dictionary array with primitive value type.
+/// A helper function that applies an infallible unary function to a dictionary array with primitive value type.
 fn unary_dict<K, F, T>(array: &DictionaryArray<K>, op: F) -> Result<ArrayRef>
 where
     K: ArrowNumericType,
@@ -138,7 +138,22 @@ where
     Ok(Arc::new(new_dict))
 }
 
-/// Applies an unary function to an array with primitive values.
+/// A helper function that applies a fallible unary function to a dictionary array with primitive value type.
+fn try_unary_dict<K, F, T>(array: &DictionaryArray<K>, op: F) -> Result<ArrayRef>
+where
+    K: ArrowNumericType,
+    T: ArrowPrimitiveType,
+    F: Fn(T::Native) -> Result<T::Native>,
+{
+    let dict_values = array.values().as_any().downcast_ref().unwrap();
+    let values = try_unary::<T, F, T>(dict_values, op)?.into_data();
+    let data = array.data().clone().into_builder().child_data(vec![values]);
+
+    let new_dict: DictionaryArray<K> = unsafe { data.build_unchecked() }.into();
+    Ok(Arc::new(new_dict))
+}
+
+/// Applies an infallible unary function to an array with primitive values.
 pub fn unary_dyn<F, T>(array: &dyn Array, op: F) -> Result<ArrayRef>
 where
     T: ArrowPrimitiveType,
@@ -152,6 +167,37 @@ where
                     array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap(),
                     op,
                 )))
+            } else {
+                Err(ArrowError::NotYetImplemented(format!(
+                    "Cannot perform unary operation on array of type {}",
+                    t
+                )))
+            }
+        }
+    }
+}
+
+/// Applies a fallible unary function to an array with primitive values.
+pub fn try_unary_dyn<F, T>(array: &dyn Array, op: F) -> Result<ArrayRef>
+where
+    T: ArrowPrimitiveType,
+    F: Fn(T::Native) -> Result<T::Native>,
+{
+    downcast_dictionary_array! {
+        array => if array.values().data_type() == &T::DATA_TYPE {
+            try_unary_dict::<_, F, T>(array, op)
+        } else {
+            Err(ArrowError::NotYetImplemented(format!(
+                "Cannot perform unary operation on dictionary array of type {}",
+                array.data_type()
+            )))
+        },
+        t => {
+            if t == &T::DATA_TYPE {
+                Ok(Arc::new(try_unary::<T, F, T>(
+                    array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap(),
+                    op,
+                )?))
             } else {
                 Err(ArrowError::NotYetImplemented(format!(
                     "Cannot perform unary operation on array of type {}",
@@ -215,9 +261,10 @@ where
 ///
 /// Like [`try_unary`] the function is only evaluated for non-null indices
 ///
-/// # Panic
+/// # Error
 ///
-/// Panics if the arrays have different lengths
+/// Return an error if the arrays have different lengths or
+/// the operation is under erroneous
 pub fn try_binary<A, B, F, O>(
     a: &PrimitiveArray<A>,
     b: &PrimitiveArray<B>,
@@ -229,13 +276,16 @@ where
     O: ArrowPrimitiveType,
     F: Fn(A::Native, B::Native) -> Result<O::Native>,
 {
-    assert_eq!(a.len(), b.len());
-    let len = a.len();
-
+    if a.len() != b.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform a binary operation on arrays of different length".to_string(),
+        ));
+    }
     if a.is_empty() {
         return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
 
+    let len = a.len();
     let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
     let null_count = null_buffer
         .as_ref()
