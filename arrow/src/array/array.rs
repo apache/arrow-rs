@@ -229,7 +229,7 @@ impl Array for ArrayRef {
     }
 
     fn into_data(self) -> ArrayData {
-        self.into()
+        self.data().clone()
     }
 
     fn data_ref(&self) -> &ArrayData {
@@ -358,6 +358,90 @@ pub trait ArrayAccessor: Array {
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item;
 }
 
+impl PartialEq for dyn Array {
+    fn eq(&self, other: &Self) -> bool {
+        self.data().eq(other.data())
+    }
+}
+
+impl<T: Array> PartialEq<T> for dyn Array {
+    fn eq(&self, other: &T) -> bool {
+        self.data().eq(other.data())
+    }
+}
+
+impl PartialEq for NullArray {
+    fn eq(&self, other: &NullArray) -> bool {
+        self.data().eq(other.data())
+    }
+}
+
+impl<T: ArrowPrimitiveType> PartialEq for PrimitiveArray<T> {
+    fn eq(&self, other: &PrimitiveArray<T>) -> bool {
+        self.data().eq(other.data())
+    }
+}
+
+impl<K: ArrowPrimitiveType> PartialEq for DictionaryArray<K> {
+    fn eq(&self, other: &Self) -> bool {
+        self.data().eq(other.data())
+    }
+}
+
+impl PartialEq for BooleanArray {
+    fn eq(&self, other: &BooleanArray) -> bool {
+        self.data().eq(other.data())
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericStringArray<OffsetSize> {
+    fn eq(&self, other: &Self) -> bool {
+        self.data().eq(other.data())
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericBinaryArray<OffsetSize> {
+    fn eq(&self, other: &Self) -> bool {
+        self.data().eq(other.data())
+    }
+}
+
+impl PartialEq for FixedSizeBinaryArray {
+    fn eq(&self, other: &Self) -> bool {
+        self.data().eq(other.data())
+    }
+}
+
+impl PartialEq for Decimal128Array {
+    fn eq(&self, other: &Self) -> bool {
+        self.data().eq(other.data())
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericListArray<OffsetSize> {
+    fn eq(&self, other: &Self) -> bool {
+        self.data().eq(other.data())
+    }
+}
+
+impl PartialEq for MapArray {
+    fn eq(&self, other: &Self) -> bool {
+        self.data().eq(other.data())
+    }
+}
+
+impl PartialEq for FixedSizeListArray {
+    fn eq(&self, other: &Self) -> bool {
+        self.data().eq(other.data())
+    }
+}
+
+impl PartialEq for StructArray {
+    fn eq(&self, other: &Self) -> bool {
+        self.data().eq(other.data())
+    }
+}
+
 /// Constructs an array using the input `data`.
 /// Returns a reference-counted `Array` instance.
 pub fn make_array(data: ArrayData) -> ArrayRef {
@@ -467,18 +551,6 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::Decimal128(_, _) => Arc::new(Decimal128Array::from(data)) as ArrayRef,
         DataType::Decimal256(_, _) => Arc::new(Decimal256Array::from(data)) as ArrayRef,
         dt => panic!("Unexpected data type {:?}", dt),
-    }
-}
-
-impl From<ArrayData> for ArrayRef {
-    fn from(data: ArrayData) -> Self {
-        make_array(data)
-    }
-}
-
-impl From<ArrayRef> for ArrayData {
-    fn from(array: ArrayRef) -> Self {
-        array.data().clone()
     }
 }
 

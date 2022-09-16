@@ -284,7 +284,11 @@ impl<T: DecimalType> DecimalArray<T> {
 
         // safety: self.data is valid DataType::Decimal as checked above
         let new_data_type = Self::TYPE_CONSTRUCTOR(precision, scale);
-        Ok(self.data().clone().with_data_type(new_data_type).into())
+        let data = self.data().clone().into_builder().data_type(new_data_type);
+
+        // SAFETY
+        // Validated data above
+        Ok(unsafe { data.build_unchecked().into() })
     }
 
     // validate that the new precision and scale are valid or not

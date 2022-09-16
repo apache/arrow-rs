@@ -26,7 +26,7 @@ use pyo3::import_exception;
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyTuple};
 
-use crate::array::{Array, ArrayData, ArrayRef};
+use crate::array::{make_array, Array, ArrayData};
 use crate::datatypes::{DataType, Field, Schema};
 use crate::error::ArrowError;
 use crate::ffi;
@@ -188,7 +188,7 @@ impl PyArrowConvert for RecordBatch {
         let arrays = value.getattr("columns")?.downcast::<PyList>()?;
         let arrays = arrays
             .iter()
-            .map(ArrayRef::from_pyarrow)
+            .map(|a| Ok(make_array(ArrayData::from_pyarrow(a)?)))
             .collect::<PyResult<_>>()?;
 
         let batch = RecordBatch::try_new(schema, arrays).map_err(to_py_err)?;
@@ -204,7 +204,7 @@ impl PyArrowConvert for RecordBatch {
         let columns = self.columns().iter();
 
         for (array, field) in columns.zip(fields) {
-            py_arrays.push(array.to_pyarrow(py)?);
+            py_arrays.push(array.data().to_pyarrow(py)?);
             py_names.push(field.name());
         }
 
