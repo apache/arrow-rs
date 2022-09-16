@@ -4252,7 +4252,7 @@ mod tests {
         let a = StringArray::from(
             vec![Some("hi"), None, Some("hello"), Some("world"), Some("")],
         );
-        let a = a.slice(1, 3);
+        let a = a.slice(1, 4);
         let a = as_string_array(&a);
         let a_eq = eq_utf8_scalar(a, "hello").unwrap();
         assert_eq!(
