@@ -95,12 +95,6 @@ where
     LT::Native: ArrowNativeTypeOp,
     RT::Native: ArrowNativeTypeOp,
 {
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform math operation on arrays of different length".to_string(),
-        ));
-    }
-
     try_binary(left, right, op)
 }
 
@@ -616,14 +610,6 @@ where
     F: Fn(T::Native, T::Native) -> Result<T::Native>,
     T::Native: ArrowNativeTypeOp,
 {
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(format!(
-            "Cannot perform operation on arrays of different length ({}, {})",
-            left.len(),
-            right.len()
-        )));
-    }
-
     let left = left.downcast_dict::<PrimitiveArray<T>>().unwrap();
     let right = right.downcast_dict::<PrimitiveArray<T>>().unwrap();
 
