@@ -168,7 +168,7 @@ fn simd_checked_modulus<T: ArrowNumericType>(
     right: T::Simd,
 ) -> Result<T::Simd>
 where
-    T::Native: One + Zero,
+    T::Native: ArrowNativeTypeOp + One,
 {
     let zero = T::init(T::Native::zero());
     let one = T::init(T::Native::one());
@@ -291,7 +291,7 @@ fn simd_checked_divide_op<T, SI, SC>(
 ) -> Result<PrimitiveArray<T>>
 where
     T: ArrowNumericType,
-    T::Native: One + Zero,
+    T::Native: ArrowNativeTypeOp,
     SI: Fn(Option<u64>, T::Simd, T::Simd) -> Result<T::Simd>,
     SC: Fn(T::Native, T::Native) -> T::Native,
 {
@@ -1075,11 +1075,11 @@ pub fn modulus<T>(
 ) -> Result<PrimitiveArray<T>>
 where
     T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp,
+    T::Native: ArrowNativeTypeOp + One,
 {
     #[cfg(feature = "simd")]
     return simd_checked_divide_op(&left, &right, simd_checked_modulus::<T>, |a, b| {
-        a % b
+        a.mod_wrapping(b)
     });
     #[cfg(not(feature = "simd"))]
     return try_binary(left, right, |a, b| a.mod_checked_divide_by_zero(b));
