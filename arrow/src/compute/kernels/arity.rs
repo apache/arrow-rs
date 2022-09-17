@@ -285,6 +285,8 @@ pub fn try_binary<A: ArrayAccessor, B: ArrayAccessor, F, O>(
 where
     O: ArrowPrimitiveType,
     F: Fn(A::Item, B::Item) -> Result<O::Native>,
+    A::Item: Copy,
+    B::Item: Copy,
 {
     if a.len() != b.len() {
         return Err(ArrowError::ComputeError(
@@ -296,8 +298,19 @@ where
     }
     let len = a.len();
 
-    if a.null_count() == 0 && b.null_count() == 0 {
-        let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
+    let a_values_accessor = a.get_values_accessor();
+    let b_values_accrssor = b.get_values_accessor();
+    if a.null_count() == 0
+        && b.null_count() == 0
+        && a_values_accessor.is_some()
+        && b_values_accrssor.is_some()
+    {
+        let values = a_values_accessor
+            .unwrap()
+            .values()
+            .iter()
+            .zip(b_values_accrssor.unwrap().values())
+            .map(|(l, r)| op(*l, *r));
         let buffer = unsafe { Buffer::try_from_trusted_len_iter(values) }?;
         // JUSTIFICATION
         //  Benefit

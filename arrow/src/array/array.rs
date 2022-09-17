@@ -356,6 +356,19 @@ pub trait ArrayAccessor: Array {
     /// # Safety
     /// Caller is responsible for ensuring that the index is within the bounds of the array
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item;
+
+    /// Returns a values accessor [`ArrayValuesAccessor`] for this [`ArrayAccessor`] if
+    /// it supports. Returns [`None`] if it doesn't support accessing values directly.
+    fn get_values_accessor(&self) -> Option<&dyn ArrayValuesAccessor<Item = Self::Item>> {
+        None
+    }
+}
+
+/// A trait for accessing the values of an [`ArrayAccessor`] as a slice at once. Not all
+/// [`ArrayAccessor`] implementations support this trait. Currently only [`PrimitiveArray`]
+/// supports it.
+pub trait ArrayValuesAccessor: ArrayAccessor {
+    fn values(&self) -> &[Self::Item];
 }
 
 /// Constructs an array using the input `data`.
