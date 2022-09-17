@@ -548,76 +548,6 @@ macro_rules! typed_dict_math_op {
     }};
 }
 
-/// Helper function to perform math lambda function on values from two dictionary arrays, this
-/// version does not attempt to use SIMD explicitly (though the compiler may auto vectorize)
-macro_rules! math_dict_op {
-    ($left: expr, $right:expr, $op:expr, $value_ty:ty) => {{
-        if $left.len() != $right.len() {
-            return Err(ArrowError::ComputeError(format!(
-                "Cannot perform operation on arrays of different length ({}, {})",
-                $left.len(),
-                $right.len()
-            )));
-        }
-
-        // Safety justification: Since the inputs are valid Arrow arrays, all values are
-        // valid indexes into the dictionary (which is verified during construction)
-
-        let left_iter = unsafe {
-            $left
-                .values()
-                .as_any()
-                .downcast_ref::<$value_ty>()
-                .unwrap()
-                .take_iter_unchecked($left.keys_iter())
-        };
-
-        let right_iter = unsafe {
-            $right
-                .values()
-                .as_any()
-                .downcast_ref::<$value_ty>()
-                .unwrap()
-                .take_iter_unchecked($right.keys_iter())
-        };
-
-        let result = left_iter
-            .zip(right_iter)
-            .map(|(left_value, right_value)| {
-                if let (Some(left), Some(right)) = (left_value, right_value) {
-                    Some($op(left, right))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        Ok(result)
-    }};
-}
-
-/// Helper function to perform math lambda function on values from two dictionary arrays, this
-/// version does not attempt to use SIMD explicitly (though the compiler may auto vectorize)
-macro_rules! math_dict_checked_op {
-    ($left: expr, $right:expr, $op:expr, $value_ty:ty) => {{
-        if $left.len() != $right.len() {
-            return Err(ArrowError::ComputeError(format!(
-                "Cannot perform operation on arrays of different length ({}, {})",
-                $left.len(),
-                $right.len()
-            )));
-        }
-
-        // Safety justification: Since the inputs are valid Arrow arrays, all values are
-        // valid indexes into the dictionary (which is verified during construction)
-
-        let left = $left.downcast_dict::<$value_ty>().unwrap();
-        let right = $right.downcast_dict::<$value_ty>().unwrap();
-
-        try_binary(left, right, |a, b| $op(a, b))
-    }};
-}
-
 /// Perform given operation on two `DictionaryArray`s.
 /// Returns an error if the two arrays have different value type
 fn math_op_dict<K, T, F>(
@@ -631,7 +561,46 @@ where
     F: Fn(T::Native, T::Native) -> T::Native,
     T::Native: ArrowNativeTypeOp,
 {
-    math_dict_op!(left, right, op, PrimitiveArray<T>)
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(format!(
+            "Cannot perform operation on arrays of different length ({}, {})",
+            left.len(),
+            right.len()
+        )));
+    }
+
+    // Safety justification: Since the inputs are valid Arrow arrays, all values are
+    // valid indexes into the dictionary (which is verified during construction)
+
+    let left_iter = unsafe {
+        left.values()
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap()
+            .take_iter_unchecked(left.keys_iter())
+    };
+
+    let right_iter = unsafe {
+        right
+            .values()
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap()
+            .take_iter_unchecked(right.keys_iter())
+    };
+
+    let result = left_iter
+        .zip(right_iter)
+        .map(|(left_value, right_value)| {
+            if let (Some(left), Some(right)) = (left_value, right_value) {
+                Some(op(left, right))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    Ok(result)
 }
 
 /// Perform given operation on two `DictionaryArray`s.
@@ -647,7 +616,18 @@ where
     F: Fn(T::Native, T::Native) -> Result<T::Native>,
     T::Native: ArrowNativeTypeOp,
 {
-    math_dict_checked_op!(left, right, op, PrimitiveArray<T>)
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(format!(
+            "Cannot perform operation on arrays of different length ({}, {})",
+            left.len(),
+            right.len()
+        )));
+    }
+
+    let left = left.downcast_dict::<PrimitiveArray<T>>().unwrap();
+    let right = right.downcast_dict::<PrimitiveArray<T>>().unwrap();
+
+    try_binary(left, right, |a, b| op(a, b))
 }
 
 /// Helper function for operations where a valid `0` on the right array should
