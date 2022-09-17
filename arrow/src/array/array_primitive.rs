@@ -33,7 +33,7 @@ use crate::{
     util::trusted_len_unzip,
 };
 
-use crate::array::array::{ArrayAccessor, ArrayValuesAccessor};
+use crate::array::array::ArrayAccessor;
 use half::f16;
 
 /// Array whose elements are of primitive types.
@@ -203,16 +203,6 @@ impl<'a, T: ArrowPrimitiveType> ArrayAccessor for &'a PrimitiveArray<T> {
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         PrimitiveArray::value_unchecked(self, index)
-    }
-
-    fn get_values_accessor(&self) -> Option<&dyn ArrayValuesAccessor<Item = Self::Item>> {
-        Some(self)
-    }
-}
-
-impl<'a, T: ArrowPrimitiveType> ArrayValuesAccessor for &'a PrimitiveArray<T> {
-    fn values(&self) -> &[Self::Item] {
-        PrimitiveArray::values(self)
     }
 }
 

@@ -285,8 +285,6 @@ pub fn try_binary<A: ArrayAccessor, B: ArrayAccessor, F, O>(
 where
     O: ArrowPrimitiveType,
     F: Fn(A::Item, B::Item) -> Result<O::Native>,
-    A::Item: Copy,
-    B::Item: Copy,
 {
     if a.len() != b.len() {
         return Err(ArrowError::ComputeError(
@@ -298,49 +296,41 @@ where
     }
     let len = a.len();
 
-    let a_values_accessor = a.get_values_accessor();
-    let b_values_accrssor = b.get_values_accessor();
-    match (a_values_accessor, b_values_accrssor) {
-        (Some(a_values), Some(b_values))
-            if a.null_count() == 0 && b.null_count() == 0 =>
-        {
-            let values = a_values
-                .values()
-                .iter()
-                .zip(b_values.values())
-                .map(|(l, r)| op(*l, *r));
-            let buffer = unsafe { Buffer::try_from_trusted_len_iter(values) }?;
-            // JUSTIFICATION
-            //  Benefit
-            //      ~75% speedup
-            //  Soundness
-            //      `values` is an iterator with a known size from a PrimitiveArray
-            Ok(unsafe { build_primitive_array(len, buffer, 0, None) })
+    if a.null_count() == 0 && b.null_count() == 0 {
+        let mut buffer = BufferBuilder::<O::Native>::new(len);
+        buffer.append_n_zeroed(len);
+        let slice = buffer.as_slice_mut();
+
+        for idx in 0..len {
+            unsafe {
+                *slice.get_unchecked_mut(idx) =
+                    op(a.value_unchecked(idx), b.value_unchecked(idx))?
+            };
         }
-        _ => {
-            let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
+        Ok(unsafe { build_primitive_array(len, buffer.finish(), 0, None) })
+    } else {
+        let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
 
-            let null_count = null_buffer
-                .as_ref()
-                .map(|x| len - x.count_set_bits())
-                .unwrap_or_default();
+        let null_count = null_buffer
+            .as_ref()
+            .map(|x| len - x.count_set_bits())
+            .unwrap_or_default();
 
-            let mut buffer = BufferBuilder::<O::Native>::new(len);
-            buffer.append_n_zeroed(len);
-            let slice = buffer.as_slice_mut();
+        let mut buffer = BufferBuilder::<O::Native>::new(len);
+        buffer.append_n_zeroed(len);
+        let slice = buffer.as_slice_mut();
 
-            try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
-                unsafe {
-                    *slice.get_unchecked_mut(idx) =
-                        op(a.value_unchecked(idx), b.value_unchecked(idx))?
-                };
-                Ok::<_, ArrowError>(())
-            })?;
+        try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+            unsafe {
+                *slice.get_unchecked_mut(idx) =
+                    op(a.value_unchecked(idx), b.value_unchecked(idx))?
+            };
+            Ok::<_, ArrowError>(())
+        })?;
 
-            Ok(unsafe {
-                build_primitive_array(len, buffer.finish(), null_count, null_buffer)
-            })
-        }
+        Ok(unsafe {
+            build_primitive_array(len, buffer.finish(), null_count, null_buffer)
+        })
     }
 }
 
