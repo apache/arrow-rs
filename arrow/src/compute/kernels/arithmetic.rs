@@ -81,7 +81,7 @@ where
 }
 
 /// This is similar to `math_op` as it performs given operation between two input primitive arrays.
-/// But the given operation can return `None` if overflow is detected. For the case, this function
+/// But the given operation can return `Err` if overflow is detected. For the case, this function
 /// returns an `Err`.
 fn math_checked_op<LT, RT, F>(
     left: &PrimitiveArray<LT>,
