@@ -697,6 +697,39 @@ where
     )
 }
 
+#[cfg(feature = "dyn_arith_dict")]
+fn math_safe_divide_op_dict<K, T, F>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+    op: F,
+) -> Result<ArrayRef>
+where
+    K: ArrowNumericType,
+    T: ArrowNumericType,
+    T::Native: One + Zero,
+    F: Fn(T::Native, T::Native) -> Option<T::Native>,
+{
+    let left = left.downcast_dict::<PrimitiveArray<T>>().unwrap();
+    let right = right.downcast_dict::<PrimitiveArray<T>>().unwrap();
+    let array: PrimitiveArray<T> = binary_opt::<_, _, _, T>(left, right, op)?;
+    Ok(Arc::new(array) as ArrayRef)
+}
+
+fn math_safe_divide_op<LT, RT, F>(
+    left: &PrimitiveArray<LT>,
+    right: &PrimitiveArray<RT>,
+    op: F,
+) -> Result<ArrayRef>
+where
+    LT: ArrowNumericType,
+    RT: ArrowNumericType,
+    RT::Native: One + Zero,
+    F: Fn(LT::Native, RT::Native) -> Option<LT::Native>,
+{
+    let array: PrimitiveArray<LT> = binary_opt::<_, _, _, LT>(left, right, op)?;
+    Ok(Arc::new(array) as ArrayRef)
+}
+
 /// Perform `left + right` operation on two arrays. If either left or right value is null
 /// then the result is also null.
 ///
@@ -1396,6 +1429,51 @@ pub fn divide_dyn_checked(left: &dyn Array, right: &dyn Array) -> Result<ArrayRe
             downcast_primitive_array!(
                 (left, right) => {
                     math_checked_divide_op(left, right, |a, b| a.div_checked(b)).map(|a| Arc::new(a) as ArrayRef)
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Unsupported data type {}, {}",
+                    left.data_type(), right.data_type()
+                )))
+            )
+        }
+    }
+}
+
+/// Perform `left / right` operation on two arrays. If either left or right value is null
+/// then the result is also null.
+///
+/// If any right hand value is zero, the operation value will be replaced with null in the
+/// result.
+///
+/// Unlike `divide_dyn` or `divide_dyn_checked`, division by zero will get a null value instead
+/// returning an `Err`, this also doesn't check overflowing, overflowing will just wrap
+/// the result around.
+pub fn divide_dyn_opt(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+    match left.data_type() {
+        DataType::Dictionary(_, _) => {
+            typed_dict_math_op!(
+                left,
+                right,
+                |a, b| {
+                    if b.is_zero() {
+                        None
+                    } else {
+                        Some(a.div_wrapping(b))
+                    }
+                },
+                math_safe_divide_op_dict
+            )
+        }
+        _ => {
+            downcast_primitive_array!(
+                (left, right) => {
+                    math_safe_divide_op(left, right, |a, b| {
+                        if b.is_zero() {
+                            None
+                        } else {
+                            Some(a.div_wrapping(b))
+                        }
+                    })
                 }
                 _ => Err(ArrowError::CastError(format!(
                     "Unsupported data type {}, {}",

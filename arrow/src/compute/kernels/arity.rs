@@ -367,16 +367,14 @@ where
 /// # Error
 ///
 /// This function gives error if the arrays have different lengths
-pub(crate) fn binary_opt<A, B, F, O>(
-    a: &PrimitiveArray<A>,
-    b: &PrimitiveArray<B>,
+pub(crate) fn binary_opt<A: ArrayAccessor + Array, B: ArrayAccessor + Array, F, O>(
+    a: A,
+    b: B,
     op: F,
 ) -> Result<PrimitiveArray<O>>
 where
-    A: ArrowPrimitiveType,
-    B: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
-    F: Fn(A::Native, B::Native) -> Option<O::Native>,
+    F: Fn(A::Item, B::Item) -> Option<O::Native>,
 {
     if a.len() != b.len() {
         return Err(ArrowError::ComputeError(
@@ -388,30 +386,21 @@ where
         return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
 
-    if a.null_count() == 0 && b.null_count() == 0 {
-        Ok(a.values()
-            .iter()
-            .zip(b.values().iter())
-            .map(|(a, b)| op(*a, *b))
-            .collect())
-    } else {
-        let iter_a = ArrayIter::new(a);
-        let iter_b = ArrayIter::new(b);
+    let iter_a = ArrayIter::new(a);
+    let iter_b = ArrayIter::new(b);
 
-        let values =
-            iter_a
-                .into_iter()
-                .zip(iter_b.into_iter())
-                .map(|(item_a, item_b)| {
-                    if let (Some(a), Some(b)) = (item_a, item_b) {
-                        op(a, b)
-                    } else {
-                        None
-                    }
-                });
+    let values = iter_a
+        .into_iter()
+        .zip(iter_b.into_iter())
+        .map(|(item_a, item_b)| {
+            if let (Some(a), Some(b)) = (item_a, item_b) {
+                op(a, b)
+            } else {
+                None
+            }
+        });
 
-        Ok(values.collect())
-    }
+    Ok(values.collect())
 }
 
 #[cfg(test)]
