@@ -156,6 +156,13 @@ where
     T: ArrowPrimitiveType,
     F: Fn(T::Native) -> Result<T::Native>,
 {
+    if array.value_type() != T::DATA_TYPE {
+        return Err(ArrowError::CastError(format!(
+            "Cannot perform the unary operation on dictionary array of value type {}",
+            array.value_type()
+        )));
+    }
+
     let dict_values = array.values().as_any().downcast_ref().unwrap();
     let values = try_unary::<T, F, T>(dict_values, op)?.into_data();
     let data = array.data().clone().into_builder().child_data(vec![values]);
