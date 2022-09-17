@@ -47,7 +47,7 @@ pub(crate) mod native_op {
     use super::ArrowNativeType;
     use crate::error::{ArrowError, Result};
     use num::Zero;
-    use std::ops::{Add, Div, Mul, Sub};
+    use std::ops::{Add, Div, Mul, Rem, Sub};
 
     /// Trait for ArrowNativeType to provide overflow-checking and non-overflow-checking
     /// variants for arithmetic operations. For floating point types, this provides some
@@ -65,6 +65,7 @@ pub(crate) mod native_op {
         + Sub<Output = Self>
         + Mul<Output = Self>
         + Div<Output = Self>
+        + Rem<Output = Self>
         + Zero
     {
         fn add_checked(self, rhs: Self) -> Result<Self> {
@@ -101,6 +102,28 @@ pub(crate) mod native_op {
 
         fn div_wrapping(self, rhs: Self) -> Self {
             self / rhs
+        }
+
+        /// Check `DivideByZero` error and `Overflow` error.
+        fn mod_fully_checked(self, rhs: Self) -> Result<Self> {
+            if rhs.is_zero() {
+                Err(ArrowError::DivideByZero)
+            } else {
+                Ok(self.mod_wrapping(rhs))
+            }
+        }
+
+        /// Only check `DivideByZero` error
+        fn mod_checked_divide_by_zero(self, rhs: Self) -> Result<Self> {
+            if rhs.is_zero() {
+                Err(ArrowError::DivideByZero)
+            } else {
+                Ok(self.mod_wrapping(rhs))
+            }
+        }
+
+        fn mod_wrapping(self, rhs: Self) -> Self {
+            self % rhs
         }
     }
 }
@@ -162,6 +185,23 @@ macro_rules! native_type_op {
 
             fn div_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_div(rhs)
+            }
+
+            fn mod_fully_checked(self, rhs: Self) -> Result<Self> {
+                if rhs.is_zero() {
+                    Err(ArrowError::DivideByZero)
+                } else {
+                    self.checked_rem(rhs).ok_or_else(|| {
+                        ArrowError::ComputeError(format!(
+                            "Overflow happened on: {:?} % {:?}",
+                            self, rhs
+                        ))
+                    })
+                }
+            }
+
+            fn mod_wrapping(self, rhs: Self) -> Self {
+                self.wrapping_rem(rhs)
             }
         }
     };
