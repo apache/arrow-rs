@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow"
-version = "22.0.0"
+version = "23.0.0"
 description = "Rust implementation of Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -44,7 +44,7 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
-arrow-buffer = { path = "../arrow-buffer", version = "22.0.0" }
+arrow-buffer = { path = "../arrow-buffer", version = "23.0.0" }
 
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
