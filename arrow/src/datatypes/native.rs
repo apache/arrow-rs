@@ -104,17 +104,7 @@ pub(crate) mod native_op {
             self / rhs
         }
 
-        /// Check `DivideByZero` error and `Overflow` error.
-        fn mod_fully_checked(self, rhs: Self) -> Result<Self> {
-            if rhs.is_zero() {
-                Err(ArrowError::DivideByZero)
-            } else {
-                Ok(self.mod_wrapping(rhs))
-            }
-        }
-
-        /// Only check `DivideByZero` error
-        fn mod_checked_divide_by_zero(self, rhs: Self) -> Result<Self> {
+        fn mod_checked(self, rhs: Self) -> Result<Self> {
             if rhs.is_zero() {
                 Err(ArrowError::DivideByZero)
             } else {
@@ -187,7 +177,7 @@ macro_rules! native_type_op {
                 self.wrapping_div(rhs)
             }
 
-            fn mod_fully_checked(self, rhs: Self) -> Result<Self> {
+            fn mod_checked(self, rhs: Self) -> Result<Self> {
                 if rhs.is_zero() {
                     Err(ArrowError::DivideByZero)
                 } else {

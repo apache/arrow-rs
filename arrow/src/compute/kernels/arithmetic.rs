@@ -1082,7 +1082,13 @@ where
         a.mod_wrapping(b)
     });
     #[cfg(not(feature = "simd"))]
-    return try_binary(left, right, |a, b| a.mod_checked_divide_by_zero(b));
+    return try_binary(left, right, |a, b| {
+        if b.is_zero() {
+            Err(ArrowError::DivideByZero)
+        } else {
+            Ok(a.mod_wrapping(b))
+        }
+    });
 }
 
 /// Perform `left / right` operation on two arrays. If either left or right value is null
