@@ -610,6 +610,14 @@ where
     F: Fn(T::Native, T::Native) -> Result<T::Native>,
     T::Native: ArrowNativeTypeOp,
 {
+    // left and right's value types are supposed to be same as guaranteed by the caller macro now.
+    if left.value_type() != T::DATA_TYPE {
+        return Err(ArrowError::NotYetImplemented(format!(
+            "Cannot perform provided operation on dictionary array of value type {}",
+            left.value_type()
+        )));
+    }
+
     let left = left.downcast_dict::<PrimitiveArray<T>>().unwrap();
     let right = right.downcast_dict::<PrimitiveArray<T>>().unwrap();
 
