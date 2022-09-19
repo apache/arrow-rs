@@ -337,7 +337,7 @@ where
     O: ArrowPrimitiveType,
     F: Fn(A::Item, B::Item) -> Result<O::Native>,
 {
-    let mut buffer = MutableBuffer::new(len);
+    let mut buffer = MutableBuffer::new(len * O::get_byte_width());
     for idx in 0..len {
         unsafe {
             buffer.push_unchecked(op(a.value_unchecked(idx), b.value_unchecked(idx))?);
