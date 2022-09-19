@@ -235,25 +235,29 @@ where
 /// especially when the operation can be vectorised, however, requires `op` to be infallible
 /// for all possible values of its inputs
 ///
-/// # Panic
+/// # Error
 ///
-/// Panics if the arrays have different lengths
+/// This function gives error if the arrays have different lengths
 pub fn binary<A, B, F, O>(
     a: &PrimitiveArray<A>,
     b: &PrimitiveArray<B>,
     op: F,
-) -> PrimitiveArray<O>
+) -> Result<PrimitiveArray<O>>
 where
     A: ArrowPrimitiveType,
     B: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
     F: Fn(A::Native, B::Native) -> O::Native,
 {
-    assert_eq!(a.len(), b.len());
+    if a.len() != b.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform binary operation on arrays of different length".to_string(),
+        ));
+    }
     let len = a.len();
 
     if a.is_empty() {
-        return PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE));
+        return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
 
     let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
@@ -270,7 +274,7 @@ where
     //      `values` is an iterator with a known size from a PrimitiveArray
     let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
 
-    unsafe { build_primitive_array(len, buffer, null_count, null_buffer) }
+    Ok(unsafe { build_primitive_array(len, buffer, null_count, null_buffer) })
 }
 
 /// Applies the provided fallible binary operation across `a` and `b`, returning any error,
@@ -344,32 +348,36 @@ where
 ///
 /// The function is only evaluated for non-null indices
 ///
-/// # Panic
+/// # Error
 ///
-/// Panics if the arrays have different lengths
+/// This function gives error if the arrays have different lengths
 pub(crate) fn binary_opt<A, B, F, O>(
     a: &PrimitiveArray<A>,
     b: &PrimitiveArray<B>,
     op: F,
-) -> PrimitiveArray<O>
+) -> Result<PrimitiveArray<O>>
 where
     A: ArrowPrimitiveType,
     B: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
     F: Fn(A::Native, B::Native) -> Option<O::Native>,
 {
-    assert_eq!(a.len(), b.len());
+    if a.len() != b.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform binary operation on arrays of different length".to_string(),
+        ));
+    }
 
     if a.is_empty() {
-        return PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE));
+        return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
 
     if a.null_count() == 0 && b.null_count() == 0 {
-        a.values()
+        Ok(a.values()
             .iter()
             .zip(b.values().iter())
             .map(|(a, b)| op(*a, *b))
-            .collect()
+            .collect())
     } else {
         let iter_a = ArrayIter::new(a);
         let iter_b = ArrayIter::new(b);
@@ -386,7 +394,7 @@ where
                     }
                 });
 
-        values.collect()
+        Ok(values.collect())
     }
 }
 
