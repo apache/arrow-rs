@@ -74,8 +74,11 @@ git checkout -b make-release
 # manully edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
 CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
+# run automated script to copy labels to issues based on referenced PRs
+python dev/release/label_issues.py
 # review change log / edit issues and labels if needed, rerun
 git commit -a -m 'Create changelog'
+
 
 # update versions
 sed -i '' -e 's/14.0.0/23.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
@@ -228,6 +231,7 @@ following commands
 Rust Arrow Crates:
 
 ```shell
+(cd arrow-buffer && cargo publish)
 (cd arrow && cargo publish)
 (cd arrow-flight && cargo publish)
 (cd parquet && cargo publish)
