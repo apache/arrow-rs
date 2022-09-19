@@ -27,6 +27,7 @@ use crate::datatypes::{ArrowNumericType, ArrowPrimitiveType};
 use crate::downcast_dictionary_array;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_iterator::try_for_each_valid_idx;
+use arrow_buffer::MutableBuffer;
 use std::sync::Arc;
 
 #[inline]
@@ -297,17 +298,7 @@ where
     let len = a.len();
 
     if a.null_count() == 0 && b.null_count() == 0 {
-        let mut buffer = BufferBuilder::<O::Native>::new(len);
-        buffer.append_n_zeroed(len);
-        let slice = buffer.as_slice_mut();
-
-        for idx in 0..len {
-            unsafe {
-                *slice.get_unchecked_mut(idx) =
-                    op(a.value_unchecked(idx), b.value_unchecked(idx))?
-            };
-        }
-        Ok(unsafe { build_primitive_array(len, buffer.finish(), 0, None) })
+        try_binary_no_nulls(len, a, b, op)
     } else {
         let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
 
@@ -332,6 +323,27 @@ where
             build_primitive_array(len, buffer.finish(), null_count, null_buffer)
         })
     }
+}
+
+/// This intentional inline(never) attribute helps LLVM optimize the loop.
+#[inline(never)]
+fn try_binary_no_nulls<A: ArrayAccessor, B: ArrayAccessor, F, O>(
+    len: usize,
+    a: A,
+    b: B,
+    op: F,
+) -> Result<PrimitiveArray<O>>
+where
+    O: ArrowPrimitiveType,
+    F: Fn(A::Item, B::Item) -> Result<O::Native>,
+{
+    let mut buffer = MutableBuffer::new(len);
+    for idx in 0..len {
+        unsafe {
+            buffer.push_unchecked(op(a.value_unchecked(idx), b.value_unchecked(idx))?);
+        };
+    }
+    Ok(unsafe { build_primitive_array(len, buffer.into(), 0, None) })
 }
 
 /// Applies the provided binary operation across `a` and `b`, collecting the optional results
