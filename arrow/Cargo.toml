@@ -95,6 +95,9 @@ ffi = []
 # Enable dyn-comparison of dictionary arrays with other arrays
 # Note: this does not impact comparison against scalars
 dyn_cmp_dict = []
+# Enable dyn-arithmetic kernels for dictionary arrays
+# Note: this does not impact arithmetic with scalars
+dyn_arith_dict = []
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
