@@ -578,10 +578,7 @@ pub fn read_record_batch(
     let mut node_index = 0;
     let mut arrays = vec![];
 
-    let options = RecordBatchOptions {
-        row_count: Some(batch.length() as usize),
-        ..Default::default()
-    };
+    let options = RecordBatchOptions::new().with_row_count(Some(batch.length() as usize));
 
     if let Some(projection) = projection {
         // project fields
@@ -1692,10 +1689,9 @@ mod tests {
     #[test]
     fn test_no_columns_batch() {
         let schema = Arc::new(Schema::new(vec![]));
-        let options = RecordBatchOptions {
-            match_field_names: true,
-            row_count: Some(10),
-        };
+        let options = RecordBatchOptions::new()
+            .with_match_field_names(true)
+            .with_row_count(Some(10));
         let input_batch =
             RecordBatch::try_new_with_options(schema, vec![], &options).unwrap();
         let output_batch = roundtrip_ipc_stream(&input_batch);
