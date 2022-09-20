@@ -18,7 +18,8 @@
 //! Defines kernels suitable to perform operations to primitive arrays.
 
 use crate::array::{
-    Array, ArrayData, ArrayIter, ArrayRef, BufferBuilder, DictionaryArray, PrimitiveArray,
+    Array, ArrayAccessor, ArrayData, ArrayIter, ArrayRef, BufferBuilder, DictionaryArray,
+    PrimitiveArray,
 };
 use crate::buffer::Buffer;
 use crate::compute::util::combine_option_bitmap;
@@ -26,6 +27,7 @@ use crate::datatypes::{ArrowNumericType, ArrowPrimitiveType};
 use crate::downcast_dictionary_array;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_iterator::try_for_each_valid_idx;
+use arrow_buffer::MutableBuffer;
 use std::sync::Arc;
 
 #[inline]
@@ -287,16 +289,14 @@ where
 ///
 /// Return an error if the arrays have different lengths or
 /// the operation is under erroneous
-pub fn try_binary<A, B, F, O>(
-    a: &PrimitiveArray<A>,
-    b: &PrimitiveArray<B>,
+pub fn try_binary<A: ArrayAccessor, B: ArrayAccessor, F, O>(
+    a: A,
+    b: B,
     op: F,
 ) -> Result<PrimitiveArray<O>>
 where
-    A: ArrowPrimitiveType,
-    B: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
-    F: Fn(A::Native, B::Native) -> Result<O::Native>,
+    F: Fn(A::Item, B::Item) -> Result<O::Native>,
 {
     if a.len() != b.len() {
         return Err(ArrowError::ComputeError(
@@ -309,36 +309,52 @@ where
     let len = a.len();
 
     if a.null_count() == 0 && b.null_count() == 0 {
-        let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
-        let buffer = unsafe { Buffer::try_from_trusted_len_iter(values) }?;
-        // JUSTIFICATION
-        //  Benefit
-        //      ~75% speedup
-        //  Soundness
-        //      `values` is an iterator with a known size from a PrimitiveArray
-        return Ok(unsafe { build_primitive_array(len, buffer, 0, None) });
+        try_binary_no_nulls(len, a, b, op)
+    } else {
+        let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
+
+        let null_count = null_buffer
+            .as_ref()
+            .map(|x| len - x.count_set_bits())
+            .unwrap_or_default();
+
+        let mut buffer = BufferBuilder::<O::Native>::new(len);
+        buffer.append_n_zeroed(len);
+        let slice = buffer.as_slice_mut();
+
+        try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+            unsafe {
+                *slice.get_unchecked_mut(idx) =
+                    op(a.value_unchecked(idx), b.value_unchecked(idx))?
+            };
+            Ok::<_, ArrowError>(())
+        })?;
+
+        Ok(unsafe {
+            build_primitive_array(len, buffer.finish(), null_count, null_buffer)
+        })
     }
+}
 
-    let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
-
-    let null_count = null_buffer
-        .as_ref()
-        .map(|x| len - x.count_set_bits())
-        .unwrap_or_default();
-
-    let mut buffer = BufferBuilder::<O::Native>::new(len);
-    buffer.append_n_zeroed(len);
-    let slice = buffer.as_slice_mut();
-
-    try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+/// This intentional inline(never) attribute helps LLVM optimize the loop.
+#[inline(never)]
+fn try_binary_no_nulls<A: ArrayAccessor, B: ArrayAccessor, F, O>(
+    len: usize,
+    a: A,
+    b: B,
+    op: F,
+) -> Result<PrimitiveArray<O>>
+where
+    O: ArrowPrimitiveType,
+    F: Fn(A::Item, B::Item) -> Result<O::Native>,
+{
+    let mut buffer = MutableBuffer::new(len * O::get_byte_width());
+    for idx in 0..len {
         unsafe {
-            *slice.get_unchecked_mut(idx) =
-                op(a.value_unchecked(idx), b.value_unchecked(idx))?
+            buffer.push_unchecked(op(a.value_unchecked(idx), b.value_unchecked(idx))?);
         };
-        Ok::<_, ArrowError>(())
-    })?;
-
-    Ok(unsafe { build_primitive_array(len, buffer.finish(), null_count, null_buffer) })
+    }
+    Ok(unsafe { build_primitive_array(len, buffer.into(), 0, None) })
 }
 
 /// Applies the provided binary operation across `a` and `b`, collecting the optional results
