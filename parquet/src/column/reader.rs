@@ -363,7 +363,7 @@ where
     }
 
     /// Read the next page as a dictionary page. If the next page is not a dictionary page,
-    /// this will return an error. 
+    /// this will return an error.
     fn read_dictionary_page(&mut self) -> Result<()> {
         match self.page_reader.get_next_page()? {
             Some(Page::DictionaryPage {
