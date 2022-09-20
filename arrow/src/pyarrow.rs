@@ -151,6 +151,21 @@ impl PyArrowConvert for ArrayData {
     }
 }
 
+impl<T: PyArrowConvert> PyArrowConvert for Vec<T> {
+    fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        let list = value.downcast::<PyList>()?;
+        list.iter().map(|x| T::from_pyarrow(&x)).collect()
+    }
+
+    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+        let values = self
+            .iter()
+            .map(|v| v.to_pyarrow(py))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(values.to_object(py))
+    }
+}
+
 impl<T> PyArrowConvert for T
 where
     T: Array + From<ArrayData>,
