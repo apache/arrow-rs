@@ -228,25 +228,25 @@ mod tests {
 
     #[test]
     fn test_unary_dict_and_unary_dyn() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(5).unwrap();
         builder.append(6).unwrap();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(9).unwrap();
         let dictionary_array = builder.finish();
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
-        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::with_capacity(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(6).unwrap();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
         builder.append(9).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(10).unwrap();
         let expected = builder.finish();
 

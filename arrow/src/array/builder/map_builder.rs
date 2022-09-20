@@ -18,6 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use super::{ArrayBuilder, BufferBuilder, NullBufferBuilder};
 use crate::array::array::Array;
 use crate::array::ArrayData;
 use crate::array::ArrayRef;
@@ -25,18 +26,16 @@ use crate::array::MapArray;
 use crate::array::StructArray;
 use crate::datatypes::DataType;
 use crate::datatypes::Field;
-use crate::error::{ArrowError, Result};
-
-use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
+use crate::error::ArrowError;
+use crate::error::Result;
 
 #[derive(Debug)]
 pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
     offsets_builder: BufferBuilder<i32>,
-    bitmap_builder: BooleanBufferBuilder,
+    null_buffer_builder: NullBufferBuilder,
     field_names: MapFieldNames,
     key_builder: K,
     value_builder: V,
-    len: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -78,11 +77,10 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         offsets_builder.append(len);
         Self {
             offsets_builder,
-            bitmap_builder: BooleanBufferBuilder::new(capacity),
+            null_buffer_builder: NullBufferBuilder::new(capacity),
             field_names: field_names.unwrap_or_default(),
             key_builder,
             value_builder,
-            len,
         }
     }
 
@@ -95,6 +93,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     }
 
     /// Finish the current map array slot
+    ///
+    /// Returns an error if the key and values builders are in an inconsistent state.
     #[inline]
     pub fn append(&mut self, is_valid: bool) -> Result<()> {
         if self.key_builder.len() != self.value_builder.len() {
@@ -105,14 +105,12 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             )));
         }
         self.offsets_builder.append(self.key_builder.len() as i32);
-        self.bitmap_builder.append(is_valid);
-        self.len += 1;
+        self.null_buffer_builder.append(is_valid);
         Ok(())
     }
 
     pub fn finish(&mut self) -> MapArray {
         let len = self.len();
-        self.len = 0;
 
         // Build the keys
         let keys_arr = self
@@ -143,8 +141,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             StructArray::from(vec![(keys_field, keys_arr), (values_field, values_arr)]);
 
         let offset_buffer = self.offsets_builder.finish();
-        let null_bit_buffer = self.bitmap_builder.finish();
-        self.offsets_builder.append(self.len);
+        let null_bit_buffer = self.null_buffer_builder.finish();
+        self.offsets_builder.append(0);
         let map_field = Box::new(Field::new(
             self.field_names.entry.as_str(),
             struct_array.data_type().clone(),
@@ -154,7 +152,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(struct_array.into_data())
-            .null_bit_buffer(Some(null_bit_buffer));
+            .null_bit_buffer(null_bit_buffer);
 
         let array_data = unsafe { array_data.build_unchecked() };
 
@@ -164,11 +162,11 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
 
 impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
     fn len(&self) -> usize {
-        self.len as usize
+        self.null_buffer_builder.len()
     }
 
     fn is_empty(&self) -> bool {
-        self.len == 0
+        self.len() == 0
     }
 
     fn finish(&mut self) -> ArrayRef {
@@ -203,22 +201,22 @@ mod tests {
 
     #[test]
     fn test_map_array_builder() {
-        let string_builder = StringBuilder::new(4);
-        let int_builder = Int32Builder::new(4);
+        let string_builder = StringBuilder::new();
+        let int_builder = Int32Builder::with_capacity(4);
 
         let mut builder = MapBuilder::new(None, string_builder, int_builder);
 
         let string_builder = builder.keys();
-        string_builder.append_value("joe").unwrap();
-        string_builder.append_null().unwrap();
-        string_builder.append_null().unwrap();
-        string_builder.append_value("mark").unwrap();
+        string_builder.append_value("joe");
+        string_builder.append_null();
+        string_builder.append_null();
+        string_builder.append_value("mark");
 
         let int_builder = builder.values();
-        int_builder.append_value(1).unwrap();
-        int_builder.append_value(2).unwrap();
-        int_builder.append_null().unwrap();
-        int_builder.append_value(4).unwrap();
+        int_builder.append_value(1);
+        int_builder.append_value(2);
+        int_builder.append_null();
+        int_builder.append_value(4);
 
         builder.append(true).unwrap();
         builder.append(false).unwrap();

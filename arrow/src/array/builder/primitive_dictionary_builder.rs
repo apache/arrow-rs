@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -25,6 +26,26 @@ use crate::error::{ArrowError, Result};
 
 use super::ArrayBuilder;
 use super::PrimitiveBuilder;
+
+/// Wraps a type implementing `ToByteSlice` implementing `Hash` and `Eq` for it
+///
+/// This is necessary to handle types such as f32, which don't natively implement these
+#[derive(Debug)]
+struct Value<T>(T);
+
+impl<T: ToByteSlice> std::hash::Hash for Value<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_byte_slice().hash(state)
+    }
+}
+
+impl<T: ToByteSlice> PartialEq for Value<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_byte_slice().eq(other.0.to_byte_slice())
+    }
+}
+
+impl<T: ToByteSlice> Eq for Value<T> {}
 
 /// Array builder for `DictionaryArray`. For example to map a set of byte indices
 /// to f32 values. Note that the use of a `HashMap` here will not scale to very large
@@ -39,11 +60,11 @@ use super::PrimitiveBuilder;
 ///    };
 ///  use arrow::datatypes::{UInt8Type, UInt32Type};
 ///
-///  let key_builder = PrimitiveBuilder::<UInt8Type>::new(3);
-///  let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
+///  let key_builder = PrimitiveBuilder::<UInt8Type>::with_capacity(3);
+///  let value_builder = PrimitiveBuilder::<UInt32Type>::with_capacity(2);
 ///  let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
 ///  builder.append(12345678).unwrap();
-///  builder.append_null().unwrap();
+///  builder.append_null();
 ///  builder.append(22345678).unwrap();
 ///  let array = builder.finish();
 ///
@@ -71,7 +92,7 @@ where
 {
     keys_builder: PrimitiveBuilder<K>,
     values_builder: PrimitiveBuilder<V>,
-    map: HashMap<Box<[u8]>, K::Native>,
+    map: HashMap<Value<V::Native>, K::Native>,
 }
 
 impl<K, V> PrimitiveDictionaryBuilder<K, V>
@@ -138,23 +159,24 @@ where
     /// value is appended to the values array.
     #[inline]
     pub fn append(&mut self, value: V::Native) -> Result<K::Native> {
-        if let Some(&key) = self.map.get(value.to_byte_slice()) {
-            // Append existing value.
-            self.keys_builder.append_value(key)?;
-            Ok(key)
-        } else {
-            // Append new value.
-            let key = K::Native::from_usize(self.values_builder.len())
-                .ok_or(ArrowError::DictionaryKeyOverflowError)?;
-            self.values_builder.append_value(value)?;
-            self.keys_builder.append_value(key as K::Native)?;
-            self.map.insert(value.to_byte_slice().into(), key);
-            Ok(key)
-        }
+        let key = match self.map.entry(Value(value)) {
+            Entry::Vacant(vacant) => {
+                // Append new value.
+                let key = K::Native::from_usize(self.values_builder.len())
+                    .ok_or(ArrowError::DictionaryKeyOverflowError)?;
+                self.values_builder.append_value(value);
+                vacant.insert(key);
+                key
+            }
+            Entry::Occupied(o) => *o.get(),
+        };
+
+        self.keys_builder.append_value(key);
+        Ok(key)
     }
 
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) {
         self.keys_builder.append_null()
     }
 
@@ -189,11 +211,11 @@ mod tests {
 
     #[test]
     fn test_primitive_dictionary_builder() {
-        let key_builder = PrimitiveBuilder::<UInt8Type>::new(3);
-        let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
+        let key_builder = PrimitiveBuilder::<UInt8Type>::with_capacity(3);
+        let value_builder = PrimitiveBuilder::<UInt32Type>::with_capacity(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(12345678).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(22345678).unwrap();
         let array = builder.finish();
 
@@ -217,8 +239,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "DictionaryKeyOverflowError")]
     fn test_primitive_dictionary_overflow() {
-        let key_builder = PrimitiveBuilder::<UInt8Type>::new(257);
-        let value_builder = PrimitiveBuilder::<UInt32Type>::new(257);
+        let key_builder = PrimitiveBuilder::<UInt8Type>::with_capacity(257);
+        let value_builder = PrimitiveBuilder::<UInt32Type>::with_capacity(257);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         // 256 unique keys.
         for i in 0..256 {

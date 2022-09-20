@@ -40,6 +40,12 @@ pub struct TreeBuilder {
     batch_size: usize,
 }
 
+impl Default for TreeBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TreeBuilder {
     /// Creates new tree builder with default parameters.
     pub fn new() -> Self {
@@ -822,7 +828,7 @@ mod tests {
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::record::api::{Field, Row, RowAccessor, RowFormatter};
     use crate::schema::parser::parse_message_type;
-    use crate::util::test_common::{get_test_file, get_test_path};
+    use crate::util::test_common::file_util::{get_test_file, get_test_path};
     use std::convert::TryFrom;
 
     // Convenient macros to assemble row, list, map, and group.

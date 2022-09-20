@@ -23,31 +23,32 @@ use crate::error::{ArrowError, Result};
 use std::any::Any;
 use std::sync::Arc;
 
-use super::BooleanBufferBuilder;
+use super::NullBufferBuilder;
 
 #[derive(Debug)]
 pub struct FixedSizeBinaryBuilder {
     values_builder: UInt8BufferBuilder,
-    bitmap_builder: BooleanBufferBuilder,
+    null_buffer_builder: NullBufferBuilder,
     value_length: i32,
 }
 
 impl FixedSizeBinaryBuilder {
-    /// Creates a new [`FixedSizeBinaryBuilder`], `capacity` is the number of bytes in the values
-    /// buffer
-    pub fn new(capacity: usize, byte_width: i32) -> Self {
+    /// Creates a new [`FixedSizeBinaryBuilder`]
+    pub fn new(byte_width: i32) -> Self {
+        Self::with_capacity(1024, byte_width)
+    }
+
+    /// Creates a new [`FixedSizeBinaryBuilder`], `capacity` is the number of byte slices
+    /// that can be appended without reallocating
+    pub fn with_capacity(capacity: usize, byte_width: i32) -> Self {
         assert!(
             byte_width >= 0,
             "value length ({}) of the array must >= 0",
             byte_width
         );
         Self {
-            values_builder: UInt8BufferBuilder::new(capacity),
-            bitmap_builder: BooleanBufferBuilder::new(if byte_width > 0 {
-                capacity / byte_width as usize
-            } else {
-                0
-            }),
+            values_builder: UInt8BufferBuilder::new(capacity * byte_width as usize),
+            null_buffer_builder: NullBufferBuilder::new(capacity),
             value_length: byte_width,
         }
     }
@@ -64,18 +65,17 @@ impl FixedSizeBinaryBuilder {
             ))
         } else {
             self.values_builder.append_slice(value.as_ref());
-            self.bitmap_builder.append(true);
+            self.null_buffer_builder.append_non_null();
             Ok(())
         }
     }
 
     /// Append a null value to the array.
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) {
         self.values_builder
             .append_slice(&vec![0u8; self.value_length as usize][..]);
-        self.bitmap_builder.append(false);
-        Ok(())
+        self.null_buffer_builder.append_null();
     }
 
     /// Builds the [`FixedSizeBinaryArray`] and reset this builder.
@@ -84,7 +84,7 @@ impl FixedSizeBinaryBuilder {
         let array_data_builder =
             ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
                 .add_buffer(self.values_builder.finish())
-                .null_bit_buffer(Some(self.bitmap_builder.finish()))
+                .null_bit_buffer(self.null_buffer_builder.finish())
                 .len(array_length);
         let array_data = unsafe { array_data_builder.build_unchecked() };
         FixedSizeBinaryArray::from(array_data)
@@ -109,12 +109,12 @@ impl ArrayBuilder for FixedSizeBinaryBuilder {
 
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
-        self.bitmap_builder.len()
+        self.null_buffer_builder.len()
     }
 
     /// Returns whether the number of array slots is zero
     fn is_empty(&self) -> bool {
-        self.bitmap_builder.is_empty()
+        self.null_buffer_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.
@@ -133,11 +133,11 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_builder() {
-        let mut builder = FixedSizeBinaryBuilder::new(15, 5);
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 5);
 
         //  [b"hello", null, "arrow"]
         builder.append_value(b"hello").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append_value(b"arrow").unwrap();
         let array: FixedSizeBinaryArray = builder.finish();
 
@@ -150,10 +150,10 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_builder_with_zero_value_length() {
-        let mut builder = FixedSizeBinaryBuilder::new(0, 0);
+        let mut builder = FixedSizeBinaryBuilder::new(0);
 
         builder.append_value(b"").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append_value(b"").unwrap();
         assert!(!builder.is_empty());
 
@@ -172,12 +172,12 @@ mod tests {
         expected = "Byte slice does not have the same length as FixedSizeBinaryBuilder value lengths"
     )]
     fn test_fixed_size_binary_builder_with_inconsistent_value_length() {
-        let mut builder = FixedSizeBinaryBuilder::new(15, 4);
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(1, 4);
         builder.append_value(b"hello").unwrap();
     }
     #[test]
     fn test_fixed_size_binary_builder_empty() {
-        let mut builder = FixedSizeBinaryBuilder::new(15, 5);
+        let mut builder = FixedSizeBinaryBuilder::new(5);
         assert!(builder.is_empty());
 
         let fixed_size_binary_array = builder.finish();
@@ -191,6 +191,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "value length (-1) of the array must >= 0")]
     fn test_fixed_size_binary_builder_invalid_value_length() {
-        let _ = FixedSizeBinaryBuilder::new(15, -1);
+        let _ = FixedSizeBinaryBuilder::with_capacity(15, -1);
     }
 }

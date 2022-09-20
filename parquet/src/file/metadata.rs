@@ -50,15 +50,18 @@ use crate::schema::types::{
     Type as SchemaType,
 };
 
+pub type ParquetColumnIndex = Vec<Vec<Index>>;
+pub type ParquetOffsetIndex = Vec<Vec<Vec<PageLocation>>>;
+
 /// Global Parquet metadata.
 #[derive(Debug, Clone)]
 pub struct ParquetMetaData {
     file_metadata: FileMetaData,
     row_groups: Vec<RowGroupMetaData>,
     /// Page index for all pages in each column chunk
-    page_indexes: Option<Vec<Vec<Index>>>,
+    page_indexes: Option<ParquetColumnIndex>,
     /// Offset index for all pages in each column chunk
-    offset_indexes: Option<Vec<Vec<Vec<PageLocation>>>>,
+    offset_indexes: Option<ParquetOffsetIndex>,
 }
 
 impl ParquetMetaData {
@@ -76,8 +79,8 @@ impl ParquetMetaData {
     pub fn new_with_page_index(
         file_metadata: FileMetaData,
         row_groups: Vec<RowGroupMetaData>,
-        page_indexes: Option<Vec<Vec<Index>>>,
-        offset_indexes: Option<Vec<Vec<Vec<PageLocation>>>>,
+        page_indexes: Option<ParquetColumnIndex>,
+        offset_indexes: Option<ParquetOffsetIndex>,
     ) -> Self {
         ParquetMetaData {
             file_metadata,
@@ -109,12 +112,12 @@ impl ParquetMetaData {
     }
 
     /// Returns page indexes in this file.
-    pub fn page_indexes(&self) -> Option<&Vec<Vec<Index>>> {
+    pub fn page_indexes(&self) -> Option<&ParquetColumnIndex> {
         self.page_indexes.as_ref()
     }
 
     /// Returns offset indexes in this file.
-    pub fn offset_indexes(&self) -> Option<&Vec<Vec<Vec<PageLocation>>>> {
+    pub fn offset_indexes(&self) -> Option<&ParquetOffsetIndex> {
         self.offset_indexes.as_ref()
     }
 }
@@ -831,6 +834,12 @@ pub struct ColumnIndexBuilder {
     valid: bool,
 }
 
+impl Default for ColumnIndexBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ColumnIndexBuilder {
     pub fn new() -> Self {
         ColumnIndexBuilder {
@@ -882,6 +891,12 @@ pub struct OffsetIndexBuilder {
     compressed_page_size_array: Vec<i32>,
     first_row_index_array: Vec<i64>,
     current_first_row_index: i64,
+}
+
+impl Default for OffsetIndexBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OffsetIndexBuilder {

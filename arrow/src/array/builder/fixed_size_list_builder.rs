@@ -23,15 +23,14 @@ use crate::array::ArrayRef;
 use crate::array::FixedSizeListArray;
 use crate::datatypes::DataType;
 use crate::datatypes::Field;
-use crate::error::Result;
 
 use super::ArrayBuilder;
-use super::BooleanBufferBuilder;
+use super::NullBufferBuilder;
 
 ///  Array builder for [`FixedSizeListArray`]
 #[derive(Debug)]
 pub struct FixedSizeListBuilder<T: ArrayBuilder> {
-    bitmap_builder: BooleanBufferBuilder,
+    null_buffer_builder: NullBufferBuilder,
     values_builder: T,
     list_len: i32,
 }
@@ -49,7 +48,7 @@ impl<T: ArrayBuilder> FixedSizeListBuilder<T> {
     /// `capacity` is the number of items to pre-allocate space for in this builder
     pub fn with_capacity(values_builder: T, value_length: i32, capacity: usize) -> Self {
         Self {
-            bitmap_builder: BooleanBufferBuilder::new(capacity),
+            null_buffer_builder: NullBufferBuilder::new(capacity),
             values_builder,
             list_len: value_length,
         }
@@ -77,12 +76,12 @@ where
 
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
-        self.bitmap_builder.len()
+        self.null_buffer_builder.len()
     }
 
     /// Returns whether the number of array slots is zero
     fn is_empty(&self) -> bool {
-        self.bitmap_builder.is_empty()
+        self.null_buffer_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.
@@ -109,9 +108,8 @@ where
 
     /// Finish the current fixed-length list array slot
     #[inline]
-    pub fn append(&mut self, is_valid: bool) -> Result<()> {
-        self.bitmap_builder.append(is_valid);
-        Ok(())
+    pub fn append(&mut self, is_valid: bool) {
+        self.null_buffer_builder.append(is_valid);
     }
 
     /// Builds the [`FixedSizeListBuilder`] and reset this builder.
@@ -133,14 +131,14 @@ where
             len,
         );
 
-        let null_bit_buffer = self.bitmap_builder.finish();
+        let null_bit_buffer = self.null_buffer_builder.finish();
         let array_data = ArrayData::builder(DataType::FixedSizeList(
             Box::new(Field::new("item", values_data.data_type().clone(), true)),
             self.list_len,
         ))
         .len(len)
         .add_child_data(values_data.clone())
-        .null_bit_buffer(Some(null_bit_buffer));
+        .null_bit_buffer(null_bit_buffer);
 
         let array_data = unsafe { array_data.build_unchecked() };
 
@@ -158,26 +156,26 @@ mod tests {
 
     #[test]
     fn test_fixed_size_list_array_builder() {
-        let values_builder = Int32Builder::new(10);
+        let values_builder = Int32Builder::new();
         let mut builder = FixedSizeListBuilder::new(values_builder, 3);
 
         //  [[0, 1, 2], null, [3, null, 5], [6, 7, null]]
-        builder.values().append_value(0).unwrap();
-        builder.values().append_value(1).unwrap();
-        builder.values().append_value(2).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_null().unwrap();
-        builder.values().append_null().unwrap();
-        builder.values().append_null().unwrap();
-        builder.append(false).unwrap();
-        builder.values().append_value(3).unwrap();
-        builder.values().append_null().unwrap();
-        builder.values().append_value(5).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_value(6).unwrap();
-        builder.values().append_value(7).unwrap();
-        builder.values().append_null().unwrap();
-        builder.append(true).unwrap();
+        builder.values().append_value(0);
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true);
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.append(false);
+        builder.values().append_value(3);
+        builder.values().append_null();
+        builder.values().append_value(5);
+        builder.append(true);
+        builder.values().append_value(6);
+        builder.values().append_value(7);
+        builder.values().append_null();
+        builder.append(true);
         let list_array = builder.finish();
 
         assert_eq!(DataType::Int32, list_array.value_type());
@@ -202,17 +200,17 @@ mod tests {
         let values_builder = Int32Array::builder(5);
         let mut builder = FixedSizeListBuilder::new(values_builder, 3);
 
-        builder.values().append_slice(&[1, 2, 3]).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_slice(&[4, 5, 6]).unwrap();
-        builder.append(true).unwrap();
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
+        builder.values().append_slice(&[4, 5, 6]);
+        builder.append(true);
 
         let mut arr = builder.finish();
         assert_eq!(2, arr.len());
         assert_eq!(0, builder.len());
 
-        builder.values().append_slice(&[7, 8, 9]).unwrap();
-        builder.append(true).unwrap();
+        builder.values().append_slice(&[7, 8, 9]);
+        builder.append(true);
         arr = builder.finish();
         assert_eq!(1, arr.len());
         assert_eq!(0, builder.len());
@@ -226,12 +224,12 @@ mod tests {
         let values_builder = Int32Array::builder(5);
         let mut builder = FixedSizeListBuilder::new(values_builder, 3);
 
-        builder.values().append_slice(&[1, 2, 3]).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_slice(&[4, 5, 6]).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_slice(&[7, 8, 9, 10]).unwrap();
-        builder.append(true).unwrap();
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
+        builder.values().append_slice(&[4, 5, 6]);
+        builder.append(true);
+        builder.values().append_slice(&[7, 8, 9, 10]);
+        builder.append(true);
 
         builder.finish();
     }

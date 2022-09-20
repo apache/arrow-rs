@@ -94,7 +94,7 @@ fn from_parquet(parquet_type: &Type) -> Result<DataType> {
             PhysicalType::INT96 => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
             PhysicalType::FLOAT => Ok(DataType::Float32),
             PhysicalType::DOUBLE => Ok(DataType::Float64),
-            PhysicalType::BYTE_ARRAY => from_byte_array(basic_info),
+            PhysicalType::BYTE_ARRAY => from_byte_array(basic_info, *precision, *scale),
             PhysicalType::FIXED_LEN_BYTE_ARRAY => {
                 from_fixed_len_byte_array(basic_info, *scale, *precision, *type_length)
             }
@@ -112,7 +112,7 @@ fn decimal_type(scale: i32, precision: i32) -> Result<DataType> {
         .try_into()
         .map_err(|_| arrow_err!("precision cannot be negative: {}", precision))?;
 
-    Ok(DataType::Decimal(precision, scale))
+    Ok(DataType::Decimal128(precision, scale))
 }
 
 fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataType> {
@@ -224,7 +224,7 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
     }
 }
 
-fn from_byte_array(info: &BasicTypeInfo) -> Result<DataType> {
+fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32) -> Result<DataType> {
     match (info.logical_type(), info.converted_type()) {
         (Some(LogicalType::String), _) => Ok(DataType::Utf8),
         (Some(LogicalType::Json), _) => Ok(DataType::Binary),
@@ -235,6 +235,14 @@ fn from_byte_array(info: &BasicTypeInfo) -> Result<DataType> {
         (None, ConvertedType::BSON) => Ok(DataType::Binary),
         (None, ConvertedType::ENUM) => Ok(DataType::Binary),
         (None, ConvertedType::UTF8) => Ok(DataType::Utf8),
+        (Some(LogicalType::Decimal { precision, scale }), _) => Ok(DataType::Decimal128(
+            precision.try_into().unwrap(),
+            scale.try_into().unwrap(),
+        )),
+        (None, ConvertedType::DECIMAL) => Ok(DataType::Decimal128(
+            precision.try_into().unwrap(),
+            scale.try_into().unwrap(),
+        )),
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet BYTE_ARRAY logical type {:?} or converted type {}",
             logical,

@@ -16,11 +16,8 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::default::Default;
 use std::fmt;
-
-use serde_derive::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use std::hash::Hash;
 
 use crate::error::{ArrowError, Result};
 
@@ -30,13 +27,16 @@ use super::Field;
 ///
 /// Note that this information is only part of the meta-data and not part of the physical
 /// memory layout.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Schema {
-    pub(crate) fields: Vec<Field>,
+    pub fields: Vec<Field>,
     /// A map of key-value pairs containing additional meta data.
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    #[serde(default)]
-    pub(crate) metadata: HashMap<String, String>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "HashMap::is_empty", default)
+    )]
+    pub metadata: HashMap<String, String>,
 }
 
 impl Schema {
@@ -48,7 +48,7 @@ impl Schema {
         }
     }
 
-    /// Creates a new `Schema` from a sequence of `Field` values.
+    /// Creates a new [`Schema`] from a sequence of [`Field`] values.
     ///
     /// # Example
     ///
@@ -63,7 +63,7 @@ impl Schema {
         Self::new_with_metadata(fields, HashMap::new())
     }
 
-    /// Creates a new `Schema` from a sequence of `Field` values
+    /// Creates a new [`Schema`] from a sequence of [`Field`] values
     /// and adds additional metadata in form of key value pairs.
     ///
     /// # Example
@@ -148,27 +148,23 @@ impl Schema {
                     // merge metadata
                     if let Some(old_val) = merged.metadata.get(&key) {
                         if old_val != &value {
-                            return Err(ArrowError::SchemaError(
-                                "Fail to merge schema due to conflicting metadata."
-                                    .to_string(),
-                            ));
+                            return Err(ArrowError::SchemaError(format!(
+                                "Fail to merge schema due to conflicting metadata. \
+                                         Key '{}' has different values '{}' and '{}'",
+                                key, old_val, value
+                            )));
                         }
                     }
                     merged.metadata.insert(key, value);
                 }
                 // merge fields
                 for field in fields.into_iter() {
-                    let mut new_field = true;
-                    for merged_field in &mut merged.fields {
-                        if field.name() != merged_field.name() {
-                            continue;
-                        }
-                        new_field = false;
-                        merged_field.try_merge(&field)?
-                    }
-                    // found a new field, add to field list
-                    if new_field {
-                        merged.fields.push(field);
+                    let merged_field =
+                        merged.fields.iter_mut().find(|f| f.name() == field.name());
+                    match merged_field {
+                        Some(merged_field) => merged_field.try_merge(&field)?,
+                        // found a new field, add to field list
+                        None => merged.fields.push(field),
                     }
                 }
                 Ok(merged)
@@ -183,22 +179,23 @@ impl Schema {
 
     /// Returns a vector with references to all fields (including nested fields)
     #[inline]
+    #[cfg(feature = "ipc")]
     pub(crate) fn all_fields(&self) -> Vec<&Field> {
         self.fields.iter().flat_map(|f| f.fields()).collect()
     }
 
-    /// Returns an immutable reference of a specific `Field` instance selected using an
+    /// Returns an immutable reference of a specific [`Field`] instance selected using an
     /// offset within the internal `fields` vector.
     pub fn field(&self, i: usize) -> &Field {
         &self.fields[i]
     }
 
-    /// Returns an immutable reference of a specific `Field` instance selected by name.
+    /// Returns an immutable reference of a specific [`Field`] instance selected by name.
     pub fn field_with_name(&self, name: &str) -> Result<&Field> {
         Ok(&self.fields[self.index_of(name)?])
     }
 
-    /// Returns a vector of immutable references to all `Field` instances selected by
+    /// Returns a vector of immutable references to all [`Field`] instances selected by
     /// the dictionary ID they use.
     pub fn fields_with_dict_id(&self, dict_id: i64) -> Vec<&Field> {
         self.fields
@@ -209,17 +206,16 @@ impl Schema {
 
     /// Find the index of the column with the given name.
     pub fn index_of(&self, name: &str) -> Result<usize> {
-        for i in 0..self.fields.len() {
-            if self.fields[i].name() == name {
-                return Ok(i);
-            }
-        }
-        let valid_fields: Vec<String> =
-            self.fields.iter().map(|f| f.name().clone()).collect();
-        Err(ArrowError::InvalidArgumentError(format!(
-            "Unable to get field named \"{}\". Valid fields: {:?}",
-            name, valid_fields
-        )))
+        (0..self.fields.len())
+            .find(|idx| self.fields[*idx].name() == name)
+            .ok_or_else(|| {
+                let valid_fields: Vec<String> =
+                    self.fields.iter().map(|f| f.name().clone()).collect();
+                ArrowError::InvalidArgumentError(format!(
+                    "Unable to get field named \"{}\". Valid fields: {:?}",
+                    name, valid_fields
+                ))
+            })
     }
 
     /// Returns an immutable reference to the Map of custom metadata key-value pairs.
@@ -238,15 +234,18 @@ impl Schema {
     }
 
     /// Generate a JSON representation of the `Schema`.
-    pub fn to_json(&self) -> Value {
-        json!({
-            "fields": self.fields.iter().map(|field| field.to_json()).collect::<Vec<Value>>(),
+    #[cfg(feature = "json")]
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "fields": self.fields.iter().map(|field| field.to_json()).collect::<Vec<serde_json::Value>>(),
             "metadata": serde_json::to_value(&self.metadata).unwrap()
         })
     }
 
     /// Parse a `Schema` definition from a JSON representation.
-    pub fn from(json: &Value) -> Result<Self> {
+    #[cfg(feature = "json")]
+    pub fn from(json: &serde_json::Value) -> Result<Self> {
+        use serde_json::Value;
         match *json {
             Value::Object(ref schema) => {
                 let fields = if let Some(Value::Array(fields)) = schema.get("fields") {
@@ -273,7 +272,9 @@ impl Schema {
 
     /// Parse a `metadata` definition from a JSON representation.
     /// The JSON can either be an Object or an Array of Objects.
-    fn from_metadata(json: &Value) -> Result<HashMap<String, String>> {
+    #[cfg(feature = "json")]
+    fn from_metadata(json: &serde_json::Value) -> Result<HashMap<String, String>> {
+        use serde_json::Value;
         match json {
             Value::Array(_) => {
                 let mut hashmap = HashMap::new();
@@ -315,31 +316,13 @@ impl Schema {
     ///
     /// In other words, any record conforms to `other` should also conform to `self`.
     pub fn contains(&self, other: &Schema) -> bool {
-        if self.fields.len() != other.fields.len() {
-            return false;
-        }
-
-        for (i, field) in other.fields.iter().enumerate() {
-            if !self.fields[i].contains(field) {
-                return false;
-            }
-        }
-
+        self.fields.len() == other.fields.len()
+        && self.fields.iter().zip(other.fields.iter()).all(|(f1, f2)| f1.contains(f2))
         // make sure self.metadata is a superset of other.metadata
-        for (k, v) in &other.metadata {
-            match self.metadata.get(k) {
-                Some(s) => {
-                    if s != v {
-                        return false;
-                    }
-                }
-                None => {
-                    return false;
-                }
-            }
-        }
-
-        true
+        && other.metadata.iter().all(|(k, v1)| match self.metadata.get(k) {
+            Some(v2) => v1 == v2,
+            _ => false,
+        })
     }
 }
 
@@ -356,7 +339,24 @@ impl fmt::Display for Schema {
     }
 }
 
-#[derive(Deserialize)]
+// need to implement `Hash` manually because `HashMap` implement Eq but no `Hash`
+#[allow(clippy::derive_hash_xor_eq)]
+impl Hash for Schema {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.fields.hash(state);
+
+        // ensure deterministic key order
+        let mut keys: Vec<&String> = self.metadata.keys().collect();
+        keys.sort();
+        for k in keys {
+            k.hash(state);
+            self.metadata.get(k).expect("key valid").hash(state);
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+#[derive(serde::Deserialize)]
 struct MetadataKeyValue {
     key: String,
     value: String,
@@ -369,6 +369,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "json")]
     fn test_ser_de_metadata() {
         // ser/de with empty metadata
         let schema = Schema::new(vec![
@@ -432,5 +433,35 @@ mod tests {
                 "Schema error: project index 3 out of bounds, max field 3".to_string()
             )
         }
+    }
+
+    #[test]
+    fn test_schema_contains() {
+        let mut metadata1 = HashMap::new();
+        metadata1.insert("meta".to_string(), "data".to_string());
+
+        let schema1 = Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("address", DataType::Utf8, false),
+            Field::new("priority", DataType::UInt8, false),
+        ])
+        .with_metadata(metadata1.clone());
+
+        let mut metadata2 = HashMap::new();
+        metadata2.insert("meta".to_string(), "data".to_string());
+        metadata2.insert("meta2".to_string(), "data".to_string());
+        let schema2 = Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("address", DataType::Utf8, false),
+            Field::new("priority", DataType::UInt8, false),
+        ])
+        .with_metadata(metadata2);
+
+        // reflexivity
+        assert!(schema1.contains(&schema1));
+        assert!(schema2.contains(&schema2));
+
+        assert!(!schema1.contains(&schema2));
+        assert!(schema2.contains(&schema1));
     }
 }

@@ -320,7 +320,20 @@ pub(crate) fn get_data_type(field: ipc::Field, may_be_dictionary: bool) -> DataT
         }
         ipc::Type::Decimal => {
             let fsb = field.type_as_decimal().unwrap();
-            DataType::Decimal(fsb.precision() as usize, fsb.scale() as usize)
+            let bit_width = fsb.bitWidth();
+            if bit_width == 128 {
+                DataType::Decimal128(
+                    fsb.precision().try_into().unwrap(),
+                    fsb.scale().try_into().unwrap(),
+                )
+            } else if bit_width == 256 {
+                DataType::Decimal256(
+                    fsb.precision().try_into().unwrap(),
+                    fsb.scale().try_into().unwrap(),
+                )
+            } else {
+                panic!("Unexpected decimal bit width {}", bit_width)
+            }
         }
         ipc::Type::Union => {
             let union = field.type_as_union().unwrap();
@@ -660,11 +673,22 @@ pub(crate) fn get_fb_field_type<'a>(
             // type in the DictionaryEncoding metadata in the parent field
             get_fb_field_type(value_type, is_nullable, fbb)
         }
-        Decimal(precision, scale) => {
+        Decimal128(precision, scale) => {
             let mut builder = ipc::DecimalBuilder::new(fbb);
             builder.add_precision(*precision as i32);
             builder.add_scale(*scale as i32);
             builder.add_bitWidth(128);
+            FBFieldType {
+                type_type: ipc::Type::Decimal,
+                type_: builder.finish().as_union_value(),
+                children: Some(fbb.create_vector(&empty_fields[..])),
+            }
+        }
+        Decimal256(precision, scale) => {
+            let mut builder = ipc::DecimalBuilder::new(fbb);
+            builder.add_precision(*precision as i32);
+            builder.add_scale(*scale as i32);
+            builder.add_bitWidth(256);
             FBFieldType {
                 type_type: ipc::Type::Decimal,
                 type_: builder.finish().as_union_value(),
@@ -947,7 +971,7 @@ mod tests {
                     123,
                     true,
                 ),
-                Field::new("decimal<usize, usize>", DataType::Decimal(10, 6), false),
+                Field::new("decimal<usize, usize>", DataType::Decimal128(10, 6), false),
             ],
             md,
         );

@@ -19,9 +19,8 @@
 //! available unless `feature = "prettyprint"` is enabled.
 
 use crate::{array::ArrayRef, record_batch::RecordBatch};
-use std::fmt::Display;
-
 use comfy_table::{Cell, Table};
+use std::fmt::Display;
 
 use crate::error::Result;
 
@@ -120,7 +119,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::array::{DecimalArray, FixedSizeListBuilder};
+    use crate::array::{Decimal128Array, FixedSizeListBuilder};
     use std::fmt::Write;
     use std::sync::Arc;
 
@@ -242,12 +241,12 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
 
-        let keys_builder = PrimitiveBuilder::<Int32Type>::new(10);
-        let values_builder = StringBuilder::new(10);
+        let keys_builder = PrimitiveBuilder::<Int32Type>::with_capacity(10);
+        let values_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
 
         builder.append("one")?;
-        builder.append_null()?;
+        builder.append_null();
         builder.append("three")?;
         let array = Arc::new(builder.finish());
 
@@ -284,12 +283,12 @@ mod tests {
         let keys_builder = Int32Array::builder(3);
         let mut builder = FixedSizeListBuilder::new(keys_builder, 3);
 
-        builder.values().append_slice(&[1, 2, 3]).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_slice(&[4, 5, 6]).unwrap();
-        builder.append(false).unwrap();
-        builder.values().append_slice(&[7, 8, 9]).unwrap();
-        builder.append(true).unwrap();
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
+        builder.values().append_slice(&[4, 5, 6]);
+        builder.append(false);
+        builder.values().append_slice(&[7, 8, 9]);
+        builder.append(true);
 
         let array = Arc::new(builder.finish());
 
@@ -318,10 +317,10 @@ mod tests {
         let field_type = DataType::FixedSizeBinary(3);
         let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
 
-        let mut builder = FixedSizeBinaryBuilder::new(3, 3);
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 3);
 
         builder.append_value(&[1, 2, 3]).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append_value(&[7, 8, 9]).unwrap();
 
         let array = Arc::new(builder.finish());
@@ -351,8 +350,8 @@ mod tests {
     macro_rules! check_datetime {
         ($ARRAYTYPE:ident, $VALUE:expr, $EXPECTED_RESULT:expr) => {
             let mut builder = $ARRAYTYPE::builder(10);
-            builder.append_value($VALUE).unwrap();
-            builder.append_null().unwrap();
+            builder.append_value($VALUE);
+            builder.append_null();
             let array = builder.finish();
 
             let schema = Arc::new(Schema::new(vec![Field::new(
@@ -523,7 +522,7 @@ mod tests {
 
         let array = [Some(101), None, Some(200), Some(3040)]
             .into_iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(precision, scale)
             .unwrap();
 
@@ -563,7 +562,7 @@ mod tests {
 
         let array = [Some(101), None, Some(200), Some(3040)]
             .into_iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(precision, scale)
             .unwrap();
 
@@ -650,7 +649,7 @@ mod tests {
 
     #[test]
     fn test_pretty_format_dense_union() -> Result<()> {
-        let mut builder = UnionBuilder::new_dense(4);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Float64Type>("b", 3.2234).unwrap();
         builder.append_null::<Float64Type>("b").unwrap();
@@ -691,7 +690,7 @@ mod tests {
 
     #[test]
     fn test_pretty_format_sparse_union() -> Result<()> {
-        let mut builder = UnionBuilder::new_sparse(4);
+        let mut builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Float64Type>("b", 3.2234).unwrap();
         builder.append_null::<Float64Type>("b").unwrap();
@@ -733,7 +732,7 @@ mod tests {
     #[test]
     fn test_pretty_format_nested_union() -> Result<()> {
         //Inner UnionArray
-        let mut builder = UnionBuilder::new_dense(5);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("b", 1).unwrap();
         builder.append::<Float64Type>("c", 3.2234).unwrap();
         builder.append_null::<Float64Type>("c").unwrap();

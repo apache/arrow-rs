@@ -23,8 +23,6 @@ use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::str::from_utf8;
 
-use byteorder::{BigEndian, ByteOrder};
-
 use crate::basic::Type;
 use crate::column::reader::{ColumnReader, ColumnReaderImpl};
 use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
@@ -36,52 +34,54 @@ use crate::util::{
 
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
 /// The type only takes 12 bytes, without extra padding.
-#[derive(Clone, Debug, PartialOrd, Default)]
+#[derive(Clone, Copy, Debug, PartialOrd, Default, PartialEq, Eq)]
 pub struct Int96 {
-    value: Option<[u32; 3]>,
+    value: [u32; 3],
 }
 
 impl Int96 {
     /// Creates new INT96 type struct with no data set.
     pub fn new() -> Self {
-        Self { value: None }
+        Self { value: [0; 3] }
     }
 
     /// Returns underlying data as slice of [`u32`].
     #[inline]
     pub fn data(&self) -> &[u32] {
-        self.value
-            .as_ref()
-            .expect("set_data should have been called")
+        &self.value
     }
 
     /// Sets data for this INT96 type.
     #[inline]
     pub fn set_data(&mut self, elem0: u32, elem1: u32, elem2: u32) {
-        self.value = Some([elem0, elem1, elem2]);
+        self.value = [elem0, elem1, elem2];
     }
 
     /// Converts this INT96 into an i64 representing the number of MILLISECONDS since Epoch
     pub fn to_i64(&self) -> i64 {
+        let (seconds, nanoseconds) = self.to_seconds_and_nanos();
+        seconds * 1_000 + nanoseconds / 1_000_000
+    }
+
+    /// Converts this INT96 into an i64 representing the number of NANOSECONDS since EPOCH
+    ///
+    /// Will wrap around on overflow
+    pub fn to_nanos(&self) -> i64 {
+        let (seconds, nanoseconds) = self.to_seconds_and_nanos();
+        seconds
+            .wrapping_mul(1_000_000_000)
+            .wrapping_add(nanoseconds)
+    }
+
+    /// Converts this INT96 to a number of seconds and nanoseconds since EPOCH
+    pub fn to_seconds_and_nanos(&self) -> (i64, i64) {
         const JULIAN_DAY_OF_EPOCH: i64 = 2_440_588;
         const SECONDS_PER_DAY: i64 = 86_400;
-        const MILLIS_PER_SECOND: i64 = 1_000;
 
         let day = self.data()[2] as i64;
         let nanoseconds = ((self.data()[1] as i64) << 32) + self.data()[0] as i64;
         let seconds = (day - JULIAN_DAY_OF_EPOCH) * SECONDS_PER_DAY;
-
-        seconds * MILLIS_PER_SECOND + nanoseconds / 1_000_000
-    }
-}
-
-impl PartialEq for Int96 {
-    fn eq(&self, other: &Int96) -> bool {
-        match (&self.value, &other.value) {
-            (Some(v1), Some(v2)) => v1 == v2,
-            (None, None) => true,
-            _ => false,
-        }
+        (seconds, nanoseconds)
     }
 }
 
@@ -313,6 +313,12 @@ impl From<ByteArray> for FixedLenByteArray {
     }
 }
 
+impl From<Vec<u8>> for FixedLenByteArray {
+    fn from(buf: Vec<u8>) -> FixedLenByteArray {
+        FixedLenByteArray(ByteArray::from(buf))
+    }
+}
+
 impl From<FixedLenByteArray> for ByteArray {
     fn from(other: FixedLenByteArray) -> Self {
         other.0
@@ -349,8 +355,7 @@ pub enum Decimal {
 impl Decimal {
     /// Creates new decimal value from `i32`.
     pub fn from_i32(value: i32, precision: i32, scale: i32) -> Self {
-        let mut bytes = [0; 4];
-        BigEndian::write_i32(&mut bytes, value);
+        let bytes = value.to_be_bytes();
         Decimal::Int32 {
             value: bytes,
             precision,
@@ -360,8 +365,7 @@ impl Decimal {
 
     /// Creates new decimal value from `i64`.
     pub fn from_i64(value: i64, precision: i32, scale: i32) -> Self {
-        let mut bytes = [0; 8];
-        BigEndian::write_i64(&mut bytes, value);
+        let bytes = value.to_be_bytes();
         Decimal::Int64 {
             value: bytes,
             precision,
@@ -565,15 +569,13 @@ impl AsBytes for str {
 
 pub(crate) mod private {
     use crate::encodings::decoding::PlainDecoderDetails;
-    use crate::util::bit_util::{round_upto_power_of_2, BitReader, BitWriter};
+    use crate::util::bit_util::{read_num_bytes, BitReader, BitWriter};
     use crate::util::memory::ByteBufferPtr;
 
-    use byteorder::ByteOrder;
+    use crate::basic::Type;
     use std::convert::TryInto;
 
     use super::{ParquetError, Result, SliceAsBytes};
-
-    pub type BitIndex = u64;
 
     /// Sealed trait to start to remove specialisation from implementations
     ///
@@ -581,18 +583,21 @@ pub(crate) mod private {
     /// crate, and thus hint to the type system (and end user) traits are public for the contract
     /// and not for extension.
     pub trait ParquetValueType:
-        std::cmp::PartialEq
+        PartialEq
         + std::fmt::Debug
         + std::fmt::Display
-        + std::default::Default
-        + std::clone::Clone
+        + Default
+        + Clone
         + super::AsBytes
         + super::FromBytes
-        + super::SliceAsBytes
+        + SliceAsBytes
         + PartialOrd
         + Send
         + crate::encodings::decoding::private::GetDecoder
+        + crate::file::statistics::private::MakeStatistics
     {
+        const PHYSICAL_TYPE: Type;
+
         /// Encode the value directly from a higher level encoder
         fn encode<W: std::io::Write>(
             values: &[Self],
@@ -612,6 +617,8 @@ pub(crate) mod private {
             buffer: &mut [Self],
             decoder: &mut PlainDecoderDetails,
         ) -> Result<usize>;
+
+        fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize>;
 
         /// Return the encoded size for a type
         fn dict_encoding_size(&self) -> (usize, usize) {
@@ -644,26 +651,16 @@ pub(crate) mod private {
     }
 
     impl ParquetValueType for bool {
+        const PHYSICAL_TYPE: Type = Type::BOOLEAN;
+
         #[inline]
         fn encode<W: std::io::Write>(
             values: &[Self],
             _: &mut W,
             bit_writer: &mut BitWriter,
         ) -> Result<()> {
-            if bit_writer.bytes_written() + values.len() / 8 >= bit_writer.capacity() {
-                let bits_available =
-                    (bit_writer.capacity() - bit_writer.bytes_written()) * 8;
-                let bits_needed = values.len() - bits_available;
-                let bytes_needed = (bits_needed + 7) / 8;
-                let bytes_needed = round_upto_power_of_2(bytes_needed, 256);
-                bit_writer.extend(bytes_needed);
-            }
             for value in values {
-                if !bit_writer.put_value(*value as u64, 1) {
-                    return Err(ParquetError::EOF(
-                        "unable to put boolean value".to_string(),
-                    ));
-                }
+                bit_writer.put_value(*value as u64, 1)
             }
             Ok(())
         }
@@ -690,6 +687,14 @@ pub(crate) mod private {
             Ok(values_read)
         }
 
+        fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {
+            let bit_reader = decoder.bit_reader.as_mut().unwrap();
+            let num_values = std::cmp::min(num_values, decoder.num_values);
+            let values_read = bit_reader.skip(num_values, 1);
+            decoder.num_values -= values_read;
+            Ok(values_read)
+        }
+
         #[inline]
         fn as_i64(&self) -> Result<i64> {
             Ok(*self as i64)
@@ -706,22 +711,11 @@ pub(crate) mod private {
         }
     }
 
-    /// Hopelessly unsafe function that emulates `num::as_ne_bytes`
-    ///
-    /// It is not recommended to use this outside of this private module as, while it
-    /// _should_ work for primitive values, it is little better than a transmutation
-    /// and can act as a backdoor into mis-interpreting types as arbitary byte slices
-    #[inline]
-    fn as_raw<'a, T>(value: *const T) -> &'a [u8] {
-        unsafe {
-            let value = value as *const u8;
-            std::slice::from_raw_parts(value, std::mem::size_of::<T>())
-        }
-    }
-
     macro_rules! impl_from_raw {
-        ($ty: ty, $self: ident => $as_i64: block) => {
+        ($ty: ty, $physical_ty: expr, $self: ident => $as_i64: block) => {
             impl ParquetValueType for $ty {
+                const PHYSICAL_TYPE: Type = $physical_ty;
+
                 #[inline]
                 fn encode<W: std::io::Write>(values: &[Self], writer: &mut W, _: &mut BitWriter) -> Result<()> {
                     let raw = unsafe {
@@ -765,6 +759,23 @@ pub(crate) mod private {
                 }
 
                 #[inline]
+                fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {
+                    let data = decoder.data.as_ref().expect("set_data should have been called");
+                    let num_values = num_values.min(decoder.num_values);
+                    let bytes_left = data.len() - decoder.start;
+                    let bytes_to_skip = std::mem::size_of::<Self>() * num_values;
+
+                    if bytes_left < bytes_to_skip {
+                        return Err(eof_err!("Not enough bytes to skip"));
+                    }
+
+                    decoder.start += bytes_to_skip;
+                    decoder.num_values -= num_values;
+
+                    Ok(num_values)
+                }
+
+                #[inline]
                 fn as_i64(&$self) -> Result<i64> {
                     $as_i64
                 }
@@ -782,12 +793,14 @@ pub(crate) mod private {
         }
     }
 
-    impl_from_raw!(i32, self => { Ok(*self as i64) });
-    impl_from_raw!(i64, self => { Ok(*self) });
-    impl_from_raw!(f32, self => { Err(general_err!("Type cannot be converted to i64")) });
-    impl_from_raw!(f64, self => { Err(general_err!("Type cannot be converted to i64")) });
+    impl_from_raw!(i32, Type::INT32, self => { Ok(*self as i64) });
+    impl_from_raw!(i64, Type::INT64, self => { Ok(*self) });
+    impl_from_raw!(f32, Type::FLOAT, self => { Err(general_err!("Type cannot be converted to i64")) });
+    impl_from_raw!(f64, Type::DOUBLE, self => { Err(general_err!("Type cannot be converted to i64")) });
 
     impl ParquetValueType for super::Int96 {
+        const PHYSICAL_TYPE: Type = Type::INT96;
+
         #[inline]
         fn encode<W: std::io::Write>(
             values: &[Self],
@@ -841,13 +854,33 @@ pub(crate) mod private {
 
             let mut pos = 0; // position in byte array
             for item in buffer.iter_mut().take(num_values) {
-                let elem0 = byteorder::LittleEndian::read_u32(&bytes[pos..pos + 4]);
-                let elem1 = byteorder::LittleEndian::read_u32(&bytes[pos + 4..pos + 8]);
-                let elem2 = byteorder::LittleEndian::read_u32(&bytes[pos + 8..pos + 12]);
+                let elem0 = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap());
+                let elem1 =
+                    u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap());
+                let elem2 =
+                    u32::from_le_bytes(bytes[pos + 8..pos + 12].try_into().unwrap());
 
                 item.set_data(elem0, elem1, elem2);
                 pos += 12;
             }
+            decoder.num_values -= num_values;
+
+            Ok(num_values)
+        }
+
+        fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {
+            let data = decoder
+                .data
+                .as_ref()
+                .expect("set_data should have been called");
+            let num_values = std::cmp::min(num_values, decoder.num_values);
+            let bytes_left = data.len() - decoder.start;
+            let bytes_to_skip = 12 * num_values;
+
+            if bytes_left < bytes_to_skip {
+                return Err(eof_err!("Not enough bytes to skip"));
+            }
+            decoder.start += bytes_to_skip;
             decoder.num_values -= num_values;
 
             Ok(num_values)
@@ -864,22 +897,9 @@ pub(crate) mod private {
         }
     }
 
-    // TODO - Why does macro importing fail?
-    /// Reads `$size` of bytes from `$src`, and reinterprets them as type `$ty`, in
-    /// little-endian order. `$ty` must implement the `Default` trait. Otherwise this won't
-    /// compile.
-    /// This is copied and modified from byteorder crate.
-    macro_rules! read_num_bytes {
-        ($ty:ty, $size:expr, $src:expr) => {{
-            assert!($size <= $src.len());
-            let mut buffer =
-                <$ty as $crate::util::bit_util::FromBytes>::Buffer::default();
-            buffer.as_mut()[..$size].copy_from_slice(&$src[..$size]);
-            <$ty>::from_ne_bytes(buffer)
-        }};
-    }
-
     impl ParquetValueType for super::ByteArray {
+        const PHYSICAL_TYPE: Type = Type::BYTE_ARRAY;
+
         #[inline]
         fn encode<W: std::io::Write>(
             values: &[Self],
@@ -916,9 +936,9 @@ pub(crate) mod private {
                 .as_mut()
                 .expect("set_data should have been called");
             let num_values = std::cmp::min(buffer.len(), decoder.num_values);
-            for i in 0..num_values {
+            for val_array in buffer.iter_mut().take(num_values) {
                 let len: usize =
-                    read_num_bytes!(u32, 4, data.start_from(decoder.start).as_ref())
+                    read_num_bytes::<u32>(4, data.start_from(decoder.start).as_ref())
                         as usize;
                 decoder.start += std::mem::size_of::<u32>();
 
@@ -926,10 +946,28 @@ pub(crate) mod private {
                     return Err(eof_err!("Not enough bytes to decode"));
                 }
 
-                let val: &mut Self = buffer[i].as_mut_any().downcast_mut().unwrap();
+                let val: &mut Self = val_array.as_mut_any().downcast_mut().unwrap();
 
                 val.set_data(data.range(decoder.start, len));
                 decoder.start += len;
+            }
+            decoder.num_values -= num_values;
+
+            Ok(num_values)
+        }
+
+        fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {
+            let data = decoder
+                .data
+                .as_mut()
+                .expect("set_data should have been called");
+            let num_values = num_values.min(decoder.num_values);
+
+            for _ in 0..num_values {
+                let len: usize =
+                    read_num_bytes::<u32>(4, data.start_from(decoder.start).as_ref())
+                        as usize;
+                decoder.start += std::mem::size_of::<u32>() + len;
             }
             decoder.num_values -= num_values;
 
@@ -953,6 +991,8 @@ pub(crate) mod private {
     }
 
     impl ParquetValueType for super::FixedLenByteArray {
+        const PHYSICAL_TYPE: Type = Type::FIXED_LEN_BYTE_ARRAY;
+
         #[inline]
         fn encode<W: std::io::Write>(
             values: &[Self],
@@ -1005,6 +1045,28 @@ pub(crate) mod private {
             Ok(num_values)
         }
 
+        fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {
+            assert!(decoder.type_length > 0);
+
+            let data = decoder
+                .data
+                .as_mut()
+                .expect("set_data should have been called");
+            let num_values = std::cmp::min(num_values, decoder.num_values);
+            for _ in 0..num_values {
+                let len = decoder.type_length as usize;
+
+                if data.len() < decoder.start + len {
+                    return Err(eof_err!("Not enough bytes to skip"));
+                }
+
+                decoder.start += len;
+            }
+            decoder.num_values -= num_values;
+
+            Ok(num_values)
+        }
+
         #[inline]
         fn dict_encoding_size(&self) -> (usize, usize) {
             (std::mem::size_of::<u32>(), self.len())
@@ -1028,7 +1090,9 @@ pub trait DataType: 'static + Send {
     type T: private::ParquetValueType;
 
     /// Returns Parquet physical type.
-    fn get_physical_type() -> Type;
+    fn get_physical_type() -> Type {
+        <Self::T as private::ParquetValueType>::PHYSICAL_TYPE
+    }
 
     /// Returns size in bytes for Rust representation of the physical type.
     fn get_type_size() -> usize;
@@ -1071,25 +1135,21 @@ where
 }
 
 macro_rules! make_type {
-    ($name:ident, $physical_ty:path, $reader_ident: ident, $writer_ident: ident, $native_ty:ty, $size:expr) => {
+    ($name:ident, $reader_ident: ident, $writer_ident: ident, $native_ty:ty, $size:expr) => {
         #[derive(Clone)]
         pub struct $name {}
 
         impl DataType for $name {
             type T = $native_ty;
 
-            fn get_physical_type() -> Type {
-                $physical_ty
-            }
-
             fn get_type_size() -> usize {
                 $size
             }
 
             fn get_column_reader(
-                column_writer: ColumnReader,
+                column_reader: ColumnReader,
             ) -> Option<ColumnReaderImpl<Self>> {
-                match column_writer {
+                match column_reader {
                     ColumnReader::$reader_ident(w) => Some(w),
                     _ => None,
                 }
@@ -1127,57 +1187,20 @@ macro_rules! make_type {
 
 // Generate struct definitions for all physical types
 
-make_type!(
-    BoolType,
-    Type::BOOLEAN,
-    BoolColumnReader,
-    BoolColumnWriter,
-    bool,
-    1
-);
-make_type!(
-    Int32Type,
-    Type::INT32,
-    Int32ColumnReader,
-    Int32ColumnWriter,
-    i32,
-    4
-);
-make_type!(
-    Int64Type,
-    Type::INT64,
-    Int64ColumnReader,
-    Int64ColumnWriter,
-    i64,
-    8
-);
+make_type!(BoolType, BoolColumnReader, BoolColumnWriter, bool, 1);
+make_type!(Int32Type, Int32ColumnReader, Int32ColumnWriter, i32, 4);
+make_type!(Int64Type, Int64ColumnReader, Int64ColumnWriter, i64, 8);
 make_type!(
     Int96Type,
-    Type::INT96,
     Int96ColumnReader,
     Int96ColumnWriter,
     Int96,
     mem::size_of::<Int96>()
 );
-make_type!(
-    FloatType,
-    Type::FLOAT,
-    FloatColumnReader,
-    FloatColumnWriter,
-    f32,
-    4
-);
-make_type!(
-    DoubleType,
-    Type::DOUBLE,
-    DoubleColumnReader,
-    DoubleColumnWriter,
-    f64,
-    8
-);
+make_type!(FloatType, FloatColumnReader, FloatColumnWriter, f32, 4);
+make_type!(DoubleType, DoubleColumnReader, DoubleColumnWriter, f64, 8);
 make_type!(
     ByteArrayType,
-    Type::BYTE_ARRAY,
     ByteArrayColumnReader,
     ByteArrayColumnWriter,
     ByteArray,
@@ -1185,12 +1208,23 @@ make_type!(
 );
 make_type!(
     FixedLenByteArrayType,
-    Type::FIXED_LEN_BYTE_ARRAY,
     FixedLenByteArrayColumnReader,
     FixedLenByteArrayColumnWriter,
     FixedLenByteArray,
     mem::size_of::<FixedLenByteArray>()
 );
+
+impl AsRef<[u8]> for ByteArray {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl AsRef<[u8]> for FixedLenByteArray {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
 
 impl FromBytes for Int96 {
     type Buffer = [u8; 12];
@@ -1220,29 +1254,29 @@ impl FromBytes for Int96 {
 // FIXME Needed to satisfy the constraint of many decoding functions but ByteArray does not
 // appear to actual be converted directly from bytes
 impl FromBytes for ByteArray {
-    type Buffer = [u8; 8];
+    type Buffer = Vec<u8>;
     fn from_le_bytes(bs: Self::Buffer) -> Self {
-        ByteArray::from(bs.to_vec())
+        ByteArray::from(bs)
     }
     fn from_be_bytes(_bs: Self::Buffer) -> Self {
         unreachable!()
     }
     fn from_ne_bytes(bs: Self::Buffer) -> Self {
-        ByteArray::from(bs.to_vec())
+        ByteArray::from(bs)
     }
 }
 
 impl FromBytes for FixedLenByteArray {
-    type Buffer = [u8; 8];
+    type Buffer = Vec<u8>;
 
     fn from_le_bytes(bs: Self::Buffer) -> Self {
-        Self(ByteArray::from(bs.to_vec()))
+        Self(ByteArray::from(bs))
     }
     fn from_be_bytes(_bs: Self::Buffer) -> Self {
         unreachable!()
     }
     fn from_ne_bytes(bs: Self::Buffer) -> Self {
-        Self(ByteArray::from(bs.to_vec()))
+        Self(ByteArray::from(bs))
     }
 }
 

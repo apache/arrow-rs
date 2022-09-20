@@ -1,0 +1,124 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+---
+# tests for `object_store` crate
+name: object_store
+
+# trigger for all PRs that touch certain files and changes to master
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    paths:
+      - object_store/**
+      - .github/**
+
+jobs:
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Rust toolchain with clippy
+        run: |
+          rustup toolchain install stable
+          rustup default stable
+          rustup component add clippy
+      # Run different tests for the library on its own as well as
+      # all targets to ensure that it still works in the absence of
+      # features that might be enabled by dev-dependencies of other
+      # targets.
+      - name: Run clippy with default features
+        run: cargo clippy -p object_store -- -D warnings
+      - name: Run clippy with aws feature
+        run: cargo clippy -p object_store --features aws -- -D warnings
+      - name: Run clippy with gcp feature
+        run: cargo clippy -p object_store --features gcp -- -D warnings
+      - name: Run clippy with azure feature
+        run: cargo clippy -p object_store --features azure -- -D warnings
+      - name: Run clippy with all features
+        run: cargo clippy -p object_store --all-features -- -D warnings
+      - name: Run clippy with all features and all targets
+        run: cargo clippy -p object_store --all-features --all-targets -- -D warnings
+
+  # test the crate
+  # This runs outside a container to workaround lack of support for passing arguments
+  # to service containers - https://github.com/orgs/community/discussions/26688
+  linux-test:
+    name: Emulator Tests
+    runs-on: ubuntu-latest
+    env:
+      # Disable full debug symbol generation to speed up CI build and keep memory down
+      # "1" means line tables only, which is useful for panic tracebacks.
+      RUSTFLAGS: "-C debuginfo=1"
+      # https://github.com/rust-lang/cargo/issues/10280
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      RUST_BACKTRACE: "1"
+      # Run integration tests
+      TEST_INTEGRATION: 1
+      EC2_METADATA_ENDPOINT: http://localhost:1338
+      AZURE_USE_EMULATOR: "1"
+      AZURITE_BLOB_STORAGE_URL: "http://localhost:10000"
+      AZURITE_QUEUE_STORAGE_URL: "http://localhost:10001"
+      GOOGLE_SERVICE_ACCOUNT: "/tmp/gcs.json"
+      OBJECT_STORE_BUCKET: test-bucket
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Configure Fake GCS Server (GCP emulation)
+        run: |
+          docker run -d -p 4443:4443 fsouza/fake-gcs-server -scheme http
+          curl -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "http://localhost:4443/storage/v1/b"
+          echo '{"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": ""}' > "$GOOGLE_SERVICE_ACCOUNT"
+
+      - name: Setup LocalStack (AWS emulation)
+        env:
+          AWS_DEFAULT_REGION: "us-east-1"
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_ENDPOINT: http://localhost:4566
+        run: |
+          docker run -d -p 4566:4566 localstack/localstack:0.14.4
+          docker run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2
+          aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket
+
+      - name: Configure Azurite (Azure emulation)
+        # the magical connection string is from
+        # https://docs.microsoft.com/en-us/azure/storage/common/storage-use-azurite?tabs=visual-studio#http-connection-strings
+        run: |
+          docker run -d -p 10000:10000 -p 10001:10001 -p 10002:10002 mcr.microsoft.com/azure-storage/azurite
+          az storage container create -n test-bucket --connection-string 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;QueueEndpoint=http://localhost:10001/devstoreaccount1;'
+
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install stable
+          rustup default stable
+
+      - name: Run object_store tests
+        env:
+          OBJECT_STORE_AWS_DEFAULT_REGION: "us-east-1"
+          OBJECT_STORE_AWS_ACCESS_KEY_ID: test
+          OBJECT_STORE_AWS_SECRET_ACCESS_KEY: test
+          OBJECT_STORE_AWS_ENDPOINT: http://localhost:4566
+        run: |
+          # run tests
+          cargo test -p object_store --features=aws,azure,gcp

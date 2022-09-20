@@ -73,7 +73,7 @@ pub fn parquet_to_arrow_schema_by_columns(
     // Add the Arrow metadata to the Parquet metadata skipping keys that collide
     if let Some(arrow_schema) = &maybe_schema {
         arrow_schema.metadata().iter().for_each(|(k, v)| {
-            metadata.entry(k.clone()).or_insert(v.clone());
+            metadata.entry(k.clone()).or_insert_with(|| v.clone());
         });
     }
 
@@ -100,7 +100,7 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
                 Ok(message) => message
                     .header_as_schema()
                     .map(arrow::ipc::convert::fb_to_schema)
-                    .ok_or(arrow_err!("the message is not Arrow Schema")),
+                    .ok_or_else(|| arrow_err!("the message is not Arrow Schema")),
                 Err(err) => {
                     // The flatbuffers implementation returns an error on verification error.
                     Err(arrow_err!(
@@ -220,7 +220,7 @@ pub fn parquet_to_arrow_field(parquet_column: &ColumnDescriptor) -> Result<Field
     ))
 }
 
-pub fn decimal_length_from_precision(precision: usize) -> usize {
+pub fn decimal_length_from_precision(precision: u8) -> usize {
     (10.0_f64.powi(precision as i32).log2() / 8.0).ceil() as usize
 }
 
@@ -380,7 +380,8 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_length(*length)
                 .build()
         }
-        DataType::Decimal(precision, scale) => {
+        DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => {
             // Decimal precision determines the Parquet physical type to use.
             // TODO(ARROW-12018): Enable the below after ARROW-10818 Decimal support
             //
@@ -487,7 +488,7 @@ mod tests {
 
     use crate::file::metadata::KeyValue;
     use crate::{
-        arrow::{ArrowReader, ArrowWriter, ParquetFileArrowReader},
+        arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
         schema::{parser::parse_message_type, types::SchemaDescriptor},
     };
 
@@ -528,6 +529,32 @@ mod tests {
             Field::new("string_2", DataType::Utf8, true),
         ];
 
+        assert_eq!(&arrow_fields, converted_arrow_schema.fields());
+    }
+
+    #[test]
+    fn test_decimal_fields() {
+        let message_type = "
+        message test_schema {
+                    REQUIRED INT32 decimal1 (DECIMAL(4,2));
+                    REQUIRED INT64 decimal2 (DECIMAL(12,2));
+                    REQUIRED FIXED_LEN_BYTE_ARRAY (16) decimal3 (DECIMAL(30,2));
+                    REQUIRED BYTE_ARRAY decimal4 (DECIMAL(33,2));
+        }
+        ";
+
+        let parquet_group_type = parse_message_type(message_type).unwrap();
+
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
+        let converted_arrow_schema =
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
+
+        let arrow_fields = vec![
+            Field::new("decimal1", DataType::Decimal128(4, 2), false),
+            Field::new("decimal2", DataType::Decimal128(12, 2), false),
+            Field::new("decimal3", DataType::Decimal128(30, 2), false),
+            Field::new("decimal4", DataType::Decimal128(33, 2), false),
+        ];
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
     }
 
@@ -1206,6 +1233,9 @@ mod tests {
             OPTIONAL INT64   ts_milli (TIMESTAMP_MILLIS);
             REQUIRED INT64   ts_micro (TIMESTAMP_MICROS);
             REQUIRED INT64   ts_nano (TIMESTAMP(NANOS,true));
+            REPEATED INT32   int_list;
+            REPEATED BINARY  byte_list;
+            REPEATED BINARY  string_list (UTF8);
         }
         ";
         let parquet_group_type = parse_message_type(message_type).unwrap();
@@ -1250,6 +1280,29 @@ mod tests {
             Field::new(
                 "ts_nano",
                 DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".to_string())),
+                false,
+            ),
+            Field::new(
+                "int_list",
+                DataType::List(Box::new(Field::new("int_list", DataType::Int32, false))),
+                false,
+            ),
+            Field::new(
+                "byte_list",
+                DataType::List(Box::new(Field::new(
+                    "byte_list",
+                    DataType::Binary,
+                    false,
+                ))),
+                false,
+            ),
+            Field::new(
+                "string_list",
+                DataType::List(Box::new(Field::new(
+                    "string_list",
+                    DataType::Utf8,
+                    false,
+                ))),
                 false,
             ),
         ];
@@ -1549,9 +1602,9 @@ mod tests {
                 //     true,
                 // ),
                 Field::new("c35", DataType::Null, true),
-                Field::new("c36", DataType::Decimal(2, 1), false),
-                Field::new("c37", DataType::Decimal(50, 20), false),
-                Field::new("c38", DataType::Decimal(18, 12), true),
+                Field::new("c36", DataType::Decimal128(2, 1), false),
+                Field::new("c37", DataType::Decimal128(50, 20), false),
+                Field::new("c38", DataType::Decimal128(18, 12), true),
                 Field::new(
                     "c39",
                     DataType::Map(
@@ -1635,14 +1688,9 @@ mod tests {
         writer.close()?;
 
         // read file back
-        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-        let read_schema = arrow_reader.get_schema()?;
-        assert_eq!(schema, read_schema);
-
-        // read all fields by columns
-        let partial_read_schema =
-            arrow_reader.get_schema_by_columns(ProjectionMask::all())?;
-        assert_eq!(schema, partial_read_schema);
+        let arrow_reader = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let read_schema = arrow_reader.schema();
+        assert_eq!(&schema, read_schema.as_ref());
 
         Ok(())
     }
@@ -1704,15 +1752,9 @@ mod tests {
         writer.close()?;
 
         // read file back
-        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-        let read_schema = arrow_reader.get_schema()?;
-        assert_eq!(schema, read_schema);
-
-        // read all fields by columns
-        let partial_read_schema =
-            arrow_reader.get_schema_by_columns(ProjectionMask::all())?;
-        assert_eq!(schema, partial_read_schema);
-
+        let arrow_reader = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let read_schema = arrow_reader.schema();
+        assert_eq!(&schema, read_schema.as_ref());
         Ok(())
     }
 }

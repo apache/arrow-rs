@@ -18,22 +18,22 @@
 [package]
 name = "arrow-pyarrow-integration-testing"
 description = ""
-version = "18.0.0"
+version = "22.0.0"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
 keywords = [ "arrow" ]
 edition = "2021"
-rust-version = "1.57"
+rust-version = "1.62"
 
 [lib]
 name = "arrow_pyarrow_integration_testing"
 crate-type = ["cdylib"]
 
 [dependencies]
-arrow = { path = "../arrow", version = "18.0.0", features = ["pyarrow"] }
-pyo3 = { version = "0.16", features = ["extension-module"] }
+arrow = { path = "../arrow", version = "22.0.0", features = ["pyarrow"] }
+pyo3 = { version = "0.17", features = ["extension-module"] }
 
 [package.metadata.maturin]
 requires-dist = ["pyarrow>=1"]

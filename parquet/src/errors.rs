@@ -22,7 +22,7 @@ use std::{cell, io, result, str};
 #[cfg(any(feature = "arrow", test))]
 use arrow::error::ArrowError;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq)]
 pub enum ParquetError {
     /// General Parquet error.
     /// Returned when code violates normal workflow of working with Parquet files.
@@ -148,8 +148,8 @@ macro_rules! arrow_err {
 // Convert parquet error into other errors
 
 #[cfg(any(feature = "arrow", test))]
-impl Into<ArrowError> for ParquetError {
-    fn into(self) -> ArrowError {
-        ArrowError::ParquetError(format!("{}", self))
+impl From<ParquetError> for ArrowError {
+    fn from(p: ParquetError) -> Self {
+        Self::ParquetError(format!("{}", p))
     }
 }

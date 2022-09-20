@@ -15,19 +15,24 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: MIRI
+name: miri
 
+# trigger for all PRs that touch certain files and changes to master
 on:
-  # always trigger
   push:
+    branches:
+      - master
   pull_request:
+    paths:
+      - arrow/**
+      - .github/**
 
 jobs:
   miri-checks:
     name: MIRI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: true
       - name: Setup Rust toolchain

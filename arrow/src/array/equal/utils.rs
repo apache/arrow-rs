@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{data::count_nulls, ArrayData};
+use crate::array::data::contains_nulls;
+use crate::array::ArrayData;
 use crate::datatypes::DataType;
-use crate::util::bit_util;
+use crate::util::bit_chunk_iterator::BitChunks;
 
 // whether bits along the positions are equal
 // `lhs_start`, `rhs_start` and `len` are _measured in bits_.
@@ -29,10 +30,16 @@ pub(super) fn equal_bits(
     rhs_start: usize,
     len: usize,
 ) -> bool {
-    (0..len).all(|i| {
-        bit_util::get_bit(lhs_values, lhs_start + i)
-            == bit_util::get_bit(rhs_values, rhs_start + i)
-    })
+    let lhs = BitChunks::new(lhs_values, lhs_start, len);
+    let rhs = BitChunks::new(rhs_values, rhs_start, len);
+
+    for (a, b) in lhs.iter().zip(rhs.iter()) {
+        if a != b {
+            return false;
+        }
+    }
+
+    lhs.remainder_bits() == rhs.remainder_bits()
 }
 
 #[inline]
@@ -43,25 +50,16 @@ pub(super) fn equal_nulls(
     rhs_start: usize,
     len: usize,
 ) -> bool {
-    let lhs_null_count = count_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
-    let rhs_null_count = count_nulls(rhs.null_buffer(), rhs_start + rhs.offset(), len);
+    let lhs_offset = lhs_start + lhs.offset();
+    let rhs_offset = rhs_start + rhs.offset();
 
-    if lhs_null_count != rhs_null_count {
-        return false;
-    }
-
-    if lhs_null_count > 0 || rhs_null_count > 0 {
-        let lhs_values = lhs.null_buffer().unwrap().as_slice();
-        let rhs_values = rhs.null_buffer().unwrap().as_slice();
-        equal_bits(
-            lhs_values,
-            rhs_values,
-            lhs_start + lhs.offset(),
-            rhs_start + rhs.offset(),
-            len,
-        )
-    } else {
-        true
+    match (lhs.null_buffer(), rhs.null_buffer()) {
+        (Some(lhs), Some(rhs)) => {
+            equal_bits(lhs.as_slice(), rhs.as_slice(), lhs_offset, rhs_offset, len)
+        }
+        (Some(lhs), None) => !contains_nulls(Some(lhs), lhs_offset, len),
+        (None, Some(rhs)) => !contains_nulls(Some(rhs), rhs_offset, len),
+        (None, None) => true,
     }
 }
 

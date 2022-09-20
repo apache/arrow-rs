@@ -351,9 +351,7 @@ pub(super) mod tests {
         T: ArrowPrimitiveType,
         PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
     {
-        use std::any::TypeId;
-
-        let mut offset = vec![0];
+        let mut offset = vec![S::zero()];
         let mut values = vec![];
 
         let list_len = data.len();
@@ -367,34 +365,18 @@ pub(super) mod tests {
                 list_null_count += 1;
                 bit_util::unset_bit(list_bitmap.as_slice_mut(), idx);
             }
-            offset.push(values.len() as i64);
+            offset.push(S::from_usize(values.len()).unwrap());
         }
 
         let value_data = PrimitiveArray::<T>::from(values).into_data();
-        let (list_data_type, value_offsets) = if TypeId::of::<S>() == TypeId::of::<i32>()
-        {
-            (
-                DataType::List(Box::new(Field::new(
-                    "item",
-                    T::DATA_TYPE,
-                    list_null_count == 0,
-                ))),
-                Buffer::from_slice_ref(
-                    &offset.into_iter().map(|x| x as i32).collect::<Vec<i32>>(),
-                ),
-            )
-        } else if TypeId::of::<S>() == TypeId::of::<i64>() {
-            (
-                DataType::LargeList(Box::new(Field::new(
-                    "item",
-                    T::DATA_TYPE,
-                    list_null_count == 0,
-                ))),
-                Buffer::from_slice_ref(&offset),
-            )
-        } else {
-            unreachable!()
-        };
+        let (list_data_type, value_offsets) = (
+            GenericListArray::<S>::DATA_TYPE_CONSTRUCTOR(Box::new(Field::new(
+                "item",
+                T::DATA_TYPE,
+                list_null_count == 0,
+            ))),
+            Buffer::from_slice_ref(&offset),
+        );
 
         let list_data = ArrayData::builder(list_data_type)
             .len(list_len)

@@ -26,3 +26,6 @@ parquet:
 
 parquet-derive:
   - parquet_derive/**/*
+
+object-store:
+  - object_store/**/*

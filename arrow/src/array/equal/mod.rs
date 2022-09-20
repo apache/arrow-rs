@@ -20,9 +20,10 @@
 //! depend on dynamic casting of `Array`.
 
 use super::{
-    Array, ArrayData, BooleanArray, DecimalArray, DictionaryArray, FixedSizeBinaryArray,
-    FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericStringArray,
-    MapArray, NullArray, OffsetSizeTrait, PrimitiveArray, StructArray,
+    Array, ArrayData, BooleanArray, Decimal128Array, DictionaryArray,
+    FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
+    GenericStringArray, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray,
+    StructArray,
 };
 use crate::datatypes::{ArrowPrimitiveType, DataType, IntervalUnit};
 use half::f16;
@@ -109,7 +110,7 @@ impl PartialEq for FixedSizeBinaryArray {
     }
 }
 
-impl PartialEq for DecimalArray {
+impl PartialEq for Decimal128Array {
     fn eq(&self, other: &Self) -> bool {
         equal(self.data(), other.data())
     }
@@ -186,7 +187,9 @@ fn equal_values(
         DataType::FixedSizeBinary(_) => {
             fixed_binary_equal(lhs, rhs, lhs_start, rhs_start, len)
         }
-        DataType::Decimal(_, _) => decimal_equal(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
+            decimal_equal(lhs, rhs, lhs_start, rhs_start, len)
+        }
         DataType::List(_) => list_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::LargeList(_) => list_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::FixedSizeList(_, _) => {
@@ -607,13 +610,13 @@ mod tests {
     }
 
     fn create_list_array<U: AsRef<[i32]>, T: AsRef<[Option<U>]>>(data: T) -> ArrayData {
-        let mut builder = ListBuilder::new(Int32Builder::new(10));
+        let mut builder = ListBuilder::new(Int32Builder::with_capacity(10));
         for d in data.as_ref() {
             if let Some(v) = d {
-                builder.values().append_slice(v.as_ref()).unwrap();
-                builder.append(true).unwrap()
+                builder.values().append_slice(v.as_ref());
+                builder.append(true);
             } else {
-                builder.append(false).unwrap()
+                builder.append(false);
             }
         }
         builder.finish().into_data()
@@ -765,13 +768,13 @@ mod tests {
     fn create_fixed_size_binary_array<U: AsRef<[u8]>, T: AsRef<[Option<U>]>>(
         data: T,
     ) -> ArrayData {
-        let mut builder = FixedSizeBinaryBuilder::new(15, 5);
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(data.as_ref().len(), 5);
 
         for d in data.as_ref() {
             if let Some(v) = d {
                 builder.append_value(v.as_ref()).unwrap();
             } else {
-                builder.append_null().unwrap();
+                builder.append_null();
             }
         }
         builder.finish().into_data()
@@ -838,9 +841,9 @@ mod tests {
         test_equal(&a_slice, &b_slice, false);
     }
 
-    fn create_decimal_array(data: &[Option<i128>]) -> ArrayData {
-        data.iter()
-            .collect::<DecimalArray>()
+    fn create_decimal_array(data: Vec<Option<i128>>) -> ArrayData {
+        data.into_iter()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap()
             .into()
@@ -848,32 +851,36 @@ mod tests {
 
     #[test]
     fn test_decimal_equal() {
-        let a = create_decimal_array(&[Some(8_887_000_000), Some(-8_887_000_000)]);
-        let b = create_decimal_array(&[Some(8_887_000_000), Some(-8_887_000_000)]);
+        let a = create_decimal_array(vec![Some(8_887_000_000), Some(-8_887_000_000)]);
+        let b = create_decimal_array(vec![Some(8_887_000_000), Some(-8_887_000_000)]);
         test_equal(&a, &b, true);
 
-        let b = create_decimal_array(&[Some(15_887_000_000), Some(-8_887_000_000)]);
+        let b = create_decimal_array(vec![Some(15_887_000_000), Some(-8_887_000_000)]);
         test_equal(&a, &b, false);
     }
 
     // Test the case where null_count > 0
     #[test]
     fn test_decimal_null() {
-        let a = create_decimal_array(&[Some(8_887_000_000), None, Some(-8_887_000_000)]);
-        let b = create_decimal_array(&[Some(8_887_000_000), None, Some(-8_887_000_000)]);
+        let a =
+            create_decimal_array(vec![Some(8_887_000_000), None, Some(-8_887_000_000)]);
+        let b =
+            create_decimal_array(vec![Some(8_887_000_000), None, Some(-8_887_000_000)]);
         test_equal(&a, &b, true);
 
-        let b = create_decimal_array(&[Some(8_887_000_000), Some(-8_887_000_000), None]);
+        let b =
+            create_decimal_array(vec![Some(8_887_000_000), Some(-8_887_000_000), None]);
         test_equal(&a, &b, false);
 
-        let b = create_decimal_array(&[Some(15_887_000_000), None, Some(-8_887_000_000)]);
+        let b =
+            create_decimal_array(vec![Some(15_887_000_000), None, Some(-8_887_000_000)]);
         test_equal(&a, &b, false);
     }
 
     #[test]
     fn test_decimal_offsets() {
         // Test the case where offset != 0
-        let a = create_decimal_array(&[
+        let a = create_decimal_array(vec![
             Some(8_887_000_000),
             None,
             None,
@@ -881,7 +888,7 @@ mod tests {
             None,
             None,
         ]);
-        let b = create_decimal_array(&[
+        let b = create_decimal_array(vec![
             None,
             Some(8_887_000_000),
             None,
@@ -911,7 +918,7 @@ mod tests {
         let b_slice = b.slice(2, 3);
         test_equal(&a_slice, &b_slice, false);
 
-        let b = create_decimal_array(&[
+        let b = create_decimal_array(vec![
             None,
             None,
             None,
@@ -928,17 +935,17 @@ mod tests {
     fn create_fixed_size_list_array<U: AsRef<[i32]>, T: AsRef<[Option<U>]>>(
         data: T,
     ) -> ArrayData {
-        let mut builder = FixedSizeListBuilder::new(Int32Builder::new(10), 3);
+        let mut builder = FixedSizeListBuilder::new(Int32Builder::with_capacity(10), 3);
 
         for d in data.as_ref() {
             if let Some(v) = d {
-                builder.values().append_slice(v.as_ref()).unwrap();
-                builder.append(true).unwrap()
+                builder.values().append_slice(v.as_ref());
+                builder.append(true);
             } else {
                 for _ in 0..builder.value_length() {
-                    builder.values().append_null().unwrap();
+                    builder.values().append_null();
                 }
-                builder.append(false).unwrap()
+                builder.append(false);
             }
         }
         builder.finish().into_data()
@@ -1239,7 +1246,7 @@ mod tests {
     fn create_dictionary_array(values: &[&str], keys: &[Option<&str>]) -> ArrayData {
         let values = StringArray::from(values.to_vec());
         let mut builder = StringDictionaryBuilder::new_with_dictionary(
-            PrimitiveBuilder::<Int16Type>::new(3),
+            PrimitiveBuilder::<Int16Type>::with_capacity(3),
             &values,
         )
         .unwrap();
@@ -1247,7 +1254,7 @@ mod tests {
             if let Some(v) = key {
                 builder.append(v).unwrap();
             } else {
-                builder.append_null().unwrap()
+                builder.append_null()
             }
         }
         builder.finish().into_data()
@@ -1363,7 +1370,7 @@ mod tests {
 
     #[test]
     fn test_union_equal_dense() {
-        let mut builder = UnionBuilder::new_dense(7);
+        let mut builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();
@@ -1373,7 +1380,7 @@ mod tests {
         builder.append::<Int32Type>("b", 7).unwrap();
         let union1 = builder.build().unwrap();
 
-        builder = UnionBuilder::new_dense(7);
+        builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();
@@ -1383,7 +1390,7 @@ mod tests {
         builder.append::<Int32Type>("b", 7).unwrap();
         let union2 = builder.build().unwrap();
 
-        builder = UnionBuilder::new_dense(7);
+        builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();
@@ -1393,7 +1400,7 @@ mod tests {
         builder.append::<Int32Type>("b", 7).unwrap();
         let union3 = builder.build().unwrap();
 
-        builder = UnionBuilder::new_dense(7);
+        builder = UnionBuilder::new_dense();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();
@@ -1410,7 +1417,7 @@ mod tests {
 
     #[test]
     fn test_union_equal_sparse() {
-        let mut builder = UnionBuilder::new_sparse(7);
+        let mut builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();
@@ -1420,7 +1427,7 @@ mod tests {
         builder.append::<Int32Type>("b", 7).unwrap();
         let union1 = builder.build().unwrap();
 
-        builder = UnionBuilder::new_sparse(7);
+        builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();
@@ -1430,7 +1437,7 @@ mod tests {
         builder.append::<Int32Type>("b", 7).unwrap();
         let union2 = builder.build().unwrap();
 
-        builder = UnionBuilder::new_sparse(7);
+        builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();
@@ -1440,7 +1447,7 @@ mod tests {
         builder.append::<Int32Type>("b", 7).unwrap();
         let union3 = builder.build().unwrap();
 
-        builder = UnionBuilder::new_sparse(7);
+        builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int32Type>("b", 2).unwrap();
         builder.append::<Int32Type>("c", 3).unwrap();

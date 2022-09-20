@@ -34,22 +34,20 @@ fn main() {
     // u64, i8, i16, i32, i64, f32, f64)
 
     // Create a new builder with a capacity of 100
-    let mut primitive_array_builder = Int32Builder::new(100);
+    let mut primitive_array_builder = Int32Builder::with_capacity(100);
 
     // Append an individual primitive value
-    primitive_array_builder.append_value(55).unwrap();
+    primitive_array_builder.append_value(55);
 
     // Append a null value
-    primitive_array_builder.append_null().unwrap();
+    primitive_array_builder.append_null();
 
     // Append a slice of primitive values
-    primitive_array_builder.append_slice(&[39, 89, 12]).unwrap();
+    primitive_array_builder.append_slice(&[39, 89, 12]);
 
     // Append lots of values
-    primitive_array_builder.append_null().unwrap();
-    primitive_array_builder
-        .append_slice(&(25..50).collect::<Vec<i32>>())
-        .unwrap();
+    primitive_array_builder.append_null();
+    primitive_array_builder.append_slice(&(25..50).collect::<Vec<i32>>());
 
     // Build the `PrimitiveArray`
     let primitive_array = primitive_array_builder.finish();

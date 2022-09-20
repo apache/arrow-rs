@@ -119,19 +119,20 @@
 //!}
 //! ```
 
-experimental_mod!(array_reader);
+experimental!(mod array_reader);
 pub mod arrow_reader;
 pub mod arrow_writer;
 mod buffer;
+mod decoder;
 
 #[cfg(feature = "async")]
 pub mod async_reader;
 
 mod record_reader;
-experimental_mod!(schema);
+experimental!(mod schema);
 
-pub use self::arrow_reader::ArrowReader;
-pub use self::arrow_reader::ParquetFileArrowReader;
+#[allow(deprecated)]
+pub use self::arrow_reader::{ArrowReader, ParquetFileArrowReader};
 pub use self::arrow_writer::ArrowWriter;
 #[cfg(feature = "async")]
 pub use self::async_reader::ParquetRecordBatchStreamBuilder;

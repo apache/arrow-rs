@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, ArrayReader};
+use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
 use crate::arrow::record_reader::buffer::ScalarValue;
 use crate::arrow::record_reader::RecordReader;
 use crate::column::page::PageIterator;
@@ -39,7 +39,6 @@ where
     pages: Box<dyn PageIterator>,
     def_levels_buffer: Option<Buffer>,
     rep_levels_buffer: Option<Buffer>,
-    column_desc: ColumnDescPtr,
     record_reader: RecordReader<T>,
 }
 
@@ -50,14 +49,13 @@ where
 {
     /// Construct null array reader.
     pub fn new(pages: Box<dyn PageIterator>, column_desc: ColumnDescPtr) -> Result<Self> {
-        let record_reader = RecordReader::<T>::new(column_desc.clone());
+        let record_reader = RecordReader::<T>::new(column_desc);
 
         Ok(Self {
             data_type: ArrowType::Null,
             pages,
             def_levels_buffer: None,
             rep_levels_buffer: None,
-            column_desc,
             record_reader,
         })
     }
@@ -78,10 +76,11 @@ where
         &self.data_type
     }
 
-    /// Reads at most `batch_size` records into array.
-    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)?;
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+        read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)
+    }
 
+    fn consume_batch(&mut self) -> Result<ArrayRef> {
         // convert to arrays
         let array = arrow::array::NullArray::new(self.record_reader.num_values());
 
@@ -97,7 +96,7 @@ where
     }
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {
-        self.record_reader.skip_records(num_records)
+        skip_records(&mut self.record_reader, self.pages.as_mut(), num_records)
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {

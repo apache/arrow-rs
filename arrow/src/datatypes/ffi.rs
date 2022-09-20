@@ -98,33 +98,33 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                     ["d", extra] => {
                         match extra.splitn(3, ',').collect::<Vec<&str>>().as_slice() {
                             [precision, scale] => {
-                                let parsed_precision = precision.parse::<usize>().map_err(|_| {
+                                let parsed_precision = precision.parse::<u8>().map_err(|_| {
                                     ArrowError::CDataInterface(
                                         "The decimal type requires an integer precision".to_string(),
                                     )
                                 })?;
-                                let parsed_scale = scale.parse::<usize>().map_err(|_| {
+                                let parsed_scale = scale.parse::<u8>().map_err(|_| {
                                     ArrowError::CDataInterface(
                                         "The decimal type requires an integer scale".to_string(),
                                     )
                                 })?;
-                                DataType::Decimal(parsed_precision, parsed_scale)
+                                DataType::Decimal128(parsed_precision, parsed_scale)
                             },
                             [precision, scale, bits] => {
                                 if *bits != "128" {
                                     return Err(ArrowError::CDataInterface("Only 128 bit wide decimal is supported in the Rust implementation".to_string()));
                                 }
-                                let parsed_precision = precision.parse::<usize>().map_err(|_| {
+                                let parsed_precision = precision.parse::<u8>().map_err(|_| {
                                     ArrowError::CDataInterface(
                                         "The decimal type requires an integer precision".to_string(),
                                     )
                                 })?;
-                                let parsed_scale = scale.parse::<usize>().map_err(|_| {
+                                let parsed_scale = scale.parse::<u8>().map_err(|_| {
                                     ArrowError::CDataInterface(
                                         "The decimal type requires an integer scale".to_string(),
                                     )
                                 })?;
-                                DataType::Decimal(parsed_precision, parsed_scale)
+                                DataType::Decimal128(parsed_precision, parsed_scale)
                             }
                             _ => {
                                 return Err(ArrowError::CDataInterface(format!(
@@ -253,7 +253,9 @@ fn get_format_string(dtype: &DataType) -> Result<String> {
         DataType::LargeUtf8 => Ok("U".to_string()),
         DataType::FixedSizeBinary(num_bytes) => Ok(format!("w:{}", num_bytes)),
         DataType::FixedSizeList(_, num_elems) => Ok(format!("+w:{}", num_elems)),
-        DataType::Decimal(precision, scale) => Ok(format!("d:{},{}", precision, scale)),
+        DataType::Decimal128(precision, scale) => {
+            Ok(format!("d:{},{}", precision, scale))
+        }
         DataType::Date32 => Ok("tdD".to_string()),
         DataType::Date64 => Ok("tdm".to_string()),
         DataType::Time32(TimeUnit::Second) => Ok("tts".to_string()),

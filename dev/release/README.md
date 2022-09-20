@@ -21,9 +21,22 @@
 
 ## Overview
 
-We try to release a new version of Arrow every two weeks. This cadence balances getting new features into arrow without overwhelming downstream projects with too frequent changes.
+This file documents the release process for:
+
+1. The "Rust Arrow Crates": `arrow`, `arrow-flight`, `parquet`, and `parquet-derive`.
+2. The `object_store` crate.
+
+### The Rust Arrow Crates
+
+The Rust Arrow Crates are interconnected (e.g. `parquet` has an optional dependency on `arrow`) so we increment and release all of them together. We try to release a new version of "Rust Arrow Crates" every two weeks. This cadence balances getting new features into the community without overwhelming downstream projects with too frequent changes or overly burdening maintainers.
 
 If any code has been merged to master that has a breaking API change, as defined in [Rust RFC 1105](https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md), the major version number incremented changed (e.g. `9.0.2` to `9.0.2`). Otherwise the new minor version incremented (e.g. `9.0.2` to `7.1.0`).
+
+### `object_store` crate
+
+At the time of writing, we release a new version of `object_store` on demand rather than on a regular schedule.
+
+As we are still in an early phase, we use the 0.x version scheme. If any code has been merged to master that has a breaking API change, as defined in [Rust RFC 1105](https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md), the minor version number incremented changed (e.g. `0.3.0` to `0.4.0`). Otherwise the patch version is incremented (e.g. `0.3.0` to `0.3.1`).
 
 # Release Mechanics
 
@@ -47,12 +60,16 @@ labels associated with them.
 
 Now prepare a PR to update `CHANGELOG.md` and versions on `master` to reflect the planned release.
 
-See [#1141](https://github.com/apache/arrow-rs/pull/1141) for an example.
+For the Rust Arrow crates, do this in the root of this repository. For example [#2323](https://github.com/apache/arrow-rs/pull/2323)
+
+For `object_store` the same process is done in the `object_store` directory. Examples TBD
 
 ```bash
 git checkout master
 git pull
 git checkout -b make-release
+
+# Copy the content of CHANGELOG.md to the beginning of CHANGELOG-old.md
 
 # manully edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
@@ -61,7 +78,7 @@ CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
 git commit -a -m 'Create changelog'
 
 # update versions
-sed -i '' -e 's/14.0.0/18.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
+sed -i '' -e 's/14.0.0/22.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
 git commit -a -m 'Update version'
 ```
 
@@ -82,7 +99,11 @@ distribution servers.
 
 While the official release artifact is a signed tarball, we also tag the commit it was created for convenience and code archaeology.
 
-Using a string such as `4.0.1` as the `<version>`, create and push the tag thusly:
+For a Rust Arrow Crates release, use a string such as `4.0.1` as the `<version>`.
+
+For `object_store` releases, use a string such as `object_store_0.4.0` as the `<version>`.
+
+Create and push the tag thusly:
 
 ```shell
 git fetch apache
@@ -97,10 +118,18 @@ Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
 
 ### Create, sign, and upload tarball
 
-Run `create-tarball.sh` with the `<version>` tag and `<rc>` and you found in previous steps:
+Run `create-tarball.sh` with the `<version>` tag and `<rc>` and you found in previous steps.
+
+Rust Arrow Crates:
 
 ```shell
 ./dev/release/create-tarball.sh 4.1.0 2
+```
+
+`object_store`:
+
+```shell
+./object_store/dev/release/create-tarball.sh 4.1.0 2
 ```
 
 The `create-tarball.sh` script
@@ -114,7 +143,7 @@ The `create-tarball.sh` script
 
 ### Vote on Release Candidate tarball
 
-Send the email output from the script to dev@arrow.apache.org. The email should look like
+Send an email, based on the output from the script to dev@arrow.apache.org. The email should look like
 
 ```
 To: dev@arrow.apache.org
@@ -144,11 +173,11 @@ The vote will be open for at least 72 hours.
 [3]: https://github.com/apache/arrow-rs/blob/a5dd428f57e62db20a945e8b1895de91405958c4/CHANGELOG.md
 ```
 
-For the release to become "official" it needs at least three PMC members to vote +1 on it.
+For the release to become "official" it needs at least three Apache Arrow PMC members to vote +1 on it.
 
 ## Verifying release candidates
 
-The `dev/release/verify-release-candidate.sh` is a script in this repository that can assist in the verification process. Run it like:
+The `dev/release/verify-release-candidate.sh` or `object_store/dev/release/verify-release-candidate.sh` are scripts in this repository that can assist in the verification process. Run it like:
 
 ```
 ./dev/release/verify-release-candidate.sh 4.1.0 2
@@ -162,8 +191,16 @@ If the release is not approved, fix whatever the problem is and try again with t
 
 Move tarball to the release location in SVN, e.g. https://dist.apache.org/repos/dist/release/arrow/arrow-4.1.0/, using the `release-tarball.sh` script:
 
+Rust Arrow Crates:
+
 ```shell
 ./dev/release/release-tarball.sh 4.1.0 2
+```
+
+`object_store`
+
+```shell
+./object_store/dev/release/release-tarball.sh 4.1.0 2
 ```
 
 Congratulations! The release is now offical!
@@ -188,9 +225,17 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (e.g. `version = "0.11.0"`) and then publish the crate with the
 following commands
 
+Rust Arrow Crates:
+
 ```shell
 (cd arrow && cargo publish)
 (cd arrow-flight && cargo publish)
 (cd parquet && cargo publish)
 (cd parquet_derive && cargo publish)
+```
+
+`object_store`
+
+```shell
+cargo publish
 ```

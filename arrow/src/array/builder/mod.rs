@@ -30,6 +30,7 @@ mod generic_binary_builder;
 mod generic_list_builder;
 mod generic_string_builder;
 mod map_builder;
+mod null_buffer_builder;
 mod primitive_builder;
 mod primitive_dictionary_builder;
 mod string_dictionary_builder;
@@ -45,14 +46,15 @@ use super::ArrayRef;
 pub use boolean_buffer_builder::BooleanBufferBuilder;
 pub use boolean_builder::BooleanBuilder;
 pub use buffer_builder::BufferBuilder;
+pub use decimal_builder::Decimal128Builder;
 pub use decimal_builder::Decimal256Builder;
-pub use decimal_builder::DecimalBuilder;
 pub use fixed_size_binary_builder::FixedSizeBinaryBuilder;
 pub use fixed_size_list_builder::FixedSizeListBuilder;
 pub use generic_binary_builder::GenericBinaryBuilder;
 pub use generic_list_builder::GenericListBuilder;
 pub use generic_string_builder::GenericStringBuilder;
-pub use map_builder::MapBuilder;
+pub use map_builder::{MapBuilder, MapFieldNames};
+use null_buffer_builder::NullBufferBuilder;
 pub use primitive_builder::PrimitiveBuilder;
 pub use primitive_dictionary_builder::PrimitiveDictionaryBuilder;
 pub use string_dictionary_builder::StringDictionaryBuilder;
@@ -71,9 +73,9 @@ pub use union_builder::UnionBuilder;
 /// # fn main() -> std::result::Result<(), ArrowError> {
 /// // Create
 /// let mut data_builders: Vec<Box<dyn ArrayBuilder>> = vec![
-///     Box::new(Float64Builder::new(1024)),
-///     Box::new(Int64Builder::new(1024)),
-///     Box::new(StringBuilder::new(1024)),
+///     Box::new(Float64Builder::new()),
+///     Box::new(Int64Builder::new()),
+///     Box::new(StringBuilder::new()),
 /// ];
 ///
 /// // Fill
@@ -81,17 +83,17 @@ pub use union_builder::UnionBuilder;
 ///     .as_any_mut()
 ///     .downcast_mut::<Float64Builder>()
 ///     .unwrap()
-///     .append_value(3.14)?;
+///     .append_value(3.14);
 /// data_builders[1]
 ///     .as_any_mut()
 ///     .downcast_mut::<Int64Builder>()
 ///     .unwrap()
-///     .append_value(-1)?;
+///     .append_value(-1);
 /// data_builders[2]
 ///     .as_any_mut()
 ///     .downcast_mut::<StringBuilder>()
 ///     .unwrap()
-///     .append_value("🍎")?;
+///     .append_value("🍎");
 ///
 /// // Finish
 /// let array_refs: Vec<ArrayRef> = data_builders

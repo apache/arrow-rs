@@ -17,4 +17,6 @@
 
 pub mod index;
 pub mod index_reader;
+
+#[cfg(test)]
 pub(crate) mod range;

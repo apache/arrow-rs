@@ -50,11 +50,12 @@ use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use crate::array::{
-    ArrayRef, BooleanArray, DecimalBuilder, DictionaryArray, PrimitiveArray, StringArray,
+    ArrayRef, BooleanArray, Decimal128Builder, DictionaryArray, PrimitiveArray,
+    StringArray,
 };
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
-use crate::record_batch::RecordBatch;
+use crate::record_batch::{RecordBatch, RecordBatchOptions};
 use crate::util::reader_parser::Parser;
 
 use csv_crate::{ByteRecord, StringRecord};
@@ -543,7 +544,7 @@ fn parse(
             let field = &fields[i];
             match field.data_type() {
                 DataType::Boolean => build_boolean_array(line_number, rows, i),
-                DataType::Decimal(precision, scale) => {
+                DataType::Decimal128(precision, scale) => {
                     build_decimal_array(line_number, rows, i, *precision, *scale)
                 }
                 DataType::Int8 => {
@@ -670,7 +671,16 @@ fn parse(
         Some(metadata) => Schema::new_with_metadata(projected_fields, metadata),
     });
 
-    arrays.and_then(|arr| RecordBatch::try_new(projected_schema, arr))
+    arrays.and_then(|arr| {
+        RecordBatch::try_new_with_options(
+            projected_schema,
+            arr,
+            &RecordBatchOptions {
+                match_field_names: true,
+                row_count: Some(rows.len()),
+            },
+        )
+    })
 }
 fn parse_item<T: Parser>(string: &str) -> Option<T::Native> {
     T::parse(string)
@@ -695,21 +705,22 @@ fn build_decimal_array(
     _line_number: usize,
     rows: &[StringRecord],
     col_idx: usize,
-    precision: usize,
-    scale: usize,
+    precision: u8,
+    scale: u8,
 ) -> Result<ArrayRef> {
-    let mut decimal_builder = DecimalBuilder::new(rows.len(), precision, scale);
+    let mut decimal_builder =
+        Decimal128Builder::with_capacity(rows.len(), precision, scale);
     for row in rows {
         let col_s = row.get(col_idx);
         match col_s {
             None => {
                 // No data for this row
-                decimal_builder.append_null()?;
+                decimal_builder.append_null();
             }
             Some(s) => {
                 if s.is_empty() {
                     // append null
-                    decimal_builder.append_null()?;
+                    decimal_builder.append_null();
                 } else {
                     let decimal_value: Result<i128> =
                         parse_decimal_with_parameter(s, precision, scale);
@@ -730,11 +741,12 @@ fn build_decimal_array(
 
 // Parse the string format decimal value to i128 format and checking the precision and scale.
 // The result i128 value can't be out of bounds.
-fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Result<i128> {
+fn parse_decimal_with_parameter(s: &str, precision: u8, scale: u8) -> Result<i128> {
     if PARSE_DECIMAL_RE.is_match(s) {
         let mut offset = s.len();
         let len = s.len();
         let mut base = 1;
+        let scale_usize = usize::from(scale);
 
         // handle the value after the '.' and meet the scale
         let delimiter_position = s.find('.');
@@ -745,12 +757,12 @@ fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Resu
             }
             Some(mid) => {
                 // there is the '.'
-                if len - mid >= scale + 1 {
+                if len - mid >= scale_usize + 1 {
                     // If the string value is "123.12345" and the scale is 2, we should just remain '.12' and drop the '345' value.
-                    offset -= len - mid - 1 - scale;
+                    offset -= len - mid - 1 - scale_usize;
                 } else {
                     // If the string value is "123.12" and the scale is 4, we should append '00' to the tail.
-                    base = 10_i128.pow((scale + 1 + mid - len) as u32);
+                    base = 10_i128.pow((scale_usize + 1 + mid - len) as u32);
                 }
             }
         };
@@ -775,8 +787,14 @@ fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Resu
         if negative {
             result = result.neg();
         }
-        validate_decimal_precision(result, precision)
-            .map_err(|e| ArrowError::ParseError(format!("parse decimal overflow: {}", e)))
+
+        match validate_decimal_precision(result, precision) {
+            Ok(_) => Ok(result),
+            Err(e) => Err(ArrowError::ParseError(format!(
+                "parse decimal overflow: {}",
+                e
+            ))),
+        }
     } else {
         Err(ArrowError::ParseError(format!(
             "can't parse the string value {} to decimal",
@@ -1115,7 +1133,6 @@ mod tests {
     use std::io::{Cursor, Write};
     use tempfile::NamedTempFile;
 
-    use crate::array::BasicDecimalArray;
     use crate::array::*;
     use crate::compute::cast;
     use crate::datatypes::Field;
@@ -1205,8 +1222,8 @@ mod tests {
     fn test_csv_reader_with_decimal() {
         let schema = Schema::new(vec![
             Field::new("city", DataType::Utf8, false),
-            Field::new("lat", DataType::Decimal(38, 6), false),
-            Field::new("lng", DataType::Decimal(38, 6), false),
+            Field::new("lat", DataType::Decimal128(38, 6), false),
+            Field::new("lng", DataType::Decimal128(38, 6), false),
         ]);
 
         let file = File::open("test/data/decimal_test.csv").unwrap();
@@ -1218,7 +1235,7 @@ mod tests {
         let lat = batch
             .column(1)
             .as_any()
-            .downcast_ref::<DecimalArray>()
+            .downcast_ref::<Decimal128Array>()
             .unwrap();
 
         assert_eq!("57.653484", lat.value_as_string(0));
@@ -1857,6 +1874,38 @@ mod tests {
         let a = batch.column(0);
         let a = a.as_any().downcast_ref::<UInt32Array>().unwrap();
         assert_eq!(a, &UInt32Array::from(vec![4, 5]));
+
+        assert!(csv.next().is_none());
+    }
+
+    #[test]
+    fn test_empty_projection() {
+        let schema = Schema::new(vec![Field::new("int", DataType::UInt32, false)]);
+        let data = vec![vec!["0"], vec!["1"]];
+
+        let data = data
+            .iter()
+            .map(|x| x.join(","))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let data = data.as_bytes();
+
+        let reader = std::io::Cursor::new(data);
+
+        let mut csv = Reader::new(
+            reader,
+            Arc::new(schema),
+            false,
+            None,
+            2,
+            None,
+            Some(vec![]),
+            None,
+        );
+
+        let batch = csv.next().unwrap().unwrap();
+        assert_eq!(batch.columns().len(), 0);
+        assert_eq!(batch.num_rows(), 2);
 
         assert!(csv.next().is_none());
     }

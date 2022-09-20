@@ -160,22 +160,22 @@ mod tests {
     #[test]
     fn list_array_non_zero_nulls() {
         // Tests handling of list arrays with non-empty null ranges
-        let mut builder = ListBuilder::new(Int64Builder::new(10));
-        builder.values().append_value(1).unwrap();
-        builder.values().append_value(2).unwrap();
-        builder.values().append_value(3).unwrap();
-        builder.append(true).unwrap();
-        builder.append(false).unwrap();
+        let mut builder = ListBuilder::new(Int64Builder::with_capacity(10));
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.values().append_value(3);
+        builder.append(true);
+        builder.append(false);
         let array1 = builder.finish();
 
-        let mut builder = ListBuilder::new(Int64Builder::new(10));
-        builder.values().append_value(1).unwrap();
-        builder.values().append_value(2).unwrap();
-        builder.values().append_value(3).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_null().unwrap();
-        builder.values().append_null().unwrap();
-        builder.append(false).unwrap();
+        let mut builder = ListBuilder::new(Int64Builder::with_capacity(10));
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.values().append_value(3);
+        builder.append(true);
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.append(false);
         let array2 = builder.finish();
 
         assert_eq!(array1, array2);

@@ -20,9 +20,10 @@ use std::fmt;
 use std::{any::Any, iter::FromIterator};
 
 use super::{
-    array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData, GenericListArray,
-    GenericStringIter, OffsetSizeTrait,
+    array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData,
+    GenericBinaryArray, GenericListArray, GenericStringIter, OffsetSizeTrait,
 };
+use crate::array::array::ArrayAccessor;
 use crate::buffer::Buffer;
 use crate::util::bit_util;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
@@ -38,15 +39,17 @@ pub struct GenericStringArray<OffsetSize: OffsetSizeTrait> {
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
+    /// Data type of the array.
+    pub const DATA_TYPE: DataType = if OffsetSize::IS_LARGE {
+        DataType::LargeUtf8
+    } else {
+        DataType::Utf8
+    };
+
     /// Get the data type of the array.
-    // Declare this function as `pub const fn` after
-    // https://github.com/rust-lang/rust/issues/93706 is merged.
-    pub fn get_data_type() -> DataType {
-        if OffsetSize::IS_LARGE {
-            DataType::LargeUtf8
-        } else {
-            DataType::Utf8
-        }
+    #[deprecated(note = "please use `Self::DATA_TYPE` instead")]
+    pub const fn get_data_type() -> DataType {
+        Self::DATA_TYPE
     }
 
     /// Returns the length for the element at index `i`.
@@ -110,31 +113,55 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     }
 
     /// Returns the element at index `i` as &str
+    /// # Panics
+    /// Panics if index `i` is out of bounds.
     #[inline]
     pub fn value(&self, i: usize) -> &str {
-        assert!(i < self.data.len(), "StringArray out of bounds access");
+        assert!(
+            i < self.data.len(),
+            "Trying to access an element at index {} from a StringArray of length {}",
+            i,
+            self.len()
+        );
         // Safety:
         // `i < self.data.len()
         unsafe { self.value_unchecked(i) }
     }
 
+    /// Convert a list array to a string array.
+    /// This method is unsound because it does
+    /// not check the utf-8 validation for each element.
     fn from_list(v: GenericListArray<OffsetSize>) -> Self {
         assert_eq!(
-            v.data().child_data()[0].child_data().len(),
+            v.data_ref().child_data().len(),
+            1,
+            "StringArray can only be created from list array of u8 values \
+             (i.e. List<PrimitiveArray<u8>>)."
+        );
+        let child_data = &v.data_ref().child_data()[0];
+
+        assert_eq!(
+            child_data.child_data().len(),
             0,
             "StringArray can only be created from list array of u8 values \
              (i.e. List<PrimitiveArray<u8>>)."
         );
         assert_eq!(
-            v.data().child_data()[0].data_type(),
+            child_data.data_type(),
             &DataType::UInt8,
             "StringArray can only be created from List<u8> arrays, mismatched data types."
         );
+        assert_eq!(
+            child_data.null_count(),
+            0,
+            "The child array cannot contain null values."
+        );
 
-        let builder = ArrayData::builder(Self::get_data_type())
+        let builder = ArrayData::builder(Self::DATA_TYPE)
             .len(v.len())
+            .offset(v.offset())
             .add_buffer(v.data().buffers()[0].clone())
-            .add_buffer(v.data().child_data()[0].buffers()[0].clone())
+            .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
             .null_bit_buffer(v.data().null_buffer().cloned());
 
         let array_data = unsafe { builder.build_unchecked() };
@@ -169,7 +196,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
         assert!(!offsets.is_empty()); // wrote at least one
         let actual_len = (offsets.len() / std::mem::size_of::<OffsetSize>()) - 1;
 
-        let array_data = ArrayData::builder(Self::get_data_type())
+        let array_data = ArrayData::builder(Self::DATA_TYPE)
             .len(actual_len)
             .add_buffer(offsets.into())
             .add_buffer(values.into());
@@ -246,7 +273,7 @@ where
 
         // calculate actual data_len, which may be different from the iterator's upper bound
         let data_len = (offsets.len() / offset_size) - 1;
-        let array_data = ArrayData::builder(Self::get_data_type())
+        let array_data = ArrayData::builder(Self::DATA_TYPE)
             .len(data_len)
             .add_buffer(offsets.into())
             .add_buffer(values.into())
@@ -274,7 +301,7 @@ impl<'a, T: OffsetSizeTrait> GenericStringArray<T> {
 
 impl<OffsetSize: OffsetSizeTrait> fmt::Debug for GenericStringArray<OffsetSize> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let prefix = if OffsetSize::IS_LARGE { "Large" } else { "" };
+        let prefix = OffsetSize::PREFIX;
 
         write!(f, "{}StringArray\n[\n", prefix)?;
         print_long_array(self, f, |array, index, f| {
@@ -298,11 +325,43 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericStringArray<OffsetSize> {
     }
 }
 
+impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor
+    for &'a GenericStringArray<OffsetSize>
+{
+    type Item = &'a str;
+
+    fn value(&self, index: usize) -> Self::Item {
+        GenericStringArray::value(self, index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        GenericStringArray::value_unchecked(self, index)
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> From<GenericListArray<OffsetSize>>
+    for GenericStringArray<OffsetSize>
+{
+    fn from(v: GenericListArray<OffsetSize>) -> Self {
+        GenericStringArray::<OffsetSize>::from_list(v)
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> From<GenericBinaryArray<OffsetSize>>
+    for GenericStringArray<OffsetSize>
+{
+    fn from(v: GenericBinaryArray<OffsetSize>) -> Self {
+        let builder = v.into_data().into_builder().data_type(Self::DATA_TYPE);
+        let data = unsafe { builder.build_unchecked() };
+        Self::from(data)
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericStringArray<OffsetSize> {
     fn from(data: ArrayData) -> Self {
         assert_eq!(
             data.data_type(),
-            &Self::get_data_type(),
+            &Self::DATA_TYPE,
             "[Large]StringArray expects Datatype::[Large]Utf8"
         );
         assert_eq!(
@@ -370,16 +429,13 @@ pub type StringArray = GenericStringArray<i32>;
 /// ```
 pub type LargeStringArray = GenericStringArray<i64>;
 
-impl<T: OffsetSizeTrait> From<GenericListArray<T>> for GenericStringArray<T> {
-    fn from(v: GenericListArray<T>) -> Self {
-        GenericStringArray::<T>::from_list(v)
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
-    use crate::array::{ListBuilder, StringBuilder};
+    use crate::{
+        array::{ListBuilder, StringBuilder},
+        datatypes::Field,
+    };
 
     use super::*;
 
@@ -443,18 +499,15 @@ mod tests {
 
     #[test]
     fn test_nested_string_array() {
-        let string_builder = StringBuilder::new(3);
+        let string_builder = StringBuilder::with_capacity(3, 10);
         let mut list_of_string_builder = ListBuilder::new(string_builder);
 
-        list_of_string_builder.values().append_value("foo").unwrap();
-        list_of_string_builder.values().append_value("bar").unwrap();
-        list_of_string_builder.append(true).unwrap();
+        list_of_string_builder.values().append_value("foo");
+        list_of_string_builder.values().append_value("bar");
+        list_of_string_builder.append(true);
 
-        list_of_string_builder
-            .values()
-            .append_value("foobar")
-            .unwrap();
-        list_of_string_builder.append(true).unwrap();
+        list_of_string_builder.values().append_value("foobar");
+        list_of_string_builder.append(true);
         let list_of_strings = list_of_string_builder.finish();
 
         assert_eq!(list_of_strings.len(), 2);
@@ -475,7 +528,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "StringArray out of bounds access")]
+    #[should_panic(
+        expected = "Trying to access an element at index 4 from a StringArray of length 3"
+    )]
     fn test_string_array_get_value_index_out_of_bound() {
         let values: [u8; 12] = [
             b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
@@ -647,5 +702,128 @@ mod tests {
         let arr =
             LargeStringArray::from_iter_values(BadIterator::new(3, 1, data.clone()));
         assert_eq!(expected, arr);
+    }
+
+    fn _test_generic_string_array_from_list_array<O: OffsetSizeTrait>() {
+        let values = b"HelloArrowAndParquet";
+        // "ArrowAndParquet"
+        let child_data = ArrayData::builder(DataType::UInt8)
+            .len(15)
+            .offset(5)
+            .add_buffer(Buffer::from(&values[..]))
+            .build()
+            .unwrap();
+
+        let offsets = [0, 5, 8, 15].map(|n| O::from_usize(n).unwrap());
+        let null_buffer = Buffer::from_slice_ref(&[0b101]);
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+            Field::new("item", DataType::UInt8, false),
+        ));
+
+        // [None, Some("Parquet")]
+        let array_data = ArrayData::builder(data_type)
+            .len(2)
+            .offset(1)
+            .add_buffer(Buffer::from_slice_ref(&offsets))
+            .null_bit_buffer(Some(null_buffer))
+            .add_child_data(child_data)
+            .build()
+            .unwrap();
+        let list_array = GenericListArray::<O>::from(array_data);
+        let string_array = GenericStringArray::<O>::from(list_array);
+
+        assert_eq!(2, string_array.len());
+        assert_eq!(1, string_array.null_count());
+        assert!(string_array.is_null(0));
+        assert!(string_array.is_valid(1));
+        assert_eq!("Parquet", string_array.value(1));
+    }
+
+    #[test]
+    fn test_string_array_from_list_array() {
+        _test_generic_string_array_from_list_array::<i32>();
+    }
+
+    #[test]
+    fn test_large_string_array_from_list_array() {
+        _test_generic_string_array_from_list_array::<i64>();
+    }
+
+    fn _test_generic_string_array_from_list_array_with_child_nulls_failed<
+        O: OffsetSizeTrait,
+    >() {
+        let values = b"HelloArrow";
+        let child_data = ArrayData::builder(DataType::UInt8)
+            .len(10)
+            .add_buffer(Buffer::from(&values[..]))
+            .null_bit_buffer(Some(Buffer::from_slice_ref(&[0b1010101010])))
+            .build()
+            .unwrap();
+
+        let offsets = [0, 5, 10].map(|n| O::from_usize(n).unwrap());
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+            Field::new("item", DataType::UInt8, false),
+        ));
+
+        // [None, Some(b"Parquet")]
+        let array_data = ArrayData::builder(data_type)
+            .len(2)
+            .add_buffer(Buffer::from_slice_ref(&offsets))
+            .add_child_data(child_data)
+            .build()
+            .unwrap();
+        let list_array = GenericListArray::<O>::from(array_data);
+        drop(GenericStringArray::<O>::from(list_array));
+    }
+
+    #[test]
+    #[should_panic(expected = "The child array cannot contain null values.")]
+    fn test_stirng_array_from_list_array_with_child_nulls_failed() {
+        _test_generic_string_array_from_list_array_with_child_nulls_failed::<i32>();
+    }
+
+    #[test]
+    #[should_panic(expected = "The child array cannot contain null values.")]
+    fn test_large_string_array_from_list_array_with_child_nulls_failed() {
+        _test_generic_string_array_from_list_array_with_child_nulls_failed::<i64>();
+    }
+
+    fn _test_generic_string_array_from_list_array_wrong_type<O: OffsetSizeTrait>() {
+        let values = b"HelloArrow";
+        let child_data = ArrayData::builder(DataType::UInt16)
+            .len(5)
+            .add_buffer(Buffer::from(&values[..]))
+            .build()
+            .unwrap();
+
+        let offsets = [0, 2, 3].map(|n| O::from_usize(n).unwrap());
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+            Field::new("item", DataType::UInt16, false),
+        ));
+
+        let array_data = ArrayData::builder(data_type)
+            .len(2)
+            .add_buffer(Buffer::from_slice_ref(&offsets))
+            .add_child_data(child_data)
+            .build()
+            .unwrap();
+        let list_array = GenericListArray::<O>::from(array_data);
+        drop(GenericStringArray::<O>::from(list_array));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "StringArray can only be created from List<u8> arrays, mismatched data types."
+    )]
+    fn test_string_array_from_list_array_wrong_type() {
+        _test_generic_string_array_from_list_array_wrong_type::<i32>();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "StringArray can only be created from List<u8> arrays, mismatched data types."
+    )]
+    fn test_large_string_array_from_list_array_wrong_type() {
+        _test_generic_string_array_from_list_array_wrong_type::<i32>();
     }
 }

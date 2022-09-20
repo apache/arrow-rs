@@ -22,7 +22,6 @@ use std::sync::Arc;
 use std::{convert::AsRef, usize};
 
 use crate::alloc::{Allocation, Deallocation};
-use crate::ffi::FFI_ArrowArray;
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::{bytes::Bytes, datatypes::ArrowNativeType};
 
@@ -38,15 +37,20 @@ pub struct Buffer {
 
     /// The offset into the buffer.
     offset: usize,
+
+    /// Byte length of the buffer.
+    length: usize,
 }
 
 impl Buffer {
     /// Auxiliary method to create a new Buffer
     #[inline]
     pub fn from_bytes(bytes: Bytes) -> Self {
+        let length = bytes.len();
         Buffer {
             data: Arc::new(bytes),
             offset: 0,
+            length,
         }
     }
 
@@ -75,30 +79,6 @@ impl Buffer {
     pub unsafe fn from_raw_parts(ptr: NonNull<u8>, len: usize, capacity: usize) -> Self {
         assert!(len <= capacity);
         Buffer::build_with_arguments(ptr, len, Deallocation::Arrow(capacity))
-    }
-
-    /// Creates a buffer from an existing memory region (must already be byte-aligned), this
-    /// `Buffer` **does not** free this piece of memory when dropped.
-    ///
-    /// # Arguments
-    ///
-    /// * `ptr` - Pointer to raw parts
-    /// * `len` - Length of raw parts in **bytes**
-    /// * `data` - An [crate::ffi::FFI_ArrowArray] with the data
-    ///
-    /// # Safety
-    ///
-    /// This function is unsafe as there is no guarantee that the given pointer is valid for `len`
-    /// bytes and that the foreign deallocator frees the region.
-    #[deprecated(
-        note = "use from_custom_allocation instead which makes it clearer that the allocation is in fact owned"
-    )]
-    pub unsafe fn from_unowned(
-        ptr: NonNull<u8>,
-        len: usize,
-        data: Arc<FFI_ArrowArray>,
-    ) -> Self {
-        Self::from_custom_allocation(ptr, len, data)
     }
 
     /// Creates a buffer from an existing memory region. Ownership of the memory is tracked via reference counting
@@ -131,28 +111,32 @@ impl Buffer {
         Buffer {
             data: Arc::new(bytes),
             offset: 0,
+            length: len,
         }
     }
 
     /// Returns the number of bytes in the buffer
+    #[inline]
     pub fn len(&self) -> usize {
-        self.data.len() - self.offset
+        self.length
     }
 
     /// Returns the capacity of this buffer.
     /// For externally owned buffers, this returns zero
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.data.capacity()
     }
 
     /// Returns whether the buffer is empty.
+    #[inline]
     pub fn is_empty(&self) -> bool {
-        self.data.len() - self.offset == 0
+        self.length == 0
     }
 
     /// Returns the byte slice stored in this buffer
     pub fn as_slice(&self) -> &[u8] {
-        &self.data[self.offset..]
+        &self.data[self.offset..(self.offset + self.length)]
     }
 
     /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`.
@@ -167,6 +151,24 @@ impl Buffer {
         Self {
             data: self.data.clone(),
             offset: self.offset + offset,
+            length: self.length - offset,
+        }
+    }
+
+    /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`,
+    /// with `length` bytes.
+    /// Doing so allows the same memory region to be shared between buffers.
+    /// # Panics
+    /// Panics iff `(offset + length)` is larger than the existing length.
+    pub fn slice_with_length(&self, offset: usize, length: usize) -> Self {
+        assert!(
+            offset + length <= self.len(),
+            "the offset of the new Buffer cannot exceed the existing length"
+        );
+        Self {
+            data: self.data.clone(),
+            offset: self.offset + offset,
+            length,
         }
     }
 
@@ -344,10 +346,10 @@ mod tests {
         let buf2 = Buffer::from(&[0, 1, 2, 3, 4]);
         assert_eq!(buf1, buf2);
 
-        // slice with same offset should still preserve equality
+        // slice with same offset and same length should still preserve equality
         let buf3 = buf1.slice(2);
         assert_ne!(buf1, buf3);
-        let buf4 = buf2.slice(2);
+        let buf4 = buf2.slice_with_length(2, 3);
         assert_eq!(buf3, buf4);
 
         // Different capacities should still preserve equality
@@ -401,7 +403,7 @@ mod tests {
         assert_eq!(3, buf2.len());
         assert_eq!(unsafe { buf.as_ptr().offset(2) }, buf2.as_ptr());
 
-        let buf3 = buf2.slice(1);
+        let buf3 = buf2.slice_with_length(1, 2);
         assert_eq!([8, 10], buf3.as_slice());
         assert_eq!(2, buf3.len());
         assert_eq!(unsafe { buf.as_ptr().offset(3) }, buf3.as_ptr());
@@ -411,7 +413,7 @@ mod tests {
         assert_eq!(empty_slice, buf4.as_slice());
         assert_eq!(0, buf4.len());
         assert!(buf4.is_empty());
-        assert_eq!(buf2.slice(2).as_slice(), &[10]);
+        assert_eq!(buf2.slice_with_length(2, 1).as_slice(), &[10]);
     }
 
     #[test]
@@ -482,7 +484,7 @@ mod tests {
         assert_eq!(
             8,
             Buffer::from(&[0b11111111, 0b11111111])
-                .slice(1)
+                .slice_with_length(1, 1)
                 .count_set_bits()
         );
         assert_eq!(
@@ -494,7 +496,7 @@ mod tests {
         assert_eq!(
             6,
             Buffer::from(&[0b11111111, 0b01001001, 0b01010010])
-                .slice(1)
+                .slice_with_length(1, 2)
                 .count_set_bits()
         );
         assert_eq!(

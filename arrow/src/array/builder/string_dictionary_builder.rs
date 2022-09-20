@@ -42,13 +42,13 @@ use std::sync::Arc;
 /// // Create a dictionary array indexed by bytes whose values are Strings.
 /// // It can thus hold up to 256 distinct string values.
 ///
-/// let key_builder = PrimitiveBuilder::<Int8Type>::new(100);
-/// let value_builder = StringBuilder::new(100);
+/// let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(100);
+/// let value_builder = StringBuilder::new();
 /// let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
 ///
 /// // The builder builds the dictionary value by value
 /// builder.append("abc").unwrap();
-/// builder.append_null().unwrap();
+/// builder.append_null();
 /// builder.append("def").unwrap();
 /// builder.append("def").unwrap();
 /// builder.append("abc").unwrap();
@@ -111,9 +111,9 @@ where
     ///
     /// let dictionary_values = StringArray::from(vec![None, Some("abc"), Some("def")]);
     ///
-    /// let mut builder = StringDictionaryBuilder::new_with_dictionary(PrimitiveBuilder::<Int16Type>::new(3), &dictionary_values).unwrap();
+    /// let mut builder = StringDictionaryBuilder::new_with_dictionary(PrimitiveBuilder::<Int16Type>::with_capacity(3), &dictionary_values).unwrap();
     /// builder.append("def").unwrap();
-    /// builder.append_null().unwrap();
+    /// builder.append_null();
     /// builder.append("abc").unwrap();
     ///
     /// let dictionary_array = builder.finish();
@@ -137,7 +137,7 @@ where
         for (idx, maybe_value) in dictionary_values.iter().enumerate() {
             match maybe_value {
                 Some(value) => {
-                    let hash = compute_hash(&state, value.as_bytes());
+                    let hash = state.hash_one(value.as_bytes());
 
                     let key = K::Native::from_usize(idx)
                         .ok_or(ArrowError::DictionaryKeyOverflowError)?;
@@ -149,13 +149,13 @@ where
 
                     if let RawEntryMut::Vacant(v) = entry {
                         v.insert_with_hasher(hash, key, (), |key| {
-                            compute_hash(&state, get_bytes(&values_builder, key))
+                            state.hash_one(get_bytes(&values_builder, key))
                         });
                     }
 
-                    values_builder.append_value(value)?;
+                    values_builder.append_value(value);
                 }
-                None => values_builder.append_null()?,
+                None => values_builder.append_null(),
             }
         }
 
@@ -210,12 +210,14 @@ where
     /// Append a primitive value to the array. Return an existing index
     /// if already present in the values array or a new index if the
     /// value is appended to the values array.
+    ///
+    /// Returns an error if the new index would overflow the key type.
     pub fn append(&mut self, value: impl AsRef<str>) -> Result<K::Native> {
         let value = value.as_ref();
 
         let state = &self.state;
         let storage = &mut self.values_builder;
-        let hash = compute_hash(state, value.as_bytes());
+        let hash = state.hash_one(value.as_bytes());
 
         let entry = self
             .dedup
@@ -226,24 +228,24 @@ where
             RawEntryMut::Occupied(entry) => *entry.into_key(),
             RawEntryMut::Vacant(entry) => {
                 let index = storage.len();
-                storage.append_value(value)?;
+                storage.append_value(value);
                 let key = K::Native::from_usize(index)
                     .ok_or(ArrowError::DictionaryKeyOverflowError)?;
 
                 *entry
                     .insert_with_hasher(hash, key, (), |key| {
-                        compute_hash(state, get_bytes(storage, key))
+                        state.hash_one(get_bytes(storage, key))
                     })
                     .0
             }
         };
-        self.keys_builder.append_value(key)?;
+        self.keys_builder.append_value(key);
 
         Ok(key)
     }
 
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) {
         self.keys_builder.append_null()
     }
 
@@ -264,13 +266,6 @@ where
 
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
-}
-
-fn compute_hash(hasher: &ahash::RandomState, value: &[u8]) -> u64 {
-    use std::hash::{BuildHasher, Hash, Hasher};
-    let mut state = hasher.build_hasher();
-    value.hash(&mut state);
-    state.finish()
 }
 
 fn get_bytes<'a, K: ArrowNativeType>(values: &'a StringBuilder, key: &K) -> &'a [u8] {
@@ -295,11 +290,11 @@ mod tests {
 
     #[test]
     fn test_string_dictionary_builder() {
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(5);
-        let value_builder = StringBuilder::new(2);
+        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(5);
+        let value_builder = StringBuilder::new();
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
@@ -322,12 +317,12 @@ mod tests {
     fn test_string_dictionary_builder_with_existing_dictionary() {
         let dictionary = StringArray::from(vec![None, Some("def"), Some("abc")]);
 
-        let key_builder = PrimitiveBuilder::<Int8Type>::new(6);
+        let key_builder = PrimitiveBuilder::<Int8Type>::with_capacity(6);
         let mut builder =
             StringDictionaryBuilder::new_with_dictionary(key_builder, &dictionary)
                 .unwrap();
         builder.append("abc").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
@@ -354,12 +349,12 @@ mod tests {
         let dictionary: Vec<Option<&str>> = vec![None];
         let dictionary = StringArray::from(dictionary);
 
-        let key_builder = PrimitiveBuilder::<Int16Type>::new(4);
+        let key_builder = PrimitiveBuilder::<Int16Type>::with_capacity(4);
         let mut builder =
             StringDictionaryBuilder::new_with_dictionary(key_builder, &dictionary)
                 .unwrap();
         builder.append("abc").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
         let array = builder.finish();

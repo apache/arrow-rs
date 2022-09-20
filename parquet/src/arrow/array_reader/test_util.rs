@@ -48,8 +48,7 @@ pub fn utf8_column() -> ColumnDescPtr {
 
 /// Encode `data` with the provided `encoding`
 pub fn encode_byte_array(encoding: Encoding, data: &[ByteArray]) -> ByteBufferPtr {
-    let descriptor = utf8_column();
-    let mut encoder = get_encoder::<ByteArrayType>(descriptor, encoding).unwrap();
+    let mut encoder = get_encoder::<ByteArrayType>(encoding).unwrap();
 
     encoder.put(data).unwrap();
     encoder.flush_buffer().unwrap()
@@ -101,6 +100,7 @@ pub struct InMemoryArrayReader {
     rep_levels: Option<Vec<i16>>,
     last_idx: usize,
     cur_idx: usize,
+    need_consume_records: usize,
 }
 
 impl InMemoryArrayReader {
@@ -127,6 +127,7 @@ impl InMemoryArrayReader {
             rep_levels,
             cur_idx: 0,
             last_idx: 0,
+            need_consume_records: 0,
         }
     }
 }
@@ -140,7 +141,7 @@ impl ArrayReader for InMemoryArrayReader {
         &self.data_type
     }
 
-    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
         assert_ne!(batch_size, 0);
         // This replicates the logical normally performed by
         // RecordReader to delimit semantic records
@@ -164,10 +165,17 @@ impl ArrayReader for InMemoryArrayReader {
             }
             None => batch_size.min(self.array.len() - self.cur_idx),
         };
+        self.need_consume_records += read;
+        Ok(read)
+    }
 
+    fn consume_batch(&mut self) -> Result<ArrayRef> {
+        let batch_size = self.need_consume_records;
+        assert_ne!(batch_size, 0);
         self.last_idx = self.cur_idx;
-        self.cur_idx += read;
-        Ok(self.array.slice(self.last_idx, read))
+        self.cur_idx += batch_size;
+        self.need_consume_records = 0;
+        Ok(self.array.slice(self.last_idx, batch_size))
     }
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {

@@ -18,6 +18,9 @@
 //! A complete, safe, native Rust implementation of [Apache Arrow](https://arrow.apache.org), a cross-language
 //! development platform for in-memory data.
 //!
+//! Please see the [arrow crates.io](https://crates.io/crates/arrow)
+//! page for feature flags and tips to improve performance.
+//!
 //! # Columnar Format
 //!
 //! The [`array`] module provides statically typed implementations of all the array
@@ -55,6 +58,23 @@
 //!
 //! assert_eq!(sum(&Float32Array::from(vec![1.1, 2.9, 3.])), 7.);
 //! assert_eq!(sum(&TimestampNanosecondArray::from(vec![1, 2, 3])), 6);
+//! ```
+//!
+//! And the following is generic over all arrays with comparable values
+//!
+//! ```rust
+//! # use arrow::array::{ArrayAccessor, ArrayIter, Int32Array, StringArray};
+//! # use arrow::datatypes::ArrowPrimitiveType;
+//! #
+//! fn min<T: ArrayAccessor>(array: T) -> Option<T::Item>
+//! where
+//!     T::Item: Ord
+//! {
+//!     ArrayIter::new(array).filter_map(|v| v).min()
+//! }
+//!
+//! assert_eq!(min(&Int32Array::from(vec![4, 2, 1, 6])), Some(1));
+//! assert_eq!(min(&StringArray::from(vec!["b", "a", "c"])), Some("a"));
 //! ```
 //!
 //! For more examples, consult the [`array`] docs.
@@ -238,10 +258,13 @@ pub mod compute;
 pub mod csv;
 pub mod datatypes;
 pub mod error;
+#[cfg(feature = "ffi")]
 pub mod ffi;
+#[cfg(feature = "ffi")]
 pub mod ffi_stream;
 #[cfg(feature = "ipc")]
 pub mod ipc;
+#[cfg(feature = "serde_json")]
 pub mod json;
 #[cfg(feature = "pyarrow")]
 pub mod pyarrow;

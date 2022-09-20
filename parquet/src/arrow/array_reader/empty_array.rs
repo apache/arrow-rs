@@ -33,6 +33,7 @@ pub fn make_empty_array_reader(row_count: usize) -> Box<dyn ArrayReader> {
 struct EmptyArrayReader {
     data_type: ArrowType,
     remaining_rows: usize,
+    need_consume_records: usize,
 }
 
 impl EmptyArrayReader {
@@ -40,6 +41,7 @@ impl EmptyArrayReader {
         Self {
             data_type: ArrowType::Struct(vec![]),
             remaining_rows: row_count,
+            need_consume_records: 0,
         }
     }
 }
@@ -53,15 +55,19 @@ impl ArrayReader for EmptyArrayReader {
         &self.data_type
     }
 
-    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
         let len = self.remaining_rows.min(batch_size);
         self.remaining_rows -= len;
+        self.need_consume_records += len;
+        Ok(len)
+    }
 
+    fn consume_batch(&mut self) -> Result<ArrayRef> {
         let data = ArrayDataBuilder::new(self.data_type.clone())
-            .len(len)
+            .len(self.need_consume_records)
             .build()
             .unwrap();
-
+        self.need_consume_records = 0;
         Ok(Arc::new(StructArray::from(data)))
     }
 

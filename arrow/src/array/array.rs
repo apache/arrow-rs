@@ -16,19 +16,16 @@
 // under the License.
 
 use std::any::Any;
-use std::convert::{From, TryFrom};
+use std::convert::From;
 use std::fmt;
 use std::sync::Arc;
 
 use super::*;
-use crate::array::equal_json::JsonEqual;
 use crate::buffer::{Buffer, MutableBuffer};
-use crate::error::Result;
-use crate::ffi;
 
 /// Trait for dealing with different types of array at runtime when the type of the
 /// array is not known in advance.
-pub trait Array: fmt::Debug + Send + Sync + JsonEqual {
+pub trait Array: fmt::Debug + Send + Sync {
     /// Returns the array as [`Any`](std::any::Any) so that it can be
     /// downcasted to a specific implementation.
     ///
@@ -216,15 +213,6 @@ pub trait Array: fmt::Debug + Send + Sync + JsonEqual {
         self.data_ref().get_array_memory_size() + std::mem::size_of_val(self)
             - std::mem::size_of::<ArrayData>()
     }
-
-    /// returns two pointers that represent this array in the C Data Interface (FFI)
-    fn to_raw(
-        &self,
-    ) -> Result<(*const ffi::FFI_ArrowArray, *const ffi::FFI_ArrowSchema)> {
-        let data = self.data().clone();
-        let array = ffi::ArrowArray::try_from(data)?;
-        Ok(ffi::ArrowArray::into_raw(array))
-    }
 }
 
 /// A reference-counted reference to a generic `Array`.
@@ -287,14 +275,87 @@ impl Array for ArrayRef {
     fn get_array_memory_size(&self) -> usize {
         self.as_ref().get_array_memory_size()
     }
+}
 
-    fn to_raw(
-        &self,
-    ) -> Result<(*const ffi::FFI_ArrowArray, *const ffi::FFI_ArrowSchema)> {
-        let data = self.data().clone();
-        let array = ffi::ArrowArray::try_from(data)?;
-        Ok(ffi::ArrowArray::into_raw(array))
+impl<'a, T: Array> Array for &'a T {
+    fn as_any(&self) -> &dyn Any {
+        T::as_any(self)
     }
+
+    fn data(&self) -> &ArrayData {
+        T::data(self)
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.data().clone()
+    }
+
+    fn data_ref(&self) -> &ArrayData {
+        T::data_ref(self)
+    }
+
+    fn data_type(&self) -> &DataType {
+        T::data_type(self)
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        T::slice(self, offset, length)
+    }
+
+    fn len(&self) -> usize {
+        T::len(self)
+    }
+
+    fn is_empty(&self) -> bool {
+        T::is_empty(self)
+    }
+
+    fn offset(&self) -> usize {
+        T::offset(self)
+    }
+
+    fn is_null(&self, index: usize) -> bool {
+        T::is_null(self, index)
+    }
+
+    fn is_valid(&self, index: usize) -> bool {
+        T::is_valid(self, index)
+    }
+
+    fn null_count(&self) -> usize {
+        T::null_count(self)
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        T::get_buffer_memory_size(self)
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        T::get_array_memory_size(self)
+    }
+}
+
+/// A generic trait for accessing the values of an [`Array`]
+///
+/// # Validity
+///
+/// An [`ArrayAccessor`] must always return a well-defined value for an index that is
+/// within the bounds `0..Array::len`, including for null indexes where [`Array::is_null`] is true.
+///
+/// The value at null indexes is unspecified, and implementations must not rely on a specific
+/// value such as [`Default::default`] being returned, however, it must not be undefined
+pub trait ArrayAccessor: Array {
+    type Item: Send + Sync;
+
+    /// Returns the element at index `i`
+    /// # Panics
+    /// Panics if the value is outside the bounds of the array
+    fn value(&self, index: usize) -> Self::Item;
+
+    /// Returns the element at index `i`
+    /// # Safety
+    /// Caller is responsible for ensuring that the index is within the bounds of the array
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item;
 }
 
 /// Constructs an array using the input `data`.
@@ -403,7 +464,8 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
             dt => panic!("Unexpected dictionary key type {:?}", dt),
         },
         DataType::Null => Arc::new(NullArray::from(data)) as ArrayRef,
-        DataType::Decimal(_, _) => Arc::new(DecimalArray::from(data)) as ArrayRef,
+        DataType::Decimal128(_, _) => Arc::new(Decimal128Array::from(data)) as ArrayRef,
+        DataType::Decimal256(_, _) => Arc::new(Decimal256Array::from(data)) as ArrayRef,
         dt => panic!("Unexpected data type {:?}", dt),
     }
 }
@@ -567,7 +629,10 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
                 )
             })
         }
-        DataType::Decimal(_, _) => new_null_sized_decimal(data_type, length),
+        DataType::Decimal128(_, _) => {
+            new_null_sized_decimal(data_type, length, std::mem::size_of::<i128>())
+        }
+        DataType::Decimal256(_, _) => new_null_sized_decimal(data_type, length, 32),
     }
 }
 
@@ -632,7 +697,11 @@ fn new_null_sized_array<T: ArrowPrimitiveType>(
 }
 
 #[inline]
-fn new_null_sized_decimal(data_type: &DataType, length: usize) -> ArrayRef {
+fn new_null_sized_decimal(
+    data_type: &DataType,
+    length: usize,
+    byte_width: usize,
+) -> ArrayRef {
     make_array(unsafe {
         ArrayData::new_unchecked(
             data_type.clone(),
@@ -640,49 +709,10 @@ fn new_null_sized_decimal(data_type: &DataType, length: usize) -> ArrayRef {
             Some(length),
             Some(MutableBuffer::new_null(length).into()),
             0,
-            vec![Buffer::from(vec![
-                0u8;
-                length * std::mem::size_of::<i128>()
-            ])],
+            vec![Buffer::from(vec![0u8; length * byte_width])],
             vec![],
         )
     })
-}
-
-/// Creates a new array from two FFI pointers. Used to import arrays from the C Data Interface
-/// # Safety
-/// Assumes that these pointers represent valid C Data Interfaces, both in memory
-/// representation and lifetime via the `release` mechanism.
-pub unsafe fn make_array_from_raw(
-    array: *const ffi::FFI_ArrowArray,
-    schema: *const ffi::FFI_ArrowSchema,
-) -> Result<ArrayRef> {
-    let array = ffi::ArrowArray::try_from_raw(array, schema)?;
-    let data = ArrayData::try_from(array)?;
-    Ok(make_array(data))
-}
-
-/// Exports an array to raw pointers of the C Data Interface provided by the consumer.
-/// # Safety
-/// Assumes that these pointers represent valid C Data Interfaces, both in memory
-/// representation and lifetime via the `release` mechanism.
-///
-/// This function copies the content of two FFI structs [ffi::FFI_ArrowArray] and
-/// [ffi::FFI_ArrowSchema] in the array to the location pointed by the raw pointers.
-/// Usually the raw pointers are provided by the array data consumer.
-pub unsafe fn export_array_into_raw(
-    src: ArrayRef,
-    out_array: *mut ffi::FFI_ArrowArray,
-    out_schema: *mut ffi::FFI_ArrowSchema,
-) -> Result<()> {
-    let data = src.data();
-    let array = ffi::FFI_ArrowArray::new(data);
-    let schema = ffi::FFI_ArrowSchema::try_from(data.data_type())?;
-
-    std::ptr::write_unaligned(out_array, array);
-    std::ptr::write_unaligned(out_schema, schema);
-
-    Ok(())
 }
 
 // Helper function for printing potentially long arrays.

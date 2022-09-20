@@ -19,17 +19,38 @@
 
 # Apache Parquet Official Native Rust Implementation
 
-[![Crates.io](https://img.shields.io/crates/v/parquet.svg)](https://crates.io/crates/parquet)
+[![crates.io](https://img.shields.io/crates/v/parquet.svg)](https://crates.io/crates/parquet)
+[![docs.rs](https://img.shields.io/docsrs/parquet.svg)](https://docs.rs/parquet/latest/parquet/)
 
 This crate contains the official Native Rust implementation of [Apache Parquet](https://parquet.apache.org/), which is part of the [Apache Arrow](https://arrow.apache.org/) project.
 
 See [crate documentation](https://docs.rs/parquet/latest/parquet/) for examples and the full API.
 
-## Rust Version Compatbility
+## Rust Version Compatibility
 
 This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
 
-## Features
+## Versioning / Releases
+
+The arrow crate follows the [SemVer standard](https://doc.rust-lang.org/cargo/reference/semver.html) defined by Cargo and works well within the Rust crate ecosystem.
+
+However, for historical reasons, this crate uses versions with major numbers greater than `0.x` (e.g. `19.0.0`), unlike many other crates in the Rust ecosystem which spend extended time releasing versions `0.x` to signal planned ongoing API changes. Minor arrow releases contain only compatible changes, while major releases may contain breaking API changes.
+
+## Feature Flags
+
+The `parquet` crate provides the following features which may be enabled in your `Cargo.toml`:
+
+- `arrow` (default) - support for reading / writing [`arrow`](https://crates.io/crates/arrow) arrays to / from parquet
+- `async` - support `async` APIs for reading parquet
+- `json` - support for reading / writing `json` data to / from parquet
+- `brotli` (default) - support for parquet using `brotli` compression
+- `flate2` (default) - support for parquet using `gzip` compression
+- `lz4` (default) - support for parquet using `lz4` compression
+- `zstd` (default) - support for parquet using `zstd` compression
+- `cli` - parquet [CLI tools](https://github.com/apache/arrow-rs/tree/master/parquet/src/bin)
+- `experimental` - Experimental APIs which may change, even between minor releases
+
+## Parquet Feature Status
 
 - [x] All encodings supported
 - [x] All compression codecs supported

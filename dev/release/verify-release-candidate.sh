@@ -72,24 +72,6 @@ fetch_archive() {
   ${sha512_verify} ${dist_name}.tar.gz.sha512
 }
 
-verify_dir_artifact_signatures() {
-  # verify the signature and the checksums of each artifact
-  find $1 -name '*.asc' | while read sigfile; do
-    artifact=${sigfile/.asc/}
-    gpg --verify $sigfile $artifact || exit 1
-
-    # go into the directory because the checksum files contain only the
-    # basename of the artifact
-    pushd $(dirname $artifact)
-    base_artifact=$(basename $artifact)
-    if [ -f $base_artifact.sha256 ]; then
-      ${sha256_verify} $base_artifact.sha256 || exit 1
-    fi
-    ${sha512_verify} $base_artifact.sha512 || exit 1
-    popd
-  done
-}
-
 setup_tempdir() {
   cleanup() {
     if [ "${TEST_SUCCESS}" = "yes" ]; then
@@ -123,7 +105,10 @@ test_source_distribution() {
 
   # raises on any formatting errors
   rustup component add rustfmt --toolchain stable
-  cargo fmt --all -- --check
+  (cd arrow && cargo fmt --check)
+  (cd arrow-flight && cargo fmt --check)
+  (cd parquet && cargo fmt --check)
+  (cd parquet_derive && cargo fmt --check)
 
   # Clone testing repositories if not cloned already
   git clone https://github.com/apache/arrow-testing.git arrow-testing-data
@@ -139,8 +124,10 @@ test_source_distribution() {
     -e 's/^parquet = "([^"]*)"/parquet = { version = "\1", path = "..\/parquet" }/g' \
     */Cargo.toml
 
-  cargo build
-  cargo test --all
+  (cd arrow && cargo build && cargo test)
+  (cd arrow-flight && cargo build && cargo test)
+  (cd parquet && cargo build && cargo test)
+  (cd parquet_derive && cargo build && cargo test)
 
   # verify that the crates can be published to crates.io
   pushd arrow

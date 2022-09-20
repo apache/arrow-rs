@@ -22,17 +22,15 @@ use crate::array::ArrayData;
 use crate::array::ArrayRef;
 use crate::array::GenericListArray;
 use crate::array::OffsetSizeTrait;
-use crate::datatypes::DataType;
 use crate::datatypes::Field;
-use crate::error::Result;
 
-use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
+use super::{ArrayBuilder, BufferBuilder, NullBufferBuilder};
 
 ///  Array builder for [`GenericListArray`]
 #[derive(Debug)]
 pub struct GenericListBuilder<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> {
     offsets_builder: BufferBuilder<OffsetSize>,
-    bitmap_builder: BooleanBufferBuilder,
+    null_buffer_builder: NullBufferBuilder,
     values_builder: T,
 }
 
@@ -50,7 +48,7 @@ impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize
         offsets_builder.append(OffsetSize::zero());
         Self {
             offsets_builder,
-            bitmap_builder: BooleanBufferBuilder::new(capacity),
+            null_buffer_builder: NullBufferBuilder::new(capacity),
             values_builder,
         }
     }
@@ -78,12 +76,12 @@ where
 
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
-        self.bitmap_builder.len()
+        self.null_buffer_builder.len()
     }
 
     /// Returns whether the number of array slots is zero
     fn is_empty(&self) -> bool {
-        self.bitmap_builder.is_empty()
+        self.null_buffer_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.
@@ -111,11 +109,10 @@ where
 
     /// Finish the current variable-length list array slot
     #[inline]
-    pub fn append(&mut self, is_valid: bool) -> Result<()> {
+    pub fn append(&mut self, is_valid: bool) {
         self.offsets_builder
             .append(OffsetSize::from_usize(self.values_builder.len()).unwrap());
-        self.bitmap_builder.append(is_valid);
-        Ok(())
+        self.null_buffer_builder.append(is_valid);
     }
 
     /// Builds the [`GenericListArray`] and reset this builder.
@@ -130,23 +127,19 @@ where
         let values_data = values_arr.data();
 
         let offset_buffer = self.offsets_builder.finish();
-        let null_bit_buffer = self.bitmap_builder.finish();
+        let null_bit_buffer = self.null_buffer_builder.finish();
         self.offsets_builder.append(OffsetSize::zero());
         let field = Box::new(Field::new(
             "item",
             values_data.data_type().clone(),
             true, // TODO: find a consistent way of getting this
         ));
-        let data_type = if OffsetSize::IS_LARGE {
-            DataType::LargeList(field)
-        } else {
-            DataType::List(field)
-        };
+        let data_type = GenericListArray::<OffsetSize>::DATA_TYPE_CONSTRUCTOR(field);
         let array_data_builder = ArrayData::builder(data_type)
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(values_data.clone())
-            .null_bit_buffer(Some(null_bit_buffer));
+            .null_bit_buffer(null_bit_buffer);
 
         let array_data = unsafe { array_data_builder.build_unchecked() };
 
@@ -165,23 +158,24 @@ mod tests {
     use crate::array::builder::ListBuilder;
     use crate::array::{Array, Int32Array, Int32Builder};
     use crate::buffer::Buffer;
+    use crate::datatypes::DataType;
 
     fn _test_generic_list_array_builder<O: OffsetSizeTrait>() {
-        let values_builder = Int32Builder::new(10);
+        let values_builder = Int32Builder::with_capacity(10);
         let mut builder = GenericListBuilder::<O, _>::new(values_builder);
 
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        builder.values().append_value(0).unwrap();
-        builder.values().append_value(1).unwrap();
-        builder.values().append_value(2).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_value(3).unwrap();
-        builder.values().append_value(4).unwrap();
-        builder.values().append_value(5).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_value(6).unwrap();
-        builder.values().append_value(7).unwrap();
-        builder.append(true).unwrap();
+        builder.values().append_value(0);
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true);
+        builder.values().append_value(3);
+        builder.values().append_value(4);
+        builder.values().append_value(5);
+        builder.append(true);
+        builder.values().append_value(6);
+        builder.values().append_value(7);
+        builder.append(true);
         let list_array = builder.finish();
 
         let values = list_array.values().data().buffers()[0].clone();
@@ -212,22 +206,23 @@ mod tests {
     }
 
     fn _test_generic_list_array_builder_nulls<O: OffsetSizeTrait>() {
-        let values_builder = Int32Builder::new(10);
+        let values_builder = Int32Builder::with_capacity(10);
         let mut builder = GenericListBuilder::<O, _>::new(values_builder);
 
         //  [[0, 1, 2], null, [3, null, 5], [6, 7]]
-        builder.values().append_value(0).unwrap();
-        builder.values().append_value(1).unwrap();
-        builder.values().append_value(2).unwrap();
-        builder.append(true).unwrap();
-        builder.append(false).unwrap();
-        builder.values().append_value(3).unwrap();
-        builder.values().append_null().unwrap();
-        builder.values().append_value(5).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_value(6).unwrap();
-        builder.values().append_value(7).unwrap();
-        builder.append(true).unwrap();
+        builder.values().append_value(0);
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true);
+        builder.append(false);
+        builder.values().append_value(3);
+        builder.values().append_null();
+        builder.values().append_value(5);
+        builder.append(true);
+        builder.values().append_value(6);
+        builder.values().append_value(7);
+        builder.append(true);
+
         let list_array = builder.finish();
 
         assert_eq!(DataType::Int32, list_array.value_type());
@@ -252,17 +247,17 @@ mod tests {
         let values_builder = Int32Array::builder(5);
         let mut builder = ListBuilder::new(values_builder);
 
-        builder.values().append_slice(&[1, 2, 3]).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_slice(&[4, 5, 6]).unwrap();
-        builder.append(true).unwrap();
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
+        builder.values().append_slice(&[4, 5, 6]);
+        builder.append(true);
 
         let mut arr = builder.finish();
         assert_eq!(2, arr.len());
         assert!(builder.is_empty());
 
-        builder.values().append_slice(&[7, 8, 9]).unwrap();
-        builder.append(true).unwrap();
+        builder.values().append_slice(&[7, 8, 9]);
+        builder.append(true);
         arr = builder.finish();
         assert_eq!(1, arr.len());
         assert!(builder.is_empty());
@@ -270,34 +265,34 @@ mod tests {
 
     #[test]
     fn test_list_list_array_builder() {
-        let primitive_builder = Int32Builder::new(10);
+        let primitive_builder = Int32Builder::with_capacity(10);
         let values_builder = ListBuilder::new(primitive_builder);
         let mut builder = ListBuilder::new(values_builder);
 
         //  [[[1, 2], [3, 4]], [[5, 6, 7], null, [8]], null, [[9, 10]]]
-        builder.values().values().append_value(1).unwrap();
-        builder.values().values().append_value(2).unwrap();
-        builder.values().append(true).unwrap();
-        builder.values().values().append_value(3).unwrap();
-        builder.values().values().append_value(4).unwrap();
-        builder.values().append(true).unwrap();
-        builder.append(true).unwrap();
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.values().values().append_value(3);
+        builder.values().values().append_value(4);
+        builder.values().append(true);
+        builder.append(true);
 
-        builder.values().values().append_value(5).unwrap();
-        builder.values().values().append_value(6).unwrap();
-        builder.values().values().append_value(7).unwrap();
-        builder.values().append(true).unwrap();
-        builder.values().append(false).unwrap();
-        builder.values().values().append_value(8).unwrap();
-        builder.values().append(true).unwrap();
-        builder.append(true).unwrap();
+        builder.values().values().append_value(5);
+        builder.values().values().append_value(6);
+        builder.values().values().append_value(7);
+        builder.values().append(true);
+        builder.values().append(false);
+        builder.values().values().append_value(8);
+        builder.values().append(true);
+        builder.append(true);
 
-        builder.append(false).unwrap();
+        builder.append(false);
 
-        builder.values().values().append_value(9).unwrap();
-        builder.values().values().append_value(10).unwrap();
-        builder.values().append(true).unwrap();
-        builder.append(true).unwrap();
+        builder.values().values().append_value(9);
+        builder.values().values().append_value(10);
+        builder.values().append(true);
+        builder.append(true);
 
         let list_array = builder.finish();
 

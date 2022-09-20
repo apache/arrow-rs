@@ -33,6 +33,7 @@ use crate::{
     util::trusted_len_unzip,
 };
 
+use crate::array::array::ArrayAccessor;
 use half::f16;
 
 /// Array whose elements are of primitive types.
@@ -90,7 +91,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
     // Returns a new primitive array builder
     pub fn builder(capacity: usize) -> PrimitiveBuilder<T> {
-        PrimitiveBuilder::<T>::new(capacity)
+        PrimitiveBuilder::<T>::with_capacity(capacity)
     }
 
     /// Returns the primitive value at index `i`.
@@ -105,11 +106,16 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     }
 
     /// Returns the primitive value at index `i`.
-    ///
-    /// Panics of offset `i` is out of bounds
+    /// # Panics
+    /// Panics if index `i` is out of bounds
     #[inline]
     pub fn value(&self, i: usize) -> T::Native {
-        assert!(i < self.len());
+        assert!(
+            i < self.len(),
+            "Trying to access an element at index {} from a PrimitiveArray of length {}",
+            i,
+            self.len()
+        );
         unsafe { self.value_unchecked(i) }
     }
 
@@ -185,6 +191,18 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
 
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+}
+
+impl<'a, T: ArrowPrimitiveType> ArrayAccessor for &'a PrimitiveArray<T> {
+    type Item = T::Native;
+
+    fn value(&self, index: usize) -> Self::Item {
+        PrimitiveArray::value(self, index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        PrimitiveArray::value_unchecked(self, index)
     }
 }
 
@@ -425,17 +443,13 @@ impl<T: ArrowPrimitiveType, Ptr: Into<NativeAdapter<T>>> FromIterator<Ptr>
             .collect();
 
         let len = null_builder.len();
-        let null_buf: Buffer = null_builder.into();
-        let valid_count = null_buf.count_set_bits();
-        let null_count = len - valid_count;
-        let opt_null_buf = (null_count != 0).then(|| null_buf);
 
         let data = unsafe {
             ArrayData::new_unchecked(
                 T::DATA_TYPE,
                 len,
-                Some(null_count),
-                opt_null_buf,
+                None,
+                Some(null_builder.into()),
                 0,
                 vec![buffer],
                 vec![],
@@ -538,6 +552,18 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
                 .len(data.len())
                 .add_buffer(Buffer::from_slice_ref(&data));
         let array_data = unsafe { array_data.build_unchecked() };
+        PrimitiveArray::from(array_data)
+    }
+
+    /// Construct a timestamp array with new timezone
+    pub fn with_timezone(&self, timezone: String) -> Self {
+        let array_data = unsafe {
+            self.data
+                .clone()
+                .into_builder()
+                .data_type(DataType::Timestamp(T::get_time_unit(), Some(timezone)))
+                .build_unchecked()
+        };
         PrimitiveArray::from(array_data)
     }
 }
@@ -937,9 +963,9 @@ mod tests {
     #[test]
     fn test_int32_with_null_fmt_debug() {
         let mut builder = Int32Array::builder(3);
-        builder.append_slice(&[0, 1]).unwrap();
-        builder.append_null().unwrap();
-        builder.append_slice(&[3, 4]).unwrap();
+        builder.append_slice(&[0, 1]);
+        builder.append_null();
+        builder.append_slice(&[3, 4]);
         let arr = builder.finish();
         assert_eq!(
             "PrimitiveArray<Int32>\n[\n  0,\n  1,\n  null,\n  3,\n  4,\n]",
@@ -1089,5 +1115,32 @@ mod tests {
             result.unwrap(),
             BooleanArray::from(vec![true, true, true, true, true])
         );
+    }
+
+    #[cfg(feature = "chrono-tz")]
+    #[test]
+    fn test_with_timezone() {
+        use crate::compute::hour;
+        let a: TimestampMicrosecondArray = vec![37800000000, 86339000000].into();
+
+        let b = hour(&a).unwrap();
+        assert_eq!(10, b.value(0));
+        assert_eq!(23, b.value(1));
+
+        let a = a.with_timezone(String::from("America/Los_Angeles"));
+
+        let b = hour(&a).unwrap();
+        assert_eq!(2, b.value(0));
+        assert_eq!(15, b.value(1));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Trying to access an element at index 4 from a PrimitiveArray of length 3"
+    )]
+    fn test_string_array_get_value_index_out_of_bound() {
+        let array: Int8Array = [10_i8, 11, 12].into_iter().collect();
+
+        array.value(4);
     }
 }

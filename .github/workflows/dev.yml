@@ -15,11 +15,13 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Dev
+name: dev
 
+# trigger for all PRs and changes to master
 on:
-  # always trigger
   push:
+    branches:
+      - master
   pull_request:
 
 env:
@@ -32,24 +34,24 @@ jobs:
     name: Release Audit Tool (RAT)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Setup Python
-        uses: actions/setup-python@v1
+        uses: actions/setup-python@v4
         with:
           python-version: 3.8
       - name: Audit licenses
         run: ./dev/release/run-rat.sh .
 
   prettier:
-    name: Use prettier to check formatting of documents
+    name: Markdown format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
         with:
           node-version: "14"
       - name: Prettier check
         run: |
-          # if you encounter error, try rerun the command below with --write instead of --check
-          # and commit the changes
-          npx prettier@2.3.0 --check {arrow,arrow-flight,dev,integration-testing,parquet}/**/*.md README.md CODE_OF_CONDUCT.md CONTRIBUTING.md
+          # if you encounter error, run the command below and commit the changes
+          npx prettier@2.3.2 --write {arrow,arrow-flight,dev,integration-testing,parquet}/**/*.md README.md CODE_OF_CONDUCT.md CONTRIBUTING.md
+          git diff --exit-code

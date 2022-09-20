@@ -20,8 +20,7 @@ use arrow::datatypes::{DataType, Field};
 use arrow::error::{ArrowError, Result};
 use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::FileWriter;
-use arrow::util::integration_util::*;
-use arrow_integration_testing::read_json_file;
+use arrow_integration_testing::{read_json_file, util::*};
 use clap::Parser;
 use std::fs::File;
 
@@ -91,7 +90,10 @@ fn arrow_to_json(arrow_name: &str, json_name: &str, verbose: bool) -> Result<()>
     for f in reader.schema().fields() {
         fields.push(ArrowJsonField::from(f));
     }
-    let schema = ArrowJsonSchema { fields };
+    let schema = ArrowJsonSchema {
+        fields,
+        metadata: None,
+    };
 
     let batches = reader
         .map(|batch| Ok(ArrowJsonBatch::from_batch(&batch?)))

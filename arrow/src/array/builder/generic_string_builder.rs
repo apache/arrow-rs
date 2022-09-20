@@ -15,87 +15,75 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{
-    ArrayBuilder, ArrayRef, GenericListBuilder, GenericStringArray, OffsetSizeTrait,
-    UInt8Builder,
-};
-use crate::error::Result;
+use crate::array::{ArrayBuilder, ArrayRef, GenericStringArray, OffsetSizeTrait};
 use std::any::Any;
 use std::sync::Arc;
 
+use super::GenericBinaryBuilder;
+
+///  Array builder for [`GenericStringArray`]
 #[derive(Debug)]
 pub struct GenericStringBuilder<OffsetSize: OffsetSizeTrait> {
-    builder: GenericListBuilder<OffsetSize, UInt8Builder>,
+    builder: GenericBinaryBuilder<OffsetSize>,
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
-    /// Creates a new `StringBuilder`,
-    /// `capacity` is the number of bytes of string data to pre-allocate space for in this builder
-    pub fn new(capacity: usize) -> Self {
-        let values_builder = UInt8Builder::new(capacity);
+    /// Creates a new [`GenericStringBuilder`],
+    pub fn new() -> Self {
         Self {
-            builder: GenericListBuilder::new(values_builder),
+            builder: GenericBinaryBuilder::new(),
         }
     }
 
-    /// Creates a new `StringBuilder`,
+    /// Creates a new [`GenericStringBuilder`],
     /// `data_capacity` is the number of bytes of string data to pre-allocate space for in this builder
     /// `item_capacity` is the number of items to pre-allocate space for in this builder
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
-        let values_builder = UInt8Builder::new(data_capacity);
         Self {
-            builder: GenericListBuilder::with_capacity(values_builder, item_capacity),
+            builder: GenericBinaryBuilder::with_capacity(item_capacity, data_capacity),
         }
     }
 
     /// Appends a string into the builder.
-    ///
-    /// Automatically calls the `append` method to delimit the string appended in as a
-    /// distinct array element.
     #[inline]
-    pub fn append_value(&mut self, value: impl AsRef<str>) -> Result<()> {
-        self.builder
-            .values()
-            .append_slice(value.as_ref().as_bytes())?;
-        self.builder.append(true)?;
-        Ok(())
-    }
-
-    /// Finish the current variable-length list array slot.
-    #[inline]
-    pub fn append(&mut self, is_valid: bool) -> Result<()> {
-        self.builder.append(is_valid)
+    pub fn append_value(&mut self, value: impl AsRef<str>) {
+        self.builder.append_value(value.as_ref().as_bytes());
     }
 
     /// Append a null value to the array.
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
-        self.append(false)
+    pub fn append_null(&mut self) {
+        self.builder.append_null()
     }
 
     /// Append an `Option` value to the array.
     #[inline]
-    pub fn append_option(&mut self, value: Option<impl AsRef<str>>) -> Result<()> {
+    pub fn append_option(&mut self, value: Option<impl AsRef<str>>) {
         match value {
-            None => self.append_null()?,
-            Some(v) => self.append_value(v)?,
+            None => self.append_null(),
+            Some(v) => self.append_value(v),
         };
-        Ok(())
     }
 
-    /// Builds the `StringArray` and reset this builder.
+    /// Builds the [`GenericStringArray`] and reset this builder.
     pub fn finish(&mut self) -> GenericStringArray<OffsetSize> {
         GenericStringArray::<OffsetSize>::from(self.builder.finish())
     }
 
     /// Returns the current values buffer as a slice
     pub fn values_slice(&self) -> &[u8] {
-        self.builder.values_ref().values_slice()
+        self.builder.values_slice()
     }
 
     /// Returns the current offsets buffer as a slice
     pub fn offsets_slice(&self) -> &[OffsetSize] {
         self.builder.offsets_slice()
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> Default for GenericStringBuilder<OffsetSize> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -134,79 +122,72 @@ impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericStringBuilder<OffsetSi
 
 #[cfg(test)]
 mod tests {
-    use crate::array::builder::StringBuilder;
-    use crate::array::{Array, ArrayBuilder};
+    use super::*;
+    use crate::array::{Array, ArrayBuilder, OffsetSizeTrait};
+
+    fn _test_generic_string_array_builder<O: OffsetSizeTrait>() {
+        let mut builder = GenericStringBuilder::<O>::new();
+        let owned = "arrow".to_owned();
+
+        builder.append_value("hello");
+        builder.append_value("");
+        builder.append_value(&owned);
+        builder.append_null();
+        builder.append_option(Some("rust"));
+        builder.append_option(None::<&str>);
+        builder.append_option(None::<String>);
+        assert_eq!(7, builder.len());
+
+        assert_eq!(
+            GenericStringArray::<O>::from(vec![
+                Some("hello"),
+                Some(""),
+                Some("arrow"),
+                None,
+                Some("rust"),
+                None,
+                None
+            ]),
+            builder.finish()
+        );
+    }
 
     #[test]
     fn test_string_array_builder() {
-        let mut builder = StringBuilder::new(20);
+        _test_generic_string_array_builder::<i32>()
+    }
 
-        builder.append_value("hello").unwrap();
-        builder.append(true).unwrap();
-        builder.append_value("world").unwrap();
+    #[test]
+    fn test_large_string_array_builder() {
+        _test_generic_string_array_builder::<i64>()
+    }
 
-        let string_array = builder.finish();
+    fn _test_generic_string_array_builder_finish<O: OffsetSizeTrait>() {
+        let mut builder = GenericStringBuilder::<O>::with_capacity(3, 11);
 
-        assert_eq!(3, string_array.len());
-        assert_eq!(0, string_array.null_count());
-        assert_eq!("hello", string_array.value(0));
-        assert_eq!("", string_array.value(1));
-        assert_eq!("world", string_array.value(2));
-        assert_eq!(5, string_array.value_offsets()[2]);
-        assert_eq!(5, string_array.value_length(2));
+        builder.append_value("hello");
+        builder.append_value("rust");
+        builder.append_null();
+
+        builder.finish();
+        assert!(builder.is_empty());
+        assert_eq!(&[O::zero()], builder.offsets_slice());
+
+        builder.append_value("arrow");
+        builder.append_value("parquet");
+        let arr = builder.finish();
+        // array should not have null buffer because there is not `null` value.
+        assert_eq!(None, arr.data().null_buffer());
+        assert_eq!(GenericStringArray::<O>::from(vec!["arrow", "parquet"]), arr,)
     }
 
     #[test]
     fn test_string_array_builder_finish() {
-        let mut builder = StringBuilder::new(10);
-
-        builder.append_value("hello").unwrap();
-        builder.append_value("world").unwrap();
-
-        let mut arr = builder.finish();
-        assert_eq!(2, arr.len());
-        assert_eq!(0, builder.len());
-
-        builder.append_value("arrow").unwrap();
-        arr = builder.finish();
-        assert_eq!(1, arr.len());
-        assert_eq!(0, builder.len());
+        _test_generic_string_array_builder_finish::<i32>()
     }
 
     #[test]
-    fn test_string_array_builder_append_string() {
-        let mut builder = StringBuilder::new(20);
-
-        let var = "hello".to_owned();
-        builder.append_value(&var).unwrap();
-        builder.append(true).unwrap();
-        builder.append_value("world").unwrap();
-
-        let string_array = builder.finish();
-
-        assert_eq!(3, string_array.len());
-        assert_eq!(0, string_array.null_count());
-        assert_eq!("hello", string_array.value(0));
-        assert_eq!("", string_array.value(1));
-        assert_eq!("world", string_array.value(2));
-        assert_eq!(5, string_array.value_offsets()[2]);
-        assert_eq!(5, string_array.value_length(2));
-    }
-
-    #[test]
-    fn test_string_array_builder_append_option() {
-        let mut builder = StringBuilder::new(20);
-        builder.append_option(Some("hello")).unwrap();
-        builder.append_option(None::<&str>).unwrap();
-        builder.append_option(None::<String>).unwrap();
-        builder.append_option(Some("world")).unwrap();
-
-        let string_array = builder.finish();
-
-        assert_eq!(4, string_array.len());
-        assert_eq!("hello", string_array.value(0));
-        assert!(string_array.is_null(1));
-        assert!(string_array.is_null(2));
-        assert_eq!("world", string_array.value(3));
+    fn test_large_string_array_builder_finish() {
+        _test_generic_string_array_builder_finish::<i64>()
     }
 }

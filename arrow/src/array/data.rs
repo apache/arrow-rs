@@ -18,8 +18,12 @@
 //! Contains `ArrayData`, a generic representation of Arrow array data which encapsulates
 //! common attributes and operations for Arrow array.
 
-use crate::datatypes::{validate_decimal_precision, DataType, IntervalUnit, UnionMode};
+use crate::datatypes::{
+    validate_decimal256_precision_with_lt_bytes, validate_decimal_precision, DataType,
+    IntervalUnit, UnionMode,
+};
 use crate::error::{ArrowError, Result};
+use crate::util::bit_iterator::BitSliceIterator;
 use crate::{bitmap::Bitmap, datatypes::ArrowNativeType};
 use crate::{
     buffer::{Buffer, MutableBuffer},
@@ -32,6 +36,21 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::equal::equal;
+
+#[inline]
+pub(crate) fn contains_nulls(
+    null_bit_buffer: Option<&Buffer>,
+    offset: usize,
+    len: usize,
+) -> bool {
+    match null_bit_buffer {
+        Some(buffer) => match BitSliceIterator::new(buffer, offset, len).next() {
+            Some((start, end)) => start != 0 || end != len,
+            None => len != 0, // No non-null values
+        },
+        None => false, // No null buffer
+    }
+}
 
 #[inline]
 pub(crate) fn count_nulls(
@@ -189,7 +208,7 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
         DataType::FixedSizeList(_, _) | DataType::Struct(_) => {
             [empty_buffer, MutableBuffer::new(0)]
         }
-        DataType::Decimal(_, _) => [
+        DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => [
             MutableBuffer::new(capacity * mem::size_of::<u8>()),
             empty_buffer,
         ],
@@ -267,7 +286,10 @@ impl ArrayData {
     /// Create a new ArrayData instance;
     ///
     /// If `null_count` is not specified, the number of nulls in
-    /// null_bit_buffer is calculated
+    /// null_bit_buffer is calculated.
+    ///
+    /// If the number of nulls is 0 then the null_bit_buffer
+    /// is set to `None`.
     ///
     /// # Safety
     ///
@@ -291,7 +313,7 @@ impl ArrayData {
             None => count_nulls(null_bit_buffer.as_ref(), offset, len),
             Some(null_count) => null_count,
         };
-        let null_bitmap = null_bit_buffer.map(Bitmap::from);
+        let null_bitmap = null_bit_buffer.filter(|_| null_count > 0).map(Bitmap::from);
         let new_self = Self {
             data_type,
             len,
@@ -310,6 +332,9 @@ impl ArrayData {
 
     /// Create a new ArrayData, validating that the provided buffers
     /// form a valid Arrow array of the specified data type.
+    ///
+    /// If the number of nulls in `null_bit_buffer` is 0 then the null_bit_buffer
+    /// is set to `None`.
     ///
     /// Note: This is a low level API and most users of the arrow
     /// crate should create arrays using the methods in the `array`
@@ -370,18 +395,24 @@ impl ArrayData {
     /// panic's if the new DataType is not compatible with the
     /// existing type.
     ///
-    /// Note: currently only changing a [DataType::Decimal]s precision
-    /// and scale are supported
+    /// Note: currently only changing a [DataType::Decimal128]s or
+    /// [DataType::Decimal256]s precision and scale are supported
     #[inline]
     pub(crate) fn with_data_type(mut self, new_data_type: DataType) -> Self {
-        assert!(
-            matches!(self.data_type, DataType::Decimal(_, _)),
-            "only DecimalType is supported for existing type"
-        );
-        assert!(
-            matches!(new_data_type, DataType::Decimal(_, _)),
-            "only DecimalType is supported for new datatype"
-        );
+        if matches!(self.data_type, DataType::Decimal128(_, _)) {
+            assert!(
+                matches!(new_data_type, DataType::Decimal128(_, _)),
+                "only 128-bit DecimalType is supported for new datatype"
+            );
+        } else if matches!(self.data_type, DataType::Decimal256(_, _)) {
+            assert!(
+                matches!(new_data_type, DataType::Decimal256(_, _)),
+                "only 256-bit DecimalType is supported for new datatype"
+            );
+        } else {
+            panic!("only DecimalType is supported.")
+        }
+
         self.data_type = new_data_type;
         self
     }
@@ -572,7 +603,8 @@ impl ArrayData {
             | DataType::LargeBinary
             | DataType::Interval(_)
             | DataType::FixedSizeBinary(_)
-            | DataType::Decimal(_, _) => vec![],
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _) => vec![],
             DataType::List(field) => {
                 vec![Self::new_empty(field.data_type())]
             }
@@ -1004,10 +1036,19 @@ impl ArrayData {
 
     pub fn validate_values(&self) -> Result<()> {
         match &self.data_type {
-            DataType::Decimal(p, _) => {
+            DataType::Decimal128(p, _) => {
                 let values_buffer: &[i128] = self.typed_buffer(0, self.len)?;
                 for value in values_buffer {
                     validate_decimal_precision(*value, *p)?;
+                }
+                Ok(())
+            }
+            DataType::Decimal256(p, _) => {
+                let values = self.buffers()[0].as_slice();
+                for pos in 0..self.len() {
+                    let offset = pos * 32;
+                    let raw_bytes = &values[offset..offset + 32];
+                    validate_decimal256_precision_with_lt_bytes(raw_bytes, *p)?;
                 }
                 Ok(())
             }
@@ -1119,16 +1160,37 @@ impl ArrayData {
         T: ArrowNativeType + TryInto<usize> + num::Num + std::fmt::Display,
     {
         let values_buffer = &self.buffers[1].as_slice();
-
-        self.validate_each_offset::<T, _>(values_buffer.len(), |string_index, range| {
-            std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
-                ArrowError::InvalidArgumentError(format!(
-                    "Invalid UTF8 sequence at string index {} ({:?}): {}",
-                    string_index, range, e
-                ))
-            })?;
-            Ok(())
-        })
+        if let Ok(values_str) = std::str::from_utf8(values_buffer) {
+            // Validate Offsets are correct
+            self.validate_each_offset::<T, _>(
+                values_buffer.len(),
+                |string_index, range| {
+                    if !values_str.is_char_boundary(range.start)
+                        || !values_str.is_char_boundary(range.end)
+                    {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "incomplete utf-8 byte sequence from index {}",
+                            string_index
+                        )));
+                    }
+                    Ok(())
+                },
+            )
+        } else {
+            // find specific offset that failed utf8 validation
+            self.validate_each_offset::<T, _>(
+                values_buffer.len(),
+                |string_index, range| {
+                    std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
+                        ArrowError::InvalidArgumentError(format!(
+                            "Invalid UTF8 sequence at string index {} ({:?}): {}",
+                            string_index, range, e
+                        ))
+                    })?;
+                    Ok(())
+                },
+            )
+        }
     }
 
     /// Ensures that all offsets in `buffers[0]` into `buffers[1]` are
@@ -1302,10 +1364,14 @@ pub(crate) fn layout(data_type: &DataType) -> DataTypeLayout {
             }
         }
         DataType::Dictionary(key_type, _value_type) => layout(key_type),
-        DataType::Decimal(_, _) => {
+        DataType::Decimal128(_, _) => {
             // Decimals are always some fixed width; The rust implementation
             // always uses 16 bytes / size of i128
             DataTypeLayout::new_fixed_width(size_of::<i128>())
+        }
+        DataType::Decimal256(_, _) => {
+            // Decimals are always some fixed width.
+            DataTypeLayout::new_fixed_width(32)
         }
         DataType::Map(_, _) => {
             // same as ListType
@@ -1513,7 +1579,7 @@ mod tests {
     use std::ptr::NonNull;
 
     use crate::array::{
-        make_array, Array, BooleanBuilder, DecimalBuilder, FixedSizeListBuilder,
+        make_array, Array, BooleanBuilder, Decimal128Builder, FixedSizeListBuilder,
         Int32Array, Int32Builder, Int64Array, StringArray, StructBuilder, UInt64Array,
         UInt8Builder,
     };
@@ -2610,8 +2676,8 @@ mod tests {
                 Field::new("b", DataType::Boolean, true),
             ],
             vec![
-                Box::new(Int32Builder::new(5)),
-                Box::new(BooleanBuilder::new(5)),
+                Box::new(Int32Builder::with_capacity(5)),
+                Box::new(BooleanBuilder::with_capacity(5)),
             ],
         );
 
@@ -2619,66 +2685,56 @@ mod tests {
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(Some(10))
-            .unwrap();
+            .append_option(Some(10));
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(Some(true))
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(Some(true));
+        builder.append(true);
 
         // struct[1] = null
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(None)
-            .unwrap();
+            .append_option(None);
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(None)
-            .unwrap();
-        builder.append(false).unwrap();
+            .append_option(None);
+        builder.append(false);
 
         // struct[2] = { a: null, b: false }
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(None)
-            .unwrap();
+            .append_option(None);
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(Some(false))
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(Some(false));
+        builder.append(true);
 
         // struct[3] = { a: 21, b: null }
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(Some(21))
-            .unwrap();
+            .append_option(Some(21));
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(None)
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(None);
+        builder.append(true);
 
         // struct[4] = { a: 18, b: false }
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(Some(18))
-            .unwrap();
+            .append_option(Some(18));
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(Some(false))
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(Some(false));
+        builder.append(true);
 
         let struct_array = builder.finish();
         let struct_array_slice = struct_array.slice(1, 3);
@@ -2765,38 +2821,33 @@ mod tests {
     #[test]
     #[cfg(not(feature = "force_validate"))]
     fn test_decimal_full_validation() {
-        let values_builder = UInt8Builder::new(10);
+        let values_builder = UInt8Builder::with_capacity(10);
         let byte_width = 16;
         let mut fixed_size_builder =
             FixedSizeListBuilder::new(values_builder, byte_width);
-        let value_as_bytes = DecimalBuilder::from_i128_to_fixed_size_bytes(
-            123456,
-            fixed_size_builder.value_length() as usize,
-        )
-        .unwrap();
+        let value_as_bytes = 123456_i128.to_le_bytes();
         fixed_size_builder
             .values()
-            .append_slice(value_as_bytes.as_slice())
-            .unwrap();
-        fixed_size_builder.append(true).unwrap();
+            .append_slice(value_as_bytes.as_slice());
+        fixed_size_builder.append(true);
         let fixed_size_array = fixed_size_builder.finish();
 
         // Build ArrayData for Decimal
-        let builder = ArrayData::builder(DataType::Decimal(5, 3))
+        let builder = ArrayData::builder(DataType::Decimal128(5, 3))
             .len(fixed_size_array.len())
             .add_buffer(fixed_size_array.data_ref().child_data()[0].buffers()[0].clone());
         let array_data = unsafe { builder.build_unchecked() };
         let validation_result = array_data.validate_full();
         let error = validation_result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: 123456 is too large to store in a Decimal of precision 5. Max is 99999",
+            "Invalid argument error: 123456 is too large to store in a Decimal128 of precision 5. Max is 99999",
             error.to_string()
         );
     }
 
     #[test]
     fn test_decimal_validation() {
-        let mut builder = DecimalBuilder::new(4, 10, 4);
+        let mut builder = Decimal128Builder::with_capacity(4, 10, 4);
         builder.append_value(10000).unwrap();
         builder.append_value(20000).unwrap();
         let array = builder.finish();
@@ -2828,5 +2879,16 @@ mod tests {
 
         let err = data.validate_values().unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2");
+    }
+
+    #[test]
+    fn test_contains_nulls() {
+        let buffer: Buffer =
+            MutableBuffer::from_iter([false, false, false, true, true, false]).into();
+
+        assert!(contains_nulls(Some(&buffer), 0, 6));
+        assert!(contains_nulls(Some(&buffer), 0, 3));
+        assert!(!contains_nulls(Some(&buffer), 3, 2));
+        assert!(!contains_nulls(Some(&buffer), 0, 0));
     }
 }
