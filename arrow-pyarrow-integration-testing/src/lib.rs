@@ -23,7 +23,7 @@ use std::sync::Arc;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
-use arrow::array::{ArrayData, ArrayRef, Int64Array};
+use arrow::array::{ArrayData, ArrayRef, Int64Array, make_array};
 use arrow::compute::kernels;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::error::ArrowError;
@@ -39,7 +39,7 @@ fn to_py_err(err: ArrowError) -> PyErr {
 #[pyfunction]
 fn double(array: &PyAny, py: Python) -> PyResult<PyObject> {
     // import
-    let array = ArrayRef::from_pyarrow(array)?;
+    let array = make_array(ArrayData::from_pyarrow(array)?);
 
     // perform some operation
     let array = array
@@ -65,7 +65,7 @@ fn double_py(lambda: &PyAny, py: Python) -> PyResult<bool> {
     // to py
     let pyarray = array.to_pyarrow(py)?;
     let pyarray = lambda.call1((pyarray,))?;
-    let array = ArrayRef::from_pyarrow(pyarray)?;
+    let array = make_array(ArrayData::from_pyarrow(pyarray)?);
 
     Ok(array == expected)
 }
@@ -77,7 +77,7 @@ fn substring(
     start: i64,
 ) -> PyResult<PyArrowType<ArrayData>> {
     // import
-    let array = ArrayRef::from(array.0);
+    let array = make_array(array.0);
 
     // substring
     let array = kernels::substring::substring(array.as_ref(), start, None).map_err(to_py_err)?;
@@ -88,12 +88,12 @@ fn substring(
 /// Returns the concatenate
 #[pyfunction]
 fn concatenate(array: PyArrowType<ArrayData>, py: Python) -> PyResult<PyObject> {
-    let array = ArrayRef::from(array.0);
+    let array = make_array(array.0);
 
     // concat
     let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).map_err(to_py_err)?;
 
-    array.to_pyarrow(py)
+    array.data().to_pyarrow(py)
 }
 
 #[pyfunction]
