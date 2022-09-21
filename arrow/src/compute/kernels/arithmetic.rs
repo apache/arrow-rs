@@ -2830,4 +2830,28 @@ mod tests {
         let overflow = divide_dyn_checked(&a, &b);
         overflow.expect_err("overflow should be detected");
     }
+
+    #[test]
+    #[cfg(feature = "dyn_arith_dict")]
+    fn test_div_dyn_opt_overflow_division_by_zero() {
+        let a = Int32Array::from(vec![i32::MIN]);
+        let b = Int32Array::from(vec![0]);
+
+        let division_by_zero = divide_dyn_opt(&a, &b);
+        let expected = Arc::new(Int32Array::from(vec![None])) as ArrayRef;
+        assert_eq!(&expected, &division_by_zero.unwrap());
+
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(1, 1);
+        builder.append(i32::MIN).unwrap();
+        let a = builder.finish();
+
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(1, 1);
+        builder.append(0).unwrap();
+        let b = builder.finish();
+
+        let division_by_zero = divide_dyn_opt(&a, &b);
+        assert_eq!(&expected, &division_by_zero.unwrap());
+    }
 }

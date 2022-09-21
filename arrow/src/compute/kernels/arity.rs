@@ -357,6 +357,26 @@ where
     Ok(unsafe { build_primitive_array(len, buffer.into(), 0, None) })
 }
 
+#[inline(never)]
+fn try_binary_opt_no_nulls<A: ArrayAccessor, B: ArrayAccessor, F, O>(
+    len: usize,
+    a: A,
+    b: B,
+    op: F,
+) -> Result<PrimitiveArray<O>>
+where
+    O: ArrowPrimitiveType,
+    F: Fn(A::Item, B::Item) -> Option<O::Native>,
+{
+    let mut buffer = Vec::with_capacity(10);
+    for idx in 0..len {
+        unsafe {
+            buffer.push(op(a.value_unchecked(idx), b.value_unchecked(idx)));
+        };
+    }
+    Ok(buffer.iter().collect())
+}
+
 /// Applies the provided binary operation across `a` and `b`, collecting the optional results
 /// into a [`PrimitiveArray`]. If any index is null in either `a` or `b`, the corresponding
 /// index in the result will also be null. The binary operation could return `None` which
@@ -384,6 +404,10 @@ where
 
     if a.is_empty() {
         return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
+    }
+
+    if a.null_count() == 0 && b.null_count() == 0 {
+        return Ok(try_binary_opt_no_nulls(a.len(), a, b, op)?);
     }
 
     let iter_a = ArrayIter::new(a);
