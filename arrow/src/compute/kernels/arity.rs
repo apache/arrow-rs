@@ -407,7 +407,7 @@ where
     }
 
     if a.null_count() == 0 && b.null_count() == 0 {
-        return Ok(try_binary_opt_no_nulls(a.len(), a, b, op)?);
+        return try_binary_opt_no_nulls(a.len(), a, b, op);
     }
 
     let iter_a = ArrayIter::new(a);
