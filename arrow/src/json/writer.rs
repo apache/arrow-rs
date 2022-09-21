@@ -700,7 +700,10 @@ where
         }
 
         self.format.start_row(&mut self.writer, is_first_row)?;
-        self.writer.write_all(&serde_json::to_vec(row)?)?;
+        self.writer.write_all(
+            &serde_json::to_vec(row)
+                .map_err(|error| ArrowError::JsonError(error.to_string()))?,
+        )?;
         self.format.end_row(&mut self.writer)?;
         Ok(())
     }

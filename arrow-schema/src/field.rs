@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::{ArrowError, Result};
+use crate::error::ArrowError;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
-use super::DataType;
+use crate::datatype::DataType;
 
 /// Describes a single column in a [`Schema`](super::Schema).
 ///
@@ -145,7 +145,7 @@ impl Field {
     /// Set the name of the [`Field`] and returns self.
     ///
     /// ```
-    /// # use arrow::datatypes::*;
+    /// # use arrow_schema::*;
     /// let field = Field::new("c1", DataType::Int64, false)
     ///    .with_name("c2");
     ///
@@ -165,7 +165,7 @@ impl Field {
     /// Set [`DataType`] of the [`Field`] and returns self.
     ///
     /// ```
-    /// # use arrow::datatypes::*;
+    /// # use arrow_schema::*;
     /// let field = Field::new("c1", DataType::Int64, false)
     ///    .with_data_type(DataType::Utf8);
     ///
@@ -185,7 +185,7 @@ impl Field {
     /// Set `nullable` of the [`Field`] and returns self.
     ///
     /// ```
-    /// # use arrow::datatypes::*;
+    /// # use arrow_schema::*;
     /// let field = Field::new("c1", DataType::Int64, false)
     ///    .with_nullable(true);
     ///
@@ -259,12 +259,12 @@ impl Field {
     /// Example:
     ///
     /// ```
-    /// # use arrow::datatypes::*;
+    /// # use arrow_schema::*;
     /// let mut field = Field::new("c1", DataType::Int64, false);
     /// assert!(field.try_merge(&Field::new("c1", DataType::Int64, true)).is_ok());
     /// assert!(field.is_nullable());
     /// ```
-    pub fn try_merge(&mut self, from: &Field) -> Result<()> {
+    pub fn try_merge(&mut self, from: &Field) -> Result<(), ArrowError> {
         if from.dict_id != self.dict_id {
             return Err(ArrowError::SchemaError(
                 "Fail to merge schema Field due to conflicting dict_id".to_string(),

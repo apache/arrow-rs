@@ -70,11 +70,13 @@ use crate::compute::kernels::temporal::using_chrono_tz_and_utc_naive_date_time;
 #[cfg(feature = "chrono-tz")]
 use chrono::{DateTime, Utc};
 
+use crate::csv::map_csv_error;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::record_batch::RecordBatch;
 use crate::util::display::make_string_from_decimal;
 use crate::{array::*, util::serialization::lexical_to_string};
+
 const DEFAULT_DATE_FORMAT: &str = "%F";
 const DEFAULT_TIME_FORMAT: &str = "%T";
 const DEFAULT_TIMESTAMP_FORMAT: &str = "%FT%H:%M:%S.%9f";
@@ -343,7 +345,9 @@ impl<W: Write> Writer<W> {
                     .fields()
                     .iter()
                     .for_each(|field| headers.push(field.name().to_string()));
-                self.writer.write_record(&headers[..])?;
+                self.writer
+                    .write_record(&headers[..])
+                    .map_err(map_csv_error)?;
             }
             self.beginning = false;
         }
@@ -364,7 +368,7 @@ impl<W: Write> Writer<W> {
 
         for row_index in 0..batch.num_rows() {
             self.convert(columns.as_slice(), row_index, &mut buffer)?;
-            self.writer.write_record(&buffer)?;
+            self.writer.write_record(&buffer).map_err(map_csv_error)?;
         }
         self.writer.flush()?;
 

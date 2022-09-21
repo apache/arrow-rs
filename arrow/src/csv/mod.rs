@@ -25,3 +25,22 @@ pub use self::reader::Reader;
 pub use self::reader::ReaderBuilder;
 pub use self::writer::Writer;
 pub use self::writer::WriterBuilder;
+use arrow_schema::ArrowError;
+
+fn map_csv_error(error: csv_crate::Error) -> ArrowError {
+    match error.kind() {
+        csv_crate::ErrorKind::Io(error) => ArrowError::CsvError(error.to_string()),
+        csv_crate::ErrorKind::Utf8 { pos: _, err } => ArrowError::CsvError(format!(
+            "Encountered UTF-8 error while reading CSV file: {}",
+            err
+        )),
+        csv_crate::ErrorKind::UnequalLengths {
+            expected_len, len, ..
+        } => ArrowError::CsvError(format!(
+            "Encountered unequal lengths between records on CSV file. Expected {} \
+                 records, found {} records",
+            len, expected_len
+        )),
+        _ => ArrowError::CsvError("Error reading CSV file".to_string()),
+    }
+}

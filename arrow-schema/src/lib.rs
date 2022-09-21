@@ -15,31 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the logical data types of Arrow arrays.
-//!
-//! The most important things you might be looking for are:
-//!  * [`Schema`](crate::datatypes::Schema) to describe a schema.
-//!  * [`Field`](crate::datatypes::Field) to describe one field within a schema.
-//!  * [`DataType`](crate::datatypes::DataType) to describe the type of a field.
+//! Arrow logical types
 
-use std::sync::Arc;
-
-mod native;
-pub use native::*;
-mod numeric;
-pub use numeric::*;
-mod types;
-pub use types::*;
-mod decimal;
-mod delta;
-pub use decimal::*;
-
-pub use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode};
-
-#[cfg(feature = "ffi")]
-mod ffi;
-#[cfg(feature = "ffi")]
-pub use ffi::*;
-
-/// A reference-counted reference to a [`Schema`](crate::datatypes::Schema).
-pub type SchemaRef = Arc<Schema>;
+mod datatype;
+pub use datatype::*;
+mod error;
+pub use error::*;
+mod field;
+pub use field::*;
+mod schema;
+pub use schema::*;

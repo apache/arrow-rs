@@ -63,6 +63,8 @@ jobs:
           cargo run --example read_csv_infer_schema
       - name: Run non-archery based integration-tests
         run: cargo test -p arrow-integration-testing
+      - name: Test arrow-schema with all features
+        run: cargo test -p arrow-schema --all-features
 
   # test compilaton features
   linux-features:

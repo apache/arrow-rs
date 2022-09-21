@@ -15,256 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use num::BigInt;
-use std::cmp::Ordering;
-use std::fmt;
-
 use crate::error::{ArrowError, Result};
 use crate::util::decimal::singed_cmp_le_bytes;
-
-use super::Field;
-
-/// The set of datatypes that are supported by this implementation of Apache Arrow.
-///
-/// The Arrow specification on data types includes some more types.
-/// See also [`Schema.fbs`](https://github.com/apache/arrow/blob/master/format/Schema.fbs)
-/// for Arrow's specification.
-///
-/// The variants of this enum include primitive fixed size types as well as parametric or
-/// nested types.
-/// Currently the Rust implementation supports the following  nested types:
-///  - `List<T>`
-///  - `Struct<T, U, V, ...>`
-///
-/// Nested types can themselves be nested within other arrays.
-/// For more information on these types please see
-/// [the physical memory layout of Apache Arrow](https://arrow.apache.org/docs/format/Columnar.html#physical-memory-layout).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum DataType {
-    /// Null type
-    Null,
-    /// A boolean datatype representing the values `true` and `false`.
-    Boolean,
-    /// A signed 8-bit integer.
-    Int8,
-    /// A signed 16-bit integer.
-    Int16,
-    /// A signed 32-bit integer.
-    Int32,
-    /// A signed 64-bit integer.
-    Int64,
-    /// An unsigned 8-bit integer.
-    UInt8,
-    /// An unsigned 16-bit integer.
-    UInt16,
-    /// An unsigned 32-bit integer.
-    UInt32,
-    /// An unsigned 64-bit integer.
-    UInt64,
-    /// A 16-bit floating point number.
-    Float16,
-    /// A 32-bit floating point number.
-    Float32,
-    /// A 64-bit floating point number.
-    Float64,
-    /// A timestamp with an optional timezone.
-    ///
-    /// Time is measured as a Unix epoch, counting the seconds from
-    /// 00:00:00.000 on 1 January 1970, excluding leap seconds,
-    /// as a 64-bit integer.
-    ///
-    /// The time zone is a string indicating the name of a time zone, one of:
-    ///
-    /// * As used in the Olson time zone database (the "tz database" or
-    ///   "tzdata"), such as "America/New_York"
-    /// * An absolute time zone offset of the form +XX:XX or -XX:XX, such as +07:30
-    ///
-    /// Timestamps with a non-empty timezone
-    /// ------------------------------------
-    ///
-    /// If a Timestamp column has a non-empty timezone value, its epoch is
-    /// 1970-01-01 00:00:00 (January 1st 1970, midnight) in the *UTC* timezone
-    /// (the Unix epoch), regardless of the Timestamp's own timezone.
-    ///
-    /// Therefore, timestamp values with a non-empty timezone correspond to
-    /// physical points in time together with some additional information about
-    /// how the data was obtained and/or how to display it (the timezone).
-    ///
-    ///   For example, the timestamp value 0 with the timezone string "Europe/Paris"
-    ///   corresponds to "January 1st 1970, 00h00" in the UTC timezone, but the
-    ///   application may prefer to display it as "January 1st 1970, 01h00" in
-    ///   the Europe/Paris timezone (which is the same physical point in time).
-    ///
-    /// One consequence is that timestamp values with a non-empty timezone
-    /// can be compared and ordered directly, since they all share the same
-    /// well-known point of reference (the Unix epoch).
-    ///
-    /// Timestamps with an unset / empty timezone
-    /// -----------------------------------------
-    ///
-    /// If a Timestamp column has no timezone value, its epoch is
-    /// 1970-01-01 00:00:00 (January 1st 1970, midnight) in an *unknown* timezone.
-    ///
-    /// Therefore, timestamp values without a timezone cannot be meaningfully
-    /// interpreted as physical points in time, but only as calendar / clock
-    /// indications ("wall clock time") in an unspecified timezone.
-    ///
-    ///   For example, the timestamp value 0 with an empty timezone string
-    ///   corresponds to "January 1st 1970, 00h00" in an unknown timezone: there
-    ///   is not enough information to interpret it as a well-defined physical
-    ///   point in time.
-    ///
-    /// One consequence is that timestamp values without a timezone cannot
-    /// be reliably compared or ordered, since they may have different points of
-    /// reference.  In particular, it is *not* possible to interpret an unset
-    /// or empty timezone as the same as "UTC".
-    ///
-    /// Conversion between timezones
-    /// ----------------------------
-    ///
-    /// If a Timestamp column has a non-empty timezone, changing the timezone
-    /// to a different non-empty value is a metadata-only operation:
-    /// the timestamp values need not change as their point of reference remains
-    /// the same (the Unix epoch).
-    ///
-    /// However, if a Timestamp column has no timezone value, changing it to a
-    /// non-empty value requires to think about the desired semantics.
-    /// One possibility is to assume that the original timestamp values are
-    /// relative to the epoch of the timezone being set; timestamp values should
-    /// then adjusted to the Unix epoch (for example, changing the timezone from
-    /// empty to "Europe/Paris" would require converting the timestamp values
-    /// from "Europe/Paris" to "UTC", which seems counter-intuitive but is
-    /// nevertheless correct).
-    Timestamp(TimeUnit, Option<String>),
-    /// A 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
-    /// in days (32 bits).
-    Date32,
-    /// A 64-bit date representing the elapsed time since UNIX epoch (1970-01-01)
-    /// in milliseconds (64 bits). Values are evenly divisible by 86400000.
-    Date64,
-    /// A 32-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
-    Time32(TimeUnit),
-    /// A 64-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
-    Time64(TimeUnit),
-    /// Measure of elapsed time in either seconds, milliseconds, microseconds or nanoseconds.
-    Duration(TimeUnit),
-    /// A "calendar" interval which models types that don't necessarily
-    /// have a precise duration without the context of a base timestamp (e.g.
-    /// days can differ in length during day light savings time transitions).
-    Interval(IntervalUnit),
-    /// Opaque binary data of variable length.
-    Binary,
-    /// Opaque binary data of fixed size.
-    /// Enum parameter specifies the number of bytes per value.
-    FixedSizeBinary(i32),
-    /// Opaque binary data of variable length and 64-bit offsets.
-    LargeBinary,
-    /// A variable-length string in Unicode with UTF-8 encoding.
-    Utf8,
-    /// A variable-length string in Unicode with UFT-8 encoding and 64-bit offsets.
-    LargeUtf8,
-    /// A list of some logical data type with variable length.
-    List(Box<Field>),
-    /// A list of some logical data type with fixed length.
-    FixedSizeList(Box<Field>, i32),
-    /// A list of some logical data type with variable length and 64-bit offsets.
-    LargeList(Box<Field>),
-    /// A nested datatype that contains a number of sub-fields.
-    Struct(Vec<Field>),
-    /// A nested datatype that can represent slots of differing types. Components:
-    ///
-    /// 1. [`Field`] for each possible child type the Union can hold
-    /// 2. The corresponding `type_id` used to identify which Field
-    /// 3. The type of union (Sparse or Dense)
-    Union(Vec<Field>, Vec<i8>, UnionMode),
-    /// A dictionary encoded array (`key_type`, `value_type`), where
-    /// each array element is an index of `key_type` into an
-    /// associated dictionary of `value_type`.
-    ///
-    /// Dictionary arrays are used to store columns of `value_type`
-    /// that contain many repeated values using less memory, but with
-    /// a higher CPU overhead for some operations.
-    ///
-    /// This type mostly used to represent low cardinality string
-    /// arrays or a limited set of primitive types as integers.
-    Dictionary(Box<DataType>, Box<DataType>),
-    /// Exact 128-bit width decimal value with precision and scale
-    ///
-    /// * precision is the total number of digits
-    /// * scale is the number of digits past the decimal
-    ///
-    /// For example the number 123.45 has precision 5 and scale 2.
-    Decimal128(u8, u8),
-    /// Exact 256-bit width decimal value with precision and scale
-    ///
-    /// * precision is the total number of digits
-    /// * scale is the number of digits past the decimal
-    ///
-    /// For example the number 123.45 has precision 5 and scale 2.
-    Decimal256(u8, u8),
-    /// A Map is a logical nested type that is represented as
-    ///
-    /// `List<entries: Struct<key: K, value: V>>`
-    ///
-    /// The keys and values are each respectively contiguous.
-    /// The key and value types are not constrained, but keys should be
-    /// hashable and unique.
-    /// Whether the keys are sorted can be set in the `bool` after the `Field`.
-    ///
-    /// In a field with Map type, the field has a child Struct field, which then
-    /// has two children: key type and the second the value type. The names of the
-    /// child fields may be respectively "entries", "key", and "value", but this is
-    /// not enforced.
-    Map(Box<Field>, bool),
-}
-
-/// An absolute length of time in seconds, milliseconds, microseconds or nanoseconds.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum TimeUnit {
-    /// Time in seconds.
-    Second,
-    /// Time in milliseconds.
-    Millisecond,
-    /// Time in microseconds.
-    Microsecond,
-    /// Time in nanoseconds.
-    Nanosecond,
-}
-
-/// YEAR_MONTH, DAY_TIME, MONTH_DAY_NANO interval in SQL style.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum IntervalUnit {
-    /// Indicates the number of elapsed whole months, stored as 4-byte integers.
-    YearMonth,
-    /// Indicates the number of elapsed days and milliseconds,
-    /// stored as 2 contiguous 32-bit integers (days, milliseconds) (8-bytes in total).
-    DayTime,
-    /// A triple of the number of elapsed months, days, and nanoseconds.
-    /// The values are stored contiguously in 16 byte blocks. Months and
-    /// days are encoded as 32 bit integers and nanoseconds is encoded as a
-    /// 64 bit integer. All integers are signed. Each field is independent
-    /// (e.g. there is no constraint that nanoseconds have the same sign
-    /// as days or that the quantity of nanoseconds represents less
-    /// than a day's worth of time).
-    MonthDayNano,
-}
-
-// Sparse or Dense union layouts
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum UnionMode {
-    Sparse,
-    Dense,
-}
-
-impl fmt::Display for DataType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
+use num::BigInt;
+use std::cmp::Ordering;
 
 // MAX decimal256 value of little-endian format for each precision.
 // Each element is the max value of signed 256-bit integer for the specified precision which
@@ -887,7 +641,7 @@ pub(crate) const MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [[u8; 32]; 76] = [
 ];
 
 /// `MAX_DECIMAL_FOR_EACH_PRECISION[p]` holds the maximum `i128` value
-/// that can be stored in [DataType::Decimal128] value of precision `p`
+/// that can be stored in [arrow_schema::DataType::Decimal128] value of precision `p`
 pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     9,
     99,
@@ -930,7 +684,7 @@ pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
 ];
 
 /// `MIN_DECIMAL_FOR_EACH_PRECISION[p]` holds the minimum `i128` value
-/// that can be stored in a [DataType::Decimal128] value of precision `p`
+/// that can be stored in a [arrow_schema::DataType::Decimal128] value of precision `p`
 pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     -9,
     -99,
@@ -972,19 +726,20 @@ pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     -99999999999999999999999999999999999999,
 ];
 
-/// The maximum precision for [DataType::Decimal128] values
+/// The maximum precision for [arrow_schema::DataType::Decimal128] values
 pub const DECIMAL128_MAX_PRECISION: u8 = 38;
 
-/// The maximum scale for [DataType::Decimal128] values
+/// The maximum scale for [arrow_schema::DataType::Decimal128] values
 pub const DECIMAL128_MAX_SCALE: u8 = 38;
 
-/// The maximum precision for [DataType::Decimal256] values
+/// The maximum precision for [arrow_schema::DataType::Decimal256] values
 pub const DECIMAL256_MAX_PRECISION: u8 = 76;
 
-/// The maximum scale for [DataType::Decimal256] values
+/// The maximum scale for [arrow_schema::DataType::Decimal256] values
 pub const DECIMAL256_MAX_SCALE: u8 = 76;
 
-/// The default scale for [DataType::Decimal128] and [DataType::Decimal256] values
+/// The default scale for [arrow_schema::DataType::Decimal128] and
+/// [arrow_schema::DataType::Decimal256] values
 pub const DECIMAL_DEFAULT_SCALE: u8 = 10;
 
 /// Validates that the specified `i128` value can be properly
@@ -1051,124 +806,9 @@ pub(crate) fn validate_decimal256_precision_with_lt_bytes(
     }
 }
 
-impl DataType {
-    /// Returns true if this type is numeric: (UInt*, Int*, or Float*).
-    pub fn is_numeric(t: &DataType) -> bool {
-        use DataType::*;
-        matches!(
-            t,
-            UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Int8
-                | Int16
-                | Int32
-                | Int64
-                | Float32
-                | Float64
-        )
-    }
-
-    /// Returns true if the type is primitive: (numeric, temporal).
-    pub fn is_primitive(t: &DataType) -> bool {
-        use DataType::*;
-        matches!(
-            t,
-            Int8 | Int16
-                | Int32
-                | Int64
-                | UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Float32
-                | Float64
-                | Date32
-                | Date64
-                | Time32(_)
-                | Time64(_)
-                | Timestamp(_, _)
-                | Interval(_)
-                | Duration(_)
-        )
-    }
-
-    /// Returns true if this type is temporal: (Date*, Time*, Duration, or Interval).
-    pub fn is_temporal(t: &DataType) -> bool {
-        use DataType::*;
-        matches!(
-            t,
-            Date32
-                | Date64
-                | Timestamp(_, _)
-                | Time32(_)
-                | Time64(_)
-                | Duration(_)
-                | Interval(_)
-        )
-    }
-
-    /// Returns true if this type is valid as a dictionary key
-    /// (e.g. [`super::ArrowDictionaryKeyType`]
-    pub fn is_dictionary_key_type(t: &DataType) -> bool {
-        use DataType::*;
-        matches!(
-            t,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64
-        )
-    }
-
-    /// Returns true if this type is nested (List, FixedSizeList, LargeList, Struct, Union, or Map)
-    pub fn is_nested(t: &DataType) -> bool {
-        use DataType::*;
-        matches!(
-            t,
-            List(_)
-                | FixedSizeList(_, _)
-                | LargeList(_)
-                | Struct(_)
-                | Union(_, _, _)
-                | Map(_, _)
-        )
-    }
-
-    /// Compares the datatype with another, ignoring nested field names
-    /// and metadata.
-    pub fn equals_datatype(&self, other: &DataType) -> bool {
-        match (&self, other) {
-            (DataType::List(a), DataType::List(b))
-            | (DataType::LargeList(a), DataType::LargeList(b)) => {
-                a.is_nullable() == b.is_nullable()
-                    && a.data_type().equals_datatype(b.data_type())
-            }
-            (DataType::FixedSizeList(a, a_size), DataType::FixedSizeList(b, b_size)) => {
-                a_size == b_size
-                    && a.is_nullable() == b.is_nullable()
-                    && a.data_type().equals_datatype(b.data_type())
-            }
-            (DataType::Struct(a), DataType::Struct(b)) => {
-                a.len() == b.len()
-                    && a.iter().zip(b).all(|(a, b)| {
-                        a.is_nullable() == b.is_nullable()
-                            && a.data_type().equals_datatype(b.data_type())
-                    })
-            }
-            (
-                DataType::Map(a_field, a_is_sorted),
-                DataType::Map(b_field, b_is_sorted),
-            ) => a_field == b_field && a_is_sorted == b_is_sorted,
-            _ => self == other,
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
-    use crate::datatypes::datatype::{
-        MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION,
-        MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION,
-    };
+    use super::*;
     use crate::util::decimal::Decimal256;
     use num::{BigInt, Num};
 
