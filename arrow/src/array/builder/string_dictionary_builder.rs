@@ -21,8 +21,7 @@ use crate::array::{
 };
 use crate::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, DataType};
 use crate::error::{ArrowError, Result};
-use hashbrown::hash_map::RawEntryMut;
-use hashbrown::HashMap;
+use hashbrown::raw::RawTable;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -65,7 +64,6 @@ use std::sync::Arc;
 /// assert_eq!(ava.value(1), "def");
 ///
 /// ```
-#[derive(Debug)]
 pub struct StringDictionaryBuilder<K>
 where
     K: ArrowDictionaryKeyType,
@@ -73,13 +71,23 @@ where
     state: ahash::RandomState,
     /// Used to provide a lookup from string value to key type
     ///
-    /// Note: K's hash implementation is not used, instead the raw entry
-    /// API is used to store keys w.r.t the hash of the strings themselves
-    ///
-    dedup: HashMap<K::Native, (), ()>,
+    /// Stores the dictionary keys for a given string value
+    dedup: RawTable<K::Native>,
 
     keys_builder: PrimitiveBuilder<K>,
     values_builder: StringBuilder,
+}
+
+impl<K> std::fmt::Debug for StringDictionaryBuilder<K>
+where
+    K: ArrowDictionaryKeyType + std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StringDictionaryBuilder")
+            .field("keys_builder", &self.keys_builder)
+            .field("values_builder", &self.values_builder)
+            .finish()
+    }
 }
 
 impl<K> Default for StringDictionaryBuilder<K>
@@ -101,7 +109,7 @@ where
         let values_builder = StringBuilder::new();
         Self {
             state: Default::default(),
-            dedup: HashMap::with_capacity_and_hasher(keys_builder.capacity(), ()),
+            dedup: RawTable::with_capacity(keys_builder.capacity()),
             keys_builder,
             values_builder,
         }
@@ -156,7 +164,7 @@ where
         let state = ahash::RandomState::default();
         let dict_len = dictionary_values.len();
 
-        let mut dedup = HashMap::with_capacity_and_hasher(dict_len, ());
+        let mut dedup = RawTable::with_capacity(dict_len);
 
         let values_len = dictionary_values.value_data().len();
         let mut values_builder = StringBuilder::with_capacity(dict_len, values_len);
@@ -169,16 +177,10 @@ where
                     let key = K::Native::from_usize(idx)
                         .ok_or(ArrowError::DictionaryKeyOverflowError)?;
 
-                    let entry =
-                        dedup.raw_entry_mut().from_hash(hash, |key: &K::Native| {
-                            value.as_bytes() == get_bytes(&values_builder, key)
-                        });
-
-                    if let RawEntryMut::Vacant(v) = entry {
-                        v.insert_with_hasher(hash, key, (), |key| {
-                            state.hash_one(get_bytes(&values_builder, key))
-                        });
-                    }
+                    // Note: this will insert duplicates if dictionary_values contains duplicates
+                    dedup.insert(hash, key, |key| {
+                        state.hash_one(get_bytes(&values_builder, key))
+                    });
 
                     values_builder.append_value(value);
                 }
@@ -248,22 +250,19 @@ where
 
         let entry = self
             .dedup
-            .raw_entry_mut()
-            .from_hash(hash, |key| value.as_bytes() == get_bytes(storage, key));
+            .get(hash, |key| value.as_bytes() == get_bytes(storage, key));
 
         let key = match entry {
-            RawEntryMut::Occupied(entry) => *entry.into_key(),
-            RawEntryMut::Vacant(entry) => {
+            Some(k) => *k,
+            None => {
                 let index = storage.len();
                 storage.append_value(value);
                 let key = K::Native::from_usize(index)
                     .ok_or(ArrowError::DictionaryKeyOverflowError)?;
 
-                *entry
-                    .insert_with_hasher(hash, key, (), |key| {
-                        state.hash_one(get_bytes(storage, key))
-                    })
-                    .0
+                self.dedup
+                    .insert(hash, key, |key| state.hash_one(get_bytes(storage, key)));
+                key
             }
         };
         self.keys_builder.append_value(key);

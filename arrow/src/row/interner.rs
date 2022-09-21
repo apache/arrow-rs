@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use hashbrown::hash_map::RawEntryMut;
-use hashbrown::HashMap;
+use hashbrown::raw::RawTable;
 use std::cmp::Ordering;
 use std::num::NonZeroU32;
 use std::ops::Index;
@@ -27,7 +26,7 @@ pub struct Interned(NonZeroU32); // We use NonZeroU32 so that `Option<Interned>`
 
 /// A byte array interner that generates normalized keys that are sorted with respect
 /// to the interned values, e.g. `inter(a) < intern(b) => a < b`
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct OrderPreservingInterner {
     /// Provides a lookup from [`Interned`] to the normalized key
     keys: InternBuffer,
@@ -38,7 +37,17 @@ pub struct OrderPreservingInterner {
 
     // A hash table used to perform faster re-keying, and detect duplicates
     hasher: ahash::RandomState,
-    lookup: HashMap<Interned, (), ()>,
+    lookup: RawTable<Interned>,
+}
+
+impl std::fmt::Debug for OrderPreservingInterner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OrderPreservingInterner")
+            .field("keys", &self.keys)
+            .field("values", &self.values)
+            .field("bucket", &self.bucket)
+            .finish()
+    }
 }
 
 impl OrderPreservingInterner {
@@ -69,14 +78,10 @@ impl OrderPreservingInterner {
 
             let v = value.as_ref();
             let hash = self.hasher.hash_one(v);
-            let entry = self
-                .lookup
-                .raw_entry_mut()
-                .from_hash(hash, |a| &self.values[*a] == v);
 
-            match entry {
-                RawEntryMut::Occupied(o) => out.push(Some(*o.key())),
-                RawEntryMut::Vacant(_) => {
+            match self.lookup.get(hash, |a| &self.values[*a] == v) {
+                Some(key) => out.push(Some(*key)),
+                None => {
                     // Push placeholder
                     out.push(None);
                     to_intern_len += v.len();
@@ -93,29 +98,21 @@ impl OrderPreservingInterner {
         self.values.values.reserve(to_intern_len);
 
         for (idx, hash, value) in to_intern {
-            let val = value.as_ref();
-
-            let entry = self
-                .lookup
-                .raw_entry_mut()
-                .from_hash(hash, |a| &self.values[*a] == val);
-
-            match entry {
-                RawEntryMut::Occupied(o) => {
-                    out[idx] = Some(*o.key());
+            let v = value.as_ref();
+            match self.lookup.get(hash, |a| &self.values[*a] == v) {
+                Some(key) => {
+                    out[idx] = Some(*key);
                 }
-                RawEntryMut::Vacant(v) => {
-                    let val = value.as_ref();
+                None => {
                     self.bucket
-                        .insert(&mut self.values, val, &mut self.keys.values);
+                        .insert(&mut self.values, v, &mut self.keys.values);
                     self.keys.values.push(0);
                     let interned = self.keys.append();
 
                     let hasher = &mut self.hasher;
                     let values = &self.values;
-                    v.insert_with_hasher(hash, interned, (), |key| {
-                        hasher.hash_one(&values[*key])
-                    });
+                    self.lookup
+                        .insert(hash, interned, |key| hasher.hash_one(&values[*key]));
                     out[idx] = Some(interned);
                 }
             }

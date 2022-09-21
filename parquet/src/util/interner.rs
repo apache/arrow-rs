@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::data_type::AsBytes;
-use hashbrown::hash_map::RawEntryMut;
-use hashbrown::HashMap;
+use hashbrown::raw::RawTable;
 
 const DEFAULT_DEDUP_CAPACITY: usize = 4096;
 
@@ -35,18 +34,20 @@ pub trait Storage {
 }
 
 /// A generic value interner supporting various different [`Storage`]
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Interner<S: Storage> {
     state: ahash::RandomState,
 
-    /// Used to provide a lookup from value to unique value
-    ///
-    /// Note: `S::Key`'s hash implementation is not used, instead the raw entry
-    /// API is used to store keys w.r.t the hash of the strings themselves
-    ///
-    dedup: HashMap<S::Key, (), ()>,
+    /// Used to provide a lookup from `S::Value` to `S::Key`
+    dedup: RawTable<S::Key>,
 
     storage: S,
+}
+
+impl<S: Storage + std::fmt::Debug> std::fmt::Debug for Interner<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Interner").field(&self.storage).finish()
+    }
 }
 
 impl<S: Storage> Interner<S> {
@@ -54,7 +55,7 @@ impl<S: Storage> Interner<S> {
     pub fn new(storage: S) -> Self {
         Self {
             state: Default::default(),
-            dedup: HashMap::with_capacity_and_hasher(DEFAULT_DEDUP_CAPACITY, ()),
+            dedup: RawTable::with_capacity(DEFAULT_DEDUP_CAPACITY),
             storage,
         }
     }
@@ -63,21 +64,18 @@ impl<S: Storage> Interner<S> {
     pub fn intern(&mut self, value: &S::Value) -> S::Key {
         let hash = self.state.hash_one(value.as_bytes());
 
-        let entry = self
+        let maybe_key = self
             .dedup
-            .raw_entry_mut()
-            .from_hash(hash, |index| value == self.storage.get(*index));
+            .get(hash, |index| value == self.storage.get(*index));
 
-        match entry {
-            RawEntryMut::Occupied(entry) => *entry.into_key(),
-            RawEntryMut::Vacant(entry) => {
+        match maybe_key {
+            Some(key) => *key,
+            None => {
                 let key = self.storage.push(value);
-
-                *entry
-                    .insert_with_hasher(hash, key, (), |key| {
-                        self.state.hash_one(self.storage.get(*key).as_bytes())
-                    })
-                    .0
+                self.dedup.insert(hash, key, |key| {
+                    self.state.hash_one(self.storage.get(*key).as_bytes())
+                });
+                key
             }
         }
     }
