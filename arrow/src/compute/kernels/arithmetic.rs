@@ -1612,8 +1612,8 @@ fn arith_decimal<F>(
     right: &Decimal128Array,
     op: F,
 ) -> Result<Decimal128Array>
-    where
-        F: Fn(i128, i128) -> Result<i128>,
+where
+    F: Fn(i128, i128) -> Result<i128>,
 {
     left.iter()
         .zip(right.iter())
@@ -1632,8 +1632,8 @@ fn arith_decimal_scalar<F>(
     right: i128,
     op: F,
 ) -> Result<Decimal128Array>
-    where
-        F: Fn(i128, i128) -> Result<i128>,
+where
+    F: Fn(i128, i128) -> Result<i128>,
 {
     left.iter()
         .map(|left| {
@@ -1691,7 +1691,7 @@ pub fn multiply_decimal(
         let result = BigInt::from(left) * BigInt::from(right) / divide;
         Ok(result.to_i128().unwrap())
     })?
-        .with_precision_and_scale(left.precision(), left.scale())?;
+    .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
 
@@ -1704,7 +1704,7 @@ pub fn multiply_decimal_scalar(
         let result = BigInt::from(left) * BigInt::from(right) / divide;
         Ok(result.to_i128().unwrap())
     })?
-        .with_precision_and_scale(left.precision(), left.scale())?;
+    .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
 
@@ -1720,7 +1720,7 @@ pub fn divide_opt_decimal(
         let result = BigInt::from(left) * mul / BigInt::from(right);
         Ok(result.to_i128().unwrap())
     })?
-        .with_precision_and_scale(left.precision(), left.scale())?;
+    .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
 
@@ -1736,7 +1736,7 @@ pub fn divide_decimal_scalar(
         let result = BigInt::from(left) * mul / BigInt::from(right);
         Ok(result.to_i128().unwrap())
     })?
-        .with_precision_and_scale(left.precision(), left.scale())?;
+    .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
 
@@ -1751,7 +1751,7 @@ pub fn modulus_decimal(
             Ok(left % right)
         }
     })?
-        .with_precision_and_scale(left.precision(), left.scale())?;
+    .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
 
@@ -3115,7 +3115,8 @@ mod tests {
         assert_eq!(expect, result);
         // multiply
         let result = multiply_decimal(&left_decimal_array, &right_decimal_array)?;
-        let expect = create_decimal_array(vec![Some(15), None, Some(15), Some(15)], 25, 3)?;
+        let expect =
+            create_decimal_array(vec![Some(15), None, Some(15), Some(15)], 25, 3)?;
         assert_eq!(expect, result);
         let result = multiply_decimal_scalar(&left_decimal_array, 10)?;
         let expect = create_decimal_array(vec![Some(1), None, Some(1), Some(1)], 25, 3)?;

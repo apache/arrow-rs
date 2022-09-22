@@ -1166,8 +1166,8 @@ fn compare_decimal_scalar<F>(
     right: i128,
     op: F,
 ) -> Result<BooleanArray>
-    where
-        F: Fn(i128, i128) -> bool,
+where
+    F: Fn(i128, i128) -> bool,
 {
     Ok(left
         .iter()
@@ -1182,8 +1182,8 @@ fn compare_decimal<F>(
     right: &Decimal128Array,
     op: F,
 ) -> Result<BooleanArray>
-    where
-        F: Fn(i128, i128) -> bool,
+where
+    F: Fn(i128, i128) -> bool,
 {
     Ok(left
         .iter()
@@ -1198,10 +1198,7 @@ fn compare_decimal<F>(
         .collect())
 }
 
-pub fn eq_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<BooleanArray> {
+pub fn eq_decimal_scalar(left: &Decimal128Array, right: i128) -> Result<BooleanArray> {
     compare_decimal_scalar(left, right, |left, right| left == right)
 }
 
@@ -1212,10 +1209,7 @@ pub fn eq_decimal(
     compare_decimal(left, right, |left, right| left == right)
 }
 
-pub fn neq_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<BooleanArray> {
+pub fn neq_decimal_scalar(left: &Decimal128Array, right: i128) -> Result<BooleanArray> {
     compare_decimal_scalar(left, right, |left, right| left != right)
 }
 
@@ -1226,10 +1220,7 @@ pub fn neq_decimal(
     compare_decimal(left, right, |left, right| left != right)
 }
 
-pub fn lt_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<BooleanArray> {
+pub fn lt_decimal_scalar(left: &Decimal128Array, right: i128) -> Result<BooleanArray> {
     compare_decimal_scalar(left, right, |left, right| left < right)
 }
 
@@ -1240,10 +1231,7 @@ pub fn lt_decimal(
     compare_decimal(left, right, |left, right| left < right)
 }
 
-pub fn lt_eq_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<BooleanArray> {
+pub fn lt_eq_decimal_scalar(left: &Decimal128Array, right: i128) -> Result<BooleanArray> {
     compare_decimal_scalar(left, right, |left, right| left <= right)
 }
 
@@ -1254,10 +1242,7 @@ pub fn lt_eq_decimal(
     compare_decimal(left, right, |left, right| left <= right)
 }
 
-pub fn gt_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<BooleanArray> {
+pub fn gt_decimal_scalar(left: &Decimal128Array, right: i128) -> Result<BooleanArray> {
     compare_decimal_scalar(left, right, |left, right| left > right)
 }
 
@@ -1268,10 +1253,7 @@ pub fn gt_decimal(
     compare_decimal(left, right, |left, right| left > right)
 }
 
-pub fn gt_eq_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<BooleanArray> {
+pub fn gt_eq_decimal_scalar(left: &Decimal128Array, right: i128) -> Result<BooleanArray> {
     compare_decimal_scalar(left, right, |left, right| left >= right)
 }
 
@@ -6816,5 +6798,4 @@ mod tests {
         );
         Ok(())
     }
-
 }
