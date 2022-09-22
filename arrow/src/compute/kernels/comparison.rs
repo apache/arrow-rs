@@ -945,7 +945,7 @@ pub fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> 
             left.data_ref()
                 .null_bitmap()
                 .as_ref()
-                .map(|b| b.bits.bit_slice(left_offset, len)),
+                .map(|b| b.buffer().bit_slice(left_offset, len)),
             0,
             vec![values],
             vec![],

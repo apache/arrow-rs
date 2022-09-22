@@ -30,10 +30,9 @@ mod numeric;
 pub use numeric::*;
 mod types;
 pub use types::*;
-mod decimal;
 mod delta;
-pub use decimal::*;
 
+pub use arrow_data::decimal::*;
 pub use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode};
 
 #[cfg(feature = "ffi")]

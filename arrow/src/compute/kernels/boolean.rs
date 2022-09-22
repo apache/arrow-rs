@@ -366,7 +366,7 @@ pub fn not(left: &BooleanArray) -> Result<BooleanArray> {
     let null_bit_buffer = data
         .null_bitmap()
         .as_ref()
-        .map(|b| b.bits.bit_slice(left_offset, len));
+        .map(|b| b.buffer().bit_slice(left_offset, len));
 
     let values = buffer_unary_not(&data.buffers()[0], left_offset, len);
 
@@ -507,7 +507,7 @@ where
             let and = buffer_bin_and(
                 right.values(),
                 right.offset(),
-                &right_bitmap.bits,
+                right_bitmap.buffer(),
                 right.offset(),
                 right.len(),
             );
@@ -520,7 +520,7 @@ where
     // Here we take care of the possible offsets of the left and right arrays all at once.
     let modified_null_buffer = match left_data.null_bitmap() {
         Some(left_null_bitmap) => buffer_bin_and(
-            &left_null_bitmap.bits,
+            left_null_bitmap.buffer(),
             left_data.offset(),
             &rcb,
             0,

@@ -15,25 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub use arrow_buffer::{bit_chunk_iterator, bit_util};
+use crate::data::ArrayData;
 
-pub use arrow_data::bit_iterator;
-pub use arrow_data::bit_mask;
-
-#[cfg(feature = "test_utils")]
-pub mod bench_util;
-#[cfg(feature = "test_utils")]
-pub mod data_gen;
-pub mod display;
-#[cfg(feature = "prettyprint")]
-pub mod pretty;
-pub(crate) mod serialization;
-pub mod string_writer;
-#[cfg(any(test, feature = "test_utils"))]
-pub mod test_util;
-
-mod trusted_len;
-pub(crate) use trusted_len::trusted_len_unzip;
-
-pub mod decimal;
-pub(crate) mod reader_parser;
+#[inline]
+pub(super) fn null_equal(
+    _lhs: &ArrayData,
+    _rhs: &ArrayData,
+    _lhs_start: usize,
+    _rhs_start: usize,
+    _len: usize,
+) -> bool {
+    // a null buffer's range is always true, as every element is by definition equal (to null).
+    // We only need to compare data_types
+    true
+}
