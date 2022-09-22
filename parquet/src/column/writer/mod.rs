@@ -1071,10 +1071,10 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
     if a_length != b_length {
         let not_equal = if a_length > b_length {
             let lead_length = a_length - b_length;
-            (&a[0..lead_length]).iter().any(|&x| x != extension)
+            a[0..lead_length].iter().any(|&x| x != extension)
         } else {
             let lead_length = b_length - a_length;
-            (&b[0..lead_length]).iter().any(|&x| x != extension)
+            b[0..lead_length].iter().any(|&x| x != extension)
         };
 
         if not_equal {
