@@ -15,25 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub use arrow_buffer::{bit_chunk_iterator, bit_util};
+use super::{Extend, _MutableArrayData};
+use crate::ArrayData;
 
-pub use arrow_data::bit_iterator;
-pub use arrow_data::bit_mask;
+pub(super) fn build_extend(_: &ArrayData) -> Extend {
+    Box::new(move |_, _, _, _| {})
+}
 
-#[cfg(feature = "test_utils")]
-pub mod bench_util;
-#[cfg(feature = "test_utils")]
-pub mod data_gen;
-pub mod display;
-#[cfg(feature = "prettyprint")]
-pub mod pretty;
-pub(crate) mod serialization;
-pub mod string_writer;
-#[cfg(any(test, feature = "test_utils"))]
-pub mod test_util;
-
-mod trusted_len;
-pub(crate) use trusted_len::trusted_len_unzip;
-
-pub mod decimal;
-pub(crate) mod reader_parser;
+pub(super) fn extend_nulls(_: &mut _MutableArrayData, _: usize) {}
