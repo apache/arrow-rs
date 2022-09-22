@@ -1578,6 +1578,33 @@ where
         .map(|a| Arc::new(a) as ArrayRef)
 }
 
+/// Divide every value in an array by a scalar. If any value in the array is null then the
+/// result is also null. The given array must be a `PrimitiveArray` of the type
+/// same as the scalar, or a `DictionaryArray` of the value type same as the scalar.
+///
+/// If any right hand value is zero, the operation value will be replaced with null in the
+/// result.
+///
+/// Unlike `divide_scalar_dyn` or `divide_scalar_checked_dyn`, division by zero will get a
+/// null value instead returning an `Err`, this also doesn't check overflowing, overflowing
+/// will just wrap the result around.
+pub fn divide_scalar_opt_dyn<T>(array: &dyn Array, divisor: T::Native) -> Result<ArrayRef>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp + Zero,
+{
+    if divisor.is_zero() {
+        match array.data_type() {
+            DataType::Dictionary(_, value_type) => {
+                return Ok(new_null_array(value_type.as_ref(), array.len()))
+            }
+            _ => return Ok(new_null_array(array.data_type(), array.len())),
+        }
+    }
+
+    unary_dyn::<_, T>(array, |value| value.div_wrapping(divisor))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2852,6 +2879,23 @@ mod tests {
         let b = builder.finish();
 
         let division_by_zero = divide_dyn_opt(&a, &b);
+        assert_eq!(&expected, &division_by_zero.unwrap());
+    }
+
+    #[test]
+    fn test_div_scalar_dyn_opt_overflow_division_by_zero() {
+        let a = Int32Array::from(vec![i32::MIN]);
+
+        let division_by_zero = divide_scalar_opt_dyn::<Int32Type>(&a, 0);
+        let expected = Arc::new(Int32Array::from(vec![None])) as ArrayRef;
+        assert_eq!(&expected, &division_by_zero.unwrap());
+
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(1, 1);
+        builder.append(i32::MIN).unwrap();
+        let a = builder.finish();
+
+        let division_by_zero = divide_scalar_opt_dyn::<Int32Type>(&a, 0);
         assert_eq!(&expected, &division_by_zero.unwrap());
     }
 }
