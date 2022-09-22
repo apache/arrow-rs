@@ -6693,11 +6693,22 @@ mod tests {
         );
     }
 
+    fn create_decimal_array(
+        array: Vec<Option<i128>>,
+        precision: u8,
+        scale: u8,
+    ) -> Result<Decimal128Array> {
+        array
+            .into_iter()
+            .collect::<Decimal128Array>()
+            .with_precision_and_scale(precision, scale)
+    }
+
     #[test]
     fn comparison_decimal_op_test() -> Result<()> {
         let value_i128: i128 = 123;
         let decimal_array = create_decimal_array(
-            &[
+            vec![
                 Some(value_i128),
                 None,
                 Some(value_i128 - 1),
@@ -6705,7 +6716,7 @@ mod tests {
             ],
             25,
             3,
-        );
+        )?;
         // eq: array = i128
         let result = eq_decimal_scalar(&decimal_array, value_i128)?;
         assert_eq!(
@@ -6745,7 +6756,7 @@ mod tests {
 
         let left_decimal_array = decimal_array;
         let right_decimal_array = create_decimal_array(
-            &[
+            vec![
                 Some(value_i128 - 1),
                 Some(value_i128),
                 Some(value_i128 + 1),
@@ -6753,7 +6764,7 @@ mod tests {
             ],
             25,
             3,
-        );
+        )?;
         // eq: left == right
         let result = eq_decimal(&left_decimal_array, &right_decimal_array)?;
         assert_eq!(

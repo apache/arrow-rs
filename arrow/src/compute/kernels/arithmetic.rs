@@ -3061,11 +3061,23 @@ mod tests {
         assert_eq!(&expected, &division_by_zero.unwrap());
     }
 
+    // TODO, cast, arithmetic, and comparison all have this function
+    fn create_decimal_array(
+        array: Vec<Option<i128>>,
+        precision: u8,
+        scale: u8,
+    ) -> Result<Decimal128Array> {
+        array
+            .into_iter()
+            .collect::<Decimal128Array>()
+            .with_precision_and_scale(precision, scale)
+    }
+
     #[test]
     fn arithmetic_decimal_op_test() -> Result<()> {
         let value_i128: i128 = 123;
         let left_decimal_array = create_decimal_array(
-            &[
+            vec![
                 Some(value_i128),
                 None,
                 Some(value_i128 - 1),
@@ -3073,9 +3085,9 @@ mod tests {
             ],
             25,
             3,
-        );
+        )?;
         let right_decimal_array = create_decimal_array(
-            &[
+            vec![
                 Some(value_i128),
                 Some(value_i128),
                 Some(value_i128),
@@ -3083,34 +3095,34 @@ mod tests {
             ],
             25,
             3,
-        );
+        )?;
         // add
         let result = add_decimal(&left_decimal_array, &right_decimal_array)?;
         let expect =
-            create_decimal_array(&[Some(246), None, Some(245), Some(247)], 25, 3);
+            create_decimal_array(vec![Some(246), None, Some(245), Some(247)], 25, 3)?;
         assert_eq!(expect, result);
         let result = add_decimal_scalar(&left_decimal_array, 10)?;
         let expect =
-            create_decimal_array(&[Some(133), None, Some(132), Some(134)], 25, 3);
+            create_decimal_array(vec![Some(133), None, Some(132), Some(134)], 25, 3)?;
         assert_eq!(expect, result);
         // subtract
         let result = subtract_decimal(&left_decimal_array, &right_decimal_array)?;
-        let expect = create_decimal_array(&[Some(0), None, Some(-1), Some(1)], 25, 3);
+        let expect = create_decimal_array(vec![Some(0), None, Some(-1), Some(1)], 25, 3)?;
         assert_eq!(expect, result);
         let result = subtract_decimal_scalar(&left_decimal_array, 10)?;
         let expect =
-            create_decimal_array(&[Some(113), None, Some(112), Some(114)], 25, 3);
+            create_decimal_array(vec![Some(113), None, Some(112), Some(114)], 25, 3)?;
         assert_eq!(expect, result);
         // multiply
         let result = multiply_decimal(&left_decimal_array, &right_decimal_array)?;
-        let expect = create_decimal_array(&[Some(15), None, Some(15), Some(15)], 25, 3);
+        let expect = create_decimal_array(vec![Some(15), None, Some(15), Some(15)], 25, 3)?;
         assert_eq!(expect, result);
         let result = multiply_decimal_scalar(&left_decimal_array, 10)?;
-        let expect = create_decimal_array(&[Some(1), None, Some(1), Some(1)], 25, 3);
+        let expect = create_decimal_array(vec![Some(1), None, Some(1), Some(1)], 25, 3)?;
         assert_eq!(expect, result);
         // divide
         let left_decimal_array = create_decimal_array(
-            &[
+            vec![
                 Some(1234567),
                 None,
                 Some(1234567),
@@ -3119,22 +3131,22 @@ mod tests {
             ],
             25,
             3,
-        );
+        )?;
         let right_decimal_array = create_decimal_array(
-            &[Some(10), Some(100), Some(55), Some(-123), None],
+            vec![Some(10), Some(100), Some(55), Some(-123), None],
             3,
             0,
-        );
+        )?;
         let result = divide_opt_decimal(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(
-            &[Some(123456700), None, Some(22446672), Some(-10037130), None],
+            vec![Some(123456700), None, Some(22446672), Some(-10037130), None],
             25,
             3,
-        );
+        )?;
         assert_eq!(expect, result);
         let result = divide_decimal_scalar(&left_decimal_array, 10)?;
         let expect = create_decimal_array(
-            &[
+            vec![
                 Some(123456700),
                 None,
                 Some(123456700),
@@ -3143,25 +3155,24 @@ mod tests {
             ],
             25,
             3,
-        );
+        )?;
         assert_eq!(expect, result);
         // modulus
         let result = modulus_decimal(&left_decimal_array, &right_decimal_array)?;
         let expect =
-            create_decimal_array(&[Some(7), None, Some(37), Some(16), None], 25, 3);
+            create_decimal_array(vec![Some(7), None, Some(37), Some(16), None], 25, 3)?;
         assert_eq!(expect, result);
         let result = modulus_decimal_scalar(&left_decimal_array, 10)?;
         let expect =
-            create_decimal_array(&[Some(7), None, Some(7), Some(7), Some(7)], 25, 3);
+            create_decimal_array(vec![Some(7), None, Some(7), Some(7), Some(7)], 25, 3)?;
         assert_eq!(expect, result);
-
         Ok(())
     }
 
     #[test]
-    fn arithmetic_decimal_divide_by_zero() {
-        let left_decimal_array = create_decimal_array(&[Some(101)], 10, 1);
-        let right_decimal_array = create_decimal_array(&[Some(0)], 1, 1);
+    fn arithmetic_decimal_divide_by_zero() -> Result<()> {
+        let left_decimal_array = create_decimal_array(vec![Some(101)], 10, 1)?;
+        let right_decimal_array = create_decimal_array(vec![Some(0)], 1, 1)?;
 
         let err =
             divide_opt_decimal(&left_decimal_array, &right_decimal_array).unwrap_err();
@@ -3172,17 +3183,18 @@ mod tests {
         assert_eq!("Divide by zero error", err.to_string());
         let err = modulus_decimal_scalar(&left_decimal_array, 0).unwrap_err();
         assert_eq!("Divide by zero error", err.to_string());
+        Ok(())
     }
 
     // #[test]
     // fn arithmetic_decimal_overflow() {
     //     // divide the max by 10 so it will fit in the decimal(38,0).
     //     let value_i128: i128 = i128::MAX / 10;
-    //     let left_decimal_array = create_decimal_array(&[Some(value_i128)], 38, 0);
-    //     let right_decimal_array = create_decimal_array(&[Some(1)], 1, 0);
+    //     let left_decimal_array = create_decimal_array(vec![Some(value_i128)], 38, 0)?;
+    //     let right_decimal_array = create_decimal_array(vec![Some(1)], 1, 0)?;
     //     // add
     //     let result = add_decimal(&left_decimal_array, &right_decimal_array).unwrap();
-    //     let expect = create_decimal_array(&[Some(value_i128 + 1)], 38, 0);
+    //     let expect = create_decimal_array(vec![Some(value_i128 + 1)], 38, 0)?;
     //     assert_eq!(expect, result);
     // }
 
@@ -3192,8 +3204,8 @@ mod tests {
     //     let value_i128: i128 = 99999999_9999999999_9999999999_9999999999_i128;
     //     let x = MAX_DECIMAL_FOR_EACH_PRECISION[37];
     //     let value_to_add: i128 = 1_i128;
-    //     let left_decimal_array = create_decimal_array(&[Some(value_i128)], 38, 0);
-    //     let right_decimal_array = create_decimal_array(&[Some(value_to_add)], 1, 0);
+    //     let left_decimal_array = create_decimal_array(vec![Some(value_i128)], 38, 0)?;
+    //     let right_decimal_array = create_decimal_array(vec![Some(value_to_add)], 1, 0)?;
     //     let _result = add_decimal(&left_decimal_array, &right_decimal_array)
     //         .expect_err("should overflow");
     // }
@@ -3202,8 +3214,8 @@ mod tests {
     // fn arithmetic_decimal_add_overflow_i128() {
     //     // divide the max by 10 so it will fit in the decimal(38,0).
     //     let value_i128: i128 = i128::MAX;
-    //     let left_decimal_array = create_decimal_array(&[Some(value_i128)], 38, 0);
-    //     let right_decimal_array = create_decimal_array(&[Some(value_i128)], 38, 0);
+    //     let left_decimal_array = create_decimal_array(vec![Some(value_i128)], 38, 0)?;
+    //     let right_decimal_array = create_decimal_array(vec![Some(value_i128)], 38, 0)?;
     //     let _result = add_decimal(&left_decimal_array, &right_decimal_array)
     //         .expect_err("should overflow");
     // }
@@ -3212,11 +3224,11 @@ mod tests {
     // fn arithmetic_decimal_overflow_divide() {
     //     // this should work. divide the max by 10 so it will fit in the decimal(38,0).
     //     let value_i128: i128 = (i128::MAX / 10 - 2) / 2;
-    //     let left_decimal_array = create_decimal_array(&[Some(value_i128)], 38, 0);
-    //     let right_decimal_array = create_decimal_array(&[Some(1)], 1, 0);
+    //     let left_decimal_array = create_decimal_array(vec![Some(value_i128)], 38, 0)?;
+    //     let right_decimal_array = create_decimal_array(vec![Some(1)], 1, 0)?;
     //     // add
     //     let result = divide_decimal(&left_decimal_array, &right_decimal_array).unwrap();
-    //     let expect = create_decimal_array(&[Some(value_i128 + 1)], 38, 0);
+    //     let expect = create_decimal_array(vec![Some(value_i128 + 1)], 38, 0)?;
     //     assert_eq!(expect, result);
     // }
 }
