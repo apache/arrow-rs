@@ -173,15 +173,12 @@ mod array_struct;
 mod array_union;
 mod builder;
 mod cast;
-mod data;
-mod equal;
 #[cfg(feature = "ffi")]
 mod ffi;
 mod iterator;
 mod null;
 mod ord;
 mod raw_pointer;
-mod transform;
 
 use crate::datatypes::*;
 
@@ -190,14 +187,9 @@ use crate::datatypes::*;
 pub use self::array::Array;
 pub use self::array::ArrayAccessor;
 pub use self::array::ArrayRef;
-pub use self::data::ArrayData;
-pub use self::data::ArrayDataBuilder;
-pub use self::data::ArrayDataRef;
-
-#[cfg(any(feature = "ipc", feature = "ffi"))]
-pub(crate) use self::data::layout;
-#[cfg(feature = "ipc")]
-pub(crate) use self::data::BufferSpec;
+pub use arrow_data::{
+    layout, ArrayData, ArrayDataBuilder, ArrayDataRef, BufferSpec, DataTypeLayout,
+};
 
 pub use self::array_binary::BinaryArray;
 pub use self::array_binary::LargeBinaryArray;
@@ -592,7 +584,7 @@ pub type DurationMillisecondBuilder = PrimitiveBuilder<DurationMillisecondType>;
 pub type DurationMicrosecondBuilder = PrimitiveBuilder<DurationMicrosecondType>;
 pub type DurationNanosecondBuilder = PrimitiveBuilder<DurationNanosecondType>;
 
-pub use self::transform::{Capacities, MutableArrayData};
+pub use arrow_data::transform::{Capacities, MutableArrayData};
 
 // --------------------- Array Iterator ---------------------
 

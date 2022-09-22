@@ -17,10 +17,11 @@
 
 pub use arrow_buffer::{bit_chunk_iterator, bit_util};
 
+pub use arrow_data::bit_iterator;
+pub use arrow_data::bit_mask;
+
 #[cfg(feature = "test_utils")]
 pub mod bench_util;
-pub mod bit_iterator;
-pub(crate) mod bit_mask;
 #[cfg(feature = "test_utils")]
 pub mod data_gen;
 pub mod display;

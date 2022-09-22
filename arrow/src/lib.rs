@@ -250,8 +250,11 @@
 
 pub use arrow_buffer::{alloc, buffer};
 
+pub mod bitmap {
+    pub use arrow_data::Bitmap;
+}
+
 pub mod array;
-pub mod bitmap;
 pub mod compute;
 #[cfg(feature = "csv")]
 pub mod csv;

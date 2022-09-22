@@ -265,7 +265,8 @@ impl ArrowJsonField {
     /// TODO: convert to use an Into
     fn to_arrow_field(&self) -> Result<Field> {
         // a bit regressive, but we have to convert the field to JSON in order to convert it
-        let field = serde_json::to_value(self)?;
+        let field = serde_json::to_value(self)
+            .map_err(|error| ArrowError::JsonError(error.to_string()))?;
         field_from_json(&field)
     }
 }

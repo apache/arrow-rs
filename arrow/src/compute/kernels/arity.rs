@@ -18,7 +18,8 @@
 //! Defines kernels suitable to perform operations to primitive arrays.
 
 use crate::array::{
-    Array, ArrayData, ArrayIter, ArrayRef, BufferBuilder, DictionaryArray, PrimitiveArray,
+    Array, ArrayAccessor, ArrayData, ArrayIter, ArrayRef, BufferBuilder, DictionaryArray,
+    PrimitiveArray,
 };
 use crate::buffer::Buffer;
 use crate::compute::util::combine_option_bitmap;
@@ -26,6 +27,7 @@ use crate::datatypes::{ArrowNumericType, ArrowPrimitiveType};
 use crate::downcast_dictionary_array;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_iterator::try_for_each_valid_idx;
+use arrow_buffer::MutableBuffer;
 use std::sync::Arc;
 
 #[inline]
@@ -156,6 +158,13 @@ where
     T: ArrowPrimitiveType,
     F: Fn(T::Native) -> Result<T::Native>,
 {
+    if array.value_type() != T::DATA_TYPE {
+        return Err(ArrowError::CastError(format!(
+            "Cannot perform the unary operation on dictionary array of value type {}",
+            array.value_type()
+        )));
+    }
+
     let dict_values = array.values().as_any().downcast_ref().unwrap();
     let values = try_unary::<T, F, T>(dict_values, op)?.into_data();
     let data = array.data().clone().into_builder().child_data(vec![values]);
@@ -228,25 +237,29 @@ where
 /// especially when the operation can be vectorised, however, requires `op` to be infallible
 /// for all possible values of its inputs
 ///
-/// # Panic
+/// # Error
 ///
-/// Panics if the arrays have different lengths
+/// This function gives error if the arrays have different lengths
 pub fn binary<A, B, F, O>(
     a: &PrimitiveArray<A>,
     b: &PrimitiveArray<B>,
     op: F,
-) -> PrimitiveArray<O>
+) -> Result<PrimitiveArray<O>>
 where
     A: ArrowPrimitiveType,
     B: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
     F: Fn(A::Native, B::Native) -> O::Native,
 {
-    assert_eq!(a.len(), b.len());
+    if a.len() != b.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform binary operation on arrays of different length".to_string(),
+        ));
+    }
     let len = a.len();
 
     if a.is_empty() {
-        return PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE));
+        return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
 
     let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
@@ -263,7 +276,7 @@ where
     //      `values` is an iterator with a known size from a PrimitiveArray
     let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
 
-    unsafe { build_primitive_array(len, buffer, null_count, null_buffer) }
+    Ok(unsafe { build_primitive_array(len, buffer, null_count, null_buffer) })
 }
 
 /// Applies the provided fallible binary operation across `a` and `b`, returning any error,
@@ -276,16 +289,14 @@ where
 ///
 /// Return an error if the arrays have different lengths or
 /// the operation is under erroneous
-pub fn try_binary<A, B, F, O>(
-    a: &PrimitiveArray<A>,
-    b: &PrimitiveArray<B>,
+pub fn try_binary<A: ArrayAccessor, B: ArrayAccessor, F, O>(
+    a: A,
+    b: B,
     op: F,
 ) -> Result<PrimitiveArray<O>>
 where
-    A: ArrowPrimitiveType,
-    B: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
-    F: Fn(A::Native, B::Native) -> Result<O::Native>,
+    F: Fn(A::Item, B::Item) -> Result<O::Native>,
 {
     if a.len() != b.len() {
         return Err(ArrowError::ComputeError(
@@ -298,36 +309,72 @@ where
     let len = a.len();
 
     if a.null_count() == 0 && b.null_count() == 0 {
-        let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
-        let buffer = unsafe { Buffer::try_from_trusted_len_iter(values) }?;
-        // JUSTIFICATION
-        //  Benefit
-        //      ~75% speedup
-        //  Soundness
-        //      `values` is an iterator with a known size from a PrimitiveArray
-        return Ok(unsafe { build_primitive_array(len, buffer, 0, None) });
+        try_binary_no_nulls(len, a, b, op)
+    } else {
+        let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
+
+        let null_count = null_buffer
+            .as_ref()
+            .map(|x| len - x.count_set_bits())
+            .unwrap_or_default();
+
+        let mut buffer = BufferBuilder::<O::Native>::new(len);
+        buffer.append_n_zeroed(len);
+        let slice = buffer.as_slice_mut();
+
+        try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+            unsafe {
+                *slice.get_unchecked_mut(idx) =
+                    op(a.value_unchecked(idx), b.value_unchecked(idx))?
+            };
+            Ok::<_, ArrowError>(())
+        })?;
+
+        Ok(unsafe {
+            build_primitive_array(len, buffer.finish(), null_count, null_buffer)
+        })
     }
+}
 
-    let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
-
-    let null_count = null_buffer
-        .as_ref()
-        .map(|x| len - x.count_set_bits())
-        .unwrap_or_default();
-
-    let mut buffer = BufferBuilder::<O::Native>::new(len);
-    buffer.append_n_zeroed(len);
-    let slice = buffer.as_slice_mut();
-
-    try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+/// This intentional inline(never) attribute helps LLVM optimize the loop.
+#[inline(never)]
+fn try_binary_no_nulls<A: ArrayAccessor, B: ArrayAccessor, F, O>(
+    len: usize,
+    a: A,
+    b: B,
+    op: F,
+) -> Result<PrimitiveArray<O>>
+where
+    O: ArrowPrimitiveType,
+    F: Fn(A::Item, B::Item) -> Result<O::Native>,
+{
+    let mut buffer = MutableBuffer::new(len * O::get_byte_width());
+    for idx in 0..len {
         unsafe {
-            *slice.get_unchecked_mut(idx) =
-                op(a.value_unchecked(idx), b.value_unchecked(idx))?
+            buffer.push_unchecked(op(a.value_unchecked(idx), b.value_unchecked(idx))?);
         };
-        Ok::<_, ArrowError>(())
-    })?;
+    }
+    Ok(unsafe { build_primitive_array(len, buffer.into(), 0, None) })
+}
 
-    Ok(unsafe { build_primitive_array(len, buffer.finish(), null_count, null_buffer) })
+#[inline(never)]
+fn try_binary_opt_no_nulls<A: ArrayAccessor, B: ArrayAccessor, F, O>(
+    len: usize,
+    a: A,
+    b: B,
+    op: F,
+) -> Result<PrimitiveArray<O>>
+where
+    O: ArrowPrimitiveType,
+    F: Fn(A::Item, B::Item) -> Option<O::Native>,
+{
+    let mut buffer = Vec::with_capacity(10);
+    for idx in 0..len {
+        unsafe {
+            buffer.push(op(a.value_unchecked(idx), b.value_unchecked(idx)));
+        };
+    }
+    Ok(buffer.iter().collect())
 }
 
 /// Applies the provided binary operation across `a` and `b`, collecting the optional results
@@ -337,50 +384,47 @@ where
 ///
 /// The function is only evaluated for non-null indices
 ///
-/// # Panic
+/// # Error
 ///
-/// Panics if the arrays have different lengths
-pub(crate) fn binary_opt<A, B, F, O>(
-    a: &PrimitiveArray<A>,
-    b: &PrimitiveArray<B>,
+/// This function gives error if the arrays have different lengths
+pub(crate) fn binary_opt<A: ArrayAccessor + Array, B: ArrayAccessor + Array, F, O>(
+    a: A,
+    b: B,
     op: F,
-) -> PrimitiveArray<O>
+) -> Result<PrimitiveArray<O>>
 where
-    A: ArrowPrimitiveType,
-    B: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
-    F: Fn(A::Native, B::Native) -> Option<O::Native>,
+    F: Fn(A::Item, B::Item) -> Option<O::Native>,
 {
-    assert_eq!(a.len(), b.len());
+    if a.len() != b.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform binary operation on arrays of different length".to_string(),
+        ));
+    }
 
     if a.is_empty() {
-        return PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE));
+        return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
 
     if a.null_count() == 0 && b.null_count() == 0 {
-        a.values()
-            .iter()
-            .zip(b.values().iter())
-            .map(|(a, b)| op(*a, *b))
-            .collect()
-    } else {
-        let iter_a = ArrayIter::new(a);
-        let iter_b = ArrayIter::new(b);
-
-        let values =
-            iter_a
-                .into_iter()
-                .zip(iter_b.into_iter())
-                .map(|(item_a, item_b)| {
-                    if let (Some(a), Some(b)) = (item_a, item_b) {
-                        op(a, b)
-                    } else {
-                        None
-                    }
-                });
-
-        values.collect()
+        return try_binary_opt_no_nulls(a.len(), a, b, op);
     }
+
+    let iter_a = ArrayIter::new(a);
+    let iter_b = ArrayIter::new(b);
+
+    let values = iter_a
+        .into_iter()
+        .zip(iter_b.into_iter())
+        .map(|(item_a, item_b)| {
+            if let (Some(a), Some(b)) = (item_a, item_b) {
+                op(a, b)
+            } else {
+                None
+            }
+        });
+
+    Ok(values.collect())
 }
 
 #[cfg(test)]
