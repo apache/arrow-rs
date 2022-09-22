@@ -698,7 +698,7 @@ where
 }
 
 #[cfg(feature = "dyn_arith_dict")]
-fn math_safe_divide_op_dict<K, T, F>(
+fn math_divide_safe_op_dict<K, T, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
     op: F,
@@ -1461,7 +1461,7 @@ pub fn divide_dyn_opt(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
                         Some(a.div_wrapping(b))
                     }
                 },
-                math_safe_divide_op_dict
+                math_divide_safe_op_dict
             )
         }
         _ => {
