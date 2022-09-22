@@ -22,23 +22,18 @@
 //!  * [`Field`](crate::datatypes::Field) to describe one field within a schema.
 //!  * [`DataType`](crate::datatypes::DataType) to describe the type of a field.
 
-use std::sync::Arc;
-
 mod native;
 pub use native::*;
 mod numeric;
 pub use numeric::*;
-mod types;
-pub use types::*;
-mod delta;
 
+pub use arrow_array::types::*;
 pub use arrow_data::decimal::*;
-pub use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode};
+pub use arrow_schema::{
+    DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
+};
 
 #[cfg(feature = "ffi")]
 mod ffi;
 #[cfg(feature = "ffi")]
 pub use ffi::*;
-
-/// A reference-counted reference to a [`Schema`](crate::datatypes::Schema).
-pub type SchemaRef = Arc<Schema>;

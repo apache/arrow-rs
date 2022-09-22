@@ -22,6 +22,9 @@ use std::hash::Hash;
 use crate::error::ArrowError;
 use crate::field::Field;
 
+/// A reference-counted reference to a [`Schema`].
+pub type SchemaRef = std::sync::Arc<Schema>;
+
 /// Describes the meta-data of an ordered sequence of relative types.
 ///
 /// Note that this information is only part of the meta-data and not part of the physical

@@ -22,17 +22,16 @@
 //! # Downcasting an Array
 //!
 //! Arrays are often passed around as a dynamically typed [`&dyn Array`] or [`ArrayRef`].
-//! For example, [`RecordBatch`](`crate::record_batch::RecordBatch`) stores columns as [`ArrayRef`].
+//! For example, [`RecordBatch`](`crate::RecordBatch`) stores columns as [`ArrayRef`].
 //!
-//! Whilst these arrays can be passed directly to the
-//! [`compute`](crate::compute), [`csv`](crate::csv),
-//! [`json`](crate::json), etc... APIs, it is often the case that you
-//! wish to interact with the data directly. This requires downcasting
-//! to the concrete type of the array:
+//! Whilst these arrays can be passed directly to the [`compute`], [`csv`], [`json`], etc... APIs,
+//! it is often the case that you wish to interact with the data directly.
+//!
+//! This requires downcasting to the concrete type of the array:
 //!
 //! ```
-//! # use arrow::array::{Array, Float32Array, Int32Array};
-//! #
+//! # use arrow_array::{Array, Float32Array, Int32Array};
+//!
 //! fn sum_int32(array: &dyn Array) -> i32 {
 //!     let integers: &Int32Array = array.as_any().downcast_ref().unwrap();
 //!     integers.iter().map(|val| val.unwrap_or_default()).sum()
@@ -45,12 +44,13 @@
 //! ```
 //!
 //! Additionally, there are convenient functions to do this casting
-//! such as [`as_primitive_array<T>`] and [`as_string_array`]:
+//! such as [`cast::as_primitive_array<T>`] and [`cast::as_string_array`]:
 //!
 //! ```
-//! # use arrow::array::*;
-//! # use arrow::datatypes::*;
-//! #
+//! # use arrow_array::Array;
+//! # use arrow_array::cast::as_primitive_array;
+//! # use arrow_array::types::Float32Type;
+//!
 //! fn as_f32_slice(array: &dyn Array) -> &[f32] {
 //!     // use as_primtive_array
 //!     as_primitive_array::<Float32Type>(array).values()
@@ -62,11 +62,9 @@
 //! Most [`Array`] implementations can be constructed directly from iterators or [`Vec`]
 //!
 //! ```
-//! # use arrow::array::Int32Array;
-//! # use arrow::array::StringArray;
-//! # use arrow::array::ListArray;
-//! # use arrow::datatypes::Int32Type;
-//! #
+//! # use arrow_array::{Int32Array, ListArray, StringArray};
+//! # use arrow_array::types::Int32Type;
+//!
 //! Int32Array::from(vec![1, 2]);
 //! Int32Array::from(vec![Some(1), None]);
 //! Int32Array::from_iter([1, 2, 3, 4]);
@@ -84,11 +82,11 @@
 //! ]);
 //! ```
 //!
-//! Additionally [`ArrayBuilder`](crate::array::ArrayBuilder) implementations can be
+//! Additionally [`ArrayBuilder`](builder::ArrayBuilder) implementations can be
 //! used to construct arrays with a push-based interface
 //!
 //! ```
-//! # use arrow::array::Int16Array;
+//! # use arrow_array::Int16Array;
 //! #
 //! // Create a new builder with a capacity of 100
 //! let mut builder = Int16Array::builder(100);
@@ -127,7 +125,7 @@
 //!
 //! ```rust
 //! # use std::sync::Arc;
-//! # use arrow::array::{Array, Int32Array, ArrayRef};
+//! # use arrow_array::{ArrayRef, Int32Array};
 //! let array = Arc::new(Int32Array::from_iter([1, 2, 3])) as ArrayRef;
 //!
 //! // Slice with offset 1 and length 2
@@ -154,24 +152,58 @@
 //!
 //! [Arrow specification]: https://arrow.apache.org/docs/format/Columnar.html
 //! [`&dyn Array`]: Array
-//! [`Bitmap`]: crate::bitmap::Bitmap
-//! [`Buffer`]: crate::buffer::Buffer
+//! [`Bitmap`]: arrow_data::Bitmap
+//! [`Buffer`]: arrow_buffer::Buffer
+//! [`compute`]: https://docs.rs/arrow/latest/arrow/compute/index.html
+//! [`json`]: https://docs.rs/arrow/latest/arrow/json/index.html
+//! [`csv`]: https://docs.rs/arrow/latest/arrow/csv/index.html
 
-#[cfg(feature = "ffi")]
-mod ffi;
-mod ord;
+pub mod array;
+pub use array::*;
 
-// --------------------- Array & ArrayData ---------------------
-pub use arrow_array::array::*;
-pub use arrow_array::builder::*;
-pub use arrow_array::cast::*;
-pub use arrow_array::iterator::*;
-pub use arrow_data::{
-    layout, ArrayData, ArrayDataBuilder, ArrayDataRef, BufferSpec, DataTypeLayout,
-};
+mod record_batch;
+pub use record_batch::{RecordBatch, RecordBatchOptions};
 
-pub use arrow_data::transform::{Capacities, MutableArrayData};
+pub mod builder;
+pub mod cast;
+pub mod decimal;
+mod delta;
+pub mod iterator;
+mod raw_pointer;
+pub mod temporal_conversions;
+mod trusted_len;
+pub mod types;
 
-// --------------------- Array's values comparison ---------------------
+#[cfg(test)]
+mod tests {
+    use crate::builder::*;
 
-pub use self::ord::{build_compare, DynComparator};
+    #[test]
+    fn test_buffer_builder_availability() {
+        let _builder = Int8BufferBuilder::new(10);
+        let _builder = Int16BufferBuilder::new(10);
+        let _builder = Int32BufferBuilder::new(10);
+        let _builder = Int64BufferBuilder::new(10);
+        let _builder = UInt16BufferBuilder::new(10);
+        let _builder = UInt32BufferBuilder::new(10);
+        let _builder = Float32BufferBuilder::new(10);
+        let _builder = Float64BufferBuilder::new(10);
+        let _builder = TimestampSecondBufferBuilder::new(10);
+        let _builder = TimestampMillisecondBufferBuilder::new(10);
+        let _builder = TimestampMicrosecondBufferBuilder::new(10);
+        let _builder = TimestampNanosecondBufferBuilder::new(10);
+        let _builder = Date32BufferBuilder::new(10);
+        let _builder = Date64BufferBuilder::new(10);
+        let _builder = Time32SecondBufferBuilder::new(10);
+        let _builder = Time32MillisecondBufferBuilder::new(10);
+        let _builder = Time64MicrosecondBufferBuilder::new(10);
+        let _builder = Time64NanosecondBufferBuilder::new(10);
+        let _builder = IntervalYearMonthBufferBuilder::new(10);
+        let _builder = IntervalDayTimeBufferBuilder::new(10);
+        let _builder = IntervalMonthDayNanoBufferBuilder::new(10);
+        let _builder = DurationSecondBufferBuilder::new(10);
+        let _builder = DurationMillisecondBufferBuilder::new(10);
+        let _builder = DurationMicrosecondBufferBuilder::new(10);
+        let _builder = DurationNanosecondBufferBuilder::new(10);
+    }
+}

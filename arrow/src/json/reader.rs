@@ -719,10 +719,9 @@ impl Decoder {
             RecordBatch::try_new_with_options(
                 projected_schema,
                 arr,
-                &RecordBatchOptions {
-                    match_field_names: true,
-                    row_count: Some(rows.len()),
-                },
+                &RecordBatchOptions::new()
+                    .with_match_field_names(true)
+                    .with_row_count(Some(rows.len())),
             )
             .map(Some)
         })
