@@ -6692,4 +6692,118 @@ mod tests {
             BooleanArray::from(vec![Some(true), None, None, Some(true)])
         );
     }
+
+    #[test]
+    fn comparison_decimal_op_test() -> Result<()> {
+        let value_i128: i128 = 123;
+        let decimal_array = create_decimal_array(
+            &[
+                Some(value_i128),
+                None,
+                Some(value_i128 - 1),
+                Some(value_i128 + 1),
+            ],
+            25,
+            3,
+        );
+        // eq: array = i128
+        let result = eq_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
+            result
+        );
+        // neq: array != i128
+        let result = neq_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
+            result
+        );
+        // lt: array < i128
+        let result = lt_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+            result
+        );
+        // lt_eq: array <= i128
+        let result = lt_eq_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+            result
+        );
+        // gt: array > i128
+        let result = gt_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
+            result
+        );
+        // gt_eq: array >= i128
+        let result = gt_eq_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+            result
+        );
+
+        let left_decimal_array = decimal_array;
+        let right_decimal_array = create_decimal_array(
+            &[
+                Some(value_i128 - 1),
+                Some(value_i128),
+                Some(value_i128 + 1),
+                Some(value_i128 + 1),
+            ],
+            25,
+            3,
+        );
+        // eq: left == right
+        let result = eq_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
+            result
+        );
+        // neq: left != right
+        let result = neq_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+            result
+        );
+        // lt: left < right
+        let result = lt_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+            result
+        );
+        // lt_eq: left <= right
+        let result = lt_eq_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
+            result
+        );
+        // gt: left > right
+        let result = gt_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
+            result
+        );
+        // gt_eq: left >= right
+        let result = gt_eq_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+            result
+        );
+        // is_distinct: left distinct right
+        let result = is_distinct_from_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false)]),
+            result
+        );
+        // is_distinct: left distinct right
+        let result =
+            is_not_distinct_from_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(true)]),
+            result
+        );
+        Ok(())
+    }
+
 }
