@@ -1159,6 +1159,159 @@ pub fn gt_eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     compare_op_scalar(left, |a| a >= right)
 }
 
+/// Creates an BooleanArray the same size as `left`,
+/// applying `op` to all non-null elements of left
+fn compare_decimal_scalar<F>(
+    left: &Decimal128Array,
+    right: i128,
+    op: F,
+) -> Result<BooleanArray>
+    where
+        F: Fn(i128, i128) -> bool,
+{
+    Ok(left
+        .iter()
+        .map(|left| left.map(|left| op(left.as_i128(), right)))
+        .collect())
+}
+
+/// Creates an BooleanArray the same size as `left`,
+/// by applying `op` to all non-null elements of left and right
+fn compare_decimal<F>(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+    op: F,
+) -> Result<BooleanArray>
+    where
+        F: Fn(i128, i128) -> bool,
+{
+    Ok(left
+        .iter()
+        .zip(right.iter())
+        .map(|(left, right)| {
+            if let (Some(left), Some(right)) = (left, right) {
+                Some(op(left.as_i128(), right.as_i128()))
+            } else {
+                None
+            }
+        })
+        .collect())
+}
+
+pub fn eq_decimal_scalar(
+    left: &Decimal128Array,
+    right: i128,
+) -> Result<BooleanArray> {
+    compare_decimal_scalar(left, right, |left, right| left == right)
+}
+
+pub fn eq_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<BooleanArray> {
+    compare_decimal(left, right, |left, right| left == right)
+}
+
+pub fn neq_decimal_scalar(
+    left: &Decimal128Array,
+    right: i128,
+) -> Result<BooleanArray> {
+    compare_decimal_scalar(left, right, |left, right| left != right)
+}
+
+pub fn neq_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<BooleanArray> {
+    compare_decimal(left, right, |left, right| left != right)
+}
+
+pub fn lt_decimal_scalar(
+    left: &Decimal128Array,
+    right: i128,
+) -> Result<BooleanArray> {
+    compare_decimal_scalar(left, right, |left, right| left < right)
+}
+
+pub fn lt_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<BooleanArray> {
+    compare_decimal(left, right, |left, right| left < right)
+}
+
+pub fn lt_eq_decimal_scalar(
+    left: &Decimal128Array,
+    right: i128,
+) -> Result<BooleanArray> {
+    compare_decimal_scalar(left, right, |left, right| left <= right)
+}
+
+pub fn lt_eq_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<BooleanArray> {
+    compare_decimal(left, right, |left, right| left <= right)
+}
+
+pub fn gt_decimal_scalar(
+    left: &Decimal128Array,
+    right: i128,
+) -> Result<BooleanArray> {
+    compare_decimal_scalar(left, right, |left, right| left > right)
+}
+
+pub fn gt_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<BooleanArray> {
+    compare_decimal(left, right, |left, right| left > right)
+}
+
+pub fn gt_eq_decimal_scalar(
+    left: &Decimal128Array,
+    right: i128,
+) -> Result<BooleanArray> {
+    compare_decimal_scalar(left, right, |left, right| left >= right)
+}
+
+pub fn gt_eq_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<BooleanArray> {
+    compare_decimal(left, right, |left, right| left >= right)
+}
+
+pub fn is_distinct_from_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<BooleanArray> {
+    Ok(left
+        .iter()
+        .zip(right.iter())
+        .map(|(left, right)| match (left, right) {
+            (None, None) => Some(false),
+            (None, Some(_)) | (Some(_), None) => Some(true),
+            (Some(left), Some(right)) => Some(left != right),
+        })
+        .collect())
+}
+
+pub fn is_not_distinct_from_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<BooleanArray> {
+    Ok(left
+        .iter()
+        .zip(right.iter())
+        .map(|(left, right)| match (left, right) {
+            (None, None) => Some(true),
+            (None, Some(_)) | (Some(_), None) => Some(false),
+            (Some(left), Some(right)) => Some(left == right),
+        })
+        .collect())
+}
+
 // Avoids creating a closure for each combination of `$RIGHT` and `$TY`
 fn try_to_type_result<T>(value: Option<T>, right: &str, ty: &str) -> Result<T> {
     value.ok_or_else(|| {

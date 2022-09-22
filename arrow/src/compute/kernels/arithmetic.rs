@@ -24,7 +24,7 @@
 
 use std::ops::{Div, Neg, Rem};
 
-use num::{One, Zero};
+use num::{BigInt, One, ToPrimitive, Zero};
 
 use crate::array::*;
 #[cfg(feature = "simd")]
@@ -1498,6 +1498,168 @@ where
 
     try_unary_dyn::<_, T>(array, |value| value.div_checked(divisor))
         .map(|a| Arc::new(a) as ArrayRef)
+}
+
+/// Creates an Decimal128Array the same size as `left`,
+/// by applying `op` to all non-null elements of left and right
+fn arith_decimal<F>(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+    op: F,
+) -> Result<Decimal128Array>
+    where
+        F: Fn(i128, i128) -> Result<i128>,
+{
+    left.iter()
+        .zip(right.iter())
+        .map(|(left, right)| {
+            if let (Some(left), Some(right)) = (left, right) {
+                Some(op(left.as_i128(), right.as_i128())).transpose()
+            } else {
+                Ok(None)
+            }
+        })
+        .collect()
+}
+
+fn arith_decimal_scalar<F>(
+    left: &Decimal128Array,
+    right: i128,
+    op: F,
+) -> Result<Decimal128Array>
+    where
+        F: Fn(i128, i128) -> Result<i128>,
+{
+    left.iter()
+        .map(|left| {
+            if let Some(left) = left {
+                Some(op(left.as_i128(), right)).transpose()
+            } else {
+                Ok(None)
+            }
+        })
+        .collect()
+}
+
+pub fn add_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<Decimal128Array> {
+    let array = arith_decimal(left, right, |left, right| Ok(left + right))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+pub fn add_decimal_scalar(
+    left: &Decimal128Array,
+    right: i128,
+) -> Result<Decimal128Array> {
+    let array = arith_decimal_scalar(left, right, |left, right| Ok(left + right))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+pub fn subtract_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<Decimal128Array> {
+    let array = arith_decimal(left, right, |left, right| Ok(left - right))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+pub fn subtract_decimal_scalar(
+    left: &Decimal128Array,
+    right: i128,
+) -> Result<Decimal128Array> {
+    let array = arith_decimal_scalar(left, right, |left, right| Ok(left - right))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+pub fn multiply_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<Decimal128Array> {
+    let divide = 10_i128.pow(left.scale() as u32);
+    let array = arith_decimal(left, right, |left, right| {
+        let result = BigInt::from(left) * BigInt::from(right) / divide;
+        Ok(result.to_i128().unwrap())
+    })?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+pub fn multiply_decimal_scalar(
+    left: &Decimal128Array,
+    right: i128,
+) -> Result<Decimal128Array> {
+    let divide = 10_i128.pow(left.scale() as u32);
+    let array = arith_decimal_scalar(left, right, |left, right| {
+        let result = BigInt::from(left) * BigInt::from(right) / divide;
+        Ok(result.to_i128().unwrap())
+    })?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+pub fn divide_opt_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<Decimal128Array> {
+    let mul = 10_i128.pow(left.scale() as u32);
+    let array = arith_decimal(left, right, |left, right| {
+        if right == 0 {
+            return Err(ArrowError::DivideByZero);
+        }
+        let result = BigInt::from(left) * mul / BigInt::from(right);
+        Ok(result.to_i128().unwrap())
+    })?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+pub fn divide_decimal_scalar(
+    left: &Decimal128Array,
+    right: i128,
+) -> Result<Decimal128Array> {
+    if right == 0 {
+        return Err(ArrowError::DivideByZero);
+    }
+    let mul = 10_i128.pow(left.scale() as u32);
+    let array = arith_decimal_scalar(left, right, |left, right| {
+        let result = BigInt::from(left) * mul / BigInt::from(right);
+        Ok(result.to_i128().unwrap())
+    })?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+pub fn modulus_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<Decimal128Array> {
+    let array = arith_decimal(left, right, |left, right| {
+        if right == 0 {
+            Err(ArrowError::DivideByZero)
+        } else {
+            Ok(left % right)
+        }
+    })?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+pub fn modulus_decimal_scalar(
+    left: &Decimal128Array,
+    right: i128,
+) -> Result<Decimal128Array> {
+    if right == 0 {
+        return Err(ArrowError::DivideByZero);
+    }
+    let array = arith_decimal_scalar(left, right, |left, right| Ok(left % right))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
 }
 
 #[cfg(test)]
