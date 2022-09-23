@@ -112,7 +112,7 @@ fn build_map_reader(
         }
         (None, None) => Ok(None),
         _ => {
-            return Err(general_err!(
+            Err(general_err!(
                 "partial projection of MapArray is not supported"
             ))
         }

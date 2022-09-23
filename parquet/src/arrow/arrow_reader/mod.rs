@@ -2331,7 +2331,7 @@ mod tests {
 
     #[test]
     fn test_raw_repetition() {
-        const MESSAGE_TYPE: &'static str = "
+        const MESSAGE_TYPE: &str = "
             message Log {
               OPTIONAL INT32 eventType;
               REPEATED INT32 category;

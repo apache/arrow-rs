@@ -564,7 +564,7 @@ mod tests {
 
         let file_metadata = file_reader.metadata().file_metadata();
         let schema = file_metadata.schema_descr();
-        let mask = ProjectionMask::leaves(&schema, vec![0]);
+        let mask = ProjectionMask::leaves(schema, vec![0]);
         let (_, fields) = parquet_to_array_schema_and_fields(
             schema,
             ProjectionMask::all(),
