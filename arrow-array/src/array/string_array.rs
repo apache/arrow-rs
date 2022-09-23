@@ -129,7 +129,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     /// Convert a list array to a string array.
     ///
     /// Note: this performs potentially expensive UTF-8 validation, consider using
-    /// [`StringBuilder`][crate::array::StringBuilder] to avoid this
+    /// [`StringBuilder`][crate::builder::StringBuilder] to avoid this
     ///
     /// # Panics
     ///
