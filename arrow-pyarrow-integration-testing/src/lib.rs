@@ -23,7 +23,7 @@ use std::sync::Arc;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
-use arrow::array::{ArrayData, ArrayRef, Int64Array, make_array};
+use arrow::array::{Array, ArrayData, ArrayRef, Int64Array, make_array};
 use arrow::compute::kernels;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::error::ArrowError;
@@ -51,7 +51,7 @@ fn double(array: &PyAny, py: Python) -> PyResult<PyObject> {
     let array = kernels::arithmetic::add(array, array).map_err(to_py_err)?;
 
     // export
-    array.to_pyarrow(py)
+    array.data().to_pyarrow(py)
 }
 
 /// calls a lambda function that receives and returns an array
@@ -63,7 +63,7 @@ fn double_py(lambda: &PyAny, py: Python) -> PyResult<bool> {
     let expected = Arc::new(Int64Array::from(vec![Some(2), None, Some(6)])) as ArrayRef;
 
     // to py
-    let pyarray = array.to_pyarrow(py)?;
+    let pyarray = array.data().to_pyarrow(py)?;
     let pyarray = lambda.call1((pyarray,))?;
     let array = make_array(ArrayData::from_pyarrow(pyarray)?);
 
