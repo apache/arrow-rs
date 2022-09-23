@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines helper functions for force [`Array`] downcasts
+//! Defines helper functions for downcasting [`dyn Array`](Array) to concrete types
 
 use crate::array::*;
 use crate::types::*;

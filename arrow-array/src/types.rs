@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Zero-sized types used to parameterize generic array implementations
+
 use crate::array::ArrowPrimitiveType;
 use crate::delta::shift_months;
 use arrow_data::decimal::{

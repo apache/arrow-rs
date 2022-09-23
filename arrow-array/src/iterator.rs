@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Idiomatic iterators for [`Array`](crate::Array)
+
 use crate::array::{
     ArrayAccessor, BooleanArray, DecimalArray, FixedSizeBinaryArray, GenericBinaryArray,
     GenericListArray, GenericStringArray, PrimitiveArray,

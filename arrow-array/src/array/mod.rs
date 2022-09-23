@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! The concrete array definitions
+
 mod binary_array;
 
 use crate::types::*;

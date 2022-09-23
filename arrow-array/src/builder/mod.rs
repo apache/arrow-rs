@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines a [`BufferBuilder`](crate::builder::BufferBuilder) capable
-//! of creating a [`Buffer`](arrow_buffer::Buffer) which can be used
-//! as an internal buffer in an [`ArrayData`](arrow_data::ArrayData)
-//! object.
+//! Defines builders for the various array types
 
 mod boolean_buffer_builder;
 pub use boolean_buffer_builder::*;

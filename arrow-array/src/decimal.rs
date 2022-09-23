@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Decimal related utils
+//! Decimal related utilities, types and functions
 
 use crate::types::{Decimal128Type, Decimal256Type, DecimalType};
 use arrow_data::decimal::{DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};

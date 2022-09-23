@@ -139,12 +139,12 @@
 //! Internally, arrays are represented by one or several [`Buffer`], the number and meaning of
 //! which depend on the array’s data type, as documented in the [Arrow specification].
 //!
-//! For example, the type `Int16Array` represents an array of 16-bit integers and consists of:
+//! For example, the type [`Int16Array`] represents an array of 16-bit integers and consists of:
 //!
 //! * An optional [`Bitmap`] identifying any null values
 //! * A contiguous [`Buffer`] of 16-bit integers
 //!
-//! Similarly, the type `StringArray` represents an array of UTF-8 strings and consists of:
+//! Similarly, the type [`StringArray`] represents an array of UTF-8 strings and consists of:
 //!
 //! * An optional [`Bitmap`] identifying any null values
 //! * An offsets [`Buffer`] of 32-bit integers identifying valid UTF-8 sequences within the values buffer
