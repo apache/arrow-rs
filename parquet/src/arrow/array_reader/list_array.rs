@@ -251,6 +251,7 @@ mod tests {
     use crate::arrow::array_reader::build_array_reader;
     use crate::arrow::array_reader::list_array::ListArrayReader;
     use crate::arrow::array_reader::test_util::InMemoryArrayReader;
+    use crate::arrow::schema::parquet_to_array_schema_and_fields;
     use crate::arrow::{parquet_to_arrow_schema, ArrowWriter, ProjectionMask};
     use crate::file::properties::WriterProperties;
     use crate::file::reader::{FileReader, SerializedFileReader};
@@ -389,21 +390,10 @@ mod tests {
             true,
         );
 
-        let l2 = ListArrayReader::<OffsetSize>::new(
-            Box::new(l3),
-            l2_type,
-            3,
-            2,
-            false,
-        );
+        let l2 = ListArrayReader::<OffsetSize>::new(Box::new(l3), l2_type, 3, 2, false);
 
-        let mut l1 = ListArrayReader::<OffsetSize>::new(
-            Box::new(l2),
-            l1_type,
-            2,
-            1,
-            true,
-        );
+        let mut l1 =
+            ListArrayReader::<OffsetSize>::new(Box::new(l2), l1_type, 2, 1, true);
 
         let expected_1 = expected.slice(0, 2);
         let expected_2 = expected.slice(2, 2);
@@ -573,18 +563,17 @@ mod tests {
             Arc::new(SerializedFileReader::new(file).unwrap());
 
         let file_metadata = file_reader.metadata().file_metadata();
-        let arrow_schema = parquet_to_arrow_schema(
-            file_metadata.schema_descr(),
+        let schema = file_metadata.schema_descr();
+        let mask = ProjectionMask::leaves(&schema, vec![0]);
+        let (_, fields) = parquet_to_array_schema_and_fields(
+            schema,
+            ProjectionMask::all(),
             file_metadata.key_value_metadata(),
         )
         .unwrap();
 
-        let schema = file_metadata.schema_descr_ptr();
-        let mask = ProjectionMask::leaves(&schema, vec![0]);
-
         let mut array_reader =
-            build_array_reader(Arc::new(arrow_schema), mask, &file_reader)
-                .unwrap();
+            build_array_reader(fields.as_ref(), &mask, &file_reader).unwrap();
 
         let batch = array_reader.next_batch(100).unwrap();
         assert_eq!(batch.data_type(), array_reader.get_data_type());
