@@ -49,7 +49,6 @@ pub trait ArrowNativeType:
     + Sync
     + Copy
     + PartialOrd
-    + std::str::FromStr
     + Default
     + private::Sealed
     + 'static

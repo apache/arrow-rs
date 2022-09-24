@@ -117,6 +117,7 @@
 //! fn parse_to_primitive<'a, T, I>(iter: I) -> PrimitiveArray<T>
 //! where
 //!     T: ArrowPrimitiveType,
+//!     T::Native: FromStr,
 //!     I: IntoIterator<Item=&'a str>,
 //! {
 //!     PrimitiveArray::from_iter(iter.into_iter().map(|val| T::Native::from_str(val).ok()))
