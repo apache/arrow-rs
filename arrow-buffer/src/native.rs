@@ -44,14 +44,7 @@ mod private {
 ///
 /// Due to the above restrictions, this trait is sealed to prevent accidental misuse
 pub trait ArrowNativeType:
-    std::fmt::Debug
-    + Send
-    + Sync
-    + Copy
-    + PartialOrd
-    + Default
-    + private::Sealed
-    + 'static
+    std::fmt::Debug + Send + Sync + Copy + PartialOrd + Default + private::Sealed + 'static
 {
     /// Convert native type from usize.
     #[inline]
