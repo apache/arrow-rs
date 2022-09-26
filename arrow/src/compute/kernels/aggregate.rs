@@ -124,10 +124,7 @@ where
             .map(|i| unsafe { array.value_unchecked(i) })
             .reduce(|acc, item| if cmp(&acc, &item) { item } else { acc })
     } else {
-        let null_buffer = array
-            .data_ref()
-            .null_buffer()
-            .map(|b| b.bit_slice(array.offset(), array.len()));
+        let null_buffer = array.data_ref().null_buffer();
         let iter = BitIndexIterator::new(
             null_buffer.as_deref().unwrap(),
             array.offset(),
@@ -681,6 +678,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::types::Float64Type;
     use super::*;
     use crate::array::*;
     use crate::compute::add;
@@ -1129,5 +1127,23 @@ mod tests {
 
         let array = dict_array.downcast_dict::<Float32Array>().unwrap();
         assert_eq!(2.0_f32, min_array::<Float32Type, _>(array).unwrap());
+    }
+
+    #[test]
+    fn test_min_max_sliced() {
+        let expected_min = Some(4.0);
+        let input: Float64Array = vec![None, Some(4.0)].into_iter().collect();
+        let actual = min(&input);
+
+        assert_eq!(actual, expected_min);
+
+        let sliced_input: Float64Array = vec![None, None, None, None, None, Some(4.0)].into_iter().collect();
+        let sliced_input = sliced_input.slice(4, 2);
+        let sliced_input = as_primitive_array::<Float64Type>(&sliced_input);
+
+        assert_eq!(sliced_input, &input);
+
+        let actual = min(&sliced_input);
+        assert_eq!(actual, expected_min);
     }
 }
