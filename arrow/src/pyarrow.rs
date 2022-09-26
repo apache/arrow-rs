@@ -166,19 +166,6 @@ impl<T: PyArrowConvert> PyArrowConvert for Vec<T> {
     }
 }
 
-impl<T> PyArrowConvert for T
-where
-    T: Array + From<ArrayData>,
-{
-    fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
-        Ok(ArrayData::from_pyarrow(value)?.into())
-    }
-
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
-        self.data().to_pyarrow(py)
-    }
-}
-
 impl PyArrowConvert for RecordBatch {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         // TODO(kszucs): implement the FFI conversions in arrow-rs for RecordBatches

@@ -47,10 +47,7 @@ pub fn create_random_batch(
     RecordBatch::try_new_with_options(
         schema,
         columns,
-        &RecordBatchOptions {
-            match_field_names: false,
-            row_count: None,
-        },
+        &RecordBatchOptions::new().with_match_field_names(false),
     )
 }
 

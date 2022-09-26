@@ -47,6 +47,7 @@ ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] 
 arrow-buffer = { version = "23.0.0", path = "../arrow-buffer" }
 arrow-data = { version = "23.0.0", path = "../arrow-data" }
 arrow-schema = { version = "23.0.0", path = "../arrow-schema" }
+arrow-array = { version = "23.0.0", path = "../arrow-array" }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 indexmap = { version = "1.9", default-features = false, features = ["std"] }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }

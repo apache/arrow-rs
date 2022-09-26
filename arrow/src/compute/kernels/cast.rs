@@ -42,7 +42,6 @@ use std::ops::{Div, Mul};
 use std::str;
 use std::sync::Arc;
 
-use crate::array::as_datetime;
 use crate::buffer::MutableBuffer;
 use crate::compute::divide_scalar;
 use crate::compute::kernels::arithmetic::{divide, multiply};
@@ -54,8 +53,8 @@ use crate::compute::{try_unary, using_chrono_tz_and_utc_naive_date_time};
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::temporal_conversions::{
-    EPOCH_DAYS_FROM_CE, MICROSECONDS, MILLISECONDS, MILLISECONDS_IN_DAY, NANOSECONDS,
-    SECONDS_IN_DAY,
+    as_datetime, EPOCH_DAYS_FROM_CE, MICROSECONDS, MILLISECONDS, MILLISECONDS_IN_DAY,
+    NANOSECONDS, SECONDS_IN_DAY,
 };
 use crate::{array::*, compute::take};
 use crate::{buffer::Buffer, util::serialization::lexical_to_string};
