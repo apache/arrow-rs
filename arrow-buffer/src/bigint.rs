@@ -73,7 +73,7 @@ impl i256 {
         )
     }
 
-    /// Create an i256 from the provided low and high i128
+    /// Create an i256 from the provided low u128 and high i128
     #[inline]
     fn from_parts(low: u128, high: i128) -> Self {
         let mut t = [0; 32];
@@ -125,7 +125,7 @@ impl i256 {
         Some(Self::from_parts(low, high))
     }
 
-    /// Performs wrapping addition
+    /// Performs wrapping subtraction
     #[inline]
     pub fn wrapping_sub(self, other: Self) -> Self {
         let (left_low, left_high) = self.as_parts();
@@ -136,7 +136,7 @@ impl i256 {
         Self::from_parts(low, high)
     }
 
-    /// Performs checked addition
+    /// Performs checked subtraction
     #[inline]
     pub fn checked_sub(self, other: Self) -> Option<Self> {
         let (left_low, left_high) = self.as_parts();
@@ -189,7 +189,7 @@ impl i256 {
         Self::from_bigint_with_overflow(l % r).0
     }
 
-    /// Performs checked division
+    /// Performs checked remainder
     #[inline]
     pub fn checked_rem(self, other: Self) -> Option<Self> {
         if other.0 == [0; 32] {
