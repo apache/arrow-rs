@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::i256;
 use half::f16;
 
 mod private {
@@ -269,6 +270,8 @@ impl ArrowNativeType for f32 {}
 impl private::Sealed for f32 {}
 impl ArrowNativeType for f64 {}
 impl private::Sealed for f64 {}
+impl private::Sealed for i256 {}
+impl ArrowNativeType for i256 {}
 
 /// Allows conversion from supported Arrow types to a byte slice.
 pub trait ToByteSlice {
