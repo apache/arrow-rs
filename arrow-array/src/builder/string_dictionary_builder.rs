@@ -293,9 +293,9 @@ fn get_bytes<'a, K: ArrowNativeType>(values: &'a StringBuilder, key: &K) -> &'a 
     let offsets = values.offsets_slice();
     let values = values.values_slice();
 
-    let idx = key.to_usize().unwrap();
-    let end_offset = offsets[idx + 1].to_usize().unwrap();
-    let start_offset = offsets[idx].to_usize().unwrap();
+    let idx = key.as_usize();
+    let end_offset = offsets[idx + 1].as_usize();
+    let start_offset = offsets[idx].as_usize();
 
     &values[start_offset..end_offset]
 }

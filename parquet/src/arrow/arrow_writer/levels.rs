@@ -276,8 +276,8 @@ impl LevelInfoBuilder {
                 // TODO: Faster bitmask iteration (#1757)
                 for (idx, w) in offsets.windows(2).enumerate() {
                     let is_valid = nulls.is_set(idx + null_offset);
-                    let start_idx = w[0].to_usize().unwrap();
-                    let end_idx = w[1].to_usize().unwrap();
+                    let start_idx = w[0].as_usize();
+                    let end_idx = w[1].as_usize();
                     if !is_valid {
                         write_null_slice(child)
                     } else if start_idx == end_idx {
@@ -289,8 +289,8 @@ impl LevelInfoBuilder {
             }
             None => {
                 for w in offsets.windows(2) {
-                    let start_idx = w[0].to_usize().unwrap();
-                    let end_idx = w[1].to_usize().unwrap();
+                    let start_idx = w[0].as_usize();
+                    let end_idx = w[1].as_usize();
                     if start_idx == end_idx {
                         write_empty_slice(child)
                     } else {

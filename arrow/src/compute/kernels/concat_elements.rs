@@ -57,20 +57,17 @@ pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
 
     let mut output_values = BufferBuilder::<u8>::new(
         left_values.len() + right_values.len()
-            - left_offsets[0].to_usize().unwrap()
-            - right_offsets[0].to_usize().unwrap(),
+            - left_offsets[0].as_usize()
+            - right_offsets[0].as_usize(),
     );
 
     let mut output_offsets = BufferBuilder::<Offset>::new(left_offsets.len());
     output_offsets.append(Offset::zero());
     for (left_idx, right_idx) in left_offsets.windows(2).zip(right_offsets.windows(2)) {
+        output_values
+            .append_slice(&left_values[left_idx[0].as_usize()..left_idx[1].as_usize()]);
         output_values.append_slice(
-            &left_values
-                [left_idx[0].to_usize().unwrap()..left_idx[1].to_usize().unwrap()],
-        );
-        output_values.append_slice(
-            &right_values
-                [right_idx[0].to_usize().unwrap()..right_idx[1].to_usize().unwrap()],
+            &right_values[right_idx[0].as_usize()..right_idx[1].as_usize()],
         );
         output_offsets.append(Offset::from_usize(output_values.len()).unwrap());
     }
@@ -137,7 +134,7 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
         data_values
             .iter()
             .zip(offsets.iter_mut())
-            .map(|(data, offset)| data.len() - offset.peek().unwrap().to_usize().unwrap())
+            .map(|(data, offset)| data.len() - offset.peek().unwrap().as_usize())
             .sum(),
     );
 
@@ -148,8 +145,8 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
             .iter()
             .zip(offsets.iter_mut())
             .for_each(|(values, offset)| {
-                let index_start = offset.next().unwrap().to_usize().unwrap();
-                let index_end = offset.peek().unwrap().to_usize().unwrap();
+                let index_start = offset.next().unwrap().as_usize();
+                let index_end = offset.peek().unwrap().as_usize();
                 output_values.append_slice(&values[index_start..index_end]);
             });
         output_offsets.append(Offset::from_usize(output_values.len()).unwrap());

@@ -568,7 +568,7 @@ where
     /// Returns the byte offset at `idx`
     #[inline]
     fn get_value_offset(&self, idx: usize) -> usize {
-        self.src_offsets[idx].to_usize().expect("illegal offset")
+        self.src_offsets[idx].as_usize()
     }
 
     /// Returns the start and end of the value at index `idx` along with its length

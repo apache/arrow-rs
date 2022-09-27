@@ -31,8 +31,8 @@ fn offset_value_equal<T: ArrowNativeType + Integer>(
     rhs_pos: usize,
     len: usize,
 ) -> bool {
-    let lhs_start = lhs_offsets[lhs_pos].to_usize().unwrap();
-    let rhs_start = rhs_offsets[rhs_pos].to_usize().unwrap();
+    let lhs_start = lhs_offsets[lhs_pos].as_usize();
+    let rhs_start = rhs_offsets[rhs_pos].as_usize();
     let lhs_len = lhs_offsets[lhs_pos + len] - lhs_offsets[lhs_pos];
     let rhs_len = rhs_offsets[rhs_pos + len] - rhs_offsets[rhs_pos];
 

@@ -308,20 +308,13 @@ impl<K: ArrowPrimitiveType> DictionaryArray<K> {
 
     /// Return an iterator over the keys (indexes into the dictionary)
     pub fn keys_iter(&self) -> impl Iterator<Item = Option<usize>> + '_ {
-        self.keys
-            .iter()
-            .map(|key| key.map(|k| k.to_usize().expect("Dictionary index not usize")))
+        self.keys.iter().map(|key| key.map(|k| k.as_usize()))
     }
 
     /// Return the value of `keys` (the dictionary key) at index `i`,
     /// cast to `usize`, `None` if the value at `i` is `NULL`.
     pub fn key(&self, i: usize) -> Option<usize> {
-        self.keys.is_valid(i).then(|| {
-            self.keys
-                .value(i)
-                .to_usize()
-                .expect("Dictionary index not usize")
-        })
+        self.keys.is_valid(i).then(|| self.keys.value(i).as_usize())
     }
 
     /// Downcast this dictionary to a [`TypedDictionaryArray`]
@@ -586,7 +579,7 @@ where
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         let val = self.dictionary.keys.value_unchecked(index);
-        let value_idx = val.to_usize().unwrap();
+        let value_idx = val.as_usize();
 
         // As dictionary keys are only verified for non-null indexes
         // we must check the value is within bounds

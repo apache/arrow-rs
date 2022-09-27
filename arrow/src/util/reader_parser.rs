@@ -97,20 +97,20 @@ impl Parser for Date32Type {
     fn parse(string: &str) -> Option<i32> {
         use chrono::Datelike;
         let date = string.parse::<chrono::NaiveDate>().ok()?;
-        Self::Native::from_i32(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
+        Some(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
     }
 
     fn parse_formatted(string: &str, format: &str) -> Option<i32> {
         use chrono::Datelike;
         let date = chrono::NaiveDate::parse_from_str(string, format).ok()?;
-        Self::Native::from_i32(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
+        Some(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
     }
 }
 
 impl Parser for Date64Type {
     fn parse(string: &str) -> Option<i64> {
         let date_time = string.parse::<chrono::NaiveDateTime>().ok()?;
-        Self::Native::from_i64(date_time.timestamp_millis())
+        Some(date_time.timestamp_millis())
     }
 
     fn parse_formatted(string: &str, format: &str) -> Option<i64> {
@@ -132,10 +132,10 @@ impl Parser for Date64Type {
         });
         if has_zone {
             let date_time = chrono::DateTime::parse_from_str(string, format).ok()?;
-            Self::Native::from_i64(date_time.timestamp_millis())
+            Some(date_time.timestamp_millis())
         } else {
             let date_time = chrono::NaiveDateTime::parse_from_str(string, format).ok()?;
-            Self::Native::from_i64(date_time.timestamp_millis())
+            Some(date_time.timestamp_millis())
         }
     }
 }
