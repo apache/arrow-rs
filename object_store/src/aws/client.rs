@@ -200,11 +200,16 @@ pub struct S3Config {
     pub credentials: CredentialProvider,
     pub retry_config: RetryConfig,
     pub allow_http: bool,
+    pub virtual_hosted_request_style: bool,
 }
 
 impl S3Config {
     fn path_url(&self, path: &Path) -> String {
-        format!("{}/{}/{}", self.endpoint, self.bucket, encode_path(path))
+        if self.virtual_hosted_request_style {
+            format!("{}/{}", self.endpoint, encode_path(path))
+        } else {
+            format!("{}/{}/{}", self.endpoint, self.bucket, encode_path(path))
+        }
     }
 }
 

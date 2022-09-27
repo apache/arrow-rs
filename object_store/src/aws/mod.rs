@@ -354,6 +354,7 @@ pub struct AmazonS3Builder {
     retry_config: RetryConfig,
     allow_http: bool,
     imdsv1_fallback: bool,
+    virtual_hosted_request_style: bool,
 }
 
 impl AmazonS3Builder {
@@ -455,6 +456,18 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Sets if virtual hosted style request has to be used.
+    /// If `virtual_hosted_request_style` is :
+    /// * false (default):  Path style request is used
+    /// * true:  Virtual hosted style request is used
+    pub fn with_virtual_hosted_request_style(
+        mut self,
+        virtual_hosted_request_style: bool,
+    ) -> Self {
+        self.virtual_hosted_request_style = virtual_hosted_request_style;
+        self
+    }
+
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
         self.retry_config = retry_config;
@@ -541,9 +554,14 @@ impl AmazonS3Builder {
             },
         };
 
-        let endpoint = self
-            .endpoint
-            .unwrap_or_else(|| format!("https://s3.{}.amazonaws.com", region));
+        let endpoint = if self.virtual_hosted_request_style {
+            self.endpoint.unwrap_or_else(|| {
+                format!("https://{}.s3.{}.amazonaws.com", bucket, region)
+            })
+        } else {
+            self.endpoint
+                .unwrap_or_else(|| format!("https://s3.{}.amazonaws.com", region))
+        };
 
         let config = S3Config {
             region,
@@ -552,6 +570,7 @@ impl AmazonS3Builder {
             credentials,
             retry_config: self.retry_config,
             allow_http: self.allow_http,
+            virtual_hosted_request_style: self.virtual_hosted_request_style,
         };
 
         let client = Arc::new(S3Client::new(config));
@@ -643,6 +662,14 @@ mod tests {
                     env::var("OBJECT_STORE_AWS_SESSION_TOKEN").ok()
                 {
                     config.with_token(token)
+                } else {
+                    config
+                };
+
+                let config = if let Some(virtual_hosted_request_style) =
+                env::var("OBJECT_STORE_VIRTUAL_HOSTED_REQUEST_STYLE").ok()
+                {
+                    config.with_virtual_hosted_request_style(virtual_hosted_request_style.trim().parse().unwrap())
                 } else {
                     config
                 };
