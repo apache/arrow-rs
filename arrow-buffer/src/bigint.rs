@@ -76,7 +76,7 @@ impl i256 {
 
     /// Create an i256 from the provided low u128 and high i128
     #[inline]
-    fn from_parts(low: u128, high: i128) -> Self {
+    pub fn from_parts(low: u128, high: i128) -> Self {
         Self { low, high }
     }
 
