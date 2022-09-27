@@ -48,92 +48,24 @@ unsafe fn build_primitive_array<O: ArrowPrimitiveType>(
     ))
 }
 
-/// Applies an unary and infallible function to a primitive array.
-/// This is the fastest way to perform an operation on a primitive array when
-/// the benefits of a vectorized operation outweigh the cost of branching nulls and non-nulls.
-///
-/// # Implementation
-///
-/// This will apply the function for all values, including those on null slots.
-/// This implies that the operation must be infallible for any value of the corresponding type
-/// or this function may panic.
-/// # Example
-/// ```rust
-/// # use arrow::array::Int32Array;
-/// # use arrow::datatypes::Int32Type;
-/// # use arrow::compute::kernels::arity::unary;
-/// # fn main() {
-/// let array = Int32Array::from(vec![Some(5), Some(7), None]);
-/// let c = unary::<_, _, Int32Type>(&array, |x| x * 2 + 1);
-/// assert_eq!(c, Int32Array::from(vec![Some(11), Some(15), None]));
-/// # }
-/// ```
+/// See [`PrimitiveArray::unary`]
 pub fn unary<I, F, O>(array: &PrimitiveArray<I>, op: F) -> PrimitiveArray<O>
 where
     I: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
     F: Fn(I::Native) -> O::Native,
 {
-    let data = array.data();
-    let len = data.len();
-    let null_count = data.null_count();
-
-    let null_buffer = data
-        .null_buffer()
-        .map(|b| b.bit_slice(data.offset(), data.len()));
-
-    let values = array.values().iter().map(|v| op(*v));
-    // JUSTIFICATION
-    //  Benefit
-    //      ~60% speedup
-    //  Soundness
-    //      `values` is an iterator with a known size because arrays are sized.
-    let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
-    unsafe { build_primitive_array(len, buffer, null_count, null_buffer) }
+    array.unary(op)
 }
 
-/// Applies a unary and fallible function to all valid values in a primitive array
-///
-/// This is unlike [`unary`] which will apply an infallible function to all rows regardless
-/// of validity, in many cases this will be significantly faster and should be preferred
-/// if `op` is infallible.
-///
-/// Note: LLVM is currently unable to effectively vectorize fallible operations
+/// See [`PrimitiveArray::try_unary`]
 pub fn try_unary<I, F, O>(array: &PrimitiveArray<I>, op: F) -> Result<PrimitiveArray<O>>
 where
     I: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
     F: Fn(I::Native) -> Result<O::Native>,
 {
-    let len = array.len();
-    let null_count = array.null_count();
-
-    if null_count == 0 {
-        let values = array.values().iter().map(|v| op(*v));
-        // JUSTIFICATION
-        //  Benefit
-        //      ~60% speedup
-        //  Soundness
-        //      `values` is an iterator with a known size because arrays are sized.
-        let buffer = unsafe { Buffer::try_from_trusted_len_iter(values)? };
-        return Ok(unsafe { build_primitive_array(len, buffer, 0, None) });
-    }
-
-    let null_buffer = array
-        .data_ref()
-        .null_buffer()
-        .map(|b| b.bit_slice(array.offset(), array.len()));
-
-    let mut buffer = BufferBuilder::<O::Native>::new(len);
-    buffer.append_n_zeroed(array.len());
-    let slice = buffer.as_slice_mut();
-
-    try_for_each_valid_idx(array.len(), 0, null_count, null_buffer.as_deref(), |idx| {
-        unsafe { *slice.get_unchecked_mut(idx) = op(array.value_unchecked(idx))? };
-        Ok::<_, ArrowError>(())
-    })?;
-
-    Ok(unsafe { build_primitive_array(len, buffer.finish(), null_count, null_buffer) })
+    array.try_unary(op)
 }
 
 /// A helper function that applies an infallible unary function to a dictionary array with primitive value type.
