@@ -364,9 +364,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
     /// Applies a unary and fallible function to all valid values in a primitive array
     ///
-    /// This is unlike [`unary`] which will apply an infallible function to all rows regardless
-    /// of validity, in many cases this will be significantly faster and should be preferred
-    /// if `op` is infallible.
+    /// This is unlike [`Self::unary`] which will apply an infallible function to all rows
+    /// regardless of validity, in many cases this will be significantly faster and should
+    /// be preferred if `op` is infallible.
     ///
     /// Note: LLVM is currently unable to effectively vectorize fallible operations
     pub fn try_unary<F, O, E>(&self, op: F) -> Result<PrimitiveArray<O>, E>
