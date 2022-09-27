@@ -105,14 +105,14 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::UInt64 => Box::new(UInt64Builder::with_capacity(capacity)),
         DataType::Float32 => Box::new(Float32Builder::with_capacity(capacity)),
         DataType::Float64 => Box::new(Float64Builder::with_capacity(capacity)),
-        DataType::Binary => Box::new(BinaryBuilder::with_capacity(1024, capacity)),
+        DataType::Binary => Box::new(BinaryBuilder::with_capacity(capacity, 1024)),
         DataType::FixedSizeBinary(len) => {
             Box::new(FixedSizeBinaryBuilder::with_capacity(capacity, *len))
         }
         DataType::Decimal128(precision, scale) => Box::new(
             Decimal128Builder::with_capacity(capacity, *precision, *scale),
         ),
-        DataType::Utf8 => Box::new(StringBuilder::with_capacity(1024, capacity)),
+        DataType::Utf8 => Box::new(StringBuilder::with_capacity(capacity, 1024)),
         DataType::Date32 => Box::new(Date32Builder::with_capacity(capacity)),
         DataType::Date64 => Box::new(Date64Builder::with_capacity(capacity)),
         DataType::Time32(TimeUnit::Second) => {
