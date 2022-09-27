@@ -667,9 +667,11 @@ mod tests {
                 };
 
                 let config = if let Some(virtual_hosted_request_style) =
-                env::var("OBJECT_STORE_VIRTUAL_HOSTED_REQUEST_STYLE").ok()
+                    env::var("OBJECT_STORE_VIRTUAL_HOSTED_REQUEST_STYLE").ok()
                 {
-                    config.with_virtual_hosted_request_style(virtual_hosted_request_style.trim().parse().unwrap())
+                    config.with_virtual_hosted_request_style(
+                        virtual_hosted_request_style.trim().parse().unwrap(),
+                    )
                 } else {
                     config
                 };
