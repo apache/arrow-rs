@@ -332,6 +332,35 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     ) -> impl Iterator<Item = Option<T::Native>> + 'a {
         indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
     }
+
+    /// Reinterprets this array's contents as a different data type without copying
+    ///
+    /// This can be used to efficiently convert between primitive arrays with the
+    /// same underlying representation
+    ///
+    /// Note: this will not modify the underlying values, and therefore may change
+    /// the semantic values of the array, e.g. 100 milliseconds in a [`TimestampNanosecondArray`]
+    /// will become 100 seconds in a [`TimestampSecondArray`].
+    ///
+    /// For casts that preserve the semantic value, check out the [compute kernels]
+    ///
+    /// [compute kernels](https://docs.rs/arrow/latest/arrow/compute/kernels/cast/index.html)
+    ///
+    /// ```
+    /// # use arrow_array::{Int64Array, TimestampNanosecondArray};
+    /// let a = Int64Array::from_iter_values([1, 2, 3, 4]);
+    /// let b: TimestampNanosecondArray = a.reinterpret_cast();
+    /// ```
+    pub fn reinterpret_cast<K>(&self) -> PrimitiveArray<K>
+    where
+        K: ArrowPrimitiveType<Native = T::Native>,
+    {
+        let d = self.data.clone().into_builder().data_type(K::DATA_TYPE);
+
+        // SAFETY:
+        // Native type is the same
+        PrimitiveArray::from(unsafe { d.build_unchecked() })
+    }
 }
 
 impl<T: ArrowPrimitiveType> From<PrimitiveArray<T>> for ArrayData {
