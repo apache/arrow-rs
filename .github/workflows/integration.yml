@@ -25,6 +25,10 @@ on:
   pull_request:
     paths:
       - arrow/**
+      - arrow-array/**
+      - arrow-buffer/**
+      - arrow-data/**
+      - arrow-schema/**
       - arrow-pyarrow-integration-testing/**
       - integration-testing/**
       - .github/**
