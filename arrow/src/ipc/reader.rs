@@ -20,6 +20,8 @@
 //! The `FileReader` and `StreamReader` have similar interfaces,
 //! however the `FileReader` expects a reader that supports `Seek`ing
 
+use arrow_array::types::*;
+use arrow_schema::*;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -27,8 +29,6 @@ use std::sync::Arc;
 
 use crate::array::*;
 use crate::buffer::{Buffer, MutableBuffer};
-use crate::compute::cast;
-use crate::datatypes::{DataType, Field, IntervalUnit, Schema, SchemaRef, UnionMode};
 use crate::error::{ArrowError, Result};
 use crate::ipc;
 use crate::record_batch::{RecordBatch, RecordBatchOptions, RecordBatchReader};
@@ -423,21 +423,39 @@ fn create_primitive_array(
         | UInt8
         | UInt16
         | UInt32
-        | Time32(_)
+        | Time32(TimeUnit::Second)
+        | Time32(TimeUnit::Millisecond)
         | Date32
         | Interval(IntervalUnit::YearMonth) => {
             if buffers[1].len() / 8 == length && length != 1 {
                 // interpret as a signed i64, and cast appropriately
-                let data = ArrayData::builder(DataType::Int64)
+                let data = ArrayData::builder(Int64)
                     .len(length)
                     .add_buffer(buffers[1].clone())
                     .null_bit_buffer(null_buffer)
                     .build()
                     .unwrap();
-                let values = Arc::new(Int64Array::from(data)) as ArrayRef;
-                // this cast is infallible, the unwrap is safe
-                let casted = cast(&values, data_type).unwrap();
-                casted.into_data()
+                let values = Int64Array::from(data);
+
+                match data_type {
+                    Int8 => values.unary::<_, Int8Type>(|x| x as _).into_data(),
+                    Int16 => values.unary::<_, Int16Type>(|x| x as _).into_data(),
+                    Int32 => values.unary::<_, Int32Type>(|x| x as _).into_data(),
+                    UInt8 => values.unary::<_, UInt8Type>(|x| x as _).into_data(),
+                    UInt16 => values.unary::<_, UInt16Type>(|x| x as _).into_data(),
+                    UInt32 => values.unary::<_, UInt32Type>(|x| x as _).into_data(),
+                    Time32(TimeUnit::Second) => {
+                        values.unary::<_, Time32SecondType>(|x| x as _).into_data()
+                    }
+                    Time32(TimeUnit::Millisecond) => values
+                        .unary::<_, Time32MillisecondType>(|x| x as _)
+                        .into_data(),
+                    Date32 => values.unary::<_, Date32Type>(|x| x as _).into_data(),
+                    Interval(IntervalUnit::YearMonth) => values
+                        .unary::<_, IntervalYearMonthType>(|x| x as _)
+                        .into_data(),
+                    _ => unreachable!(),
+                }
             } else {
                 ArrayData::builder(data_type.clone())
                     .len(length)
@@ -450,16 +468,14 @@ fn create_primitive_array(
         Float32 => {
             if buffers[1].len() / 8 == length && length != 1 {
                 // interpret as a f64, and cast appropriately
-                let data = ArrayData::builder(DataType::Float64)
+                let data = ArrayData::builder(Float64)
                     .len(length)
                     .add_buffer(buffers[1].clone())
                     .null_bit_buffer(null_buffer)
                     .build()
                     .unwrap();
-                let values = Arc::new(Float64Array::from(data)) as ArrayRef;
-                // this cast is infallible, the unwrap is safe
-                let casted = cast(&values, data_type).unwrap();
-                casted.into_data()
+                let values = Float64Array::from(data);
+                values.unary::<_, Float32Type>(|x| x as _).into_data()
             } else {
                 ArrayData::builder(data_type.clone())
                     .len(length)
