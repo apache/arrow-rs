@@ -63,24 +63,6 @@ pub trait ArrowNativeType:
     fn to_isize(&self) -> Option<isize> {
         None
     }
-
-    /// Convert native type from i32.
-    #[inline]
-    fn from_i32(_: i32) -> Option<Self> {
-        None
-    }
-
-    /// Convert native type from i64.
-    #[inline]
-    fn from_i64(_: i64) -> Option<Self> {
-        None
-    }
-
-    /// Convert native type from i128.
-    #[inline]
-    fn from_i128(_: i128) -> Option<Self> {
-        None
-    }
 }
 
 impl private::Sealed for i8 {}
@@ -135,12 +117,6 @@ impl ArrowNativeType for i32 {
     fn to_isize(&self) -> Option<isize> {
         num::ToPrimitive::to_isize(self)
     }
-
-    /// Convert native type from i32.
-    #[inline]
-    fn from_i32(val: i32) -> Option<Self> {
-        Some(val)
-    }
 }
 
 impl private::Sealed for i64 {}
@@ -159,12 +135,6 @@ impl ArrowNativeType for i64 {
     fn to_isize(&self) -> Option<isize> {
         num::ToPrimitive::to_isize(self)
     }
-
-    /// Convert native type from i64.
-    #[inline]
-    fn from_i64(val: i64) -> Option<Self> {
-        Some(val)
-    }
 }
 
 impl private::Sealed for i128 {}
@@ -182,12 +152,6 @@ impl ArrowNativeType for i128 {
     #[inline]
     fn to_isize(&self) -> Option<isize> {
         num::ToPrimitive::to_isize(self)
-    }
-
-    /// Convert native type from i128.
-    #[inline]
-    fn from_i128(val: i128) -> Option<Self> {
-        Some(val)
     }
 }
 
