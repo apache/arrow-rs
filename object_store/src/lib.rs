@@ -701,6 +701,20 @@ mod tests {
         assert_eq!(files, vec![path.clone()]);
 
         storage.delete(&path).await.unwrap();
+
+        let path = Path::parse("foo bar/I contain spaces.parquet").unwrap();
+        storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
+        storage.head(&path).await.unwrap();
+        let files = flatten_list_stream(storage, Some(&Path::from("foo bar")))
+            .await
+            .unwrap();
+        assert_eq!(files, vec![path.clone()]);
+        storage.delete(&path).await.unwrap();
+
+        let files = flatten_list_stream(storage, Some(&Path::from("foo bar")))
+            .await
+            .unwrap();
+        assert!(files.is_empty(), "{:?}", files);
     }
 
     fn get_vec_of_bytes(chunk_length: usize, num_chunks: usize) -> Vec<Bytes> {

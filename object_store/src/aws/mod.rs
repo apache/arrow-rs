@@ -58,6 +58,20 @@ use crate::{
 mod client;
 mod credential;
 
+// http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
+//
+// Do not URI-encode any of the unreserved characters that RFC 3986 defines:
+// A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
+pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet =
+    percent_encoding::NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'.')
+        .remove(b'_')
+        .remove(b'~');
+
+/// This struct is used to maintain the URI path encoding
+const STRICT_PATH_ENCODE_SET: percent_encoding::AsciiSet = STRICT_ENCODE_SET.remove(b'/');
+
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
