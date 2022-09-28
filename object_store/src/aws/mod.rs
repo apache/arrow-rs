@@ -460,6 +460,9 @@ impl AmazonS3Builder {
     /// If `virtual_hosted_request_style` is :
     /// * false (default):  Path style request is used
     /// * true:  Virtual hosted style request is used
+    ///
+    /// If the `endpoint` is provided then `virtual_hosted_request_style`
+    /// is ignored. Path style is assumed
     pub fn with_virtual_hosted_request_style(
         mut self,
         virtual_hosted_request_style: bool,
@@ -554,20 +557,21 @@ impl AmazonS3Builder {
             },
         };
 
-        let endpoint = if self.virtual_hosted_request_style {
-            self.endpoint.unwrap_or_else(|| {
+        let endpoint = self.endpoint.clone().unwrap_or_else(|| {
+            if self.virtual_hosted_request_style {
                 format!("https://{}.s3.{}.amazonaws.com", bucket, region)
-            })
-        } else {
-            self.endpoint
-                .unwrap_or_else(|| format!("https://s3.{}.amazonaws.com", region))
-        };
+            } else {
+                format!("https://s3.{}.amazonaws.com", region)
+            }
+        });
 
-        let bucket_endpoint = if self.virtual_hosted_request_style {
-            endpoint.clone()
-        } else {
-            format!("{}/{}", endpoint, bucket)
-        };
+        let bucket_endpoint = self.endpoint.unwrap_or_else(|| {
+            if self.virtual_hosted_request_style {
+                format!("https://{}.s3.{}.amazonaws.com", bucket, region)
+            } else {
+                format!("https://s3.{}.amazonaws.com/{}", region, bucket)
+            }
+        });
 
         let config = S3Config {
             region,
