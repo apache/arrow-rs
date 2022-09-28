@@ -595,7 +595,7 @@ mod tests {
     use super::*;
     use crate::tests::{
         copy_if_not_exists, list_uses_directories_correctly, list_with_delimiter,
-        put_get_delete_list, rename_and_copy, stream_get,
+        put_get_delete_list, put_get_delete_list_opts, rename_and_copy, stream_get,
     };
     use std::env;
 
@@ -663,9 +663,10 @@ mod tests {
 
     #[tokio::test]
     async fn azure_blob_test() {
+        let use_emulator = env::var("AZURE_USE_EMULATOR").is_ok();
         let integration = maybe_skip_integration!().build().unwrap();
-
-        put_get_delete_list(&integration).await;
+        // Azurite doesn't support listing with spaces - https://github.com/localstack/localstack/issues/6328
+        put_get_delete_list_opts(&integration, use_emulator).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
@@ -687,13 +688,9 @@ mod tests {
             .with_container_name(
                 env::var("OBJECT_STORE_BUCKET").expect("must be set OBJECT_STORE_BUCKET"),
             )
-            .with_client_secret_authorization(
-                env::var("AZURE_STORAGE_CLIENT_ID")
+            .with_access_key(
+                env::var("AZURE_STORAGE_ACCESS_KEY")
                     .expect("must be set AZURE_STORAGE_CLIENT_ID"),
-                env::var("AZURE_STORAGE_CLIENT_SECRET")
-                    .expect("must be set AZURE_STORAGE_CLIENT_SECRET"),
-                env::var("AZURE_STORAGE_TENANT_ID")
-                    .expect("must be set AZURE_STORAGE_TENANT_ID"),
             );
         let integration = builder.build().unwrap();
 

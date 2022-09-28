@@ -565,7 +565,7 @@ mod tests {
     use super::*;
     use crate::tests::{
         get_nonexistent_object, list_uses_directories_correctly, list_with_delimiter,
-        put_get_delete_list, rename_and_copy, stream_get,
+        put_get_delete_list_opts, rename_and_copy, stream_get,
     };
     use bytes::Bytes;
     use std::env;
@@ -691,9 +691,11 @@ mod tests {
     #[tokio::test]
     async fn s3_test() {
         let config = maybe_skip_integration!();
+        let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
         let integration = config.build().unwrap();
 
-        put_get_delete_list(&integration).await;
+        // Localstack doesn't support listing with spaces https://github.com/localstack/localstack/issues/6328
+        put_get_delete_list_opts(&integration, is_local).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
