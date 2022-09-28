@@ -197,6 +197,7 @@ pub struct S3Config {
     pub region: String,
     pub endpoint: String,
     pub bucket: String,
+    pub bucket_endpoint: String,
     pub credentials: CredentialProvider,
     pub retry_config: RetryConfig,
     pub allow_http: bool,
@@ -205,11 +206,7 @@ pub struct S3Config {
 
 impl S3Config {
     fn path_url(&self, path: &Path) -> String {
-        if self.virtual_hosted_request_style {
-            format!("{}/{}", self.endpoint, encode_path(path))
-        } else {
-            format!("{}/{}/{}", self.endpoint, self.bucket, encode_path(path))
-        }
+        format!("{}/{}", self.bucket_endpoint, encode_path(path))
     }
 }
 
@@ -347,7 +344,7 @@ impl S3Client {
         token: Option<&str>,
     ) -> Result<(ListResult, Option<String>)> {
         let credential = self.get_credential().await?;
-        let url = format!("{}/{}", self.config.endpoint, self.config.bucket);
+        let url = self.config.bucket_endpoint.clone();
 
         let mut query = Vec::with_capacity(4);
 
@@ -403,12 +400,7 @@ impl S3Client {
 
     pub async fn create_multipart(&self, location: &Path) -> Result<MultipartId> {
         let credential = self.get_credential().await?;
-        let url = format!(
-            "{}/{}/{}?uploads=",
-            self.config.endpoint,
-            self.config.bucket,
-            encode_path(location)
-        );
+        let url = format!("{}?uploads=", self.config.path_url(location),);
 
         let response = self
             .client

@@ -555,18 +555,30 @@ impl AmazonS3Builder {
         };
 
         let endpoint = if self.virtual_hosted_request_style {
-            self.endpoint.unwrap_or_else(|| {
+            self.endpoint.clone().unwrap_or_else(|| {
                 format!("https://{}.s3.{}.amazonaws.com", bucket, region)
             })
         } else {
             self.endpoint
+                .clone()
                 .unwrap_or_else(|| format!("https://s3.{}.amazonaws.com", region))
+        };
+
+        let bucket_endpoint = if self.virtual_hosted_request_style {
+            self.endpoint.unwrap_or_else(|| {
+                format!("https://{}.s3.{}.amazonaws.com", bucket, region)
+            })
+        } else {
+            self.endpoint.unwrap_or_else(|| {
+                format!("https://s3.{}.amazonaws.com/{}", region, bucket)
+            })
         };
 
         let config = S3Config {
             region,
             endpoint,
             bucket,
+            bucket_endpoint,
             credentials,
             retry_config: self.retry_config,
             allow_http: self.allow_http,
