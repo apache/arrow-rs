@@ -20,49 +20,62 @@
 use crate::client::backoff::{Backoff, BackoffConfig};
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use reqwest::header::LOCATION;
 use reqwest::{Response, StatusCode};
-use snafu::Snafu;
 use std::time::{Duration, Instant};
 use tracing::info;
 
 /// Retry request error
-#[derive(Debug, Snafu)]
-#[snafu(display(
-    "response error \"{}\", after {} retries: {}",
-    message,
-    retries,
-    source
-))]
+#[derive(Debug)]
 pub struct Error {
     retries: usize,
     message: String,
-    source: reqwest::Error,
+    source: Option<reqwest::Error>,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "response error \"{}\", after {} retries",
+            self.message, self.retries
+        )?;
+        if let Some(source) = &self.source {
+            write!(f, ": {}", source)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_ref().map(|e| e as _)
+    }
 }
 
 impl Error {
     /// Returns the status code associated with this error if any
     pub fn status(&self) -> Option<StatusCode> {
-        self.source.status()
+        self.source.as_ref().and_then(|e| e.status())
     }
 }
 
 impl From<Error> for std::io::Error {
     fn from(err: Error) -> Self {
         use std::io::ErrorKind;
-        if err.source.is_builder() || err.source.is_request() {
-            Self::new(ErrorKind::InvalidInput, err)
-        } else if let Some(s) = err.source.status() {
-            match s {
-                StatusCode::NOT_FOUND => Self::new(ErrorKind::NotFound, err),
-                StatusCode::BAD_REQUEST => Self::new(ErrorKind::InvalidInput, err),
-                _ => Self::new(ErrorKind::Other, err),
+        match (&err.source, err.status()) {
+            (Some(source), _) if source.is_builder() || source.is_request() => {
+                Self::new(ErrorKind::InvalidInput, err)
             }
-        } else if err.source.is_timeout() {
-            Self::new(ErrorKind::TimedOut, err)
-        } else if err.source.is_connect() {
-            Self::new(ErrorKind::NotConnected, err)
-        } else {
-            Self::new(ErrorKind::Other, err)
+            (_, Some(StatusCode::NOT_FOUND)) => Self::new(ErrorKind::NotFound, err),
+            (_, Some(StatusCode::BAD_REQUEST)) => Self::new(ErrorKind::InvalidInput, err),
+            (Some(source), None) if source.is_timeout() => {
+                Self::new(ErrorKind::TimedOut, err)
+            }
+            (Some(source), None) if source.is_connect() => {
+                Self::new(ErrorKind::NotConnected, err)
+            }
+            _ => Self::new(ErrorKind::Other, err),
         }
     }
 }
@@ -131,7 +144,21 @@ impl RetryExt for reqwest::RequestBuilder {
                 let s = self.try_clone().expect("request body must be cloneable");
                 match s.send().await {
                     Ok(r) => match r.error_for_status_ref() {
-                        Ok(_) => return Ok(r),
+                        Ok(_) if r.status().is_success() => return Ok(r),
+                        Ok(r) => {
+                            let is_bare_redirect = r.status().is_redirection() && !r.headers().contains_key(LOCATION);
+                            let message = match is_bare_redirect {
+                                true => "Received redirect without LOCATION, this normally indicates an incorrectly configured region".to_string(),
+                                // Not actually sure if this is reachable, but here for completeness
+                                false => format!("request unsuccessful: {}", r.status()),
+                            };
+
+                            return Err(Error{
+                                message,
+                                retries,
+                                source: None,
+                            })
+                        }
                         Err(e) => {
                             let status = r.status();
 
@@ -152,7 +179,7 @@ impl RetryExt for reqwest::RequestBuilder {
                                 return Err(Error{
                                     message,
                                     retries,
-                                    source: e,
+                                    source: Some(e),
                                 })
 
                             }
@@ -168,7 +195,7 @@ impl RetryExt for reqwest::RequestBuilder {
                         return Err(Error{
                             retries,
                             message: "request error".to_string(),
-                            source: e
+                            source: Some(e)
                         })
                     }
                 }
@@ -253,7 +280,7 @@ mod tests {
         let r = do_request().await.unwrap();
         assert_eq!(r.status(), StatusCode::NO_CONTENT);
 
-        // Follows redirects
+        // Follows 402 redirects
         mock.push(
             Response::builder()
                 .status(StatusCode::FOUND)
@@ -265,6 +292,44 @@ mod tests {
         let r = do_request().await.unwrap();
         assert_eq!(r.status(), StatusCode::OK);
         assert_eq!(r.url().path(), "/foo");
+
+        // Follows 401 redirects
+        mock.push(
+            Response::builder()
+                .status(StatusCode::FOUND)
+                .header(LOCATION, "/bar")
+                .body(Body::empty())
+                .unwrap(),
+        );
+
+        let r = do_request().await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(r.url().path(), "/bar");
+
+        // Handles redirect loop
+        for _ in 0..10 {
+            mock.push(
+                Response::builder()
+                    .status(StatusCode::FOUND)
+                    .header(LOCATION, "/bar")
+                    .body(Body::empty())
+                    .unwrap(),
+            );
+        }
+
+        let e = do_request().await.unwrap_err().to_string();
+        assert!(e.ends_with("too many redirects"), "{}", e);
+
+        // Handles redirect missing location
+        mock.push(
+            Response::builder()
+                .status(StatusCode::FOUND)
+                .body(Body::empty())
+                .unwrap(),
+        );
+
+        let e = do_request().await.unwrap_err();
+        assert_eq!(e.message, "Received redirect without LOCATION, this normally indicates an incorrectly configured region");
 
         // Gives up after the retrying the specified number of times
         for _ in 0..=retry.max_retries {
