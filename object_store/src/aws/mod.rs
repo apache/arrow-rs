@@ -557,21 +557,21 @@ impl AmazonS3Builder {
             },
         };
 
-        let endpoint = self.endpoint.clone().unwrap_or_else(|| {
-            if self.virtual_hosted_request_style {
-                format!("https://{}.s3.{}.amazonaws.com", bucket, region)
-            } else {
-                format!("https://s3.{}.amazonaws.com", region)
-            }
-        });
+        let endpoint: String;
+        let bucket_endpoint: String;
 
-        let bucket_endpoint = self.endpoint.unwrap_or_else(|| {
-            if self.virtual_hosted_request_style {
-                format!("https://{}.s3.{}.amazonaws.com", bucket, region)
-            } else {
-                format!("https://s3.{}.amazonaws.com/{}", region, bucket)
-            }
-        });
+        //If `endpoint` input is provided then its assumed to comply with path style.
+        //bucket is appended to the end to form bucket_endpoint
+        if let Some(input_endpoint) = self.endpoint {
+            bucket_endpoint = format!("{}/{}", input_endpoint, bucket);
+            endpoint = input_endpoint;
+        } else if self.virtual_hosted_request_style {
+            bucket_endpoint = format!("https://{}.s3.{}.amazonaws.com", bucket, region);
+            endpoint = bucket_endpoint.clone();
+        } else {
+            bucket_endpoint = format!("https://s3.{}.amazonaws.com/{}", region, bucket);
+            endpoint = format!("https://s3.{}.amazonaws.com", region);
+        };
 
         let config = S3Config {
             region,
