@@ -95,15 +95,15 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
         dict_values: &[u8],
     ) -> Result<()> {
         for key in keys {
-            let index = key.to_usize().unwrap();
+            let index = key.as_usize();
             if index + 1 >= dict_offsets.len() {
                 return Err(general_err!(
                     "dictionary key beyond bounds of dictionary: 0..{}",
                     dict_offsets.len().saturating_sub(1)
                 ));
             }
-            let start_offset = dict_offsets[index].to_usize().unwrap();
-            let end_offset = dict_offsets[index + 1].to_usize().unwrap();
+            let start_offset = dict_offsets[index].as_usize();
+            let end_offset = dict_offsets[index + 1].as_usize();
 
             // Dictionary values are verified when decoding dictionary page
             self.try_push(&dict_values[start_offset..end_offset], false)?;
@@ -167,7 +167,7 @@ impl<I: OffsetSizeTrait + ScalarValue> BufferQueue for OffsetBuffer<I> {
 
         Self {
             offsets: std::mem::replace(&mut self.offsets, new_offsets),
-            values: self.values.take(end_offset.to_usize().unwrap()),
+            values: self.values.take(end_offset.as_usize()),
         }
     }
 

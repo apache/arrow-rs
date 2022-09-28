@@ -280,14 +280,13 @@ fn binary_substring<OffsetSize: OffsetSizeTrait>(
     });
 
     // concatenate substrings into a buffer
-    let mut new_values =
-        MutableBuffer::new(new_offsets.last().unwrap().to_usize().unwrap());
+    let mut new_values = MutableBuffer::new(new_offsets.last().unwrap().as_usize());
 
     new_starts_ends
         .iter()
         .map(|(start, end)| {
-            let start = start.to_usize().unwrap();
-            let end = end.to_usize().unwrap();
+            let start = start.as_usize();
+            let end = end.as_usize();
             &data[start..end]
         })
         .for_each(|slice| new_values.extend_from_slice(slice));
@@ -375,7 +374,7 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
         // Safety: a StringArray must contain valid UTF8 data
         let data_str = unsafe { std::str::from_utf8_unchecked(data) };
         |offset: OffsetSize| {
-            let offset_usize = offset.to_usize().unwrap();
+            let offset_usize = offset.as_usize();
             if data_str.is_char_boundary(offset_usize) {
                 Ok(offset)
             } else {
@@ -411,14 +410,13 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
     })?;
 
     // concatenate substrings into a buffer
-    let mut new_values =
-        MutableBuffer::new(new_offsets.last().unwrap().to_usize().unwrap());
+    let mut new_values = MutableBuffer::new(new_offsets.last().unwrap().as_usize());
 
     new_starts_ends
         .iter()
         .map(|(start, end)| {
-            let start = start.to_usize().unwrap();
-            let end = end.to_usize().unwrap();
+            let start = start.as_usize();
+            let end = end.as_usize();
             &data[start..end]
         })
         .for_each(|slice| new_values.extend_from_slice(slice));
