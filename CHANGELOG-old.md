@@ -19,9 +19,9 @@
 
 # Historical Changelog
 
-## [23.0.0](https://github.com/apache/arrow-rs/tree/23.0.0) (2022-09-16)
+## [24.0.0](https://github.com/apache/arrow-rs/tree/24.0.0) (2022-09-16)
 
-[Full Changelog](https://github.com/apache/arrow-rs/compare/22.0.0...23.0.0)
+[Full Changelog](https://github.com/apache/arrow-rs/compare/22.0.0...24.0.0)
 
 **Breaking changes:**
 
