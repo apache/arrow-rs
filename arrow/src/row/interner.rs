@@ -22,7 +22,7 @@ use std::num::NonZeroU32;
 use std::ops::Index;
 
 /// An interned value
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Interned(NonZeroU32); // We use NonZeroU32 so that `Option<Interned>` is 32 bits
 
 /// A byte array interner that generates normalized keys that are sorted with respect
@@ -132,7 +132,6 @@ impl OrderPreservingInterner {
 
     /// Converts a normalized key returned by [`Self::normalized_key`] to [`Interned`]
     /// returning `None` if it cannot be found
-    #[allow(dead_code)]
     pub fn lookup(&self, normalized_key: &[u8]) -> Option<Interned> {
         let len = normalized_key.len();
 
@@ -159,7 +158,6 @@ impl OrderPreservingInterner {
     }
 
     /// Returns the interned value for a given [`Interned`]
-    #[allow(dead_code)]
     pub fn value(&self, key: Interned) -> &[u8] {
         self.values.index(key)
     }

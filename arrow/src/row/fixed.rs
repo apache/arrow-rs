@@ -19,17 +19,38 @@ use crate::array::PrimitiveArray;
 use crate::compute::SortOptions;
 use crate::datatypes::ArrowPrimitiveType;
 use crate::row::Rows;
-use crate::util::decimal::{Decimal128, Decimal256};
+use arrow_array::types::DecimalType;
+use arrow_array::{BooleanArray, DecimalArray};
+use arrow_buffer::{bit_util, MutableBuffer, ToByteSlice};
+use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_schema::DataType;
 use half::f16;
+
+pub trait FromSlice {
+    fn from_slice(slice: &[u8], invert: bool) -> Self;
+}
+
+impl<const N: usize> FromSlice for [u8; N] {
+    #[inline]
+    fn from_slice(slice: &[u8], invert: bool) -> Self {
+        let mut t: Self = slice.try_into().unwrap();
+        if invert {
+            t.iter_mut().for_each(|o| *o = !*o);
+        }
+        t
+    }
+}
 
 /// Encodes a value of a particular fixed width type into bytes according to the rules
 /// described on [`super::RowConverter`]
 pub trait FixedLengthEncoding: Copy {
     const ENCODED_LEN: usize = 1 + std::mem::size_of::<Self::Encoded>();
 
-    type Encoded: Sized + Copy + AsRef<[u8]> + AsMut<[u8]>;
+    type Encoded: Sized + Copy + FromSlice + AsRef<[u8]> + AsMut<[u8]>;
 
     fn encode(self) -> Self::Encoded;
+
+    fn decode(encoded: Self::Encoded) -> Self;
 }
 
 impl FixedLengthEncoding for bool {
@@ -37,6 +58,10 @@ impl FixedLengthEncoding for bool {
 
     fn encode(self) -> [u8; 1] {
         [self as u8]
+    }
+
+    fn decode(encoded: Self::Encoded) -> Self {
+        encoded[0] != 0
     }
 }
 
@@ -50,6 +75,12 @@ macro_rules! encode_signed {
                 // Toggle top "sign" bit to ensure consistent sort order
                 b[0] ^= 0x80;
                 b
+            }
+
+            fn decode(mut encoded: Self::Encoded) -> Self {
+                // Toggle top "sign" bit
+                encoded[0] ^= 0x80;
+                Self::from_be_bytes(encoded)
             }
         }
     };
@@ -69,6 +100,10 @@ macro_rules! encode_unsigned {
             fn encode(self) -> [u8; $n] {
                 self.to_be_bytes()
             }
+
+            fn decode(encoded: Self::Encoded) -> Self {
+                Self::from_be_bytes(encoded)
+            }
         }
     };
 }
@@ -87,6 +122,12 @@ impl FixedLengthEncoding for f16 {
         let val = s ^ (((s >> 15) as u16) >> 1) as i16;
         val.encode()
     }
+
+    fn decode(encoded: Self::Encoded) -> Self {
+        let bits = i16::decode(encoded);
+        let val = bits ^ (((bits >> 15) as u16) >> 1) as i16;
+        Self::from_bits(val as u16)
+    }
 }
 
 impl FixedLengthEncoding for f32 {
@@ -97,6 +138,12 @@ impl FixedLengthEncoding for f32 {
         let s = self.to_bits() as i32;
         let val = s ^ (((s >> 31) as u32) >> 1) as i32;
         val.encode()
+    }
+
+    fn decode(encoded: Self::Encoded) -> Self {
+        let bits = i32::decode(encoded);
+        let val = bits ^ (((bits >> 31) as u32) >> 1) as i32;
+        Self::from_bits(val as u32)
     }
 }
 
@@ -109,31 +156,40 @@ impl FixedLengthEncoding for f64 {
         let val = s ^ (((s >> 63) as u64) >> 1) as i64;
         val.encode()
     }
+
+    fn decode(encoded: Self::Encoded) -> Self {
+        let bits = i64::decode(encoded);
+        let val = bits ^ (((bits >> 63) as u64) >> 1) as i64;
+        Self::from_bits(val as u64)
+    }
 }
 
-impl FixedLengthEncoding for Decimal128 {
-    type Encoded = [u8; 16];
+/// The raw bytes of a decimal
+#[derive(Copy, Clone)]
+pub struct RawDecimal<const N: usize>(pub [u8; N]);
 
-    fn encode(self) -> [u8; 16] {
-        let mut val = *self.raw_value();
+impl<const N: usize> ToByteSlice for RawDecimal<N> {
+    fn to_byte_slice(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl<const N: usize> FixedLengthEncoding for RawDecimal<N> {
+    type Encoded = [u8; N];
+
+    fn encode(self) -> [u8; N] {
+        let mut val = self.0;
         // Convert to big endian representation
         val.reverse();
         // Toggle top "sign" bit to ensure consistent sort order
         val[0] ^= 0x80;
         val
     }
-}
 
-impl FixedLengthEncoding for Decimal256 {
-    type Encoded = [u8; 32];
-
-    fn encode(self) -> [u8; 32] {
-        let mut val = *self.raw_value();
-        // Convert to big endian representation
-        val.reverse();
-        // Toggle top "sign" bit to ensure consistent sort order
-        val[0] ^= 0x80;
-        val
+    fn decode(mut encoded: Self::Encoded) -> Self {
+        encoded[0] ^= 0x80;
+        encoded.reverse();
+        Self(encoded)
     }
 }
 
@@ -171,4 +227,148 @@ pub fn encode<T: FixedLengthEncoding, I: IntoIterator<Item = Option<T>>>(
         }
         *offset = end_offset;
     }
+}
+
+/// Splits `len` bytes from `src`
+#[inline]
+fn split_off<'a>(src: &mut &'a [u8], len: usize) -> &'a [u8] {
+    let v = &src[..len];
+    *src = &src[len..];
+    v
+}
+
+/// Decodes a `BooleanArray` from rows
+pub fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
+    let true_val = match options.descending {
+        true => !1,
+        false => 1,
+    };
+
+    let len = rows.len();
+
+    let mut null_count = 0;
+    let mut nulls = MutableBuffer::new(bit_util::ceil(len, 64) * 8);
+    let mut values = MutableBuffer::new(bit_util::ceil(len, 64) * 8);
+
+    let chunks = len / 64;
+    let remainder = len % 64;
+    for chunk in 0..chunks {
+        let mut null_packed = 0;
+        let mut values_packed = 0;
+
+        for bit_idx in 0..64 {
+            let i = split_off(&mut rows[bit_idx + chunk * 64], 2);
+            let (null, value) = (i[0] == 1, i[1] == true_val);
+            null_count += !null as usize;
+            null_packed |= (null as u64) << bit_idx;
+            values_packed |= (value as u64) << bit_idx;
+        }
+
+        nulls.push(null_packed);
+        values.push(values_packed);
+    }
+
+    if remainder != 0 {
+        let mut null_packed = 0;
+        let mut values_packed = 0;
+
+        for bit_idx in 0..remainder {
+            let i = split_off(&mut rows[bit_idx + chunks * 64], 2);
+            let (null, value) = (i[0] == 1, i[1] == true_val);
+            null_count += !null as usize;
+            null_packed |= (null as u64) << bit_idx;
+            values_packed |= (value as u64) << bit_idx;
+        }
+
+        nulls.push(null_packed);
+        values.push(values_packed);
+    }
+
+    let builder = ArrayDataBuilder::new(DataType::Boolean)
+        .len(rows.len())
+        .null_count(null_count)
+        .add_buffer(values.into())
+        .null_bit_buffer(Some(nulls.into()));
+
+    // SAFETY:
+    // Buffers are the correct length
+    unsafe { BooleanArray::from(builder.build_unchecked()) }
+}
+
+/// Decodes a `ArrayData` from rows based on the provided `FixedLengthEncoding` `T`
+fn decode_fixed<T: FixedLengthEncoding + ToByteSlice>(
+    rows: &mut [&[u8]],
+    data_type: DataType,
+    options: SortOptions,
+) -> ArrayData {
+    let len = rows.len();
+
+    let mut null_count = 0;
+    let mut nulls = MutableBuffer::new(bit_util::ceil(len, 64) * 8);
+    let mut values = MutableBuffer::new(std::mem::size_of::<T>() * len);
+
+    let chunks = len / 64;
+    let remainder = len % 64;
+    for chunk in 0..chunks {
+        let mut null_packed = 0;
+
+        for bit_idx in 0..64 {
+            let i = split_off(&mut rows[bit_idx + chunk * 64], T::ENCODED_LEN);
+            let null = i[0] == 1;
+            null_count += !null as usize;
+            null_packed |= (null as u64) << bit_idx;
+
+            let value = T::Encoded::from_slice(&i[1..], options.descending);
+            values.push(T::decode(value));
+        }
+
+        nulls.push(null_packed);
+    }
+
+    if remainder != 0 {
+        let mut null_packed = 0;
+
+        for bit_idx in 0..remainder {
+            let i = split_off(&mut rows[bit_idx + chunks * 64], T::ENCODED_LEN);
+            let null = i[0] == 1;
+            null_count += !null as usize;
+            null_packed |= (null as u64) << bit_idx;
+
+            let value = T::Encoded::from_slice(&i[1..], options.descending);
+            values.push(T::decode(value));
+        }
+
+        nulls.push(null_packed);
+    }
+
+    let builder = ArrayDataBuilder::new(data_type)
+        .len(rows.len())
+        .null_count(null_count)
+        .add_buffer(values.into())
+        .null_bit_buffer(Some(nulls.into()));
+
+    // SAFETY: Buffers correct length
+    unsafe { builder.build_unchecked() }
+}
+
+/// Decodes a `DecimalArray` from rows
+pub fn decode_decimal<const N: usize, T: DecimalType>(
+    rows: &mut [&[u8]],
+    options: SortOptions,
+    precision: u8,
+    scale: u8,
+) -> DecimalArray<T> {
+    decode_fixed::<RawDecimal<N>>(rows, T::TYPE_CONSTRUCTOR(precision, scale), options)
+        .into()
+}
+
+/// Decodes a `PrimitiveArray` from rows
+pub fn decode_primitive<T: ArrowPrimitiveType>(
+    rows: &mut [&[u8]],
+    options: SortOptions,
+) -> PrimitiveArray<T>
+where
+    T::Native: FixedLengthEncoding + ToByteSlice,
+{
+    decode_fixed::<T::Native>(rows, T::DATA_TYPE, options).into()
 }
