@@ -333,8 +333,7 @@ where
             // process data in chunks of 64 elements since we also get 64 bits of validity information at a time
 
             // safety: result is newly created above, always written as a T below
-            let mut result_chunks =
-                unsafe { result.typed_data_mut().chunks_exact_mut(64) };
+            let mut result_chunks = result.typed_data_mut().chunks_exact_mut(64);
             let mut left_chunks = left.values().chunks_exact(64);
             let mut right_chunks = right.values().chunks_exact(64);
 
@@ -381,8 +380,7 @@ where
         }
         None => {
             // safety: result is newly created above, always written as a T below
-            let mut result_chunks =
-                unsafe { result.typed_data_mut().chunks_exact_mut(lanes) };
+            let mut result_chunks = result.typed_data_mut().chunks_exact_mut(lanes);
             let mut left_chunks = left.values().chunks_exact(lanes);
             let mut right_chunks = right.values().chunks_exact(lanes);
 
@@ -1611,6 +1609,7 @@ mod tests {
     use crate::array::Int32Array;
     use crate::datatypes::{Date64Type, Int32Type, Int8Type};
     use chrono::NaiveDate;
+    use half::f16;
 
     #[test]
     fn test_primitive_array_add() {
@@ -2897,5 +2896,27 @@ mod tests {
 
         let division_by_zero = divide_scalar_opt_dyn::<Int32Type>(&a, 0);
         assert_eq!(&expected, &division_by_zero.unwrap());
+    }
+
+    #[test]
+    fn test_sum_f16() {
+        let a = Float16Array::from_iter_values([
+            f16::from_f32(0.1),
+            f16::from_f32(0.2),
+            f16::from_f32(1.5),
+            f16::from_f32(-0.1),
+        ]);
+        let b = Float16Array::from_iter_values([
+            f16::from_f32(5.1),
+            f16::from_f32(6.2),
+            f16::from_f32(-1.),
+            f16::from_f32(-2.1),
+        ]);
+        let expected = Float16Array::from_iter_values(
+            a.values().iter().zip(b.values()).map(|(a, b)| a + b),
+        );
+
+        let c = add(&a, &b).unwrap();
+        assert_eq!(c, expected);
     }
 }
