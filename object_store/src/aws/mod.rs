@@ -376,6 +376,7 @@ impl AmazonS3Builder {
     /// * AWS_ENDPOINT -> endpoint
     /// * AWS_SESSION_TOKEN -> token
     /// * AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
+    /// * AWS_ALLOW_HTTP -> true for trusted minio connection
     /// # Example
     /// ```
     /// use object_store::aws::AmazonS3Builder;
@@ -414,6 +415,10 @@ impl AmazonS3Builder {
         {
             builder.metadata_endpoint =
                 Some(format!("{}{}", METADATA_ENDPOINT, metadata_relative_uri));
+        }
+
+        if let Ok(text) = std::env::var("AWS_ALLOW_HTTP") {
+            builder.allow_http = text == "true";
         }
 
         builder
