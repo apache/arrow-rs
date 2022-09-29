@@ -534,4 +534,15 @@ mod tests {
             needle
         );
     }
+
+    #[test]
+    fn path_containing_spaces() {
+        let a = Path::from_iter(["foo bar", "baz"]);
+        let b = Path::from("foo bar/baz");
+        let c = Path::parse("foo bar/baz").unwrap();
+
+        assert_eq!(a.raw, "foo bar/baz");
+        assert_eq!(a.raw, b.raw);
+        assert_eq!(b.raw, c.raw);
+    }
 }
