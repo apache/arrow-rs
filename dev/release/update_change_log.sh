@@ -72,7 +72,7 @@ mv "${OLD_OUTPUT_PATH}".tmp "${OLD_OUTPUT_PATH}"
 # use exclude-tags-regex to filter out tags used for object_store
 # crates and only only look at tags that DO NOT begin with `object_store_`
 pushd "${SOURCE_TOP_DIR}"
-docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$CHANGELOG_GITHUB_TOKEN" -v "$(pwd)":/usr/local/src/your-app githubchangeloggenerator/github-changelog-generator \
+docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$ARROW_GITHUB_API_TOKEN" -v "$(pwd)":/usr/local/src/your-app githubchangeloggenerator/github-changelog-generator \
     --user apache \
     --project arrow-rs \
     --cache-file=.githubchangeloggenerator.cache \

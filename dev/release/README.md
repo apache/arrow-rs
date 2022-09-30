@@ -71,9 +71,12 @@ git checkout -b make-release
 
 # Copy the content of CHANGELOG.md to the beginning of CHANGELOG-old.md
 
+# ensure your github token is available
+export ARROW_GITHUB_API_TOKEN=<TOKEN>
+
 # manully edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
-CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
+./dev/release/update_change_log.sh
 
 # run automated script to copy labels to issues based on referenced PRs
 # (NOTE this must be done by a committer / other who has
