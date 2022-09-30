@@ -201,7 +201,6 @@ pub struct S3Config {
     pub credentials: CredentialProvider,
     pub retry_config: RetryConfig,
     pub allow_http: bool,
-    pub virtual_hosted_request_style: bool,
 }
 
 impl S3Config {

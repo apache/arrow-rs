@@ -433,10 +433,13 @@ impl AmazonS3Builder {
     }
 
     /// Sets the endpoint for communicating with AWS S3. Default value
-    /// is based on region.
+    /// is based on region. The `endpoint` field should be consistent with
+    /// the field `virtual_hosted_request_style'.
     ///
     /// For example, this might be set to `"http://localhost:4566:`
     /// for testing against a localstack instance.
+    /// If `virtual_hosted_request_style` is set to true then `endpoint`
+    /// should have bucket name in it.
     pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = Some(endpoint.into());
         self
@@ -461,8 +464,10 @@ impl AmazonS3Builder {
     /// * false (default):  Path style request is used
     /// * true:  Virtual hosted style request is used
     ///
-    /// If the `endpoint` is provided then `virtual_hosted_request_style`
-    /// is ignored. Path style is assumed
+    /// If the `endpoint` is provided then it should be
+    /// consistent with `virtual_hosted_request_style`.
+    /// i.e. if `virutal_hosted_request_style` is set to true
+    /// then `endpoint` should have bucket name on it.
     pub fn with_virtual_hosted_request_style(
         mut self,
         virtual_hosted_request_style: bool,
@@ -560,18 +565,20 @@ impl AmazonS3Builder {
         let endpoint: String;
         let bucket_endpoint: String;
 
-        //If `endpoint` input is provided then its assumed to comply with path style.
-        //bucket is appended to the end to form bucket_endpoint
-        if let Some(input_endpoint) = self.endpoint {
-            bucket_endpoint = format!("{}/{}", input_endpoint, bucket);
-            endpoint = input_endpoint;
-        } else if self.virtual_hosted_request_style {
-            bucket_endpoint = format!("https://{}.s3.{}.amazonaws.com", bucket, region);
-            endpoint = bucket_endpoint.clone();
+        //If `endpoint` is provided then its assumed to be consistent with
+        // `virutal_hosted_style_request`. i.e. if `virtual_hosted_request_style` is true then
+        // `endpoint` should have bucket name on it.
+        if self.virtual_hosted_request_style {
+            endpoint = self.endpoint.unwrap_or_else(|| {
+                format!("https://{}.s3.{}.amazonaws.com", bucket, region)
+            });
+            bucket_endpoint = endpoint.clone();
         } else {
-            bucket_endpoint = format!("https://s3.{}.amazonaws.com/{}", region, bucket);
-            endpoint = format!("https://s3.{}.amazonaws.com", region);
-        };
+            endpoint = self
+                .endpoint
+                .unwrap_or_else(|| format!("https://s3.{}.amazonaws.com", region));
+            bucket_endpoint = format!("{}/{}", endpoint, bucket);
+        }
 
         let config = S3Config {
             region,
@@ -581,7 +588,6 @@ impl AmazonS3Builder {
             credentials,
             retry_config: self.retry_config,
             allow_http: self.allow_http,
-            virtual_hosted_request_style: self.virtual_hosted_request_style,
         };
 
         let client = Arc::new(S3Client::new(config));
