@@ -87,7 +87,7 @@ pub(crate) mod native_op {
             if rhs.is_zero() {
                 Err(ArrowError::DivideByZero)
             } else {
-                Ok(self.mod_wrapping(rhs))
+                Ok(self % rhs)
             }
         }
 
