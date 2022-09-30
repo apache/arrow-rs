@@ -74,8 +74,12 @@ git checkout -b make-release
 # manully edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
 CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
+
 # run automated script to copy labels to issues based on referenced PRs
+# (NOTE this must be done by a committer / other who has
+# write access to the repository)
 python dev/release/label_issues.py
+
 # review change log / edit issues and labels if needed, rerun
 git commit -a -m 'Create changelog'
 
