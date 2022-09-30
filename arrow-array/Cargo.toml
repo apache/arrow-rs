@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-array"
-version = "23.0.0"
+version = "24.0.0"
 description = "Array abstractions for Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -45,9 +45,9 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
-arrow-buffer = { version = "23.0.0", path = "../arrow-buffer" }
-arrow-schema = { version = "23.0.0", path = "../arrow-schema" }
-arrow-data = { version = "23.0.0", path = "../arrow-data" }
+arrow-buffer = { version = "24.0.0", path = "../arrow-buffer" }
+arrow-schema = { version = "24.0.0", path = "../arrow-schema" }
+arrow-data = { version = "24.0.0", path = "../arrow-data" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.0", default-features = false }
