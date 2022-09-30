@@ -39,8 +39,6 @@ type StdError = Box<dyn std::error::Error + Send + Sync>;
 static EMPTY_SHA256_HASH: &str =
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
-/// Default metadata endpoint
-static METADATA_ENDPOINT: &str = "http://169.254.169.254";
 #[derive(Debug)]
 pub struct AwsCredential {
     pub key_id: String,
@@ -323,6 +321,7 @@ pub struct InstanceCredentialProvider {
     pub client: Client,
     pub retry_config: RetryConfig,
     pub imdsv1_fallback: bool,
+    pub metadata_endpoint: String,
 }
 
 impl InstanceCredentialProvider {
@@ -332,7 +331,7 @@ impl InstanceCredentialProvider {
                 instance_creds(
                     &self.client,
                     &self.retry_config,
-                    METADATA_ENDPOINT,
+                    &self.metadata_endpoint,
                     self.imdsv1_fallback,
                 )
                 .map_err(|source| crate::Error::Generic {

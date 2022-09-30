@@ -47,7 +47,7 @@ use tracing::info;
 use crate::aws::client::{S3Client, S3Config};
 use crate::aws::credential::{
     AwsCredential, CredentialProvider, InstanceCredentialProvider,
-    StaticCredentialProvider, WebIdentityProvider, METADATA_ENDPOINT,
+    StaticCredentialProvider, WebIdentityProvider,
 };
 use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
 use crate::{
@@ -71,6 +71,9 @@ pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet =
 
 /// This struct is used to maintain the URI path encoding
 const STRICT_PATH_ENCODE_SET: percent_encoding::AsciiSet = STRICT_ENCODE_SET.remove(b'/');
+
+/// Default metadata endpoint
+static METADATA_ENDPOINT: &str = "http://169.254.169.254";
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -409,7 +412,7 @@ impl AmazonS3Builder {
             std::env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
         {
             builder.metadata_endpoint =
-                format!("{}{}", METADATA_ENDPOINT, metadata_relative_uri);
+                Some(format!("{}{}", METADATA_ENDPOINT, metadata_relative_uri));
         }
 
         builder
@@ -557,6 +560,9 @@ impl AmazonS3Builder {
                         client,
                         retry_config: self.retry_config.clone(),
                         imdsv1_fallback: self.imdsv1_fallback,
+                        metadata_endpoint: self
+                            .metadata_endpoint
+                            .unwrap_or_else(|| METADATA_ENDPOINT.into()),
                     })
                 }
             },
@@ -690,7 +696,7 @@ mod tests {
 
         let container_creds_relative_uri =
             env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
-                .unwrap_or_else(|_| "/object_store/fake_credentials_uri");
+                .unwrap_or_else(|_| "/object_store/fake_credentials_uri".into());
 
         // required
         env::set_var("AWS_ACCESS_KEY_ID", &aws_access_key_id);
