@@ -39,6 +39,8 @@ type StdError = Box<dyn std::error::Error + Send + Sync>;
 static EMPTY_SHA256_HASH: &str =
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
+/// Default metadata endpoint
+static METADATA_ENDPOINT: &str = "http://169.254.169.254";
 #[derive(Debug)]
 pub struct AwsCredential {
     pub key_id: String,
@@ -327,7 +329,6 @@ impl InstanceCredentialProvider {
     async fn get_credential(&self) -> Result<Arc<AwsCredential>> {
         self.cache
             .get_or_insert_with(|| {
-                const METADATA_ENDPOINT: &str = "http://169.254.169.254";
                 instance_creds(
                     &self.client,
                     &self.retry_config,
