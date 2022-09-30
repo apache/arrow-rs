@@ -190,7 +190,7 @@ where
                 .iter()
                 .map(|index| {
                     if let Some(index) = index {
-                        struct_.is_valid(ArrowNativeType::to_usize(&index).unwrap())
+                        struct_.is_valid(index.to_usize().unwrap())
                     } else {
                         false
                     }

@@ -21,9 +21,7 @@ use crate::datatypes::*;
 /// Specialized parsing implementations
 /// used by csv and json reader
 pub(crate) trait Parser: ArrowPrimitiveType {
-    fn parse(string: &str) -> Option<Self::Native> {
-        string.parse::<Self::Native>().ok()
-    }
+    fn parse(string: &str) -> Option<Self::Native>;
 
     fn parse_formatted(string: &str, _format: &str) -> Option<Self::Native> {
         Self::parse(string)
@@ -42,21 +40,23 @@ impl Parser for Float64Type {
     }
 }
 
-impl Parser for UInt64Type {}
-
-impl Parser for UInt32Type {}
-
-impl Parser for UInt16Type {}
-
-impl Parser for UInt8Type {}
-
-impl Parser for Int64Type {}
-
-impl Parser for Int32Type {}
-
-impl Parser for Int16Type {}
-
-impl Parser for Int8Type {}
+macro_rules! parser_primitive {
+    ($t:ty) => {
+        impl Parser for $t {
+            fn parse(string: &str) -> Option<Self::Native> {
+                string.parse::<Self::Native>().ok()
+            }
+        }
+    };
+}
+parser_primitive!(UInt64Type);
+parser_primitive!(UInt32Type);
+parser_primitive!(UInt16Type);
+parser_primitive!(UInt8Type);
+parser_primitive!(Int64Type);
+parser_primitive!(Int32Type);
+parser_primitive!(Int16Type);
+parser_primitive!(Int8Type);
 
 impl Parser for TimestampNanosecondType {
     fn parse(string: &str) -> Option<i64> {
@@ -85,13 +85,10 @@ impl Parser for TimestampSecondType {
     }
 }
 
-impl Parser for Time64NanosecondType {}
-
-impl Parser for Time64MicrosecondType {}
-
-impl Parser for Time32MillisecondType {}
-
-impl Parser for Time32SecondType {}
+parser_primitive!(Time64NanosecondType);
+parser_primitive!(Time64MicrosecondType);
+parser_primitive!(Time32MillisecondType);
+parser_primitive!(Time32SecondType);
 
 /// Number of days between 0001-01-01 and 1970-01-01
 const EPOCH_DAYS_FROM_CE: i32 = 719_163;
@@ -100,20 +97,20 @@ impl Parser for Date32Type {
     fn parse(string: &str) -> Option<i32> {
         use chrono::Datelike;
         let date = string.parse::<chrono::NaiveDate>().ok()?;
-        Self::Native::from_i32(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
+        Some(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
     }
 
     fn parse_formatted(string: &str, format: &str) -> Option<i32> {
         use chrono::Datelike;
         let date = chrono::NaiveDate::parse_from_str(string, format).ok()?;
-        Self::Native::from_i32(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
+        Some(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
     }
 }
 
 impl Parser for Date64Type {
     fn parse(string: &str) -> Option<i64> {
         let date_time = string.parse::<chrono::NaiveDateTime>().ok()?;
-        Self::Native::from_i64(date_time.timestamp_millis())
+        Some(date_time.timestamp_millis())
     }
 
     fn parse_formatted(string: &str, format: &str) -> Option<i64> {
@@ -135,10 +132,10 @@ impl Parser for Date64Type {
         });
         if has_zone {
             let date_time = chrono::DateTime::parse_from_str(string, format).ok()?;
-            Self::Native::from_i64(date_time.timestamp_millis())
+            Some(date_time.timestamp_millis())
         } else {
             let date_time = chrono::NaiveDateTime::parse_from_str(string, format).ok()?;
-            Self::Native::from_i64(date_time.timestamp_millis())
+            Some(date_time.timestamp_millis())
         }
     }
 }

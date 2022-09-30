@@ -19,10 +19,10 @@
 
 use chrono::{Datelike, Timelike};
 
-use crate::array::as_datetime;
 use crate::array::*;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
+use arrow_array::temporal_conversions::{as_datetime, as_time};
 
 use chrono::format::strftime::StrftimeItems;
 use chrono::format::{parse, Parsed};

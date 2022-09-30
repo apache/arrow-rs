@@ -25,6 +25,10 @@ on:
   pull_request:
     paths:
       - arrow/**
+      - arrow-array/**
+      - arrow-buffer/**
+      - arrow-data/**
+      - arrow-schema/**
       - arrow-pyarrow-integration-testing/**
       - integration-testing/**
       - .github/**
@@ -77,9 +81,8 @@ jobs:
         run: conda run --no-capture-output ci/scripts/cpp_build.sh $PWD /build
       - name: Build C#
         run: conda run --no-capture-output ci/scripts/csharp_build.sh $PWD /build
-      # Temporarily disable Golang #2688
-      # - name: Build Go
-      #  run: conda run --no-capture-output ci/scripts/go_build.sh $PWD
+      - name: Build Go
+        run: conda run --no-capture-output ci/scripts/go_build.sh $PWD
       - name: Build Java
         run: conda run --no-capture-output ci/scripts/java_build.sh $PWD /build
       - name: Build JS
@@ -94,7 +97,7 @@ jobs:
             --with-csharp=1 \
             --with-java=1 \
             --with-js=1 \
-            --with-go=0 \
+            --with-go=1 \
             --with-rust=1 \
             --gold-dirs=testing/data/arrow-ipc-stream/integration/0.14.1 \
             --gold-dirs=testing/data/arrow-ipc-stream/integration/0.17.1 \

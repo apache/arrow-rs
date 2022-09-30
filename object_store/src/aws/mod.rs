@@ -58,6 +58,20 @@ use crate::{
 mod client;
 mod credential;
 
+// http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
+//
+// Do not URI-encode any of the unreserved characters that RFC 3986 defines:
+// A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
+pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet =
+    percent_encoding::NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'.')
+        .remove(b'_')
+        .remove(b'~');
+
+/// This struct is used to maintain the URI path encoding
+const STRICT_PATH_ENCODE_SET: percent_encoding::AsciiSet = STRICT_ENCODE_SET.remove(b'/');
+
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
@@ -551,7 +565,7 @@ mod tests {
     use super::*;
     use crate::tests::{
         get_nonexistent_object, list_uses_directories_correctly, list_with_delimiter,
-        put_get_delete_list, rename_and_copy, stream_get,
+        put_get_delete_list_opts, rename_and_copy, stream_get,
     };
     use bytes::Bytes;
     use std::env;
@@ -677,9 +691,11 @@ mod tests {
     #[tokio::test]
     async fn s3_test() {
         let config = maybe_skip_integration!();
+        let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
         let integration = config.build().unwrap();
 
-        put_get_delete_list(&integration).await;
+        // Localstack doesn't support listing with spaces https://github.com/localstack/localstack/issues/6328
+        put_get_delete_list_opts(&integration, is_local).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;

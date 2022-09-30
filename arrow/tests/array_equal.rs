@@ -22,6 +22,7 @@ use arrow::array::{
     OffsetSizeTrait, StringArray, StringDictionaryBuilder, StructArray, UnionBuilder,
 };
 use arrow::datatypes::{Int16Type, Int32Type};
+use arrow_array::builder::{StringBuilder, StructBuilder};
 use arrow_buffer::{Buffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{DataType, Field};
@@ -1271,4 +1272,66 @@ fn test_list_different_offsets() {
     let a_slice = a.slice(1, 2);
     let b_slice = b.slice(0, 2);
     assert_eq!(&a_slice, &b_slice);
+}
+
+fn make_struct(
+    elements: Vec<Option<(Option<&'static str>, Option<i32>)>>,
+) -> StructArray {
+    let mut builder = StructBuilder::new(
+        vec![
+            Field::new("f1", DataType::Utf8, true),
+            Field::new("f2", DataType::Int32, true),
+        ],
+        vec![
+            Box::new(StringBuilder::new()),
+            Box::new(Int32Builder::new()),
+        ],
+    );
+
+    for element in elements {
+        match element.and_then(|e| e.0) {
+            None => builder
+                .field_builder::<StringBuilder>(0)
+                .unwrap()
+                .append_null(),
+            Some(s) => builder
+                .field_builder::<StringBuilder>(0)
+                .unwrap()
+                .append_value(s),
+        };
+
+        builder
+            .field_builder::<Int32Builder>(1)
+            .unwrap()
+            .append_option(element.and_then(|e| e.1));
+
+        builder.append(element.is_some());
+    }
+
+    builder.finish()
+}
+
+#[test]
+fn test_struct_equal_slice() {
+    let a = make_struct(vec![
+        None,
+        Some((Some("joe"), Some(1))),
+        Some((None, Some(2))),
+        Some((None, None)),
+        Some((Some("mark"), Some(4))),
+        Some((Some("doe"), Some(5))),
+    ]);
+    let a = a.slice(1, 5);
+    let a = a.as_any().downcast_ref::<StructArray>().unwrap();
+
+    let b = make_struct(vec![
+        Some((Some("joe"), Some(1))),
+        Some((None, Some(2))),
+        Some((None, None)),
+        Some((Some("mark"), Some(4))),
+        Some((Some("doe"), Some(5))),
+    ]);
+    assert_eq!(a, &b);
+
+    test_equal(a.data(), b.data(), true);
 }

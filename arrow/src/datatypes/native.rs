@@ -15,33 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::DataType;
 use crate::error::{ArrowError, Result};
 pub use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use half::f16;
 use num::Zero;
 
-/// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
-/// static-typed nature of rust types ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
-pub trait ArrowPrimitiveType: 'static {
-    /// Corresponding Rust native type for the primitive type.
-    type Native: ArrowNativeType;
-
-    /// the corresponding Arrow data type of this primitive type.
-    const DATA_TYPE: DataType;
-
-    /// Returns the byte width of this primitive type.
-    fn get_byte_width() -> usize {
-        std::mem::size_of::<Self::Native>()
-    }
-
-    /// Returns a default value of this primitive type.
-    ///
-    /// This is useful for aggregate array ops like `sum()`, `mean()`.
-    fn default_value() -> Self::Native {
-        Default::default()
-    }
-}
+pub use arrow_array::ArrowPrimitiveType;
 
 pub(crate) mod native_op {
     use super::ArrowNativeType;

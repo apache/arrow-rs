@@ -178,7 +178,7 @@ pub type UnalignedBitChunkIterator<'a> = std::iter::Chain<
 fn read_u64(input: &[u8]) -> u64 {
     let len = input.len().min(8);
     let mut buf = [0_u8; 8];
-    (&mut buf[..len]).copy_from_slice(input);
+    buf[..len].copy_from_slice(input);
     u64::from_le_bytes(buf)
 }
 

@@ -41,7 +41,7 @@ mod complex;
 mod primitive;
 
 use crate::arrow::ProjectionMask;
-pub(crate) use complex::{convert_schema, ParquetField, ParquetFieldType};
+pub(crate) use complex::{ParquetField, ParquetFieldType};
 
 /// Convert Parquet schema to Arrow schema including optional metadata.
 /// Attempts to decode any existing Arrow schema metadata, falling back
@@ -64,6 +64,15 @@ pub fn parquet_to_arrow_schema_by_columns(
     mask: ProjectionMask,
     key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Result<Schema> {
+    Ok(parquet_to_array_schema_and_fields(parquet_schema, mask, key_value_metadata)?.0)
+}
+
+/// Extracts the arrow metadata
+pub(crate) fn parquet_to_array_schema_and_fields(
+    parquet_schema: &SchemaDescriptor,
+    mask: ProjectionMask,
+    key_value_metadata: Option<&Vec<KeyValue>>,
+) -> Result<(Schema, Option<ParquetField>)> {
     let mut metadata = parse_key_value_metadata(key_value_metadata).unwrap_or_default();
     let maybe_schema = metadata
         .remove(super::ARROW_SCHEMA_META_KEY)
@@ -77,12 +86,15 @@ pub fn parquet_to_arrow_schema_by_columns(
         });
     }
 
-    match convert_schema(parquet_schema, mask, maybe_schema.as_ref())? {
-        Some(field) => match field.arrow_type {
-            DataType::Struct(fields) => Ok(Schema::new_with_metadata(fields, metadata)),
+    match complex::convert_schema(parquet_schema, mask, maybe_schema.as_ref())? {
+        Some(field) => match &field.arrow_type {
+            DataType::Struct(fields) => Ok((
+                Schema::new_with_metadata(fields.clone(), metadata),
+                Some(field),
+            )),
             _ => unreachable!(),
         },
-        None => Ok(Schema::new_with_metadata(vec![], metadata)),
+        None => Ok((Schema::new_with_metadata(vec![], metadata), None)),
     }
 }
 

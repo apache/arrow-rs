@@ -44,239 +44,130 @@ mod private {
 ///
 /// Due to the above restrictions, this trait is sealed to prevent accidental misuse
 pub trait ArrowNativeType:
-    std::fmt::Debug
-    + Send
-    + Sync
-    + Copy
-    + PartialOrd
-    + std::str::FromStr
-    + Default
-    + private::Sealed
-    + 'static
+    std::fmt::Debug + Send + Sync + Copy + PartialOrd + Default + private::Sealed + 'static
 {
-    /// Convert native type from usize.
-    #[inline]
-    fn from_usize(_: usize) -> Option<Self> {
-        None
-    }
+    /// Convert native integer type from usize
+    ///
+    /// Returns `None` if [`Self`] is not an integer or conversion would result
+    /// in truncation/overflow
+    fn from_usize(_: usize) -> Option<Self>;
+
+    /// Convert to usize according to the [`as`] operator
+    ///
+    /// [`as`]: https://doc.rust-lang.org/reference/expressions/operator-expr.html#numeric-cast
+    fn as_usize(self) -> usize;
 
     /// Convert native type to usize.
-    #[inline]
-    fn to_usize(&self) -> Option<usize> {
-        None
-    }
+    ///
+    /// Returns `None` if [`Self`] is not an integer or conversion would result
+    /// in truncation/overflow
+    fn to_usize(self) -> Option<usize>;
 
     /// Convert native type to isize.
-    #[inline]
-    fn to_isize(&self) -> Option<isize> {
-        None
-    }
+    ///
+    /// Returns `None` if [`Self`] is not an integer or conversion would result
+    /// in truncation/overflow
+    fn to_isize(self) -> Option<isize>;
 
     /// Convert native type from i32.
-    #[inline]
+    ///
+    /// Returns `None` if [`Self`] is not `i32`
+    #[deprecated(note = "please use `Option::Some` instead")]
     fn from_i32(_: i32) -> Option<Self> {
         None
     }
 
     /// Convert native type from i64.
-    #[inline]
+    ///
+    /// Returns `None` if [`Self`] is not `i64`
+    #[deprecated(note = "please use `Option::Some` instead")]
     fn from_i64(_: i64) -> Option<Self> {
         None
     }
 
     /// Convert native type from i128.
-    #[inline]
+    ///
+    /// Returns `None` if [`Self`] is not `i128`
+    #[deprecated(note = "please use `Option::Some` instead")]
     fn from_i128(_: i128) -> Option<Self> {
         None
     }
 }
 
-impl private::Sealed for i8 {}
-impl ArrowNativeType for i8 {
-    #[inline]
-    fn from_usize(v: usize) -> Option<Self> {
-        num::FromPrimitive::from_usize(v)
-    }
+macro_rules! native_integer {
+    ($t: ty $(, $from:ident)*) => {
+        impl private::Sealed for $t {}
+        impl ArrowNativeType for $t {
+            #[inline]
+            fn from_usize(v: usize) -> Option<Self> {
+                v.try_into().ok()
+            }
 
-    #[inline]
-    fn to_usize(&self) -> Option<usize> {
-        num::ToPrimitive::to_usize(self)
-    }
+            #[inline]
+            fn to_usize(self) -> Option<usize> {
+                self.try_into().ok()
+            }
 
-    #[inline]
-    fn to_isize(&self) -> Option<isize> {
-        num::ToPrimitive::to_isize(self)
-    }
+            #[inline]
+            fn to_isize(self) -> Option<isize> {
+                self.try_into().ok()
+            }
+
+            #[inline]
+            fn as_usize(self) -> usize {
+                self as _
+            }
+
+            $(
+                #[inline]
+                fn $from(v: $t) -> Option<Self> {
+                    Some(v)
+                }
+            )*
+        }
+    };
 }
 
-impl private::Sealed for i16 {}
-impl ArrowNativeType for i16 {
-    #[inline]
-    fn from_usize(v: usize) -> Option<Self> {
-        num::FromPrimitive::from_usize(v)
-    }
+native_integer!(i8);
+native_integer!(i16);
+native_integer!(i32, from_i32);
+native_integer!(i64, from_i64);
+native_integer!(i128, from_i128);
+native_integer!(u8);
+native_integer!(u16);
+native_integer!(u32);
+native_integer!(u64);
 
-    #[inline]
-    fn to_usize(&self) -> Option<usize> {
-        num::ToPrimitive::to_usize(self)
-    }
+macro_rules! native_float {
+    ($t:ty, $s:ident, $as_usize: expr) => {
+        impl private::Sealed for $t {}
+        impl ArrowNativeType for $t {
+            #[inline]
+            fn from_usize(_: usize) -> Option<Self> {
+                None
+            }
 
-    #[inline]
-    fn to_isize(&self) -> Option<isize> {
-        num::ToPrimitive::to_isize(self)
-    }
+            #[inline]
+            fn to_usize(self) -> Option<usize> {
+                None
+            }
+
+            #[inline]
+            fn to_isize(self) -> Option<isize> {
+                None
+            }
+
+            #[inline]
+            fn as_usize($s) -> usize {
+                $as_usize
+            }
+        }
+    };
 }
 
-impl private::Sealed for i32 {}
-impl ArrowNativeType for i32 {
-    #[inline]
-    fn from_usize(v: usize) -> Option<Self> {
-        num::FromPrimitive::from_usize(v)
-    }
-
-    #[inline]
-    fn to_usize(&self) -> Option<usize> {
-        num::ToPrimitive::to_usize(self)
-    }
-
-    #[inline]
-    fn to_isize(&self) -> Option<isize> {
-        num::ToPrimitive::to_isize(self)
-    }
-
-    /// Convert native type from i32.
-    #[inline]
-    fn from_i32(val: i32) -> Option<Self> {
-        Some(val)
-    }
-}
-
-impl private::Sealed for i64 {}
-impl ArrowNativeType for i64 {
-    #[inline]
-    fn from_usize(v: usize) -> Option<Self> {
-        num::FromPrimitive::from_usize(v)
-    }
-
-    #[inline]
-    fn to_usize(&self) -> Option<usize> {
-        num::ToPrimitive::to_usize(self)
-    }
-
-    #[inline]
-    fn to_isize(&self) -> Option<isize> {
-        num::ToPrimitive::to_isize(self)
-    }
-
-    /// Convert native type from i64.
-    #[inline]
-    fn from_i64(val: i64) -> Option<Self> {
-        Some(val)
-    }
-}
-
-impl private::Sealed for i128 {}
-impl ArrowNativeType for i128 {
-    #[inline]
-    fn from_usize(v: usize) -> Option<Self> {
-        num::FromPrimitive::from_usize(v)
-    }
-
-    #[inline]
-    fn to_usize(&self) -> Option<usize> {
-        num::ToPrimitive::to_usize(self)
-    }
-
-    #[inline]
-    fn to_isize(&self) -> Option<isize> {
-        num::ToPrimitive::to_isize(self)
-    }
-
-    /// Convert native type from i128.
-    #[inline]
-    fn from_i128(val: i128) -> Option<Self> {
-        Some(val)
-    }
-}
-
-impl private::Sealed for u8 {}
-impl ArrowNativeType for u8 {
-    #[inline]
-    fn from_usize(v: usize) -> Option<Self> {
-        num::FromPrimitive::from_usize(v)
-    }
-
-    #[inline]
-    fn to_usize(&self) -> Option<usize> {
-        num::ToPrimitive::to_usize(self)
-    }
-
-    #[inline]
-    fn to_isize(&self) -> Option<isize> {
-        num::ToPrimitive::to_isize(self)
-    }
-}
-
-impl private::Sealed for u16 {}
-impl ArrowNativeType for u16 {
-    #[inline]
-    fn from_usize(v: usize) -> Option<Self> {
-        num::FromPrimitive::from_usize(v)
-    }
-
-    #[inline]
-    fn to_usize(&self) -> Option<usize> {
-        num::ToPrimitive::to_usize(self)
-    }
-
-    #[inline]
-    fn to_isize(&self) -> Option<isize> {
-        num::ToPrimitive::to_isize(self)
-    }
-}
-
-impl private::Sealed for u32 {}
-impl ArrowNativeType for u32 {
-    #[inline]
-    fn from_usize(v: usize) -> Option<Self> {
-        num::FromPrimitive::from_usize(v)
-    }
-
-    #[inline]
-    fn to_usize(&self) -> Option<usize> {
-        num::ToPrimitive::to_usize(self)
-    }
-
-    #[inline]
-    fn to_isize(&self) -> Option<isize> {
-        num::ToPrimitive::to_isize(self)
-    }
-}
-
-impl private::Sealed for u64 {}
-impl ArrowNativeType for u64 {
-    #[inline]
-    fn from_usize(v: usize) -> Option<Self> {
-        num::FromPrimitive::from_usize(v)
-    }
-
-    #[inline]
-    fn to_usize(&self) -> Option<usize> {
-        num::ToPrimitive::to_usize(self)
-    }
-
-    #[inline]
-    fn to_isize(&self) -> Option<isize> {
-        num::ToPrimitive::to_isize(self)
-    }
-}
-
-impl ArrowNativeType for f16 {}
-impl private::Sealed for f16 {}
-impl ArrowNativeType for f32 {}
-impl private::Sealed for f32 {}
-impl ArrowNativeType for f64 {}
-impl private::Sealed for f64 {}
+native_float!(f16, self, self.to_f32() as _);
+native_float!(f32, self, self as _);
+native_float!(f64, self, self as _);
 
 /// Allows conversion from supported Arrow types to a byte slice.
 pub trait ToByteSlice {

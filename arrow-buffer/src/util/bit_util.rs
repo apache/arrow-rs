@@ -17,7 +17,6 @@
 
 //! Utils for working with bits
 
-use num::Integer;
 #[cfg(feature = "simd")]
 use packed_simd::u8x64;
 
@@ -102,7 +101,7 @@ pub unsafe fn unset_bit_raw(data: *mut u8, i: usize) {
 pub fn ceil(value: usize, divisor: usize) -> usize {
     // Rewrite as `value.div_ceil(&divisor)` after
     // https://github.com/rust-lang/rust/issues/88581 is merged.
-    Integer::div_ceil(&value, &divisor)
+    value / divisor + (0 != value % divisor) as usize
 }
 
 /// Performs SIMD bitwise binary operations.

@@ -101,6 +101,7 @@ use crate::arrow::arrow_reader::{
     evaluate_predicate, selects_any, ArrowReaderBuilder, ArrowReaderOptions,
     ParquetRecordBatchReader, RowFilter, RowSelection,
 };
+use crate::arrow::schema::ParquetField;
 use crate::arrow::ProjectionMask;
 
 use crate::column::page::{PageIterator, PageReader};
@@ -337,7 +338,7 @@ impl<T: AsyncFileReader + Send + 'static> ArrowReaderBuilder<AsyncReader<T>> {
             input: self.input.0,
             filter: self.filter,
             metadata: self.metadata.clone(),
-            schema: self.schema.clone(),
+            fields: self.fields,
         };
 
         Ok(ParquetRecordBatchStream {
@@ -360,7 +361,7 @@ type ReadResult<T> = Result<(ReaderFactory<T>, Option<ParquetRecordBatchReader>)
 struct ReaderFactory<T> {
     metadata: Arc<ParquetMetaData>,
 
-    schema: SchemaRef,
+    fields: Option<ParquetField>,
 
     input: T,
 
@@ -397,13 +398,13 @@ where
                     return Ok((self, None));
                 }
 
-                let predicate_projection = predicate.projection().clone();
+                let predicate_projection = predicate.projection();
                 row_group
-                    .fetch(&mut self.input, &predicate_projection, selection.as_ref())
+                    .fetch(&mut self.input, predicate_projection, selection.as_ref())
                     .await?;
 
                 let array_reader = build_array_reader(
-                    self.schema.clone(),
+                    self.fields.as_ref(),
                     predicate_projection,
                     &row_group,
                 )?;
@@ -427,7 +428,7 @@ where
 
         let reader = ParquetRecordBatchReader::new(
             batch_size,
-            build_array_reader(self.schema.clone(), projection, &row_group)?,
+            build_array_reader(self.fields.as_ref(), &projection, &row_group)?,
             selection,
         );
 
@@ -792,7 +793,8 @@ mod tests {
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowSelector,
     };
-    use crate::arrow::{parquet_to_arrow_schema, ArrowWriter};
+    use crate::arrow::schema::parquet_to_array_schema_and_fields;
+    use crate::arrow::ArrowWriter;
     use crate::file::footer::parse_metadata;
     use crate::file::page_index::index_reader;
     use arrow::array::{Array, ArrayRef, Int32Array, StringArray};
@@ -1278,10 +1280,12 @@ mod tests {
         };
 
         let requests = async_reader.requests.clone();
-        let schema = Arc::new(
-            parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
-                .expect("building arrow schema"),
-        );
+        let (_, fields) = parquet_to_array_schema_and_fields(
+            metadata.file_metadata().schema_descr(),
+            ProjectionMask::all(),
+            None,
+        )
+        .unwrap();
 
         let _schema_desc = metadata.file_metadata().schema_descr();
 
@@ -1290,7 +1294,7 @@ mod tests {
 
         let reader_factory = ReaderFactory {
             metadata,
-            schema,
+            fields,
             input: async_reader,
             filter: None,
         };

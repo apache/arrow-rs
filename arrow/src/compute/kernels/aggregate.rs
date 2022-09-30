@@ -124,15 +124,8 @@ where
             .map(|i| unsafe { array.value_unchecked(i) })
             .reduce(|acc, item| if cmp(&acc, &item) { item } else { acc })
     } else {
-        let null_buffer = array
-            .data_ref()
-            .null_buffer()
-            .map(|b| b.bit_slice(array.offset(), array.len()));
-        let iter = BitIndexIterator::new(
-            null_buffer.as_deref().unwrap(),
-            array.offset(),
-            array.len(),
-        );
+        let null_buffer = array.data_ref().null_buffer().unwrap();
+        let iter = BitIndexIterator::new(null_buffer, array.offset(), array.len());
         unsafe {
             let idx = iter.reduce(|acc_idx, idx| {
                 let acc = array.value_unchecked(acc_idx);
@@ -685,6 +678,7 @@ mod tests {
     use crate::array::*;
     use crate::compute::add;
     use crate::datatypes::{Float32Type, Int32Type, Int8Type};
+    use arrow_array::types::Float64Type;
 
     #[test]
     fn test_primitive_array_sum() {
@@ -1129,5 +1123,97 @@ mod tests {
 
         let array = dict_array.downcast_dict::<Float32Array>().unwrap();
         assert_eq!(2.0_f32, min_array::<Float32Type, _>(array).unwrap());
+    }
+
+    #[test]
+    fn test_min_max_sliced_primitive() {
+        let expected = Some(4.0);
+        let input: Float64Array = vec![None, Some(4.0)].into_iter().collect();
+        let actual = min(&input);
+        assert_eq!(actual, expected);
+        let actual = max(&input);
+        assert_eq!(actual, expected);
+
+        let sliced_input: Float64Array = vec![None, None, None, None, None, Some(4.0)]
+            .into_iter()
+            .collect();
+        let sliced_input = sliced_input.slice(4, 2);
+        let sliced_input = as_primitive_array::<Float64Type>(&sliced_input);
+
+        assert_eq!(sliced_input, &input);
+
+        let actual = min(sliced_input);
+        assert_eq!(actual, expected);
+        let actual = max(sliced_input);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_min_max_sliced_boolean() {
+        let expected = Some(true);
+        let input: BooleanArray = vec![None, Some(true)].into_iter().collect();
+        let actual = min_boolean(&input);
+        assert_eq!(actual, expected);
+        let actual = max_boolean(&input);
+        assert_eq!(actual, expected);
+
+        let sliced_input: BooleanArray = vec![None, None, None, None, None, Some(true)]
+            .into_iter()
+            .collect();
+        let sliced_input = sliced_input.slice(4, 2);
+        let sliced_input = as_boolean_array(&sliced_input);
+
+        assert_eq!(sliced_input, &input);
+
+        let actual = min_boolean(sliced_input);
+        assert_eq!(actual, expected);
+        let actual = max_boolean(sliced_input);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_min_max_sliced_string() {
+        let expected = Some("foo");
+        let input: StringArray = vec![None, Some("foo")].into_iter().collect();
+        let actual = min_string(&input);
+        assert_eq!(actual, expected);
+        let actual = max_string(&input);
+        assert_eq!(actual, expected);
+
+        let sliced_input: StringArray = vec![None, None, None, None, None, Some("foo")]
+            .into_iter()
+            .collect();
+        let sliced_input = sliced_input.slice(4, 2);
+        let sliced_input = as_string_array(&sliced_input);
+
+        assert_eq!(sliced_input, &input);
+
+        let actual = min_string(sliced_input);
+        assert_eq!(actual, expected);
+        let actual = max_string(sliced_input);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_min_max_sliced_binary() {
+        let expected: Option<&[u8]> = Some(&[5]);
+        let input: BinaryArray = vec![None, Some(&[5])].into_iter().collect();
+        let actual = min_binary(&input);
+        assert_eq!(actual, expected);
+        let actual = max_binary(&input);
+        assert_eq!(actual, expected);
+
+        let sliced_input: BinaryArray = vec![None, None, None, None, None, Some(&[5])]
+            .into_iter()
+            .collect();
+        let sliced_input = sliced_input.slice(4, 2);
+        let sliced_input = as_generic_binary_array::<i32>(&sliced_input);
+
+        assert_eq!(sliced_input, &input);
+
+        let actual = min_binary(sliced_input);
+        assert_eq!(actual, expected);
+        let actual = max_binary(sliced_input);
+        assert_eq!(actual, expected);
     }
 }
