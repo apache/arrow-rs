@@ -321,17 +321,17 @@ pub struct InstanceCredentialProvider {
     pub client: Client,
     pub retry_config: RetryConfig,
     pub imdsv1_fallback: bool,
+    pub metadata_endpoint: String,
 }
 
 impl InstanceCredentialProvider {
     async fn get_credential(&self) -> Result<Arc<AwsCredential>> {
         self.cache
             .get_or_insert_with(|| {
-                const METADATA_ENDPOINT: &str = "http://169.254.169.254";
                 instance_creds(
                     &self.client,
                     &self.retry_config,
-                    METADATA_ENDPOINT,
+                    &self.metadata_endpoint,
                     self.imdsv1_fallback,
                 )
                 .map_err(|source| crate::Error::Generic {

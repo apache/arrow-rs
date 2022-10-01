@@ -72,6 +72,9 @@ pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet =
 /// This struct is used to maintain the URI path encoding
 const STRICT_PATH_ENCODE_SET: percent_encoding::AsciiSet = STRICT_ENCODE_SET.remove(b'/');
 
+/// Default metadata endpoint
+static METADATA_ENDPOINT: &str = "http://169.254.169.254";
+
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
@@ -354,6 +357,7 @@ pub struct AmazonS3Builder {
     retry_config: RetryConfig,
     allow_http: bool,
     imdsv1_fallback: bool,
+    metadata_endpoint: Option<String>,
 }
 
 impl AmazonS3Builder {
@@ -370,6 +374,7 @@ impl AmazonS3Builder {
     /// * AWS_DEFAULT_REGION -> region
     /// * AWS_ENDPOINT -> endpoint
     /// * AWS_SESSION_TOKEN -> token
+    /// * AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
     /// # Example
     /// ```
     /// use object_store::aws::AmazonS3Builder;
@@ -399,6 +404,15 @@ impl AmazonS3Builder {
 
         if let Ok(token) = std::env::var("AWS_SESSION_TOKEN") {
             builder.token = Some(token);
+        }
+
+        // This env var is set in ECS
+        // https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html
+        if let Ok(metadata_relative_uri) =
+            std::env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+        {
+            builder.metadata_endpoint =
+                Some(format!("{}{}", METADATA_ENDPOINT, metadata_relative_uri));
         }
 
         builder
@@ -478,6 +492,16 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Set the [instance metadata endpoint](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html),
+    /// used primarily within AWS EC2.
+    ///
+    /// This defaults to the IPv4 endpoint: http://169.254.169.254. One can alternatively use the IPv6
+    /// endpoint http://fd00:ec2::254.
+    pub fn with_metadata_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.metadata_endpoint = Some(endpoint.into());
+        self
+    }
+
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(self) -> Result<AmazonS3> {
@@ -536,6 +560,9 @@ impl AmazonS3Builder {
                         client,
                         retry_config: self.retry_config.clone(),
                         imdsv1_fallback: self.imdsv1_fallback,
+                        metadata_endpoint: self
+                            .metadata_endpoint
+                            .unwrap_or_else(|| METADATA_ENDPOINT.into()),
                     })
                 }
             },
@@ -667,6 +694,10 @@ mod tests {
         let aws_session_token = env::var("AWS_SESSION_TOKEN")
             .unwrap_or_else(|_| "object_store:fake_session_token".into());
 
+        let container_creds_relative_uri =
+            env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+                .unwrap_or_else(|_| "/object_store/fake_credentials_uri".into());
+
         // required
         env::set_var("AWS_ACCESS_KEY_ID", &aws_access_key_id);
         env::set_var("AWS_SECRET_ACCESS_KEY", &aws_secret_access_key);
@@ -675,6 +706,10 @@ mod tests {
         // optional
         env::set_var("AWS_ENDPOINT", &aws_endpoint);
         env::set_var("AWS_SESSION_TOKEN", &aws_session_token);
+        env::set_var(
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+            &container_creds_relative_uri,
+        );
 
         let builder = AmazonS3Builder::from_env();
         assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
@@ -686,6 +721,10 @@ mod tests {
 
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
+
+        let metadata_uri =
+            format!("{}{}", METADATA_ENDPOINT, container_creds_relative_uri);
+        assert_eq!(builder.metadata_endpoint.unwrap(), metadata_uri);
     }
 
     #[tokio::test]
