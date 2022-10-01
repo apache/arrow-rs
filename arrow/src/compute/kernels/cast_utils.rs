@@ -256,4 +256,43 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn string_without_timezone_to_timestamp() -> Result<()> {
+        // string without timezone should always output the same regardless the local or session timezone
+
+        let naive_datetime = NaiveDateTime::new(
+            NaiveDate::from_ymd(2020, 9, 8),
+            NaiveTime::from_hms_nano(13, 42, 29, 190855000),
+        );
+
+        // Ensure both T and ' ' variants work
+        assert_eq!(
+            naive_datetime.timestamp_nanos(),
+            parse_timestamp("2020-09-08T13:42:29.190855")?
+        );
+
+        assert_eq!(
+            naive_datetime.timestamp_nanos(),
+            parse_timestamp("2020-09-08 13:42:29.190855")?
+        );
+
+        let naive_datetime = NaiveDateTime::new(
+            NaiveDate::from_ymd(2020, 9, 8),
+            NaiveTime::from_hms_nano(13, 42, 29, 0),
+        );
+
+        // Ensure both T and ' ' variants work
+        assert_eq!(
+            naive_datetime.timestamp_nanos(),
+            parse_timestamp("2020-09-08T13:42:29")?
+        );
+
+        assert_eq!(
+            naive_datetime.timestamp_nanos(),
+            parse_timestamp("2020-09-08 13:42:29")?
+        );
+
+        Ok(())
+    }
 }
