@@ -354,7 +354,7 @@ pub struct AmazonS3Builder {
     retry_config: RetryConfig,
     allow_http: bool,
     imdsv1_fallback: bool,
-    virtual_hosted_request_style: bool,
+    virtual_hosted_style_request: bool,
 }
 
 impl AmazonS3Builder {
@@ -434,12 +434,12 @@ impl AmazonS3Builder {
 
     /// Sets the endpoint for communicating with AWS S3. Default value
     /// is based on region. The `endpoint` field should be consistent with
-    /// the field `virtual_hosted_request_style'.
+    /// the field `virtual_hosted_style_request'.
     ///
     /// For example, this might be set to `"http://localhost:4566:`
     /// for testing against a localstack instance.
-    /// If `virtual_hosted_request_style` is set to true then `endpoint`
-    /// should have bucket name in it.
+    /// If `virtual_hosted_style_request` is set to true then `endpoint`
+    /// should have bucket name included.
     pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = Some(endpoint.into());
         self
@@ -460,19 +460,19 @@ impl AmazonS3Builder {
     }
 
     /// Sets if virtual hosted style request has to be used.
-    /// If `virtual_hosted_request_style` is :
+    /// If `virtual_hosted_style_request` is :
     /// * false (default):  Path style request is used
     /// * true:  Virtual hosted style request is used
     ///
     /// If the `endpoint` is provided then it should be
-    /// consistent with `virtual_hosted_request_style`.
+    /// consistent with `virtual_hosted_style_request`.
     /// i.e. if `virutal_hosted_request_style` is set to true
-    /// then `endpoint` should have bucket name on it.
-    pub fn with_virtual_hosted_request_style(
+    /// then `endpoint` should have bucket name included.
+    pub fn with_virtual_hosted_style_request(
         mut self,
-        virtual_hosted_request_style: bool,
+        virtual_hosted_style_request: bool,
     ) -> Self {
-        self.virtual_hosted_request_style = virtual_hosted_request_style;
+        self.virtual_hosted_style_request = virtual_hosted_style_request;
         self
     }
 
@@ -566,9 +566,9 @@ impl AmazonS3Builder {
         let bucket_endpoint: String;
 
         //If `endpoint` is provided then its assumed to be consistent with
-        // `virutal_hosted_style_request`. i.e. if `virtual_hosted_request_style` is true then
-        // `endpoint` should have bucket name on it.
-        if self.virtual_hosted_request_style {
+        // `virutal_hosted_style_request`. i.e. if `virtual_hosted_style_request` is true then
+        // `endpoint` should have bucket name included.
+        if self.virtual_hosted_style_request {
             endpoint = self.endpoint.unwrap_or_else(|| {
                 format!("https://{}.s3.{}.amazonaws.com", bucket, region)
             });
@@ -683,11 +683,11 @@ mod tests {
                     config
                 };
 
-                let config = if let Some(virtual_hosted_request_style) =
-                    env::var("OBJECT_STORE_VIRTUAL_HOSTED_REQUEST_STYLE").ok()
+                let config = if let Some(virtual_hosted_style_request) =
+                    env::var("OBJECT_STORE_VIRTUAL_HOSTED_STYLE_REQUEST").ok()
                 {
-                    config.with_virtual_hosted_request_style(
-                        virtual_hosted_request_style.trim().parse().unwrap(),
+                    config.with_virtual_hosted_style_request(
+                        virtual_hosted_style_request.trim().parse().unwrap(),
                     )
                 } else {
                     config
