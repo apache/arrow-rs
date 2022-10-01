@@ -374,7 +374,7 @@ impl AmazonS3Builder {
     /// * AWS_DEFAULT_REGION -> region
     /// * AWS_ENDPOINT -> endpoint
     /// * AWS_SESSION_TOKEN -> token
-    /// * AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -> metadata_endpoint
+    /// * AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
     /// # Example
     /// ```
     /// use object_store::aws::AmazonS3Builder;
@@ -495,8 +495,8 @@ impl AmazonS3Builder {
     /// Set the [instance metadata endpoint](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html),
     /// used primarily within AWS EC2.
     ///
-    /// This defaults to the IPv4 endpoint: 169.254.169.254. One can alternatively use the IPv6
-    /// endpoint fd00:ec2::254.
+    /// This defaults to the IPv4 endpoint: http://169.254.169.254. One can alternatively use the IPv6
+    /// endpoint http://fd00:ec2::254.
     pub fn with_metadata_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.metadata_endpoint = Some(endpoint.into());
         self
