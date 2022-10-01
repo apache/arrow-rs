@@ -480,7 +480,7 @@ impl AmazonS3Builder {
     ///
     /// If the `endpoint` is provided then it should be
     /// consistent with `virtual_hosted_style_request`.
-    /// i.e. if `virutal_hosted_request_style` is set to true
+    /// i.e. if `virtual_hosted_style_request` is set to true
     /// then `endpoint` should have bucket name included.
     pub fn with_virtual_hosted_style_request(
         mut self,
