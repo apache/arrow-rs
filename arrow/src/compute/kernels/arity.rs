@@ -76,11 +76,8 @@ where
     F: Fn(T::Native) -> T::Native,
 {
     let dict_values = array.values().as_any().downcast_ref().unwrap();
-    let values = unary::<T, F, T>(dict_values, op).into_data();
-    let data = array.data().clone().into_builder().child_data(vec![values]);
-
-    let new_dict: DictionaryArray<K> = unsafe { data.build_unchecked() }.into();
-    Ok(Arc::new(new_dict))
+    let values = unary::<T, F, T>(dict_values, op);
+    Ok(Arc::new(array.with_values(&values)))
 }
 
 /// A helper function that applies a fallible unary function to a dictionary array with primitive value type.
@@ -98,11 +95,8 @@ where
     }
 
     let dict_values = array.values().as_any().downcast_ref().unwrap();
-    let values = try_unary::<T, F, T>(dict_values, op)?.into_data();
-    let data = array.data().clone().into_builder().child_data(vec![values]);
-
-    let new_dict: DictionaryArray<K> = unsafe { data.build_unchecked() }.into();
-    Ok(Arc::new(new_dict))
+    let values = try_unary::<T, F, T>(dict_values, op)?;
+    Ok(Arc::new(array.with_values(&values)))
 }
 
 /// Applies an infallible unary function to an array with primitive values.
