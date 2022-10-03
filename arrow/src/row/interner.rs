@@ -129,6 +129,40 @@ impl OrderPreservingInterner {
     pub fn normalized_key(&self, key: Interned) -> &[u8] {
         &self.keys[key]
     }
+
+    /// Converts a normalized key returned by [`Self::normalized_key`] to [`Interned`]
+    /// returning `None` if it cannot be found
+    #[allow(dead_code)]
+    pub fn lookup(&self, normalized_key: &[u8]) -> Option<Interned> {
+        let len = normalized_key.len();
+
+        let mut current_slot: Option<&Slot> = None;
+        if len > 2 {
+            for v in normalized_key.iter().take(len - 2) {
+                let slot_idx = v.checked_sub(1)?;
+                current_slot = Some(match current_slot {
+                    None => &self.bucket.slots[slot_idx as usize],
+                    Some(b) => &b.child.as_ref()?.slots[slot_idx as usize],
+                });
+            }
+        }
+
+        if len > 1 {
+            let slot_idx = normalized_key[len - 2].checked_sub(2)?;
+            current_slot = Some(match current_slot {
+                None => &self.bucket.slots[slot_idx as usize],
+                Some(b) => &b.child.as_ref()?.slots[slot_idx as usize],
+            });
+        }
+
+        current_slot.as_ref()?.value
+    }
+
+    /// Returns the interned value for a given [`Interned`]
+    #[allow(dead_code)]
+    pub fn value(&self, key: Interned) -> &[u8] {
+        self.values.index(key)
+    }
 }
 
 /// A buffer of `[u8]` indexed by `[Interned]`
@@ -393,13 +427,21 @@ mod tests {
             .map(Option::unwrap)
             .collect();
 
-        let interned: Vec<_> = interned
-            .into_iter()
-            .map(|x| interner.normalized_key(x))
+        for (value, interned) in values.iter().zip(&interned) {
+            assert_eq!(interner.value(*interned), &value.to_be_bytes());
+        }
+
+        let normalized_keys: Vec<_> = interned
+            .iter()
+            .map(|x| interner.normalized_key(*x))
             .collect();
 
-        for (i, a) in interned.iter().enumerate() {
-            for (j, b) in interned.iter().enumerate() {
+        for (interned, normalized) in interned.iter().zip(&normalized_keys) {
+            assert_eq!(*interned, interner.lookup(normalized).unwrap());
+        }
+
+        for (i, a) in normalized_keys.iter().enumerate() {
+            for (j, b) in normalized_keys.iter().enumerate() {
                 let interned_cmp = a.cmp(b);
                 let values_cmp = values[i].cmp(&values[j]);
                 assert_eq!(
