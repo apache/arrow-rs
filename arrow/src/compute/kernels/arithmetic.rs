@@ -22,7 +22,7 @@
 //! `RUSTFLAGS="-C target-feature=+avx2"` for example.  See the documentation
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 
-use std::ops::{Div, Neg, Rem};
+use std::ops::{Div, Neg};
 
 use num::{One, Zero};
 
@@ -182,7 +182,7 @@ fn simd_checked_modulus<T: ArrowNumericType>(
     right: T::Simd,
 ) -> Result<T::Simd>
 where
-    T::Native: One + Zero,
+    T::Native: ArrowNativeTypeOp + One,
 {
     let zero = T::init(T::Native::zero());
     let one = T::init(T::Native::one());
@@ -305,7 +305,7 @@ fn simd_checked_divide_op<T, SI, SC>(
 ) -> Result<PrimitiveArray<T>>
 where
     T: ArrowNumericType,
-    T::Native: One + Zero,
+    T::Native: ArrowNativeTypeOp,
     SI: Fn(Option<u64>, T::Simd, T::Simd) -> Result<T::Simd>,
     SC: Fn(T::Native, T::Native) -> T::Native,
 {
@@ -1301,7 +1301,7 @@ pub fn modulus<T>(
 ) -> Result<PrimitiveArray<T>>
 where
     T: ArrowNumericType,
-    T::Native: Rem<Output = T::Native> + Zero + One,
+    T::Native: ArrowNativeTypeOp + One,
 {
     #[cfg(feature = "simd")]
     return simd_checked_divide_op(&left, &right, simd_checked_modulus::<T>, |a, b| {
@@ -1312,7 +1312,7 @@ where
         if b.is_zero() {
             Err(ArrowError::DivideByZero)
         } else {
-            Ok(a % b)
+            Ok(a.mod_wrapping(b))
         }
     });
 }
@@ -1507,13 +1507,13 @@ pub fn modulus_scalar<T>(
 ) -> Result<PrimitiveArray<T>>
 where
     T: ArrowNumericType,
-    T::Native: Rem<Output = T::Native> + Zero,
+    T::Native: ArrowNativeTypeOp,
 {
     if modulo.is_zero() {
         return Err(ArrowError::DivideByZero);
     }
 
-    Ok(unary(array, |a| a % modulo))
+    Ok(unary(array, |a| a.mod_wrapping(modulo)))
 }
 
 /// Divide every value in an array by a scalar. If any value in the array is null then the
@@ -2117,7 +2117,7 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive_array_modulus() {
+    fn test_int_array_modulus() {
         let a = Int32Array::from(vec![15, 15, 8, 1, 9]);
         let b = Int32Array::from(vec![5, 6, 8, 9, 1]);
         let c = modulus(&a, &b).unwrap();
@@ -2126,6 +2126,34 @@ mod tests {
         assert_eq!(0, c.value(2));
         assert_eq!(1, c.value(3));
         assert_eq!(0, c.value(4));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "called `Result::unwrap()` on an `Err` value: DivideByZero"
+    )]
+    fn test_int_array_modulus_divide_by_zero() {
+        let a = Int32Array::from(vec![1]);
+        let b = Int32Array::from(vec![0]);
+        modulus(&a, &b).unwrap();
+    }
+
+    #[test]
+    #[cfg(not(feature = "simd"))]
+    fn test_int_array_modulus_overflow_wrapping() {
+        let a = Int32Array::from(vec![i32::MIN]);
+        let b = Int32Array::from(vec![-1]);
+        let result = modulus(&a, &b).unwrap();
+        assert_eq!(0, result.value(0))
+    }
+
+    #[test]
+    #[cfg(feature = "simd")]
+    #[should_panic(expected = "attempt to calculate the remainder with overflow")]
+    fn test_int_array_modulus_overflow_panic() {
+        let a = Int32Array::from(vec![i32::MIN]);
+        let b = Int32Array::from(vec![-1]);
+        let _ = modulus(&a, &b).unwrap();
     }
 
     #[test]
@@ -2190,7 +2218,7 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive_array_modulus_scalar() {
+    fn test_int_array_modulus_scalar() {
         let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
         let b = 3;
         let c = modulus_scalar(&a, b).unwrap();
@@ -2199,13 +2227,29 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive_array_modulus_scalar_sliced() {
+    fn test_int_array_modulus_scalar_sliced() {
         let a = Int32Array::from(vec![Some(15), None, Some(9), Some(8), None]);
         let a = a.slice(1, 4);
         let a = as_primitive_array(&a);
         let actual = modulus_scalar(a, 3).unwrap();
         let expected = Int32Array::from(vec![None, Some(0), Some(2), None]);
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "called `Result::unwrap()` on an `Err` value: DivideByZero"
+    )]
+    fn test_int_array_modulus_scalar_divide_by_zero() {
+        let a = Int32Array::from(vec![1]);
+        modulus_scalar(&a, 0).unwrap();
+    }
+
+    #[test]
+    fn test_int_array_modulus_scalar_overflow_wrapping() {
+        let a = Int32Array::from(vec![i32::MIN]);
+        let result = modulus_scalar(&a, -1).unwrap();
+        assert_eq!(0, result.value(0))
     }
 
     #[test]
