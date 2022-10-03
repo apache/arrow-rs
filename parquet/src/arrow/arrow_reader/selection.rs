@@ -285,6 +285,14 @@ impl RowSelection {
     pub fn selects_any(&self) -> bool {
         self.selectors.iter().any(|x| !x.skip)
     }
+
+    /// Trims this [`RowSelection`] removing any trailing skips
+    pub(crate) fn trim(mut self) -> Self {
+        while self.selectors.last().map(|x| x.skip).unwrap_or(false) {
+            self.selectors.pop();
+        }
+        self
+    }
 }
 
 impl From<Vec<RowSelector>> for RowSelection {

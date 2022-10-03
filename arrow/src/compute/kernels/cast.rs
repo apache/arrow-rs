@@ -42,7 +42,6 @@ use std::ops::{Div, Mul};
 use std::str;
 use std::sync::Arc;
 
-use crate::array::as_datetime;
 use crate::buffer::MutableBuffer;
 use crate::compute::divide_scalar;
 use crate::compute::kernels::arithmetic::{divide, multiply};
@@ -54,8 +53,8 @@ use crate::compute::{try_unary, using_chrono_tz_and_utc_naive_date_time};
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::temporal_conversions::{
-    EPOCH_DAYS_FROM_CE, MICROSECONDS, MILLISECONDS, MILLISECONDS_IN_DAY, NANOSECONDS,
-    SECONDS_IN_DAY,
+    as_datetime, EPOCH_DAYS_FROM_CE, MICROSECONDS, MILLISECONDS, MILLISECONDS_IN_DAY,
+    NANOSECONDS, SECONDS_IN_DAY,
 };
 use crate::{array::*, compute::take};
 use crate::{buffer::Buffer, util::serialization::lexical_to_string};
@@ -1612,7 +1611,7 @@ where
                 .data()
                 .null_bitmap()
                 .cloned()
-                .map(|bitmap| bitmap.bits),
+                .map(|bitmap| bitmap.into_buffer()),
             array.data().offset(),
             array.data().buffers().to_vec(),
             vec![],
@@ -2408,7 +2407,7 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
                         .data()
                         .null_bitmap()
                         .cloned()
-                        .map(|bitmap| bitmap.bits),
+                        .map(|bitmap| bitmap.into_buffer()),
                     cast_keys.data().offset(),
                     cast_keys.data().buffers().to_vec(),
                     vec![cast_values.into_data()],
@@ -2622,7 +2621,7 @@ fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
                 .data()
                 .null_bitmap()
                 .cloned()
-                .map(|bitmap| bitmap.bits),
+                .map(|bitmap| bitmap.into_buffer()),
             0,
             vec![offsets.into()],
             vec![cast_array.into_data()],
@@ -2649,7 +2648,9 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
             to_type.clone(),
             array.len(),
             Some(data.null_count()),
-            data.null_bitmap().cloned().map(|bitmap| bitmap.bits),
+            data.null_bitmap()
+                .cloned()
+                .map(|bitmap| bitmap.into_buffer()),
             array.offset(),
             // reuse offset buffer
             data.buffers().to_vec(),

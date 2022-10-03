@@ -1392,8 +1392,8 @@ mod tests {
             // verify
             assert_eq!(array, Int32Array::from(vec![2, 4, 6]));
 
-            Box::from_raw(out_array_ptr);
-            Box::from_raw(out_schema_ptr);
+            drop(Box::from_raw(out_array_ptr));
+            drop(Box::from_raw(out_schema_ptr));
         }
         Ok(())
     }

@@ -18,6 +18,9 @@
 [workspace]
 members = [
         "arrow",
+        "arrow-array",
+        "arrow-data",
+        "arrow-schema",
         "arrow-buffer",
         "arrow-flight",
         "parquet",

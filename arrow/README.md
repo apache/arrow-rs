@@ -35,7 +35,7 @@ This crate is tested with the latest stable version of Rust. We do not currently
 
 The arrow crate follows the [SemVer standard](https://doc.rust-lang.org/cargo/reference/semver.html) defined by Cargo and works well within the Rust crate ecosystem.
 
-However, for historical reasons, this crate uses versions with major numbers greater than `0.x` (e.g. `22.0.0`), unlike many other crates in the Rust ecosystem which spend extended time releasing versions `0.x` to signal planned ongoing API changes. Minor arrow releases contain only compatible changes, while major releases may contain breaking API changes.
+However, for historical reasons, this crate uses versions with major numbers greater than `0.x` (e.g. `24.0.0`), unlike many other crates in the Rust ecosystem which spend extended time releasing versions `0.x` to signal planned ongoing API changes. Minor arrow releases contain only compatible changes, while major releases may contain breaking API changes.
 
 ## Feature Flags
 
@@ -54,6 +54,7 @@ The `arrow` crate provides the following features which may be enabled in your `
 - `ffi` - bindings for the Arrow C [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
 - `pyarrow` - bindings for pyo3 to call arrow-rs from python
 - `dyn_cmp_dict` - enables comparison of dictionary arrays within dyn comparison kernels
+- `dyn_arith_dict` - enables arithmetic on dictionary arrays within dyn arithmetic kernels
 
 ## Arrow Feature Status
 
@@ -61,7 +62,7 @@ The [Apache Arrow Status](https://arrow.apache.org/docs/status.html) page lists 
 
 ## Safety
 
-Arrow seeks to uphold the Rust Soundness Pledge as articulated eloquently [here](https://raphlinus.github.io/rust/22.0.01/18/soundness-pledge.html). Specifically:
+Arrow seeks to uphold the Rust Soundness Pledge as articulated eloquently [here](https://raphlinus.github.io/rust/24.0.01/18/soundness-pledge.html). Specifically:
 
 > The intent of this crate is to be free of soundness bugs. The developers will do their best to avoid them, and welcome help in analyzing and fixing them
 

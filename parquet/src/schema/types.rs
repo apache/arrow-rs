@@ -281,8 +281,9 @@ impl<'a> PrimitiveTypeBuilder<'a> {
         // Check length before logical type, since it is used for logical type validation.
         if self.physical_type == PhysicalType::FIXED_LEN_BYTE_ARRAY && self.length < 0 {
             return Err(general_err!(
-                "Invalid FIXED_LEN_BYTE_ARRAY length: {}",
-                self.length
+                "Invalid FIXED_LEN_BYTE_ARRAY length: {} for field '{}'",
+                self.length,
+                self.name
             ));
         }
 
@@ -295,9 +296,10 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         != self.converted_type
                     {
                         return Err(general_err!(
-                            "Logical type {:?} is imcompatible with converted type {}",
+                            "Logical type {:?} is incompatible with converted type {} for field '{}'",
                             logical_type,
-                            self.converted_type
+                            self.converted_type,
+                            self.name
                         ));
                     }
                 } else {
@@ -308,8 +310,9 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                 match (logical_type, self.physical_type) {
                     (LogicalType::Map, _) | (LogicalType::List, _) => {
                         return Err(general_err!(
-                            "{:?} cannot be applied to a primitive type",
-                            logical_type
+                            "{:?} cannot be applied to a primitive type for field '{}'",
+                            logical_type,
+                            self.name
                         ));
                     }
                     (LogicalType::Enum, PhysicalType::BYTE_ARRAY) => {}
@@ -317,16 +320,18 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         // Check that scale and precision are consistent with legacy values
                         if *scale != self.scale {
                             return Err(general_err!(
-                                "DECIMAL logical type scale {} must match self.scale {}",
+                                "DECIMAL logical type scale {} must match self.scale {} for field '{}'",
                                 scale,
-                                self.scale
+                                self.scale,
+                                self.name
                             ));
                         }
                         if *precision != self.precision {
                             return Err(general_err!(
-                                "DECIMAL logical type precision {} must match self.precision {}",
+                                "DECIMAL logical type precision {} must match self.precision {} for field '{}'",
                                 precision,
-                                self.precision
+                                self.precision,
+                                self.name
                             ));
                         }
                         self.check_decimal_precision_scale()?;
@@ -342,7 +347,8 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     (LogicalType::Time { unit, .. }, PhysicalType::INT64) => {
                         if *unit == TimeUnit::MILLIS(Default::default()) {
                             return Err(general_err!(
-                                "Cannot use millisecond unit on INT64 type"
+                                "Cannot use millisecond unit on INT64 type for field '{}'",
+                                self.name
                             ));
                         }
                     }
@@ -359,9 +365,10 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {}
                     (a, b) => {
                         return Err(general_err!(
-                            "Cannot annotate {:?} from {} fields",
+                            "Cannot annotate {:?} from {} for field '{}'",
                             a,
-                            b
+                            b,
+                            self.name
                         ))
                     }
                 }
@@ -374,8 +381,9 @@ impl<'a> PrimitiveTypeBuilder<'a> {
             ConvertedType::UTF8 | ConvertedType::BSON | ConvertedType::JSON => {
                 if self.physical_type != PhysicalType::BYTE_ARRAY {
                     return Err(general_err!(
-                        "{} can only annotate BYTE_ARRAY fields",
-                        self.converted_type
+                        "{} cannot annotate field '{}' because it is not a BYTE_ARRAY field",
+                        self.converted_type,
+                        self.name
                     ));
                 }
             }
@@ -392,8 +400,9 @@ impl<'a> PrimitiveTypeBuilder<'a> {
             | ConvertedType::INT_32 => {
                 if self.physical_type != PhysicalType::INT32 {
                     return Err(general_err!(
-                        "{} can only annotate INT32",
-                        self.converted_type
+                        "{} cannot annotate field '{}' because it is not a INT32 field",
+                        self.converted_type,
+                        self.name
                     ));
                 }
             }
@@ -404,8 +413,9 @@ impl<'a> PrimitiveTypeBuilder<'a> {
             | ConvertedType::INT_64 => {
                 if self.physical_type != PhysicalType::INT64 {
                     return Err(general_err!(
-                        "{} can only annotate INT64",
-                        self.converted_type
+                        "{} cannot annotate field '{}' because it is not a INT64 field",
+                        self.converted_type,
+                        self.name
                     ));
                 }
             }
@@ -414,19 +424,21 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     || self.length != 12
                 {
                     return Err(general_err!(
-                        "INTERVAL can only annotate FIXED_LEN_BYTE_ARRAY(12)"
+                        "INTERVAL cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(12) field",
+                        self.name
                     ));
                 }
             }
             ConvertedType::ENUM => {
                 if self.physical_type != PhysicalType::BYTE_ARRAY {
-                    return Err(general_err!("ENUM can only annotate BYTE_ARRAY fields"));
+                    return Err(general_err!("ENUM cannot annotate field '{}' because it is not a BYTE_ARRAY field", self.name));
                 }
             }
             _ => {
                 return Err(general_err!(
-                    "{} cannot be applied to a primitive type",
-                    self.converted_type
+                    "{} cannot be applied to primitive field '{}'",
+                    self.converted_type,
+                    self.name
                 ));
             }
         }
@@ -1258,7 +1270,7 @@ mod tests {
         if let Err(e) = result {
             assert_eq!(
                 format!("{}", e),
-                "Parquet error: Cannot annotate Integer { bit_width: 8, is_signed: true } from INT64 fields"
+                "Parquet error: Cannot annotate Integer { bit_width: 8, is_signed: true } from INT64 for field 'foo'"
             );
         }
 
@@ -1271,7 +1283,7 @@ mod tests {
         if let Err(e) = result {
             assert_eq!(
                 format!("{}", e),
-                "Parquet error: BSON can only annotate BYTE_ARRAY fields"
+                "Parquet error: BSON cannot annotate field 'foo' because it is not a BYTE_ARRAY field"
             );
         }
 
@@ -1302,7 +1314,7 @@ mod tests {
         if let Err(e) = result {
             assert_eq!(
                 format!("{}", e),
-                "Parquet error: DECIMAL logical type scale 32 must match self.scale -1"
+                "Parquet error: DECIMAL logical type scale 32 must match self.scale -1 for field 'foo'"
             );
         }
 
@@ -1419,7 +1431,7 @@ mod tests {
         if let Err(e) = result {
             assert_eq!(
                 format!("{}", e),
-                "Parquet error: UINT_8 can only annotate INT32"
+                "Parquet error: UINT_8 cannot annotate field 'foo' because it is not a INT32 field"
             );
         }
 
@@ -1431,7 +1443,7 @@ mod tests {
         if let Err(e) = result {
             assert_eq!(
                 format!("{}", e),
-                "Parquet error: TIME_MICROS can only annotate INT64"
+                "Parquet error: TIME_MICROS cannot annotate field 'foo' because it is not a INT64 field"
             );
         }
 
@@ -1443,7 +1455,7 @@ mod tests {
         if let Err(e) = result {
             assert_eq!(
                 format!("{}", e),
-                "Parquet error: INTERVAL can only annotate FIXED_LEN_BYTE_ARRAY(12)"
+                "Parquet error: INTERVAL cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(12) field"
             );
         }
 
@@ -1456,7 +1468,7 @@ mod tests {
         if let Err(e) = result {
             assert_eq!(
                 format!("{}", e),
-                "Parquet error: INTERVAL can only annotate FIXED_LEN_BYTE_ARRAY(12)"
+                "Parquet error: INTERVAL cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(12) field"
             );
         }
 
@@ -1468,7 +1480,7 @@ mod tests {
         if let Err(e) = result {
             assert_eq!(
                 format!("{}", e),
-                "Parquet error: ENUM can only annotate BYTE_ARRAY fields"
+                "Parquet error: ENUM cannot annotate field 'foo' because it is not a BYTE_ARRAY field"
             );
         }
 
@@ -1480,7 +1492,7 @@ mod tests {
         if let Err(e) = result {
             assert_eq!(
                 format!("{}", e),
-                "Parquet error: MAP cannot be applied to a primitive type"
+                "Parquet error: MAP cannot be applied to primitive field 'foo'"
             );
         }
 
@@ -1493,7 +1505,7 @@ mod tests {
         if let Err(e) = result {
             assert_eq!(
                 format!("{}", e),
-                "Parquet error: Invalid FIXED_LEN_BYTE_ARRAY length: -1"
+                "Parquet error: Invalid FIXED_LEN_BYTE_ARRAY length: -1 for field 'foo'"
             );
         }
     }

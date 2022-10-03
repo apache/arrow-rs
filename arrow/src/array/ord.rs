@@ -97,8 +97,8 @@ where
         PrimitiveArray::from(right.values().data().clone());
 
     Box::new(move |i: usize, j: usize| {
-        let key_left = left_keys.value(i).to_usize().unwrap();
-        let key_right = right_keys.value(j).to_usize().unwrap();
+        let key_left = left_keys.value(i).as_usize();
+        let key_right = right_keys.value(j).as_usize();
         let left = left_values.value(key_left);
         let right = right_values.value(key_right);
         left.cmp(&right)
@@ -118,8 +118,8 @@ where
     let right_values = StringArray::from(right.values().data().clone());
 
     Box::new(move |i: usize, j: usize| {
-        let key_left = left_keys.value(i).to_usize().unwrap();
-        let key_right = right_keys.value(j).to_usize().unwrap();
+        let key_left = left_keys.value(i).as_usize();
+        let key_right = right_keys.value(j).as_usize();
         let left = left_values.value(key_left);
         let right = right_values.value(key_right);
         left.cmp(right)

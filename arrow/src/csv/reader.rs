@@ -58,6 +58,7 @@ use crate::error::{ArrowError, Result};
 use crate::record_batch::{RecordBatch, RecordBatchOptions};
 use crate::util::reader_parser::Parser;
 
+use crate::csv::map_csv_error;
 use csv_crate::{ByteRecord, StringRecord};
 use std::ops::Neg;
 
@@ -187,10 +188,10 @@ fn infer_reader_schema_with_csv_options<R: Read>(
     // get or create header names
     // when has_header is false, creates default column names with column_ prefix
     let headers: Vec<String> = if roptions.has_header {
-        let headers = &csv_reader.headers()?.clone();
+        let headers = &csv_reader.headers().map_err(map_csv_error)?.clone();
         headers.iter().map(|s| s.to_string()).collect()
     } else {
-        let first_record_count = &csv_reader.headers()?.len();
+        let first_record_count = &csv_reader.headers().map_err(map_csv_error)?.len();
         (0..*first_record_count)
             .map(|i| format!("column_{}", i + 1))
             .collect()
@@ -208,7 +209,7 @@ fn infer_reader_schema_with_csv_options<R: Read>(
     let mut record = StringRecord::new();
     let max_records = roptions.max_read_records.unwrap_or(usize::MAX);
     while records_count < max_records {
-        if !csv_reader.read_record(&mut record)? {
+        if !csv_reader.read_record(&mut record).map_err(map_csv_error)? {
             break;
         }
         records_count += 1;
@@ -675,10 +676,9 @@ fn parse(
         RecordBatch::try_new_with_options(
             projected_schema,
             arr,
-            &RecordBatchOptions {
-                match_field_names: true,
-                row_count: Some(rows.len()),
-            },
+            &RecordBatchOptions::new()
+                .with_match_field_names(true)
+                .with_row_count(Some(rows.len())),
         )
     })
 }
@@ -1136,7 +1136,7 @@ mod tests {
     use crate::array::*;
     use crate::compute::cast;
     use crate::datatypes::Field;
-    use chrono::{prelude::*, LocalResult};
+    use chrono::prelude::*;
 
     #[test]
     fn test_csv() {
@@ -1696,26 +1696,6 @@ mod tests {
         }
     }
 
-    /// Interprets a naive_datetime (with no explicit timezone offset)
-    /// using the local timezone and returns the timestamp in UTC (0
-    /// offset)
-    fn naive_datetime_to_timestamp(naive_datetime: &NaiveDateTime) -> i64 {
-        // Note: Use chrono APIs that are different than
-        // naive_datetime_to_timestamp to compute the utc offset to
-        // try and double check the logic
-        let utc_offset_secs = match Local.offset_from_local_datetime(naive_datetime) {
-            LocalResult::Single(local_offset) => {
-                local_offset.fix().local_minus_utc() as i64
-            }
-            _ => panic!(
-                "Unexpected failure converting {} to local datetime",
-                naive_datetime
-            ),
-        };
-        let utc_offset_nanos = utc_offset_secs * 1_000_000_000;
-        naive_datetime.timestamp_nanos() - utc_offset_nanos
-    }
-
     #[test]
     fn test_parse_timestamp_microseconds() {
         assert_eq!(
@@ -1728,11 +1708,11 @@ mod tests {
         );
         assert_eq!(
             parse_item::<TimestampMicrosecondType>("2018-11-13T17:11:10").unwrap(),
-            naive_datetime_to_timestamp(&naive_datetime) / 1000
+            naive_datetime.timestamp_nanos() / 1000
         );
         assert_eq!(
             parse_item::<TimestampMicrosecondType>("2018-11-13 17:11:10").unwrap(),
-            naive_datetime_to_timestamp(&naive_datetime) / 1000
+            naive_datetime.timestamp_nanos() / 1000
         );
         let naive_datetime = NaiveDateTime::new(
             NaiveDate::from_ymd(2018, 11, 13),
@@ -1740,7 +1720,7 @@ mod tests {
         );
         assert_eq!(
             parse_item::<TimestampMicrosecondType>("2018-11-13T17:11:10.011").unwrap(),
-            naive_datetime_to_timestamp(&naive_datetime) / 1000
+            naive_datetime.timestamp_nanos() / 1000
         );
         let naive_datetime = NaiveDateTime::new(
             NaiveDate::from_ymd(1900, 2, 28),
@@ -1748,7 +1728,7 @@ mod tests {
         );
         assert_eq!(
             parse_item::<TimestampMicrosecondType>("1900-02-28T12:34:56").unwrap(),
-            naive_datetime_to_timestamp(&naive_datetime) / 1000
+            naive_datetime.timestamp_nanos() / 1000
         );
     }
 
@@ -1764,11 +1744,11 @@ mod tests {
         );
         assert_eq!(
             parse_item::<TimestampNanosecondType>("2018-11-13T17:11:10").unwrap(),
-            naive_datetime_to_timestamp(&naive_datetime)
+            naive_datetime.timestamp_nanos()
         );
         assert_eq!(
             parse_item::<TimestampNanosecondType>("2018-11-13 17:11:10").unwrap(),
-            naive_datetime_to_timestamp(&naive_datetime)
+            naive_datetime.timestamp_nanos()
         );
         let naive_datetime = NaiveDateTime::new(
             NaiveDate::from_ymd(2018, 11, 13),
@@ -1776,7 +1756,7 @@ mod tests {
         );
         assert_eq!(
             parse_item::<TimestampNanosecondType>("2018-11-13T17:11:10.011").unwrap(),
-            naive_datetime_to_timestamp(&naive_datetime)
+            naive_datetime.timestamp_nanos()
         );
         let naive_datetime = NaiveDateTime::new(
             NaiveDate::from_ymd(1900, 2, 28),
@@ -1784,7 +1764,7 @@ mod tests {
         );
         assert_eq!(
             parse_item::<TimestampNanosecondType>("1900-02-28T12:34:56").unwrap(),
-            naive_datetime_to_timestamp(&naive_datetime)
+            naive_datetime.timestamp_nanos()
         );
     }
 

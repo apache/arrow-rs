@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow"
-version = "22.0.0"
+version = "24.0.0"
 description = "Rust implementation of Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -44,14 +44,15 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
-arrow-buffer = { path = "../arrow-buffer", version = "22.0.0" }
-
-serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
+arrow-buffer = { version = "24.0.0", path = "../arrow-buffer" }
+arrow-data = { version = "24.0.0", path = "../arrow-data" }
+arrow-schema = { version = "24.0.0", path = "../arrow-schema" }
+arrow-array = { version = "24.0.0", path = "../arrow-array" }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 indexmap = { version = "1.9", default-features = false, features = ["std"] }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
-half = { version = "2.0", default-features = false }
+half = { version = "2.0", default-features = false, features = ["num-traits"]}
 hashbrown = { version = "0.12", default-features = false }
 csv_crate = { version = "1.1", default-features = false, optional = true, package = "csv" }
 regex = { version = "1.5.6", default-features = false, features = ["std", "unicode"] }
@@ -77,7 +78,7 @@ default = ["csv", "ipc", "json"]
 ipc_compression = ["ipc", "zstd", "lz4"]
 csv = ["csv_crate"]
 ipc = ["flatbuffers"]
-json = ["serde", "serde_json"]
+json = ["serde_json"]
 simd = ["packed_simd"]
 prettyprint = ["comfy-table"]
 # The test utils feature enables code used in benchmarks and tests but
@@ -89,12 +90,15 @@ pyarrow = ["pyo3", "ffi"]
 # force_validate runs full data validation for all arrays that are created
 # this is not enabled by default as it is too computationally expensive
 # but is run as part of our CI checks
-force_validate = []
+force_validate = ["arrow-data/force_validate"]
 # Enable ffi support
 ffi = []
 # Enable dyn-comparison of dictionary arrays with other arrays
 # Note: this does not impact comparison against scalars
 dyn_cmp_dict = []
+# Enable dyn-arithmetic kernels for dictionary arrays
+# Note: this does not impact arithmetic with scalars
+dyn_arith_dict = []
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
@@ -222,6 +226,10 @@ required-features = ["test_utils"]
 name = "buffer_create"
 harness = false
 required-features = ["test_utils"]
+
+[[bench]]
+name = "string_dictionary_builder"
+harness = false
 
 [[bench]]
 name = "substring_kernels"

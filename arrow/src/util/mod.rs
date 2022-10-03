@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub use arrow_buffer::util::{bit_chunk_iterator, bit_util};
+pub use arrow_buffer::{bit_chunk_iterator, bit_util};
+
+pub use arrow_data::bit_iterator;
+pub use arrow_data::bit_mask;
 
 #[cfg(feature = "test_utils")]
 pub mod bench_util;
-pub mod bit_iterator;
-pub(crate) mod bit_mask;
 #[cfg(feature = "test_utils")]
 pub mod data_gen;
 pub mod display;
@@ -31,8 +32,5 @@ pub mod string_writer;
 #[cfg(any(test, feature = "test_utils"))]
 pub mod test_util;
 
-mod trusted_len;
-pub(crate) use trusted_len::trusted_len_unzip;
-
-pub mod decimal;
+pub use arrow_array::decimal;
 pub(crate) mod reader_parser;
