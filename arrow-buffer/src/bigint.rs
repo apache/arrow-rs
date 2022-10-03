@@ -205,7 +205,7 @@ impl i256 {
         let l = BigInt::from_signed_bytes_le(&self.to_le_bytes());
         let r = BigInt::from_signed_bytes_le(&other.to_le_bytes());
         let (val, overflow) = Self::from_bigint_with_overflow(l / r);
-        (!overflow).then(|| val)
+        (!overflow).then_some(val)
     }
 
     /// Performs wrapping remainder
@@ -226,7 +226,7 @@ impl i256 {
         let l = BigInt::from_signed_bytes_le(&self.to_le_bytes());
         let r = BigInt::from_signed_bytes_le(&other.to_le_bytes());
         let (val, overflow) = Self::from_bigint_with_overflow(l % r);
-        (!overflow).then(|| val)
+        (!overflow).then_some(val)
     }
 }
 
