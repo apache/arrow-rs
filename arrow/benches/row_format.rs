@@ -89,7 +89,7 @@ fn row_bench(c: &mut Criterion) {
     });
 
     let cols =
-        vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 100)) as ArrayRef];
+        vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 10)) as ArrayRef];
 
     c.bench_function("row_batch 4096 string_dictionary(10, 0)", |b| {
         b.iter(|| {
@@ -99,7 +99,7 @@ fn row_bench(c: &mut Criterion) {
     });
 
     let cols =
-        vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 100)) as ArrayRef];
+        vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 30)) as ArrayRef];
 
     c.bench_function("row_batch 4096 string_dictionary(30, 0)", |b| {
         b.iter(|| {
