@@ -72,7 +72,7 @@ use std::{
 };
 
 use arrow::{csv::ReaderBuilder, datatypes::Schema, error::ArrowError};
-use clap::{ArgEnum, Parser};
+use clap::{Parser, ValueEnum};
 use parquet::{
     arrow::{parquet_to_arrow_schema, ArrowWriter},
     basic::Compression,
@@ -153,7 +153,7 @@ struct Args {
     output_file: PathBuf,
     /// input file format
     #[clap(
-        arg_enum,
+        value_enum,
         short('f'),
         long,
         help("input file format"),
@@ -179,7 +179,7 @@ struct Args {
     ///  when input_format==TSV: 'TAB'
     #[clap(short, long, help("field delimiter"))]
     delimiter: Option<char>,
-    #[clap(arg_enum, short, long, help("record terminator"))]
+    #[clap(value_enum, short, long, help("record terminator"))]
     record_terminator: Option<RecordTerminator>,
     #[clap(short, long, help("escape charactor"))]
     escape_char: Option<char>,
@@ -188,11 +188,11 @@ struct Args {
     #[clap(short('D'), long, help("double quote"))]
     double_quote: Option<bool>,
     #[clap(short('c'), long, help("compression mode"), default_value_t=Compression::SNAPPY)]
-    #[clap(parse(try_from_str =compression_from_str))]
+    #[clap(value_parser =compression_from_str)]
     parquet_compression: Compression,
 
     #[clap(short, long, help("writer version"))]
-    #[clap(parse(try_from_str =writer_version_from_str))]
+    #[clap(value_parser =writer_version_from_str)]
     writer_version: Option<WriterVersion>,
     #[clap(short, long, help("max row group size"))]
     max_row_group_size: Option<usize>,
@@ -263,13 +263,13 @@ impl Args {
     }
 }
 
-#[derive(Debug, Clone, Copy, ArgEnum, PartialEq)]
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
 enum CsvDialect {
     Csv,
     Tsv,
 }
 
-#[derive(Debug, Clone, Copy, ArgEnum, PartialEq)]
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
 enum RecordTerminator {
     LF,
     Crlf,

@@ -20,7 +20,7 @@ use clap::Parser;
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 type Result<T = (), E = Error> = std::result::Result<T, E>;
 
-#[derive(clap::ArgEnum, Debug, Clone)]
+#[derive(clap::ValueEnum, Debug, Clone)]
 enum Scenario {
     Middleware,
     #[clap(name = "auth:basic_proto")]
@@ -40,7 +40,7 @@ struct Args {
         help = "path to the descriptor file, only used when scenario is not provided. See https://arrow.apache.org/docs/format/Integration.html#json-test-data-format"
     )]
     path: Option<String>,
-    #[clap(long, arg_enum)]
+    #[clap(long, value_enum)]
     scenario: Option<Scenario>,
 }
 
