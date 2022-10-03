@@ -88,14 +88,13 @@ impl i256 {
     /// Converts this `i256` into an `i128` returning `None` if this would result
     /// in truncation/overflow
     pub fn to_i128(self) -> Option<i128> {
-        let is_negative = match self.high {
-            0 => false,
-            -1 => true,
-            _ => return None
-        };
+        let as_i128 = self.low as i128;
 
-        let top_bit_set = (self.low & (1 << 127)) != 0;
-        (is_negative == top_bit_set).then(|| self.low as i128)
+        let high_negative = self.high < 0;
+        let low_negative = as_i128 < 0;
+        let high_valid = self.high == -1 || self.high == 0;
+
+        (high_negative == low_negative && high_valid).then_some(self.low as i128)
     }
 
     /// Return the memory representation of this integer as a byte array in little-endian byte order.
