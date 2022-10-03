@@ -69,7 +69,10 @@ git checkout master
 git pull
 git checkout -b <RELEASE_BRANCH>
 
-<<<<<<< HEAD
+# Update versions. Make sure to run it before the next step since we do not want CHANGELOG-old.md affected.
+sed -i '' -e 's/14.0.0/24.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
+git commit -a -m 'Update version'
+
 # Copy the content of CHANGELOG.md to the beginning of CHANGELOG-old.md
 
 # ensure your github token is available
@@ -87,9 +90,6 @@ python dev/release/label_issues.py
 # review change log / edit issues and labels if needed, rerun
 git commit -a -m 'Create changelog'
 
-# Update versions. Make sure to run it before the next step since we do not want CHANGELOG-old.md affected.
-sed -i '' -e 's/14.0.0/24.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
-git commit -a -m 'Update version'
 
 # Manully edit ./dev/release/update_change_log.sh to reflect the release version
 # Create the changelog
