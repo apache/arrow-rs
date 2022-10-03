@@ -38,6 +38,7 @@ path = "src/lib.rs"
 bench = false
 
 [dependencies]
+num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.0", default-features = false }
 
 [dev-dependencies]
