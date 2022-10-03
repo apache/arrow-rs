@@ -565,7 +565,7 @@ where
         .into_iter()
         .map(|index| {
             let key: K::Native = keys.value(index as usize);
-            let value_order = value_indices_map.get(&key.to_usize().unwrap()).unwrap();
+            let value_order = value_indices_map.get(&key.as_usize()).unwrap();
             (index, *value_order)
         })
         .collect::<Vec<(u32, u32)>>();
@@ -690,7 +690,7 @@ fn sort_string_dictionary<T: ArrowDictionaryKeyType>(
         .into_iter()
         .map(|index| {
             let key: T::Native = keys.value(index as usize);
-            let value_order = value_indices_map.get(&key.to_usize().unwrap()).unwrap();
+            let value_order = value_indices_map.get(&key.as_usize()).unwrap();
             (index, *value_order)
         })
         .collect::<Vec<(u32, u32)>>();
@@ -1277,7 +1277,7 @@ mod tests {
             (0..sorted.len())
                 .map(|i| {
                     if sorted.is_valid(i) {
-                        Some(sorted_dict.value(sorted_keys.value(i).to_usize().unwrap()))
+                        Some(sorted_dict.value(sorted_keys.value(i).as_usize()))
                     } else {
                         None
                     }
@@ -1329,7 +1329,7 @@ mod tests {
         let sorted_values: PrimitiveArray<T> = From::<Vec<Option<T::Native>>>::from(
             (0..sorted.len())
                 .map(|i| {
-                    let key = sorted_keys.value(i).to_usize().unwrap();
+                    let key = sorted_keys.value(i).as_usize();
                     if sorted.is_valid(i) && sorted_dict.is_valid(key) {
                         Some(sorted_dict.value(key))
                     } else {

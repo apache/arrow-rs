@@ -80,6 +80,24 @@ impl i256 {
         Self { low, high }
     }
 
+    /// Returns this `i256` as a low u128 and high i128
+    pub fn to_parts(self) -> (u128, i128) {
+        (self.low, self.high)
+    }
+
+    /// Converts this `i256` into an `i128` returning `None` if this would result
+    /// in truncation/overflow
+    pub fn to_i128(self) -> Option<i128> {
+        let is_negative = match self.high {
+            0 => false,
+            -1 => true,
+            _ => return None
+        };
+
+        let top_bit_set = (self.low & (1 << 127)) != 0;
+        (is_negative == top_bit_set).then(|| self.low as i128)
+    }
+
     /// Return the memory representation of this integer as a byte array in little-endian byte order.
     #[inline]
     pub fn to_le_bytes(self) -> [u8; 32] {
@@ -255,7 +273,7 @@ fn mulx(a: u128, b: u128) -> (u128, u128) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use num::BigInt;
+    use num::{BigInt, FromPrimitive, ToPrimitive};
     use rand::{thread_rng, Rng};
 
     #[test]
@@ -267,6 +285,23 @@ mod tests {
         let a = i256::from_parts(i128::MAX as u128, 12);
         let b = i256::from_parts(i128::MIN as u128, -12);
         assert!(a > b);
+    }
+
+    #[test]
+    fn test_to_i128() {
+        let vals = [
+            BigInt::from_i128(-1).unwrap(),
+            BigInt::from_i128(i128::MAX).unwrap(),
+            BigInt::from_i128(i128::MIN).unwrap(),
+            BigInt::from_u128(u128::MIN).unwrap(),
+            BigInt::from_u128(u128::MAX).unwrap(),
+        ];
+
+        for v in vals {
+            let (t, overflow) = i256::from_bigint_with_overflow(v.clone());
+            assert!(!overflow);
+            assert_eq!(t.to_i128(), v.to_i128(), "{} vs {}", v, t);
+        }
     }
 
     #[test]
@@ -290,6 +325,10 @@ mod tests {
 
             // Comparison
             assert_eq!(il.cmp(&ir), bl.cmp(&br), "{} cmp {}", bl, br);
+
+            // To i128
+            assert_eq!(il.to_i128(), bl.to_i128(), "{}", bl);
+            assert_eq!(ir.to_i128(), br.to_i128(), "{}", br);
 
             // Addition
             let actual = il.wrapping_add(ir);

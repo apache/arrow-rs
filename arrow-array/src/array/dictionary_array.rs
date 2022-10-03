@@ -308,20 +308,13 @@ impl<K: ArrowPrimitiveType> DictionaryArray<K> {
 
     /// Return an iterator over the keys (indexes into the dictionary)
     pub fn keys_iter(&self) -> impl Iterator<Item = Option<usize>> + '_ {
-        self.keys
-            .iter()
-            .map(|key| key.map(|k| k.to_usize().expect("Dictionary index not usize")))
+        self.keys.iter().map(|key| key.map(|k| k.as_usize()))
     }
 
     /// Return the value of `keys` (the dictionary key) at index `i`,
     /// cast to `usize`, `None` if the value at `i` is `NULL`.
     pub fn key(&self, i: usize) -> Option<usize> {
-        self.keys.is_valid(i).then(|| {
-            self.keys
-                .value(i)
-                .to_usize()
-                .expect("Dictionary index not usize")
-        })
+        self.keys.is_valid(i).then(|| self.keys.value(i).as_usize())
     }
 
     /// Downcast this dictionary to a [`TypedDictionaryArray`]
@@ -343,6 +336,60 @@ impl<K: ArrowPrimitiveType> DictionaryArray<K> {
             dictionary: self,
             values,
         })
+    }
+
+    /// Returns a new dictionary with the same keys as the current instance
+    /// but with a different set of dictionary values
+    ///
+    /// This can be used to perform an operation on the values of a dictionary
+    ///
+    /// # Panics
+    ///
+    /// Panics if `values` has a length less than the current values
+    ///
+    /// ```
+    /// use arrow_array::builder::PrimitiveDictionaryBuilder;
+    /// use arrow_array::{Int8Array, Int64Array, ArrayAccessor};
+    /// use arrow_array::types::{Int32Type, Int8Type};
+    ///
+    /// // Construct a Dict(Int32, Int8)
+    /// let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int8Type>::with_capacity(2, 200);
+    /// for i in 0..100 {
+    ///     builder.append(i % 2).unwrap();
+    /// }
+    ///
+    /// let dictionary = builder.finish();
+    ///
+    /// // Perform a widening cast of dictionary values
+    /// let typed_dictionary = dictionary.downcast_dict::<Int8Array>().unwrap();
+    /// let values: Int64Array = typed_dictionary.values().unary(|x| x as i64);
+    ///
+    /// // Create a Dict(Int32,
+    /// let new = dictionary.with_values(&values);
+    ///
+    /// // Verify values are as expected
+    /// let new_typed = new.downcast_dict::<Int64Array>().unwrap();
+    /// for i in 0..100 {
+    ///     assert_eq!(new_typed.value(i), (i % 2) as i64)
+    /// }
+    /// ```
+    ///
+    pub fn with_values(&self, values: &dyn Array) -> Self {
+        assert!(values.len() >= self.values.len());
+
+        let builder = self
+            .data
+            .clone()
+            .into_builder()
+            .data_type(DataType::Dictionary(
+                Box::new(K::DATA_TYPE),
+                Box::new(values.data_type().clone()),
+            ))
+            .child_data(vec![values.data().clone()]);
+
+        // SAFETY:
+        // Offsets were valid before and verified length is greater than or equal
+        Self::from(unsafe { builder.build_unchecked() })
     }
 }
 
@@ -586,7 +633,7 @@ where
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         let val = self.dictionary.keys.value_unchecked(index);
-        let value_idx = val.to_usize().unwrap();
+        let value_idx = val.as_usize();
 
         // As dictionary keys are only verified for non-null indexes
         // we must check the value is within bounds

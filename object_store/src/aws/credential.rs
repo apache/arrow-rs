@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::aws::STRICT_ENCODE_SET;
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::util::hmac_sha256;
@@ -22,6 +23,7 @@ use crate::{Result, RetryConfig};
 use bytes::Buf;
 use chrono::{DateTime, Utc};
 use futures::TryFutureExt;
+use percent_encoding::utf8_percent_encode;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client, Method, Request, RequestBuilder, StatusCode};
 use serde::Deserialize;
@@ -29,6 +31,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::warn;
+use url::Url;
 
 type StdError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -103,13 +106,14 @@ impl<'a> RequestSigner<'a> {
         request.headers_mut().insert(HASH_HEADER, header_digest);
 
         let (signed_headers, canonical_headers) = canonicalize_headers(request.headers());
+        let canonical_query = canonicalize_query(request.url());
 
         // https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
         let canonical_request = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
             request.method().as_str(),
             request.url().path(), // S3 doesn't percent encode this like other services
-            request.url().query().unwrap_or(""), // This assumes the query pairs are in order
+            canonical_query,
             canonical_headers,
             signed_headers,
             digest
@@ -207,6 +211,37 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
+/// Canonicalizes query parameters into the AWS canonical form
+///
+/// <https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html>
+fn canonicalize_query(url: &Url) -> String {
+    use std::fmt::Write;
+
+    let capacity = match url.query() {
+        Some(q) if !q.is_empty() => q.len(),
+        _ => return String::new(),
+    };
+    let mut encoded = String::with_capacity(capacity + 1);
+
+    let mut headers = url.query_pairs().collect::<Vec<_>>();
+    headers.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+
+    let mut first = true;
+    for (k, v) in headers {
+        if !first {
+            encoded.push('&');
+        }
+        first = false;
+        let _ = write!(
+            encoded,
+            "{}={}",
+            utf8_percent_encode(k.as_ref(), &STRICT_ENCODE_SET),
+            utf8_percent_encode(v.as_ref(), &STRICT_ENCODE_SET)
+        );
+    }
+    encoded
+}
+
 /// Canonicalizes headers into the AWS Canonical Form.
 ///
 /// <https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html>
@@ -286,17 +321,17 @@ pub struct InstanceCredentialProvider {
     pub client: Client,
     pub retry_config: RetryConfig,
     pub imdsv1_fallback: bool,
+    pub metadata_endpoint: String,
 }
 
 impl InstanceCredentialProvider {
     async fn get_credential(&self) -> Result<Arc<AwsCredential>> {
         self.cache
             .get_or_insert_with(|| {
-                const METADATA_ENDPOINT: &str = "http://169.254.169.254";
                 instance_creds(
                     &self.client,
                     &self.retry_config,
-                    METADATA_ENDPOINT,
+                    &self.metadata_endpoint,
                     self.imdsv1_fallback,
                 )
                 .map_err(|source| crate::Error::Generic {

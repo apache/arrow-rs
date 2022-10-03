@@ -58,6 +58,23 @@ use crate::{
 mod client;
 mod credential;
 
+// http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
+//
+// Do not URI-encode any of the unreserved characters that RFC 3986 defines:
+// A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
+pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet =
+    percent_encoding::NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'.')
+        .remove(b'_')
+        .remove(b'~');
+
+/// This struct is used to maintain the URI path encoding
+const STRICT_PATH_ENCODE_SET: percent_encoding::AsciiSet = STRICT_ENCODE_SET.remove(b'/');
+
+/// Default metadata endpoint
+static METADATA_ENDPOINT: &str = "http://169.254.169.254";
+
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
@@ -340,6 +357,8 @@ pub struct AmazonS3Builder {
     retry_config: RetryConfig,
     allow_http: bool,
     imdsv1_fallback: bool,
+    virtual_hosted_style_request: bool,
+    metadata_endpoint: Option<String>,
 }
 
 impl AmazonS3Builder {
@@ -356,6 +375,7 @@ impl AmazonS3Builder {
     /// * AWS_DEFAULT_REGION -> region
     /// * AWS_ENDPOINT -> endpoint
     /// * AWS_SESSION_TOKEN -> token
+    /// * AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
     /// # Example
     /// ```
     /// use object_store::aws::AmazonS3Builder;
@@ -385,6 +405,15 @@ impl AmazonS3Builder {
 
         if let Ok(token) = std::env::var("AWS_SESSION_TOKEN") {
             builder.token = Some(token);
+        }
+
+        // This env var is set in ECS
+        // https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html
+        if let Ok(metadata_relative_uri) =
+            std::env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+        {
+            builder.metadata_endpoint =
+                Some(format!("{}{}", METADATA_ENDPOINT, metadata_relative_uri));
         }
 
         builder
@@ -418,10 +447,13 @@ impl AmazonS3Builder {
     }
 
     /// Sets the endpoint for communicating with AWS S3. Default value
-    /// is based on region.
+    /// is based on region. The `endpoint` field should be consistent with
+    /// the field `virtual_hosted_style_request'.
     ///
     /// For example, this might be set to `"http://localhost:4566:`
     /// for testing against a localstack instance.
+    /// If `virtual_hosted_style_request` is set to true then `endpoint`
+    /// should have bucket name included.
     pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = Some(endpoint.into());
         self
@@ -438,6 +470,23 @@ impl AmazonS3Builder {
     /// * true:  HTTP and HTTPS are allowed
     pub fn with_allow_http(mut self, allow_http: bool) -> Self {
         self.allow_http = allow_http;
+        self
+    }
+
+    /// Sets if virtual hosted style request has to be used.
+    /// If `virtual_hosted_style_request` is :
+    /// * false (default):  Path style request is used
+    /// * true:  Virtual hosted style request is used
+    ///
+    /// If the `endpoint` is provided then it should be
+    /// consistent with `virtual_hosted_style_request`.
+    /// i.e. if `virtual_hosted_style_request` is set to true
+    /// then `endpoint` should have bucket name included.
+    pub fn with_virtual_hosted_style_request(
+        mut self,
+        virtual_hosted_style_request: bool,
+    ) -> Self {
+        self.virtual_hosted_style_request = virtual_hosted_style_request;
         self
     }
 
@@ -461,6 +510,16 @@ impl AmazonS3Builder {
     ///
     pub fn with_imdsv1_fallback(mut self) -> Self {
         self.imdsv1_fallback = true;
+        self
+    }
+
+    /// Set the [instance metadata endpoint](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html),
+    /// used primarily within AWS EC2.
+    ///
+    /// This defaults to the IPv4 endpoint: http://169.254.169.254. One can alternatively use the IPv6
+    /// endpoint http://fd00:ec2::254.
+    pub fn with_metadata_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.metadata_endpoint = Some(endpoint.into());
         self
     }
 
@@ -522,19 +581,37 @@ impl AmazonS3Builder {
                         client,
                         retry_config: self.retry_config.clone(),
                         imdsv1_fallback: self.imdsv1_fallback,
+                        metadata_endpoint: self
+                            .metadata_endpoint
+                            .unwrap_or_else(|| METADATA_ENDPOINT.into()),
                     })
                 }
             },
         };
 
-        let endpoint = self
-            .endpoint
-            .unwrap_or_else(|| format!("https://s3.{}.amazonaws.com", region));
+        let endpoint: String;
+        let bucket_endpoint: String;
+
+        //If `endpoint` is provided then its assumed to be consistent with
+        // `virutal_hosted_style_request`. i.e. if `virtual_hosted_style_request` is true then
+        // `endpoint` should have bucket name included.
+        if self.virtual_hosted_style_request {
+            endpoint = self.endpoint.unwrap_or_else(|| {
+                format!("https://{}.s3.{}.amazonaws.com", bucket, region)
+            });
+            bucket_endpoint = endpoint.clone();
+        } else {
+            endpoint = self
+                .endpoint
+                .unwrap_or_else(|| format!("https://s3.{}.amazonaws.com", region));
+            bucket_endpoint = format!("{}/{}", endpoint, bucket);
+        }
 
         let config = S3Config {
             region,
             endpoint,
             bucket,
+            bucket_endpoint,
             credentials,
             retry_config: self.retry_config,
             allow_http: self.allow_http,
@@ -551,7 +628,7 @@ mod tests {
     use super::*;
     use crate::tests::{
         get_nonexistent_object, list_uses_directories_correctly, list_with_delimiter,
-        put_get_delete_list, rename_and_copy, stream_get,
+        put_get_delete_list_opts, rename_and_copy, stream_get,
     };
     use bytes::Bytes;
     use std::env;
@@ -633,6 +710,16 @@ mod tests {
                     config
                 };
 
+                let config = if let Some(virtual_hosted_style_request) =
+                    env::var("OBJECT_STORE_VIRTUAL_HOSTED_STYLE_REQUEST").ok()
+                {
+                    config.with_virtual_hosted_style_request(
+                        virtual_hosted_style_request.trim().parse().unwrap(),
+                    )
+                } else {
+                    config
+                };
+
                 config
             }
         }};
@@ -653,6 +740,10 @@ mod tests {
         let aws_session_token = env::var("AWS_SESSION_TOKEN")
             .unwrap_or_else(|_| "object_store:fake_session_token".into());
 
+        let container_creds_relative_uri =
+            env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+                .unwrap_or_else(|_| "/object_store/fake_credentials_uri".into());
+
         // required
         env::set_var("AWS_ACCESS_KEY_ID", &aws_access_key_id);
         env::set_var("AWS_SECRET_ACCESS_KEY", &aws_secret_access_key);
@@ -661,6 +752,10 @@ mod tests {
         // optional
         env::set_var("AWS_ENDPOINT", &aws_endpoint);
         env::set_var("AWS_SESSION_TOKEN", &aws_session_token);
+        env::set_var(
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+            &container_creds_relative_uri,
+        );
 
         let builder = AmazonS3Builder::from_env();
         assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
@@ -672,14 +767,20 @@ mod tests {
 
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
+
+        let metadata_uri =
+            format!("{}{}", METADATA_ENDPOINT, container_creds_relative_uri);
+        assert_eq!(builder.metadata_endpoint.unwrap(), metadata_uri);
     }
 
     #[tokio::test]
     async fn s3_test() {
         let config = maybe_skip_integration!();
+        let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
         let integration = config.build().unwrap();
 
-        put_get_delete_list(&integration).await;
+        // Localstack doesn't support listing with spaces https://github.com/localstack/localstack/issues/6328
+        put_get_delete_list_opts(&integration, is_local).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;

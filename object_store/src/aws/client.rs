@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::aws::credential::{AwsCredential, CredentialExt, CredentialProvider};
+use crate::aws::STRICT_PATH_ENCODE_SET;
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
 use crate::multipart::UploadPart;
@@ -26,25 +27,12 @@ use crate::{
 };
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
-use percent_encoding::{utf8_percent_encode, AsciiSet, PercentEncode, NON_ALPHANUMERIC};
+use percent_encoding::{utf8_percent_encode, PercentEncode};
 use reqwest::{Client as ReqwestClient, Method, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::ops::Range;
 use std::sync::Arc;
-
-// http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
-//
-// Do not URI-encode any of the unreserved characters that RFC 3986 defines:
-// A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
-const STRICT_ENCODE_SET: AsciiSet = NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'.')
-    .remove(b'_')
-    .remove(b'~');
-
-/// This struct is used to maintain the URI path encoding
-const STRICT_PATH_ENCODE_SET: AsciiSet = STRICT_ENCODE_SET.remove(b'/');
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -209,6 +197,7 @@ pub struct S3Config {
     pub region: String,
     pub endpoint: String,
     pub bucket: String,
+    pub bucket_endpoint: String,
     pub credentials: CredentialProvider,
     pub retry_config: RetryConfig,
     pub allow_http: bool,
@@ -216,7 +205,7 @@ pub struct S3Config {
 
 impl S3Config {
     fn path_url(&self, path: &Path) -> String {
-        format!("{}/{}/{}", self.endpoint, self.bucket, encode_path(path))
+        format!("{}/{}", self.bucket_endpoint, encode_path(path))
     }
 }
 
@@ -354,7 +343,7 @@ impl S3Client {
         token: Option<&str>,
     ) -> Result<(ListResult, Option<String>)> {
         let credential = self.get_credential().await?;
-        let url = format!("{}/{}", self.config.endpoint, self.config.bucket);
+        let url = self.config.bucket_endpoint.clone();
 
         let mut query = Vec::with_capacity(4);
 
@@ -410,12 +399,7 @@ impl S3Client {
 
     pub async fn create_multipart(&self, location: &Path) -> Result<MultipartId> {
         let credential = self.get_credential().await?;
-        let url = format!(
-            "{}/{}/{}?uploads=",
-            self.config.endpoint,
-            self.config.bucket,
-            encode_path(location)
-        );
+        let url = format!("{}?uploads=", self.config.path_url(location),);
 
         let response = self
             .client

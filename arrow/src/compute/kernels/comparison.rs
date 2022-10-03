@@ -863,9 +863,9 @@ fn utf8_empty<OffsetSize: OffsetSizeTrait, const EQ: bool>(
         MutableBuffer::from_trusted_len_iter_bool(left.value_offsets().windows(2).map(
             |offset| {
                 if EQ {
-                    offset[1].to_usize().unwrap() == offset[0].to_usize().unwrap()
+                    offset[1].as_usize() == offset[0].as_usize()
                 } else {
-                    offset[1].to_usize().unwrap() > offset[0].to_usize().unwrap()
+                    offset[1].as_usize() > offset[0].as_usize()
                 }
             },
         ))
@@ -1793,7 +1793,7 @@ where
         .map(|key| {
             key.map(|key| unsafe {
                 // safety lengths were verified above
-                let key = key.to_usize().expect("Dictionary index not usize");
+                let key = key.as_usize();
                 dict_comparison.value_unchecked(key)
             })
         })

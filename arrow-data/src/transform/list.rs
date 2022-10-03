@@ -46,8 +46,8 @@ pub(super) fn build_extend<T: ArrowNativeType + Integer>(array: &ArrayData) -> E
 
                 mutable.child_data[0].extend(
                     index,
-                    offsets[start].to_usize().unwrap(),
-                    offsets[start + len].to_usize().unwrap(),
+                    offsets[start].as_usize(),
+                    offsets[start + len].as_usize(),
                 )
             },
         )
@@ -75,8 +75,8 @@ pub(super) fn build_extend<T: ArrowNativeType + Integer>(array: &ArrayData) -> E
                         // append value
                         child.extend(
                             index,
-                            offsets[i].to_usize().unwrap(),
-                            offsets[i + 1].to_usize().unwrap(),
+                            offsets[i].as_usize(),
+                            offsets[i + 1].as_usize(),
                         );
                     }
                     // append offset
