@@ -213,6 +213,11 @@ impl i256 {
     }
 }
 
+/// Performs an unsigned multiplication of `a * b` returning a tuple of
+/// `(low, high)` where `low` contains the lower 128-bits of the result
+/// and `high` the higher 128-bits
+///
+/// This mirrors the x86 mulx instruction but for 128-bit types
 #[inline]
 fn mulx(a: u128, b: u128) -> (u128, u128) {
     let split = |a: u128| (a & (u64::MAX as u128), a >> 64);
