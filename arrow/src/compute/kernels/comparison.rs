@@ -1792,7 +1792,6 @@ where
         .iter()
         .map(|key| {
             key.map(|key| unsafe {
-                // safety lengths were verified above
                 let key = key.as_usize();
                 dict_comparison.value_unchecked(key)
             })
@@ -1845,8 +1844,7 @@ where
     let mut left_chunks = left.values().chunks_exact(CHUNK_SIZE);
     let mut right_chunks = right.values().chunks_exact(CHUNK_SIZE);
 
-    // safety: result is newly created above, always written as a T below
-    let result_chunks = unsafe { result.typed_data_mut() };
+    let result_chunks = result.typed_data_mut();
     let result_remainder = left_chunks
         .borrow_mut()
         .zip(right_chunks.borrow_mut())
@@ -1937,8 +1935,7 @@ where
     let mut left_chunks = left.values().chunks_exact(CHUNK_SIZE);
     let simd_right = T::init(right);
 
-    // safety: result is newly created above, always written as a T below
-    let result_chunks = unsafe { result.typed_data_mut() };
+    let result_chunks = result.typed_data_mut();
     let result_remainder =
         left_chunks
             .borrow_mut()
