@@ -332,7 +332,6 @@ where
 
             // process data in chunks of 64 elements since we also get 64 bits of validity information at a time
 
-            // safety: result is newly created above, always written as a T below
             let mut result_chunks = result.typed_data_mut().chunks_exact_mut(64);
             let mut left_chunks = left.values().chunks_exact(64);
             let mut right_chunks = right.values().chunks_exact(64);
@@ -379,7 +378,6 @@ where
             )?;
         }
         None => {
-            // safety: result is newly created above, always written as a T below
             let mut result_chunks = result.typed_data_mut().chunks_exact_mut(lanes);
             let mut left_chunks = left.values().chunks_exact(lanes);
             let mut right_chunks = right.values().chunks_exact(lanes);
