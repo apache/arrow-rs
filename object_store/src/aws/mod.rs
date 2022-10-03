@@ -376,7 +376,7 @@ impl AmazonS3Builder {
     /// * AWS_ENDPOINT -> endpoint
     /// * AWS_SESSION_TOKEN -> token
     /// * AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
-    /// * AWS_ALLOW_HTTP -> true for trusted minio connection
+    /// * AWS_ALLOW_HTTP -> set to "true" to permit HTTP connections without TLS
     /// # Example
     /// ```
     /// use object_store::aws::AmazonS3Builder;
