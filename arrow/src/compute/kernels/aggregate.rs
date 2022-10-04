@@ -20,6 +20,7 @@
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_schema::ArrowError;
 use multiversion::multiversion;
+#[allow(unused_imports)]
 use std::ops::{Add, Deref};
 
 use crate::array::{
@@ -168,6 +169,7 @@ pub fn min_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&
 /// Returns the sum of values in the array.
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `sum_array_checked` instead.
 pub fn sum_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
 where
     T: ArrowNumericType,
@@ -195,6 +197,42 @@ where
             Some(sum)
         }
         _ => sum::<T>(as_primitive_array(&array)),
+    }
+}
+
+/// Returns the sum of values in the array.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `sum_array` instead.
+pub fn sum_array_checked<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+) -> Result<Option<T::Native>>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    match array.data_type() {
+        DataType::Dictionary(_, _) => {
+            let null_count = array.null_count();
+
+            if null_count == array.len() {
+                return Ok(None);
+            }
+
+            let iter = ArrayIter::new(array);
+            let sum =
+                iter.into_iter()
+                    .try_fold(T::default_value(), |accumulator, value| {
+                        if let Some(value) = value {
+                            accumulator.add_checked(value)
+                        } else {
+                            Ok(accumulator)
+                        }
+                    })?;
+
+            Ok(Some(sum))
+        }
+        _ => sum_checked::<T>(as_primitive_array(&array)),
     }
 }
 
@@ -1291,5 +1329,6 @@ mod tests {
         let a = Int32Array::from(vec![i32::MAX, 1]);
 
         sum_checked(&a).expect_err("overflow should be detected");
+        sum_array_checked::<Int32Type, _>(&a).expect_err("overflow should be detected");
     }
 }
