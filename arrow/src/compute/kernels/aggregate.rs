@@ -24,6 +24,7 @@ use crate::array::{
     as_primitive_array, Array, ArrayAccessor, ArrayIter, BooleanArray,
     GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
+use crate::datatypes::native_op::ArrowNativeTypeOp;
 use crate::datatypes::{ArrowNativeType, ArrowNumericType, DataType};
 use crate::util::bit_iterator::BitIndexIterator;
 
@@ -162,10 +163,13 @@ pub fn min_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&
 }
 
 /// Returns the sum of values in the array.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `sum_checked` instead.
 pub fn sum_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
 where
     T: ArrowNumericType,
-    T::Native: Add<Output = T::Native>,
+    T::Native: ArrowNativeTypeOp,
 {
     match array.data_type() {
         DataType::Dictionary(_, _) => {
@@ -180,7 +184,7 @@ where
                 .into_iter()
                 .fold(T::default_value(), |accumulator, value| {
                     if let Some(value) = value {
-                        accumulator + value
+                        accumulator.add_wrapping(value)
                     } else {
                         accumulator
                     }
@@ -239,11 +243,14 @@ where
 /// Returns the sum of values in the primitive array.
 ///
 /// Returns `None` if the array is empty or only contains null values.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `sum_checked` instead.
 #[cfg(not(feature = "simd"))]
 pub fn sum<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
     T: ArrowNumericType,
-    T::Native: Add<Output = T::Native>,
+    T::Native: ArrowNativeTypeOp,
 {
     let null_count = array.null_count();
 
@@ -256,7 +263,7 @@ where
     match array.data().null_buffer() {
         None => {
             let sum = data.iter().fold(T::default_value(), |accumulator, value| {
-                accumulator + *value
+                accumulator.add_wrapping(*value)
             });
 
             Some(sum)
@@ -274,7 +281,7 @@ where
                     let mut index_mask = 1;
                     chunk.iter().for_each(|value| {
                         if (mask & index_mask) != 0 {
-                            sum = sum + *value;
+                            sum = sum.add_wrapping(*value);
                         }
                         index_mask <<= 1;
                     });
@@ -284,7 +291,7 @@ where
 
             remainder.iter().enumerate().for_each(|(i, value)| {
                 if remainder_bits & (1 << i) != 0 {
-                    sum = sum + *value;
+                    sum = sum.add_wrapping(*value);
                 }
             });
 
@@ -638,6 +645,9 @@ mod simd {
 /// Returns the sum of values in the primitive array.
 ///
 /// Returns `None` if the array is empty or only contains null values.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `sum_checked` instead.
 #[cfg(feature = "simd")]
 pub fn sum<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
@@ -1215,5 +1225,14 @@ mod tests {
         assert_eq!(actual, expected);
         let actual = max_binary(sliced_input);
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    #[cfg(not(feature = "simd"))]
+    fn test_sum_overflow() {
+        let a = Int32Array::from(vec![i32::MAX, 1]);
+
+        assert_eq!(sum(&a).unwrap(), -2147483648);
+        assert_eq!(sum_array::<Int32Type, _>(&a).unwrap(), -2147483648);
     }
 }
