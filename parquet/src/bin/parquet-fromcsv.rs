@@ -72,7 +72,7 @@ use std::{
 };
 
 use arrow::{csv::ReaderBuilder, datatypes::Schema, error::ArrowError};
-use clap::{ValueEnum, Parser};
+use clap::{Parser, ValueEnum};
 use parquet::{
     arrow::{parquet_to_arrow_schema, ArrowWriter},
     basic::Compression,
