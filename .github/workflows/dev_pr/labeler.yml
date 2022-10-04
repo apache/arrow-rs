@@ -17,6 +17,10 @@
 
 arrow:
   - arrow/**/*
+  - arrow-array/**/*
+  - arrow-buffer/**/*
+  - arrow-data/**/*
+  - arrow-schema/**/*
 
 arrow-flight:
   - arrow-flight/**/*
