@@ -57,7 +57,10 @@ use crate::temporal_conversions::{
     NANOSECONDS, SECONDS_IN_DAY,
 };
 use crate::{array::*, compute::take};
-use crate::{buffer::Buffer, util::serialization::lexical_to_string};
+use crate::{
+    buffer::Buffer, util::display::array_value_to_string,
+    util::serialization::lexical_to_string,
+};
 use num::cast::AsPrimitive;
 use num::{BigInt, NumCast, ToPrimitive};
 
@@ -136,6 +139,10 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (List(list_from), LargeList(list_to)) => {
             list_from.data_type() == list_to.data_type()
         }
+        (LargeList(list_from), List(list_to)) => {
+            list_from.data_type() == list_to.data_type()
+        }
+        (List(list_from) | LargeList(list_from), Utf8 | LargeUtf8) => can_cast_types(list_from.data_type(), to_type),
         (List(_), _) => false,
         (_, List(list_to)) => can_cast_types(from_type, list_to.data_type()),
         (_, LargeList(list_to)) => can_cast_types(from_type, list_to.data_type()),
@@ -408,6 +415,21 @@ macro_rules! cast_decimal_to_float {
     }};
 }
 
+// cast the List array to Utf8 array
+macro_rules! cast_list_to_string {
+    ($ARRAY:expr, $SIZE:ident) => {{
+        let mut value_builder: GenericStringBuilder<$SIZE> = GenericStringBuilder::new();
+        for i in 0..$ARRAY.len() {
+            if $ARRAY.is_null(i) {
+                value_builder.append_null();
+            } else {
+                value_builder.append_value(array_value_to_string($ARRAY, i)?);
+            }
+        }
+        Ok(Arc::new(value_builder.finish()))
+    }};
+}
+
 /// Cast `array` to the provided data type and return a new Array with
 /// type `to_type`, if possible. It accepts `CastOptions` to allow consumers
 /// to configure cast behavior.
@@ -585,6 +607,8 @@ pub fn cast_with_options(
                 cast_list_container::<i64, i32>(&**array, cast_options)
             }
         }
+        (List(_) | LargeList(_), Utf8) => cast_list_to_string!(array, i32),
+        (List(_) | LargeList(_), LargeUtf8) => cast_list_to_string!(array, i64),
         (List(_), _) => Err(ArrowError::CastError(
             "Cannot cast list to non-list data types".to_string(),
         )),
@@ -5763,5 +5787,68 @@ mod tests {
             out.as_any().downcast_ref::<StringArray>().unwrap(),
             &expected
         );
+    }
+
+    #[test]
+    fn test_list_to_string() {
+        let str_array = StringArray::from(vec!["a", "b", "c", "d", "e", "f", "g", "h"]);
+        let value_offsets = Buffer::from_slice_ref(&[0, 3, 6, 8]);
+        let value_data = ArrayData::builder(DataType::Utf8)
+            .len(str_array.len())
+            .buffers(str_array.data().buffers().to_vec())
+            .build()
+            .unwrap();
+
+        let list_data_type =
+            DataType::List(Box::new(Field::new("item", DataType::Utf8, true)));
+        let list_data = ArrayData::builder(list_data_type)
+            .len(3)
+            .add_buffer(value_offsets)
+            .add_child_data(value_data)
+            .build()
+            .unwrap();
+        let array = Arc::new(ListArray::from(list_data)) as ArrayRef;
+
+        let out = cast(&array, &DataType::Utf8).unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(&out, &vec!["[a, b, c]", "[d, e, f]", "[g, h]"]);
+
+        let out = cast(&array, &DataType::LargeUtf8).unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(&out, &vec!["[a, b, c]", "[d, e, f]", "[g, h]"]);
+
+        let array = Arc::new(make_list_array()) as ArrayRef;
+        let out = cast(&array, &DataType::Utf8).unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(&out, &vec!["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
+
+        let array = Arc::new(make_large_list_array()) as ArrayRef;
+        let out = cast(&array, &DataType::LargeUtf8).unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(&out, &vec!["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
     }
 }
