@@ -140,7 +140,7 @@ impl Display for ParquetFromCsvError {
 }
 
 #[derive(Debug, Parser)]
-#[clap(author, version, about("Binary to convert csv to Parquet"), long_about=None)]
+#[clap(author, version, disable_help_flag=true, about("Binary to convert csv to Parquet"), long_about=None)]
 struct Args {
     /// Path to a text file containing a parquet schema definition
     #[clap(short, long, help("message schema for output Parquet"))]
@@ -188,14 +188,17 @@ struct Args {
     #[clap(short('D'), long, help("double quote"))]
     double_quote: Option<bool>,
     #[clap(short('c'), long, help("compression mode"), default_value_t=Compression::SNAPPY)]
-    #[clap(value_parser =compression_from_str)]
+    #[clap(value_parser=compression_from_str)]
     parquet_compression: Compression,
 
     #[clap(short, long, help("writer version"))]
-    #[clap(value_parser =writer_version_from_str)]
+    #[clap(value_parser=writer_version_from_str)]
     writer_version: Option<WriterVersion>,
     #[clap(short, long, help("max row group size"))]
     max_row_group_size: Option<usize>,
+
+    #[clap(long, action=clap::ArgAction::Help, help("display usage help"))]
+    help: Option<bool>,
 }
 
 fn compression_from_str(cmp: &str) -> Result<Compression, String> {
@@ -208,7 +211,7 @@ fn compression_from_str(cmp: &str) -> Result<Compression, String> {
         "LZ4" => Ok(Compression::LZ4),
         "ZSTD" => Ok(Compression::ZSTD),
         v => Err(
-            format!("Unknown compression {0} : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD ",v)
+            format!("Unknown compression {0} : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help",v)
         )
     }
 }
@@ -544,6 +547,7 @@ mod tests {
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
             max_row_group_size: None,
+            help: None,
         };
         let arrow_schema = Arc::new(Schema::new(vec![
             Field::new("field1", DataType::Utf8, false),
@@ -577,6 +581,7 @@ mod tests {
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
             max_row_group_size: None,
+            help: None,
         };
         let arrow_schema = Arc::new(Schema::new(vec![
             Field::new("field1", DataType::Utf8, false),
@@ -630,6 +635,7 @@ mod tests {
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
             max_row_group_size: None,
+            help: None,
         };
         convert_csv_to_parquet(&args).unwrap();
     }
