@@ -17,8 +17,10 @@
 
 //! Defines aggregations over Arrow arrays.
 
+use arrow_data::bit_iterator::try_for_each_valid_idx;
+use arrow_schema::ArrowError;
 use multiversion::multiversion;
-use std::ops::Add;
+use std::ops::{Add, Deref};
 
 use crate::array::{
     as_primitive_array, Array, ArrayAccessor, ArrayIter, BooleanArray,
@@ -26,6 +28,7 @@ use crate::array::{
 };
 use crate::datatypes::native_op::ArrowNativeTypeOp;
 use crate::datatypes::{ArrowNativeType, ArrowNumericType, DataType};
+use crate::error::Result;
 use crate::util::bit_iterator::BitIndexIterator;
 
 /// Generic test for NaN, the optimizer should be able to remove this for integer types.
@@ -165,7 +168,6 @@ pub fn min_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&
 /// Returns the sum of values in the array.
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
-/// For an overflow-checking variant, use `sum_checked` instead.
 pub fn sum_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
 where
     T: ArrowNumericType,
@@ -296,6 +298,54 @@ where
             });
 
             Some(sum)
+        }
+    }
+}
+
+/// Returns the sum of values in the primitive array.
+///
+/// Returns `Ok(None)` if the array is empty or only contains null values.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `sum` instead.
+pub fn sum_checked<T>(array: &PrimitiveArray<T>) -> Result<Option<T::Native>>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    let null_count = array.null_count();
+
+    if null_count == array.len() {
+        return Ok(None);
+    }
+
+    let data: &[T::Native] = array.values();
+
+    match array.data().null_buffer() {
+        None => {
+            let sum = data
+                .iter()
+                .try_fold(T::default_value(), |accumulator, value| {
+                    accumulator.add_checked(*value)
+                })?;
+
+            Ok(Some(sum))
+        }
+        Some(buffer) => {
+            let mut sum = T::default_value();
+
+            try_for_each_valid_idx(
+                array.len(),
+                array.offset(),
+                null_count,
+                Some(buffer.deref()),
+                |idx| {
+                    unsafe { sum = sum.add_checked(array.value_unchecked(idx))? };
+                    Ok::<_, ArrowError>(())
+                },
+            )?;
+
+            Ok(Some(sum))
         }
     }
 }
@@ -646,8 +696,8 @@ mod simd {
 ///
 /// Returns `None` if the array is empty or only contains null values.
 ///
-/// This doesn't detect overflow. Once overflowing, the result will wrap around.
-/// For an overflow-checking variant, use `sum_checked` instead.
+/// This doesn't detect overflow in release mode by default. Once overflowing, the result will
+/// wrap around. For an overflow-checking variant, use `sum_checked` instead.
 #[cfg(feature = "simd")]
 pub fn sum<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
@@ -1234,5 +1284,12 @@ mod tests {
 
         assert_eq!(sum(&a).unwrap(), -2147483648);
         assert_eq!(sum_array::<Int32Type, _>(&a).unwrap(), -2147483648);
+    }
+
+    #[test]
+    fn test_sum_checked_overflow() {
+        let a = Int32Array::from(vec![i32::MAX, 1]);
+
+        sum_checked(&a).expect_err("overflow should be detected");
     }
 }
