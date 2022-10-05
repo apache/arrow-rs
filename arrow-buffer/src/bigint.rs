@@ -144,11 +144,12 @@ impl i256 {
     /// Computes the absolute value of this i256
     #[inline]
     pub fn wrapping_abs(self) -> Self {
-        // Shift sign bit down to construct mask of all set bits if negative
+        // -1 if negative, otherwise 0
         let sa = self.high >> 127;
-        let high = (self.high ^ sa).wrapping_sub(sa);
-        let low = (self.low ^ sa as u128).wrapping_sub(sa as u128);
-        Self { high, low }
+        let sa = Self::from_parts(sa as u128, sa);
+
+        // Inverted if negative
+        Self::from_parts(self.low ^ sa.low, self.high ^ sa.high).wrapping_sub(sa)
     }
 
     /// Computes the absolute value of this i256 returning `None` if `Self == Self::MIN`
@@ -216,18 +217,23 @@ impl i256 {
         let l_abs = self.wrapping_abs();
         let r_abs = other.wrapping_abs();
 
+        // Overflow if both high parts are non-zero
+        if l_abs.high != 0 && r_abs.high != 0 {
+            return None;
+        }
+
         // Perform checked multiplication on absolute values
         let (low, high) = mulx(l_abs.low, r_abs.low);
 
         // Compute the high multiples, only impacting the high 128-bits
-        let hl = (self.high as u128).checked_mul(other.low)?;
-        let lh = self.low.checked_mul(other.high as u128)?;
+        let hl = (l_abs.high as u128).checked_mul(r_abs.low)?;
+        let lh = l_abs.low.checked_mul(r_abs.high as u128)?;
 
         let high: i128 = high.checked_add(hl)?.checked_add(lh)?.try_into().ok()?;
 
         // Reverse absolute value, if necessary
-        let high = (high ^ out_sa).wrapping_sub(out_sa);
-        let low = (low ^ out_sa as u128).wrapping_sub(out_sa as u128);
+        let (low, c) = (low ^ out_sa as u128).overflowing_sub(out_sa as u128);
+        let high = (high ^ out_sa).wrapping_sub(out_sa).wrapping_sub(c as i128);
 
         Some(Self { low, high })
     }
@@ -344,8 +350,106 @@ mod tests {
         }
     }
 
+    /// Tests operations against the two provided [`i256`]
+    fn test_ops(il: i256, ir: i256) {
+        let bl = BigInt::from_signed_bytes_le(&il.to_le_bytes());
+        let br = BigInt::from_signed_bytes_le(&ir.to_le_bytes());
+
+        // Comparison
+        assert_eq!(il.cmp(&ir), bl.cmp(&br), "{} cmp {}", bl, br);
+
+        // To i128
+        assert_eq!(il.to_i128(), bl.to_i128(), "{}", bl);
+        assert_eq!(ir.to_i128(), br.to_i128(), "{}", br);
+
+        // Absolute value
+        let (abs, overflow) = i256::from_bigint_with_overflow(bl.abs());
+        assert_eq!(il.wrapping_abs(), abs);
+        assert_eq!(il.checked_abs().is_none(), overflow);
+
+        let (abs, overflow) = i256::from_bigint_with_overflow(br.abs());
+        assert_eq!(ir.wrapping_abs(), abs);
+        assert_eq!(ir.checked_abs().is_none(), overflow);
+
+        // Addition
+        let actual = il.wrapping_add(ir);
+        let (expected, overflow) =
+            i256::from_bigint_with_overflow(bl.clone() + br.clone());
+        assert_eq!(actual, expected);
+
+        let checked = il.checked_add(ir);
+        match overflow {
+            true => assert!(checked.is_none()),
+            false => assert_eq!(checked.unwrap(), actual),
+        }
+
+        // Subtraction
+        let actual = il.wrapping_sub(ir);
+        let (expected, overflow) =
+            i256::from_bigint_with_overflow(bl.clone() - br.clone());
+        assert_eq!(actual.to_string(), expected.to_string());
+
+        let checked = il.checked_sub(ir);
+        match overflow {
+            true => assert!(checked.is_none()),
+            false => assert_eq!(checked.unwrap(), actual),
+        }
+
+        // Multiplication
+        let actual = il.wrapping_mul(ir);
+        let (expected, overflow) =
+            i256::from_bigint_with_overflow(bl.clone() * br.clone());
+        assert_eq!(actual.to_string(), expected.to_string());
+
+        let checked = il.checked_mul(ir);
+        match overflow {
+            true => assert!(
+                checked.is_none(),
+                "{} * {} = {} vs {} * {} = {}",
+                il,
+                ir,
+                actual,
+                bl,
+                br,
+                expected
+            ),
+            false => assert_eq!(
+                checked.unwrap(),
+                actual,
+                "{} * {} = {} vs {} * {} = {}",
+                il,
+                ir,
+                actual,
+                bl,
+                br,
+                expected
+            ),
+        }
+    }
+
     #[test]
     fn test_i256() {
+        let candidates = [
+            i256::from_parts(0, 0),
+            i256::from_parts(0, 1),
+            i256::from_parts(0, -1),
+            i256::from_parts(u128::MAX, 1),
+            i256::from_parts(u128::MAX, -1),
+            i256::from_parts(0, 1),
+            i256::from_parts(0, -1),
+            i256::from_parts(100, 32),
+        ];
+
+        for il in candidates {
+            for ir in candidates {
+                test_ops(il, ir)
+            }
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn test_i256_fuzz() {
         let mut rng = thread_rng();
 
         for _ in 0..1000 {
@@ -357,82 +461,7 @@ mod tests {
             let len = rng.gen_range(0..32);
             r.iter_mut().take(len).for_each(|x| *x = rng.gen());
 
-            let il = i256::from_le_bytes(l);
-            let ir = i256::from_le_bytes(r);
-
-            let bl = BigInt::from_signed_bytes_le(&l);
-            let br = BigInt::from_signed_bytes_le(&r);
-
-            // Comparison
-            assert_eq!(il.cmp(&ir), bl.cmp(&br), "{} cmp {}", bl, br);
-
-            // To i128
-            assert_eq!(il.to_i128(), bl.to_i128(), "{}", bl);
-            assert_eq!(ir.to_i128(), br.to_i128(), "{}", br);
-
-            // Absolute value
-            let (abs, overflow) = i256::from_bigint_with_overflow(bl.abs());
-            assert_eq!(il.wrapping_abs(), abs);
-            assert_eq!(il.checked_abs().is_none(), overflow);
-
-            let (abs, overflow) = i256::from_bigint_with_overflow(br.abs());
-            assert_eq!(ir.wrapping_abs(), abs);
-            assert_eq!(ir.checked_abs().is_none(), overflow);
-
-            // Addition
-            let actual = il.wrapping_add(ir);
-            let (expected, overflow) =
-                i256::from_bigint_with_overflow(bl.clone() + br.clone());
-            assert_eq!(actual, expected);
-
-            let checked = il.checked_add(ir);
-            match overflow {
-                true => assert!(checked.is_none()),
-                false => assert_eq!(checked.unwrap(), actual),
-            }
-
-            // Subtraction
-            let actual = il.wrapping_sub(ir);
-            let (expected, overflow) =
-                i256::from_bigint_with_overflow(bl.clone() - br.clone());
-            assert_eq!(actual.to_string(), expected.to_string());
-
-            let checked = il.checked_sub(ir);
-            match overflow {
-                true => assert!(checked.is_none()),
-                false => assert_eq!(checked.unwrap(), actual),
-            }
-
-            // Multiplication
-            let actual = il.wrapping_mul(ir);
-            let (expected, overflow) =
-                i256::from_bigint_with_overflow(bl.clone() * br.clone());
-            assert_eq!(actual.to_string(), expected.to_string());
-
-            let checked = il.checked_mul(ir);
-            match overflow {
-                true => assert!(
-                    checked.is_none(),
-                    "{} * {} = {} vs {} * {} = {}",
-                    il,
-                    ir,
-                    actual,
-                    bl,
-                    br,
-                    expected
-                ),
-                false => assert_eq!(
-                    checked.unwrap(),
-                    actual,
-                    "{} * {} = {} vs {} * {} = {}",
-                    il,
-                    ir,
-                    actual,
-                    bl,
-                    br,
-                    expected
-                ),
-            }
+            test_ops(i256::from_le_bytes(l), i256::from_le_bytes(r))
         }
     }
 }
