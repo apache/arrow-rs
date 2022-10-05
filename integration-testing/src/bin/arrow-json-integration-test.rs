@@ -24,7 +24,7 @@ use arrow_integration_testing::{read_json_file, util::*};
 use clap::Parser;
 use std::fs::File;
 
-#[derive(clap::ArgEnum, Debug, Clone)]
+#[derive(clap::ValueEnum, Debug, Clone)]
 #[clap(rename_all = "SCREAMING_SNAKE_CASE")]
 enum Mode {
     ArrowToJson,
@@ -41,7 +41,7 @@ struct Args {
     arrow: String,
     #[clap(short, long, help("Path to JSON file"))]
     json: String,
-    #[clap(arg_enum, short, long, default_value_t = Mode::Validate, help="Mode of integration testing tool")]
+    #[clap(value_enum, short, long, default_value_t = Mode::Validate, help="Mode of integration testing tool")]
     mode: Mode,
     #[clap(short, long)]
     verbose: bool,
