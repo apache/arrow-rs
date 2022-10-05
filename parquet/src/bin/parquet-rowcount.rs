@@ -47,7 +47,7 @@ struct Args {
     #[clap(
         short,
         long,
-        multiple_values(true),
+        number_of_values(1),
         help("List of Parquet files to read from separated by space")
     )]
     file_paths: Vec<String>,
