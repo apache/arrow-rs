@@ -18,6 +18,7 @@
 use crate::compute::SortOptions;
 use crate::row::fixed::{FixedLengthEncoding, FromSlice, RawDecimal};
 use crate::row::interner::{Interned, OrderPreservingInterner};
+use crate::row::{null_sentinel, Rows};
 use arrow_array::builder::*;
 use arrow_array::cast::*;
 use arrow_array::types::*;
@@ -25,6 +26,7 @@ use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, MutableBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 /// Computes the dictionary mapping for the given dictionary values
@@ -55,6 +57,38 @@ pub fn compute_dictionary_mapping(
     })
 }
 
+/// Dictionary types are encoded as
+///
+/// - single `0_u8` if null
+/// - the bytes of the corresponding normalized key including the null terminator
+pub fn encode_dictionary<'a, K: ArrowDictionaryKeyType>(
+    out: &mut Rows,
+    column: &DictionaryArray<K>,
+    normalized_keys: &[Option<&[u8]>],
+    opts: SortOptions,
+) {
+    for (offset, k) in out.offsets.iter_mut().skip(1).zip(column.keys()) {
+        match k.and_then(|k| normalized_keys[k.as_usize()]) {
+            Some(normalized_key) => {
+                let end_offset = *offset + 1 + normalized_key.len();
+                out.buffer[*offset] = 1;
+                out.buffer[*offset + 1..end_offset].copy_from_slice(normalized_key);
+                // Negate if descending
+                if opts.descending {
+                    out.buffer[*offset..end_offset]
+                        .iter_mut()
+                        .for_each(|v| *v = !*v)
+                }
+                *offset = end_offset;
+            }
+            None => {
+                out.buffer[*offset] = null_sentinel(opts);
+                *offset += 1;
+            }
+        }
+    }
+}
+
 /// Decodes a string array from `rows` with the provided `options`
 ///
 /// # Safety
@@ -69,11 +103,9 @@ pub unsafe fn decode_dictionary<K: ArrowDictionaryKeyType>(
     let len = rows.len();
     let mut dictionary: HashMap<Interned, K::Native> = HashMap::with_capacity(len);
 
-    let null_sentinel = match options.nulls_first {
-        true => 0_u8,
-        false => 0xFF,
-    };
+    let null_sentinel = null_sentinel(options);
 
+    // If descending, the null terminator will have been negated
     let null_terminator = match options.descending {
         true => 0xFF,
         false => 0_u8,
@@ -99,11 +131,15 @@ pub unsafe fn decode_dictionary<K: ArrowDictionaryKeyType>(
             .skip(1)
             .position(|x| *x == null_terminator)
             .unwrap();
+
+        // Extract the normalized key including the null terminator
         let key = &row[1..key_offset + 2];
         *row = &row[key_offset + 2..];
 
         let interned = match options.descending {
             true => {
+                // If options.descending the normalized key will have been
+                // negated we must first reverse this
                 key_scratch.clear();
                 key_scratch.extend_from_slice(key);
                 key_scratch.iter_mut().for_each(|o| *o = !*o);
@@ -112,11 +148,16 @@ pub unsafe fn decode_dictionary<K: ArrowDictionaryKeyType>(
             false => interner.lookup(key).unwrap(),
         };
 
-        let k = *dictionary.entry(interned).or_insert_with(|| {
-            let k = values.len();
-            values.push(interner.value(interned));
-            K::Native::from_usize(k).unwrap()
-        });
+        let k = match dictionary.entry(interned) {
+            Entry::Vacant(v) => {
+                let k = values.len();
+                values.push(interner.value(interned));
+                let key = K::Native::from_usize(k)
+                    .ok_or_else(|| ArrowError::DictionaryKeyOverflowError)?;
+                *v.insert(key)
+            }
+            Entry::Occupied(o) => *o.get(),
+        };
 
         keys.append(k);
         null_builder.append(true);

@@ -27,8 +27,13 @@ use arrow_array::*;
 use crate::compute::SortOptions;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
-use crate::row::dictionary::{compute_dictionary_mapping, decode_dictionary};
-use crate::row::fixed::{decode_bool, decode_decimal, decode_primitive, RawDecimal};
+use crate::row::dictionary::{
+    compute_dictionary_mapping, decode_dictionary, encode_dictionary,
+};
+use crate::row::fixed::{
+    decode_bool, decode_decimal, decode_primitive, RawDecimal, RawDecimal128,
+    RawDecimal256,
+};
 use crate::row::interner::OrderPreservingInterner;
 use crate::row::variable::{decode_binary, decode_string};
 use crate::{downcast_dictionary_array, downcast_primitive_array};
@@ -372,6 +377,8 @@ pub struct Row<'a> {
     fields: &'a Arc<[SortField]>,
 }
 
+// Manually derive these as don't wish to include `fields`
+
 impl<'a> PartialEq for Row<'a> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
@@ -409,6 +416,15 @@ impl<'a> AsRef<[u8]> for Row<'a> {
     }
 }
 
+/// Returns the null sentinel, negated if `invert` is true
+#[inline]
+fn null_sentinel(options: SortOptions) -> u8 {
+    match options.nulls_first {
+        true => 0,
+        false => 0xFF,
+    }
+}
+
 /// Computes the length of each encoded [`Rows`] and returns an empty [`Rows`]
 fn new_empty_rows(
     cols: &[ArrayRef],
@@ -425,8 +441,8 @@ fn new_empty_rows(
             array => lengths.iter_mut().for_each(|x| *x += fixed::encoded_len(array)),
             DataType::Null => {},
             DataType::Boolean => lengths.iter_mut().for_each(|x| *x += bool::ENCODED_LEN),
-            DataType::Decimal128(_, _) => lengths.iter_mut().for_each(|x| *x += 17),
-            DataType::Decimal256(_, _) => lengths.iter_mut().for_each(|x| *x += 33),
+            DataType::Decimal128(_, _) => lengths.iter_mut().for_each(|x| *x += RawDecimal128::ENCODED_LEN),
+            DataType::Decimal256(_, _) => lengths.iter_mut().for_each(|x| *x += RawDecimal256::ENCODED_LEN),
             DataType::Binary => as_generic_binary_array::<i32>(array)
                 .iter()
                 .zip(lengths.iter_mut())
@@ -546,28 +562,7 @@ fn encode_column(
             opts,
         ),
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
-            column => {
-                let dict = dictionary.unwrap();
-                for (offset, k) in out.offsets.iter_mut().skip(1).zip(column.keys()) {
-                    match k.and_then(|k| dict[k as usize]) {
-                        Some(v) => {
-                            let end_offset = *offset + 1 + v.len();
-                            out.buffer[*offset] = 1;
-                            out.buffer[*offset+1..end_offset].copy_from_slice(v);
-                            if opts.descending {
-                                out.buffer[*offset..end_offset].iter_mut().for_each(|v| *v = !*v)
-                            }
-                            *offset = end_offset;
-                        }
-                        None => {
-                            if !opts.nulls_first {
-                                out.buffer[*offset] = 0xFF;
-                            }
-                            *offset += 1;
-                        }
-                    }
-                }
-            },
+            column => encode_dictionary(out, column, dictionary.unwrap(), opts),
             _ => unreachable!()
         }
         t => unimplemented!("not yet implemented: {}", t)

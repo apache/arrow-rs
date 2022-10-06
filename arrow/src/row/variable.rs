@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::compute::SortOptions;
-use crate::row::Rows;
+use crate::row::{null_sentinel, Rows};
 use crate::util::bit_util::ceil;
 use arrow_array::builder::BufferBuilder;
 use arrow_array::{Array, GenericBinaryArray, GenericStringArray, OffsetSizeTrait};
@@ -26,6 +26,15 @@ use arrow_schema::DataType;
 
 /// The block size of the variable length encoding
 pub const BLOCK_SIZE: usize = 32;
+
+/// The continuation token
+pub const BLOCK_CONTINUATION: u8 = 0xFF;
+
+/// Indicates an empty string
+pub const EMPTY_SENTINEL: u8 = 1;
+
+/// Indicates a non-empty string
+pub const NON_EMPTY_SENTINEL: u8 = 2;
 
 /// Returns the length of the encoded representation of a byte array, including the null byte
 pub fn encoded_len(a: Option<&[u8]>) -> usize {
@@ -55,8 +64,8 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
         match maybe_val {
             Some(val) if val.is_empty() => {
                 out.buffer[*offset] = match opts.descending {
-                    true => !1,
-                    false => 1,
+                    true => !EMPTY_SENTINEL,
+                    false => EMPTY_SENTINEL,
                 };
                 *offset += 1;
             }
@@ -66,7 +75,7 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
                 let to_write = &mut out.buffer[*offset..end_offset];
 
                 // Write `2_u8` to demarcate as non-empty, non-null string
-                to_write[0] = 2;
+                to_write[0] = NON_EMPTY_SENTINEL;
 
                 let chunks = val.chunks_exact(BLOCK_SIZE);
                 let remainder = chunks.remainder();
@@ -81,7 +90,7 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
                     *out_block = *input;
 
                     // Indicate that there are further blocks to follow
-                    output[BLOCK_SIZE] = u8::MAX;
+                    output[BLOCK_SIZE] = BLOCK_CONTINUATION;
                 }
 
                 if !remainder.is_empty() {
@@ -102,9 +111,7 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
                 }
             }
             None => {
-                if !opts.nulls_first {
-                    out.buffer[*offset] = 0xFF;
-                }
+                out.buffer[*offset] = null_sentinel(opts);
                 *offset += 1;
             }
         }
@@ -114,8 +121,8 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
 /// Returns the number of bytes of encoded data
 fn decoded_len(row: &[u8], options: SortOptions) -> usize {
     let (non_empty_sentinel, continuation) = match options.descending {
-        true => (!2, !0xFF),
-        false => (2, 0xFF),
+        true => (!NON_EMPTY_SENTINEL, !BLOCK_CONTINUATION),
+        false => (NON_EMPTY_SENTINEL, BLOCK_CONTINUATION),
     };
 
     if row[0] != non_empty_sentinel {
@@ -146,14 +153,9 @@ pub fn decode_binary<I: OffsetSizeTrait>(
     options: SortOptions,
 ) -> GenericBinaryArray<I> {
     let len = rows.len();
-    let null_sentinel = match options.nulls_first {
-        true => 0,
-        false => 0xFF,
-    };
-
     let mut null_count = 0;
     let nulls = MutableBuffer::collect_bool(len, |x| {
-        let valid = rows[x][0] != null_sentinel;
+        let valid = rows[x][0] != null_sentinel(options);
         null_count += !valid as usize;
         valid
     });

@@ -18,7 +18,7 @@
 use crate::array::PrimitiveArray;
 use crate::compute::SortOptions;
 use crate::datatypes::ArrowPrimitiveType;
-use crate::row::Rows;
+use crate::row::{null_sentinel, Rows};
 use arrow_array::types::DecimalType;
 use arrow_array::{BooleanArray, DecimalArray};
 use arrow_buffer::{bit_util, MutableBuffer, ToByteSlice};
@@ -164,6 +164,9 @@ impl FixedLengthEncoding for f64 {
     }
 }
 
+pub type RawDecimal128 = RawDecimal<16>;
+pub type RawDecimal256 = RawDecimal<32>;
+
 /// The raw bytes of a decimal
 #[derive(Copy, Clone)]
 pub struct RawDecimal<const N: usize>(pub [u8; N]);
@@ -222,8 +225,8 @@ pub fn encode<T: FixedLengthEncoding, I: IntoIterator<Item = Option<T>>>(
                 encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
             }
             to_write[1..].copy_from_slice(encoded.as_ref())
-        } else if !opts.nulls_first {
-            out.buffer[*offset] = 0xFF;
+        } else {
+            out.buffer[*offset] = null_sentinel(opts);
         }
         *offset = end_offset;
     }
