@@ -1244,7 +1244,7 @@ pub fn cast_with_options(
             let array = cast_with_options(array, &Int32, cast_options)?;
             let time_array = as_primitive_array::<Int32Type>(array.as_ref());
             // note: (numeric_cast + SIMD multiply) is faster than (cast & multiply)
-            let c: Int64Array = numeric_cast(&time_array);
+            let c: Int64Array = numeric_cast(time_array);
             let from_size = time_unit_multiple(from_unit);
             let to_size = time_unit_multiple(to_unit);
             // from is only smaller than to if 64milli/64second don't exist
@@ -1291,13 +1291,13 @@ pub fn cast_with_options(
             let divisor = from_size / to_size;
             match to_unit {
                 TimeUnit::Second => {
-                    let values = unary::<_, _, Time32SecondType>(&time_array, |x| {
+                    let values = unary::<_, _, Time32SecondType>(time_array, |x| {
                         (x as i64 / divisor) as i32
                     });
                     Ok(Arc::new(values) as ArrayRef)
                 }
                 TimeUnit::Millisecond => {
-                    let values = unary::<_, _, Time32MillisecondType>(&time_array, |x| {
+                    let values = unary::<_, _, Time32MillisecondType>(time_array, |x| {
                         (x as i64 / divisor) as i32
                     });
                     Ok(Arc::new(values) as ArrayRef)
@@ -1329,9 +1329,9 @@ pub fn cast_with_options(
             // we either divide or multiply, depending on size of each unit
             // units are never the same when the types are the same
             let converted = if from_size >= to_size {
-                divide_scalar(&time_array, from_size / to_size)?
+                divide_scalar(time_array, from_size / to_size)?
             } else {
-                multiply_scalar(&time_array, to_size / from_size)?
+                multiply_scalar(time_array, to_size / from_size)?
             };
             let array_ref = Arc::new(converted) as ArrayRef;
             use TimeUnit::*;
