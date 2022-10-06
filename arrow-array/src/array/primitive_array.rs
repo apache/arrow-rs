@@ -809,6 +809,14 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
 /// Constructs a `PrimitiveArray` from an array data reference.
 impl<T: ArrowPrimitiveType> From<ArrayData> for PrimitiveArray<T> {
     fn from(data: ArrayData) -> Self {
+        // Use discriminant to allow for decimals
+        assert_eq!(
+            std::mem::discriminant(&T::DATA_TYPE),
+            std::mem::discriminant(data.data_type()),
+            "PrimitiveArray expected ArrayData with type {} got {}",
+            T::DATA_TYPE,
+            data.data_type()
+        );
         assert_eq!(
             data.buffers().len(),
             1,
@@ -818,6 +826,8 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for PrimitiveArray<T> {
         let ptr = data.buffers()[0].as_ptr();
         Self {
             data,
+            // SAFETY:
+            // ArrayData must be valid, and validated data type above
             raw_values: unsafe { RawPtrBox::new(ptr) },
         }
     }
@@ -1341,5 +1351,14 @@ mod tests {
         let array: Int8Array = [10_i8, 11, 12].into_iter().collect();
 
         array.value(4);
+    }
+
+    #[test]
+    #[should_panic(
+    expected = "PrimitiveArray expected ArrayData with type Int64 got Int32"
+    )]
+    fn test_from_array_data_validation() {
+        let foo = PrimitiveArray::<Int32Type>::from_iter([1, 2, 3]);
+        let _ = PrimitiveArray::<Int64Type>::from(foo.into_data());
     }
 }

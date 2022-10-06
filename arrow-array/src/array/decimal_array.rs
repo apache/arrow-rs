@@ -407,13 +407,21 @@ impl<T: DecimalType> From<ArrayData> for DecimalArray<T> {
             "DecimalArray data should contain 1 buffer only (values)"
         );
         let values = data.buffers()[0].as_ptr();
-        let (precision, scale) = match (data.data_type(), Self::VALUE_LENGTH) {
-            (DataType::Decimal128(precision, scale), 16)
-            | (DataType::Decimal256(precision, scale), 32) => (*precision, *scale),
-            _ => panic!("Expected data type to be Decimal"),
+        let (precision, scale) = match (data.data_type(), Self::DEFAULT_TYPE) {
+            (DataType::Decimal128(precision, scale), DataType::Decimal128(_, _))
+            | (DataType::Decimal256(precision, scale), DataType::Decimal256(_, _)) => {
+                (*precision, *scale)
+            }
+            _ => panic!(
+                "Expected data type to match {} got {}",
+                Self::DEFAULT_TYPE,
+                data.data_type()
+            ),
         };
         Self {
             data,
+            // SAFETY:
+            // ArrayData must be valid, and verified data type above
             value_data: unsafe { RawPtrBox::new(values) },
             precision,
             scale,
@@ -976,5 +984,14 @@ mod tests {
         let array = Decimal128Array::from_iter_values(vec![-100, 0, 101].into_iter());
 
         array.value(4);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Expected data type to match Decimal256(76, 10) got Decimal128(38, 10)"
+    )]
+    fn test_from_array_data_validation() {
+        let array = Decimal128Array::from_iter_values(vec![-100, 0, 101].into_iter());
+        let _ = Decimal256Array::from(array.into_data());
     }
 }

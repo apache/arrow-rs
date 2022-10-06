@@ -290,6 +290,8 @@ impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericBinaryArray<OffsetS
         let values = data.buffers()[1].as_ptr();
         Self {
             data,
+            // SAFETY:
+            // ArrayData must be valid, and validated data type above
             value_offsets: unsafe { RawPtrBox::new(offsets) },
             value_data: unsafe { RawPtrBox::new(values) },
         }
@@ -824,6 +826,13 @@ mod tests {
             .unwrap();
         let binary_array = BinaryArray::from(array_data);
         binary_array.value(4);
+    }
+
+    #[test]
+    #[should_panic(expected = "[Large]BinaryArray expects Datatype::[Large]Binary")]
+    fn test_binary_array_validation() {
+        let array = BinaryArray::from_iter_values(&[&[1, 2]]);
+        let _ = LargeBinaryArray::from(array.into_data());
     }
 
     #[test]
