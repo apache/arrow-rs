@@ -61,7 +61,7 @@ pub fn compute_dictionary_mapping(
 ///
 /// - single `0_u8` if null
 /// - the bytes of the corresponding normalized key including the null terminator
-pub fn encode_dictionary<'a, K: ArrowDictionaryKeyType>(
+pub fn encode_dictionary<K: ArrowDictionaryKeyType>(
     out: &mut Rows,
     column: &DictionaryArray<K>,
     normalized_keys: &[Option<&[u8]>],
@@ -153,7 +153,7 @@ pub unsafe fn decode_dictionary<K: ArrowDictionaryKeyType>(
                 let k = values.len();
                 values.push(interner.value(interned));
                 let key = K::Native::from_usize(k)
-                    .ok_or_else(|| ArrowError::DictionaryKeyOverflowError)?;
+                    .ok_or(ArrowError::DictionaryKeyOverflowError)?;
                 *v.insert(key)
             }
             Entry::Occupied(o) => *o.get(),
