@@ -26,7 +26,8 @@ use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow::array::{
     ArrayDataBuilder, ArrayRef, BooleanArray, BooleanBufferBuilder, Decimal128Array,
-    Float32Array, Float64Array, Int32Array, Int64Array,TimestampNanosecondArray, TimestampNanosecondBufferBuilder,
+    Float32Array, Float64Array, Int32Array, Int64Array, TimestampNanosecondArray,
+    TimestampNanosecondBufferBuilder, UInt32Array, UInt64Array,
 };
 use arrow::buffer::Buffer;
 use arrow::datatypes::{DataType as ArrowType, TimeUnit};
@@ -169,15 +170,21 @@ where
             .null_bit_buffer(self.record_reader.consume_bitmap_buffer());
 
         let array_data = unsafe { array_data.build_unchecked() };
-        let array = match T::get_physical_type() {
-            PhysicalType::BOOLEAN => Arc::new(BooleanArray::from(array_data)) as ArrayRef,
-            PhysicalType::INT32 => Arc::new(Int32Array::from(array_data)) as ArrayRef,
-            PhysicalType::INT64 => Arc::new(Int64Array::from(array_data)) as ArrayRef,
-            PhysicalType::FLOAT => Arc::new(Float32Array::from(array_data)) as ArrayRef,
-            PhysicalType::DOUBLE => Arc::new(Float64Array::from(array_data)) as ArrayRef,
-            PhysicalType::INT96 => {
-                Arc::new(TimestampNanosecondArray::from(array_data)) as ArrayRef
-            }
+        let array: ArrayRef = match T::get_physical_type() {
+            PhysicalType::BOOLEAN => Arc::new(BooleanArray::from(array_data)),
+            PhysicalType::INT32 => match array_data.data_type() {
+                ArrowType::UInt32 => Arc::new(UInt32Array::from(array_data)),
+                ArrowType::Int32 => Arc::new(Int32Array::from(array_data)),
+                _ => unreachable!(),
+            },
+            PhysicalType::INT64 => match array_data.data_type() {
+                ArrowType::UInt64 => Arc::new(UInt64Array::from(array_data)),
+                ArrowType::Int64 => Arc::new(Int64Array::from(array_data)),
+                _ => unreachable!(),
+            },
+            PhysicalType::FLOAT => Arc::new(Float32Array::from(array_data)),
+            PhysicalType::DOUBLE => Arc::new(Float64Array::from(array_data)),
+            PhysicalType::INT96 => Arc::new(TimestampNanosecondArray::from(array_data)),
             PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
                 unreachable!(
                     "PrimitiveArrayReaders don't support complex physical types"
