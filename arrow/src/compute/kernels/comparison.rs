@@ -38,6 +38,7 @@ use crate::datatypes::{
 use crate::downcast_dictionary_array;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
+use num::ToPrimitive;
 use regex::Regex;
 use std::collections::HashMap;
 
@@ -1328,7 +1329,11 @@ macro_rules! dyn_compare_utf8_scalar {
 }
 
 /// Perform `left == right` operation on an array and a numeric scalar
-/// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
+/// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values.
+///
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
     T: num::ToPrimitive + std::fmt::Debug,
@@ -1342,7 +1347,11 @@ where
 }
 
 /// Perform `left < right` operation on an array and a numeric scalar
-/// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
+/// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values.
+///
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn lt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
     T: num::ToPrimitive + std::fmt::Debug,
@@ -1356,7 +1365,11 @@ where
 }
 
 /// Perform `left <= right` operation on an array and a numeric scalar
-/// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
+/// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values.
+///
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn lt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
     T: num::ToPrimitive + std::fmt::Debug,
@@ -1370,7 +1383,11 @@ where
 }
 
 /// Perform `left > right` operation on an array and a numeric scalar
-/// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
+/// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values.
+///
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn gt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
     T: num::ToPrimitive + std::fmt::Debug,
@@ -1384,7 +1401,11 @@ where
 }
 
 /// Perform `left >= right` operation on an array and a numeric scalar
-/// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
+/// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values.
+///
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn gt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
     T: num::ToPrimitive + std::fmt::Debug,
@@ -1398,7 +1419,11 @@ where
 }
 
 /// Perform `left != right` operation on an array and a numeric scalar
-/// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
+/// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values.
+///
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn neq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
     T: num::ToPrimitive + std::fmt::Debug,
@@ -3016,14 +3041,31 @@ where
 }
 
 /// Perform `left == right` operation on a [`PrimitiveArray`] and a scalar value.
+///
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn eq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: num::ToPrimitive + std::fmt::Debug,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::eq, |a, b| a == b);
     #[cfg(not(feature = "simd"))]
-    return compare_op_scalar(left, |a| a == right);
+    match left.data_type() {
+        DataType::Float32 => {
+            let left = as_primitive_array::<Float32Type>(left);
+            let right = try_to_type!(right, to_f32)?;
+            compare_op_scalar(left, |a: f32| a.total_cmp(&right).is_eq())
+        }
+        DataType::Float64 => {
+            let left = as_primitive_array::<Float64Type>(left);
+            let right = try_to_type!(right, to_f64)?;
+            compare_op_scalar(left, |a: f64| a.total_cmp(&right).is_eq())
+        }
+        _ => compare_op_scalar(left, |a| a == right),
+    }
 }
 
 /// Applies an unary and infallible comparison function to a primitive array.
@@ -3047,14 +3089,31 @@ where
 }
 
 /// Perform `left != right` operation on a [`PrimitiveArray`] and a scalar value.
+///
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn neq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: num::ToPrimitive + std::fmt::Debug,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::ne, |a, b| a != b);
     #[cfg(not(feature = "simd"))]
-    return compare_op_scalar(left, |a| a != right);
+    match left.data_type() {
+        DataType::Float32 => {
+            let left = as_primitive_array::<Float32Type>(left);
+            let right = try_to_type!(right, to_f32)?;
+            compare_op_scalar(left, |a: f32| a.total_cmp(&right).is_ne())
+        }
+        DataType::Float64 => {
+            let left = as_primitive_array::<Float64Type>(left);
+            let right = try_to_type!(right, to_f64)?;
+            compare_op_scalar(left, |a: f64| a.total_cmp(&right).is_ne())
+        }
+        _ => compare_op_scalar(left, |a| a != right),
+    }
 }
 
 /// Perform `left < right` operation on two [`PrimitiveArray`]s. Null values are less than non-null
@@ -3071,14 +3130,31 @@ where
 
 /// Perform `left < right` operation on a [`PrimitiveArray`] and a scalar value.
 /// Null values are less than non-null values.
+///
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn lt_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: num::ToPrimitive + std::fmt::Debug,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::lt, |a, b| a < b);
     #[cfg(not(feature = "simd"))]
-    return compare_op_scalar(left, |a| a < right);
+    match left.data_type() {
+        DataType::Float32 => {
+            let left = as_primitive_array::<Float32Type>(left);
+            let right = try_to_type!(right, to_f32)?;
+            compare_op_scalar(left, |a: f32| a.total_cmp(&right).is_lt())
+        }
+        DataType::Float64 => {
+            let left = as_primitive_array::<Float64Type>(left);
+            let right = try_to_type!(right, to_f64)?;
+            compare_op_scalar(left, |a: f64| a.total_cmp(&right).is_lt())
+        }
+        _ => compare_op_scalar(left, |a| a < right),
+    }
 }
 
 /// Perform `left <= right` operation on two [`PrimitiveArray`]s. Null values are less than non-null
@@ -3098,14 +3174,31 @@ where
 
 /// Perform `left <= right` operation on a [`PrimitiveArray`] and a scalar value.
 /// Null values are less than non-null values.
+///
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn lt_eq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: num::ToPrimitive + std::fmt::Debug,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::le, |a, b| a <= b);
     #[cfg(not(feature = "simd"))]
-    return compare_op_scalar(left, |a| a <= right);
+    match left.data_type() {
+        DataType::Float32 => {
+            let left = as_primitive_array::<Float32Type>(left);
+            let right = try_to_type!(right, to_f32)?;
+            compare_op_scalar(left, |a: f32| a.total_cmp(&right).is_le())
+        }
+        DataType::Float64 => {
+            let left = as_primitive_array::<Float64Type>(left);
+            let right = try_to_type!(right, to_f64)?;
+            compare_op_scalar(left, |a: f64| a.total_cmp(&right).is_le())
+        }
+        _ => compare_op_scalar(left, |a| a <= right),
+    }
 }
 
 /// Perform `left > right` operation on two [`PrimitiveArray`]s. Non-null values are greater than null
@@ -3122,14 +3215,31 @@ where
 
 /// Perform `left > right` operation on a [`PrimitiveArray`] and a scalar value.
 /// Non-null values are greater than null values.
+///
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn gt_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: num::ToPrimitive + std::fmt::Debug,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::gt, |a, b| a > b);
     #[cfg(not(feature = "simd"))]
-    return compare_op_scalar(left, |a| a > right);
+    match left.data_type() {
+        DataType::Float32 => {
+            let left = as_primitive_array::<Float32Type>(left);
+            let right = try_to_type!(right, to_f32)?;
+            compare_op_scalar(left, |a: f32| a.total_cmp(&right).is_gt())
+        }
+        DataType::Float64 => {
+            let left = as_primitive_array::<Float64Type>(left);
+            let right = try_to_type!(right, to_f64)?;
+            compare_op_scalar(left, |a: f64| a.total_cmp(&right).is_gt())
+        }
+        _ => compare_op_scalar(left, |a| a > right),
+    }
 }
 
 /// Perform `left >= right` operation on two [`PrimitiveArray`]s. Non-null values are greater than null
@@ -3149,14 +3259,31 @@ where
 
 /// Perform `left >= right` operation on a [`PrimitiveArray`] and a scalar value.
 /// Non-null values are greater than null values.
+///
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn gt_eq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: num::ToPrimitive + std::fmt::Debug,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::ge, |a, b| a >= b);
     #[cfg(not(feature = "simd"))]
-    return compare_op_scalar(left, |a| a >= right);
+    match left.data_type() {
+        DataType::Float32 => {
+            let left = as_primitive_array::<Float32Type>(left);
+            let right = try_to_type!(right, to_f32)?;
+            compare_op_scalar(left, |a: f32| a.total_cmp(&right).is_ge())
+        }
+        DataType::Float64 => {
+            let left = as_primitive_array::<Float64Type>(left);
+            let right = try_to_type!(right, to_f64)?;
+            compare_op_scalar(left, |a: f64| a.total_cmp(&right).is_ge())
+        }
+        _ => compare_op_scalar(left, |a| a >= right),
+    }
 }
 
 /// Checks if a [`GenericListArray`] contains a value in the [`PrimitiveArray`]
@@ -5849,12 +5976,12 @@ mod tests {
             .map(Some)
             .collect();
         let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+            vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
         );
         assert_eq!(eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
 
         let expected = BooleanArray::from(
-            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
+            vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
         );
         assert_eq!(neq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
 
@@ -5863,12 +5990,12 @@ mod tests {
             .map(Some)
             .collect();
         let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+            vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
         );
         assert_eq!(eq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
 
         let expected = BooleanArray::from(
-            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
+            vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
         );
         assert_eq!(neq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
     }
@@ -5880,12 +6007,12 @@ mod tests {
             .map(Some)
             .collect();
         let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+            vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
         );
         assert_eq!(lt_dyn_scalar(&array, f32::NAN).unwrap(), expected);
 
         let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
         );
         assert_eq!(lt_eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
 
@@ -5894,12 +6021,12 @@ mod tests {
             .map(Some)
             .collect();
         let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+            vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
         );
         assert_eq!(lt_dyn_scalar(&array, f64::NAN).unwrap(), expected);
 
         let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
         );
         assert_eq!(lt_eq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
     }
@@ -5916,7 +6043,7 @@ mod tests {
         assert_eq!(gt_dyn_scalar(&array, f32::NAN).unwrap(), expected);
 
         let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+            vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
         );
         assert_eq!(gt_eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
 
@@ -5930,7 +6057,7 @@ mod tests {
         assert_eq!(gt_dyn_scalar(&array, f64::NAN).unwrap(), expected);
 
         let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+            vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
         );
         assert_eq!(gt_eq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
     }
