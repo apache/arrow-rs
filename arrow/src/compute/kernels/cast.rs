@@ -43,12 +43,12 @@ use std::str;
 use std::sync::Arc;
 
 use crate::buffer::MutableBuffer;
-use crate::compute::divide_scalar;
 use crate::compute::kernels::arithmetic::{divide, multiply};
 use crate::compute::kernels::arity::unary;
 use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use crate::compute::kernels::temporal::extract_component_from_array;
 use crate::compute::kernels::temporal::return_compute_error_with;
+use crate::compute::{divide_scalar, multiply_scalar};
 use crate::compute::{try_unary, using_chrono_tz_and_utc_naive_date_time};
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
@@ -1241,14 +1241,14 @@ pub fn cast_with_options(
         }
         //(Time32(TimeUnit::Second), Time64(_)) => {},
         (Time32(from_unit), Time64(to_unit)) => {
-            let time_array = Int32Array::from(array.data().clone());
+            let array = cast_with_options(array, &Int32, cast_options)?;
+            let time_array = as_primitive_array::<Int32Type>(array.as_ref());
             // note: (numeric_cast + SIMD multiply) is faster than (cast & multiply)
             let c: Int64Array = numeric_cast(&time_array);
             let from_size = time_unit_multiple(from_unit);
             let to_size = time_unit_multiple(to_unit);
             // from is only smaller than to if 64milli/64second don't exist
-            let mult = Int64Array::from(vec![to_size / from_size; array.len()]);
-            let converted = multiply(&c, &mult)?;
+            let converted = multiply_scalar(&c, to_size / from_size)?;
             let array_ref = Arc::new(converted) as ArrayRef;
             use TimeUnit::*;
             match to_unit {
@@ -1284,7 +1284,8 @@ pub fn cast_with_options(
             Ok(Arc::new(values) as ArrayRef)
         }
         (Time64(from_unit), Time32(to_unit)) => {
-            let time_array = Int64Array::from(array.data().clone());
+            let array = cast_with_options(array, &Int64, cast_options)?;
+            let time_array = as_primitive_array::<Int64Type>(array.as_ref());
             let from_size = time_unit_multiple(from_unit);
             let to_size = time_unit_multiple(to_unit);
             let divisor = from_size / to_size;
@@ -1321,7 +1322,8 @@ pub fn cast_with_options(
             }
         }
         (Timestamp(from_unit, _), Timestamp(to_unit, _)) => {
-            let time_array = Int64Array::from(array.data().clone());
+            let array = cast_with_options(array, &Int64, cast_options)?;
+            let time_array = as_primitive_array::<Int64Type>(array.as_ref());
             let from_size = time_unit_multiple(from_unit);
             let to_size = time_unit_multiple(to_unit);
             // we either divide or multiply, depending on size of each unit
@@ -1329,10 +1331,7 @@ pub fn cast_with_options(
             let converted = if from_size >= to_size {
                 divide_scalar(&time_array, from_size / to_size)?
             } else {
-                multiply(
-                    &time_array,
-                    &Int64Array::from(vec![to_size / from_size; array.len()]),
-                )?
+                multiply_scalar(&time_array, to_size / from_size)?
             };
             let array_ref = Arc::new(converted) as ArrayRef;
             use TimeUnit::*;
@@ -1355,10 +1354,10 @@ pub fn cast_with_options(
             }
         }
         (Timestamp(from_unit, _), Date32) => {
-            let time_array = Int64Array::from(array.data().clone());
+            let array = cast_with_options(array, &Int64, cast_options)?;
+            let time_array = as_primitive_array::<Int64Type>(array.as_ref());
             let from_size = time_unit_multiple(from_unit) * SECONDS_IN_DAY;
 
-            // Int32Array::from_iter(tim.iter)
             let mut b = Date32Builder::with_capacity(array.len());
 
             for i in 0..array.len() {
