@@ -46,7 +46,6 @@ pub(crate) mod native_op {
         + Div<Output = Self>
         + Rem<Output = Self>
         + Zero
-        + num::ToPrimitive
     {
         fn add_checked(self, rhs: Self) -> Result<Self> {
             Ok(self + rhs)

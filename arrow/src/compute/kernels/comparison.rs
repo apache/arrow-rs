@@ -1337,7 +1337,7 @@ macro_rules! dyn_compare_utf8_scalar {
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: ArrowNativeTypeOp,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
@@ -1356,7 +1356,7 @@ where
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn lt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: ArrowNativeTypeOp,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
@@ -1375,7 +1375,7 @@ where
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn lt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: ArrowNativeTypeOp,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
@@ -1394,7 +1394,7 @@ where
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn gt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: ArrowNativeTypeOp,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
@@ -1413,7 +1413,7 @@ where
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn gt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: ArrowNativeTypeOp,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
@@ -1432,7 +1432,7 @@ where
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn neq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: ArrowNativeTypeOp,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
