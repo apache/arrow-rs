@@ -16,11 +16,25 @@
 // under the License.
 
 use crate::compute::SortOptions;
-use crate::row::Rows;
+use crate::row::{null_sentinel, Rows};
 use crate::util::bit_util::ceil;
+use arrow_array::builder::BufferBuilder;
+use arrow_array::{Array, GenericBinaryArray, GenericStringArray, OffsetSizeTrait};
+use arrow_buffer::MutableBuffer;
+use arrow_data::ArrayDataBuilder;
+use arrow_schema::DataType;
 
 /// The block size of the variable length encoding
 pub const BLOCK_SIZE: usize = 32;
+
+/// The continuation token
+pub const BLOCK_CONTINUATION: u8 = 0xFF;
+
+/// Indicates an empty string
+pub const EMPTY_SENTINEL: u8 = 1;
+
+/// Indicates a non-empty string
+pub const NON_EMPTY_SENTINEL: u8 = 2;
 
 /// Returns the length of the encoded representation of a byte array, including the null byte
 pub fn encoded_len(a: Option<&[u8]>) -> usize {
@@ -50,8 +64,8 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
         match maybe_val {
             Some(val) if val.is_empty() => {
                 out.buffer[*offset] = match opts.descending {
-                    true => !1,
-                    false => 1,
+                    true => !EMPTY_SENTINEL,
+                    false => EMPTY_SENTINEL,
                 };
                 *offset += 1;
             }
@@ -61,7 +75,7 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
                 let to_write = &mut out.buffer[*offset..end_offset];
 
                 // Write `2_u8` to demarcate as non-empty, non-null string
-                to_write[0] = 2;
+                to_write[0] = NON_EMPTY_SENTINEL;
 
                 let chunks = val.chunks_exact(BLOCK_SIZE);
                 let remainder = chunks.remainder();
@@ -76,7 +90,7 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
                     *out_block = *input;
 
                     // Indicate that there are further blocks to follow
-                    output[BLOCK_SIZE] = u8::MAX;
+                    output[BLOCK_SIZE] = BLOCK_CONTINUATION;
                 }
 
                 if !remainder.is_empty() {
@@ -97,11 +111,121 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
                 }
             }
             None => {
-                if !opts.nulls_first {
-                    out.buffer[*offset] = 0xFF;
-                }
+                out.buffer[*offset] = null_sentinel(opts);
                 *offset += 1;
             }
         }
     }
+}
+
+/// Returns the number of bytes of encoded data
+fn decoded_len(row: &[u8], options: SortOptions) -> usize {
+    let (non_empty_sentinel, continuation) = match options.descending {
+        true => (!NON_EMPTY_SENTINEL, !BLOCK_CONTINUATION),
+        false => (NON_EMPTY_SENTINEL, BLOCK_CONTINUATION),
+    };
+
+    if row[0] != non_empty_sentinel {
+        // Empty or null string
+        return 0;
+    }
+
+    let mut str_len = 0;
+    let mut idx = 1;
+    loop {
+        let sentinel = row[idx + BLOCK_SIZE];
+        if sentinel == continuation {
+            idx += BLOCK_SIZE + 1;
+            str_len += BLOCK_SIZE;
+            continue;
+        }
+        let block_len = match options.descending {
+            true => !sentinel,
+            false => sentinel,
+        };
+        return str_len + block_len as usize;
+    }
+}
+
+/// Decodes a binary array from `rows` with the provided `options`
+pub fn decode_binary<I: OffsetSizeTrait>(
+    rows: &mut [&[u8]],
+    options: SortOptions,
+) -> GenericBinaryArray<I> {
+    let len = rows.len();
+    let mut null_count = 0;
+    let nulls = MutableBuffer::collect_bool(len, |x| {
+        let valid = rows[x][0] != null_sentinel(options);
+        null_count += !valid as usize;
+        valid
+    });
+
+    let values_capacity = rows.iter().map(|row| decoded_len(row, options)).sum();
+    let mut offsets = BufferBuilder::<I>::new(len + 1);
+    offsets.append(I::zero());
+    let mut values = MutableBuffer::new(values_capacity);
+
+    for row in rows {
+        let str_length = decoded_len(row, options);
+        let mut to_read = str_length;
+        let mut offset = 1;
+        while to_read >= BLOCK_SIZE {
+            to_read -= BLOCK_SIZE;
+
+            values.extend_from_slice(&row[offset..offset + BLOCK_SIZE]);
+            offset += BLOCK_SIZE + 1;
+        }
+
+        if to_read != 0 {
+            values.extend_from_slice(&row[offset..offset + to_read]);
+            offset += BLOCK_SIZE + 1;
+        }
+        *row = &row[offset..];
+
+        offsets.append(I::from_usize(values.len()).expect("offset overflow"))
+    }
+
+    if options.descending {
+        values.as_slice_mut().iter_mut().for_each(|o| *o = !*o)
+    }
+
+    let d = match I::IS_LARGE {
+        true => DataType::LargeBinary,
+        false => DataType::Binary,
+    };
+
+    let builder = ArrayDataBuilder::new(d)
+        .len(len)
+        .null_count(null_count)
+        .null_bit_buffer(Some(nulls.into()))
+        .add_buffer(offsets.finish())
+        .add_buffer(values.into());
+
+    // SAFETY:
+    // Valid by construction above
+    unsafe { GenericBinaryArray::from(builder.build_unchecked()) }
+}
+
+/// Decodes a string array from `rows` with the provided `options`
+///
+/// # Safety
+///
+/// The row must contain valid UTF-8 data
+pub unsafe fn decode_string<I: OffsetSizeTrait>(
+    rows: &mut [&[u8]],
+    options: SortOptions,
+) -> GenericStringArray<I> {
+    let d = match I::IS_LARGE {
+        true => DataType::LargeUtf8,
+        false => DataType::Utf8,
+    };
+
+    let builder = decode_binary::<I>(rows, options)
+        .into_data()
+        .into_builder()
+        .data_type(d);
+
+    // SAFETY:
+    // Row data must have come from a valid UTF-8 array
+    GenericStringArray::from(builder.build_unchecked())
 }
