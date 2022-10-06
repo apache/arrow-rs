@@ -94,6 +94,30 @@ pub(crate) mod native_op {
         fn mod_wrapping(self, rhs: Self) -> Self {
             self % rhs
         }
+
+        fn is_eq(self, rhs: Self) -> bool {
+            self == rhs
+        }
+
+        fn is_ne(self, rhs: Self) -> bool {
+            self != rhs
+        }
+
+        fn is_lt(self, rhs: Self) -> bool {
+            self < rhs
+        }
+
+        fn is_le(self, rhs: Self) -> bool {
+            self <= rhs
+        }
+
+        fn is_gt(self, rhs: Self) -> bool {
+            self > rhs
+        }
+
+        fn is_ge(self, rhs: Self) -> bool {
+            self >= rhs
+        }
     }
 }
 
@@ -186,6 +210,36 @@ native_type_op!(u16);
 native_type_op!(u32);
 native_type_op!(u64);
 
-impl native_op::ArrowNativeTypeOp for f16 {}
-impl native_op::ArrowNativeTypeOp for f32 {}
-impl native_op::ArrowNativeTypeOp for f64 {}
+macro_rules! native_type_float_op {
+    ($t:tt) => {
+        impl native_op::ArrowNativeTypeOp for $t {
+            fn is_eq(self, rhs: Self) -> bool {
+                self.total_cmp(&rhs).is_eq()
+            }
+
+            fn is_ne(self, rhs: Self) -> bool {
+                self.total_cmp(&rhs).is_ne()
+            }
+
+            fn is_lt(self, rhs: Self) -> bool {
+                self.total_cmp(&rhs).is_lt()
+            }
+
+            fn is_le(self, rhs: Self) -> bool {
+                self.total_cmp(&rhs).is_le()
+            }
+
+            fn is_gt(self, rhs: Self) -> bool {
+                self.total_cmp(&rhs).is_gt()
+            }
+
+            fn is_ge(self, rhs: Self) -> bool {
+                self.total_cmp(&rhs).is_ge()
+            }
+        }
+    };
+}
+
+native_type_float_op!(f16);
+native_type_float_op!(f32);
+native_type_float_op!(f64);

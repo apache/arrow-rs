@@ -22,7 +22,7 @@ use crate::temporal_conversions::{as_date, as_datetime, as_duration, as_time};
 use crate::trusted_len::trusted_len_unzip;
 use crate::types::*;
 use crate::{print_long_array, Array, ArrayAccessor};
-use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
@@ -609,6 +609,8 @@ def_from_for_primitive!(UInt64Type, u64);
 def_from_for_primitive!(Float16Type, f16);
 def_from_for_primitive!(Float32Type, f32);
 def_from_for_primitive!(Float64Type, f64);
+def_from_for_primitive!(Decimal128Type, i128);
+def_from_for_primitive!(Decimal256Type, i256);
 
 impl<T: ArrowPrimitiveType> From<Option<<T as ArrowPrimitiveType>::Native>>
     for NativeAdapter<T>
@@ -733,6 +735,8 @@ def_numeric_from_vec!(UInt32Type);
 def_numeric_from_vec!(UInt64Type);
 def_numeric_from_vec!(Float32Type);
 def_numeric_from_vec!(Float64Type);
+def_numeric_from_vec!(Decimal128Type);
+def_numeric_from_vec!(Decimal256Type);
 
 def_numeric_from_vec!(Date32Type);
 def_numeric_from_vec!(Date64Type);
@@ -1360,5 +1364,43 @@ mod tests {
     fn test_from_array_data_validation() {
         let foo = PrimitiveArray::<Int32Type>::from_iter([1, 2, 3]);
         let _ = PrimitiveArray::<Int64Type>::from(foo.into_data());
+    }
+
+    #[test]
+    fn test_decimal128() {
+        let values: Vec<_> = vec![0, 1, -1, i128::MIN, i128::MAX];
+        let array: PrimitiveArray<Decimal128Type> =
+            PrimitiveArray::from_iter(values.iter().copied());
+        assert_eq!(array.values(), &values);
+
+        let array: PrimitiveArray<Decimal128Type> =
+            PrimitiveArray::from_iter_values(values.iter().copied());
+        assert_eq!(array.values(), &values);
+
+        let array = PrimitiveArray::<Decimal128Type>::from(values.clone());
+        assert_eq!(array.values(), &values);
+
+        let array = PrimitiveArray::<Decimal128Type>::from(array.data().clone());
+        assert_eq!(array.values(), &values);
+    }
+
+    #[test]
+    fn test_decimal256() {
+        let values: Vec<_> =
+            vec![i256::ZERO, i256::ONE, i256::MINUS_ONE, i256::MIN, i256::MAX];
+
+        let array: PrimitiveArray<Decimal256Type> =
+            PrimitiveArray::from_iter(values.iter().copied());
+        assert_eq!(array.values(), &values);
+
+        let array: PrimitiveArray<Decimal256Type> =
+            PrimitiveArray::from_iter_values(values.iter().copied());
+        assert_eq!(array.values(), &values);
+
+        let array = PrimitiveArray::<Decimal256Type>::from(values.clone());
+        assert_eq!(array.values(), &values);
+
+        let array = PrimitiveArray::<Decimal256Type>::from(array.data().clone());
+        assert_eq!(array.values(), &values);
     }
 }
