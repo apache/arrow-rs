@@ -28,6 +28,7 @@ pub mod comparison;
 pub mod concat;
 pub mod concat_elements;
 pub mod filter;
+pub mod interleave;
 pub mod length;
 pub mod limit;
 pub mod partition;

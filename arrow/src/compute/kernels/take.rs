@@ -46,15 +46,20 @@ use num::{ToPrimitive, Zero};
 /// ├─────────────────┤      └─────────┘                              └─────────────────┘
 /// │        E        │
 /// └─────────────────┘
-///    values array            indicies array                              result
+///    values array          indices array                              result
 /// ```
+///
+/// For selecting values by index from multiple arrays see [compute::interleave](crate::compute::interleave)
 ///
 /// # Errors
 /// This function errors whenever:
 /// * An index cannot be casted to `usize` (typically 32 bit architectures)
 /// * An index is out of bounds and `options` is set to check bounds.
+///
 /// # Safety
-/// When `options` is not set to check bounds (default), taking indexes after `len` is undefined behavior.
+///
+/// When `options` is not set to check bounds, taking indexes after `len` will panic.
+///
 /// # Examples
 /// ```
 /// use arrow::array::{StringArray, UInt32Array};
