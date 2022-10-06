@@ -27,18 +27,18 @@ use crate::array::*;
 use crate::buffer::{buffer_unary_not, Buffer, MutableBuffer};
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{
-    ArrowNativeType, ArrowNumericType, DataType, Date32Type, Date64Type, Float32Type,
-    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, Time32MillisecondType,
-    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimeUnit,
-    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    native_op::ArrowNativeTypeOp, ArrowNativeType, ArrowNumericType, DataType,
+    Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
+    Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    IntervalYearMonthType, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
 };
 #[allow(unused_imports)]
 use crate::downcast_dictionary_array;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
-use num::ToPrimitive;
 use regex::Regex;
 use std::collections::HashMap;
 
@@ -1336,7 +1336,7 @@ macro_rules! dyn_compare_utf8_scalar {
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: num::ToPrimitive + std::fmt::Debug,
+    T: ArrowNativeTypeOp,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
@@ -3048,24 +3048,12 @@ where
 pub fn eq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
-    T::Native: num::ToPrimitive + std::fmt::Debug,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::eq, |a, b| a == b);
     #[cfg(not(feature = "simd"))]
-    match left.data_type() {
-        DataType::Float32 => {
-            let left = as_primitive_array::<Float32Type>(left);
-            let right = try_to_type!(right, to_f32)?;
-            compare_op_scalar(left, |a: f32| a.total_cmp(&right).is_eq())
-        }
-        DataType::Float64 => {
-            let left = as_primitive_array::<Float64Type>(left);
-            let right = try_to_type!(right, to_f64)?;
-            compare_op_scalar(left, |a: f64| a.total_cmp(&right).is_eq())
-        }
-        _ => compare_op_scalar(left, |a| a == right),
-    }
+    return compare_op_scalar(left, |a| a.is_eq(right));
 }
 
 /// Applies an unary and infallible comparison function to a primitive array.
@@ -3096,24 +3084,12 @@ where
 pub fn neq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
-    T::Native: num::ToPrimitive + std::fmt::Debug,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::ne, |a, b| a != b);
     #[cfg(not(feature = "simd"))]
-    match left.data_type() {
-        DataType::Float32 => {
-            let left = as_primitive_array::<Float32Type>(left);
-            let right = try_to_type!(right, to_f32)?;
-            compare_op_scalar(left, |a: f32| a.total_cmp(&right).is_ne())
-        }
-        DataType::Float64 => {
-            let left = as_primitive_array::<Float64Type>(left);
-            let right = try_to_type!(right, to_f64)?;
-            compare_op_scalar(left, |a: f64| a.total_cmp(&right).is_ne())
-        }
-        _ => compare_op_scalar(left, |a| a != right),
-    }
+    return compare_op_scalar(left, |a| a.is_ne(right));
 }
 
 /// Perform `left < right` operation on two [`PrimitiveArray`]s. Null values are less than non-null
@@ -3137,24 +3113,12 @@ where
 pub fn lt_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
-    T::Native: num::ToPrimitive + std::fmt::Debug,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::lt, |a, b| a < b);
     #[cfg(not(feature = "simd"))]
-    match left.data_type() {
-        DataType::Float32 => {
-            let left = as_primitive_array::<Float32Type>(left);
-            let right = try_to_type!(right, to_f32)?;
-            compare_op_scalar(left, |a: f32| a.total_cmp(&right).is_lt())
-        }
-        DataType::Float64 => {
-            let left = as_primitive_array::<Float64Type>(left);
-            let right = try_to_type!(right, to_f64)?;
-            compare_op_scalar(left, |a: f64| a.total_cmp(&right).is_lt())
-        }
-        _ => compare_op_scalar(left, |a| a < right),
-    }
+    return compare_op_scalar(left, |a| a.is_lt(right));
 }
 
 /// Perform `left <= right` operation on two [`PrimitiveArray`]s. Null values are less than non-null
@@ -3181,24 +3145,12 @@ where
 pub fn lt_eq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
-    T::Native: num::ToPrimitive + std::fmt::Debug,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::le, |a, b| a <= b);
     #[cfg(not(feature = "simd"))]
-    match left.data_type() {
-        DataType::Float32 => {
-            let left = as_primitive_array::<Float32Type>(left);
-            let right = try_to_type!(right, to_f32)?;
-            compare_op_scalar(left, |a: f32| a.total_cmp(&right).is_le())
-        }
-        DataType::Float64 => {
-            let left = as_primitive_array::<Float64Type>(left);
-            let right = try_to_type!(right, to_f64)?;
-            compare_op_scalar(left, |a: f64| a.total_cmp(&right).is_le())
-        }
-        _ => compare_op_scalar(left, |a| a <= right),
-    }
+    return compare_op_scalar(left, |a| a.is_le(right));
 }
 
 /// Perform `left > right` operation on two [`PrimitiveArray`]s. Non-null values are greater than null
@@ -3222,24 +3174,12 @@ where
 pub fn gt_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
-    T::Native: num::ToPrimitive + std::fmt::Debug,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::gt, |a, b| a > b);
     #[cfg(not(feature = "simd"))]
-    match left.data_type() {
-        DataType::Float32 => {
-            let left = as_primitive_array::<Float32Type>(left);
-            let right = try_to_type!(right, to_f32)?;
-            compare_op_scalar(left, |a: f32| a.total_cmp(&right).is_gt())
-        }
-        DataType::Float64 => {
-            let left = as_primitive_array::<Float64Type>(left);
-            let right = try_to_type!(right, to_f64)?;
-            compare_op_scalar(left, |a: f64| a.total_cmp(&right).is_gt())
-        }
-        _ => compare_op_scalar(left, |a| a > right),
-    }
+    return compare_op_scalar(left, |a| a.is_gt(right));
 }
 
 /// Perform `left >= right` operation on two [`PrimitiveArray`]s. Non-null values are greater than null
@@ -3266,24 +3206,12 @@ where
 pub fn gt_eq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
-    T::Native: num::ToPrimitive + std::fmt::Debug,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::ge, |a, b| a >= b);
     #[cfg(not(feature = "simd"))]
-    match left.data_type() {
-        DataType::Float32 => {
-            let left = as_primitive_array::<Float32Type>(left);
-            let right = try_to_type!(right, to_f32)?;
-            compare_op_scalar(left, |a: f32| a.total_cmp(&right).is_ge())
-        }
-        DataType::Float64 => {
-            let left = as_primitive_array::<Float64Type>(left);
-            let right = try_to_type!(right, to_f64)?;
-            compare_op_scalar(left, |a: f64| a.total_cmp(&right).is_ge())
-        }
-        _ => compare_op_scalar(left, |a| a >= right),
-    }
+    return compare_op_scalar(left, |a| a.is_ge(right));
 }
 
 /// Checks if a [`GenericListArray`] contains a value in the [`PrimitiveArray`]
