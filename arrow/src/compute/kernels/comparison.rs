@@ -27,13 +27,13 @@ use crate::array::*;
 use crate::buffer::{buffer_unary_not, Buffer, MutableBuffer};
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{
-    native_op::ArrowNativeTypeOp, ArrowNativeType, ArrowNumericType, DataType,
-    Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-    IntervalYearMonthType, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    ArrowNativeType, ArrowNativeTypeOp, ArrowNumericType, DataType, Date32Type,
+    Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
+    UInt8Type,
 };
 #[allow(unused_imports)]
 use crate::downcast_dictionary_array;

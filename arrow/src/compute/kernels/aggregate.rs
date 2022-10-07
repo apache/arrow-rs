@@ -27,8 +27,7 @@ use crate::array::{
     as_primitive_array, Array, ArrayAccessor, ArrayIter, BooleanArray,
     GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
-use crate::datatypes::native_op::ArrowNativeTypeOp;
-use crate::datatypes::{ArrowNativeType, ArrowNumericType, DataType};
+use crate::datatypes::{ArrowNativeType, ArrowNativeTypeOp, ArrowNumericType, DataType};
 use crate::error::Result;
 use crate::util::bit_iterator::BitIndexIterator;
 
