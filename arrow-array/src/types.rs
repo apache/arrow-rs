@@ -19,6 +19,7 @@
 
 use crate::array::ArrowPrimitiveType;
 use crate::delta::shift_months;
+use arrow_buffer::i256;
 use arrow_data::decimal::{
     DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
     DECIMAL256_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
@@ -515,6 +516,12 @@ impl DecimalType for Decimal128Type {
         DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
 }
 
+impl ArrowPrimitiveType for Decimal128Type {
+    type Native = i128;
+
+    const DATA_TYPE: DataType = <Self as DecimalType>::DEFAULT_TYPE;
+}
+
 /// The decimal type for a Decimal256Array
 #[derive(Debug)]
 pub struct Decimal256Type {}
@@ -528,6 +535,12 @@ impl DecimalType for Decimal256Type {
     const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType = DataType::Decimal256;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
+}
+
+impl ArrowPrimitiveType for Decimal256Type {
+    type Native = i256;
+
+    const DATA_TYPE: DataType = <Self as DecimalType>::DEFAULT_TYPE;
 }
 
 #[cfg(test)]
