@@ -2145,21 +2145,11 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "simd"))]
     fn test_int_array_modulus_overflow_wrapping() {
         let a = Int32Array::from(vec![i32::MIN]);
         let b = Int32Array::from(vec![-1]);
         let result = modulus(&a, &b).unwrap();
         assert_eq!(0, result.value(0))
-    }
-
-    #[test]
-    #[cfg(feature = "simd")]
-    #[should_panic(expected = "attempt to calculate the remainder with overflow")]
-    fn test_int_array_modulus_overflow_panic() {
-        let a = Int32Array::from(vec![i32::MIN]);
-        let b = Int32Array::from(vec![-1]);
-        let _ = modulus(&a, &b).unwrap();
     }
 
     #[test]
