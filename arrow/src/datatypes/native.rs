@@ -19,110 +19,72 @@ use crate::error::{ArrowError, Result};
 pub use arrow_array::ArrowPrimitiveType;
 pub use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use half::f16;
-use num::Zero;
-use std::ops::{Add, Div, Mul, Rem, Sub};
 
-mod private {
-    pub trait Sealed {}
-}
-
-/// Trait for ArrowNativeType to provide overflow-checking and non-overflow-checking
-/// variants for arithmetic operations. For floating point types, this provides some
-/// default implementations. Integer types that need to deal with overflow can implement
-/// this trait.
+/// Trait for [`ArrowNativeType`] that adds checked and unchecked arithmetic operations,
+/// and totally ordered comparison operations
 ///
-/// The APIs with `_wrapping` suffix are the variant of non-overflow-checking. If overflow
-/// occurred, they will supposedly wrap around the boundary of the type.
+/// The APIs with `_wrapping` suffix do not perform overflow-checking. For integer
+/// types they will wrap around the boundary of the type. For floating point types they
+/// will overflow to INF or -INF preserving the expected sign value
 ///
-/// The APIs with `_checked` suffix are the variant of overflow-checking which return `None`
-/// if overflow occurred.
-pub trait ArrowNativeTypeOp:
-    ArrowNativeType
-    + Add<Output = Self>
-    + Sub<Output = Self>
-    + Mul<Output = Self>
-    + Div<Output = Self>
-    + Rem<Output = Self>
-    + Zero
-    + private::Sealed
-{
-    fn add_checked(self, rhs: Self) -> Result<Self> {
-        Ok(self + rhs)
-    }
+/// Note `div_wrapping` and `mod_wrapping` will panic for integer types if `rhs` is zero
+/// although this may be subject to change <https://github.com/apache/arrow-rs/issues/2647>
+///
+/// The APIs with `_checked` suffix perform overflow-checking. For integer types
+/// these will return `Err` instead of wrapping. For floating point types they will
+/// overflow to INF or -INF preserving the expected sign value
+///
+/// Comparison of integer types is as per normal integer comparison rules, floating
+/// point values are compared as per IEEE 754's totalOrder predicate see [`f32::total_cmp`]
+///
+pub trait ArrowNativeTypeOp: ArrowNativeType {
+    /// The additive identity
+    const ZERO: Self;
 
-    fn add_wrapping(self, rhs: Self) -> Self {
-        self + rhs
-    }
+    /// The multiplicative identity
+    const ONE: Self;
 
-    fn sub_checked(self, rhs: Self) -> Result<Self> {
-        Ok(self - rhs)
-    }
+    fn add_checked(self, rhs: Self) -> Result<Self>;
 
-    fn sub_wrapping(self, rhs: Self) -> Self {
-        self - rhs
-    }
+    fn add_wrapping(self, rhs: Self) -> Self;
 
-    fn mul_checked(self, rhs: Self) -> Result<Self> {
-        Ok(self * rhs)
-    }
+    fn sub_checked(self, rhs: Self) -> Result<Self>;
 
-    fn mul_wrapping(self, rhs: Self) -> Self {
-        self * rhs
-    }
+    fn sub_wrapping(self, rhs: Self) -> Self;
 
-    fn div_checked(self, rhs: Self) -> Result<Self> {
-        if rhs.is_zero() {
-            Err(ArrowError::DivideByZero)
-        } else {
-            Ok(self / rhs)
-        }
-    }
+    fn mul_checked(self, rhs: Self) -> Result<Self>;
 
-    fn div_wrapping(self, rhs: Self) -> Self {
-        self / rhs
-    }
+    fn mul_wrapping(self, rhs: Self) -> Self;
 
-    fn mod_checked(self, rhs: Self) -> Result<Self> {
-        if rhs.is_zero() {
-            Err(ArrowError::DivideByZero)
-        } else {
-            Ok(self % rhs)
-        }
-    }
+    fn div_checked(self, rhs: Self) -> Result<Self>;
 
-    fn mod_wrapping(self, rhs: Self) -> Self {
-        self % rhs
-    }
+    fn div_wrapping(self, rhs: Self) -> Self;
 
-    fn is_eq(self, rhs: Self) -> bool {
-        self == rhs
-    }
+    fn mod_checked(self, rhs: Self) -> Result<Self>;
 
-    fn is_ne(self, rhs: Self) -> bool {
-        self != rhs
-    }
+    fn mod_wrapping(self, rhs: Self) -> Self;
 
-    fn is_lt(self, rhs: Self) -> bool {
-        self < rhs
-    }
+    fn is_zero(self) -> bool;
 
-    fn is_le(self, rhs: Self) -> bool {
-        self <= rhs
-    }
+    fn is_eq(self, rhs: Self) -> bool;
 
-    fn is_gt(self, rhs: Self) -> bool {
-        self > rhs
-    }
+    fn is_ne(self, rhs: Self) -> bool;
 
-    fn is_ge(self, rhs: Self) -> bool {
-        self >= rhs
-    }
+    fn is_lt(self, rhs: Self) -> bool;
+
+    fn is_le(self, rhs: Self) -> bool;
+
+    fn is_gt(self, rhs: Self) -> bool;
+
+    fn is_ge(self, rhs: Self) -> bool;
 }
 
 macro_rules! native_type_op {
     ($t:tt) => {
-        impl private::Sealed for $t {}
         impl ArrowNativeTypeOp for $t {
+            const ZERO: Self = 0;
+            const ONE: Self = 1;
+
             fn add_checked(self, rhs: Self) -> Result<Self> {
                 self.checked_add(rhs).ok_or_else(|| {
                     ArrowError::ComputeError(format!(
@@ -195,6 +157,34 @@ macro_rules! native_type_op {
             fn mod_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_rem(rhs)
             }
+
+            fn is_zero(self) -> bool {
+                self == 0
+            }
+
+            fn is_eq(self, rhs: Self) -> bool {
+                self == rhs
+            }
+
+            fn is_ne(self, rhs: Self) -> bool {
+                self != rhs
+            }
+
+            fn is_lt(self, rhs: Self) -> bool {
+                self < rhs
+            }
+
+            fn is_le(self, rhs: Self) -> bool {
+                self <= rhs
+            }
+
+            fn is_gt(self, rhs: Self) -> bool {
+                self > rhs
+            }
+
+            fn is_ge(self, rhs: Self) -> bool {
+                self >= rhs
+            }
         }
     };
 }
@@ -210,9 +200,63 @@ native_type_op!(u32);
 native_type_op!(u64);
 
 macro_rules! native_type_float_op {
-    ($t:tt) => {
-        impl private::Sealed for $t {}
+    ($t:tt, $zero:expr, $one:expr) => {
         impl ArrowNativeTypeOp for $t {
+            const ZERO: Self = $zero;
+            const ONE: Self = $one;
+
+            fn add_checked(self, rhs: Self) -> Result<Self> {
+                Ok(self + rhs)
+            }
+
+            fn add_wrapping(self, rhs: Self) -> Self {
+                self + rhs
+            }
+
+            fn sub_checked(self, rhs: Self) -> Result<Self> {
+                Ok(self - rhs)
+            }
+
+            fn sub_wrapping(self, rhs: Self) -> Self {
+                self - rhs
+            }
+
+            fn mul_checked(self, rhs: Self) -> Result<Self> {
+                Ok(self * rhs)
+            }
+
+            fn mul_wrapping(self, rhs: Self) -> Self {
+                self * rhs
+            }
+
+            fn div_checked(self, rhs: Self) -> Result<Self> {
+                if rhs.is_zero() {
+                    Err(ArrowError::DivideByZero)
+                } else {
+                    Ok(self / rhs)
+                }
+            }
+
+            fn div_wrapping(self, rhs: Self) -> Self {
+                self / rhs
+            }
+
+            fn mod_checked(self, rhs: Self) -> Result<Self> {
+                if rhs.is_zero() {
+                    Err(ArrowError::DivideByZero)
+                } else {
+                    Ok(self % rhs)
+                }
+            }
+
+            fn mod_wrapping(self, rhs: Self) -> Self {
+                self % rhs
+            }
+
+            fn is_zero(self) -> bool {
+                self == $zero
+            }
+
             fn is_eq(self, rhs: Self) -> bool {
                 self.total_cmp(&rhs).is_eq()
             }
@@ -240,6 +284,6 @@ macro_rules! native_type_float_op {
     };
 }
 
-native_type_float_op!(f16);
-native_type_float_op!(f32);
-native_type_float_op!(f64);
+native_type_float_op!(f16, f16::ONE, f16::ZERO);
+native_type_float_op!(f32, 0., 1.);
+native_type_float_op!(f64, 0., 1.);
