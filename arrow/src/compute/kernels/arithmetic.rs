@@ -34,7 +34,7 @@ use crate::compute::{
     binary, binary_opt, try_binary, try_unary, try_unary_dyn, unary_dyn,
 };
 use crate::datatypes::{
-    native_op::ArrowNativeTypeOp, ArrowNumericType, DataType, Date32Type, Date64Type,
+    ArrowNativeTypeOp, ArrowNumericType, DataType, Date32Type, Date64Type,
     IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
 };
 #[cfg(feature = "dyn_arith_dict")]
