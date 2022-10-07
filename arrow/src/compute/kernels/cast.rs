@@ -440,6 +440,35 @@ macro_rules! cast_list_to_string {
     }};
 }
 
+fn make_timestamp_array(
+    array: &PrimitiveArray<Int64Type>,
+    unit: TimeUnit,
+    tz: Option<String>,
+) -> ArrayRef {
+    match unit {
+        TimeUnit::Second => Arc::new(
+            array
+                .reinterpret_cast::<TimestampSecondType>()
+                .with_timezone_opt(tz),
+        ),
+        TimeUnit::Millisecond => Arc::new(
+            array
+                .reinterpret_cast::<TimestampMillisecondType>()
+                .with_timezone_opt(tz),
+        ),
+        TimeUnit::Microsecond => Arc::new(
+            array
+                .reinterpret_cast::<TimestampMicrosecondType>()
+                .with_timezone_opt(tz),
+        ),
+        TimeUnit::Nanosecond => Arc::new(
+            array
+                .reinterpret_cast::<TimestampNanosecondType>()
+                .with_timezone_opt(tz),
+        ),
+    }
+}
+
 /// Cast `array` to the provided data type and return a new Array with
 /// type `to_type`, if possible. It accepts `CastOptions` to allow consumers
 /// to configure cast behavior.
@@ -1277,20 +1306,13 @@ pub fn cast_with_options(
             cast_reinterpret_arrays::<TimestampNanosecondType, Int64Type>(array)
         }
 
-        (Int64, Timestamp(TimeUnit::Second, _)) => {
-            cast_reinterpret_arrays::<Int64Type, TimestampSecondType>(array)
-        }
-        (Int64, Timestamp(TimeUnit::Millisecond, _)) => {
-            cast_reinterpret_arrays::<Int64Type, TimestampMillisecondType>(array)
-        }
-        (Int64, Timestamp(TimeUnit::Microsecond, _)) => {
-            cast_reinterpret_arrays::<Int64Type, TimestampMicrosecondType>(array)
-        }
-        (Int64, Timestamp(TimeUnit::Nanosecond, _)) => {
-            cast_reinterpret_arrays::<Int64Type, TimestampNanosecondType>(array)
-        }
+        (Int64, Timestamp(unit, tz)) => Ok(make_timestamp_array(
+            as_primitive_array(array),
+            unit.clone(),
+            tz.clone(),
+        )),
 
-        (Timestamp(from_unit, _), Timestamp(to_unit, _)) => {
+        (Timestamp(from_unit, _), Timestamp(to_unit, to_tz)) => {
             let time_array = Int64Array::from(array.data().clone());
             let from_size = time_unit_multiple(from_unit);
             let to_size = time_unit_multiple(to_unit);
@@ -1301,21 +1323,11 @@ pub fn cast_with_options(
             } else {
                 multiply_scalar(&time_array, to_size / from_size)?
             };
-            use TimeUnit::*;
-            match to_unit {
-                Second => Ok(Arc::new(
-                    converted.reinterpret_cast::<TimestampSecondType>(),
-                )),
-                Millisecond => Ok(Arc::new(
-                    converted.reinterpret_cast::<TimestampMillisecondType>(),
-                )),
-                Microsecond => Ok(Arc::new(
-                    converted.reinterpret_cast::<TimestampMicrosecondType>(),
-                )),
-                Nanosecond => Ok(Arc::new(
-                    converted.reinterpret_cast::<TimestampNanosecondType>(),
-                )),
-            }
+            Ok(make_timestamp_array(
+                &converted,
+                to_unit.clone(),
+                to_tz.clone(),
+            ))
         }
         (Timestamp(from_unit, _), Date32) => {
             let time_array = Int64Array::from(array.data().clone());
