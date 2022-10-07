@@ -43,12 +43,10 @@ use std::str;
 use std::sync::Arc;
 
 use crate::buffer::MutableBuffer;
-use crate::compute::divide_scalar;
-use crate::compute::kernels::arithmetic::{divide, multiply};
-use crate::compute::kernels::arity::unary;
 use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use crate::compute::kernels::temporal::extract_component_from_array;
 use crate::compute::kernels::temporal::return_compute_error_with;
+use crate::compute::{divide_scalar, multiply_scalar};
 use crate::compute::{try_unary, using_chrono_tz_and_utc_naive_date_time};
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
@@ -315,7 +313,7 @@ fn cast_primitive_to_decimal<T: ArrayAccessor, F>(
     op: F,
     precision: u8,
     scale: u8,
-) -> Result<Arc<dyn Array>>
+) -> Result<ArrayRef>
 where
     F: Fn(T::Item) -> i128,
 {
@@ -332,7 +330,7 @@ fn cast_integer_to_decimal<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
     precision: u8,
     scale: u8,
-) -> Result<Arc<dyn Array>>
+) -> Result<ArrayRef>
 where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<i128>,
 {
@@ -347,7 +345,7 @@ fn cast_floating_point_to_decimal<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
     precision: u8,
     scale: u8,
-) -> Result<Arc<dyn Array>>
+) -> Result<ArrayRef>
 where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<f64>,
 {
@@ -363,6 +361,18 @@ where
         precision,
         scale,
     )
+}
+
+/// Cast the primitive array using [`PrimitiveArray::reinterpret_cast`]
+fn cast_reinterpret_arrays<
+    I: ArrowPrimitiveType,
+    O: ArrowPrimitiveType<Native = I::Native>,
+>(
+    array: &dyn Array,
+) -> Result<ArrayRef> {
+    Ok(Arc::new(
+        as_primitive_array::<I>(array).reinterpret_cast::<O>(),
+    ))
 }
 
 // cast the decimal array to integer array
@@ -619,50 +629,28 @@ pub fn cast_with_options(
             cast_primitive_to_list::<i64>(array, to, to_type, cast_options)
         }
         (Dictionary(index_type, _), _) => match **index_type {
-            DataType::Int8 => dictionary_cast::<Int8Type>(array, to_type, cast_options),
-            DataType::Int16 => dictionary_cast::<Int16Type>(array, to_type, cast_options),
-            DataType::Int32 => dictionary_cast::<Int32Type>(array, to_type, cast_options),
-            DataType::Int64 => dictionary_cast::<Int64Type>(array, to_type, cast_options),
-            DataType::UInt8 => dictionary_cast::<UInt8Type>(array, to_type, cast_options),
-            DataType::UInt16 => {
-                dictionary_cast::<UInt16Type>(array, to_type, cast_options)
-            }
-            DataType::UInt32 => {
-                dictionary_cast::<UInt32Type>(array, to_type, cast_options)
-            }
-            DataType::UInt64 => {
-                dictionary_cast::<UInt64Type>(array, to_type, cast_options)
-            }
+            Int8 => dictionary_cast::<Int8Type>(array, to_type, cast_options),
+            Int16 => dictionary_cast::<Int16Type>(array, to_type, cast_options),
+            Int32 => dictionary_cast::<Int32Type>(array, to_type, cast_options),
+            Int64 => dictionary_cast::<Int64Type>(array, to_type, cast_options),
+            UInt8 => dictionary_cast::<UInt8Type>(array, to_type, cast_options),
+            UInt16 => dictionary_cast::<UInt16Type>(array, to_type, cast_options),
+            UInt32 => dictionary_cast::<UInt32Type>(array, to_type, cast_options),
+            UInt64 => dictionary_cast::<UInt64Type>(array, to_type, cast_options),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from dictionary type {:?} to {:?} not supported",
                 from_type, to_type,
             ))),
         },
         (_, Dictionary(index_type, value_type)) => match **index_type {
-            DataType::Int8 => {
-                cast_to_dictionary::<Int8Type>(array, value_type, cast_options)
-            }
-            DataType::Int16 => {
-                cast_to_dictionary::<Int16Type>(array, value_type, cast_options)
-            }
-            DataType::Int32 => {
-                cast_to_dictionary::<Int32Type>(array, value_type, cast_options)
-            }
-            DataType::Int64 => {
-                cast_to_dictionary::<Int64Type>(array, value_type, cast_options)
-            }
-            DataType::UInt8 => {
-                cast_to_dictionary::<UInt8Type>(array, value_type, cast_options)
-            }
-            DataType::UInt16 => {
-                cast_to_dictionary::<UInt16Type>(array, value_type, cast_options)
-            }
-            DataType::UInt32 => {
-                cast_to_dictionary::<UInt32Type>(array, value_type, cast_options)
-            }
-            DataType::UInt64 => {
-                cast_to_dictionary::<UInt64Type>(array, value_type, cast_options)
-            }
+            Int8 => cast_to_dictionary::<Int8Type>(array, value_type, cast_options),
+            Int16 => cast_to_dictionary::<Int16Type>(array, value_type, cast_options),
+            Int32 => cast_to_dictionary::<Int32Type>(array, value_type, cast_options),
+            Int64 => cast_to_dictionary::<Int64Type>(array, value_type, cast_options),
+            UInt8 => cast_to_dictionary::<UInt8Type>(array, value_type, cast_options),
+            UInt16 => cast_to_dictionary::<UInt16Type>(array, value_type, cast_options),
+            UInt32 => cast_to_dictionary::<UInt32Type>(array, value_type, cast_options),
+            UInt64 => cast_to_dictionary::<UInt64Type>(array, value_type, cast_options),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from type {:?} to dictionary type {:?} not supported",
                 from_type, to_type,
@@ -757,20 +745,18 @@ pub fn cast_with_options(
             Int64 => cast_numeric_to_string::<Int64Type, i32>(array),
             Float32 => cast_numeric_to_string::<Float32Type, i32>(array),
             Float64 => cast_numeric_to_string::<Float64Type, i32>(array),
-            Timestamp(unit, tz) => match unit {
-                TimeUnit::Nanosecond => {
-                    cast_timestamp_to_string::<TimestampNanosecondType, i32>(array, tz)
-                }
-                TimeUnit::Microsecond => {
-                    cast_timestamp_to_string::<TimestampMicrosecondType, i32>(array, tz)
-                }
-                TimeUnit::Millisecond => {
-                    cast_timestamp_to_string::<TimestampMillisecondType, i32>(array, tz)
-                }
-                TimeUnit::Second => {
-                    cast_timestamp_to_string::<TimestampSecondType, i32>(array, tz)
-                }
-            },
+            Timestamp(TimeUnit::Nanosecond, tz) => {
+                cast_timestamp_to_string::<TimestampNanosecondType, i32>(array, tz)
+            }
+            Timestamp(TimeUnit::Microsecond, tz) => {
+                cast_timestamp_to_string::<TimestampMicrosecondType, i32>(array, tz)
+            }
+            Timestamp(TimeUnit::Millisecond, tz) => {
+                cast_timestamp_to_string::<TimestampMillisecondType, i32>(array, tz)
+            }
+            Timestamp(TimeUnit::Second, tz) => {
+                cast_timestamp_to_string::<TimestampSecondType, i32>(array, tz)
+            }
             Date32 => cast_date32_to_string::<i32>(array),
             Date64 => cast_date64_to_string::<i32>(array),
             Binary => {
@@ -813,20 +799,18 @@ pub fn cast_with_options(
             Int64 => cast_numeric_to_string::<Int64Type, i64>(array),
             Float32 => cast_numeric_to_string::<Float32Type, i64>(array),
             Float64 => cast_numeric_to_string::<Float64Type, i64>(array),
-            Timestamp(unit, tz) => match unit {
-                TimeUnit::Nanosecond => {
-                    cast_timestamp_to_string::<TimestampNanosecondType, i64>(array, tz)
-                }
-                TimeUnit::Microsecond => {
-                    cast_timestamp_to_string::<TimestampMicrosecondType, i64>(array, tz)
-                }
-                TimeUnit::Millisecond => {
-                    cast_timestamp_to_string::<TimestampMillisecondType, i64>(array, tz)
-                }
-                TimeUnit::Second => {
-                    cast_timestamp_to_string::<TimestampSecondType, i64>(array, tz)
-                }
-            },
+            Timestamp(TimeUnit::Nanosecond, tz) => {
+                cast_timestamp_to_string::<TimestampNanosecondType, i64>(array, tz)
+            }
+            Timestamp(TimeUnit::Microsecond, tz) => {
+                cast_timestamp_to_string::<TimestampMicrosecondType, i64>(array, tz)
+            }
+            Timestamp(TimeUnit::Millisecond, tz) => {
+                cast_timestamp_to_string::<TimestampMillisecondType, i64>(array, tz)
+            }
+            Timestamp(TimeUnit::Second, tz) => {
+                cast_timestamp_to_string::<TimestampSecondType, i64>(array, tz)
+            }
             Date32 => cast_date32_to_string::<i64>(array),
             Date64 => cast_date64_to_string::<i64>(array),
             Binary => {
@@ -1160,166 +1144,152 @@ pub fn cast_with_options(
         // end numeric casts
 
         // temporal casts
-        (Int32, Date32) => cast_array_data::<Date32Type>(array, to_type.clone()),
+        (Int32, Date32) => cast_reinterpret_arrays::<Int32Type, Date32Type>(array),
         (Int32, Date64) => cast_with_options(
-            &cast_with_options(array, &DataType::Date32, cast_options)?,
-            &DataType::Date64,
+            &cast_with_options(array, &Date32, cast_options)?,
+            &Date64,
             cast_options,
         ),
         (Int32, Time32(TimeUnit::Second)) => {
-            cast_array_data::<Time32SecondType>(array, to_type.clone())
+            cast_reinterpret_arrays::<Int32Type, Time32SecondType>(array)
         }
         (Int32, Time32(TimeUnit::Millisecond)) => {
-            cast_array_data::<Time32MillisecondType>(array, to_type.clone())
+            cast_reinterpret_arrays::<Int32Type, Time32MillisecondType>(array)
         }
         // No support for microsecond/nanosecond with i32
-        (Date32, Int32) => cast_array_data::<Int32Type>(array, to_type.clone()),
+        (Date32, Int32) => cast_reinterpret_arrays::<Date32Type, Int32Type>(array),
         (Date32, Int64) => cast_with_options(
-            &cast_with_options(array, &DataType::Int32, cast_options)?,
-            &DataType::Int64,
+            &cast_with_options(array, &Int32, cast_options)?,
+            &Int64,
             cast_options,
         ),
-        (Time32(_), Int32) => cast_array_data::<Int32Type>(array, to_type.clone()),
-        (Int64, Date64) => cast_array_data::<Date64Type>(array, to_type.clone()),
+        (Time32(TimeUnit::Second), Int32) => {
+            cast_reinterpret_arrays::<Time32SecondType, Int32Type>(array)
+        }
+        (Time32(TimeUnit::Millisecond), Int32) => {
+            cast_reinterpret_arrays::<Time32MillisecondType, Int32Type>(array)
+        }
+        (Int64, Date64) => cast_reinterpret_arrays::<Int64Type, Date64Type>(array),
         (Int64, Date32) => cast_with_options(
-            &cast_with_options(array, &DataType::Int32, cast_options)?,
-            &DataType::Date32,
+            &cast_with_options(array, &Int32, cast_options)?,
+            &Date32,
             cast_options,
         ),
         // No support for second/milliseconds with i64
         (Int64, Time64(TimeUnit::Microsecond)) => {
-            cast_array_data::<Time64MicrosecondType>(array, to_type.clone())
+            cast_reinterpret_arrays::<Int64Type, Time64MicrosecondType>(array)
         }
         (Int64, Time64(TimeUnit::Nanosecond)) => {
-            cast_array_data::<Time64NanosecondType>(array, to_type.clone())
+            cast_reinterpret_arrays::<Int64Type, Time64NanosecondType>(array)
         }
 
-        (Date64, Int64) => cast_array_data::<Int64Type>(array, to_type.clone()),
+        (Date64, Int64) => cast_reinterpret_arrays::<Date64Type, Int64Type>(array),
         (Date64, Int32) => cast_with_options(
-            &cast_with_options(array, &DataType::Int64, cast_options)?,
-            &DataType::Int32,
+            &cast_with_options(array, &Int64, cast_options)?,
+            &Int32,
             cast_options,
         ),
-        (Time64(_), Int64) => cast_array_data::<Int64Type>(array, to_type.clone()),
-        (Date32, Date64) => {
-            let date_array = array.as_any().downcast_ref::<Date32Array>().unwrap();
-
-            let values =
-                unary::<_, _, Date64Type>(date_array, |x| x as i64 * MILLISECONDS_IN_DAY);
-
-            Ok(Arc::new(values) as ArrayRef)
+        (Time64(TimeUnit::Microsecond), Int64) => {
+            cast_reinterpret_arrays::<Time64MicrosecondType, Int64Type>(array)
         }
-        (Date64, Date32) => {
-            let date_array = array.as_any().downcast_ref::<Date64Array>().unwrap();
-
-            let values = unary::<_, _, Date32Type>(date_array, |x| {
-                (x / MILLISECONDS_IN_DAY) as i32
-            });
-
-            Ok(Arc::new(values) as ArrayRef)
+        (Time64(TimeUnit::Nanosecond), Int64) => {
+            cast_reinterpret_arrays::<Time64NanosecondType, Int64Type>(array)
         }
-        (Time32(TimeUnit::Second), Time32(TimeUnit::Millisecond)) => {
-            let time_array = array.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+        (Date32, Date64) => Ok(Arc::new(
+            as_primitive_array::<Date32Type>(array)
+                .unary::<_, Date64Type>(|x| x as i64 * MILLISECONDS_IN_DAY),
+        )),
+        (Date64, Date32) => Ok(Arc::new(
+            as_primitive_array::<Date64Type>(array)
+                .unary::<_, Date32Type>(|x| (x / MILLISECONDS_IN_DAY) as i32),
+        )),
 
-            let values = unary::<_, _, Time32MillisecondType>(time_array, |x| {
-                x * MILLISECONDS as i32
-            });
+        (Time32(TimeUnit::Second), Time32(TimeUnit::Millisecond)) => Ok(Arc::new(
+            as_primitive_array::<Time32SecondType>(array)
+                .unary::<_, Time32MillisecondType>(|x| x * MILLISECONDS as i32),
+        )),
+        (Time32(TimeUnit::Second), Time64(TimeUnit::Microsecond)) => Ok(Arc::new(
+            as_primitive_array::<Time32SecondType>(array)
+                .unary::<_, Time64MicrosecondType>(|x| x as i64 * MICROSECONDS),
+        )),
+        (Time32(TimeUnit::Second), Time64(TimeUnit::Nanosecond)) => Ok(Arc::new(
+            as_primitive_array::<Time32SecondType>(array)
+                .unary::<_, Time64NanosecondType>(|x| x as i64 * NANOSECONDS),
+        )),
 
-            Ok(Arc::new(values) as ArrayRef)
-        }
-        (Time32(TimeUnit::Millisecond), Time32(TimeUnit::Second)) => {
-            let time_array = array
-                .as_any()
-                .downcast_ref::<Time32MillisecondArray>()
-                .unwrap();
+        (Time32(TimeUnit::Millisecond), Time32(TimeUnit::Second)) => Ok(Arc::new(
+            as_primitive_array::<Time32MillisecondType>(array)
+                .unary::<_, Time32SecondType>(|x| x / MILLISECONDS as i32),
+        )),
+        (Time32(TimeUnit::Millisecond), Time64(TimeUnit::Microsecond)) => Ok(Arc::new(
+            as_primitive_array::<Time32MillisecondType>(array)
+                .unary::<_, Time64MicrosecondType>(|x| {
+                    x as i64 * (MICROSECONDS / MILLISECONDS)
+                }),
+        )),
+        (Time32(TimeUnit::Millisecond), Time64(TimeUnit::Nanosecond)) => Ok(Arc::new(
+            as_primitive_array::<Time32MillisecondType>(array)
+                .unary::<_, Time64NanosecondType>(|x| {
+                    x as i64 * (MICROSECONDS / NANOSECONDS)
+                }),
+        )),
 
-            let values = unary::<_, _, Time32SecondType>(time_array, |x| {
-                x / (MILLISECONDS as i32)
-            });
+        (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Second)) => Ok(Arc::new(
+            as_primitive_array::<Time64MicrosecondType>(array)
+                .unary::<_, Time32SecondType>(|x| (x / MICROSECONDS) as i32),
+        )),
+        (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Millisecond)) => Ok(Arc::new(
+            as_primitive_array::<Time64MicrosecondType>(array)
+                .unary::<_, Time32MillisecondType>(|x| {
+                    (x / (MICROSECONDS / MILLISECONDS)) as i32
+                }),
+        )),
+        (Time64(TimeUnit::Microsecond), Time64(TimeUnit::Nanosecond)) => Ok(Arc::new(
+            as_primitive_array::<Time64MicrosecondType>(array)
+                .unary::<_, Time64NanosecondType>(|x| x * (NANOSECONDS / MICROSECONDS)),
+        )),
 
-            Ok(Arc::new(values) as ArrayRef)
-        }
-        //(Time32(TimeUnit::Second), Time64(_)) => {},
-        (Time32(from_unit), Time64(to_unit)) => {
-            let time_array = Int32Array::from(array.data().clone());
-            // note: (numeric_cast + SIMD multiply) is faster than (cast & multiply)
-            let c: Int64Array = numeric_cast(&time_array);
-            let from_size = time_unit_multiple(from_unit);
-            let to_size = time_unit_multiple(to_unit);
-            // from is only smaller than to if 64milli/64second don't exist
-            let mult = Int64Array::from(vec![to_size / from_size; array.len()]);
-            let converted = multiply(&c, &mult)?;
-            let array_ref = Arc::new(converted) as ArrayRef;
-            use TimeUnit::*;
-            match to_unit {
-                Microsecond => cast_array_data::<TimestampMicrosecondType>(
-                    &array_ref,
-                    to_type.clone(),
-                ),
-                Nanosecond => cast_array_data::<TimestampNanosecondType>(
-                    &array_ref,
-                    to_type.clone(),
-                ),
-                _ => unreachable!("array type not supported"),
-            }
-        }
-        (Time64(TimeUnit::Microsecond), Time64(TimeUnit::Nanosecond)) => {
-            let time_array = array
-                .as_any()
-                .downcast_ref::<Time64MicrosecondArray>()
-                .unwrap();
+        (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Second)) => Ok(Arc::new(
+            as_primitive_array::<Time64NanosecondType>(array)
+                .unary::<_, Time32SecondType>(|x| (x / NANOSECONDS) as i32),
+        )),
+        (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Millisecond)) => Ok(Arc::new(
+            as_primitive_array::<Time64NanosecondType>(array)
+                .unary::<_, Time32MillisecondType>(|x| {
+                    (x / (NANOSECONDS / MILLISECONDS)) as i32
+                }),
+        )),
+        (Time64(TimeUnit::Nanosecond), Time64(TimeUnit::Microsecond)) => Ok(Arc::new(
+            as_primitive_array::<Time64NanosecondType>(array)
+                .unary::<_, Time64MicrosecondType>(|x| x / (NANOSECONDS / MICROSECONDS)),
+        )),
 
-            let values =
-                unary::<_, _, Time64NanosecondType>(time_array, |x| x * MILLISECONDS);
-            Ok(Arc::new(values) as ArrayRef)
+        (Timestamp(TimeUnit::Second, _), Int64) => {
+            cast_reinterpret_arrays::<TimestampSecondType, Int64Type>(array)
         }
-        (Time64(TimeUnit::Nanosecond), Time64(TimeUnit::Microsecond)) => {
-            let time_array = array
-                .as_any()
-                .downcast_ref::<Time64NanosecondArray>()
-                .unwrap();
+        (Timestamp(TimeUnit::Millisecond, _), Int64) => {
+            cast_reinterpret_arrays::<TimestampMillisecondType, Int64Type>(array)
+        }
+        (Timestamp(TimeUnit::Microsecond, _), Int64) => {
+            cast_reinterpret_arrays::<TimestampMicrosecondType, Int64Type>(array)
+        }
+        (Timestamp(TimeUnit::Nanosecond, _), Int64) => {
+            cast_reinterpret_arrays::<TimestampNanosecondType, Int64Type>(array)
+        }
 
-            let values =
-                unary::<_, _, Time64MicrosecondType>(time_array, |x| x / MILLISECONDS);
-            Ok(Arc::new(values) as ArrayRef)
+        (Int64, Timestamp(TimeUnit::Second, _)) => {
+            cast_reinterpret_arrays::<Int64Type, TimestampSecondType>(array)
         }
-        (Time64(from_unit), Time32(to_unit)) => {
-            let time_array = Int64Array::from(array.data().clone());
-            let from_size = time_unit_multiple(from_unit);
-            let to_size = time_unit_multiple(to_unit);
-            let divisor = from_size / to_size;
-            match to_unit {
-                TimeUnit::Second => {
-                    let values = unary::<_, _, Time32SecondType>(&time_array, |x| {
-                        (x as i64 / divisor) as i32
-                    });
-                    Ok(Arc::new(values) as ArrayRef)
-                }
-                TimeUnit::Millisecond => {
-                    let values = unary::<_, _, Time32MillisecondType>(&time_array, |x| {
-                        (x as i64 / divisor) as i32
-                    });
-                    Ok(Arc::new(values) as ArrayRef)
-                }
-                _ => unreachable!("array type not supported"),
-            }
+        (Int64, Timestamp(TimeUnit::Millisecond, _)) => {
+            cast_reinterpret_arrays::<Int64Type, TimestampMillisecondType>(array)
         }
-        (Timestamp(_, _), Int64) => cast_array_data::<Int64Type>(array, to_type.clone()),
-        (Int64, Timestamp(to_unit, _)) => {
-            use TimeUnit::*;
-            match to_unit {
-                Second => cast_array_data::<TimestampSecondType>(array, to_type.clone()),
-                Millisecond => {
-                    cast_array_data::<TimestampMillisecondType>(array, to_type.clone())
-                }
-                Microsecond => {
-                    cast_array_data::<TimestampMicrosecondType>(array, to_type.clone())
-                }
-                Nanosecond => {
-                    cast_array_data::<TimestampNanosecondType>(array, to_type.clone())
-                }
-            }
+        (Int64, Timestamp(TimeUnit::Microsecond, _)) => {
+            cast_reinterpret_arrays::<Int64Type, TimestampMicrosecondType>(array)
         }
+        (Int64, Timestamp(TimeUnit::Nanosecond, _)) => {
+            cast_reinterpret_arrays::<Int64Type, TimestampNanosecondType>(array)
+        }
+
         (Timestamp(from_unit, _), Timestamp(to_unit, _)) => {
             let time_array = Int64Array::from(array.data().clone());
             let from_size = time_unit_multiple(from_unit);
@@ -1329,29 +1299,22 @@ pub fn cast_with_options(
             let converted = if from_size >= to_size {
                 divide_scalar(&time_array, from_size / to_size)?
             } else {
-                multiply(
-                    &time_array,
-                    &Int64Array::from(vec![to_size / from_size; array.len()]),
-                )?
+                multiply_scalar(&time_array, to_size / from_size)?
             };
-            let array_ref = Arc::new(converted) as ArrayRef;
             use TimeUnit::*;
             match to_unit {
-                Second => {
-                    cast_array_data::<TimestampSecondType>(&array_ref, to_type.clone())
-                }
-                Millisecond => cast_array_data::<TimestampMillisecondType>(
-                    &array_ref,
-                    to_type.clone(),
-                ),
-                Microsecond => cast_array_data::<TimestampMicrosecondType>(
-                    &array_ref,
-                    to_type.clone(),
-                ),
-                Nanosecond => cast_array_data::<TimestampNanosecondType>(
-                    &array_ref,
-                    to_type.clone(),
-                ),
+                Second => Ok(Arc::new(
+                    converted.reinterpret_cast::<TimestampSecondType>(),
+                )),
+                Millisecond => Ok(Arc::new(
+                    converted.reinterpret_cast::<TimestampMillisecondType>(),
+                )),
+                Microsecond => Ok(Arc::new(
+                    converted.reinterpret_cast::<TimestampMicrosecondType>(),
+                )),
+                Nanosecond => Ok(Arc::new(
+                    converted.reinterpret_cast::<TimestampNanosecondType>(),
+                )),
             }
         }
         (Timestamp(from_unit, _), Date32) => {
@@ -1371,80 +1334,61 @@ pub fn cast_with_options(
 
             Ok(Arc::new(b.finish()) as ArrayRef)
         }
-        (Timestamp(from_unit, _), Date64) => {
-            let from_size = time_unit_multiple(from_unit);
-            let to_size = MILLISECONDS;
-
-            // Scale time_array by (to_size / from_size) using a
-            // single integer operation, but need to avoid integer
-            // math rounding down to zero
-
-            match to_size.cmp(&from_size) {
-                std::cmp::Ordering::Less => {
-                    let time_array = Date64Array::from(array.data().clone());
-                    Ok(Arc::new(divide(
-                        &time_array,
-                        &Date64Array::from(vec![from_size / to_size; array.len()]),
-                    )?) as ArrayRef)
-                }
-                std::cmp::Ordering::Equal => {
-                    cast_array_data::<Date64Type>(array, to_type.clone())
-                }
-                std::cmp::Ordering::Greater => {
-                    let time_array = Date64Array::from(array.data().clone());
-                    Ok(Arc::new(multiply(
-                        &time_array,
-                        &Date64Array::from(vec![to_size / from_size; array.len()]),
-                    )?) as ArrayRef)
-                }
-            }
+        (Timestamp(TimeUnit::Second, _), Date64) => Ok(Arc::new(
+            as_primitive_array::<TimestampSecondType>(array)
+                .unary::<_, Date64Type>(|x| x * MILLISECONDS),
+        )),
+        (Timestamp(TimeUnit::Millisecond, _), Date64) => {
+            cast_reinterpret_arrays::<TimestampMillisecondType, Date64Type>(array)
         }
+        (Timestamp(TimeUnit::Microsecond, _), Date64) => Ok(Arc::new(
+            as_primitive_array::<TimestampMicrosecondType>(array)
+                .unary::<_, Date64Type>(|x| x / (MICROSECONDS / MILLISECONDS)),
+        )),
+        (Timestamp(TimeUnit::Nanosecond, _), Date64) => Ok(Arc::new(
+            as_primitive_array::<TimestampNanosecondType>(array)
+                .unary::<_, Date64Type>(|x| x / (NANOSECONDS / MILLISECONDS)),
+        )),
+
         // date64 to timestamp might not make sense,
-        (Int64, Duration(to_unit)) => {
-            use TimeUnit::*;
-            match to_unit {
-                Second => cast_array_data::<DurationSecondType>(array, to_type.clone()),
-                Millisecond => {
-                    cast_array_data::<DurationMillisecondType>(array, to_type.clone())
-                }
-                Microsecond => {
-                    cast_array_data::<DurationMicrosecondType>(array, to_type.clone())
-                }
-                Nanosecond => {
-                    cast_array_data::<DurationNanosecondType>(array, to_type.clone())
-                }
-            }
+        (Int64, Duration(TimeUnit::Second)) => {
+            cast_reinterpret_arrays::<Int64Type, DurationSecondType>(array)
         }
-        (Duration(_), Int64) => cast_array_data::<Int64Type>(array, to_type.clone()),
-        (Interval(from_type), Int64) => match from_type {
-            IntervalUnit::YearMonth => cast_numeric_arrays::<
-                IntervalYearMonthType,
-                Int64Type,
-            >(array, cast_options),
-            IntervalUnit::DayTime => cast_array_data::<Int64Type>(array, to_type.clone()),
-            IntervalUnit::MonthDayNano => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
-            ))),
-        },
-        (Int32, Interval(to_type)) => match to_type {
-            IntervalUnit::YearMonth => {
-                cast_array_data::<IntervalYearMonthType>(array, Interval(to_type.clone()))
-            }
-            _ => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
-            ))),
-        },
-        (Int64, Interval(to_type)) => match to_type {
-            IntervalUnit::DayTime => {
-                cast_array_data::<IntervalDayTimeType>(array, Interval(to_type.clone()))
-            }
-            _ => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
-            ))),
-        },
+        (Int64, Duration(TimeUnit::Millisecond)) => {
+            cast_reinterpret_arrays::<Int64Type, DurationMillisecondType>(array)
+        }
+        (Int64, Duration(TimeUnit::Microsecond)) => {
+            cast_reinterpret_arrays::<Int64Type, DurationMicrosecondType>(array)
+        }
+        (Int64, Duration(TimeUnit::Nanosecond)) => {
+            cast_reinterpret_arrays::<Int64Type, DurationNanosecondType>(array)
+        }
+
+        (Duration(TimeUnit::Second), Int64) => {
+            cast_reinterpret_arrays::<DurationSecondType, Int64Type>(array)
+        }
+        (Duration(TimeUnit::Millisecond), Int64) => {
+            cast_reinterpret_arrays::<DurationMillisecondType, Int64Type>(array)
+        }
+        (Duration(TimeUnit::Microsecond), Int64) => {
+            cast_reinterpret_arrays::<DurationMicrosecondType, Int64Type>(array)
+        }
+        (Duration(TimeUnit::Nanosecond), Int64) => {
+            cast_reinterpret_arrays::<DurationNanosecondType, Int64Type>(array)
+        }
+
+        (Interval(IntervalUnit::YearMonth), Int64) => {
+            cast_numeric_arrays::<IntervalYearMonthType, Int64Type>(array, cast_options)
+        }
+        (Interval(IntervalUnit::DayTime), Int64) => {
+            cast_reinterpret_arrays::<IntervalDayTimeType, Int64Type>(array)
+        }
+        (Int32, Interval(IntervalUnit::YearMonth)) => {
+            cast_reinterpret_arrays::<Int32Type, IntervalYearMonthType>(array)
+        }
+        (Int64, Interval(IntervalUnit::DayTime)) => {
+            cast_reinterpret_arrays::<Int64Type, IntervalDayTimeType>(array)
+        }
         (_, _) => Err(ArrowError::CastError(format!(
             "Casting from {:?} to {:?} not supported",
             from_type, to_type,
@@ -1617,33 +1561,6 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
     }
 }
 
-/// Cast an array by changing its array_data type to the desired type
-///
-/// Arrays should have the same primitive data type, otherwise this should fail.
-/// We do not perform this check on primitive data types as we only use this
-/// function internally, where it is guaranteed to be infallible.
-fn cast_array_data<TO>(array: &ArrayRef, to_type: DataType) -> Result<ArrayRef>
-where
-    TO: ArrowNumericType,
-{
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            to_type,
-            array.len(),
-            Some(array.null_count()),
-            array
-                .data()
-                .null_bitmap()
-                .cloned()
-                .map(|bitmap| bitmap.into_buffer()),
-            array.data().offset(),
-            array.data().buffers().to_vec(),
-            vec![],
-        )
-    };
-    Ok(Arc::new(PrimitiveArray::<TO>::from(data)) as ArrayRef)
-}
-
 /// Convert Array into a PrimitiveArray of type, and apply numeric cast
 fn cast_numeric_arrays<FROM, TO>(
     from: &ArrayRef,
@@ -1652,8 +1569,8 @@ fn cast_numeric_arrays<FROM, TO>(
 where
     FROM: ArrowNumericType,
     TO: ArrowNumericType,
-    FROM::Native: num::NumCast,
-    TO::Native: num::NumCast,
+    FROM::Native: NumCast,
+    TO::Native: NumCast,
 {
     if cast_options.safe {
         // If the value can't be casted to the `TO::Native`, return null
@@ -1678,8 +1595,8 @@ fn try_numeric_cast<T, R>(from: &PrimitiveArray<T>) -> Result<PrimitiveArray<R>>
 where
     T: ArrowNumericType,
     R: ArrowNumericType,
-    T::Native: num::NumCast,
-    R::Native: num::NumCast,
+    T::Native: NumCast,
+    R::Native: NumCast,
 {
     try_unary(from, |value| {
         num::cast::cast::<T::Native, R::Native>(value).ok_or_else(|| {
@@ -1698,8 +1615,8 @@ fn numeric_cast<T, R>(from: &PrimitiveArray<T>) -> PrimitiveArray<R>
 where
     T: ArrowNumericType,
     R: ArrowNumericType,
-    T::Native: num::NumCast,
-    R::Native: num::NumCast,
+    T::Native: NumCast,
+    R::Native: NumCast,
 {
     let iter = from
         .iter()
