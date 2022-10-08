@@ -66,17 +66,11 @@ pub enum Index {
 impl Index {
     /// Return min/max elements inside ColumnIndex are ordered or not.
     pub fn is_sorted(&self) -> bool {
-        match self {
-            Index::NONE => false,
-            Index::BOOLEAN(x) => check_boundary_is_ordered(&x.boundary_order),
-            Index::INT32(x) => check_boundary_is_ordered(&x.boundary_order),
-            Index::INT64(x) => check_boundary_is_ordered(&x.boundary_order),
-            Index::INT96(x) => check_boundary_is_ordered(&x.boundary_order),
-            Index::FLOAT(x) => check_boundary_is_ordered(&x.boundary_order),
-            Index::DOUBLE(x) => check_boundary_is_ordered(&x.boundary_order),
-            Index::BYTE_ARRAY(x) | Index::FIXED_LEN_BYTE_ARRAY(x) => {
-                check_boundary_is_ordered(&x.boundary_order)
-            }
+        // 0:UNORDERED, 1:ASCENDING ,2:DESCENDING,
+        if let Some(order) = self.get_boundary_order() {
+            order.0 > (BoundaryOrder::UNORDERED.0)
+        } else {
+            false
         }
     }
 
@@ -94,11 +88,6 @@ impl Index {
             Index::FIXED_LEN_BYTE_ARRAY(index) => Some(index.boundary_order),
         }
     }
-}
-
-fn check_boundary_is_ordered(b: &BoundaryOrder) -> bool {
-    // 0:UNORDERED, 1:ASCENDING ,2:DESCENDING,
-    b.0 > (BoundaryOrder::UNORDERED.0)
 }
 
 /// An index of a column of [`Type`] physical representation
