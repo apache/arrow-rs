@@ -660,22 +660,15 @@ where
     T: ArrowPrimitiveType,
     T::Native: num::Num,
 {
-    let filtered_keys = filter_primitive::<T>(array.keys(), predicate);
-    let filtered_data = filtered_keys.data_ref();
+    let builder = filter_primitive::<T>(array.keys(), predicate)
+        .into_data()
+        .into_builder()
+        .data_type(array.data_type().clone())
+        .child_data(array.data().child_data().to_vec());
 
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            array.data_type().clone(),
-            filtered_data.len(),
-            Some(filtered_data.null_count()),
-            filtered_data.null_buffer().cloned(),
-            filtered_data.offset(),
-            filtered_data.buffers().to_vec(),
-            array.data().child_data().to_vec(),
-        )
-    };
-
-    DictionaryArray::from(data)
+    // SAFETY:
+    // Keys were valid before, filtered subset is therefore still valid
+    DictionaryArray::from(unsafe { builder.build_unchecked() })
 }
 
 #[cfg(test)]
