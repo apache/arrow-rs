@@ -1674,7 +1674,7 @@ fn extract_component_from_datatime_array<
 >(
     iter: ArrayIter<A>,
     mut builder: GenericStringBuilder<OffsetSize>,
-    tz: &String,
+    tz: &str,
     mut parsed: Parsed,
     op: F,
 ) -> Result<ArrayRef>
@@ -1689,7 +1689,7 @@ where
             "Expected format [+-]XX:XX".to_string()
         )
     } else {
-        let tz_parse_result = parse(&mut parsed, &tz, StrftimeItems::new("%z"));
+        let tz_parse_result = parse(&mut parsed, tz, StrftimeItems::new("%z"));
         let fixed_offset_from_parsed = match tz_parse_result {
             Ok(_) => match parsed.to_fixed_offset() {
                 Ok(fo) => Some(fo),
@@ -1698,14 +1698,14 @@ where
             _ => None,
         };
 
-        for value in iter.into_iter() {
+        for value in iter {
             if let Some(value) = value {
                 match as_datetime::<T>(<i64 as From<_>>::from(value)) {
                     Some(utc) => {
                         let fixed_offset = match fixed_offset_from_parsed {
                             Some(fo) => fo,
                             None => {
-                                match using_chrono_tz_and_utc_naive_date_time(&tz, utc) {
+                                match using_chrono_tz_and_utc_naive_date_time(tz, utc) {
                                     Some(fo) => fo,
                                     err => return_compute_error_with!(
                                         "Unable to parse timezone",
@@ -1749,23 +1749,21 @@ where
         // After applying timezone offset on the datatime, calling `to_string` to get
         // the strings.
         let iter = ArrayIter::new(array);
-        return Ok(
-            extract_component_from_datatime_array::<_, OffsetSize, T, _>(
-                iter,
-                builder,
-                tz,
-                scratch,
-                |t| t.to_string(),
-            )?,
-        );
+        extract_component_from_datatime_array::<_, OffsetSize, T, _>(
+            iter,
+            builder,
+            tz,
+            scratch,
+            |t| t.to_string(),
+        )
     } else {
         // No timezone available. Calling `to_string` on the datatime value simply.
         let iter = ArrayIter::new(array);
-        return Ok(as_time_with_string_op::<_, OffsetSize, T, _>(
+        Ok(as_time_with_string_op::<_, OffsetSize, T, _>(
             iter,
             builder,
             |t| t.to_string(),
-        ));
+        ))
     }
 }
 

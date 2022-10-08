@@ -81,7 +81,7 @@ fn extract_component_from_datatime_array<
 >(
     iter: ArrayIter<A>,
     mut builder: PrimitiveBuilder<Int32Type>,
-    tz: &String,
+    tz: &str,
     mut parsed: Parsed,
     op: F,
 ) -> Result<Int32Array>
@@ -95,7 +95,7 @@ where
             "Expected format [+-]XX:XX".to_string()
         )
     } else {
-        let tz_parse_result = parse(&mut parsed, &tz, StrftimeItems::new("%z"));
+        let tz_parse_result = parse(&mut parsed, tz, StrftimeItems::new("%z"));
         let fixed_offset_from_parsed = match tz_parse_result {
             Ok(_) => match parsed.to_fixed_offset() {
                 Ok(fo) => Some(fo),
@@ -104,14 +104,14 @@ where
             _ => None,
         };
 
-        for value in iter.into_iter() {
+        for value in iter {
             if let Some(value) = value {
                 match as_datetime::<T>(i64::from(value)) {
                     Some(utc) => {
                         let fixed_offset = match fixed_offset_from_parsed {
                             Some(fo) => fo,
                             None => {
-                                match using_chrono_tz_and_utc_naive_date_time(&tz, utc) {
+                                match using_chrono_tz_and_utc_naive_date_time(tz, utc) {
                                     Some(fo) => fo,
                                     err => return_compute_error_with!(
                                         "Unable to parse timezone",
@@ -237,22 +237,18 @@ where
     match dt {
         DataType::Time32(_) | DataType::Time64(_) => {
             let iter = ArrayIter::new(array);
-            return Ok(as_time_with_op::<A, T, _>(iter, b, |t| t.hour() as i32));
+            Ok(as_time_with_op::<A, T, _>(iter, b, |t| t.hour() as i32))
         }
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            return Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| t.hour() as i32));
+            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| t.hour() as i32))
         }
         DataType::Timestamp(_, Some(tz)) => {
             let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            return Ok(extract_component_from_datatime_array::<A, T, _>(
-                iter,
-                b,
-                tz,
-                scratch,
-                |t| t.hour() as i32,
-            )?);
+            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+                t.hour() as i32
+            })
         }
         _ => return_compute_error_with!("hour does not support", array.data_type()),
     }
@@ -294,7 +290,7 @@ where
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
             let b = Int32Builder::with_capacity(array.len());
             let iter = ArrayIter::new(array);
-            return Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| t.year()));
+            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| t.year()))
         }
         _t => return_compute_error_with!("year does not support", array.data_type()),
     }
@@ -340,20 +336,16 @@ where
     match dt {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            return Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
+            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
                 t.quarter() as i32
-            }));
+            }))
         }
         DataType::Timestamp(_, Some(tz)) => {
             let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            return Ok(extract_component_from_datatime_array::<A, T, _>(
-                iter,
-                b,
-                tz,
-                scratch,
-                |t| t.quarter() as i32,
-            )?);
+            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+                t.quarter() as i32
+            })
         }
         _ => return_compute_error_with!("quarter does not support", array.data_type()),
     }
@@ -398,20 +390,16 @@ where
     match dt {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            return Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
+            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
                 t.month() as i32
-            }));
+            }))
         }
         DataType::Timestamp(_, Some(tz)) => {
             let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            return Ok(extract_component_from_datatime_array::<A, T, _>(
-                iter,
-                b,
-                tz,
-                scratch,
-                |t| t.month() as i32,
-            )?);
+            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+                t.month() as i32
+            })
         }
         _ => return_compute_error_with!("month does not support", array.data_type()),
     }
@@ -470,20 +458,16 @@ where
     match dt {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            return Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
+            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
                 t.num_days_from_monday()
-            }));
+            }))
         }
         DataType::Timestamp(_, Some(tz)) => {
             let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            return Ok(extract_component_from_datatime_array::<A, T, _>(
-                iter,
-                b,
-                tz,
-                scratch,
-                |t| t.num_days_from_monday(),
-            )?);
+            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+                t.num_days_from_monday()
+            })
         }
         _ => return_compute_error_with!("weekday does not support", array.data_type()),
     }
@@ -542,20 +526,16 @@ where
     match dt {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            return Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
+            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
                 t.num_days_from_sunday()
-            }));
+            }))
         }
         DataType::Timestamp(_, Some(tz)) => {
             let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            return Ok(extract_component_from_datatime_array::<A, T, _>(
-                iter,
-                b,
-                tz,
-                scratch,
-                |t| t.num_days_from_sunday(),
-            )?);
+            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+                t.num_days_from_sunday()
+            })
         }
         _ => return_compute_error_with!(
             "num_days_from_sunday does not support",
@@ -600,18 +580,14 @@ where
     match dt {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            return Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| t.day() as i32));
+            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| t.day() as i32))
         }
         DataType::Timestamp(_, Some(ref tz)) => {
             let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            return Ok(extract_component_from_datatime_array::<A, T, _>(
-                iter,
-                b,
-                tz,
-                scratch,
-                |t| t.day() as i32,
-            )?);
+            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+                t.day() as i32
+            })
         }
         _ => return_compute_error_with!("day does not support", array.data_type()),
     }
@@ -657,20 +633,16 @@ where
     match dt {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            return Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
+            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
                 t.ordinal() as i32
-            }));
+            }))
         }
         DataType::Timestamp(_, Some(ref tz)) => {
             let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            return Ok(extract_component_from_datatime_array::<A, T, _>(
-                iter,
-                b,
-                tz,
-                scratch,
-                |t| t.ordinal() as i32,
-            )?);
+            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+                t.ordinal() as i32
+            })
         }
         _ => return_compute_error_with!("doy does not support", array.data_type()),
     }
@@ -714,20 +686,16 @@ where
     match dt {
         DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            return Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
+            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
                 t.minute() as i32
-            }));
+            }))
         }
         DataType::Timestamp(_, Some(tz)) => {
             let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            return Ok(extract_component_from_datatime_array::<A, T, _>(
-                iter,
-                b,
-                tz,
-                scratch,
-                |t| t.minute() as i32,
-            )?);
+            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+                t.minute() as i32
+            })
         }
         _ => return_compute_error_with!("minute does not support", array.data_type()),
     }
@@ -769,9 +737,9 @@ where
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let b = Int32Builder::with_capacity(array.len());
             let iter = ArrayIter::new(array);
-            return Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
+            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
                 t.iso_week().week() as i32
-            }));
+            }))
         }
         _ => return_compute_error_with!("week does not support", array.data_type()),
     }
@@ -815,20 +783,16 @@ where
     match dt {
         DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            return Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
+            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
                 t.second() as i32
-            }));
+            }))
         }
         DataType::Timestamp(_, Some(tz)) => {
             let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            return Ok(extract_component_from_datatime_array::<A, T, _>(
-                iter,
-                b,
-                tz,
-                scratch,
-                |t| t.second() as i32,
-            )?);
+            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+                t.second() as i32
+            })
         }
         _ => return_compute_error_with!("second does not support", array.data_type()),
     }
