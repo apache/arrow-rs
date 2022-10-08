@@ -1325,6 +1325,7 @@ mod tests {
         let row_group_metadata = metadata.row_group(0);
 
         //col0->id: INT32 UNCOMPRESSED DO:0 FPO:4 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 7299, num_nulls: 0]
+        assert!(!&page_indexes[0][0].is_sorted());
         if let Index::INT32(index) = &page_indexes[0][0] {
             check_native_page_index(
                 index,
@@ -1337,6 +1338,7 @@ mod tests {
             unreachable!()
         };
         //col1->bool_col:BOOLEAN UNCOMPRESSED DO:0 FPO:37329 SZ:3022/3022/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: false, max: true, num_nulls: 0]
+        assert!(&page_indexes[0][1].is_sorted());
         if let Index::BOOLEAN(index) = &page_indexes[0][1] {
             assert_eq!(index.indexes.len(), 82);
             assert_eq!(row_group_offset_indexes[1].len(), 82);
@@ -1344,6 +1346,7 @@ mod tests {
             unreachable!()
         };
         //col2->tinyint_col: INT32 UNCOMPRESSED DO:0 FPO:40351 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
+        assert!(&page_indexes[0][2].is_sorted());
         if let Index::INT32(index) = &page_indexes[0][2] {
             check_native_page_index(
                 index,
@@ -1356,6 +1359,7 @@ mod tests {
             unreachable!()
         };
         //col4->smallint_col: INT32 UNCOMPRESSED DO:0 FPO:77676 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
+        assert!(&page_indexes[0][3].is_sorted());
         if let Index::INT32(index) = &page_indexes[0][3] {
             check_native_page_index(
                 index,
@@ -1368,6 +1372,7 @@ mod tests {
             unreachable!()
         };
         //col5->smallint_col: INT32 UNCOMPRESSED DO:0 FPO:77676 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
+        assert!(&page_indexes[0][4].is_sorted());
         if let Index::INT32(index) = &page_indexes[0][4] {
             check_native_page_index(
                 index,
@@ -1380,6 +1385,7 @@ mod tests {
             unreachable!()
         };
         //col6->bigint_col: INT64 UNCOMPRESSED DO:0 FPO:152326 SZ:71598/71598/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 90, num_nulls: 0]
+        assert!(!&page_indexes[0][5].is_sorted());
         if let Index::INT64(index) = &page_indexes[0][5] {
             check_native_page_index(
                 index,
@@ -1392,6 +1398,7 @@ mod tests {
             unreachable!()
         };
         //col7->float_col: FLOAT UNCOMPRESSED DO:0 FPO:223924 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: -0.0, max: 9.9, num_nulls: 0]
+        assert!(&page_indexes[0][6].is_sorted());
         if let Index::FLOAT(index) = &page_indexes[0][6] {
             check_native_page_index(
                 index,
@@ -1404,6 +1411,7 @@ mod tests {
             unreachable!()
         };
         //col8->double_col: DOUBLE UNCOMPRESSED DO:0 FPO:261249 SZ:71598/71598/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: -0.0, max: 90.89999999999999, num_nulls: 0]
+        assert!(!&page_indexes[0][7].is_sorted());
         if let Index::DOUBLE(index) = &page_indexes[0][7] {
             check_native_page_index(
                 index,
@@ -1416,6 +1424,7 @@ mod tests {
             unreachable!()
         };
         //col9->date_string_col: BINARY UNCOMPRESSED DO:0 FPO:332847 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 01/01/09, max: 12/31/10, num_nulls: 0]
+        assert!(!&page_indexes[0][8].is_sorted());
         if let Index::BYTE_ARRAY(index) = &page_indexes[0][8] {
             check_bytes_page_index(
                 index,
@@ -1428,6 +1437,7 @@ mod tests {
             unreachable!()
         };
         //col10->string_col: BINARY UNCOMPRESSED DO:0 FPO:444795 SZ:45298/45298/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
+        assert!(&page_indexes[0][9].is_sorted());
         if let Index::BYTE_ARRAY(index) = &page_indexes[0][9] {
             check_bytes_page_index(
                 index,
@@ -1441,12 +1451,14 @@ mod tests {
         };
         //col11->timestamp_col: INT96 UNCOMPRESSED DO:0 FPO:490093 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[num_nulls: 0, min/max not defined]
         //Notice: min_max values for each page for this col not exits.
+        assert!(!&page_indexes[0][10].is_sorted());
         if let Index::NONE = &page_indexes[0][10] {
             assert_eq!(row_group_offset_indexes[10].len(), 974);
         } else {
             unreachable!()
         };
         //col12->year: INT32 UNCOMPRESSED DO:0 FPO:602041 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 2009, max: 2010, num_nulls: 0]
+        assert!(&page_indexes[0][11].is_sorted());
         if let Index::INT32(index) = &page_indexes[0][11] {
             check_native_page_index(
                 index,
@@ -1459,6 +1471,7 @@ mod tests {
             unreachable!()
         };
         //col13->month: INT32 UNCOMPRESSED DO:0 FPO:639366 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 1, max: 12, num_nulls: 0]
+        assert!(!&page_indexes[0][12].is_sorted());
         if let Index::INT32(index) = &page_indexes[0][12] {
             check_native_page_index(
                 index,
