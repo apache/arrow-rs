@@ -1326,6 +1326,9 @@ mod tests {
 
         //col0->id: INT32 UNCOMPRESSED DO:0 FPO:4 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 7299, num_nulls: 0]
         assert!(!&page_indexes[0][0].is_sorted());
+        let boundary_order = &page_indexes[0][0].get_boundary_order();
+        assert!(boundary_order.is_some());
+        matches!(boundary_order.unwrap(), BoundaryOrder::UNORDERED);
         if let Index::INT32(index) = &page_indexes[0][0] {
             check_native_page_index(
                 index,

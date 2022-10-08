@@ -21,7 +21,6 @@ use crate::data_type::Int96;
 use crate::errors::ParquetError;
 use crate::format::{BoundaryOrder, ColumnIndex};
 use crate::util::bit_util::from_le_slice;
-use arrow::datatypes::ArrowNativeTypeOp;
 use std::fmt::Debug;
 
 /// The statistics in one page
@@ -80,11 +79,26 @@ impl Index {
             }
         }
     }
+
+    /// Get boundary_order of this page index.
+    pub fn get_boundary_order(&self) -> Option<BoundaryOrder> {
+        match self {
+            Index::NONE => None,
+            Index::BOOLEAN(index) => Some(index.boundary_order),
+            Index::INT32(index) => Some(index.boundary_order),
+            Index::INT64(index) => Some(index.boundary_order),
+            Index::INT96(index) => Some(index.boundary_order),
+            Index::FLOAT(index) => Some(index.boundary_order),
+            Index::DOUBLE(index) => Some(index.boundary_order),
+            Index::BYTE_ARRAY(index) => Some(index.boundary_order),
+            Index::FIXED_LEN_BYTE_ARRAY(index) => Some(index.boundary_order),
+        }
+    }
 }
 
 fn check_boundary_is_ordered(b: &BoundaryOrder) -> bool {
     // 0:UNORDERED, 1:ASCENDING ,2:DESCENDING,
-    b.0.is_gt(BoundaryOrder::UNORDERED.0)
+    b.0 > (BoundaryOrder::UNORDERED.0)
 }
 
 /// An index of a column of [`Type`] physical representation
