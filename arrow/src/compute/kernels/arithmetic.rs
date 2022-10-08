@@ -22,9 +22,7 @@
 //! `RUSTFLAGS="-C target-feature=+avx2"` for example.  See the documentation
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 
-use std::ops::{Div, Neg};
-
-use num::{One, Zero};
+use std::ops::Neg;
 
 use crate::array::*;
 #[cfg(feature = "simd")]
@@ -107,7 +105,6 @@ fn math_checked_divide_op<LT, RT, F>(
 where
     LT: ArrowNumericType,
     RT: ArrowNumericType,
-    RT::Native: One + Zero,
     F: Fn(LT::Native, RT::Native) -> Result<LT::Native>,
 {
     try_binary(left, right, op)
@@ -131,7 +128,6 @@ fn math_checked_divide_op_on_iters<T, F>(
 ) -> Result<PrimitiveArray<T>>
 where
     T: ArrowNumericType,
-    T::Native: One + Zero,
     F: Fn(T::Native, T::Native) -> Result<T::Native>,
 {
     let buffer = if null_bit_buffer.is_some() {
@@ -182,10 +178,10 @@ fn simd_checked_modulus<T: ArrowNumericType>(
     right: T::Simd,
 ) -> Result<T::Simd>
 where
-    T::Native: ArrowNativeTypeOp + One,
+    T::Native: ArrowNativeTypeOp,
 {
-    let zero = T::init(T::Native::zero());
-    let one = T::init(T::Native::one());
+    let zero = T::init(T::Native::ZERO);
+    let one = T::init(T::Native::ONE);
 
     let right_no_invalid_zeros = match valid_mask {
         Some(mask) => {
@@ -219,10 +215,10 @@ fn simd_checked_divide<T: ArrowNumericType>(
     right: T::Simd,
 ) -> Result<T::Simd>
 where
-    T::Native: One + Zero,
+    T::Native: ArrowNativeTypeOp,
 {
-    let zero = T::init(T::Native::zero());
-    let one = T::init(T::Native::one());
+    let zero = T::init(T::Native::ZERO);
+    let one = T::init(T::Native::ONE);
 
     let right_no_invalid_zeros = match valid_mask {
         Some(mask) => {
@@ -260,7 +256,7 @@ fn simd_checked_divide_op_remainder<T, F>(
 ) -> Result<()>
 where
     T: ArrowNumericType,
-    T::Native: Zero,
+    T::Native: ArrowNativeTypeOp,
     F: Fn(T::Native, T::Native) -> T::Native,
 {
     let result_remainder = result_chunks.into_remainder();
@@ -273,7 +269,7 @@ where
         .enumerate()
         .try_for_each(|(i, (result_scalar, (left_scalar, right_scalar)))| {
             if valid_mask.map(|mask| mask & (1 << i) != 0).unwrap_or(true) {
-                if *right_scalar == T::Native::zero() {
+                if right_scalar.is_zero() {
                     return Err(ArrowError::DivideByZero);
                 }
                 *result_scalar = op(*left_scalar, *right_scalar);
@@ -648,7 +644,6 @@ fn math_divide_checked_op_dict<K, T, F>(
 where
     K: ArrowNumericType,
     T: ArrowNumericType,
-    T::Native: One + Zero,
     F: Fn(T::Native, T::Native) -> Result<T::Native>,
 {
     if left.len() != right.len() {
@@ -702,7 +697,6 @@ fn math_divide_safe_op_dict<K, T, F>(
 where
     K: ArrowNumericType,
     T: ArrowNumericType,
-    T::Native: One + Zero,
     F: Fn(T::Native, T::Native) -> Option<T::Native>,
 {
     let left = left.downcast_dict::<PrimitiveArray<T>>().unwrap();
@@ -719,7 +713,6 @@ fn math_safe_divide_op<LT, RT, F>(
 where
     LT: ArrowNumericType,
     RT: ArrowNumericType,
-    RT::Native: One + Zero,
     F: Fn(LT::Native, RT::Native) -> Option<LT::Native>,
 {
     let array: PrimitiveArray<LT> = binary_opt::<_, _, _, LT>(left, right, op)?;
@@ -1068,8 +1061,8 @@ pub fn subtract_scalar<T>(
     scalar: T::Native,
 ) -> Result<PrimitiveArray<T>>
 where
-    T: datatypes::ArrowNumericType,
-    T::Native: ArrowNativeTypeOp + Zero,
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
     Ok(unary(array, |value| value.sub_wrapping(scalar)))
 }
@@ -1085,7 +1078,7 @@ pub fn subtract_scalar_checked<T>(
 ) -> Result<PrimitiveArray<T>>
 where
     T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp + Zero,
+    T::Native: ArrowNativeTypeOp,
 {
     try_unary(array, |value| value.sub_checked(scalar))
 }
@@ -1125,7 +1118,7 @@ where
 /// Perform `-` operation on an array. If value is null then the result is also null.
 pub fn negate<T>(array: &PrimitiveArray<T>) -> Result<PrimitiveArray<T>>
 where
-    T: datatypes::ArrowNumericType,
+    T: ArrowNumericType,
     T::Native: Neg<Output = T::Native>,
 {
     Ok(unary(array, |x| -x))
@@ -1239,7 +1232,7 @@ pub fn multiply_scalar<T>(
 ) -> Result<PrimitiveArray<T>>
 where
     T: datatypes::ArrowNumericType,
-    T::Native: ArrowNativeTypeOp + Zero + One,
+    T::Native: ArrowNativeTypeOp,
 {
     Ok(unary(array, |value| value.mul_wrapping(scalar)))
 }
@@ -1255,7 +1248,7 @@ pub fn multiply_scalar_checked<T>(
 ) -> Result<PrimitiveArray<T>>
 where
     T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp + Zero + One,
+    T::Native: ArrowNativeTypeOp,
 {
     try_unary(array, |value| value.mul_checked(scalar))
 }
@@ -1301,11 +1294,11 @@ pub fn modulus<T>(
 ) -> Result<PrimitiveArray<T>>
 where
     T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp + One,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_checked_divide_op(&left, &right, simd_checked_modulus::<T>, |a, b| {
-        a % b
+        a.mod_wrapping(b)
     });
     #[cfg(not(feature = "simd"))]
     return try_binary(left, right, |a, b| {
@@ -1328,11 +1321,13 @@ pub fn divide_checked<T>(
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
-    T: datatypes::ArrowNumericType,
-    T::Native: ArrowNativeTypeOp + Zero + One,
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
-    return simd_checked_divide_op(&left, &right, simd_checked_divide::<T>, |a, b| a / b);
+    return simd_checked_divide_op(&left, &right, simd_checked_divide::<T>, |a, b| {
+        a.div_wrapping(b)
+    });
     #[cfg(not(feature = "simd"))]
     return math_checked_divide_op(left, right, |a, b| a.div_checked(b));
 }
@@ -1343,16 +1338,21 @@ where
 /// If any right hand value is zero, the operation value will be replaced with null in the
 /// result.
 ///
-/// Unlike `divide` or `divide_checked`, division by zero will get a null value instead
-/// returning an `Err`, this also doesn't check overflowing, overflowing will just wrap
-/// the result around.
+/// Unlike [`divide`] or [`divide_checked`], division by zero will yield a null value in the
+/// result instead of returning an `Err`.
+///
+/// For floating point types overflow will saturate at INF or -INF
+/// preserving the expected sign value.
+///
+/// For integer types overflow will wrap around.
+///
 pub fn divide_opt<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>>
 where
     T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp + Zero + One,
+    T::Native: ArrowNativeTypeOp,
 {
     binary_opt(left, right, |a, b| {
         if b.is_zero() {
@@ -1480,12 +1480,16 @@ pub fn divide_dyn_opt(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
     }
 }
 
-/// Perform `left / right` operation on two arrays without checking for division by zero.
-/// For floating point types, the result of dividing by zero follows normal floating point
-/// rules. For other numeric types, dividing by zero will panic,
-/// If either left or right value is null then the result is also null. If any right hand value is zero then the result of this
+/// Perform `left / right` operation on two arrays without checking for
+/// division by zero or overflow.
 ///
-/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For floating point types, overflow and division by zero follows normal floating point rules
+///
+/// For integer types overflow will wrap around. Division by zero will currently panic, although
+/// this may be subject to change see <https://github.com/apache/arrow-rs/issues/2647>
+///
+/// If either left or right value is null then the result is also null.
+///
 /// For an overflow-checking variant, use `divide_checked` instead.
 pub fn divide<T>(
     left: &PrimitiveArray<T>,
@@ -1495,6 +1499,8 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
+    // TODO: This is incorrect as div_wrapping has side-effects for integer types
+    // and so may panic on null values (#2647)
     math_op(left, right, |a, b| a.div_wrapping(b))
 }
 
@@ -1525,12 +1531,12 @@ pub fn divide_scalar<T>(
 ) -> Result<PrimitiveArray<T>>
 where
     T: ArrowNumericType,
-    T::Native: Div<Output = T::Native> + Zero,
+    T::Native: ArrowNativeTypeOp,
 {
     if divisor.is_zero() {
         return Err(ArrowError::DivideByZero);
     }
-    Ok(unary(array, |a| a / divisor))
+    Ok(unary(array, |a| a.div_wrapping(divisor)))
 }
 
 /// Divide every value in an array by a scalar. If any value in the array is null then the
@@ -1543,7 +1549,7 @@ where
 pub fn divide_scalar_dyn<T>(array: &dyn Array, divisor: T::Native) -> Result<ArrayRef>
 where
     T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp + Zero,
+    T::Native: ArrowNativeTypeOp,
 {
     if divisor.is_zero() {
         return Err(ArrowError::DivideByZero);
@@ -1564,7 +1570,7 @@ pub fn divide_scalar_checked_dyn<T>(
 ) -> Result<ArrayRef>
 where
     T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp + Zero,
+    T::Native: ArrowNativeTypeOp,
 {
     if divisor.is_zero() {
         return Err(ArrowError::DivideByZero);
@@ -1587,7 +1593,7 @@ where
 pub fn divide_scalar_opt_dyn<T>(array: &dyn Array, divisor: T::Native) -> Result<ArrayRef>
 where
     T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp + Zero,
+    T::Native: ArrowNativeTypeOp,
 {
     if divisor.is_zero() {
         match array.data_type() {
@@ -2139,21 +2145,11 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "simd"))]
     fn test_int_array_modulus_overflow_wrapping() {
         let a = Int32Array::from(vec![i32::MIN]);
         let b = Int32Array::from(vec![-1]);
         let result = modulus(&a, &b).unwrap();
         assert_eq!(0, result.value(0))
-    }
-
-    #[test]
-    #[cfg(feature = "simd")]
-    #[should_panic(expected = "attempt to calculate the remainder with overflow")]
-    fn test_int_array_modulus_overflow_panic() {
-        let a = Int32Array::from(vec![i32::MIN]);
-        let b = Int32Array::from(vec![-1]);
-        let _ = modulus(&a, &b).unwrap();
     }
 
     #[test]
