@@ -1114,10 +1114,16 @@ mod tests {
         let schema =
             Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
-        let mut builder = StringBuilder::with_capacity(10_000, 2 * 10_000);
+        let mut builder = StringBuilder::with_capacity(100, 329 * 10_000);
 
-        for i in 0..10_000 {
-            let value = i.to_string().repeat(100);
+        // Generate an array of 10 unique 10 character string
+        for i in 0..10 {
+            let value = i
+                .to_string()
+                .repeat(10)
+                .chars()
+                .take(10)
+                .collect::<String>();
 
             builder.append_value(value);
         }
@@ -1128,9 +1134,11 @@ mod tests {
 
         let file = tempfile::tempfile().unwrap();
 
+        // Set everything very low so we fallback to PLAIN encoding after the first row
         let props = WriterProperties::builder()
-            .set_max_row_group_size(usize::MAX)
-            .set_data_pagesize_limit(256)
+            .set_data_pagesize_limit(1)
+            .set_dictionary_pagesize_limit(1)
+            .set_write_batch_size(1)
             .build();
 
         let mut writer =
@@ -1143,13 +1151,24 @@ mod tests {
 
         let column = reader.metadata().row_group(0).columns();
 
+        assert_eq!(column.len(), 1);
+
+        // We should write one row before falling back to PLAIN encoding so there should still be a
+        // dictionary page.
+        assert!(
+            column[0].dictionary_page_offset().is_some(),
+            "Expected a dictionary page"
+        );
+
         let page_locations = read_pages_locations(&file, column).unwrap();
 
         let offset_index = page_locations[0].clone();
 
+        // We should fallback to PLAIN encoding after the first row and our max page size is 1 bytes
+        // so we expect one dictionary encoded page and then a page per row thereafter.
         assert_eq!(
             offset_index.len(),
-            8,
+            10,
             "Expected 9 pages but got {:#?}",
             offset_index
         );
