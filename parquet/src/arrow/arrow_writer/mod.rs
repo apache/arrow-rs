@@ -609,6 +609,7 @@ mod tests {
     use super::*;
 
     use bytes::Bytes;
+    use rand::{thread_rng, Rng};
     use std::fs::File;
     use std::sync::Arc;
 
@@ -624,6 +625,7 @@ mod tests {
 
     use crate::basic::Encoding;
     use crate::file::metadata::ParquetMetaData;
+    use crate::file::page_index::index_reader::read_pages_locations;
     use crate::file::properties::WriterVersion;
     use crate::file::{
         reader::{FileReader, SerializedFileReader},
@@ -1106,6 +1108,55 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 
         roundtrip(batch, Some(SMALL_SIZE / 2));
+    }
+
+    #[test]
+    fn arrow_writer_page_size() {
+        let mut rng = thread_rng();
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+
+        let mut builder = StringBuilder::with_capacity(1_000, 2 * 1_000);
+
+        for _ in 0..10_000 {
+            let value = (0..200)
+                .map(|_| rng.gen_range(b'a'..=b'z') as char)
+                .collect::<String>();
+
+            builder.append_value(value);
+        }
+
+        let array = Arc::new(builder.finish());
+
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let file = tempfile::tempfile().unwrap();
+
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(usize::MAX)
+            .set_data_pagesize_limit(256)
+            .build();
+
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), Some(props))
+                .expect("Unable to write file");
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let reader = SerializedFileReader::new(file.try_clone().unwrap()).unwrap();
+
+        let column = reader.metadata().row_group(0).columns();
+
+        let page_locations = read_pages_locations(&file, column).unwrap();
+
+        let offset_index = page_locations[0].clone();
+
+        assert_eq!(
+            offset_index.len(),
+            5,
+            "Expected more than two pages but got {:#?}",
+            offset_index
+        );
     }
 
     const SMALL_SIZE: usize = 7;
