@@ -609,7 +609,6 @@ mod tests {
     use super::*;
 
     use bytes::Bytes;
-    use rand::{thread_rng, Rng};
     use std::fs::File;
     use std::sync::Arc;
 
@@ -1112,16 +1111,13 @@ mod tests {
 
     #[test]
     fn arrow_writer_page_size() {
-        let mut rng = thread_rng();
         let schema =
             Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
-        let mut builder = StringBuilder::with_capacity(1_000, 2 * 1_000);
+        let mut builder = StringBuilder::with_capacity(10_000, 2 * 10_000);
 
-        for _ in 0..10_000 {
-            let value = (0..200)
-                .map(|_| rng.gen_range(b'a'..=b'z') as char)
-                .collect::<String>();
+        for i in 0..10_000 {
+            let value = i.to_string().repeat(100);
 
             builder.append_value(value);
         }
@@ -1153,8 +1149,8 @@ mod tests {
 
         assert_eq!(
             offset_index.len(),
-            5,
-            "Expected more than two pages but got {:#?}",
+            8,
+            "Expected 9 pages but got {:#?}",
             offset_index
         );
     }
