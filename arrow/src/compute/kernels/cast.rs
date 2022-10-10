@@ -1322,7 +1322,7 @@ pub fn cast_with_options(
             let converted = if from_size >= to_size {
                 divide_scalar(time_array, from_size / to_size)?
             } else {
-                multiply_scalar(&time_array, to_size / from_size)?
+                multiply_scalar(time_array, to_size / from_size)?
             };
             Ok(make_timestamp_array(
                 &converted,
