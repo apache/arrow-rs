@@ -769,11 +769,16 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
 
     /// Construct a timestamp array with new timezone
     pub fn with_timezone(&self, timezone: String) -> Self {
+        self.with_timezone_opt(Some(timezone))
+    }
+
+    /// Construct a timestamp array with an optional timezone
+    pub fn with_timezone_opt(&self, timezone: Option<String>) -> Self {
         let array_data = unsafe {
             self.data
                 .clone()
                 .into_builder()
-                .data_type(DataType::Timestamp(T::get_time_unit(), Some(timezone)))
+                .data_type(DataType::Timestamp(T::get_time_unit(), timezone))
                 .build_unchecked()
         };
         PrimitiveArray::from(array_data)

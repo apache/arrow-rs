@@ -391,9 +391,8 @@ where
 mod simd {
     use super::is_nan;
     use crate::array::{Array, PrimitiveArray};
-    use crate::datatypes::ArrowNumericType;
+    use crate::datatypes::{ArrowNativeTypeOp, ArrowNumericType};
     use std::marker::PhantomData;
-    use std::ops::Add;
 
     pub(super) trait SimdAggregate<T: ArrowNumericType> {
         type ScalarAccumulator;
@@ -434,7 +433,7 @@ mod simd {
 
     impl<T: ArrowNumericType> SimdAggregate<T> for SumAggregate<T>
     where
-        T::Native: Add<Output = T::Native>,
+        T::Native: ArrowNativeTypeOp,
     {
         type ScalarAccumulator = T::Native;
         type SimdAccumulator = T::Simd;
@@ -463,7 +462,7 @@ mod simd {
         }
 
         fn accumulate_scalar(accumulator: &mut T::Native, value: T::Native) {
-            *accumulator = *accumulator + value
+            *accumulator = accumulator.add_wrapping(value)
         }
 
         fn reduce(
@@ -738,7 +737,7 @@ mod simd {
 #[cfg(feature = "simd")]
 pub fn sum<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
-    T::Native: Add<Output = T::Native>,
+    T::Native: ArrowNativeTypeOp,
 {
     use simd::*;
 
