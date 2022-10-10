@@ -551,7 +551,10 @@ where
 
     match &mut encoder.dict_encoder {
         Some(dict_encoder) => dict_encoder.encode(values, indices),
-        None => encoder.fallback.encode(values, indices),
+        None => {
+            encoder.num_values += indices.len();
+            encoder.fallback.encode(values, indices)
+        }
     }
 }
 
