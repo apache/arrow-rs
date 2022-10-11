@@ -38,7 +38,6 @@
 use chrono::format::strftime::StrftimeItems;
 use chrono::format::{parse, Parsed};
 use chrono::Timelike;
-use std::ops::{Div, Mul};
 use std::str;
 use std::sync::Arc;
 
@@ -59,8 +58,9 @@ use crate::{
     buffer::Buffer, util::display::array_value_to_string,
     util::serialization::lexical_to_string,
 };
+use arrow_buffer::i256;
 use num::cast::AsPrimitive;
-use num::{BigInt, NumCast, ToPrimitive};
+use num::{NumCast, ToPrimitive};
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug)]
@@ -387,7 +387,7 @@ macro_rules! cast_decimal_to_integer {
             if array.is_null(i) {
                 value_builder.append_null();
             } else {
-                let v = array.value(i).as_i128() / div;
+                let v = array.value(i) / div;
                 // check the overflow
                 // For example: Decimal(128,10,0) as i8
                 // 128 is out of range i8
@@ -417,7 +417,7 @@ macro_rules! cast_decimal_to_float {
             } else {
                 // The range of f32 or f64 is larger than i128, we don't need to check overflow.
                 // cast the i128 to f64 will lose precision, for example the `112345678901234568` will be as `112345678901234560`.
-                let v = (array.value(i).as_i128() as f64 / div) as $NATIVE_TYPE;
+                let v = (array.value(i) as f64 / div) as $NATIVE_TYPE;
                 value_builder.append_value(v);
             }
         }
@@ -1466,7 +1466,7 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
         let div = 10_i128.pow((input_scale - output_scale) as u32);
         if BYTE_WIDTH1 == 16 {
             let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
-            let iter = array.iter().map(|v| v.map(|v| v.as_i128() / div));
+            let iter = array.iter().map(|v| v.map(|v| v.wrapping_div(div)));
             if BYTE_WIDTH2 == 16 {
                 let output_array = iter
                     .collect::<Decimal128Array>()
@@ -1475,7 +1475,7 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
                 Ok(Arc::new(output_array))
             } else {
                 let output_array = iter
-                    .map(|v| v.map(BigInt::from))
+                    .map(|v| v.map(i256::from_i128))
                     .collect::<Decimal256Array>()
                     .with_precision_and_scale(*output_precision, *output_scale)?;
 
@@ -1483,7 +1483,8 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
             }
         } else {
             let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
-            let iter = array.iter().map(|v| v.map(|v| v.to_big_int().div(div)));
+            let div = i256::from_i128(div);
+            let iter = array.iter().map(|v| v.map(|v| v.wrapping_div(div)));
             if BYTE_WIDTH2 == 16 {
                 let values = iter
                     .map(|v| {
@@ -1521,7 +1522,7 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
         let mul = 10_i128.pow((output_scale - input_scale) as u32);
         if BYTE_WIDTH1 == 16 {
             let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
-            let iter = array.iter().map(|v| v.map(|v| v.as_i128() * mul));
+            let iter = array.iter().map(|v| v.map(|v| v.wrapping_mul(mul)));
             if BYTE_WIDTH2 == 16 {
                 let output_array = iter
                     .collect::<Decimal128Array>()
@@ -1530,7 +1531,7 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
                 Ok(Arc::new(output_array))
             } else {
                 let output_array = iter
-                    .map(|v| v.map(BigInt::from))
+                    .map(|v| v.map(i256::from_i128))
                     .collect::<Decimal256Array>()
                     .with_precision_and_scale(*output_precision, *output_scale)?;
 
@@ -1538,7 +1539,8 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
             }
         } else {
             let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
-            let iter = array.iter().map(|v| v.map(|v| v.to_big_int().mul(mul)));
+            let mul = i256::from_i128(mul);
+            let iter = array.iter().map(|v| v.map(|v| v.wrapping_mul(mul)));
             if BYTE_WIDTH2 == 16 {
                 let values = iter
                     .map(|v| {
@@ -2741,7 +2743,6 @@ where
 mod tests {
     use super::*;
     use crate::datatypes::TimeUnit;
-    use crate::util::decimal::{Decimal128, Decimal256};
     use crate::{buffer::Buffer, util::display::array_value_to_string};
 
     macro_rules! generate_cast_test_case {
@@ -2781,7 +2782,7 @@ mod tests {
     }
 
     fn create_decimal256_array(
-        array: Vec<Option<BigInt>>,
+        array: Vec<Option<i256>>,
         precision: u8,
         scale: u8,
     ) -> Result<Decimal256Array> {
@@ -2804,9 +2805,9 @@ mod tests {
             Decimal128Array,
             &output_type,
             vec![
-                Some(Decimal128::new_from_i128(20, 4, 11234560_i128)),
-                Some(Decimal128::new_from_i128(20, 4, 21234560_i128)),
-                Some(Decimal128::new_from_i128(20, 4, 31234560_i128)),
+                Some(11234560_i128),
+                Some(21234560_i128),
+                Some(31234560_i128),
                 None
             ]
         );
@@ -2833,18 +2834,9 @@ mod tests {
             Decimal256Array,
             &output_type,
             vec![
-                Some(
-                    Decimal256::from_big_int(&BigInt::from(11234560_i128), 20, 4)
-                        .unwrap()
-                ),
-                Some(
-                    Decimal256::from_big_int(&BigInt::from(21234560_i128), 20, 4)
-                        .unwrap()
-                ),
-                Some(
-                    Decimal256::from_big_int(&BigInt::from(31234560_i128), 20, 4)
-                        .unwrap()
-                ),
+                Some(i256::from_i128(11234560_i128)),
+                Some(i256::from_i128(21234560_i128)),
+                Some(i256::from_i128(31234560_i128)),
                 None
             ]
         );
@@ -2856,9 +2848,9 @@ mod tests {
         let output_type = DataType::Decimal128(20, 4);
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![
-            Some(BigInt::from(1123456)),
-            Some(BigInt::from(2123456)),
-            Some(BigInt::from(3123456)),
+            Some(i256::from_i128(1123456)),
+            Some(i256::from_i128(2123456)),
+            Some(i256::from_i128(3123456)),
             None,
         ];
         let input_decimal_array = create_decimal256_array(array, 20, 3).unwrap();
@@ -2868,9 +2860,9 @@ mod tests {
             Decimal128Array,
             &output_type,
             vec![
-                Some(Decimal128::new_from_i128(20, 4, 11234560_i128)),
-                Some(Decimal128::new_from_i128(20, 4, 21234560_i128)),
-                Some(Decimal128::new_from_i128(20, 4, 31234560_i128)),
+                Some(11234560_i128),
+                Some(21234560_i128),
+                Some(31234560_i128),
                 None
             ]
         );
@@ -2882,9 +2874,9 @@ mod tests {
         let output_type = DataType::Decimal256(20, 4);
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![
-            Some(BigInt::from(1123456)),
-            Some(BigInt::from(2123456)),
-            Some(BigInt::from(3123456)),
+            Some(i256::from_i128(1123456)),
+            Some(i256::from_i128(2123456)),
+            Some(i256::from_i128(3123456)),
             None,
         ];
         let input_decimal_array = create_decimal256_array(array, 20, 3).unwrap();
@@ -2894,18 +2886,9 @@ mod tests {
             Decimal256Array,
             &output_type,
             vec![
-                Some(
-                    Decimal256::from_big_int(&BigInt::from(11234560_i128), 20, 4)
-                        .unwrap()
-                ),
-                Some(
-                    Decimal256::from_big_int(&BigInt::from(21234560_i128), 20, 4)
-                        .unwrap()
-                ),
-                Some(
-                    Decimal256::from_big_int(&BigInt::from(31234560_i128), 20, 4)
-                        .unwrap()
-                ),
+                Some(i256::from_i128(11234560_i128)),
+                Some(i256::from_i128(21234560_i128)),
+                Some(i256::from_i128(31234560_i128)),
                 None
             ]
         );
@@ -3074,11 +3057,11 @@ mod tests {
                 Decimal128Array,
                 &decimal_type,
                 vec![
-                    Some(Decimal128::new_from_i128(38, 6, 1000000_i128)),
-                    Some(Decimal128::new_from_i128(38, 6, 2000000_i128)),
-                    Some(Decimal128::new_from_i128(38, 6, 3000000_i128)),
+                    Some(1000000_i128),
+                    Some(2000000_i128),
+                    Some(3000000_i128),
                     None,
-                    Some(Decimal128::new_from_i128(38, 6, 5000000_i128))
+                    Some(5000000_i128)
                 ]
             );
         }
@@ -3106,12 +3089,12 @@ mod tests {
             Decimal128Array,
             &decimal_type,
             vec![
-                Some(Decimal128::new_from_i128(38, 6, 1100000_i128)),
-                Some(Decimal128::new_from_i128(38, 6, 2200000_i128)),
-                Some(Decimal128::new_from_i128(38, 6, 4400000_i128)),
+                Some(1100000_i128),
+                Some(2200000_i128),
+                Some(4400000_i128),
                 None,
-                Some(Decimal128::new_from_i128(38, 6, 1123456_i128)),
-                Some(Decimal128::new_from_i128(38, 6, 1123456_i128)),
+                Some(1123456_i128),
+                Some(1123456_i128),
             ]
         );
 
@@ -3131,13 +3114,13 @@ mod tests {
             Decimal128Array,
             &decimal_type,
             vec![
-                Some(Decimal128::new_from_i128(38, 6, 1100000_i128)),
-                Some(Decimal128::new_from_i128(38, 6, 2200000_i128)),
-                Some(Decimal128::new_from_i128(38, 6, 4400000_i128)),
+                Some(1100000_i128),
+                Some(2200000_i128),
+                Some(4400000_i128),
                 None,
-                Some(Decimal128::new_from_i128(38, 6, 1123456_i128)),
-                Some(Decimal128::new_from_i128(38, 6, 1123456_i128)),
-                Some(Decimal128::new_from_i128(38, 6, 1123456_i128)),
+                Some(1123456_i128),
+                Some(1123456_i128),
+                Some(1123456_i128),
             ]
         );
     }

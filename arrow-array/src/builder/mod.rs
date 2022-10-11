@@ -24,8 +24,6 @@ mod boolean_builder;
 pub use boolean_builder::*;
 mod buffer_builder;
 pub use buffer_builder::*;
-mod decimal_builder;
-pub use decimal_builder::*;
 mod fixed_size_binary_builder;
 pub use fixed_size_binary_builder::*;
 mod fixed_size_list_builder;

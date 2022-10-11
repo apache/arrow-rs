@@ -20,7 +20,7 @@ use crate::compute::SortOptions;
 use crate::datatypes::ArrowPrimitiveType;
 use crate::row::{null_sentinel, Rows};
 use arrow_array::types::DecimalType;
-use arrow_array::{BooleanArray, DecimalArray};
+use arrow_array::BooleanArray;
 use arrow_buffer::{bit_util, MutableBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
@@ -355,12 +355,12 @@ fn decode_fixed<T: FixedLengthEncoding + ToByteSlice>(
 }
 
 /// Decodes a `DecimalArray` from rows
-pub fn decode_decimal<const N: usize, T: DecimalType>(
+pub fn decode_decimal<const N: usize, T: DecimalType + ArrowPrimitiveType>(
     rows: &mut [&[u8]],
     options: SortOptions,
     precision: u8,
     scale: u8,
-) -> DecimalArray<T> {
+) -> PrimitiveArray<T> {
     decode_fixed::<RawDecimal<N>>(rows, T::TYPE_CONSTRUCTOR(precision, scale), options)
         .into()
 }

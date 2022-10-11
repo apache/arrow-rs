@@ -18,6 +18,7 @@
 //! Decimal related utilities, types and functions
 
 use crate::types::{Decimal128Type, Decimal256Type, DecimalType};
+use arrow_buffer::i256;
 use arrow_data::decimal::{DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
 use arrow_schema::{ArrowError, DataType};
 use num::{BigInt, Signed};
@@ -33,7 +34,7 @@ use std::cmp::{min, Ordering};
 pub struct Decimal<T: DecimalType> {
     precision: u8,
     scale: u8,
-    value: T::Native,
+    value: T::DecimalNative,
 }
 
 /// Manually implement to avoid `T: Debug` bound
@@ -76,7 +77,7 @@ impl<T: DecimalType> Decimal<T> {
     pub fn try_new_from_bytes(
         precision: u8,
         scale: u8,
-        bytes: &T::Native,
+        bytes: &T::DecimalNative,
     ) -> Result<Self, ArrowError>
     where
         Self: Sized,
@@ -111,15 +112,16 @@ impl<T: DecimalType> Decimal<T> {
     /// Safety:
     /// This method doesn't check if the precision and scale are valid.
     /// Use `try_new_from_bytes` for safe constructor.
-    pub fn new(precision: u8, scale: u8, bytes: &T::Native) -> Self {
+    pub fn new(precision: u8, scale: u8, bytes: &T::DecimalNative) -> Self {
         Self {
             precision,
             scale,
             value: *bytes,
         }
     }
+
     /// Returns the raw bytes of the integer representation of the decimal.
-    pub fn raw_value(&self) -> &T::Native {
+    pub fn raw_value(&self) -> &T::DecimalNative {
         &self.value
     }
 
@@ -243,6 +245,10 @@ impl Decimal256 {
         let num_bytes = &num.to_signed_bytes_le();
         bytes[0..num_bytes.len()].clone_from_slice(num_bytes);
         Decimal256::try_new_from_bytes(precision, scale, &bytes)
+    }
+
+    pub fn from_i256(precision: u8, scale: u8, value: i256) -> Self {
+        Decimal256::new(precision, scale, &value.to_le_bytes())
     }
 
     /// Constructs a `BigInt` from this `Decimal256` value.

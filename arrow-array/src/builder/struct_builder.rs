@@ -109,9 +109,9 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::FixedSizeBinary(len) => {
             Box::new(FixedSizeBinaryBuilder::with_capacity(capacity, *len))
         }
-        DataType::Decimal128(precision, scale) => Box::new(
-            Decimal128Builder::with_capacity(capacity, *precision, *scale),
-        ),
+        DataType::Decimal128(_precision, _scale) => {
+            Box::new(Decimal128Builder::with_capacity(capacity))
+        }
         DataType::Utf8 => Box::new(StringBuilder::with_capacity(capacity, 1024)),
         DataType::Date32 => Box::new(Date32Builder::with_capacity(capacity)),
         DataType::Date64 => Box::new(Date64Builder::with_capacity(capacity)),

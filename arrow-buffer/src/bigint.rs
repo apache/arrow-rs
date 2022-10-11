@@ -86,6 +86,16 @@ impl i256 {
         }
     }
 
+    pub fn from_i128(v: i128) -> Self {
+        let mut bytes = if num::Signed::is_negative(&v) {
+            [255_u8; 32]
+        } else {
+            [0; 32]
+        };
+        bytes[0..16].copy_from_slice(&v.to_le_bytes());
+        Self::from_le_bytes(bytes)
+    }
+
     /// Create an i256 from the provided low u128 and high i128
     #[inline]
     pub fn from_parts(low: u128, high: i128) -> Self {

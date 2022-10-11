@@ -21,10 +21,11 @@ use crate::array::ArrowPrimitiveType;
 use crate::delta::shift_months;
 use arrow_buffer::i256;
 use arrow_data::decimal::{
+    validate_decimal256_precision_with_lt_bytes, validate_decimal_precision,
     DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
     DECIMAL256_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
 };
-use arrow_schema::{DataType, IntervalUnit, TimeUnit};
+use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use chrono::{Duration, NaiveDate};
 use half::f16;
 use std::ops::{Add, Sub};
@@ -491,14 +492,23 @@ impl<const N: usize> NativeDecimalType for [u8; N] {
 /// [`DecimalArray`]: [crate::array::DecimalArray]
 /// [`Decimal128Array`]: [crate::array::Decimal128Array]
 /// [`Decimal256Array`]: [crate::array::Decimal256Array]
-pub trait DecimalType: 'static + Send + Sync + private::DecimalTypeSealed {
-    type Native: NativeDecimalType;
+pub trait DecimalType:
+    'static + Send + Sync + ArrowPrimitiveType + private::DecimalTypeSealed
+{
+    type DecimalNative: NativeDecimalType;
 
     const BYTE_LENGTH: usize;
     const MAX_PRECISION: u8;
     const MAX_SCALE: u8;
     const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType;
     const DEFAULT_TYPE: DataType;
+
+    fn to_native(num: <Self as ArrowPrimitiveType>::Native) -> Self::DecimalNative;
+
+    fn validate_decimal_precision(
+        num: <Self as ArrowPrimitiveType>::Native,
+        precision: u8,
+    ) -> Result<(), ArrowError>;
 }
 
 /// The decimal type for a Decimal128Array
@@ -506,7 +516,7 @@ pub trait DecimalType: 'static + Send + Sync + private::DecimalTypeSealed {
 pub struct Decimal128Type {}
 
 impl DecimalType for Decimal128Type {
-    type Native = [u8; 16];
+    type DecimalNative = [u8; 16];
 
     const BYTE_LENGTH: usize = 16;
     const MAX_PRECISION: u8 = DECIMAL128_MAX_PRECISION;
@@ -514,6 +524,14 @@ impl DecimalType for Decimal128Type {
     const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType = DataType::Decimal128;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
+
+    fn to_native(num: i128) -> [u8; 16] {
+        num.to_le_bytes()
+    }
+
+    fn validate_decimal_precision(num: i128, precision: u8) -> Result<(), ArrowError> {
+        validate_decimal_precision(num, precision)
+    }
 }
 
 impl ArrowPrimitiveType for Decimal128Type {
@@ -527,7 +545,7 @@ impl ArrowPrimitiveType for Decimal128Type {
 pub struct Decimal256Type {}
 
 impl DecimalType for Decimal256Type {
-    type Native = [u8; 32];
+    type DecimalNative = [u8; 32];
 
     const BYTE_LENGTH: usize = 32;
     const MAX_PRECISION: u8 = DECIMAL256_MAX_PRECISION;
@@ -535,6 +553,14 @@ impl DecimalType for Decimal256Type {
     const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType = DataType::Decimal256;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
+
+    fn to_native(num: i256) -> [u8; 32] {
+        num.to_le_bytes()
+    }
+
+    fn validate_decimal_precision(num: i256, precision: u8) -> Result<(), ArrowError> {
+        validate_decimal256_precision_with_lt_bytes(&num.to_le_bytes(), precision)
+    }
 }
 
 impl ArrowPrimitiveType for Decimal256Type {

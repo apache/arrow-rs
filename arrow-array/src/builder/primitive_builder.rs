@@ -52,6 +52,9 @@ pub type DurationMillisecondBuilder = PrimitiveBuilder<DurationMillisecondType>;
 pub type DurationMicrosecondBuilder = PrimitiveBuilder<DurationMicrosecondType>;
 pub type DurationNanosecondBuilder = PrimitiveBuilder<DurationNanosecondType>;
 
+pub type Decimal128Builder = PrimitiveBuilder<Decimal128Type>;
+pub type Decimal256Builder = PrimitiveBuilder<Decimal256Type>;
+
 ///  Array builder for fixed-width primitive types
 #[derive(Debug)]
 pub struct PrimitiveBuilder<T: ArrowPrimitiveType> {
