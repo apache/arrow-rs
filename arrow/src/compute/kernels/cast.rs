@@ -2793,6 +2793,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_cast_decimal128_to_decimal128() {
         let input_type = DataType::Decimal128(20, 3);
         let output_type = DataType::Decimal128(20, 4);
@@ -3018,6 +3019,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_cast_numeric_to_decimal() {
         // test negative cast type
         let decimal_type = DataType::Decimal128(38, 6);
