@@ -103,6 +103,7 @@ pub struct Writer<W: Write> {
     /// The datetime format for datetime arrays
     datetime_format: String,
     /// The timestamp format for timestamp arrays
+    #[allow(dead_code)]
     timestamp_format: String,
     /// The timestamp format for timestamp (with timezone) arrays
     #[allow(dead_code)]

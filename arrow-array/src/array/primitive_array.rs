@@ -786,7 +786,7 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
 }
 
 impl<T: ArrowTimestampType> PrimitiveArray<T> {
-    /// Construct a timestamp array from a vec of Option<i64> values and an optional timezone
+    /// Construct a timestamp array from a vec of `Option<i64>` values and an optional timezone
     pub fn from_opt_vec(data: Vec<Option<i64>>, timezone: Option<String>) -> Self {
         // TODO: duplicated from def_numeric_from_vec! macro, it looks possible to convert to generic
         let data_len = data.len();
