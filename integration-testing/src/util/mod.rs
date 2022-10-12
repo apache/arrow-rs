@@ -786,7 +786,7 @@ pub fn array_from_json(
                 ))),
             }
         }
-        DataType::Decimal128(precision, scale) => unsafe {
+        DataType::Decimal128(precision, scale) => {
             let mut b = Decimal128Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
@@ -801,11 +801,10 @@ pub fn array_from_json(
                 };
             }
             Ok(Arc::new(
-                b.finish()
-                    .unchecked_with_precision_and_scale(*precision, *scale)?,
+                b.finish().with_precision_and_scale(*precision, *scale)?,
             ))
-        },
-        DataType::Decimal256(precision, scale) => unsafe {
+        }
+        DataType::Decimal256(precision, scale) => {
             let mut b = Decimal256Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
@@ -832,10 +831,9 @@ pub fn array_from_json(
                 }
             }
             Ok(Arc::new(
-                b.finish()
-                    .unchecked_with_precision_and_scale(*precision, *scale)?,
+                b.finish().with_precision_and_scale(*precision, *scale)?,
             ))
-        },
+        }
         DataType::Map(child_field, _) => {
             let null_buf = create_null_buf(&json_col);
             let children = json_col.children.clone().unwrap();
