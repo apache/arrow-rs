@@ -976,6 +976,7 @@ mod tests {
                 .build()
                 .unwrap(),
         );
+        assert_eq!(string.len(), 0);
         assert_eq!(string.value_offsets(), &[0]);
     }
 }
