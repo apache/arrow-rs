@@ -1509,10 +1509,10 @@ mod tests {
             ]
         );
 
-        assert!(!schema.field(0).is_nullable());
+        assert!(schema.field(0).is_nullable());
         assert!(schema.field(1).is_nullable());
         assert!(schema.field(2).is_nullable());
-        assert!(!schema.field(3).is_nullable());
+        assert!(schema.field(3).is_nullable());
         assert!(schema.field(4).is_nullable());
         assert!(schema.field(5).is_nullable());
 
@@ -1793,10 +1793,10 @@ mod tests {
         )?;
 
         assert_eq!(schema.fields().len(), 4);
-        assert!(!schema.field(0).is_nullable());
+        assert!(schema.field(0).is_nullable());
         assert!(schema.field(1).is_nullable());
-        assert!(!schema.field(2).is_nullable());
-        assert!(!schema.field(3).is_nullable());
+        assert!(schema.field(2).is_nullable());
+        assert!(schema.field(3).is_nullable());
 
         assert_eq!(&DataType::Int64, schema.field(0).data_type());
         assert_eq!(&DataType::Utf8, schema.field(1).data_type());
