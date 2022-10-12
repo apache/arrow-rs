@@ -212,10 +212,10 @@ fn infer_reader_schema_with_csv_options<R: Read>(
         }
         records_count += 1;
 
-        for i in 0..header_length {
+        for (i, column_type) in column_types.iter_mut().enumerate().take(header_length) {
             if let Some(string) = record.get(i) {
                 if !string.is_empty() {
-                    column_types[i]
+                    column_type
                         .insert(infer_field_schema(string, roptions.datetime_re.clone()));
                 }
             }
