@@ -978,7 +978,7 @@ pub fn dictionary_array_from_json(
     }
 }
 
-/// A helper to create a null buffer from a Vec<bool>
+/// A helper to create a null buffer from a `Vec<bool>`
 fn create_null_buf(json_col: &ArrowJsonColumn) -> Buffer {
     let num_bytes = bit_util::ceil(json_col.count, 8);
     let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, false);

@@ -167,8 +167,8 @@ pub struct BadIterator<T> {
 }
 
 impl<T> BadIterator<T> {
-    /// Create a new iterator for <limit> items, but that reports to
-    /// produce <claimed> items. Must provide at least 1 item.
+    /// Create a new iterator for `<limit>` items, but that reports to
+    /// produce `<claimed>` items. Must provide at least 1 item.
     pub fn new(limit: usize, claimed: usize, items: Vec<T>) -> Self {
         assert!(!items.is_empty());
         Self {

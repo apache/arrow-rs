@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![allow(rustdoc::invalid_html_tags)]
+
 use arrow::datatypes::Schema;
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
@@ -27,6 +29,7 @@ use std::{
 };
 
 #[allow(clippy::derive_partial_eq_without_eq)]
+
 mod gen {
     include!("arrow.flight.protocol.rs");
 }
