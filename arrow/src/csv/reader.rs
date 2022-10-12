@@ -200,8 +200,6 @@ fn infer_reader_schema_with_csv_options<R: Read>(
     let header_length = headers.len();
     // keep track of inferred field types
     let mut column_types: Vec<HashSet<DataType>> = vec![HashSet::new(); header_length];
-    // keep track of columns with nulls
-    let mut nulls: Vec<bool> = vec![false; header_length];
 
     let mut records_count = 0;
     let mut fields = vec![];
@@ -216,9 +214,7 @@ fn infer_reader_schema_with_csv_options<R: Read>(
 
         for i in 0..header_length {
             if let Some(string) = record.get(i) {
-                if string.is_empty() {
-                    nulls[i] = true;
-                } else {
+                if !string.is_empty() {
                     column_types[i]
                         .insert(infer_field_schema(string, roptions.datetime_re.clone()));
                 }
@@ -229,7 +225,6 @@ fn infer_reader_schema_with_csv_options<R: Read>(
     // build schema from inference results
     for i in 0..header_length {
         let possibilities = &column_types[i];
-        let has_nulls = nulls[i];
         let field_name = &headers[i];
 
         // determine data type based on possible types
@@ -237,7 +232,7 @@ fn infer_reader_schema_with_csv_options<R: Read>(
         match possibilities.len() {
             1 => {
                 for dtype in possibilities.iter() {
-                    fields.push(Field::new(field_name, dtype.clone(), has_nulls));
+                    fields.push(Field::new(field_name, dtype.clone(), true));
                 }
             }
             2 => {
@@ -245,13 +240,13 @@ fn infer_reader_schema_with_csv_options<R: Read>(
                     && possibilities.contains(&DataType::Float64)
                 {
                     // we have an integer and double, fall down to double
-                    fields.push(Field::new(field_name, DataType::Float64, has_nulls));
+                    fields.push(Field::new(field_name, DataType::Float64, true));
                 } else {
                     // default to Utf8 for conflicting datatypes (e.g bool and int)
-                    fields.push(Field::new(field_name, DataType::Utf8, has_nulls));
+                    fields.push(Field::new(field_name, DataType::Utf8, true));
                 }
             }
-            _ => fields.push(Field::new(field_name, DataType::Utf8, has_nulls)),
+            _ => fields.push(Field::new(field_name, DataType::Utf8, true)),
         }
     }
 
@@ -1287,9 +1282,9 @@ mod tests {
 
         let mut csv = builder.build(file).unwrap();
         let expected_schema = Schema::new(vec![
-            Field::new("city", DataType::Utf8, false),
-            Field::new("lat", DataType::Float64, false),
-            Field::new("lng", DataType::Float64, false),
+            Field::new("city", DataType::Utf8, true),
+            Field::new("lat", DataType::Float64, true),
+            Field::new("lng", DataType::Float64, true),
         ]);
         assert_eq!(Arc::new(expected_schema), csv.schema());
         let batch = csv.next().unwrap().unwrap();
