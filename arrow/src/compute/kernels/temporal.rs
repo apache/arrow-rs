@@ -28,6 +28,9 @@ use chrono::format::strftime::StrftimeItems;
 use chrono::format::{parse, Parsed};
 use chrono::FixedOffset;
 
+/// This function takes an `ArrayIter` of input array and an extractor `op` which takes
+/// an input `NaiveTime` and returns time component (e.g. hour) as `i32` value.
+/// The extracted values are built by the given `builder` to be an `Int32Array`.
 fn as_time_with_op<A: ArrayAccessor<Item = T::Native>, T: ArrowTemporalType, F>(
     iter: ArrayIter<A>,
     mut builder: PrimitiveBuilder<Int32Type>,
@@ -51,6 +54,9 @@ where
     builder.finish()
 }
 
+/// This function takes an `ArrayIter` of input array and an extractor `op` which takes
+/// an input `NaiveDateTime` and returns data time component (e.g. hour) as `i32` value.
+/// The extracted values are built by the given `builder` to be an `Int32Array`.
 fn as_datetime_with_op<A: ArrayAccessor<Item = T::Native>, T: ArrowTemporalType, F>(
     iter: ArrayIter<A>,
     mut builder: PrimitiveBuilder<Int32Type>,
@@ -74,6 +80,13 @@ where
     builder.finish()
 }
 
+/// This function extracts date time component (e.g. hour) from an array of datatime.
+/// `iter` is the `ArrayIter` of input datatime array. `builder` is used to build the
+/// returned `Int32Array` containing the extracted components. `tz` is timezone string
+/// which will be added to datetime values in the input array. `parsed` is a `Parsed`
+/// object used to parse timezone string. `op` is the extractor closure which takes
+/// data time object of `NaiveDateTime` type and returns `i32` value of extracted
+/// component.
 fn extract_component_from_datatime_array<
     A: ArrayAccessor<Item = T::Native>,
     T: ArrowTemporalType,
