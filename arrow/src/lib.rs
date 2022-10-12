@@ -248,7 +248,7 @@
 
 #![deny(clippy::redundant_clone)]
 #![warn(missing_debug_implementations)]
-
+#![allow(rustdoc::invalid_html_tags)]
 pub use arrow_array::{downcast_dictionary_array, downcast_primitive_array};
 
 pub use arrow_buffer::{alloc, buffer};

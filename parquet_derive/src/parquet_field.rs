@@ -68,7 +68,7 @@ impl Field {
     ///
     /// struct Record {
     ///   a_bool: bool,
-    ///   maybe_a_bool: Option<bool>
+    ///   maybe_a_bool: `Option<bool>`
     /// }
     ///
     /// but not
@@ -355,9 +355,9 @@ impl Type {
     /// Helper to simplify a nested field definition to its leaf type
     ///
     /// Ex:
-    ///   Option<&String> => Type::TypePath(String)
-    ///   &Option<i32> => Type::TypePath(i32)
-    ///   Vec<Vec<u8>> => Type::Vec(u8)
+    ///   `Option<&String>` => Type::TypePath(String)
+    ///   `&Option<i32>` => Type::TypePath(i32)
+    ///   `Vec<Vec<u8>>` => Type::Vec(u8)
     ///
     /// Useful in determining the physical type of a field and the
     /// definition levels.
@@ -404,7 +404,7 @@ impl Type {
     ///
     /// Ex:
     ///   std::string::String => String
-    ///   Vec<u8> => Vec<u8>
+    ///   `Vec<u8>` => `Vec<u8>`
     ///   chrono::NaiveDateTime => NaiveDateTime
     ///
     /// Does run the risk of mis-identifying a type if import
@@ -427,7 +427,7 @@ impl Type {
     ///
     /// Ex:
     ///   [u8; 10] => FIXED_LEN_BYTE_ARRAY
-    ///   Vec<u8>  => BYTE_ARRAY
+    ///   `Vec<u8>`  => BYTE_ARRAY
     ///   String => BYTE_ARRAY
     ///   i32 => INT32
     fn physical_type(&self) -> parquet::basic::Type {
