@@ -18,8 +18,8 @@
 use crate::iterator::GenericStringIter;
 use crate::raw_pointer::RawPtrBox;
 use crate::{
-    print_long_array, Array, ArrayAccessor, GenericBinaryArray, GenericListArray,
-    OffsetSizeTrait,
+    empty_offsets, print_long_array, Array, ArrayAccessor, GenericBinaryArray,
+    GenericListArray, OffsetSizeTrait,
 };
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_data::ArrayData;
@@ -370,7 +370,11 @@ impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericStringArray<OffsetS
             2,
             "StringArray data should contain 2 buffers only (offsets and values)"
         );
-        let offsets = data.buffers()[0].as_ptr();
+        // Handle case of empty offsets
+        let offsets = match data.is_empty() && data.buffers()[0].is_empty() {
+            true => empty_offsets::<OffsetSize>().as_ptr() as *const _,
+            false => data.buffers()[0].as_ptr(),
+        };
         let values = data.buffers()[1].as_ptr();
         Self {
             data,
@@ -822,5 +826,26 @@ mod tests {
     )]
     fn test_large_string_array_from_list_array_wrong_type() {
         _test_generic_string_array_from_list_array_wrong_type::<i32>();
+    }
+
+    #[test]
+    fn test_empty_offsets() {
+        let string = StringArray::from(
+            ArrayData::builder(DataType::Utf8)
+                .buffers(vec![Buffer::from(&[]), Buffer::from(&[])])
+                .build()
+                .unwrap(),
+        );
+        assert_eq!(string.len(), 0);
+        assert_eq!(string.value_offsets(), &[0]);
+
+        let string = LargeStringArray::from(
+            ArrayData::builder(DataType::LargeUtf8)
+                .buffers(vec![Buffer::from(&[]), Buffer::from(&[])])
+                .build()
+                .unwrap(),
+        );
+        assert_eq!(string.len(), 0);
+        assert_eq!(string.value_offsets(), &[0]);
     }
 }
