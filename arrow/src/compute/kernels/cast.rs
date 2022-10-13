@@ -1312,15 +1312,16 @@ pub fn cast_with_options(
         )),
 
         (Timestamp(from_unit, _), Timestamp(to_unit, to_tz)) => {
-            let time_array = Int64Array::from(array.data().clone());
+            let array = cast_with_options(array, &Int64, cast_options)?;
+            let time_array = as_primitive_array::<Int64Type>(array.as_ref());
             let from_size = time_unit_multiple(from_unit);
             let to_size = time_unit_multiple(to_unit);
             // we either divide or multiply, depending on size of each unit
             // units are never the same when the types are the same
             let converted = if from_size >= to_size {
-                divide_scalar(&time_array, from_size / to_size)?
+                divide_scalar(time_array, from_size / to_size)?
             } else {
-                multiply_scalar(&time_array, to_size / from_size)?
+                multiply_scalar(time_array, to_size / from_size)?
             };
             Ok(make_timestamp_array(
                 &converted,
@@ -1329,10 +1330,10 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(from_unit, _), Date32) => {
-            let time_array = Int64Array::from(array.data().clone());
+            let array = cast_with_options(array, &Int64, cast_options)?;
+            let time_array = as_primitive_array::<Int64Type>(array.as_ref());
             let from_size = time_unit_multiple(from_unit) * SECONDS_IN_DAY;
 
-            // Int32Array::from_iter(tim.iter)
             let mut b = Date32Builder::with_capacity(array.len());
 
             for i in 0..array.len() {

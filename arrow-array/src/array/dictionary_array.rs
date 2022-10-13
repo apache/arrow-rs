@@ -408,10 +408,17 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for DictionaryArray<T> {
         );
 
         if let DataType::Dictionary(key_data_type, _) = data.data_type() {
-            if key_data_type.as_ref() != &T::DATA_TYPE {
-                panic!("DictionaryArray's data type must match.")
-            };
+            assert_eq!(
+                &T::DATA_TYPE,
+                key_data_type.as_ref(),
+                "DictionaryArray's data type must match, expected {} got {}",
+                T::DATA_TYPE,
+                key_data_type
+            );
+
             // create a zero-copy of the keys' data
+            // SAFETY:
+            // ArrayData is valid and verified type above
             let keys = PrimitiveArray::<T>::from(unsafe {
                 ArrayData::new_unchecked(
                     T::DATA_TYPE,
@@ -924,5 +931,14 @@ mod tests {
         let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
         let keys: Float32Array = [Some(0_f32), None, Some(3_f32)].into_iter().collect();
         DictionaryArray::<Float32Type>::try_new(&keys, &values).unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "DictionaryArray's data type must match, expected Int64 got Int32"
+    )]
+    fn test_from_array_data_validation() {
+        let a = DictionaryArray::<Int32Type>::from_iter(["32"]);
+        let _ = DictionaryArray::<Int64Type>::from(a.into_data());
     }
 }

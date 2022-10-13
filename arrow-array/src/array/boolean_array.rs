@@ -202,6 +202,13 @@ impl From<Vec<Option<bool>>> for BooleanArray {
 impl From<ArrayData> for BooleanArray {
     fn from(data: ArrayData) -> Self {
         assert_eq!(
+            data.data_type(),
+            &DataType::Boolean,
+            "BooleanArray expected ArrayData with type {} got {}",
+            DataType::Boolean,
+            data.data_type()
+        );
+        assert_eq!(
             data.buffers().len(),
             1,
             "BooleanArray data should contain a single buffer only (values buffer)"
@@ -209,6 +216,8 @@ impl From<ArrayData> for BooleanArray {
         let ptr = data.buffers()[0].as_ptr();
         Self {
             data,
+            // SAFETY:
+            // ArrayData must be valid, and validated data type above
             raw_values: unsafe { RawPtrBox::new(ptr) },
         }
     }
@@ -413,5 +422,13 @@ mod tests {
                 .build_unchecked()
         };
         drop(BooleanArray::from(data));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "BooleanArray expected ArrayData with type Boolean got Int32"
+    )]
+    fn test_from_array_data_validation() {
+        let _ = BooleanArray::from(ArrayData::new_empty(&DataType::Int32));
     }
 }
