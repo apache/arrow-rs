@@ -121,6 +121,8 @@ pub struct ReaderOptions {
 ///
 /// Return inferred schema and number of records used for inference. This function does not change
 /// reader cursor offset.
+/// 
+/// The inferred schema will always have each field set as nullable.
 pub fn infer_file_schema<R: Read + Seek>(
     reader: R,
     delimiter: u8,
