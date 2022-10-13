@@ -33,6 +33,7 @@ logging = ["tracing-subscriber"]
 [dependencies]
 arrow = { path = "../arrow", default-features = false, features = ["test_utils", "ipc", "ipc_compression", "json"] }
 arrow-flight = { path = "../arrow-flight", default-features = false }
+arrow-buffer = { path = "../arrow-buffer", default-features = false }
 async-trait = { version = "0.1.41", default-features = false }
 clap = { version = "4", default-features = false, features = ["std", "derive", "help", "error-context", "usage"] }
 futures = { version = "0.3", default-features = false }

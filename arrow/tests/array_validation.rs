@@ -1065,9 +1065,9 @@ fn test_decimal_full_validation() {
 
 #[test]
 fn test_decimal_validation() {
-    let mut builder = Decimal128Builder::with_capacity(4, 10, 4);
-    builder.append_value(10000).unwrap();
-    builder.append_value(20000).unwrap();
+    let mut builder = Decimal128Builder::with_capacity(4);
+    builder.append_value(10000);
+    builder.append_value(20000);
     let array = builder.finish();
 
     array.data().validate_full().unwrap();

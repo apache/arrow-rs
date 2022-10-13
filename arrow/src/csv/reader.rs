@@ -707,8 +707,7 @@ fn build_decimal_array(
     precision: u8,
     scale: u8,
 ) -> Result<ArrayRef> {
-    let mut decimal_builder =
-        Decimal128Builder::with_capacity(rows.len(), precision, scale);
+    let mut decimal_builder = Decimal128Builder::with_capacity(rows.len());
     for row in rows {
         let col_s = row.get(col_idx);
         match col_s {
@@ -725,7 +724,7 @@ fn build_decimal_array(
                         parse_decimal_with_parameter(s, precision, scale);
                     match decimal_value {
                         Ok(v) => {
-                            decimal_builder.append_value(v)?;
+                            decimal_builder.append_value(v);
                         }
                         Err(e) => {
                             return Err(e);
@@ -735,7 +734,11 @@ fn build_decimal_array(
             }
         }
     }
-    Ok(Arc::new(decimal_builder.finish()))
+    Ok(Arc::new(
+        decimal_builder
+            .finish()
+            .with_precision_and_scale(precision, scale)?,
+    ))
 }
 
 // Parse the string format decimal value to i128 format and checking the precision and scale.
@@ -1237,16 +1240,16 @@ mod tests {
             .downcast_ref::<Decimal128Array>()
             .unwrap();
 
-        assert_eq!("57.653484", lat.value_as_string(0));
-        assert_eq!("53.002666", lat.value_as_string(1));
-        assert_eq!("52.412811", lat.value_as_string(2));
-        assert_eq!("51.481583", lat.value_as_string(3));
-        assert_eq!("12.123456", lat.value_as_string(4));
-        assert_eq!("50.760000", lat.value_as_string(5));
-        assert_eq!("0.123000", lat.value_as_string(6));
-        assert_eq!("123.000000", lat.value_as_string(7));
-        assert_eq!("123.000000", lat.value_as_string(8));
-        assert_eq!("-50.760000", lat.value_as_string(9));
+        assert_eq!("57.653484", lat.value_as_string(0).unwrap());
+        assert_eq!("53.002666", lat.value_as_string(1).unwrap());
+        assert_eq!("52.412811", lat.value_as_string(2).unwrap());
+        assert_eq!("51.481583", lat.value_as_string(3).unwrap());
+        assert_eq!("12.123456", lat.value_as_string(4).unwrap());
+        assert_eq!("50.760000", lat.value_as_string(5).unwrap());
+        assert_eq!("0.123000", lat.value_as_string(6).unwrap());
+        assert_eq!("123.000000", lat.value_as_string(7).unwrap());
+        assert_eq!("123.000000", lat.value_as_string(8).unwrap());
+        assert_eq!("-50.760000", lat.value_as_string(9).unwrap());
     }
 
     #[test]

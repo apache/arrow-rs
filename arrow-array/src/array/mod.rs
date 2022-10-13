@@ -31,9 +31,6 @@ pub use binary_array::*;
 mod boolean_array;
 pub use boolean_array::*;
 
-mod decimal_array;
-pub use decimal_array::*;
-
 mod dictionary_array;
 pub use dictionary_array::*;
 
@@ -444,12 +441,6 @@ impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericBinaryArray<OffsetSize> {
 }
 
 impl PartialEq for FixedSizeBinaryArray {
-    fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
-    }
-}
-
-impl PartialEq for Decimal128Array {
     fn eq(&self, other: &Self) -> bool {
         self.data().eq(other.data())
     }

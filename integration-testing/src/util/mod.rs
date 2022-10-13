@@ -34,7 +34,7 @@ use arrow::datatypes::*;
 use arrow::error::{ArrowError, Result};
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
 use arrow::util::bit_util;
-use arrow::util::decimal::Decimal256;
+use arrow_buffer::i256;
 
 mod datatype;
 mod field;
@@ -787,12 +787,7 @@ pub fn array_from_json(
             }
         }
         DataType::Decimal128(precision, scale) => {
-            let mut b =
-                Decimal128Builder::with_capacity(json_col.count, *precision, *scale);
-            // C++ interop tests involve incompatible decimal values
-            unsafe {
-                b.disable_value_validation();
-            }
+            let mut b = Decimal128Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -801,21 +796,16 @@ pub fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => {
-                        b.append_value(value.as_str().unwrap().parse::<i128>().unwrap())?
-                    }
+                    1 => b.append_value(value.as_str().unwrap().parse::<i128>().unwrap()),
                     _ => b.append_null(),
                 };
             }
-            Ok(Arc::new(b.finish()))
+            Ok(Arc::new(
+                b.finish().with_precision_and_scale(*precision, *scale)?,
+            ))
         }
         DataType::Decimal256(precision, scale) => {
-            let mut b =
-                Decimal256Builder::with_capacity(json_col.count, *precision, *scale);
-            // C++ interop tests involve incompatible decimal values
-            unsafe {
-                b.disable_value_validation();
-            }
+            let mut b = Decimal256Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
@@ -835,15 +825,14 @@ pub fn array_from_json(
                         };
                         bytes[0..integer_bytes.len()]
                             .copy_from_slice(integer_bytes.as_slice());
-                        let decimal =
-                            Decimal256::try_new_from_bytes(*precision, *scale, &bytes)
-                                .unwrap();
-                        b.append_value(&decimal)?;
+                        b.append_value(i256::from_le_bytes(bytes));
                     }
                     _ => b.append_null(),
                 }
             }
-            Ok(Arc::new(b.finish()))
+            Ok(Arc::new(
+                b.finish().with_precision_and_scale(*precision, *scale)?,
+            ))
         }
         DataType::Map(child_field, _) => {
             let null_buf = create_null_buf(&json_col);

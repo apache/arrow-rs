@@ -529,7 +529,7 @@ fn encode_column(
                 .downcast_ref::<Decimal128Array>()
                 .unwrap()
                 .into_iter()
-                .map(|x| x.map(|x| RawDecimal(*x.raw_value())));
+                .map(|x| x.map(|x| RawDecimal(x.to_le_bytes())));
 
             fixed::encode(out, iter, opts)
         },
@@ -539,7 +539,7 @@ fn encode_column(
                 .downcast_ref::<Decimal256Array>()
                 .unwrap()
                 .into_iter()
-                .map(|x| x.map(|x| RawDecimal(*x.raw_value())));
+                .map(|x| x.map(|x| RawDecimal(x.to_le_bytes())));
 
             fixed::encode(out, iter, opts)
         },
