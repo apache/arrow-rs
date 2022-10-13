@@ -186,6 +186,14 @@ jobs:
       - name: Setup Clippy
         run: |
           rustup component add clippy
-      - name: Run clippy
+      - name: Clippy arrow-buffer with all features
+        run: cargo clippy -p arrow-buffer --all-features
+      - name: Clippy arrow-data with all features
+        run: cargo clippy -p arrow-data --all-features
+      - name: Clippy arrow-schema with all features
+        run: cargo clippy -p arrow-schema --all-features
+      - name: Clippy arrow-array with all features
+        run: cargo clippy -p arrow-array --all-features
+      - name: Clippy arrow
         run: |
           cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict,dyn_arith_dict --all-targets -- -D warnings

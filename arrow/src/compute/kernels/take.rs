@@ -459,9 +459,7 @@ where
             t
         })
         .collect::<Result<Decimal128Array>>()?
-        // PERF: we could avoid re-validating that the data in
-        // Decimal128Array was in range as we know it came from a valid Decimal128Array
-        .with_precision_and_scale(decimal_values.precision()?, decimal_values.scale()?)
+        .with_precision_and_scale(decimal_values.precision(), decimal_values.scale())
 }
 
 /// `take` implementation for all primitive arrays
