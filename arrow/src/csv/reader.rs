@@ -121,6 +121,8 @@ pub struct ReaderOptions {
 ///
 /// Return inferred schema and number of records used for inference. This function does not change
 /// reader cursor offset.
+///
+/// The inferred schema will always have each field set as nullable.
 pub fn infer_file_schema<R: Read + Seek>(
     reader: R,
     delimiter: u8,
@@ -200,8 +202,6 @@ fn infer_reader_schema_with_csv_options<R: Read>(
     let header_length = headers.len();
     // keep track of inferred field types
     let mut column_types: Vec<HashSet<DataType>> = vec![HashSet::new(); header_length];
-    // keep track of columns with nulls
-    let mut nulls: Vec<bool> = vec![false; header_length];
 
     let mut records_count = 0;
     let mut fields = vec![];
@@ -214,12 +214,12 @@ fn infer_reader_schema_with_csv_options<R: Read>(
         }
         records_count += 1;
 
-        for i in 0..header_length {
+        // Note since we may be looking at a sample of the data, we make the safe assumption that
+        // they could be nullable
+        for (i, column_type) in column_types.iter_mut().enumerate().take(header_length) {
             if let Some(string) = record.get(i) {
-                if string.is_empty() {
-                    nulls[i] = true;
-                } else {
-                    column_types[i]
+                if !string.is_empty() {
+                    column_type
                         .insert(infer_field_schema(string, roptions.datetime_re.clone()));
                 }
             }
@@ -229,7 +229,6 @@ fn infer_reader_schema_with_csv_options<R: Read>(
     // build schema from inference results
     for i in 0..header_length {
         let possibilities = &column_types[i];
-        let has_nulls = nulls[i];
         let field_name = &headers[i];
 
         // determine data type based on possible types
@@ -237,7 +236,7 @@ fn infer_reader_schema_with_csv_options<R: Read>(
         match possibilities.len() {
             1 => {
                 for dtype in possibilities.iter() {
-                    fields.push(Field::new(field_name, dtype.clone(), has_nulls));
+                    fields.push(Field::new(field_name, dtype.clone(), true));
                 }
             }
             2 => {
@@ -245,13 +244,13 @@ fn infer_reader_schema_with_csv_options<R: Read>(
                     && possibilities.contains(&DataType::Float64)
                 {
                     // we have an integer and double, fall down to double
-                    fields.push(Field::new(field_name, DataType::Float64, has_nulls));
+                    fields.push(Field::new(field_name, DataType::Float64, true));
                 } else {
                     // default to Utf8 for conflicting datatypes (e.g bool and int)
-                    fields.push(Field::new(field_name, DataType::Utf8, has_nulls));
+                    fields.push(Field::new(field_name, DataType::Utf8, true));
                 }
             }
-            _ => fields.push(Field::new(field_name, DataType::Utf8, has_nulls)),
+            _ => fields.push(Field::new(field_name, DataType::Utf8, true)),
         }
     }
 
@@ -1287,9 +1286,9 @@ mod tests {
 
         let mut csv = builder.build(file).unwrap();
         let expected_schema = Schema::new(vec![
-            Field::new("city", DataType::Utf8, false),
-            Field::new("lat", DataType::Float64, false),
-            Field::new("lng", DataType::Float64, false),
+            Field::new("city", DataType::Utf8, true),
+            Field::new("lat", DataType::Float64, true),
+            Field::new("lng", DataType::Float64, true),
         ]);
         assert_eq!(Arc::new(expected_schema), csv.schema());
         let batch = csv.next().unwrap().unwrap();
@@ -1514,10 +1513,10 @@ mod tests {
             ]
         );
 
-        assert!(!schema.field(0).is_nullable());
+        assert!(schema.field(0).is_nullable());
         assert!(schema.field(1).is_nullable());
         assert!(schema.field(2).is_nullable());
-        assert!(!schema.field(3).is_nullable());
+        assert!(schema.field(3).is_nullable());
         assert!(schema.field(4).is_nullable());
         assert!(schema.field(5).is_nullable());
 
@@ -1798,10 +1797,10 @@ mod tests {
         )?;
 
         assert_eq!(schema.fields().len(), 4);
-        assert!(!schema.field(0).is_nullable());
+        assert!(schema.field(0).is_nullable());
         assert!(schema.field(1).is_nullable());
-        assert!(!schema.field(2).is_nullable());
-        assert!(!schema.field(3).is_nullable());
+        assert!(schema.field(2).is_nullable());
+        assert!(schema.field(3).is_nullable());
 
         assert_eq!(&DataType::Int64, schema.field(0).data_type());
         assert_eq!(&DataType::Utf8, schema.field(1).data_type());
