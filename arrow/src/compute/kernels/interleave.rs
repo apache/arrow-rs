@@ -46,10 +46,6 @@ use arrow_schema::ArrowError;
 /// ```
 ///
 /// For selecting values by index from a single array see [compute::take](crate::compute::take)
-///
-/// # Panics
-///
-/// Panics if the arrays do not have the same data type or `values` is empty
 pub fn interleave(
     values: &[&dyn Array],
     indices: &[(usize, usize)],
@@ -61,22 +57,20 @@ pub fn interleave(
     }
     let data_type = values[0].data_type();
 
-    if values
-        .iter()
-        .skip(1)
-        .any(|array| array.data_type() != data_type)
-    {
-        return Err(ArrowError::InvalidArgumentError(
-            "It is not possible to interleave arrays of different data types."
-                .to_string(),
-        ));
+    for array in values.iter().skip(1) {
+        if array.data_type() != data_type {
+            return Err(ArrowError::InvalidArgumentError(
+                format!("It is not possible to interleave arrays of different data types ({} and {})",
+              data_type, array.data_type()),
+            ));
+        }
     }
 
     if indices.is_empty() {
         return Ok(new_empty_array(data_type));
     }
 
-    // TODO: Add specialized implementations (#1523)
+    // TODO: Add specialized implementations (#2864)
 
     interleave_fallback(values, indices)
 }
@@ -121,6 +115,7 @@ mod tests {
     use arrow_array::cast::{as_primitive_array, as_string_array};
     use arrow_array::types::Int32Type;
     use arrow_array::{Int32Array, ListArray, StringArray};
+    use arrow_schema::DataType;
 
     #[test]
     fn test_primitive() {
@@ -150,6 +145,7 @@ mod tests {
         let a = Int32Array::from_iter_values([1, 2, 3, 4]);
         let v = interleave(&[&a], &[]).unwrap();
         assert!(v.is_empty());
+        assert_eq!(v.data_type(), &DataType::Int32);
     }
 
     #[test]
