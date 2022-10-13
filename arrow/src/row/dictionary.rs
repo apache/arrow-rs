@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::compute::SortOptions;
-use crate::row::fixed::{FixedLengthEncoding, FromSlice, RawDecimal};
+use crate::row::fixed::{FixedLengthEncoding, FromSlice};
 use crate::row::interner::{Interned, OrderPreservingInterner};
 use crate::row::{null_sentinel, Rows};
 use arrow_array::builder::*;
@@ -222,12 +222,8 @@ pub unsafe fn decode_dictionary<K: ArrowDictionaryKeyType>(
         DataType::Interval(IntervalUnit::YearMonth) => {
             decode_primitive::<IntervalYearMonthType>(&values)
         }
-        DataType::Decimal128(p, s) => {
-            decode_decimal::<16, Decimal128Type>(&values, *p, *s)
-        }
-        DataType::Decimal256(p, s) => {
-            decode_decimal::<32, Decimal256Type>(&values, *p, *s)
-        }
+        DataType::Decimal128(p, s) => decode_decimal::<Decimal128Type>(&values, *p, *s),
+        DataType::Decimal256(p, s) => decode_decimal::<Decimal256Type>(&values, *p, *s),
         DataType::Utf8 => decode_string::<i32>(&values),
         DataType::LargeUtf8 => decode_string::<i64>(&values),
         DataType::Binary => decode_binary::<i32>(&values),
@@ -328,10 +324,9 @@ where
 }
 
 /// Decodes a `DecimalArray` from dictionary values
-fn decode_decimal<const N: usize, T: DecimalType>(
-    values: &[&[u8]],
-    precision: u8,
-    scale: u8,
-) -> ArrayData {
-    decode_fixed::<RawDecimal<N>>(values, T::TYPE_CONSTRUCTOR(precision, scale))
+fn decode_decimal<T: DecimalType>(values: &[&[u8]], precision: u8, scale: u8) -> ArrayData
+where
+    T::Native: FixedLengthEncoding,
+{
+    decode_fixed::<T::Native>(values, T::TYPE_CONSTRUCTOR(precision, scale))
 }

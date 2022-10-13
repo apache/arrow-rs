@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::*;
 use arrow_array::*;
+use arrow_buffer::i256;
 
 use crate::compute::SortOptions;
 use crate::datatypes::*;
@@ -30,10 +31,7 @@ use crate::error::{ArrowError, Result};
 use crate::row::dictionary::{
     compute_dictionary_mapping, decode_dictionary, encode_dictionary,
 };
-use crate::row::fixed::{
-    decode_bool, decode_decimal, decode_primitive, RawDecimal, RawDecimal128,
-    RawDecimal256,
-};
+use crate::row::fixed::{decode_bool, decode_primitive};
 use crate::row::interner::OrderPreservingInterner;
 use crate::row::variable::{decode_binary, decode_string};
 use crate::{downcast_dictionary_array, downcast_primitive_array};
@@ -441,8 +439,8 @@ fn new_empty_rows(
             array => lengths.iter_mut().for_each(|x| *x += fixed::encoded_len(array)),
             DataType::Null => {},
             DataType::Boolean => lengths.iter_mut().for_each(|x| *x += bool::ENCODED_LEN),
-            DataType::Decimal128(_, _) => lengths.iter_mut().for_each(|x| *x += RawDecimal128::ENCODED_LEN),
-            DataType::Decimal256(_, _) => lengths.iter_mut().for_each(|x| *x += RawDecimal256::ENCODED_LEN),
+            DataType::Decimal128(_, _) => lengths.iter_mut().for_each(|x| *x += i128::ENCODED_LEN),
+            DataType::Decimal256(_, _) => lengths.iter_mut().for_each(|x| *x += i256::ENCODED_LEN),
             DataType::Binary => as_generic_binary_array::<i32>(array)
                 .iter()
                 .zip(lengths.iter_mut())
@@ -524,24 +522,20 @@ fn encode_column(
         DataType::Null => {}
         DataType::Boolean => fixed::encode(out, as_boolean_array(column), opts),
         DataType::Decimal128(_, _) => {
-            let iter = column
+            let column = column
                 .as_any()
                 .downcast_ref::<Decimal128Array>()
-                .unwrap()
-                .into_iter()
-                .map(|x| x.map(|x| RawDecimal(x.to_le_bytes())));
+                .unwrap();
 
-            fixed::encode(out, iter, opts)
+            fixed::encode(out, column, opts)
         },
         DataType::Decimal256(_, _) => {
-            let iter = column
+            let column = column
                 .as_any()
                 .downcast_ref::<Decimal256Array>()
-                .unwrap()
-                .into_iter()
-                .map(|x| x.map(|x| RawDecimal(x.to_le_bytes())));
+                .unwrap();
 
-            fixed::encode(out, iter, opts)
+            fixed::encode(out, column, opts)
         },
         DataType::Binary => {
             variable::encode(out, as_generic_binary_array::<i32>(column).iter(), opts)
@@ -651,12 +645,16 @@ unsafe fn decode_column(
         DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)),
         DataType::Utf8 => Arc::new(decode_string::<i32>(rows, options)),
         DataType::LargeUtf8 => Arc::new(decode_string::<i64>(rows, options)),
-        DataType::Decimal128(p, s) => {
-            Arc::new(decode_decimal::<16, Decimal128Type>(rows, options, *p, *s))
-        }
-        DataType::Decimal256(p, s) => {
-            Arc::new(decode_decimal::<32, Decimal256Type>(rows, options, *p, *s))
-        }
+        DataType::Decimal128(p, s) => Arc::new(
+            decode_primitive::<Decimal128Type>(rows, options)
+                .with_precision_and_scale(*p, *s)
+                .unwrap(),
+        ),
+        DataType::Decimal256(p, s) => Arc::new(
+            decode_primitive::<Decimal256Type>(rows, options)
+                .with_precision_and_scale(*p, *s)
+                .unwrap(),
+        ),
         DataType::Dictionary(k, v) => match k.as_ref() {
             DataType::Int8 => Arc::new(decode_dictionary::<Int8Type>(
                 interner.unwrap(),
@@ -809,6 +807,64 @@ mod tests {
         for (expected, actual) in cols.iter().zip(&back) {
             assert_eq!(expected, actual);
         }
+    }
+
+    #[test]
+    fn test_decimal128() {
+        let mut converter = RowConverter::new(vec![SortField::new(
+            DataType::Decimal128(DECIMAL128_MAX_PRECISION, 7),
+        )]);
+        let col = Arc::new(
+            Decimal128Array::from_iter([
+                None,
+                Some(i128::MIN),
+                Some(-13),
+                Some(46_i128),
+                Some(5456_i128),
+                Some(i128::MAX),
+            ])
+            .with_precision_and_scale(38, 7)
+            .unwrap(),
+        ) as ArrayRef;
+
+        let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
+        for i in 0..rows.num_rows() - 1 {
+            assert!(rows.row(i) < rows.row(i + 1));
+        }
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(col.as_ref(), back[0].as_ref())
+    }
+
+    #[test]
+    fn test_decimal256() {
+        let mut converter = RowConverter::new(vec![SortField::new(
+            DataType::Decimal256(DECIMAL256_MAX_PRECISION, 7),
+        )]);
+        let col = Arc::new(
+            Decimal256Array::from_iter([
+                None,
+                Some(i256::MIN),
+                Some(i256::from_parts(0, -1)),
+                Some(i256::from_parts(u128::MAX, -1)),
+                Some(i256::from_parts(u128::MAX, 0)),
+                Some(i256::from_parts(0, 46_i128)),
+                Some(i256::from_parts(5, 46_i128)),
+                Some(i256::MAX),
+            ])
+            .with_precision_and_scale(DECIMAL256_MAX_PRECISION, 7)
+            .unwrap(),
+        ) as ArrayRef;
+
+        let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
+        for i in 0..rows.num_rows() - 1 {
+            assert!(rows.row(i) < rows.row(i + 1));
+        }
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(col.as_ref(), back[0].as_ref())
     }
 
     #[test]
