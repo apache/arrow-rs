@@ -30,7 +30,8 @@ on:
       - arrow-data/**
       - arrow-schema/**
       - arrow-pyarrow-integration-testing/**
-      - integration-testing/**
+      - arrow-integration-test/**
+      - arrow-integration-testing/**
       - .github/**
 
 jobs:
