@@ -4452,7 +4452,7 @@ impl OffsetIndex {
 //
 
 /// Description for ColumnIndex.
-/// Each <array-field>\[i\] refers to the page at OffsetIndex.page_locations\[i\]
+/// Each `<array-field>`\[i\] refers to the page at OffsetIndex.page_locations\[i\]
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ColumnIndex {
   /// A list of Boolean values to determine the validity of the corresponding
@@ -4905,7 +4905,7 @@ pub struct FileMetaData {
   /// Optional key/value metadata *
   pub key_value_metadata: Option<Vec<KeyValue>>,
   /// String for application that wrote this file.  This should be in the format
-  /// <Application> version <App Version> (build <App Build Hash>).
+  /// `<Application>` version `<App Version>` (build `<App Build Hash>`).
   /// e.g. impala version 1.0 (build 6cf94d29b2b7115df4de2c06e2ab4326d721eb55)
   /// 
   pub created_by: Option<String>,

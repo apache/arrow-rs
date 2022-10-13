@@ -365,7 +365,7 @@ impl MutableBuffer {
 
     /// Extends the buffer with a new item, without checking for sufficient capacity
     /// # Safety
-    /// Caller must ensure that the capacity()-len()>=size_of<T>()
+    /// Caller must ensure that the capacity()-len()>=`size_of<T>`()
     #[inline]
     pub unsafe fn push_unchecked<T: ToByteSlice>(&mut self, item: T) {
         let additional = std::mem::size_of::<T>();
