@@ -1398,7 +1398,7 @@ mod tests {
     fn test_take_bool_nullable_index() {
         // indices where the masked invalid elements would be out of bounds
         let index_data = ArrayData::try_new(
-            DataType::Int32,
+            DataType::UInt32,
             6,
             Some(Buffer::from_iter(vec![
                 false, true, false, true, false, true,
@@ -1421,7 +1421,7 @@ mod tests {
     fn test_take_bool_nullable_index_nonnull_values() {
         // indices where the masked invalid elements would be out of bounds
         let index_data = ArrayData::try_new(
-            DataType::Int32,
+            DataType::UInt32,
             6,
             Some(Buffer::from_iter(vec![
                 false, true, false, true, false, true,

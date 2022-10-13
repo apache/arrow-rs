@@ -37,13 +37,12 @@
 
 use chrono::format::strftime::StrftimeItems;
 use chrono::format::{parse, Parsed};
-use chrono::Timelike;
+use chrono::{NaiveDateTime, Timelike};
 use std::str;
 use std::sync::Arc;
 
 use crate::buffer::MutableBuffer;
 use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
-use crate::compute::kernels::temporal::extract_component_from_array;
 use crate::compute::kernels::temporal::return_compute_error_with;
 use crate::compute::{divide_scalar, multiply_scalar};
 use crate::compute::{try_unary, using_chrono_tz_and_utc_naive_date_time};
@@ -1313,15 +1312,16 @@ pub fn cast_with_options(
         )),
 
         (Timestamp(from_unit, _), Timestamp(to_unit, to_tz)) => {
-            let time_array = Int64Array::from(array.data().clone());
+            let array = cast_with_options(array, &Int64, cast_options)?;
+            let time_array = as_primitive_array::<Int64Type>(array.as_ref());
             let from_size = time_unit_multiple(from_unit);
             let to_size = time_unit_multiple(to_unit);
             // we either divide or multiply, depending on size of each unit
             // units are never the same when the types are the same
             let converted = if from_size >= to_size {
-                divide_scalar(&time_array, from_size / to_size)?
+                divide_scalar(time_array, from_size / to_size)?
             } else {
-                multiply_scalar(&time_array, to_size / from_size)?
+                multiply_scalar(time_array, to_size / from_size)?
             };
             Ok(make_timestamp_array(
                 &converted,
@@ -1330,10 +1330,10 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(from_unit, _), Date32) => {
-            let time_array = Int64Array::from(array.data().clone());
+            let array = cast_with_options(array, &Int64, cast_options)?;
+            let time_array = as_primitive_array::<Int64Type>(array.as_ref());
             let from_size = time_unit_multiple(from_unit) * SECONDS_IN_DAY;
 
-            // Int32Array::from_iter(tim.iter)
             let mut b = Date32Builder::with_capacity(array.len());
 
             for i in 0..array.len() {
@@ -1640,6 +1640,98 @@ where
     unsafe { PrimitiveArray::<R>::from_trusted_len_iter(iter) }
 }
 
+fn as_time_with_string_op<
+    A: ArrayAccessor<Item = T::Native>,
+    OffsetSize,
+    T: ArrowTemporalType,
+    F,
+>(
+    iter: ArrayIter<A>,
+    mut builder: GenericStringBuilder<OffsetSize>,
+    op: F,
+) -> ArrayRef
+where
+    OffsetSize: OffsetSizeTrait,
+    F: Fn(NaiveDateTime) -> String,
+    i64: From<T::Native>,
+{
+    iter.into_iter().for_each(|value| {
+        if let Some(value) = value {
+            match as_datetime::<T>(<i64 as From<_>>::from(value)) {
+                Some(dt) => builder.append_value(op(dt)),
+                None => builder.append_null(),
+            }
+        } else {
+            builder.append_null();
+        }
+    });
+
+    Arc::new(builder.finish())
+}
+
+fn extract_component_from_datatime_array<
+    A: ArrayAccessor<Item = T::Native>,
+    OffsetSize,
+    T: ArrowTemporalType,
+    F,
+>(
+    iter: ArrayIter<A>,
+    mut builder: GenericStringBuilder<OffsetSize>,
+    tz: &str,
+    mut parsed: Parsed,
+    op: F,
+) -> Result<ArrayRef>
+where
+    OffsetSize: OffsetSizeTrait,
+    F: Fn(NaiveDateTime) -> String,
+    i64: From<T::Native>,
+{
+    if (tz.starts_with('+') || tz.starts_with('-')) && !tz.contains(':') {
+        return_compute_error_with!(
+            "Invalid timezone",
+            "Expected format [+-]XX:XX".to_string()
+        )
+    } else {
+        let tz_parse_result = parse(&mut parsed, tz, StrftimeItems::new("%z"));
+        let fixed_offset_from_parsed = match tz_parse_result {
+            Ok(_) => match parsed.to_fixed_offset() {
+                Ok(fo) => Some(fo),
+                err => return_compute_error_with!("Invalid timezone", err),
+            },
+            _ => None,
+        };
+
+        for value in iter {
+            if let Some(value) = value {
+                match as_datetime::<T>(<i64 as From<_>>::from(value)) {
+                    Some(utc) => {
+                        let fixed_offset = match fixed_offset_from_parsed {
+                            Some(fo) => fo,
+                            None => {
+                                match using_chrono_tz_and_utc_naive_date_time(tz, utc) {
+                                    Some(fo) => fo,
+                                    err => return_compute_error_with!(
+                                        "Unable to parse timezone",
+                                        err
+                                    ),
+                                }
+                            }
+                        };
+                        builder.append_value(op(utc + fixed_offset));
+                    }
+                    err => return_compute_error_with!(
+                        "Unable to read value as datetime",
+                        err
+                    ),
+                }
+            } else {
+                builder.append_null();
+            }
+        }
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
 /// Cast timestamp types to Utf8/LargeUtf8
 fn cast_timestamp_to_string<T, OffsetSize>(
     array: &ArrayRef,
@@ -1652,38 +1744,30 @@ where
 {
     let array = array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
 
-    let mut builder = GenericStringBuilder::<OffsetSize>::new();
+    let builder = GenericStringBuilder::<OffsetSize>::new();
 
     if let Some(tz) = tz {
-        let mut scratch = Parsed::new();
+        let scratch = Parsed::new();
         // The macro calls `as_datetime` on timestamp values of the array.
         // After applying timezone offset on the datatime, calling `to_string` to get
         // the strings.
         let iter = ArrayIter::new(array);
-        extract_component_from_array!(
+        extract_component_from_datatime_array::<_, OffsetSize, T, _>(
             iter,
             builder,
-            to_string,
-            |value, tz| as_datetime::<T>(<i64 as From<_>>::from(value))
-                .map(|datetime| datetime + tz),
             tz,
             scratch,
-            |value| as_datetime::<T>(<i64 as From<_>>::from(value)),
-            |h| h
+            |t| t.to_string(),
         )
     } else {
         // No timezone available. Calling `to_string` on the datatime value simply.
         let iter = ArrayIter::new(array);
-        extract_component_from_array!(
+        Ok(as_time_with_string_op::<_, OffsetSize, T, _>(
             iter,
             builder,
-            to_string,
-            |value| as_datetime::<T>(<i64 as From<_>>::from(value)),
-            |h| h
-        )
+            |t| t.to_string(),
+        ))
     }
-
-    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
 /// Cast date32 types to Utf8/LargeUtf8

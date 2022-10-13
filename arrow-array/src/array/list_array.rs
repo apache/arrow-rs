@@ -43,6 +43,17 @@ impl OffsetSizeTrait for i64 {
     const PREFIX: &'static str = "Large";
 }
 
+/// Returns a slice of `OffsetSize` consisting of a single zero value
+#[inline]
+pub(crate) fn empty_offsets<OffsetSize: OffsetSizeTrait>() -> &'static [OffsetSize] {
+    static OFFSET: &[i64] = &[0];
+    // SAFETY:
+    // OffsetSize is ArrowNativeType and is therefore trivially transmutable
+    let (prefix, val, suffix) = unsafe { OFFSET.align_to::<OffsetSize>() };
+    assert!(prefix.is_empty() && suffix.is_empty());
+    val
+}
+
 /// Generic struct for a variable-size list array.
 ///
 /// Columnar format in Apache Arrow:
@@ -240,8 +251,15 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         }
 
         let values = make_array(values);
-        let value_offsets = data.buffers()[0].as_ptr();
-        let value_offsets = unsafe { RawPtrBox::<OffsetSize>::new(value_offsets) };
+        // Handle case of empty offsets
+        let offsets = match data.is_empty() && data.buffers()[0].is_empty() {
+            true => empty_offsets::<OffsetSize>().as_ptr() as *const _,
+            false => data.buffers()[0].as_ptr(),
+        };
+
+        // SAFETY:
+        // Verified list type in call to `Self::get_type`
+        let value_offsets = unsafe { RawPtrBox::new(offsets) };
         Ok(Self {
             data,
             values,
@@ -346,6 +364,7 @@ pub type LargeListArray = GenericListArray<i64>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::builder::{Int32Builder, ListBuilder};
     use crate::types::Int32Type;
     use crate::Int32Array;
     use arrow_buffer::{bit_util, Buffer, ToByteSlice};
@@ -805,6 +824,18 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(
+        expected = "[Large]ListArray's datatype must be [Large]ListArray(). It is List"
+    )]
+    fn test_from_array_data_validation() {
+        let mut builder = ListBuilder::new(Int32Builder::new());
+        builder.values().append_value(1);
+        builder.append(true);
+        let array = builder.finish();
+        let _ = LargeListArray::from(array.into_data());
+    }
+
+    #[test]
     fn test_list_array_offsets_need_not_start_at_zero() {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
@@ -940,5 +971,27 @@ mod tests {
             vec![None, None, Some(vec![Some(2)])],
             false,
         );
+    }
+
+    #[test]
+    fn test_empty_offsets() {
+        let f = Box::new(Field::new("element", DataType::Int32, true));
+        let string = ListArray::from(
+            ArrayData::builder(DataType::List(f.clone()))
+                .buffers(vec![Buffer::from(&[])])
+                .add_child_data(ArrayData::new_empty(&DataType::Int32))
+                .build()
+                .unwrap(),
+        );
+        assert_eq!(string.value_offsets(), &[0]);
+        let string = LargeListArray::from(
+            ArrayData::builder(DataType::LargeList(f))
+                .buffers(vec![Buffer::from(&[])])
+                .add_child_data(ArrayData::new_empty(&DataType::Int32))
+                .build()
+                .unwrap(),
+        );
+        assert_eq!(string.len(), 0);
+        assert_eq!(string.value_offsets(), &[0]);
     }
 }

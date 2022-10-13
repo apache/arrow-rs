@@ -109,6 +109,12 @@ impl From<MapArray> for ArrayData {
 
 impl MapArray {
     fn try_new_from_array_data(data: ArrayData) -> Result<Self, ArrowError> {
+        assert!(
+            matches!(data.data_type(), DataType::Map(_, _)),
+            "MapArray expected ArrayData with DataType::Map got {}",
+            data.data_type()
+        );
+
         if data.buffers().len() != 1 {
             return Err(ArrowError::InvalidArgumentError(
                 format!("MapArray data should contain a single buffer only (value offsets), had {}",
@@ -141,6 +147,8 @@ impl MapArray {
         let values = make_array(entries);
         let value_offsets = data.buffers()[0].as_ptr();
 
+        // SAFETY:
+        // ArrayData is valid, and verified type above
         let value_offsets = unsafe { RawPtrBox::<i32>::new(value_offsets) };
         unsafe {
             if (*value_offsets.as_ptr().offset(0)) != 0 {
@@ -465,6 +473,21 @@ mod tests {
         let map_array = create_from_buffers();
 
         map_array.value(map_array.len());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "MapArray expected ArrayData with DataType::Map got Dictionary"
+    )]
+    fn test_from_array_data_validation() {
+        // A DictionaryArray has similar buffer layout to a MapArray
+        // but the meaning of the values differs
+        let struct_t = DataType::Struct(vec![
+            Field::new("keys", DataType::Int32, true),
+            Field::new("values", DataType::UInt32, true),
+        ]);
+        let dict_t = DataType::Dictionary(Box::new(DataType::Int32), Box::new(struct_t));
+        let _ = MapArray::from(ArrayData::new_empty(&dict_t));
     }
 
     #[test]
