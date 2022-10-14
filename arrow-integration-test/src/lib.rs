@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Utils for JSON integration testing
+//! Support for the [Apache Arrow JSON test data format](https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format)
 //!
 //! These utilities define structs that read the integration JSON format for integration testing purposes.
+//!
+//! This is not a canonical format, but provides a human-readable way of verifying language implementations
 
 use hex::decode;
 use num::BigInt;
@@ -40,8 +42,8 @@ mod datatype;
 mod field;
 mod schema;
 
-use crate::util::datatype::data_type_to_json;
-use crate::util::field::field_from_json;
+pub use datatype::*;
+pub use field::*;
 pub use schema::*;
 
 /// A struct that represents an Arrow file with a schema and record batches

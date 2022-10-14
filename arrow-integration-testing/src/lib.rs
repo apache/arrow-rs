@@ -19,12 +19,11 @@
 
 use serde_json::Value;
 
-use util::*;
-
 use arrow::datatypes::Schema;
 use arrow::error::Result;
 use arrow::record_batch::RecordBatch;
 use arrow::util::test_util::arrow_test_data;
+use arrow_integration_test::*;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
@@ -36,7 +35,6 @@ pub const AUTH_PASSWORD: &str = "flight";
 
 pub mod flight_client_scenarios;
 pub mod flight_server_scenarios;
-pub mod util;
 
 pub struct ArrowFile {
     pub schema: Schema,

@@ -4,7 +4,7 @@ target/*
 dev/release/rat_exclude_files.txt
 arrow/test/data/*
 arrow/test/dependency/*
-integration-testing/data/*
+arrow-integration-test/data/*
 parquet_derive/test/dependency/*
 .gitattributes
 **.gitignore

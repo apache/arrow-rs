@@ -30,6 +30,7 @@ on:
       - arrow-buffer/**
       - arrow-data/**
       - arrow-schema/**
+      - arrow-integration-test/**
       - .github/**
 
 jobs:
@@ -60,6 +61,8 @@ jobs:
         run: cargo test -p arrow-schema --all-features
       - name: Test arrow-array with all features
         run: cargo test -p arrow-array --all-features
+      - name: Test arrow-integration-test with all features
+        run: cargo test -p arrow-integration-test --all-features
       - name: Test arrow
         run: cargo test -p arrow
       - name: Test --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict,dyn_arith_dict

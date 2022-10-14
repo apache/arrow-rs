@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::util::field::{field_from_json, field_to_json};
+use crate::{field_from_json, field_to_json};
 use arrow::datatypes::Schema;
 use arrow::error::{ArrowError, Result};
 use std::collections::HashMap;
