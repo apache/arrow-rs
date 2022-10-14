@@ -24,12 +24,175 @@ use crate::types::*;
 #[doc(hidden)]
 #[macro_export]
 macro_rules! repeat_pat {
-    ($e:pat, $v_:ident) => {
+    ($e:pat, $v_:expr) => {
         $e
     };
-    ($e:pat, $v_:ident $(, $tail:ident)+) => {
+    ($e:pat, $v_:expr $(, $tail:expr)+) => {
         ($e, $crate::repeat_pat!($e $(, $tail)+))
     }
+}
+
+/// Given one or more expressions evaluating to integer [`DataType`] invokes the provided macro
+/// `m` with the corresponding [`ArrowPrimitiveType`], followed by any additional arguments
+///
+/// ```
+/// # use arrow_array::{downcast_primitive, ArrowPrimitiveType, downcast_integer};
+/// # use arrow_schema::DataType;
+///
+/// macro_rules! dictionary_key_size_helper {
+///   ($t:ty, $o:ty) => {
+///       std::mem::size_of::<<$t as ArrowPrimitiveType>::Native>() as $o
+///   };
+/// }
+///
+/// fn dictionary_key_size(t: &DataType) -> u8 {
+///     match t {
+///         DataType::Dictionary(k, _) => downcast_integer! {
+///             k.as_ref() => (dictionary_key_size_helper, u8),
+///             _ => unreachable!(),
+///         },
+///         _ => u8::MAX,
+///     }
+/// }
+///
+/// assert_eq!(dictionary_key_size(&DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))), 4);
+/// assert_eq!(dictionary_key_size(&DataType::Dictionary(Box::new(DataType::Int64), Box::new(DataType::Utf8))), 8);
+/// assert_eq!(dictionary_key_size(&DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8))), 2);
+/// ```
+#[macro_export]
+macro_rules! downcast_integer {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($($p:pat),+ => $fallback:expr $(,)*)*) => {
+        match ($($data_type),+) {
+            $crate::repeat_pat!(arrow_schema::DataType::Int8, $($data_type),+) => {
+                $m!($crate::types::Int8Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Int16, $($data_type),+) => {
+                $m!($crate::types::Int16Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Int32, $($data_type),+) => {
+                $m!($crate::types::Int32Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Int64, $($data_type),+) => {
+                $m!($crate::types::Int64Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::UInt8, $($data_type),+) => {
+                $m!($crate::types::UInt8Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::UInt16, $($data_type),+) => {
+                $m!($crate::types::UInt16Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::UInt32, $($data_type),+) => {
+                $m!($crate::types::UInt32Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::UInt64, $($data_type),+) => {
+                $m!($crate::types::UInt64Type $(, $args)*)
+            }
+            $(($($p),+) => $fallback,)*
+        }
+    };
+}
+
+/// Given one or more expressions evaluating to primitive [`DataType`] invokes the provided macro
+/// `m` with the corresponding [`ArrowPrimitiveType`], followed by any additional arguments
+///
+/// ```
+/// # use arrow_array::{downcast_primitive, ArrowPrimitiveType};
+/// # use arrow_schema::DataType;
+///
+/// macro_rules! primitive_size_helper {
+///   ($t:ty, $o:ty) => {
+///       std::mem::size_of::<<$t as ArrowPrimitiveType>::Native>() as $o
+///   };
+/// }
+///
+/// fn primitive_size(t: &DataType) -> u8 {
+///     downcast_primitive! {
+///         t => (primitive_size_helper, u8),
+///         _ => u8::MAX
+///     }
+/// }
+///
+/// assert_eq!(primitive_size(&DataType::Int32), 4);
+/// assert_eq!(primitive_size(&DataType::Int64), 8);
+/// assert_eq!(primitive_size(&DataType::Float16), 2);
+/// ```
+#[macro_export]
+macro_rules! downcast_primitive {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($($p:pat),+ => $fallback:expr $(,)*)*) => {
+        $crate::downcast_integer! {
+            $($data_type),+ => ($m $(, $args)*),
+            $crate::repeat_pat!(arrow_schema::DataType::Float16, $($data_type),+) => {
+                $m!($crate::types::Float16Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Float32, $($data_type),+) => {
+                $m!($crate::types::Float32Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Float64, $($data_type),+) => {
+                $m!($crate::types::Float64Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Date32, $($data_type),+) => {
+                $m!($crate::types::Date32Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Date64, $($data_type),+) => {
+                $m!($crate::types::Date64Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Time32(arrow_schema::TimeUnit::Second), $($data_type),+) => {
+                $m!($crate::types::Time32SecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Time32(arrow_schema::TimeUnit::Millisecond), $($data_type),+) => {
+                $m!($crate::types::Time32MillisecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Time64(arrow_schema::TimeUnit::Microsecond), $($data_type),+) => {
+                $m!($crate::types::Time64MicrosecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Time64(arrow_schema::TimeUnit::Nanosecond), $($data_type),+) => {
+                $m!($crate::types::Time64NanosecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Second, _), $($data_type),+) => {
+                $m!($crate::types::TimestampSecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, _), $($data_type),+) => {
+                $m!($crate::types::TimestampMillisecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _), $($data_type),+) => {
+                $m!($crate::types::TimestampMicrosecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _), $($data_type),+) => {
+                $m!($crate::types::TimestampNanosecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Interval(arrow_schema::IntervalUnit::YearMonth), $($data_type),+) => {
+                $m!($crate::types::IntervalYearMonthType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Interval(arrow_schema::IntervalUnit::DayTime), $($data_type),+) => {
+                $m!($crate::types::IntervalDayTimeType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Interval(arrow_schema::IntervalUnit::MonthDayNano), $($data_type),+) => {
+                $m!($crate::types::IntervalMonthDayNanoType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Duration(arrow_schema::TimeUnit::Second), $($data_type),+) => {
+                $m!($crate::types::DurationSecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Duration(arrow_schema::TimeUnit::Millisecond), $($data_type),+) => {
+                $m!($crate::types::DurationMillisecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Duration(arrow_schema::TimeUnit::Microsecond), $($data_type),+) => {
+                $m!($crate::types::DurationMicrosecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Duration(arrow_schema::TimeUnit::Nanosecond), $($data_type),+) => {
+                $m!($crate::types::DurationNanosecondType $(, $args)*)
+            }
+            $($($p),+ => $fallback,)*
+        }
+    };
+}
+
+#[macro_export]
+#[doc(hidden)]
+macro_rules! downcast_primitive_array_helper {
+    ($t:ty, $($values:ident),+, $e:block) => {{
+        $(let $values = $crate::cast::as_primitive_array::<$t>($values);)+
+        $e
+    }};
 }
 
 /// Downcast an [`Array`] to a [`PrimitiveArray`] based on its [`DataType`]
@@ -60,7 +223,7 @@ macro_rules! repeat_pat {
 #[macro_export]
 macro_rules! downcast_primitive_array {
     ($values:ident => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
-        downcast_primitive_array!($values => {$e} $($p => $fallback)*)
+        $crate::downcast_primitive_array!($values => {$e} $($p => $fallback)*)
     };
     (($($values:ident),+) => $e:block $($($p:pat),+ => $fallback:expr $(,)*)*) => {
         $crate::downcast_primitive_array!($($values),+ => $e $($($p),+ => $fallback)*)
@@ -69,176 +232,9 @@ macro_rules! downcast_primitive_array {
         $crate::downcast_primitive_array!($($values),+ => $e $($($p),+ => $fallback)*)
     };
     ($($values:ident),+ => $e:block $($($p:pat),+ => $fallback:expr $(,)*)*) => {
-        match ($($values.data_type()),+) {
-            $crate::repeat_pat!(arrow_schema::DataType::Int8, $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::Int8Type,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Int16, $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::Int16Type,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Int32, $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::Int32Type,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Int64, $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::Int64Type,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::UInt8, $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::UInt8Type,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::UInt16, $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::UInt16Type,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::UInt32, $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::UInt32Type,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::UInt64, $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::UInt64Type,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Float16, $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::Float16Type,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Float32, $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::Float32Type,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Float64, $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::Float64Type,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Date32, $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::Date32Type,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Date64, $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::Date64Type,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Time32(arrow_schema::TimeUnit::Second), $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::Time32SecondType,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Time32(arrow_schema::TimeUnit::Millisecond), $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::Time32MillisecondType,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Time64(arrow_schema::TimeUnit::Microsecond), $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::Time64MicrosecondType,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Time64(arrow_schema::TimeUnit::Nanosecond), $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::Time64NanosecondType,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Second, _), $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::TimestampSecondType,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, _), $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::TimestampMillisecondType,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _), $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::TimestampMicrosecondType,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _), $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::TimestampNanosecondType,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Interval(arrow_schema::IntervalUnit::YearMonth), $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::IntervalYearMonthType,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Interval(arrow_schema::IntervalUnit::DayTime), $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::IntervalDayTimeType,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Interval(arrow_schema::IntervalUnit::MonthDayNano), $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::IntervalMonthDayNanoType,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Duration(arrow_schema::TimeUnit::Second), $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::DurationSecondType,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Duration(arrow_schema::TimeUnit::Millisecond), $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::DurationMillisecondType,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Duration(arrow_schema::TimeUnit::Microsecond), $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::DurationMicrosecondType,
-                >($values);)+
-                $e
-            }
-            $crate::repeat_pat!(arrow_schema::DataType::Duration(arrow_schema::TimeUnit::Nanosecond), $($values),+) => {
-                $(let $values = $crate::cast::as_primitive_array::<
-                    $crate::types::DurationNanosecondType,
-                >($values);)+
-                $e
-            }
-            $(($($p),+) => $fallback,)*
+        $crate::downcast_primitive!{
+            $($values.data_type()),+ => ($crate::downcast_primitive_array_helper, $($values),+, $e),
+            $($($p),+ => $fallback,)*
         }
     };
 }
@@ -278,6 +274,15 @@ where
         .expect("Unable to downcast to primitive array")
 }
 
+#[macro_export]
+#[doc(hidden)]
+macro_rules! downcast_dictionary_array_helper {
+    ($t:ty, $($values:ident),+, $e:block) => {{
+        $(let $values = $crate::cast::as_dictionary_array::<$t>($values);)+
+        $e
+    }};
+}
+
 /// Downcast an [`Array`] to a [`DictionaryArray`] based on its [`DataType`], accepts
 /// a number of subsequent patterns to match the data type
 ///
@@ -314,56 +319,11 @@ macro_rules! downcast_dictionary_array {
 
     ($values:ident => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
         match $values.data_type() {
-            arrow_schema::DataType::Dictionary(k, _) => match k.as_ref() {
-                arrow_schema::DataType::Int8 => {
-                    let $values = $crate::cast::as_dictionary_array::<
-                        $crate::types::Int8Type,
-                    >($values);
-                    $e
-                },
-                arrow_schema::DataType::Int16 => {
-                    let $values = $crate::cast::as_dictionary_array::<
-                        $crate::types::Int16Type,
-                    >($values);
-                    $e
-                },
-                arrow_schema::DataType::Int32 => {
-                    let $values = $crate::cast::as_dictionary_array::<
-                        $crate::types::Int32Type,
-                    >($values);
-                    $e
-                },
-                arrow_schema::DataType::Int64 => {
-                    let $values = $crate::cast::as_dictionary_array::<
-                        $crate::types::Int64Type,
-                    >($values);
-                    $e
-                },
-                arrow_schema::DataType::UInt8 => {
-                    let $values = $crate::cast::as_dictionary_array::<
-                        $crate::types::UInt8Type,
-                    >($values);
-                    $e
-                },
-                arrow_schema::DataType::UInt16 => {
-                    let $values = $crate::cast::as_dictionary_array::<
-                        $crate::types::UInt16Type,
-                    >($values);
-                    $e
-                },
-                arrow_schema::DataType::UInt32 => {
-                    let $values = $crate::cast::as_dictionary_array::<
-                        $crate::types::UInt32Type,
-                    >($values);
-                    $e
-                },
-                arrow_schema::DataType::UInt64 => {
-                    let $values = $crate::cast::as_dictionary_array::<
-                        $crate::types::UInt64Type,
-                    >($values);
-                    $e
-                },
-                k => unreachable!("unsupported dictionary key type: {}", k)
+            arrow_schema::DataType::Dictionary(k, _) => {
+                $crate::downcast_integer! {
+                    k.as_ref() => ($crate::downcast_dictionary_array_helper, $values, $e),
+                    k => unreachable!("unsupported dictionary key type: {}", k)
+                }
             }
             $($p => $fallback,)*
         }
