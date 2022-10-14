@@ -20,12 +20,12 @@ use arrow::array::{
     Int32Array, Int32Builder, Int64Array, StringArray, StructBuilder, UInt64Array,
     UInt8Builder,
 };
+use arrow_array::Decimal128Array;
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, Field, UnionMode};
 use std::ptr::NonNull;
 use std::sync::Arc;
-use arrow_array::Decimal128Array;
 
 #[test]
 #[should_panic(
@@ -1058,7 +1058,9 @@ fn test_decimal_full_validation() {
     array_data.validate_full().unwrap();
 
     let array = Decimal128Array::from(array_data);
-    let error = array.validate_decimal_precision(array.precision()).unwrap_err();
+    let error = array
+        .validate_decimal_precision(array.precision())
+        .unwrap_err();
 
     assert_eq!(
         "Invalid argument error: 123456 is too large to store in a Decimal128 of precision 5. Max is 99999",
