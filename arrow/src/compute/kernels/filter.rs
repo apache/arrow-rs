@@ -338,6 +338,16 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
         // actually filter
         _ => downcast_primitive_array! {
             values => Ok(Arc::new(filter_primitive(values, predicate))),
+            DataType::Decimal128(p, s) => {
+                let values = values.as_any().downcast_ref::<Decimal128Array>().unwrap();
+                let filtered = filter_primitive(values, predicate);
+                Ok(Arc::new(filtered.with_precision_and_scale(*p, *s).unwrap()))
+            }
+            DataType::Decimal256(p, s) => {
+                let values = values.as_any().downcast_ref::<Decimal256Array>().unwrap();
+                let filtered = filter_primitive(values, predicate);
+                Ok(Arc::new(filtered.with_precision_and_scale(*p, *s).unwrap()))
+            }
             DataType::Boolean => {
                 let values = values.as_any().downcast_ref::<BooleanArray>().unwrap();
                 Ok(Arc::new(filter_boolean(values, predicate)))
