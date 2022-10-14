@@ -62,7 +62,7 @@ The [Apache Arrow Status](https://arrow.apache.org/docs/status.html) page lists 
 
 ## Safety
 
-Arrow seeks to uphold the Rust Soundness Pledge as articulated eloquently [here](https://raphlinus.github.io/rust/25.0.01/18/soundness-pledge.html). Specifically:
+Arrow seeks to uphold the Rust Soundness Pledge as articulated eloquently [here](https://raphlinus.github.io/rust/2020/01/18/soundness-pledge.html). Specifically:
 
 > The intent of this crate is to be free of soundness bugs. The developers will do their best to avoid them, and welcome help in analyzing and fixing them
 
