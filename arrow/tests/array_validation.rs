@@ -25,6 +25,7 @@ use arrow_data::ArrayData;
 use arrow_schema::{DataType, Field, UnionMode};
 use std::ptr::NonNull;
 use std::sync::Arc;
+use arrow_array::Decimal128Array;
 
 #[test]
 #[should_panic(
@@ -1038,7 +1039,6 @@ fn test_string_data_from_foreign() {
 }
 
 #[test]
-#[cfg(not(feature = "force_validate"))]
 fn test_decimal_full_validation() {
     let values_builder = UInt8Builder::with_capacity(10);
     let byte_width = 16;
@@ -1055,8 +1055,11 @@ fn test_decimal_full_validation() {
         .len(fixed_size_array.len())
         .add_buffer(fixed_size_array.data_ref().child_data()[0].buffers()[0].clone());
     let array_data = unsafe { builder.build_unchecked() };
-    let validation_result = array_data.validate_full();
-    let error = validation_result.unwrap_err();
+    array_data.validate_full().unwrap();
+
+    let array = Decimal128Array::from(array_data);
+    let error = array.validate_decimal_precision(array.precision()).unwrap_err();
+
     assert_eq!(
         "Invalid argument error: 123456 is too large to store in a Decimal128 of precision 5. Max is 99999",
         error.to_string()
