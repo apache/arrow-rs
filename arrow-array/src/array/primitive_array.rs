@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
-use crate::decimal::Decimal;
 use crate::iterator::PrimitiveIter;
 use crate::raw_pointer::RawPtrBox;
 use crate::temporal_conversions::{as_date, as_datetime, as_duration, as_time};
@@ -917,67 +916,62 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
         })
     }
 
-    pub fn value_as_string(&self, row: usize) -> Result<String, ArrowError> {
-        let p = self.precision()?;
-        let s = self.scale()?;
-        Ok(Decimal::<T>::new(p, s, &T::to_native(self.value(row))).to_string())
+    /// Returns [`Self::value`] formatted as a string
+    pub fn value_as_string(&self, row: usize) -> String {
+        T::format_decimal(self.value(row), self.precision(), self.scale())
     }
 
-    pub fn precision(&self) -> Result<u8, ArrowError> {
+    /// Returns the decimal precision of this array
+    pub fn precision(&self) -> u8 {
         match T::BYTE_LENGTH {
             16 => {
                 if let DataType::Decimal128(p, _) = self.data().data_type() {
-                    Ok(*p)
+                    *p
                 } else {
-                    Err(ArrowError::InvalidArgumentError(format!(
+                    unreachable!(
                         "Decimal128Array datatype is not DataType::Decimal128 but {}",
                         self.data_type()
-                    )))
+                    )
                 }
             }
             32 => {
                 if let DataType::Decimal256(p, _) = self.data().data_type() {
-                    Ok(*p)
+                    *p
                 } else {
-                    Err(ArrowError::InvalidArgumentError(format!(
+                    unreachable!(
                         "Decimal256Array datatype is not DataType::Decimal256 but {}",
                         self.data_type()
-                    )))
+                    )
                 }
             }
-            other => Err(ArrowError::InvalidArgumentError(format!(
-                "Unsupported byte length for decimal array {}",
-                other
-            ))),
+            other => unreachable!("Unsupported byte length for decimal array {}", other),
         }
     }
 
-    pub fn scale(&self) -> Result<u8, ArrowError> {
+    /// Returns the decimal scale of this array
+    pub fn scale(&self) -> u8 {
         match T::BYTE_LENGTH {
             16 => {
                 if let DataType::Decimal128(_, s) = self.data().data_type() {
-                    Ok(*s)
+                    *s
                 } else {
-                    Err(ArrowError::InvalidArgumentError(format!(
+                    unreachable!(
                         "Decimal128Array datatype is not DataType::Decimal128 but {}",
                         self.data_type()
-                    )))
+                    )
                 }
             }
             32 => {
                 if let DataType::Decimal256(_, s) = self.data().data_type() {
-                    Ok(*s)
+                    *s
                 } else {
-                    Err(ArrowError::InvalidArgumentError(format!(
+                    unreachable!(
                         "Decimal256Array datatype is not DataType::Decimal256 but {}",
                         self.data_type()
-                    )))
+                    )
                 }
             }
-            other => Err(ArrowError::InvalidArgumentError(format!(
-                "Unsupported byte length for decimal array {}",
-                other
-            ))),
+            other => unreachable!("Unsupported byte length for decimal array {}", other),
         }
     }
 }
@@ -1564,8 +1558,8 @@ mod tests {
             .build()
             .unwrap();
         let decimal_array = Decimal128Array::from(array_data);
-        assert_eq!(8_887_000_000_i128, decimal_array.value(0).into());
-        assert_eq!(-8_887_000_000_i128, decimal_array.value(1).into());
+        assert_eq!(8_887_000_000_i128, decimal_array.value(0));
+        assert_eq!(-8_887_000_000_i128, decimal_array.value(1));
     }
 
     #[test]
@@ -1576,7 +1570,7 @@ mod tests {
         let result = decimal_builder.finish().with_precision_and_scale(5, 3);
         assert!(result.is_ok());
         let arr = result.unwrap();
-        assert_eq!("12.345", arr.value_as_string(1).unwrap());
+        assert_eq!("12.345", arr.value_as_string(1));
 
         // Validate it explicitly
         let result = arr.validate_decimal_precision(5);
@@ -1594,8 +1588,8 @@ mod tests {
         let result = decimal_builder.finish().with_precision_and_scale(2, 1);
         assert!(result.is_ok());
         let arr = result.unwrap();
-        assert_eq!("9.9", arr.value_as_string(1).unwrap());
-        assert_eq!("-9.9", arr.value_as_string(3).unwrap());
+        assert_eq!("9.9", arr.value_as_string(1));
+        assert_eq!("-9.9", arr.value_as_string(3));
 
         // Validate it explicitly
         let result = arr.validate_decimal_precision(2);
@@ -1611,11 +1605,11 @@ mod tests {
         let array = Decimal128Array::from_iter_values(vec![-100, 0, 101].into_iter());
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal128(38, 10));
-        assert_eq!(-100_i128, array.value(0).into());
+        assert_eq!(-100_i128, array.value(0));
         assert!(!array.is_null(0));
-        assert_eq!(0_i128, array.value(1).into());
+        assert_eq!(0_i128, array.value(1));
         assert!(!array.is_null(1));
-        assert_eq!(101_i128, array.value(2).into());
+        assert_eq!(101_i128, array.value(2));
         assert!(!array.is_null(2));
     }
 
@@ -1625,10 +1619,10 @@ mod tests {
             vec![Some(-100), None, Some(101)].into_iter().collect();
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal128(38, 10));
-        assert_eq!(-100_i128, array.value(0).into());
+        assert_eq!(-100_i128, array.value(0));
         assert!(!array.is_null(0));
         assert!(array.is_null(1));
-        assert_eq!(101_i128, array.value(2).into());
+        assert_eq!(101_i128, array.value(2));
         assert!(!array.is_null(2));
     }
 
@@ -1661,13 +1655,13 @@ mod tests {
             .with_precision_and_scale(6, 3)
             .unwrap();
 
-        assert_eq!("123.450", arr.value_as_string(0).unwrap());
-        assert_eq!("-123.450", arr.value_as_string(1).unwrap());
-        assert_eq!("0.100", arr.value_as_string(2).unwrap());
-        assert_eq!("-0.100", arr.value_as_string(3).unwrap());
-        assert_eq!("0.010", arr.value_as_string(4).unwrap());
-        assert_eq!("-0.010", arr.value_as_string(5).unwrap());
-        assert_eq!("0.000", arr.value_as_string(6).unwrap());
+        assert_eq!("123.450", arr.value_as_string(0));
+        assert_eq!("-123.450", arr.value_as_string(1));
+        assert_eq!("0.100", arr.value_as_string(2));
+        assert_eq!("-0.100", arr.value_as_string(3));
+        assert_eq!("0.010", arr.value_as_string(4));
+        assert_eq!("-0.010", arr.value_as_string(5));
+        assert_eq!("0.000", arr.value_as_string(6));
     }
 
     #[test]
@@ -1677,12 +1671,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(arr.data_type(), &DataType::Decimal128(20, 2));
-        assert_eq!(arr.precision().unwrap(), 20);
-        assert_eq!(arr.scale().unwrap(), 2);
+        assert_eq!(arr.precision(), 20);
+        assert_eq!(arr.scale(), 2);
 
-        let actual: Vec<_> = (0..arr.len())
-            .map(|i| arr.value_as_string(i).unwrap())
-            .collect();
+        let actual: Vec<_> = (0..arr.len()).map(|i| arr.value_as_string(i)).collect();
         let expected = vec!["123.45", "4.56", "78.90", "-1232234234324.32"];
 
         assert_eq!(actual, expected);
@@ -1748,9 +1740,7 @@ mod tests {
         let value2 = i256::from_i128(56789);
 
         let mut array: Decimal256Array =
-            vec![Some(value1.clone()), None, Some(value2.clone())]
-                .into_iter()
-                .collect();
+            vec![Some(value1), None, Some(value2)].into_iter().collect();
         array = array.with_precision_and_scale(76, 10).unwrap();
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal256(76, 10));
@@ -1768,10 +1758,10 @@ mod tests {
         array = array.with_precision_and_scale(38, 10).unwrap();
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal128(38, 10));
-        assert_eq!(-100_i128, array.value(0).into());
+        assert_eq!(-100_i128, array.value(0));
         assert!(!array.is_null(0));
         assert!(array.is_null(1));
-        assert_eq!(101_i128, array.value(2).into());
+        assert_eq!(101_i128, array.value(2));
         assert!(!array.is_null(2));
     }
 

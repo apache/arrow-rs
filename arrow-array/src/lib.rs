@@ -166,7 +166,6 @@ pub use record_batch::{RecordBatch, RecordBatchOptions};
 
 pub mod builder;
 pub mod cast;
-pub mod decimal;
 mod delta;
 pub mod iterator;
 mod raw_pointer;

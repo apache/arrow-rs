@@ -274,7 +274,7 @@ pub fn make_string_from_decimal(column: &Arc<dyn Array>, row: usize) -> Result<S
         .downcast_ref::<array::Decimal128Array>()
         .unwrap();
 
-    array.value_as_string(row)
+    Ok(array.value_as_string(row))
 }
 
 fn append_struct_field_string(

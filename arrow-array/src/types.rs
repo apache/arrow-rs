@@ -495,18 +495,18 @@ impl<const N: usize> NativeDecimalType for [u8; N] {
 pub trait DecimalType:
     'static + Send + Sync + ArrowPrimitiveType + private::DecimalTypeSealed
 {
-    type DecimalNative: NativeDecimalType;
-
     const BYTE_LENGTH: usize;
     const MAX_PRECISION: u8;
     const MAX_SCALE: u8;
     const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType;
     const DEFAULT_TYPE: DataType;
 
-    fn to_native(num: <Self as ArrowPrimitiveType>::Native) -> Self::DecimalNative;
+    /// Formats the decimal value with the provided precision and scale
+    fn format_decimal(value: Self::Native, precision: u8, scale: u8) -> String;
 
+    /// Validates that `value` contains no more than `precision` decimal digits
     fn validate_decimal_precision(
-        num: <Self as ArrowPrimitiveType>::Native,
+        value: Self::Native,
         precision: u8,
     ) -> Result<(), ArrowError>;
 }
@@ -516,8 +516,6 @@ pub trait DecimalType:
 pub struct Decimal128Type {}
 
 impl DecimalType for Decimal128Type {
-    type DecimalNative = [u8; 16];
-
     const BYTE_LENGTH: usize = 16;
     const MAX_PRECISION: u8 = DECIMAL128_MAX_PRECISION;
     const MAX_SCALE: u8 = DECIMAL128_MAX_SCALE;
@@ -525,8 +523,8 @@ impl DecimalType for Decimal128Type {
     const DEFAULT_TYPE: DataType =
         DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
 
-    fn to_native(num: i128) -> [u8; 16] {
-        num.to_le_bytes()
+    fn format_decimal(value: Self::Native, precision: u8, scale: u8) -> String {
+        format_decimal_str(&value.to_string(), precision as usize, scale as usize)
     }
 
     fn validate_decimal_precision(num: i128, precision: u8) -> Result<(), ArrowError> {
@@ -545,8 +543,6 @@ impl ArrowPrimitiveType for Decimal128Type {
 pub struct Decimal256Type {}
 
 impl DecimalType for Decimal256Type {
-    type DecimalNative = [u8; 32];
-
     const BYTE_LENGTH: usize = 32;
     const MAX_PRECISION: u8 = DECIMAL256_MAX_PRECISION;
     const MAX_SCALE: u8 = DECIMAL256_MAX_SCALE;
@@ -554,8 +550,8 @@ impl DecimalType for Decimal256Type {
     const DEFAULT_TYPE: DataType =
         DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
 
-    fn to_native(num: i256) -> [u8; 32] {
-        num.to_le_bytes()
+    fn format_decimal(value: Self::Native, precision: u8, scale: u8) -> String {
+        format_decimal_str(&value.to_string(), precision as usize, scale as usize)
     }
 
     fn validate_decimal_precision(num: i256, precision: u8) -> Result<(), ArrowError> {
@@ -567,6 +563,26 @@ impl ArrowPrimitiveType for Decimal256Type {
     type Native = i256;
 
     const DATA_TYPE: DataType = <Self as DecimalType>::DEFAULT_TYPE;
+}
+
+fn format_decimal_str(value_str: &str, precision: usize, scale: usize) -> String {
+    let (sign, rest) = match value_str.strip_prefix('-') {
+        Some(stripped) => ("-", stripped),
+        None => ("", value_str),
+    };
+    let bound = precision.min(rest.len()) + sign.len();
+    let value_str = &value_str[0..bound];
+
+    if scale == 0 {
+        value_str.to_string()
+    } else if rest.len() > scale {
+        // Decimal separator is in the middle of the string
+        let (whole, decimal) = value_str.split_at(value_str.len() - scale);
+        format!("{}.{}", whole, decimal)
+    } else {
+        // String has to be padded
+        format!("{}0.{:0>width$}", sign, rest, width = scale)
+    }
 }
 
 #[cfg(test)]

@@ -1176,8 +1176,8 @@ mod tests {
 
             let expected = 1..25;
 
-            assert_eq!(col.precision().unwrap(), target_precision);
-            assert_eq!(col.scale().unwrap(), 2);
+            assert_eq!(col.precision(), target_precision);
+            assert_eq!(col.scale(), 2);
 
             for (i, v) in expected.enumerate() {
                 assert_eq!(col.value(i), v * 100_i128);
