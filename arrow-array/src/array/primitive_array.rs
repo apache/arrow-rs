@@ -1674,9 +1674,7 @@ mod tests {
         assert_eq!(arr.precision(), 20);
         assert_eq!(arr.scale(), 2);
 
-        let actual: Vec<_> = (0..arr.len())
-            .map(|i| arr.value_as_string(i))
-            .collect();
+        let actual: Vec<_> = (0..arr.len()).map(|i| arr.value_as_string(i)).collect();
         let expected = vec!["123.45", "4.56", "78.90", "-1232234234324.32"];
 
         assert_eq!(actual, expected);
