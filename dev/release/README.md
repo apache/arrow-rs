@@ -260,6 +260,7 @@ Rust Arrow Crates:
 (cd arrow-flight && cargo publish)
 (cd parquet && cargo publish)
 (cd parquet_derive && cargo publish)
+(cd arrow-integration-test && cargo publish)
 ```
 
 `object_store`

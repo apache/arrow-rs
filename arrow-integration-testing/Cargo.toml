@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-integration-testing"
-description = "Binaries used in the Arrow integration tests"
+description = "Binaries used in the Arrow integration tests (NOT PUBLISHED TO crates.io)"
 version = "25.0.0"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
