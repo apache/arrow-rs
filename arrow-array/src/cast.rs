@@ -59,6 +59,8 @@ macro_rules! repeat_pat {
 /// assert_eq!(dictionary_key_size(&DataType::Dictionary(Box::new(DataType::Int64), Box::new(DataType::Utf8))), 8);
 /// assert_eq!(dictionary_key_size(&DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8))), 2);
 /// ```
+///
+/// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_integer {
     ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($($p:pat),+ => $fallback:expr $(,)*)*) => {
@@ -116,6 +118,8 @@ macro_rules! downcast_integer {
 /// assert_eq!(primitive_size(&DataType::Int64), 8);
 /// assert_eq!(primitive_size(&DataType::Float16), 2);
 /// ```
+///
+/// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_primitive {
     ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($($p:pat),+ => $fallback:expr $(,)*)*) => {
