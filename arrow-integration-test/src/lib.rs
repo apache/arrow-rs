@@ -42,9 +42,9 @@ mod datatype;
 mod field;
 mod schema;
 
-pub use schema::*;
 pub use datatype::*;
 pub use field::*;
+pub use schema::*;
 
 /// A struct that represents an Arrow file with a schema and record batches
 ///

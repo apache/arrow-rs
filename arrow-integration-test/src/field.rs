@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::{data_type_from_json, data_type_to_json};
 use arrow::datatypes::{DataType, Field};
 use arrow::error::{ArrowError, Result};
 use std::collections::BTreeMap;
-use crate::{data_type_from_json, data_type_to_json};
 
 /// Parse a `Field` definition from a JSON representation.
 pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
