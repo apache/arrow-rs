@@ -78,14 +78,17 @@ git commit -a -m 'Update version'
 # ensure your github token is available
 export ARROW_GITHUB_API_TOKEN=<TOKEN>
 
-# run automated script to copy labels to issues based on referenced PRs
-# (NOTE this must be done by a committer / other who has
-# write access to the repository)
-python dev/release/label_issues.py
 
 # manully edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
 ./dev/release/update_change_log.sh
+
+# run automated script to copy labels to issues based on referenced PRs
+# (NOTE 1:  this must be done by a committer / other who has
+# write access to the repository)
+#
+# NOTE 2: this must be done after creating the initial CHANGELOG file
+python dev/release/label_issues.py
 
 # review change log / edit issues and labels if needed, rerun
 git commit -a -m 'Create changelog'
