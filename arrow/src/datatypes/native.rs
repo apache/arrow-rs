@@ -17,7 +17,7 @@
 
 use crate::error::{ArrowError, Result};
 pub use arrow_array::ArrowPrimitiveType;
-pub use arrow_buffer::{ArrowNativeType, ToByteSlice};
+pub use arrow_buffer::{i256, ArrowNativeType, ToByteSlice};
 use half::f16;
 
 /// Trait for [`ArrowNativeType`] that adds checked and unchecked arithmetic operations,
@@ -81,9 +81,12 @@ pub trait ArrowNativeTypeOp: ArrowNativeType {
 
 macro_rules! native_type_op {
     ($t:tt) => {
+        native_type_op!($t, 0, 1);
+    };
+    ($t:tt, $zero:expr, $one: expr) => {
         impl ArrowNativeTypeOp for $t {
-            const ZERO: Self = 0;
-            const ONE: Self = 1;
+            const ZERO: Self = $zero;
+            const ONE: Self = $one;
 
             fn add_checked(self, rhs: Self) -> Result<Self> {
                 self.checked_add(rhs).ok_or_else(|| {
@@ -159,7 +162,7 @@ macro_rules! native_type_op {
             }
 
             fn is_zero(self) -> bool {
-                self == 0
+                self == Self::ZERO
             }
 
             fn is_eq(self, rhs: Self) -> bool {
@@ -198,6 +201,7 @@ native_type_op!(u8);
 native_type_op!(u16);
 native_type_op!(u32);
 native_type_op!(u64);
+native_type_op!(i256, i256::ZERO, i256::ONE);
 
 macro_rules! native_type_float_op {
     ($t:tt, $zero:expr, $one:expr) => {
