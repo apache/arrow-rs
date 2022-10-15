@@ -111,9 +111,12 @@ jobs:
       - name: Check compilation --no-default-features --all-targets --features test_utils
         run: |
           cargo check -p arrow --no-default-features --all-targets --features test_utils
-      - name: Check compilation --no-default-features --all-targets --features --ffi
+      - name: Check compilation --no-default-features --all-targets --features ffi
         run: |
           cargo check -p arrow --no-default-features --all-targets --features ffi
+      - name: Check compilation --no-default-features --all-targets --features chrono-tz
+        run: |
+          cargo check -p arrow --no-default-features --all-targets --features chrono-tz
 
   # test the --features "simd" of the arrow crate. This requires nightly Rust.
   linux-test-simd:
