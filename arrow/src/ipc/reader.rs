@@ -486,16 +486,12 @@ fn create_primitive_array(
             .unwrap(),
         Decimal128(_, _) | Decimal256(_, _) => {
             // read 2 buffers: null buffer (optional) and data buffer
-            let builder = ArrayData::builder(data_type.clone())
+            ArrayData::builder(data_type.clone())
                 .len(length)
                 .add_buffer(buffers[1].clone())
-                .null_bit_buffer(null_buffer);
-
-            // Don't validate the decimal array so far,
-            // becasue validating decimal is some what complicated
-            // and there is no conclusion on whether we should do it.
-            // For more infomation, please look at https://github.com/apache/arrow-rs/issues/2387
-            unsafe { builder.build_unchecked() }
+                .null_bit_buffer(null_buffer)
+                .build()
+                .unwrap()
         }
         t => unreachable!("Data type {:?} either unsupported or not primitive", t),
     };
