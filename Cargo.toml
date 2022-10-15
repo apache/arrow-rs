@@ -19,14 +19,15 @@
 members = [
         "arrow",
         "arrow-array",
-        "arrow-data",
-        "arrow-schema",
         "arrow-buffer",
+        "arrow-data",
         "arrow-flight",
+        "arrow-integration-test",
+        "arrow-integration-testing",
+        "arrow-schema",
         "parquet",
         "parquet_derive",
         "parquet_derive_test",
-        "integration-testing",
         "object_store",
 ]
 # Enable the version 2 feature resolver, which avoids unifying features for targets that are not being built

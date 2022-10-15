@@ -30,6 +30,7 @@ on:
       - arrow-buffer/**
       - arrow-data/**
       - arrow-schema/**
+      - arrow-integration-test/**
       - .github/**
 
 jobs:
@@ -60,6 +61,8 @@ jobs:
         run: cargo test -p arrow-schema --all-features
       - name: Test arrow-array with all features
         run: cargo test -p arrow-array --all-features
+      - name: Test arrow-integration-test with all features
+        run: cargo test -p arrow-integration-test --all-features
       - name: Test arrow
         run: cargo test -p arrow
       - name: Test --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict,dyn_arith_dict
@@ -186,6 +189,14 @@ jobs:
       - name: Setup Clippy
         run: |
           rustup component add clippy
-      - name: Run clippy
+      - name: Clippy arrow-buffer with all features
+        run: cargo clippy -p arrow-buffer --all-features
+      - name: Clippy arrow-data with all features
+        run: cargo clippy -p arrow-data --all-features
+      - name: Clippy arrow-schema with all features
+        run: cargo clippy -p arrow-schema --all-features
+      - name: Clippy arrow-array with all features
+        run: cargo clippy -p arrow-array --all-features
+      - name: Clippy arrow
         run: |
           cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict,dyn_arith_dict --all-targets -- -D warnings

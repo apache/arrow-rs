@@ -134,10 +134,19 @@ where
             let values = values.as_any().downcast_ref::<BooleanArray>().unwrap();
             Ok(Arc::new(take_boolean(values, indices)?))
         }
-        DataType::Decimal128(_, _) => {
-            let decimal_values =
-                values.as_any().downcast_ref::<Decimal128Array>().unwrap();
-            Ok(Arc::new(take_decimal128(decimal_values, indices)?))
+        DataType::Decimal128(p, s) => {
+            let decimal_values = values.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            let array = take_primitive(decimal_values, indices)?
+                .with_precision_and_scale(*p, *s)
+                .unwrap();
+            Ok(Arc::new(array))
+        }
+        DataType::Decimal256(p, s) => {
+            let decimal_values = values.as_any().downcast_ref::<Decimal256Array>().unwrap();
+            let array = take_primitive(decimal_values, indices)?
+                .with_precision_and_scale(*p, *s)
+                .unwrap();
+            Ok(Arc::new(array))
         }
         DataType::Utf8 => {
             let values = values
@@ -427,41 +436,6 @@ where
     };
 
     Ok((buffer, nulls))
-}
-
-/// `take` implementation for decimal arrays
-fn take_decimal128<IndexType>(
-    decimal_values: &Decimal128Array,
-    indices: &PrimitiveArray<IndexType>,
-) -> Result<Decimal128Array>
-where
-    IndexType: ArrowNumericType,
-    IndexType::Native: ToPrimitive,
-{
-    indices
-        .iter()
-        .map(|index| {
-            // Use type annotations below for readability (was blowing
-            // my mind otherwise)
-            let t: Option<Result<Option<_>>> = index.map(|index| {
-                let index = ToPrimitive::to_usize(&index).ok_or_else(|| {
-                    ArrowError::ComputeError("Cast to usize failed".to_string())
-                })?;
-
-                if decimal_values.is_null(index) {
-                    Ok(None)
-                } else {
-                    Ok(Some(decimal_values.value(index)))
-                }
-            });
-            let t: Result<Option<Option<_>>> = t.transpose();
-            let t: Result<Option<_>> = t.map(|t| t.flatten());
-            t
-        })
-        .collect::<Result<Decimal128Array>>()?
-        // PERF: we could avoid re-validating that the data in
-        // Decimal128Array was in range as we know it came from a valid Decimal128Array
-        .with_precision_and_scale(decimal_values.precision()?, decimal_values.scale()?)
 }
 
 /// `take` implementation for all primitive arrays

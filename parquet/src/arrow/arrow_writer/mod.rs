@@ -583,7 +583,7 @@ fn get_decimal_array_slice(
     indices: &[usize],
 ) -> Vec<FixedLenByteArray> {
     let mut values = Vec::with_capacity(indices.len());
-    let size = decimal_length_from_precision(array.precision().unwrap());
+    let size = decimal_length_from_precision(array.precision());
     for i in indices {
         let as_be_bytes = array.value(*i).to_be_bytes();
         let resized_value = as_be_bytes[(16 - size)..].to_vec();
