@@ -866,7 +866,6 @@ mod tests {
         let ptr = arrow_buffer::alloc::allocate_aligned(8);
         let buf = unsafe { Buffer::from_raw_parts(ptr, 8, 8) };
         let buf2 = buf.slice(1);
-
         let array_data = ArrayData::builder(DataType::Int32)
             .add_buffer(buf2)
             .build()
