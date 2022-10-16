@@ -861,16 +861,40 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "memory is not aligned")]
+    #[should_panic(expected = "Need at least 8 bytes in buffers[0]")]
     fn test_primitive_array_alignment() {
-        let ptr = arrow_buffer::alloc::allocate_aligned(8);
+        let ptr = arrow_buffer::alloc::allocate_aligned_zeroed(8);
         let buf = unsafe { Buffer::from_raw_parts(ptr, 8, 8) };
+        let buf1 = buf.slice(1);
         let buf2 = buf.slice(1);
+
+        // Aligned
         let array_data = ArrayData::builder(DataType::Int32)
-            .add_buffer(buf2)
+            .add_buffer(buf)
+            .len(2)
             .build()
             .unwrap();
-        drop(Int32Array::from(array_data));
+        let array = Int32Array::from(array_data);
+        assert_eq!(array.len(), 2);
+        assert_eq!(array.value(0), 0);
+        assert_eq!(array.value(1), 0);
+
+        // Not aligned.
+        // `ArrayData::build` checks buffer length.
+        let array_data = ArrayData::builder(DataType::Int32)
+            .add_buffer(buf1)
+            .len(1)
+            .build()
+            .unwrap();
+        let array = Int32Array::from(array_data);
+        assert_eq!(array.len(), 1);
+        assert_eq!(array.value(0), 0);
+
+        ArrayData::builder(DataType::Int32)
+            .add_buffer(buf2)
+            .len(2)
+            .build()
+            .unwrap();
     }
 
     #[test]
