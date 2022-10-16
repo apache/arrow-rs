@@ -878,6 +878,7 @@ mod tests {
         assert_eq!(array.len(), 2);
         assert_eq!(array.value(0), 0);
         assert_eq!(array.value(1), 0);
+        assert_eq!(array.values(), &[0, 0]);
 
         // Not aligned.
         // `ArrayData::build` checks buffer length.
@@ -889,6 +890,7 @@ mod tests {
         let array = Int32Array::from(array_data);
         assert_eq!(array.len(), 1);
         assert_eq!(array.value(0), 0);
+        assert_eq!(array.values(), &[0]);
 
         ArrayData::builder(DataType::Int32)
             .add_buffer(buf2)
