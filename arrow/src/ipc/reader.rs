@@ -477,14 +477,13 @@ fn create_primitive_array(
         | Timestamp(_, _)
         | Date64
         | Duration(_)
-        | Interval(IntervalUnit::DayTime)
-        | Interval(IntervalUnit::MonthDayNano) => ArrayData::builder(data_type.clone())
+        | Interval(IntervalUnit::DayTime) => ArrayData::builder(data_type.clone())
             .len(length)
             .add_buffer(buffers[1].clone())
             .null_bit_buffer(null_buffer)
             .build()
             .unwrap(),
-        Decimal128(_, _) | Decimal256(_, _) => {
+        Interval(IntervalUnit::MonthDayNano) | Decimal128(_, _) | Decimal256(_, _) => {
             let buffer = get_aligned_buffer(&buffers[1], length);
 
             // read 2 buffers: null buffer (optional) and data buffer
