@@ -46,7 +46,7 @@ use ipc::CONTINUATION_MARKER;
 #[derive(Debug, Clone)]
 pub struct IpcWriteOptions {
     /// Write padding after memory buffers to this multiple of bytes.
-    /// Generally 8 or 64, defaults to 8
+    /// Generally 8 or 64, defaults to 64
     alignment: usize,
     /// The legacy format is for releases before 0.15.0, and uses metadata V4
     write_legacy_ipc_format: bool,
@@ -132,7 +132,7 @@ impl IpcWriteOptions {
 impl Default for IpcWriteOptions {
     fn default() -> Self {
         Self {
-            alignment: 8,
+            alignment: 64,
             write_legacy_ipc_format: false,
             metadata_version: ipc::MetadataVersion::V5,
             batch_compression_type: None,
