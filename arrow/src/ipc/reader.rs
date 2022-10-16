@@ -484,12 +484,19 @@ fn create_primitive_array(
             .null_bit_buffer(null_buffer)
             .build()
             .unwrap(),
-        Interval(IntervalUnit::MonthDayNano) | Decimal128(_, _) | Decimal256(_, _) => {
-            let buffer = if matches!(data_type, &DataType::Decimal256(_, _)) {
-                get_aligned_buffer::<i256>(&buffers[1], length)
-            } else {
-                get_aligned_buffer::<i128>(&buffers[1], length)
-            };
+        Interval(IntervalUnit::MonthDayNano) | Decimal128(_, _) => {
+            let buffer = get_aligned_buffer::<i128>(&buffers[1], length);
+
+            // read 2 buffers: null buffer (optional) and data buffer
+            ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_buffer(buffer)
+                .null_bit_buffer(null_buffer)
+                .build()
+                .unwrap()
+        }
+        Decimal256(_, _) => {
+            let buffer = get_aligned_buffer::<i256>(&buffers[1], length);
 
             // read 2 buffers: null buffer (optional) and data buffer
             ArrayData::builder(data_type.clone())
@@ -515,7 +522,7 @@ fn get_aligned_buffer<T>(buffer: &Buffer, length: usize) -> Buffer {
     // e.g. 8 bytes, but on some platform (e.g. ARM) i128 requires 16 bytes alignment.
     // We need to copy the buffer as fallback.
     if align_offset != 0 {
-        let len_in_bytes = length * std::mem::size_of::<T>();
+        let len_in_bytes = (length * std::mem::size_of::<T>()).min(buffer.len());
         let slice = &buffer.as_slice()[0..len_in_bytes];
         Buffer::from_slice_ref(&slice)
     } else {
