@@ -19,10 +19,7 @@
 
 use crate::array::*;
 use crate::buffer::{buffer_bin_and, Buffer};
-use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
-use num::{One, ToPrimitive, Zero};
-use std::ops::Add;
 
 /// Combines the null bitmaps of multiple arrays using a bitwise `and` operation.
 ///
@@ -61,93 +58,15 @@ pub(super) fn combine_option_bitmap(
         )
 }
 
-/// Takes/filters a list array's inner data using the offsets of the list array.
-///
-/// Where a list array has indices `[0,2,5,10]`, taking indices of `[2,0]` returns
-/// an array of the indices `[5..10, 0..2]` and offsets `[0,5,7]` (5 elements and 2
-/// elements)
-pub(super) fn take_value_indices_from_list<IndexType, OffsetType>(
-    list: &GenericListArray<OffsetType::Native>,
-    indices: &PrimitiveArray<IndexType>,
-) -> Result<(PrimitiveArray<OffsetType>, Vec<OffsetType::Native>)>
-where
-    IndexType: ArrowNumericType,
-    IndexType::Native: ToPrimitive,
-    OffsetType: ArrowNumericType,
-    OffsetType::Native: OffsetSizeTrait + Add + Zero + One,
-    PrimitiveArray<OffsetType>: From<Vec<Option<OffsetType::Native>>>,
-{
-    // TODO: benchmark this function, there might be a faster unsafe alternative
-    let offsets: &[OffsetType::Native] = list.value_offsets();
-
-    let mut new_offsets = Vec::with_capacity(indices.len());
-    let mut values = Vec::new();
-    let mut current_offset = OffsetType::Native::zero();
-    // add first offset
-    new_offsets.push(OffsetType::Native::zero());
-    // compute the value indices, and set offsets accordingly
-    for i in 0..indices.len() {
-        if indices.is_valid(i) {
-            let ix = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
-                ArrowError::ComputeError("Cast to usize failed".to_string())
-            })?;
-            let start = offsets[ix];
-            let end = offsets[ix + 1];
-            current_offset += end - start;
-            new_offsets.push(current_offset);
-
-            let mut curr = start;
-
-            // if start == end, this slot is empty
-            while curr < end {
-                values.push(Some(curr));
-                curr += OffsetType::Native::one();
-            }
-        } else {
-            new_offsets.push(current_offset);
-        }
-    }
-
-    Ok((PrimitiveArray::<OffsetType>::from(values), new_offsets))
-}
-
-/// Takes/filters a fixed size list array's inner data using the offsets of the list array.
-pub(super) fn take_value_indices_from_fixed_size_list<IndexType>(
-    list: &FixedSizeListArray,
-    indices: &PrimitiveArray<IndexType>,
-    length: <UInt32Type as ArrowPrimitiveType>::Native,
-) -> Result<PrimitiveArray<UInt32Type>>
-where
-    IndexType: ArrowNumericType,
-    IndexType::Native: ToPrimitive,
-{
-    let mut values = vec![];
-
-    for i in 0..indices.len() {
-        if indices.is_valid(i) {
-            let index = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
-                ArrowError::ComputeError("Cast to usize failed".to_string())
-            })?;
-            let start =
-                list.value_offset(index) as <UInt32Type as ArrowPrimitiveType>::Native;
-
-            values.extend(start..start + length);
-        }
-    }
-
-    Ok(PrimitiveArray::<UInt32Type>::from(values))
-}
-
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
 
     use std::sync::Arc;
 
+    use crate::array::ArrayData;
     use crate::buffer::buffer_bin_or;
     use crate::datatypes::DataType;
-    use crate::util::bit_util;
-    use crate::{array::ArrayData, buffer::MutableBuffer};
 
     /// Compares the null bitmaps of two arrays using a bitwise `or` operation.
     ///
@@ -319,176 +238,6 @@ pub(super) mod tests {
         assert_eq!(
             Some(Buffer::from([0b11111111])),
             compare_option_bitmap(&some_bitmap, &inverse_bitmap, 8,).unwrap()
-        );
-    }
-
-    pub(crate) fn build_generic_list<S, T>(
-        data: Vec<Option<Vec<T::Native>>>,
-    ) -> GenericListArray<S>
-    where
-        S: OffsetSizeTrait + 'static,
-        T: ArrowPrimitiveType,
-        PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
-    {
-        let data = data
-            .into_iter()
-            .map(|subarray| {
-                subarray.map(|item| {
-                    item.into_iter()
-                        .map(Some)
-                        .collect::<Vec<Option<T::Native>>>()
-                })
-            })
-            .collect();
-        build_generic_list_nullable(data)
-    }
-
-    pub(crate) fn build_generic_list_nullable<S, T>(
-        data: Vec<Option<Vec<Option<T::Native>>>>,
-    ) -> GenericListArray<S>
-    where
-        S: OffsetSizeTrait + 'static,
-        T: ArrowPrimitiveType,
-        PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
-    {
-        let mut offset = vec![S::zero()];
-        let mut values = vec![];
-
-        let list_len = data.len();
-        let num_bytes = bit_util::ceil(list_len, 8);
-        let mut list_null_count = 0;
-        let mut list_bitmap = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
-        for (idx, array) in data.into_iter().enumerate() {
-            if let Some(mut array) = array {
-                values.append(&mut array);
-            } else {
-                list_null_count += 1;
-                bit_util::unset_bit(list_bitmap.as_slice_mut(), idx);
-            }
-            offset.push(S::from_usize(values.len()).unwrap());
-        }
-
-        let value_data = PrimitiveArray::<T>::from(values).into_data();
-        let (list_data_type, value_offsets) = (
-            GenericListArray::<S>::DATA_TYPE_CONSTRUCTOR(Box::new(Field::new(
-                "item",
-                T::DATA_TYPE,
-                list_null_count == 0,
-            ))),
-            Buffer::from_slice_ref(&offset),
-        );
-
-        let list_data = ArrayData::builder(list_data_type)
-            .len(list_len)
-            .null_bit_buffer(Some(list_bitmap.into()))
-            .add_buffer(value_offsets)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-
-        GenericListArray::<S>::from(list_data)
-    }
-
-    pub(crate) fn build_fixed_size_list_nullable<T>(
-        list_values: Vec<Option<Vec<Option<T::Native>>>>,
-        length: <Int32Type as ArrowPrimitiveType>::Native,
-    ) -> FixedSizeListArray
-    where
-        T: ArrowPrimitiveType,
-        PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
-    {
-        let mut values = vec![];
-        let mut list_null_count = 0;
-        let list_len = list_values.len();
-
-        let num_bytes = bit_util::ceil(list_len, 8);
-        let mut list_bitmap = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
-        for (idx, list_element) in list_values.into_iter().enumerate() {
-            if let Some(items) = list_element {
-                // every sub-array should have the same length
-                debug_assert_eq!(length as usize, items.len());
-
-                values.extend(items.into_iter());
-            } else {
-                list_null_count += 1;
-                bit_util::unset_bit(list_bitmap.as_slice_mut(), idx);
-                values.extend(vec![None; length as usize].into_iter());
-            }
-        }
-
-        let list_data_type = DataType::FixedSizeList(
-            Box::new(Field::new("item", T::DATA_TYPE, list_null_count == 0)),
-            length,
-        );
-
-        let child_data = PrimitiveArray::<T>::from(values).into_data();
-
-        let list_data = ArrayData::builder(list_data_type)
-            .len(list_len)
-            .null_bit_buffer(Some(list_bitmap.into()))
-            .add_child_data(child_data)
-            .build()
-            .unwrap();
-
-        FixedSizeListArray::from(list_data)
-    }
-
-    #[test]
-    fn test_take_value_index_from_list() {
-        let list = build_generic_list::<i32, Int32Type>(vec![
-            Some(vec![0, 1]),
-            Some(vec![2, 3, 4]),
-            Some(vec![5, 6, 7, 8, 9]),
-        ]);
-        let indices = UInt32Array::from(vec![2, 0]);
-
-        let (indexed, offsets) = take_value_indices_from_list(&list, &indices).unwrap();
-
-        assert_eq!(indexed, Int32Array::from(vec![5, 6, 7, 8, 9, 0, 1]));
-        assert_eq!(offsets, vec![0, 5, 7]);
-    }
-
-    #[test]
-    fn test_take_value_index_from_large_list() {
-        let list = build_generic_list::<i64, Int32Type>(vec![
-            Some(vec![0, 1]),
-            Some(vec![2, 3, 4]),
-            Some(vec![5, 6, 7, 8, 9]),
-        ]);
-        let indices = UInt32Array::from(vec![2, 0]);
-
-        let (indexed, offsets) =
-            take_value_indices_from_list::<_, Int64Type>(&list, &indices).unwrap();
-
-        assert_eq!(indexed, Int64Array::from(vec![5, 6, 7, 8, 9, 0, 1]));
-        assert_eq!(offsets, vec![0, 5, 7]);
-    }
-
-    #[test]
-    fn test_take_value_index_from_fixed_list() {
-        let list = build_fixed_size_list_nullable::<Int32Type>(
-            vec![
-                Some(vec![Some(1), Some(2), None]),
-                Some(vec![Some(4), None, Some(6)]),
-                None,
-                Some(vec![None, Some(8), Some(9)]),
-            ],
-            3,
-        );
-
-        let indices = UInt32Array::from(vec![2, 1, 0]);
-        let indexed =
-            take_value_indices_from_fixed_size_list(&list, &indices, 3).unwrap();
-
-        assert_eq!(indexed, UInt32Array::from(vec![6, 7, 8, 3, 4, 5, 0, 1, 2]));
-
-        let indices = UInt32Array::from(vec![3, 2, 1, 2, 0]);
-        let indexed =
-            take_value_indices_from_fixed_size_list(&list, &indices, 3).unwrap();
-
-        assert_eq!(
-            indexed,
-            UInt32Array::from(vec![9, 10, 11, 6, 7, 8, 3, 4, 5, 6, 7, 8, 0, 1, 2])
         );
     }
 }

@@ -15,21 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines miscellaneous array kernels.
+//! Defines filter kernels
 
 use std::ops::AddAssign;
 use std::sync::Arc;
 
 use num::Zero;
 
-use crate::array::*;
-use crate::buffer::{buffer_bin_and, Buffer, MutableBuffer};
-use crate::datatypes::*;
-use crate::error::{ArrowError, Result};
-use crate::record_batch::RecordBatch;
-use crate::util::bit_iterator::{BitIndexIterator, BitSliceIterator};
-use crate::util::bit_util;
-use crate::{downcast_dictionary_array, downcast_primitive_array};
+use arrow_array::builder::BooleanBufferBuilder;
+use arrow_array::*;
+use arrow_buffer::bit_util;
+use arrow_buffer::{buffer::buffer_bin_and, Buffer, MutableBuffer};
+use arrow_data::bit_iterator::{BitIndexIterator, BitSliceIterator};
+use arrow_data::transform::MutableArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_schema::*;
 
 /// If the filter selects more than this fraction of rows, use
 /// [`SlicesIterator`] to copy ranges of values. Otherwise iterate
@@ -130,7 +130,7 @@ pub type Filter<'a> = Box<dyn Fn(&ArrayData) -> ArrayData + 'a>;
 /// Deprecated: Use [`FilterBuilder`] instead
 #[deprecated]
 #[allow(deprecated)]
-pub fn build_filter(filter: &BooleanArray) -> Result<Filter> {
+pub fn build_filter(filter: &BooleanArray) -> Result<Filter, ArrowError> {
     let iter = SlicesIterator::new(filter);
     let filter_count = filter_count(filter);
     let chunks = iter.collect::<Vec<_>>();
@@ -173,19 +173,18 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 ///
 /// # Example
 /// ```rust
-/// # use arrow::array::{Int32Array, BooleanArray};
-/// # use arrow::error::Result;
-/// # use arrow::compute::kernels::filter::filter;
-/// # fn main() -> Result<()> {
+/// # use arrow_array::{Int32Array, BooleanArray};
+/// # use arrow_select::filter::filter;
 /// let array = Int32Array::from(vec![5, 6, 7, 8, 9]);
 /// let filter_array = BooleanArray::from(vec![true, false, false, true, false]);
-/// let c = filter(&array, &filter_array)?;
+/// let c = filter(&array, &filter_array).unwrap();
 /// let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
 /// assert_eq!(c, &Int32Array::from(vec![5, 8]));
-/// # Ok(())
-/// # }
 /// ```
-pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef> {
+pub fn filter(
+    values: &dyn Array,
+    predicate: &BooleanArray,
+) -> Result<ArrayRef, ArrowError> {
     let predicate = FilterBuilder::new(predicate).build();
     filter_array(values, &predicate)
 }
@@ -194,7 +193,7 @@ pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef> 
 pub fn filter_record_batch(
     record_batch: &RecordBatch,
     predicate: &BooleanArray,
-) -> Result<RecordBatch> {
+) -> Result<RecordBatch, ArrowError> {
     let mut filter_builder = FilterBuilder::new(predicate);
     if record_batch.num_columns() > 1 {
         // Only optimize if filtering more than one column
@@ -206,7 +205,7 @@ pub fn filter_record_batch(
         .columns()
         .iter()
         .map(|a| filter_array(a, &filter))
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
 
     RecordBatch::try_new(record_batch.schema(), filtered_arrays)
 }
@@ -318,12 +317,15 @@ pub struct FilterPredicate {
 
 impl FilterPredicate {
     /// Selects rows from `values` based on this [`FilterPredicate`]
-    pub fn filter(&self, values: &dyn Array) -> Result<ArrayRef> {
+    pub fn filter(&self, values: &dyn Array) -> Result<ArrayRef, ArrowError> {
         filter_array(values, self)
     }
 }
 
-fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<ArrayRef> {
+fn filter_array(
+    values: &dyn Array,
+    predicate: &FilterPredicate,
+) -> Result<ArrayRef, ArrowError> {
     if predicate.filter.len() > values.len() {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Filter predicate of length {} is larger than target array of length {}",
@@ -683,14 +685,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::builder::*;
+    use arrow_array::types::*;
     use rand::distributions::{Alphanumeric, Standard};
     use rand::prelude::*;
-
-    use crate::datatypes::Int64Type;
-    use crate::{
-        buffer::Buffer,
-        datatypes::{DataType, Field},
-    };
 
     use super::*;
 
@@ -923,24 +921,6 @@ mod tests {
     }
 
     #[test]
-    fn test_filter_string_array_with_negated_boolean_array() {
-        let a = StringArray::from(vec!["hello", " ", "world", "!"]);
-        let mut bb = BooleanBuilder::with_capacity(2);
-        bb.append_value(false);
-        bb.append_value(true);
-        bb.append_value(false);
-        bb.append_value(true);
-        let b = bb.finish();
-        let b = crate::compute::not(&b).unwrap();
-
-        let c = filter(&a, &b).unwrap();
-        let d = c.as_ref().as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(2, d.len());
-        assert_eq!("hello", d.value(0));
-        assert_eq!("world", d.value(1));
-    }
-
-    #[test]
     fn test_filter_list_array() {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
@@ -1027,36 +1007,22 @@ mod tests {
     }
 
     #[test]
-    fn test_null_mask() -> Result<()> {
-        use crate::compute::kernels::comparison;
-        let a: PrimitiveArray<Int64Type> =
-            PrimitiveArray::from(vec![Some(1), Some(2), None]);
-        let mask0 = comparison::eq(&a, &a)?;
-        let out0 = filter(&a, &mask0)?;
-        let out_arr0 = out0
-            .as_any()
-            .downcast_ref::<PrimitiveArray<Int64Type>>()
-            .unwrap();
+    fn test_null_mask() {
+        let a = Int64Array::from(vec![Some(1), Some(2), None]);
 
         let mask1 = BooleanArray::from(vec![Some(true), Some(true), None]);
-        let out1 = filter(&a, &mask1)?;
-        let out_arr1 = out1
-            .as_any()
-            .downcast_ref::<PrimitiveArray<Int64Type>>()
-            .unwrap();
-        assert_eq!(mask0, mask1);
-        assert_eq!(out_arr0, out_arr1);
-        Ok(())
+        let out = filter(&a, &mask1).unwrap();
+        assert_eq!(&out, &a.slice(0, 2));
     }
 
     #[test]
-    fn test_fast_path() -> Result<()> {
+    fn test_fast_path() {
         let a: PrimitiveArray<Int64Type> =
             PrimitiveArray::from(vec![Some(1), Some(2), None]);
 
         // all true
         let mask = BooleanArray::from(vec![true, true, true]);
-        let out = filter(&a, &mask)?;
+        let out = filter(&a, &mask).unwrap();
         let b = out
             .as_any()
             .downcast_ref::<PrimitiveArray<Int64Type>>()
@@ -1065,10 +1031,9 @@ mod tests {
 
         // all false
         let mask = BooleanArray::from(vec![false, false, false]);
-        let out = filter(&a, &mask)?;
+        let out = filter(&a, &mask).unwrap();
         assert_eq!(out.len(), 0);
         assert_eq!(out.data_type(), &DataType::Int64);
-        Ok(())
     }
 
     #[test]

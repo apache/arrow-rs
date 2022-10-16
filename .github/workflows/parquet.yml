@@ -32,6 +32,7 @@ on:
       - arrow-buffer/**
       - arrow-data/**
       - arrow-schema/**
+      - arrow-select/**
       - parquet/**
       - .github/**
 
