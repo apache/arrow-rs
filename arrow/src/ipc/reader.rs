@@ -511,21 +511,11 @@ fn get_aligned_buffer(buffer: &Buffer, length: usize) -> Buffer {
     // We need to copy the buffer as fallback.
     if align_offset != 0 {
         let len_in_bytes = length * std::mem::size_of::<i128>();
-        let pad_len = padding(len_in_bytes, align_req);
-        let mut aligned_buffer = MutableBuffer::with_capacity(len_in_bytes + pad_len);
-        aligned_buffer.extend_from_slice(&buffer.as_slice()[0..len_in_bytes]);
-        aligned_buffer.extend_from_slice(&vec![0u8; pad_len]);
-        aligned_buffer.into()
+        let slice = &buffer.as_slice()[0..len_in_bytes];
+        Buffer::from_slice_ref(&slice)
     } else {
         buffer.clone()
     }
-}
-
-/// Calculate byte boundary and return the number of bytes needed to pad to `align_req` bytes
-#[inline]
-fn padding(len: usize, align_req: usize) -> usize {
-    assert_eq!(align_req % 8, 0);
-    ((len + (align_req - 1)) & !(align_req - 1)) - len
 }
 
 /// Reads the correct number of buffers based on list type and null_count, and creates a
