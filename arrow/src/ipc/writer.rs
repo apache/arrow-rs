@@ -46,7 +46,7 @@ use ipc::CONTINUATION_MARKER;
 #[derive(Debug, Clone)]
 pub struct IpcWriteOptions {
     /// Write padding after memory buffers to this multiple of bytes.
-    /// Generally 8 or 64, defaults to 8
+    /// Generally 8 or 64, defaults to 64
     alignment: usize,
     /// The legacy format is for releases before 0.15.0, and uses metadata V4
     write_legacy_ipc_format: bool,
@@ -132,7 +132,7 @@ impl IpcWriteOptions {
 impl Default for IpcWriteOptions {
     fn default() -> Self {
         Self {
-            alignment: 8,
+            alignment: 64,
             write_legacy_ipc_format: false,
             metadata_version: ipc::MetadataVersion::V5,
             batch_compression_type: None,
@@ -788,7 +788,8 @@ impl<W: Write> StreamWriter<W> {
     ///
     /// ```
     /// # use arrow::datatypes::Schema;
-    /// # use arrow::ipc::writer::StreamWriter;
+    /// # use arrow::ipc::writer::{StreamWriter, IpcWriteOptions};
+    /// # use arrow::ipc::MetadataVersion;
     /// # use arrow::error::ArrowError;
     /// # fn main() -> Result<(), ArrowError> {
     /// // The result we expect from an empty schema
@@ -807,7 +808,8 @@ impl<W: Write> StreamWriter<W> {
     ///
     /// let schema = Schema::new(vec![]);
     /// let buffer: Vec<u8> = Vec::new();
-    /// let stream_writer = StreamWriter::try_new(buffer, &schema)?;
+    /// let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    /// let stream_writer = StreamWriter::try_new_with_options(buffer, &schema, options)?;
     ///
     /// assert_eq!(stream_writer.into_inner()?, expected);
     /// # Ok(())
