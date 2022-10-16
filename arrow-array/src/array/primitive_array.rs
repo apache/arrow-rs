@@ -840,7 +840,7 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for PrimitiveArray<T> {
             data,
             // SAFETY:
             // ArrayData must be valid, and validated data type above
-            raw_values: unsafe { RawPtrBox::unchecked_new(ptr) },
+            raw_values: unsafe { RawPtrBox::new(ptr) },
         }
     }
 }
