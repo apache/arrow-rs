@@ -45,6 +45,21 @@ impl<T> RawPtrBox<T> {
         Self { ptr: ptr.cast() }
     }
 
+    /// # Safety
+    /// The user must guarantee that:
+    /// * the contents where `ptr` points to are never `moved`. This is guaranteed when they are Pinned.
+    /// * the lifetime of this struct does not outlive the lifetime of `ptr`.
+    /// Failure to fulfill any the above conditions results in undefined behavior.
+    /// # Panic
+    /// This function panics if:
+    /// * `ptr` is null
+    ///
+    /// Unlike `new`, this function does not check if `ptr` is aligned to a slice of type `T`.
+    pub(crate) unsafe fn unchecked_new(ptr: *const u8) -> Self {
+        let ptr = NonNull::new(ptr as *mut u8).expect("Pointer cannot be null");
+        Self { ptr: ptr.cast() }
+    }
+
     pub(super) fn as_ptr(&self) -> *const T {
         self.ptr.as_ptr()
     }
