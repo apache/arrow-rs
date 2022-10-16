@@ -788,7 +788,8 @@ impl<W: Write> StreamWriter<W> {
     ///
     /// ```
     /// # use arrow::datatypes::Schema;
-    /// # use arrow::ipc::writer::StreamWriter;
+    /// # use arrow::ipc::writer::{StreamWriter, IpcWriteOptions};
+    /// # use arrow::ipc::MetadataVersion;
     /// # use arrow::error::ArrowError;
     /// # fn main() -> Result<(), ArrowError> {
     /// // The result we expect from an empty schema
@@ -807,7 +808,8 @@ impl<W: Write> StreamWriter<W> {
     ///
     /// let schema = Schema::new(vec![]);
     /// let buffer: Vec<u8> = Vec::new();
-    /// let stream_writer = StreamWriter::try_new(buffer, &schema)?;
+    /// let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    /// let stream_writer = StreamWriter::try_new_with_options(buffer, &schema, options)?;
     ///
     /// assert_eq!(stream_writer.into_inner()?, expected);
     /// # Ok(())
