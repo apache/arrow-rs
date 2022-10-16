@@ -485,22 +485,7 @@ fn create_primitive_array(
             .build()
             .unwrap(),
         Decimal128(_, _) | Decimal256(_, _) => {
-            let ptr = buffers[1].as_ptr();
-            let align_req = std::mem::align_of::<i128>();
-            let align_offset = ptr.align_offset(align_req);
-            // The buffer is not aligned properly. The writer might use a smaller alignment
-            // e.g. 8 bytes, but on some platform (e.g. ARM) i128 requires 16 bytes alignment.
-            // We need to copy the buffer as fallback.
-            let buffer = if align_offset != 0 {
-                let len_in_bytes = length * std::mem::size_of::<i128>();
-                let pad_len = padding(len_in_bytes, align_req);
-                let mut buffer = MutableBuffer::with_capacity(len_in_bytes + pad_len);
-                buffer.extend_from_slice(&buffers[1].as_slice()[0..len_in_bytes]);
-                buffer.extend_from_slice(&vec![0u8; pad_len]);
-                buffer.into()
-            } else {
-                buffers[1].clone()
-            };
+            let buffer = get_aligned_buffer(&buffers[1], length);
 
             // read 2 buffers: null buffer (optional) and data buffer
             ArrayData::builder(data_type.clone())
@@ -514,6 +499,27 @@ fn create_primitive_array(
     };
 
     make_array(array_data)
+}
+
+/// Checks if given `Buffer` is properly aligned with `i128`.
+/// If not, copying the data and padded it for alignment.
+fn get_aligned_buffer(buffer: &Buffer, length: usize) -> Buffer {
+    let ptr = buffer.as_ptr();
+    let align_req = std::mem::align_of::<i128>();
+    let align_offset = ptr.align_offset(align_req);
+    // The buffer is not aligned properly. The writer might use a smaller alignment
+    // e.g. 8 bytes, but on some platform (e.g. ARM) i128 requires 16 bytes alignment.
+    // We need to copy the buffer as fallback.
+    if align_offset != 0 {
+        let len_in_bytes = length * std::mem::size_of::<i128>();
+        let pad_len = padding(len_in_bytes, align_req);
+        let mut aligned_buffer = MutableBuffer::with_capacity(len_in_bytes + pad_len);
+        aligned_buffer.extend_from_slice(&buffer.as_slice()[0..len_in_bytes]);
+        aligned_buffer.extend_from_slice(&vec![0u8; pad_len]);
+        aligned_buffer.into()
+    } else {
+        buffer.clone()
+    }
 }
 
 /// Calculate byte boundary and return the number of bytes needed to pad to `align_req` bytes
