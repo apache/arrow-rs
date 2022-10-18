@@ -98,16 +98,6 @@ impl RleEncoder {
         }
     }
 
-    /// Returns the minimum buffer size needed to use the encoder for `bit_width`.
-    /// This is the maximum length of a single run for `bit_width`.
-    #[allow(unused)]
-    pub fn min_buffer_size(bit_width: u8) -> usize {
-        let b = bit_width as usize;
-        let max_bit_packed_run_size = 1 + MAX_GROUPS_PER_BIT_PACKED_RUN * b;
-        let max_rle_run_size = 1 + bit_util::ceil(b, 8);
-        max_bit_packed_run_size.max(max_rle_run_size)
-    }
-
     /// Returns the maximum buffer size to encode `num_values` values with
     /// `bit_width`.
     pub fn max_buffer_size(bit_width: u8, num_values: usize) -> usize {
@@ -120,8 +110,11 @@ impl RleEncoder {
         // The maximum size if stored as shortest possible bit packed runs of 8
         let bit_packed_max_size = num_runs + num_runs * bytes_per_run;
 
+        // The length of `8` VLQ encoded
+        let rle_len_prefix = 1;
+
         // The length of an RLE run of 8
-        let min_rle_run_size = 1 + bit_util::ceil(bit_width as usize, 8);
+        let min_rle_run_size = rle_len_prefix + bit_util::ceil(bit_width as usize, 8);
 
         // The maximum size if stored as shortest possible RLE runs of 8
         let rle_max_size = num_runs * min_rle_run_size;
@@ -908,8 +901,8 @@ mod tests {
     #[test]
     fn test_rle_specific_roundtrip() {
         let bit_width = 1;
-        let buffer_len = RleEncoder::min_buffer_size(bit_width);
         let values: Vec<i16> = vec![0, 1, 1, 1, 1, 0, 0, 0, 0, 1];
+        let buffer_len = RleEncoder::max_buffer_size(bit_width, values.len());
         let mut encoder = RleEncoder::new(bit_width, buffer_len);
         for v in &values {
             encoder.put(*v as u64)
