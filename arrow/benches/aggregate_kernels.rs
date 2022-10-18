@@ -42,23 +42,23 @@ fn bench_min_string(arr_a: &StringArray) {
 }
 
 fn add_benchmark(c: &mut Criterion) {
-    let arr_a = create_primitive_array::<Float32Type>(512, 0.0);
+    let arr_a = create_primitive_array::<Float32Type>(4096, 0.0);
 
-    c.bench_function("sum 512", |b| b.iter(|| bench_sum(&arr_a)));
-    c.bench_function("min 512", |b| b.iter(|| bench_min(&arr_a)));
-    c.bench_function("max 512", |b| b.iter(|| bench_max(&arr_a)));
+    c.bench_function("sum 4096", |b| b.iter(|| bench_sum(&arr_a)));
+    c.bench_function("min 4096", |b| b.iter(|| bench_min(&arr_a)));
+    c.bench_function("max 4096", |b| b.iter(|| bench_max(&arr_a)));
 
-    let arr_a = create_primitive_array::<Float32Type>(512, 0.5);
+    let arr_a = create_primitive_array::<Float32Type>(4096, 0.5);
 
-    c.bench_function("sum nulls 512", |b| b.iter(|| bench_sum(&arr_a)));
-    c.bench_function("min nulls 512", |b| b.iter(|| bench_min(&arr_a)));
-    c.bench_function("max nulls 512", |b| b.iter(|| bench_max(&arr_a)));
+    c.bench_function("sum nulls 4096", |b| b.iter(|| bench_sum(&arr_a)));
+    c.bench_function("min nulls 4096", |b| b.iter(|| bench_min(&arr_a)));
+    c.bench_function("max nulls 4096", |b| b.iter(|| bench_max(&arr_a)));
 
-    let arr_b = create_string_array::<i32>(512, 0.0);
-    c.bench_function("min string 512", |b| b.iter(|| bench_min_string(&arr_b)));
+    let arr_b = create_string_array::<i32>(4096, 0.0);
+    c.bench_function("min string 4096", |b| b.iter(|| bench_min_string(&arr_b)));
 
-    let arr_b = create_string_array::<i32>(512, 0.5);
-    c.bench_function("min nulls string 512", |b| {
+    let arr_b = create_string_array::<i32>(4096, 0.5);
+    c.bench_function("min nulls string 4096", |b| {
         b.iter(|| bench_min_string(&arr_b))
     });
 }
