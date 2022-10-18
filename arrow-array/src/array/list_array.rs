@@ -16,12 +16,12 @@
 // under the License.
 
 use crate::array::make_array;
+use crate::builder::{GenericListBuilder, PrimitiveBuilder};
 use crate::{
-    builder::BooleanBufferBuilder, iterator::GenericListArrayIter, print_long_array,
-    raw_pointer::RawPtrBox, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType,
-    PrimitiveArray,
+    iterator::GenericListArrayIter, print_long_array, raw_pointer::RawPtrBox, Array,
+    ArrayAccessor, ArrayRef, ArrowPrimitiveType,
 };
-use arrow_buffer::{ArrowNativeType, MutableBuffer};
+use arrow_buffer::ArrowNativeType;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
 use num::Integer;
@@ -157,47 +157,26 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     pub fn from_iter_primitive<T, P, I>(iter: I) -> Self
     where
         T: ArrowPrimitiveType,
-        P: AsRef<[Option<<T as ArrowPrimitiveType>::Native>]>
-            + IntoIterator<Item = Option<<T as ArrowPrimitiveType>::Native>>,
+        P: IntoIterator<Item = Option<<T as ArrowPrimitiveType>::Native>>,
         I: IntoIterator<Item = Option<P>>,
     {
-        let iterator = iter.into_iter();
-        let (lower, _) = iterator.size_hint();
+        let iter = iter.into_iter();
+        let size_hint = iter.size_hint().0;
+        let mut builder =
+            GenericListBuilder::with_capacity(PrimitiveBuilder::<T>::new(), size_hint);
 
-        let mut offsets =
-            MutableBuffer::new((lower + 1) * std::mem::size_of::<OffsetSize>());
-        let mut length_so_far = OffsetSize::zero();
-        offsets.push(length_so_far);
-
-        let mut null_buf = BooleanBufferBuilder::new(lower);
-
-        let values: PrimitiveArray<T> = iterator
-            .filter_map(|maybe_slice| {
-                // regardless of whether the item is Some, the offsets and null buffers must be updated.
-                match &maybe_slice {
-                    Some(x) => {
-                        length_so_far +=
-                            OffsetSize::from_usize(x.as_ref().len()).unwrap();
-                        null_buf.append(true);
+        for i in iter {
+            match i {
+                Some(p) => {
+                    for t in p {
+                        builder.values().append_option(t);
                     }
-                    None => null_buf.append(false),
-                };
-                offsets.push(length_so_far);
-                maybe_slice
-            })
-            .flatten()
-            .collect();
-
-        let field = Box::new(Field::new("item", T::DATA_TYPE, true));
-        let data_type = Self::DATA_TYPE_CONSTRUCTOR(field);
-        let array_data = ArrayData::builder(data_type)
-            .len(null_buf.len())
-            .add_buffer(offsets.into())
-            .add_child_data(values.into_data())
-            .null_bit_buffer(Some(null_buf.into()));
-        let array_data = unsafe { array_data.build_unchecked() };
-
-        Self::from(array_data)
+                    builder.append(true);
+                }
+                None => builder.append(false),
+            }
+        }
+        builder.finish()
     }
 }
 
