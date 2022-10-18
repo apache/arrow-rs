@@ -22,8 +22,6 @@
 //! `RUSTFLAGS="-C target-feature=+avx2"` for example.  See the documentation
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 
-use std::ops::Neg;
-
 use crate::array::*;
 #[cfg(feature = "simd")]
 use crate::buffer::MutableBuffer;
@@ -1116,12 +1114,27 @@ where
 }
 
 /// Perform `-` operation on an array. If value is null then the result is also null.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `negate_checked` instead.
 pub fn negate<T>(array: &PrimitiveArray<T>) -> Result<PrimitiveArray<T>>
 where
     T: ArrowNumericType,
-    T::Native: Neg<Output = T::Native>,
+    T::Native: ArrowNativeTypeOp,
 {
-    Ok(unary(array, |x| -x))
+    Ok(unary(array, |x| x.neg_wrapping()))
+}
+
+/// Perform `-` operation on an array. If value is null then the result is also null.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `negate` instead.
+pub fn negate_checked<T>(array: &PrimitiveArray<T>) -> Result<PrimitiveArray<T>>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    try_unary(array, |value| value.neg_checked())
 }
 
 /// Raise array with floating point values to the power of a scalar.
@@ -2565,6 +2578,17 @@ mod tests {
         let actual = negate(&a).unwrap();
         let expected: Int64Array = (0..100).into_iter().map(|i| Some(-i)).collect();
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_primitive_array_negate_checked_overflow() {
+        let a = Int32Array::from(vec![i32::MIN]);
+        let actual = negate(&a).unwrap();
+        let expected = Int32Array::from(vec![i32::MIN]);
+        assert_eq!(expected, actual);
+
+        let err = negate_checked(&a);
+        err.expect_err("negate_checked should detect overflow");
     }
 
     #[test]
