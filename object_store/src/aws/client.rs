@@ -198,7 +198,7 @@ pub struct S3Config {
     pub endpoint: String,
     pub bucket: String,
     pub bucket_endpoint: String,
-    pub credentials: CredentialProvider,
+    pub credentials: Box<dyn CredentialProvider>,
     pub retry_config: RetryConfig,
     pub allow_http: bool,
 }
