@@ -17,7 +17,7 @@
 
 #[macro_use]
 extern crate criterion;
-use criterion::Criterion;
+use criterion::{Criterion, Throughput};
 
 extern crate arrow;
 
@@ -43,24 +43,37 @@ fn bench_min_string(arr_a: &StringArray) {
 
 fn add_benchmark(c: &mut Criterion) {
     let arr_a = create_primitive_array::<Float32Type>(4096, 0.0);
+    {
+        let mut g = c.benchmark_group("float");
+        g.throughput(Throughput::Bytes(4096 * std::mem::size_of::<f32>() as u64));
 
-    c.bench_function("sum 4096", |b| b.iter(|| bench_sum(&arr_a)));
-    c.bench_function("min 4096", |b| b.iter(|| bench_min(&arr_a)));
-    c.bench_function("max 4096", |b| b.iter(|| bench_max(&arr_a)));
+        g.bench_function("sum 4096", |b| b.iter(|| bench_sum(&arr_a)));
+        g.bench_function("min 4096", |b| b.iter(|| bench_min(&arr_a)));
+        g.bench_function("max 4096", |b| b.iter(|| bench_max(&arr_a)));
 
-    let arr_a = create_primitive_array::<Float32Type>(4096, 0.5);
+        let arr_a = create_primitive_array::<Float32Type>(4096, 0.5);
 
-    c.bench_function("sum nulls 4096", |b| b.iter(|| bench_sum(&arr_a)));
-    c.bench_function("min nulls 4096", |b| b.iter(|| bench_min(&arr_a)));
-    c.bench_function("max nulls 4096", |b| b.iter(|| bench_max(&arr_a)));
+        g.bench_function("sum nulls 4096", |b| b.iter(|| bench_sum(&arr_a)));
+        g.bench_function("min nulls 4096", |b| b.iter(|| bench_min(&arr_a)));
+        g.bench_function("max nulls 4096", |b| b.iter(|| bench_max(&arr_a)));
+    }
 
-    let arr_b = create_string_array::<i32>(4096, 0.0);
-    c.bench_function("min string 4096", |b| b.iter(|| bench_min_string(&arr_b)));
+    {
+        const STRING_LEN: usize = 4;
 
-    let arr_b = create_string_array::<i32>(4096, 0.5);
-    c.bench_function("min nulls string 4096", |b| {
-        b.iter(|| bench_min_string(&arr_b))
-    });
+        let mut g = c.benchmark_group("string");
+        g.throughput(Throughput::Bytes(
+            4096 * (std::mem::size_of::<i32>() + STRING_LEN) as u64,
+        ));
+
+        let arr_b = create_string_array_with_len::<i32>(4096, 0.0, STRING_LEN);
+        g.bench_function("min string 4096", |b| b.iter(|| bench_min_string(&arr_b)));
+
+        let arr_b = create_string_array::<i32>(4096, 0.5);
+        g.bench_function("min nulls string 4096", |b| {
+            b.iter(|| bench_min_string(&arr_b))
+        });
+    }
 }
 
 criterion_group!(benches, add_benchmark);
