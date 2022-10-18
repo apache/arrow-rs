@@ -379,8 +379,7 @@ impl DictEncoder {
 
     fn estimated_data_page_size(&self) -> usize {
         let bit_width = self.bit_width();
-        1 + RleEncoder::min_buffer_size(bit_width)
-            + RleEncoder::max_buffer_size(bit_width, self.indices.len())
+        1 + RleEncoder::max_buffer_size(bit_width, self.indices.len())
     }
 
     fn estimated_dict_page_size(&self) -> usize {
