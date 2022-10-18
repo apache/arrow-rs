@@ -371,14 +371,14 @@ impl AmazonS3Builder {
     /// Fill the [`AmazonS3Builder`] with regular AWS environment variables
     ///
     /// Variables extracted from environment:
-    /// * AWS_ACCESS_KEY_ID -> access_key_id
-    /// * AWS_SECRET_ACCESS_KEY -> secret_access_key
-    /// * AWS_DEFAULT_REGION -> region
-    /// * AWS_ENDPOINT -> endpoint
-    /// * AWS_SESSION_TOKEN -> token
-    /// * AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
-    /// * AWS_ALLOW_HTTP -> set to "true" to permit HTTP connections without TLS
-    /// * AWS_PROFILE -> set profile name, requires `aws_profile` feature enabled
+    /// * `AWS_ACCESS_KEY_ID` -> access_key_id
+    /// * `AWS_SECRET_ACCESS_KEY` -> secret_access_key
+    /// * `AWS_DEFAULT_REGION` -> region
+    /// * `AWS_ENDPOINT` -> endpoint
+    /// * `AWS_SESSION_TOKEN` -> token
+    /// * `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
+    /// * `AWS_ALLOW_HTTP` -> set to "true" to permit HTTP connections without TLS
+    /// * `AWS_PROFILE` -> set profile name, requires `aws_profile` feature enabled
     /// # Example
     /// ```
     /// use object_store::aws::AmazonS3Builder;
@@ -534,9 +534,18 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Set the AWS profile name
+    /// Set the AWS profile name, see <https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html>
     ///
-    /// See <https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html>
+    /// This makes use of [aws-config] to provide credentials and therefore requires
+    /// the `aws-profile` feature to be enabled
+    ///
+    /// It is strongly encouraged that users instead make use of a credential manager
+    /// such as [aws-vault] not only to avoid the significant additional dependencies,
+    /// but also to avoid storing credentials in [plain text on disk]
+    ///
+    /// [aws-config]: https://docs.rs/aws-config
+    /// [aws-vault]: https://github.com/99designs/aws-vault
+    /// [plain text on disk]: https://99designs.com.au/blog/engineering/aws-vault/
     #[cfg(feature = "aws_profile")]
     pub fn with_profile(mut self, profile: impl Into<String>) -> Self {
         self.profile = Some(profile.into());
