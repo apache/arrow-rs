@@ -32,8 +32,8 @@ macro_rules! repeat_pat {
     }
 }
 
-/// Given one or more expressions evaluating to integer [`DataType`] invokes the provided macro
-/// `m` with the corresponding [`ArrowPrimitiveType`], followed by any additional arguments
+/// Given one or more expressions evaluating to an integer [`DataType`] invokes the provided macro
+/// `m` with the corresponding integer [`ArrowPrimitiveType`], followed by any additional arguments
 ///
 /// ```
 /// # use arrow_array::{downcast_primitive, ArrowPrimitiveType, downcast_integer};
