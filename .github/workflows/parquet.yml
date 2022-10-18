@@ -119,6 +119,9 @@ jobs:
       - name: Check compilation  --all-targets --no-default-features --features json
         run: |
           cargo check -p parquet --all-targets --no-default-features --features json
+      - name: Check compilation wasm32-unknown-unknown
+        run: |
+          cargo check -p parquet --no-default-features --features cli,snap,flate2,brotli --target wasm32-unknown-unknown
 
   clippy:
     name: Clippy
