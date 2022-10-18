@@ -64,6 +64,10 @@ pub trait ArrowNativeTypeOp: ArrowNativeType {
 
     fn mod_wrapping(self, rhs: Self) -> Self;
 
+    fn neg_checked(self) -> Result<Self>;
+
+    fn neg_wrapping(self) -> Self;
+
     fn is_zero(self) -> bool;
 
     fn is_eq(self, rhs: Self) -> bool;
@@ -156,6 +160,16 @@ macro_rules! native_type_op {
 
             fn mod_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_rem(rhs)
+            }
+
+            fn neg_checked(self) -> Result<Self> {
+                self.checked_neg().ok_or_else(|| {
+                    ArrowError::ComputeError(format!("Overflow happened on: {:?}", self))
+                })
+            }
+
+            fn neg_wrapping(self) -> Self {
+                self.wrapping_neg()
             }
 
             fn is_zero(self) -> bool {
@@ -251,6 +265,14 @@ macro_rules! native_type_float_op {
 
             fn mod_wrapping(self, rhs: Self) -> Self {
                 self % rhs
+            }
+
+            fn neg_checked(self) -> Result<Self> {
+                Ok(-self)
+            }
+
+            fn neg_wrapping(self) -> Self {
+                -self
             }
 
             fn is_zero(self) -> bool {
