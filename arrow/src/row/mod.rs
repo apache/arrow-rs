@@ -616,6 +616,12 @@ fn encode_column(
     }
 }
 
+macro_rules! decode_primitive_helper {
+    ($t:ty, $rows: ident, $options:ident) => {
+        Arc::new(decode_primitive::<$t>($rows, $options))
+    };
+}
+
 /// Decodes a the provided `field` from `rows`
 ///
 /// # Safety
@@ -627,73 +633,10 @@ unsafe fn decode_column(
     interner: Option<&OrderPreservingInterner>,
 ) -> Result<ArrayRef> {
     let options = field.options;
-    let array: ArrayRef = match &field.data_type {
+    let array: ArrayRef = downcast_primitive! {
+        &field.data_type => (decode_primitive_helper, rows, options),
         DataType::Null => Arc::new(NullArray::new(rows.len())),
         DataType::Boolean => Arc::new(decode_bool(rows, options)),
-        DataType::Int8 => Arc::new(decode_primitive::<Int8Type>(rows, options)),
-        DataType::Int16 => Arc::new(decode_primitive::<Int16Type>(rows, options)),
-        DataType::Int32 => Arc::new(decode_primitive::<Int32Type>(rows, options)),
-        DataType::Int64 => Arc::new(decode_primitive::<Int64Type>(rows, options)),
-        DataType::UInt8 => Arc::new(decode_primitive::<UInt8Type>(rows, options)),
-        DataType::UInt16 => Arc::new(decode_primitive::<UInt16Type>(rows, options)),
-        DataType::UInt32 => Arc::new(decode_primitive::<UInt32Type>(rows, options)),
-        DataType::UInt64 => Arc::new(decode_primitive::<UInt64Type>(rows, options)),
-        DataType::Float16 => Arc::new(decode_primitive::<Float16Type>(rows, options)),
-        DataType::Float32 => Arc::new(decode_primitive::<Float32Type>(rows, options)),
-        DataType::Float64 => Arc::new(decode_primitive::<Float64Type>(rows, options)),
-        DataType::Timestamp(TimeUnit::Second, _) => {
-            Arc::new(decode_primitive::<TimestampSecondType>(rows, options))
-        }
-        DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            Arc::new(decode_primitive::<TimestampMillisecondType>(rows, options))
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            Arc::new(decode_primitive::<TimestampMicrosecondType>(rows, options))
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            Arc::new(decode_primitive::<TimestampNanosecondType>(rows, options))
-        }
-        DataType::Date32 => Arc::new(decode_primitive::<Date32Type>(rows, options)),
-        DataType::Date64 => Arc::new(decode_primitive::<Date64Type>(rows, options)),
-        DataType::Time32(t) => match t {
-            TimeUnit::Second => {
-                Arc::new(decode_primitive::<Time32SecondType>(rows, options))
-            }
-            TimeUnit::Millisecond => {
-                Arc::new(decode_primitive::<Time32MillisecondType>(rows, options))
-            }
-            _ => unreachable!(),
-        },
-        DataType::Time64(t) => match t {
-            TimeUnit::Microsecond => {
-                Arc::new(decode_primitive::<Time64MicrosecondType>(rows, options))
-            }
-            TimeUnit::Nanosecond => {
-                Arc::new(decode_primitive::<Time64NanosecondType>(rows, options))
-            }
-            _ => unreachable!(),
-        },
-        DataType::Duration(TimeUnit::Second) => {
-            Arc::new(decode_primitive::<DurationSecondType>(rows, options))
-        }
-        DataType::Duration(TimeUnit::Millisecond) => {
-            Arc::new(decode_primitive::<DurationMillisecondType>(rows, options))
-        }
-        DataType::Duration(TimeUnit::Microsecond) => {
-            Arc::new(decode_primitive::<DurationMicrosecondType>(rows, options))
-        }
-        DataType::Duration(TimeUnit::Nanosecond) => {
-            Arc::new(decode_primitive::<DurationNanosecondType>(rows, options))
-        }
-        DataType::Interval(IntervalUnit::DayTime) => {
-            Arc::new(decode_primitive::<IntervalDayTimeType>(rows, options))
-        }
-        DataType::Interval(IntervalUnit::MonthDayNano) => {
-            Arc::new(decode_primitive::<IntervalMonthDayNanoType>(rows, options))
-        }
-        DataType::Interval(IntervalUnit::YearMonth) => {
-            Arc::new(decode_primitive::<IntervalYearMonthType>(rows, options))
-        }
         DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)),
         DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)),
         DataType::Utf8 => Arc::new(decode_string::<i32>(rows, options)),
@@ -760,13 +703,7 @@ unsafe fn decode_column(
                 )));
             }
         },
-        DataType::FixedSizeBinary(_)
-        | DataType::List(_)
-        | DataType::FixedSizeList(_, _)
-        | DataType::LargeList(_)
-        | DataType::Struct(_)
-        | DataType::Union(_, _, _)
-        | DataType::Map(_, _) => {
+        _ => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "converting {} row is not supported",
                 field.data_type
