@@ -19,9 +19,8 @@ use crate::array::PrimitiveArray;
 use crate::compute::SortOptions;
 use crate::datatypes::ArrowPrimitiveType;
 use crate::row::{null_sentinel, Rows};
-use arrow_array::types::DecimalType;
 use arrow_array::BooleanArray;
-use arrow_buffer::{bit_util, MutableBuffer, ToByteSlice};
+use arrow_buffer::{bit_util, i256, MutableBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
 use half::f16;
@@ -91,6 +90,7 @@ encode_signed!(2, i16);
 encode_signed!(4, i32);
 encode_signed!(8, i64);
 encode_signed!(16, i128);
+encode_signed!(32, i256);
 
 macro_rules! encode_unsigned {
     ($n:expr, $t:ty) => {
@@ -161,38 +161,6 @@ impl FixedLengthEncoding for f64 {
         let bits = i64::decode(encoded);
         let val = bits ^ (((bits >> 63) as u64) >> 1) as i64;
         Self::from_bits(val as u64)
-    }
-}
-
-pub type RawDecimal128 = RawDecimal<16>;
-pub type RawDecimal256 = RawDecimal<32>;
-
-/// The raw bytes of a decimal
-#[derive(Copy, Clone)]
-pub struct RawDecimal<const N: usize>(pub [u8; N]);
-
-impl<const N: usize> ToByteSlice for RawDecimal<N> {
-    fn to_byte_slice(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl<const N: usize> FixedLengthEncoding for RawDecimal<N> {
-    type Encoded = [u8; N];
-
-    fn encode(self) -> [u8; N] {
-        let mut val = self.0;
-        // Convert to big endian representation
-        val.reverse();
-        // Toggle top "sign" bit to ensure consistent sort order
-        val[0] ^= 0x80;
-        val
-    }
-
-    fn decode(mut encoded: Self::Encoded) -> Self {
-        encoded[0] ^= 0x80;
-        encoded.reverse();
-        Self(encoded)
     }
 }
 
@@ -352,17 +320,6 @@ fn decode_fixed<T: FixedLengthEncoding + ToByteSlice>(
 
     // SAFETY: Buffers correct length
     unsafe { builder.build_unchecked() }
-}
-
-/// Decodes a `DecimalArray` from rows
-pub fn decode_decimal<const N: usize, T: DecimalType + ArrowPrimitiveType>(
-    rows: &mut [&[u8]],
-    options: SortOptions,
-    precision: u8,
-    scale: u8,
-) -> PrimitiveArray<T> {
-    decode_fixed::<RawDecimal<N>>(rows, T::TYPE_CONSTRUCTOR(precision, scale), options)
-        .into()
 }
 
 /// Decodes a `PrimitiveArray` from rows

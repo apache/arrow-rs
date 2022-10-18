@@ -86,6 +86,15 @@ impl i256 {
         }
     }
 
+    /// Create an integer value from its representation as a byte array in little-endian.
+    #[inline]
+    pub fn from_be_bytes(b: [u8; 32]) -> Self {
+        Self {
+            high: i128::from_be_bytes(b[0..16].try_into().unwrap()),
+            low: u128::from_be_bytes(b[16..32].try_into().unwrap()),
+        }
+    }
+
     pub fn from_i128(v: i128) -> Self {
         let mut bytes = if num::Signed::is_negative(&v) {
             [255_u8; 32]
@@ -127,6 +136,17 @@ impl i256 {
         *t_low = self.low.to_le_bytes();
         let t_high: &mut [u8; 16] = (&mut t[16..32]).try_into().unwrap();
         *t_high = self.high.to_le_bytes();
+        t
+    }
+
+    /// Return the memory representation of this integer as a byte array in big-endian byte order.
+    #[inline]
+    pub fn to_be_bytes(self) -> [u8; 32] {
+        let mut t = [0; 32];
+        let t_low: &mut [u8; 16] = (&mut t[0..16]).try_into().unwrap();
+        *t_low = self.high.to_be_bytes();
+        let t_high: &mut [u8; 16] = (&mut t[16..32]).try_into().unwrap();
+        *t_high = self.low.to_be_bytes();
         t
     }
 
