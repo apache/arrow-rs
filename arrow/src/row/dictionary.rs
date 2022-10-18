@@ -25,7 +25,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, MutableBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
+use arrow_schema::{ArrowError, DataType};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
@@ -87,6 +87,12 @@ pub fn encode_dictionary<K: ArrowDictionaryKeyType>(
             }
         }
     }
+}
+
+macro_rules! decode_primitive_helper {
+    ($t:ty, $values: ident) => {
+        decode_primitive::<$t>(&$values)
+    };
 }
 
 /// Decodes a string array from `rows` with the provided `options`
@@ -163,65 +169,10 @@ pub unsafe fn decode_dictionary<K: ArrowDictionaryKeyType>(
         null_builder.append(true);
     }
 
-    let child = match &value_type {
+    let child = downcast_primitive! {
+        &value_type => (decode_primitive_helper, values),
         DataType::Null => NullArray::new(values.len()).into_data(),
         DataType::Boolean => decode_bool(&values),
-        DataType::Int8 => decode_primitive::<Int8Type>(&values),
-        DataType::Int16 => decode_primitive::<Int16Type>(&values),
-        DataType::Int32 => decode_primitive::<Int32Type>(&values),
-        DataType::Int64 => decode_primitive::<Int64Type>(&values),
-        DataType::UInt8 => decode_primitive::<UInt8Type>(&values),
-        DataType::UInt16 => decode_primitive::<UInt16Type>(&values),
-        DataType::UInt32 => decode_primitive::<UInt32Type>(&values),
-        DataType::UInt64 => decode_primitive::<UInt64Type>(&values),
-        DataType::Float16 => decode_primitive::<Float16Type>(&values),
-        DataType::Float32 => decode_primitive::<Float32Type>(&values),
-        DataType::Float64 => decode_primitive::<Float64Type>(&values),
-        DataType::Timestamp(TimeUnit::Second, _) => {
-            decode_primitive::<TimestampSecondType>(&values)
-        }
-        DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            decode_primitive::<TimestampMillisecondType>(&values)
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            decode_primitive::<TimestampMicrosecondType>(&values)
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            decode_primitive::<TimestampNanosecondType>(&values)
-        }
-        DataType::Date32 => decode_primitive::<Date32Type>(&values),
-        DataType::Date64 => decode_primitive::<Date64Type>(&values),
-        DataType::Time32(t) => match t {
-            TimeUnit::Second => decode_primitive::<Time32SecondType>(&values),
-            TimeUnit::Millisecond => decode_primitive::<Time32MillisecondType>(&values),
-            _ => unreachable!(),
-        },
-        DataType::Time64(t) => match t {
-            TimeUnit::Microsecond => decode_primitive::<Time64MicrosecondType>(&values),
-            TimeUnit::Nanosecond => decode_primitive::<Time64NanosecondType>(&values),
-            _ => unreachable!(),
-        },
-        DataType::Duration(TimeUnit::Second) => {
-            decode_primitive::<DurationSecondType>(&values)
-        }
-        DataType::Duration(TimeUnit::Millisecond) => {
-            decode_primitive::<DurationMillisecondType>(&values)
-        }
-        DataType::Duration(TimeUnit::Microsecond) => {
-            decode_primitive::<DurationMicrosecondType>(&values)
-        }
-        DataType::Duration(TimeUnit::Nanosecond) => {
-            decode_primitive::<DurationNanosecondType>(&values)
-        }
-        DataType::Interval(IntervalUnit::DayTime) => {
-            decode_primitive::<IntervalDayTimeType>(&values)
-        }
-        DataType::Interval(IntervalUnit::MonthDayNano) => {
-            decode_primitive::<IntervalMonthDayNanoType>(&values)
-        }
-        DataType::Interval(IntervalUnit::YearMonth) => {
-            decode_primitive::<IntervalYearMonthType>(&values)
-        }
         DataType::Decimal128(p, s) => decode_decimal::<Decimal128Type>(&values, *p, *s),
         DataType::Decimal256(p, s) => decode_decimal::<Decimal256Type>(&values, *p, *s),
         DataType::Utf8 => decode_string::<i32>(&values),

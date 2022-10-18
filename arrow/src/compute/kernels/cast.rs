@@ -5640,10 +5640,9 @@ mod tests {
     /// Creates a dictionary with primitive dictionary values, and keys of type K
     #[cfg(feature = "chrono-tz")]
     fn make_dictionary_primitive<K: ArrowDictionaryKeyType>() -> ArrayRef {
-        let keys_builder = PrimitiveBuilder::<K>::new();
         // Pick Int32 arbitrarily for dictionary values
-        let values_builder = PrimitiveBuilder::<Int32Type>::new();
-        let mut b = PrimitiveDictionaryBuilder::new(keys_builder, values_builder);
+        let mut b: PrimitiveDictionaryBuilder<K, Int32Type> =
+            PrimitiveDictionaryBuilder::new();
         b.append(1).unwrap();
         b.append(2).unwrap();
         Arc::new(b.finish())
@@ -5652,10 +5651,8 @@ mod tests {
     /// Creates a dictionary with utf8 values, and keys of type K
     #[cfg(feature = "chrono-tz")]
     fn make_dictionary_utf8<K: ArrowDictionaryKeyType>() -> ArrayRef {
-        let keys_builder = PrimitiveBuilder::<K>::new();
         // Pick Int32 arbitrarily for dictionary values
-        let values_builder = StringBuilder::new();
-        let mut b = StringDictionaryBuilder::new(keys_builder, values_builder);
+        let mut b: StringDictionaryBuilder<K> = StringDictionaryBuilder::new();
         b.append("foo").unwrap();
         b.append("bar").unwrap();
         Arc::new(b.finish())
