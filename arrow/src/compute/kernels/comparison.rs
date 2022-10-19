@@ -29,11 +29,10 @@ use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{
     ArrowNativeType, ArrowNativeTypeOp, ArrowNumericType, DataType, Date32Type,
     Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    IntervalDayTimeType, IntervalUnit, IntervalYearMonthType, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 #[allow(unused_imports)]
 use crate::downcast_dictionary_array;
@@ -2329,10 +2328,10 @@ macro_rules! typed_compares {
                 DataType::Interval(IntervalUnit::DayTime),
                 DataType::Interval(IntervalUnit::DayTime),
             ) => cmp_primitive_array::<IntervalDayTimeType, _>($LEFT, $RIGHT, $OP),
-            (
-                DataType::Interval(IntervalUnit::MonthDayNano),
-                DataType::Interval(IntervalUnit::MonthDayNano),
-            ) => cmp_primitive_array::<IntervalMonthDayNanoType, _>($LEFT, $RIGHT, $OP),
+            // (
+            //     DataType::Interval(IntervalUnit::MonthDayNano),
+            //     DataType::Interval(IntervalUnit::MonthDayNano),
+            // ) => cmp_primitive_array::<IntervalMonthDayNanoType, _>($LEFT, $RIGHT, $OP),
             (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                 "Comparing arrays of type {} is not yet implemented",
                 t1
@@ -4038,6 +4037,8 @@ mod tests {
             )
         );
 
+        // IntervalMonthDayNano is no longer a numeric type and so can't be compared
+        /*
         let a = IntervalMonthDayNanoArray::from(
             vec![Some(0), Some(6), Some(834), None, Some(3), None],
         );
@@ -4053,6 +4054,8 @@ mod tests {
                 vec![Some(true), Some(false), Some(false), None, Some(false), None]
             )
         );
+
+         */
 
         let a = IntervalYearMonthArray::from(
             vec![Some(0), Some(623), Some(834), None, Some(3), None],

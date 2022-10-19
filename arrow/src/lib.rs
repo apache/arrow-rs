@@ -245,7 +245,7 @@
 //! [DataFusion]: https://github.com/apache/arrow-datafusion
 //! [issue tracker]: https://github.com/apache/arrow-rs/issues
 //!
-
+#![cfg_attr(feature = "simd", feature(portable_simd))]
 #![deny(clippy::redundant_clone)]
 #![warn(missing_debug_implementations)]
 #![allow(rustdoc::invalid_html_tags)]

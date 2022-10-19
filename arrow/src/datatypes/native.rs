@@ -98,6 +98,7 @@ macro_rules! native_type_op {
                 })
             }
 
+            #[inline]
             fn add_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_add(rhs)
             }
@@ -111,6 +112,7 @@ macro_rules! native_type_op {
                 })
             }
 
+            #[inline]
             fn sub_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_sub(rhs)
             }
@@ -124,6 +126,7 @@ macro_rules! native_type_op {
                 })
             }
 
+            #[inline]
             fn mul_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_mul(rhs)
             }
@@ -141,6 +144,7 @@ macro_rules! native_type_op {
                 }
             }
 
+            #[inline]
             fn div_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_div(rhs)
             }
@@ -158,6 +162,7 @@ macro_rules! native_type_op {
                 }
             }
 
+            #[inline]
             fn mod_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_rem(rhs)
             }
@@ -168,34 +173,42 @@ macro_rules! native_type_op {
                 })
             }
 
+            #[inline]
             fn neg_wrapping(self) -> Self {
                 self.wrapping_neg()
             }
 
+            #[inline]
             fn is_zero(self) -> bool {
                 self == 0
             }
 
+            #[inline]
             fn is_eq(self, rhs: Self) -> bool {
                 self == rhs
             }
 
+            #[inline]
             fn is_ne(self, rhs: Self) -> bool {
                 self != rhs
             }
 
+            #[inline]
             fn is_lt(self, rhs: Self) -> bool {
                 self < rhs
             }
 
+            #[inline]
             fn is_le(self, rhs: Self) -> bool {
                 self <= rhs
             }
 
+            #[inline]
             fn is_gt(self, rhs: Self) -> bool {
                 self > rhs
             }
 
+            #[inline]
             fn is_ge(self, rhs: Self) -> bool {
                 self >= rhs
             }
@@ -219,26 +232,32 @@ macro_rules! native_type_float_op {
             const ZERO: Self = $zero;
             const ONE: Self = $one;
 
+            #[inline]
             fn add_checked(self, rhs: Self) -> Result<Self> {
                 Ok(self + rhs)
             }
 
+            #[inline]
             fn add_wrapping(self, rhs: Self) -> Self {
                 self + rhs
             }
 
+            #[inline]
             fn sub_checked(self, rhs: Self) -> Result<Self> {
                 Ok(self - rhs)
             }
 
+            #[inline]
             fn sub_wrapping(self, rhs: Self) -> Self {
                 self - rhs
             }
 
+            #[inline]
             fn mul_checked(self, rhs: Self) -> Result<Self> {
                 Ok(self * rhs)
             }
 
+            #[inline]
             fn mul_wrapping(self, rhs: Self) -> Self {
                 self * rhs
             }
@@ -251,6 +270,7 @@ macro_rules! native_type_float_op {
                 }
             }
 
+            #[inline]
             fn div_wrapping(self, rhs: Self) -> Self {
                 self / rhs
             }
@@ -263,42 +283,52 @@ macro_rules! native_type_float_op {
                 }
             }
 
+            #[inline]
             fn mod_wrapping(self, rhs: Self) -> Self {
                 self % rhs
             }
 
+            #[inline]
             fn neg_checked(self) -> Result<Self> {
                 Ok(-self)
             }
 
+            #[inline]
             fn neg_wrapping(self) -> Self {
                 -self
             }
 
+            #[inline]
             fn is_zero(self) -> bool {
                 self == $zero
             }
 
+            #[inline]
             fn is_eq(self, rhs: Self) -> bool {
                 self.total_cmp(&rhs).is_eq()
             }
 
+            #[inline]
             fn is_ne(self, rhs: Self) -> bool {
                 self.total_cmp(&rhs).is_ne()
             }
 
+            #[inline]
             fn is_lt(self, rhs: Self) -> bool {
                 self.total_cmp(&rhs).is_lt()
             }
 
+            #[inline]
             fn is_le(self, rhs: Self) -> bool {
                 self.total_cmp(&rhs).is_le()
             }
 
+            #[inline]
             fn is_gt(self, rhs: Self) -> bool {
                 self.total_cmp(&rhs).is_gt()
             }
 
+            #[inline]
             fn is_ge(self, rhs: Self) -> bool {
                 self.total_cmp(&rhs).is_ge()
             }

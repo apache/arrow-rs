@@ -16,10 +16,12 @@
 // under the License.
 
 use super::*;
-#[cfg(feature = "simd")]
-use packed_simd::*;
+#[cfg(all(feature = "simd", feature = "external_core_simd"))]
+use core_simd::simd::*;
 #[cfg(feature = "simd")]
 use std::ops::{Add, BitAnd, BitAndAssign, BitOr, BitOrAssign, Div, Mul, Not, Rem, Sub};
+#[cfg(all(feature = "simd", not(feature = "external_core_simd")))]
+use std::simd::*;
 
 /// A subtype of primitive type that represents numeric values.
 ///
@@ -113,7 +115,7 @@ where
 pub trait ArrowNumericType: ArrowPrimitiveType {}
 
 macro_rules! make_numeric_type {
-    ($impl_ty:ty, $native_ty:ty, $simd_ty:ident, $simd_mask_ty:ident) => {
+    ($impl_ty:ty, $native_ty:ty, $simd_ty:ty, $simd_mask_ty:ty) => {
         #[cfg(feature = "simd")]
         impl ArrowNumericType for $impl_ty {
             type Simd = $simd_ty;
@@ -122,7 +124,7 @@ macro_rules! make_numeric_type {
 
             #[inline]
             fn lanes() -> usize {
-                Self::Simd::lanes()
+                Self::Simd::LANES
             }
 
             #[inline]
@@ -132,7 +134,7 @@ macro_rules! make_numeric_type {
 
             #[inline]
             fn load(slice: &[Self::Native]) -> Self::Simd {
-                unsafe { Self::Simd::from_slice_unaligned_unchecked(slice) }
+                Self::Simd::from_slice(slice)
             }
 
             #[inline]
@@ -142,126 +144,26 @@ macro_rules! make_numeric_type {
 
             #[inline]
             fn mask_from_u64(mask: u64) -> Self::SimdMask {
-                // this match will get removed by the compiler since the number of lanes is known at
-                // compile-time for each concrete numeric type
-                match Self::lanes() {
-                    4 => {
-                        // the bit position in each lane indicates the index of that lane
-                        let vecidx = i128x4::new(1, 2, 4, 8);
-
-                        // broadcast the lowermost 8 bits of mask to each lane
-                        let vecmask = i128x4::splat((mask & 0x0F) as i128);
-                        // compute whether the bit corresponding to each lanes index is set
-                        let vecmask = (vecidx & vecmask).eq(vecidx);
-
-                        // transmute is necessary because the different match arms return different
-                        // mask types, at runtime only one of those expressions will exist per type,
-                        // with the type being equal to `SimdMask`.
-                        unsafe { std::mem::transmute(vecmask) }
-                    }
-                    8 => {
-                        // the bit position in each lane indicates the index of that lane
-                        let vecidx = i64x8::new(1, 2, 4, 8, 16, 32, 64, 128);
-
-                        // broadcast the lowermost 8 bits of mask to each lane
-                        let vecmask = i64x8::splat((mask & 0xFF) as i64);
-                        // compute whether the bit corresponding to each lanes index is set
-                        let vecmask = (vecidx & vecmask).eq(vecidx);
-
-                        // transmute is necessary because the different match arms return different
-                        // mask types, at runtime only one of those expressions will exist per type,
-                        // with the type being equal to `SimdMask`.
-                        unsafe { std::mem::transmute(vecmask) }
-                    }
-                    16 => {
-                        // same general logic as for 8 lanes, extended to 16 bits
-                        let vecidx = i32x16::new(
-                            1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096,
-                            8192, 16384, 32768,
-                        );
-
-                        let vecmask = i32x16::splat((mask & 0xFFFF) as i32);
-                        let vecmask = (vecidx & vecmask).eq(vecidx);
-
-                        unsafe { std::mem::transmute(vecmask) }
-                    }
-                    32 => {
-                        // compute two separate m32x16 vector masks from  from the lower-most 32 bits of `mask`
-                        // and then combine them into one m16x32 vector mask by writing and reading a temporary
-                        let tmp = &mut [0_i16; 32];
-
-                        let vecidx = i32x16::new(
-                            1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096,
-                            8192, 16384, 32768,
-                        );
-
-                        let vecmask = i32x16::splat((mask & 0xFFFF) as i32);
-                        let vecmask = (vecidx & vecmask).eq(vecidx);
-
-                        i16x16::from_cast(vecmask)
-                            .write_to_slice_unaligned(&mut tmp[0..16]);
-
-                        let vecmask = i32x16::splat(((mask >> 16) & 0xFFFF) as i32);
-                        let vecmask = (vecidx & vecmask).eq(vecidx);
-
-                        i16x16::from_cast(vecmask)
-                            .write_to_slice_unaligned(&mut tmp[16..32]);
-
-                        unsafe { std::mem::transmute(i16x32::from_slice_unaligned(tmp)) }
-                    }
-                    64 => {
-                        // compute four m32x16 vector masks from  from all 64 bits of `mask`
-                        // and convert them into one m8x64 vector mask by writing and reading a temporary
-                        let tmp = &mut [0_i8; 64];
-
-                        let vecidx = i32x16::new(
-                            1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096,
-                            8192, 16384, 32768,
-                        );
-
-                        let vecmask = i32x16::splat((mask & 0xFFFF) as i32);
-                        let vecmask = (vecidx & vecmask).eq(vecidx);
-
-                        i8x16::from_cast(vecmask)
-                            .write_to_slice_unaligned(&mut tmp[0..16]);
-
-                        let vecmask = i32x16::splat(((mask >> 16) & 0xFFFF) as i32);
-                        let vecmask = (vecidx & vecmask).eq(vecidx);
-
-                        i8x16::from_cast(vecmask)
-                            .write_to_slice_unaligned(&mut tmp[16..32]);
-
-                        let vecmask = i32x16::splat(((mask >> 32) & 0xFFFF) as i32);
-                        let vecmask = (vecidx & vecmask).eq(vecidx);
-
-                        i8x16::from_cast(vecmask)
-                            .write_to_slice_unaligned(&mut tmp[32..48]);
-
-                        let vecmask = i32x16::splat(((mask >> 48) & 0xFFFF) as i32);
-                        let vecmask = (vecidx & vecmask).eq(vecidx);
-
-                        i8x16::from_cast(vecmask)
-                            .write_to_slice_unaligned(&mut tmp[48..64]);
-
-                        unsafe { std::mem::transmute(i8x64::from_slice_unaligned(tmp)) }
-                    }
-                    _ => panic!("Invalid number of vector lanes"),
-                }
+                Self::SimdMask::from_bitmask(mask as _)
             }
 
             #[inline]
             fn mask_to_u64(mask: &Self::SimdMask) -> u64 {
-                mask.bitmask() as u64
+                mask.to_bitmask() as u64
             }
 
             #[inline]
             fn mask_get(mask: &Self::SimdMask, idx: usize) -> bool {
-                unsafe { mask.extract_unchecked(idx) }
+                unsafe { mask.test_unchecked(idx) }
             }
 
             #[inline]
             fn mask_set(mask: Self::SimdMask, idx: usize, value: bool) -> Self::SimdMask {
-                unsafe { mask.replace_unchecked(idx, value) }
+                let mut tmp = mask;
+                unsafe {
+                    tmp.set_unchecked(idx, value);
+                }
+                tmp
             }
 
             /// Selects elements of `a` and `b` using `mask`
@@ -290,37 +192,38 @@ macro_rules! make_numeric_type {
 
             #[inline]
             fn eq(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
-                left.eq(right)
+                left.simd_eq(right)
             }
 
             #[inline]
             fn ne(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
-                left.ne(right)
+                left.simd_ne(right)
             }
 
             #[inline]
             fn lt(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
-                left.lt(right)
+                left.simd_lt(right)
             }
 
             #[inline]
             fn le(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
-                left.le(right)
+                left.simd_le(right)
             }
 
             #[inline]
             fn gt(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
-                left.gt(right)
+                left.simd_gt(right)
             }
 
             #[inline]
             fn ge(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
-                left.ge(right)
+                left.simd_ge(right)
             }
 
             #[inline]
             fn write(simd_result: Self::Simd, slice: &mut [Self::Native]) {
-                unsafe { simd_result.write_to_slice_unaligned_unchecked(slice) };
+                slice[0..Self::Simd::LANES].copy_from_slice(&simd_result.to_array());
+                // simd_result.write_to_slice_unaligned_unchecked(slice)
             }
 
             #[inline]
@@ -337,34 +240,34 @@ macro_rules! make_numeric_type {
     };
 }
 
-make_numeric_type!(Int8Type, i8, i8x64, m8x64);
-make_numeric_type!(Int16Type, i16, i16x32, m16x32);
-make_numeric_type!(Int32Type, i32, i32x16, m32x16);
-make_numeric_type!(Int64Type, i64, i64x8, m64x8);
-make_numeric_type!(UInt8Type, u8, u8x64, m8x64);
-make_numeric_type!(UInt16Type, u16, u16x32, m16x32);
-make_numeric_type!(UInt32Type, u32, u32x16, m32x16);
-make_numeric_type!(UInt64Type, u64, u64x8, m64x8);
-make_numeric_type!(Float32Type, f32, f32x16, m32x16);
-make_numeric_type!(Float64Type, f64, f64x8, m64x8);
+make_numeric_type!(Int8Type, i8, i8x64, mask8x64);
+make_numeric_type!(Int16Type, i16, i16x32, mask16x32);
+make_numeric_type!(Int32Type, i32, i32x16, mask32x16);
+make_numeric_type!(Int64Type, i64, i64x8, mask64x8);
+make_numeric_type!(UInt8Type, u8, u8x64, mask8x64);
+make_numeric_type!(UInt16Type, u16, u16x32, mask16x32);
+make_numeric_type!(UInt32Type, u32, u32x16, mask32x16);
+make_numeric_type!(UInt64Type, u64, u64x8, mask64x8);
+make_numeric_type!(Float32Type, f32, f32x16, mask32x16);
+make_numeric_type!(Float64Type, f64, f64x8, mask64x8);
 
-make_numeric_type!(TimestampSecondType, i64, i64x8, m64x8);
-make_numeric_type!(TimestampMillisecondType, i64, i64x8, m64x8);
-make_numeric_type!(TimestampMicrosecondType, i64, i64x8, m64x8);
-make_numeric_type!(TimestampNanosecondType, i64, i64x8, m64x8);
-make_numeric_type!(Date32Type, i32, i32x16, m32x16);
-make_numeric_type!(Date64Type, i64, i64x8, m64x8);
-make_numeric_type!(Time32SecondType, i32, i32x16, m32x16);
-make_numeric_type!(Time32MillisecondType, i32, i32x16, m32x16);
-make_numeric_type!(Time64MicrosecondType, i64, i64x8, m64x8);
-make_numeric_type!(Time64NanosecondType, i64, i64x8, m64x8);
-make_numeric_type!(IntervalYearMonthType, i32, i32x16, m32x16);
-make_numeric_type!(IntervalDayTimeType, i64, i64x8, m64x8);
-make_numeric_type!(IntervalMonthDayNanoType, i128, i128x4, m128x4);
-make_numeric_type!(DurationSecondType, i64, i64x8, m64x8);
-make_numeric_type!(DurationMillisecondType, i64, i64x8, m64x8);
-make_numeric_type!(DurationMicrosecondType, i64, i64x8, m64x8);
-make_numeric_type!(DurationNanosecondType, i64, i64x8, m64x8);
+make_numeric_type!(TimestampSecondType, i64, i64x8, mask64x8);
+make_numeric_type!(TimestampMillisecondType, i64, i64x8, mask64x8);
+make_numeric_type!(TimestampMicrosecondType, i64, i64x8, mask64x8);
+make_numeric_type!(TimestampNanosecondType, i64, i64x8, mask64x8);
+make_numeric_type!(Date32Type, i32, i32x16, mask32x16);
+make_numeric_type!(Date64Type, i64, i64x8, mask64x8);
+make_numeric_type!(Time32SecondType, i32, i32x16, mask32x16);
+make_numeric_type!(Time32MillisecondType, i32, i32x16, mask32x16);
+make_numeric_type!(Time64MicrosecondType, i64, i64x8, mask64x8);
+make_numeric_type!(Time64NanosecondType, i64, i64x8, mask64x8);
+make_numeric_type!(IntervalYearMonthType, i32, i32x16, mask32x16);
+make_numeric_type!(IntervalDayTimeType, i64, i64x8, mask64x8);
+// make_numeric_type!(IntervalMonthDayNanoType, i128, i32x4, mask32x4); // TODO: simd types are wrong since i128 is not supported (https://github.com/rust-lang/portable-simd/issues/108)
+make_numeric_type!(DurationSecondType, i64, i64x8, mask64x8);
+make_numeric_type!(DurationMillisecondType, i64, i64x8, mask64x8);
+make_numeric_type!(DurationMicrosecondType, i64, i64x8, mask64x8);
+make_numeric_type!(DurationNanosecondType, i64, i64x8, mask64x8);
 
 #[cfg(not(feature = "simd"))]
 impl ArrowNumericType for Float16Type {}
@@ -383,7 +286,7 @@ impl ArrowNumericType for Float16Type {
     }
 
     fn load(slice: &[Self::Native]) -> Self::Simd {
-        let mut s = [0_f32; Self::Simd::lanes()];
+        let mut s = [0_f32; Self::Simd::LANES];
         s.iter_mut().zip(slice).for_each(|(o, a)| *o = a.to_f32());
         Float32Type::load(&s)
     }
@@ -449,11 +352,11 @@ impl ArrowNumericType for Float16Type {
     }
 
     fn write(simd_result: Self::Simd, slice: &mut [Self::Native]) {
-        let mut s = [0_f32; Self::Simd::lanes()];
+        let mut s = [0_f32; Self::Simd::LANES];
         Float32Type::write(simd_result, &mut s);
         slice
             .iter_mut()
-            .zip(s)
+            .zip(s.into_iter())
             .for_each(|(o, i)| *o = half::f16::from_f32(i))
     }
 
@@ -462,31 +365,11 @@ impl ArrowNumericType for Float16Type {
     }
 }
 
-#[cfg(feature = "simd")]
-pub trait ArrowFloatNumericType: ArrowNumericType {
-    fn pow(base: Self::Simd, raise: Self::Simd) -> Self::Simd;
-}
-
-#[cfg(not(feature = "simd"))]
 pub trait ArrowFloatNumericType: ArrowNumericType {}
 
-macro_rules! make_float_numeric_type {
-    ($impl_ty:ty, $simd_ty:ident) => {
-        #[cfg(feature = "simd")]
-        impl ArrowFloatNumericType for $impl_ty {
-            #[inline]
-            fn pow(base: Self::Simd, raise: Self::Simd) -> Self::Simd {
-                base.powf(raise)
-            }
-        }
-
-        #[cfg(not(feature = "simd"))]
-        impl ArrowFloatNumericType for $impl_ty {}
-    };
-}
-
-make_float_numeric_type!(Float32Type, f32x16);
-make_float_numeric_type!(Float64Type, f64x8);
+impl ArrowFloatNumericType for Float64Type {}
+impl ArrowFloatNumericType for Float32Type {}
+impl ArrowFloatNumericType for Float16Type {}
 
 #[cfg(all(test, feature = "simd"))]
 mod tests {

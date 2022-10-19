@@ -60,11 +60,9 @@ pub fn math_op<LT, RT, F>(
     op: F,
 ) -> Result<PrimitiveArray<LT>>
 where
-    LT: ArrowNumericType,
-    RT: ArrowNumericType,
+    LT: ArrowPrimitiveType,
+    RT: ArrowPrimitiveType,
     F: Fn(LT::Native, RT::Native) -> LT::Native,
-    LT::Native: ArrowNativeTypeOp,
-    RT::Native: ArrowNativeTypeOp,
 {
     binary(left, right, op)
 }
@@ -78,11 +76,9 @@ fn math_checked_op<LT, RT, F>(
     op: F,
 ) -> Result<PrimitiveArray<LT>>
 where
-    LT: ArrowNumericType,
-    RT: ArrowNumericType,
+    LT: ArrowPrimitiveType,
+    RT: ArrowPrimitiveType,
     F: Fn(LT::Native, RT::Native) -> Result<LT::Native>,
-    LT::Native: ArrowNativeTypeOp,
-    RT::Native: ArrowNativeTypeOp,
 {
     try_binary(left, right, op)
 }
@@ -101,8 +97,8 @@ fn math_checked_divide_op<LT, RT, F>(
     op: F,
 ) -> Result<PrimitiveArray<LT>>
 where
-    LT: ArrowNumericType,
-    RT: ArrowNumericType,
+    LT: ArrowPrimitiveType,
+    RT: ArrowPrimitiveType,
     F: Fn(LT::Native, RT::Native) -> Result<LT::Native>,
 {
     try_binary(left, right, op)
@@ -709,8 +705,8 @@ fn math_safe_divide_op<LT, RT, F>(
     op: F,
 ) -> Result<ArrayRef>
 where
-    LT: ArrowNumericType,
-    RT: ArrowNumericType,
+    LT: ArrowPrimitiveType,
+    RT: ArrowPrimitiveType,
     F: Fn(LT::Native, RT::Native) -> Option<LT::Native>,
 {
     let array: PrimitiveArray<LT> = binary_opt::<_, _, _, LT>(left, right, op)?;
