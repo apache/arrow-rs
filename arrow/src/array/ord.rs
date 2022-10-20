@@ -315,9 +315,33 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::array::{Float64Array, Int32Array};
+    use crate::array::{FixedSizeBinaryArray, Float64Array, Int32Array};
     use crate::error::Result;
     use std::cmp::Ordering;
+
+    #[test]
+    fn test_fixed_size_binary() -> Result<()> {
+        let items = vec![vec![1u8], vec![2u8]];
+        let array = FixedSizeBinaryArray::try_from_iter(items.into_iter()).unwrap();
+
+        let cmp = build_compare(&array, &array)?;
+
+        assert_eq!(Ordering::Less, (cmp)(0, 1));
+        Ok(())
+    }
+
+    #[test]
+    fn test_fixed_size_binary_fixed_size_binary() -> Result<()> {
+        let items = vec![vec![1u8]];
+        let array1 = FixedSizeBinaryArray::try_from_iter(items.into_iter()).unwrap();
+        let items = vec![vec![2u8]];
+        let array2 = FixedSizeBinaryArray::try_from_iter(items.into_iter()).unwrap();
+
+        let cmp = build_compare(&array1, &array2)?;
+
+        assert_eq!(Ordering::Less, (cmp)(0, 0));
+        Ok(())
+    }
 
     #[test]
     fn test_i32() -> Result<()> {
