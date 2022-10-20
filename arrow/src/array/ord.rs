@@ -295,6 +295,14 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
             let right: Decimal128Array = Decimal128Array::from(right.data().clone());
             Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
         }
+        (FixedSizeBinary(_), FixedSizeBinary(_)) => {
+            let left: FixedSizeBinaryArray =
+                FixedSizeBinaryArray::from(left.data().clone());
+            let right: FixedSizeBinaryArray =
+                FixedSizeBinaryArray::from(right.data().clone());
+
+            Box::new(move |i, j| left.value(i).cmp(right.value(j)))
+        }
         (lhs, _) => {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "The data type type {:?} has no natural order",
