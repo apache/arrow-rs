@@ -45,7 +45,7 @@ use arrow_schema::ArrowError;
 ///   values array 1
 /// ```
 ///
-/// For selecting values by index from a single array see [compute::take](crate::compute::take)
+/// For selecting values by index from a single array see [`crate::interleave`]
 pub fn interleave(
     values: &[&dyn Array],
     indices: &[(usize, usize)],

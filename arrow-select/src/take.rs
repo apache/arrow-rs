@@ -46,7 +46,7 @@ use num::{ToPrimitive, Zero};
 ///    values array          indices array                              result
 /// ```
 ///
-/// For selecting values by index from multiple arrays see [compute::interleave](crate::compute::interleave)
+/// For selecting values by index from multiple arrays see [`crate::interleave`]
 ///
 /// # Errors
 /// This function errors whenever:
