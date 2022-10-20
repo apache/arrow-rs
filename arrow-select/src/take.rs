@@ -1771,17 +1771,13 @@ mod tests {
     {
         let indices = UInt32Array::from(indices);
 
-        let input_array = FixedSizeListArray::from_iter_primitive::<T, _, _>(
-            input_data.clone(),
-            length,
-        );
+        let input_array =
+            FixedSizeListArray::from_iter_primitive::<T, _, _>(input_data, length);
 
         let output = take_fixed_size_list(&input_array, &indices, length as u32).unwrap();
 
-        let expected = FixedSizeListArray::from_iter_primitive::<T, _, _>(
-            expected_data.clone(),
-            length,
-        );
+        let expected =
+            FixedSizeListArray::from_iter_primitive::<T, _, _>(expected_data, length);
 
         assert_eq!(&output, &expected)
     }

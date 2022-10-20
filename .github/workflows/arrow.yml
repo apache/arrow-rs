@@ -196,15 +196,15 @@ jobs:
         run: |
           rustup component add clippy
       - name: Clippy arrow-buffer with all features
-        run: cargo clippy -p arrow-buffer --all-features
+        run: cargo clippy -p arrow-buffer --all-targets --all-features
       - name: Clippy arrow-data with all features
-        run: cargo clippy -p arrow-data --all-features
+        run: cargo clippy -p arrow-data --all-targets --all-features
       - name: Clippy arrow-schema with all features
-        run: cargo clippy -p arrow-schema --all-features
+        run: cargo clippy -p arrow-schema --all-targets --all-features
       - name: Clippy arrow-array with all features
-        run: cargo clippy -p arrow-array --all-features
+        run: cargo clippy -p arrow-array --all-targets --all-features
       - name: Clippy arrow-select with all features
-        run: cargo clippy -p arrow-select --all-features
+        run: cargo clippy -p arrow-select --all-targets --all-features
       - name: Clippy arrow
         run: |
           cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict,dyn_arith_dict --all-targets -- -D warnings
