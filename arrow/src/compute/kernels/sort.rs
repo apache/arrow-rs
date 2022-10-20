@@ -1106,9 +1106,6 @@ fn sort_valids_array<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compute::util::tests::{
-        build_fixed_size_list_nullable, build_generic_list_nullable,
-    };
     use rand::rngs::StdRng;
     use rand::{Rng, RngCore, SeedableRng};
     use std::convert::TryFrom;
@@ -1356,12 +1353,15 @@ mod tests {
     {
         // for FixedSizedList
         if let Some(length) = fixed_length {
-            let input = Arc::new(build_fixed_size_list_nullable(data.clone(), length));
+            let input = Arc::new(FixedSizeListArray::from_iter_primitive::<T, _, _>(
+                data.clone(),
+                length,
+            ));
             let sorted = match limit {
                 Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
                 _ => sort(&(input as ArrayRef), options).unwrap(),
             };
-            let expected = Arc::new(build_fixed_size_list_nullable(
+            let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<T, _, _>(
                 expected_data.clone(),
                 length,
             )) as ArrayRef;
@@ -1370,25 +1370,26 @@ mod tests {
         }
 
         // for List
-        let input = Arc::new(build_generic_list_nullable::<i32, T>(data.clone()));
+        let input = Arc::new(ListArray::from_iter_primitive::<T, _, _>(data.clone()));
         let sorted = match limit {
             Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
             _ => sort(&(input as ArrayRef), options).unwrap(),
         };
-        let expected =
-            Arc::new(build_generic_list_nullable::<i32, T>(expected_data.clone()))
-                as ArrayRef;
+        let expected = Arc::new(ListArray::from_iter_primitive::<T, _, _>(
+            expected_data.clone(),
+        )) as ArrayRef;
 
         assert_eq!(&sorted, &expected);
 
         // for LargeList
-        let input = Arc::new(build_generic_list_nullable::<i64, T>(data));
+        let input = Arc::new(LargeListArray::from_iter_primitive::<T, _, _>(data));
         let sorted = match limit {
             Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
             _ => sort(&(input as ArrayRef), options).unwrap(),
         };
-        let expected =
-            Arc::new(build_generic_list_nullable::<i64, T>(expected_data)) as ArrayRef;
+        let expected = Arc::new(LargeListArray::from_iter_primitive::<T, _, _>(
+            expected_data,
+        )) as ArrayRef;
 
         assert_eq!(&sorted, &expected);
     }

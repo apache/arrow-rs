@@ -25,6 +25,7 @@ members = [
         "arrow-integration-test",
         "arrow-integration-testing",
         "arrow-schema",
+        "arrow-select",
         "parquet",
         "parquet_derive",
         "parquet_derive_test",

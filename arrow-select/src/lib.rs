@@ -15,26 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Computation kernels on Arrow Arrays
+//! Arrow selection kernels
 
-pub mod aggregate;
-pub mod arithmetic;
-pub mod arity;
-pub mod bitwise;
-pub mod boolean;
-pub mod cast;
-pub mod cast_utils;
-pub mod comparison;
-pub mod concat;
-pub mod concat_elements;
-pub mod length;
-pub mod limit;
-pub mod partition;
-pub mod regexp;
-pub mod sort;
-pub mod substring;
-pub mod temporal;
-pub mod window;
-pub mod zip;
-
-pub use arrow_select::{filter, interleave, take};
+pub mod filter;
+pub mod interleave;
+pub mod take;
