@@ -26,6 +26,7 @@ use arrow_buffer::ArrowNativeType;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
+use std::sync::Arc;
 
 ///
 /// A dictionary array where each element is a single value indexed by an integer key.
@@ -520,6 +521,10 @@ impl<T: ArrowPrimitiveType> Array for DictionaryArray<T> {
         self
     }
 
+    fn as_any_arc(self: Arc<Self>) -> Option<Arc<dyn Any + Send + Sync + 'static>> {
+        Some(self)
+    }
+
     fn data(&self) -> &ArrayData {
         &self.data
     }
@@ -595,6 +600,10 @@ impl<'a, K: ArrowPrimitiveType, V> TypedDictionaryArray<'a, K, V> {
 impl<'a, K: ArrowPrimitiveType, V: Sync> Array for TypedDictionaryArray<'a, K, V> {
     fn as_any(&self) -> &dyn Any {
         self.dictionary
+    }
+
+    fn as_any_arc(self: Arc<Self>) -> Option<Arc<dyn Any + Send + Sync + 'static>> {
+        None
     }
 
     fn data(&self) -> &ArrayData {

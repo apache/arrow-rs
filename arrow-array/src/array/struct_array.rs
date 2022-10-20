@@ -20,7 +20,7 @@ use arrow_buffer::buffer::buffer_bin_or;
 use arrow_buffer::Buffer;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
-use std::any::Any;
+use std::{any::Any, sync::Arc};
 
 /// A nested array type where each child (called *field*) is represented by a separate
 /// array.
@@ -190,6 +190,10 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
 impl Array for StructArray {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn as_any_arc(self: Arc<Self>) -> Option<Arc<dyn Any + Send + Sync + 'static>> {
+        Some(self)
     }
 
     fn data(&self) -> &ArrayData {

@@ -26,6 +26,7 @@ use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
 use num::Integer;
 use std::any::Any;
+use std::sync::Arc;
 
 /// trait declaring an offset size, relevant for i32 vs i64 array types.
 pub trait OffsetSizeTrait: ArrowNativeType + std::ops::AddAssign + Integer {
@@ -250,6 +251,10 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
 impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn as_any_arc(self: Arc<Self>) -> Option<Arc<dyn Any + Send + Sync + 'static>> {
+        Some(self)
     }
 
     fn data(&self) -> &ArrayData {

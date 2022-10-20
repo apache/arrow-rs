@@ -208,6 +208,10 @@ impl Array for MapArray {
         self
     }
 
+    fn as_any_arc(self: Arc<Self>) -> Option<Arc<dyn Any + Send + Sync + 'static>> {
+        Some(self)
+    }
+
     fn data(&self) -> &ArrayData {
         &self.data
     }

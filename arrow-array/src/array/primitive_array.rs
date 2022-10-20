@@ -29,6 +29,7 @@ use arrow_schema::{ArrowError, DataType};
 use chrono::{Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 use half::f16;
 use std::any::Any;
+use std::sync::Arc;
 
 ///
 /// # Example: Using `collect`
@@ -464,6 +465,10 @@ impl<T: ArrowPrimitiveType> From<PrimitiveArray<T>> for ArrayData {
 impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn as_any_arc(self: Arc<Self>) -> Option<Arc<dyn Any + Send + Sync + 'static>> {
+        Some(self)
     }
 
     fn data(&self) -> &ArrayData {

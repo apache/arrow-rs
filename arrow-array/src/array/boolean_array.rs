@@ -23,6 +23,7 @@ use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 use std::any::Any;
+use std::sync::Arc;
 
 /// Array of bools
 ///
@@ -150,6 +151,10 @@ impl BooleanArray {
 impl Array for BooleanArray {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn as_any_arc(self: Arc<Self>) -> Option<Arc<dyn Any + Send + Sync + 'static>> {
+        Some(self)
     }
 
     fn data(&self) -> &ArrayData {

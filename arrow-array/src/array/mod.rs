@@ -88,6 +88,31 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// ```
     fn as_any(&self) -> &dyn Any;
 
+    /// Returns the array as [`Any`](std::any::Any) wrapped into an [`Arc`] so that it can be
+    /// downcasted to a specific implementation without the need for an unsized reference. This is helpful if you want
+    /// to return a concrete array type.
+    /// 
+    /// Note that this conversion may not be possible for all types due to the `'static` constraint.
+    ///
+    /// # Example:
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{Int32Array, RecordBatch};
+    /// # use arrow_schema::{Schema, Field, DataType, ArrowError};
+    ///
+    /// let id = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    /// let batch = RecordBatch::try_new(
+    ///     Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)])),
+    ///     vec![Arc::new(id)]
+    /// ).unwrap();
+    ///
+    /// let int32array = Arc::downcast::<Int32Array>(
+    ///     Arc::clone(batch.column(0)).as_any_arc().expect("Failed to create static Arc")
+    /// ).expect("Failed to downcast");
+    /// ```
+    fn as_any_arc(self: Arc<Self>) -> Option<Arc<dyn Any + Send + Sync + 'static>>;
+
     /// Returns a reference to the underlying data of this array.
     fn data(&self) -> &ArrayData;
 
@@ -258,6 +283,10 @@ impl Array for ArrayRef {
         self.as_ref().as_any()
     }
 
+    fn as_any_arc(self: Arc<Self>) -> Option<Arc<dyn Any + Send + Sync + 'static>> {
+        Some(self)
+    }
+
     fn data(&self) -> &ArrayData {
         self.as_ref().data()
     }
@@ -314,6 +343,10 @@ impl Array for ArrayRef {
 impl<'a, T: Array> Array for &'a T {
     fn as_any(&self) -> &dyn Any {
         T::as_any(self)
+    }
+
+    fn as_any_arc(self: Arc<Self>) -> Option<Arc<dyn Any + Send + Sync + 'static>> {
+        None
     }
 
     fn data(&self) -> &ArrayData {

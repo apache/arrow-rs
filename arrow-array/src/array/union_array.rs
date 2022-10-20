@@ -21,7 +21,7 @@ use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field, UnionMode};
 /// Contains the `UnionArray` type.
 ///
-use std::any::Any;
+use std::{any::Any, sync::Arc};
 
 /// An Array that can represent slots of varying types.
 ///
@@ -308,6 +308,10 @@ impl From<UnionArray> for ArrayData {
 impl Array for UnionArray {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn as_any_arc(self: Arc<Self>) -> Option<Arc<dyn Any + Send + Sync + 'static>> {
+        Some(self)
     }
 
     fn data(&self) -> &ArrayData {

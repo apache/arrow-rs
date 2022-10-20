@@ -22,6 +22,7 @@ use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
+use std::sync::Arc;
 
 /// An array where each element is a fixed-size sequence of bytes.
 ///
@@ -356,6 +357,10 @@ impl std::fmt::Debug for FixedSizeBinaryArray {
 impl Array for FixedSizeBinaryArray {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn as_any_arc(self: Arc<Self>) -> Option<Arc<dyn Any + Send + Sync + 'static>> {
+        Some(self)
     }
 
     fn data(&self) -> &ArrayData {

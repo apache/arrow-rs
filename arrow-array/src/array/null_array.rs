@@ -20,7 +20,7 @@
 use crate::Array;
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
-use std::any::Any;
+use std::{any::Any, sync::Arc};
 
 /// An Array where all elements are nulls
 ///
@@ -56,6 +56,10 @@ impl NullArray {
 impl Array for NullArray {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn as_any_arc(self: Arc<Self>) -> Option<Arc<dyn Any + Send + Sync + 'static>> {
+        Some(self)
     }
 
     fn data(&self) -> &ArrayData {
