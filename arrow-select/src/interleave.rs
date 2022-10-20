@@ -15,9 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::{make_array, new_empty_array, Array, ArrayRef};
+use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
+use arrow_array::cast::as_primitive_array;
+use arrow_array::{
+    downcast_primitive, make_array, new_empty_array, Array, ArrayRef, ArrowPrimitiveType,
+    PrimitiveArray,
+};
 use arrow_data::transform::MutableArrayData;
-use arrow_schema::ArrowError;
+use arrow_data::ArrayDataBuilder;
+use arrow_schema::{ArrowError, DataType};
+use std::sync::Arc;
+
+macro_rules! primitive_helper {
+    ($t:ty, $values:ident, $indices:ident, $data_type:ident) => {
+        interleave_primitive::<$t>($values, $indices, $data_type)
+    };
+}
 
 ///
 /// Takes elements by index from a list of [`Array`], creating a new [`Array`] from those values.
@@ -70,9 +83,51 @@ pub fn interleave(
         return Ok(new_empty_array(data_type));
     }
 
-    // TODO: Add specialized implementations (#2864)
+    downcast_primitive! {
+        data_type => (primitive_helper, values, indices, data_type),
+        _ => interleave_fallback(values, indices)
+    }
+}
 
-    interleave_fallback(values, indices)
+fn interleave_primitive<T: ArrowPrimitiveType>(
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+    data_type: &DataType,
+) -> Result<ArrayRef, ArrowError> {
+    let mut has_nulls = false;
+    let cast: Vec<_> = values
+        .iter()
+        .map(|x| {
+            has_nulls = has_nulls || x.null_count() != 0;
+            as_primitive_array::<T>(*x)
+        })
+        .collect();
+
+    let mut values = BufferBuilder::<T::Native>::new(indices.len());
+    for (a, b) in indices {
+        let v = cast[*a].value(*b);
+        values.append(v)
+    }
+
+    let mut null_count = 0;
+    let nulls = has_nulls.then(|| {
+        let mut builder = BooleanBufferBuilder::new(indices.len());
+        for (a, b) in indices {
+            let v = cast[*a].is_valid(*b);
+            null_count += !v as usize;
+            builder.append(v)
+        }
+        builder.finish()
+    });
+
+    let builder = ArrayDataBuilder::new(data_type.clone())
+        .len(indices.len())
+        .add_buffer(values.finish())
+        .null_bit_buffer(nulls)
+        .null_count(null_count);
+
+    let data = unsafe { builder.build_unchecked() };
+    Ok(Arc::new(PrimitiveArray::<T>::from(data)))
 }
 
 /// Fallback implementation of interleave using [`MutableArrayData`]
