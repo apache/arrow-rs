@@ -177,6 +177,11 @@ harness = false
 required-features = ["test_utils"]
 
 [[bench]]
+name = "interleave_kernels"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
 name = "length_kernel"
 harness = false
 
