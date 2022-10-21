@@ -146,7 +146,9 @@ pub fn sort_to_indices(
     let (v, n) = partition_validity(values);
 
     Ok(match values.data_type() {
-        DataType::Decimal128(_, _) => sort_decimal(values, v, n, cmp, &options, limit),
+        DataType::Decimal128(_, _) => {
+            sort_primitive::<Decimal128Type, _>(values, v, n, cmp, &options, limit)
+        }
         DataType::Boolean => sort_boolean(values, v, n, &options, limit),
         DataType::Int8 => {
             sort_primitive::<Int8Type, _>(values, v, n, cmp, &options, limit)
@@ -472,37 +474,6 @@ fn sort_boolean(
     };
 
     UInt32Array::from(result_data)
-}
-
-/// Sort Decimal array
-fn sort_decimal<F>(
-    decimal_values: &ArrayRef,
-    value_indices: Vec<u32>,
-    null_indices: Vec<u32>,
-    cmp: F,
-    options: &SortOptions,
-    limit: Option<usize>,
-) -> UInt32Array
-where
-    F: Fn(i128, i128) -> std::cmp::Ordering,
-{
-    // downcast to decimal array
-    let decimal_array = decimal_values
-        .as_any()
-        .downcast_ref::<Decimal128Array>()
-        .expect("Unable to downcast to decimal array");
-    let valids = value_indices
-        .into_iter()
-        .map(|index| (index, decimal_array.value(index as usize)))
-        .collect::<Vec<(u32, i128)>>();
-    sort_primitive_inner(
-        decimal_values.len(),
-        null_indices,
-        cmp,
-        options,
-        limit,
-        valids,
-    )
 }
 
 /// Sort primitive values
