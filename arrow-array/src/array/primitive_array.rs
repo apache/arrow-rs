@@ -22,7 +22,7 @@ use crate::temporal_conversions::{as_date, as_datetime, as_duration, as_time};
 use crate::trusted_len::trusted_len_unzip;
 use crate::types::*;
 use crate::{print_long_array, Array, ArrayAccessor};
-use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{i256, ArrowNativeType, Buffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
@@ -761,13 +761,19 @@ def_numeric_from_vec!(TimestampNanosecondType);
 
 impl<T: ArrowTimestampType> PrimitiveArray<T> {
     /// Construct a timestamp array from a vec of i64 values and an optional timezone
-    pub fn from_vec(data: Vec<i64>, timezone: Option<String>) -> Self {
-        let array_data =
-            ArrayData::builder(DataType::Timestamp(T::get_time_unit(), timezone))
-                .len(data.len())
-                .add_buffer(Buffer::from_slice_ref(&data));
-        let array_data = unsafe { array_data.build_unchecked() };
-        PrimitiveArray::from(array_data)
+    pub fn from_vec(data: Vec<i64>, timezone: Option<String>) -> Self
+    where
+        Self: From<Vec<i64>>,
+    {
+        Self::from(data).with_timezone_opt(timezone)
+    }
+
+    /// Construct a timestamp array from a vec of `Option<i64>` values and an optional timezone
+    pub fn from_opt_vec(data: Vec<Option<i64>>, timezone: Option<String>) -> Self
+    where
+        Self: From<Vec<Option<i64>>>,
+    {
+        Self::from(data).with_timezone_opt(timezone)
     }
 
     /// Construct a timestamp array with new timezone
@@ -784,36 +790,6 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
                 .data_type(DataType::Timestamp(T::get_time_unit(), timezone))
                 .build_unchecked()
         };
-        PrimitiveArray::from(array_data)
-    }
-}
-
-impl<T: ArrowTimestampType> PrimitiveArray<T> {
-    /// Construct a timestamp array from a vec of `Option<i64>` values and an optional timezone
-    pub fn from_opt_vec(data: Vec<Option<i64>>, timezone: Option<String>) -> Self {
-        // TODO: duplicated from def_numeric_from_vec! macro, it looks possible to convert to generic
-        let data_len = data.len();
-        let mut null_buf = MutableBuffer::new_null(data_len);
-        let mut val_buf = MutableBuffer::new(data_len * std::mem::size_of::<i64>());
-
-        {
-            let null_slice = null_buf.as_slice_mut();
-            for (i, v) in data.iter().enumerate() {
-                if let Some(n) = v {
-                    bit_util::set_bit(null_slice, i);
-                    val_buf.push(*n);
-                } else {
-                    val_buf.push(0i64);
-                }
-            }
-        }
-
-        let array_data =
-            ArrayData::builder(DataType::Timestamp(T::get_time_unit(), timezone))
-                .len(data_len)
-                .add_buffer(val_buf.into())
-                .null_bit_buffer(Some(null_buf.into()));
-        let array_data = unsafe { array_data.build_unchecked() };
         PrimitiveArray::from(array_data)
     }
 }
