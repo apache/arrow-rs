@@ -1362,11 +1362,24 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "invalid time")]
     fn test_time32second_invalid_neg() {
-        // The panic should come from chrono, not from arrow
+        // chrono::NaiveDatetime::from_timestamp_opt returns None while input is invalid
         let arr: PrimitiveArray<Time32SecondType> = vec![-7201, -60054].into();
-        println!("{:?}", arr);
+        assert_eq!(
+            "PrimitiveArray<Time32(Second)>\n[\n  null,\n  null,\n]",
+            format!("{:?}", arr)
+        )
+    }
+
+    #[test]
+    fn test_timestamp_micros_out_of_range() {
+        // replicate the issue from https://github.com/apache/arrow-datafusion/issues/3832
+        let arr: PrimitiveArray<TimestampMicrosecondType> =
+            vec![9065525203050843594].into();
+        assert_eq!(
+            "PrimitiveArray<Timestamp(Microsecond, None)>\n[\n  null,\n]",
+            format!("{:?}", arr)
+        )
     }
 
     #[test]
