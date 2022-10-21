@@ -5,8 +5,15 @@ pub use private::{Tz, TzOffset};
 
 /// Parses a fixed offset of the form "+09:00"
 fn parse_fixed_offset(tz: &str) -> Result<FixedOffset, ArrowError> {
+    if tz.len() != 6 {
+        return Err(ArrowError::ParseError(format!(
+            "Invalid timezone \"{}\": Expected format [+-]XX:XX",
+            tz
+        )));
+    }
+
     let mut parsed = Parsed::new();
-    parse(&mut parsed, tz, StrftimeItems::new("%z"))
+    parse(&mut parsed, tz, StrftimeItems::new("%:z"))
         .and_then(|_| parsed.to_fixed_offset())
         .map_err(|e| {
             ArrowError::ParseError(format!("Invalid timezone \"{}\": {}", tz, e))
@@ -286,5 +293,14 @@ mod tests {
             tz.offset_from_utc_date(&t).fix().local_minus_utc(),
             9 * 60 * 60
         );
+
+        let err = "+9:00".parse::<Tz>().unwrap_err().to_string();
+        assert!(err.contains("Invalid timezone"), "{}", err);
+
+        let err = "+09".parse::<Tz>().unwrap_err().to_string();
+        assert!(err.contains("Invalid timezone"), "{}", err);
+
+        let err = "+0900".parse::<Tz>().unwrap_err().to_string();
+        assert!(err.contains("Invalid timezone"), "{}", err);
     }
 }
