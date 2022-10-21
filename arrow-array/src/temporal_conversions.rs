@@ -17,9 +17,10 @@
 
 //! Conversion methods for dates and times.
 
+use crate::timezone::Tz;
 use crate::ArrowPrimitiveType;
 use arrow_schema::{DataType, TimeUnit};
-use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 
 /// Number of seconds in a day
 pub const SECONDS_IN_DAY: i64 = 86_400;
@@ -185,6 +186,15 @@ pub fn as_datetime<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDateTime> {
         DataType::Interval(_) => None,
         _ => None,
     }
+}
+
+/// Converts an [`ArrowPrimitiveType`] to [`DateTime<Tz>`]
+pub fn as_datetime_with_timezone<T: ArrowPrimitiveType>(
+    v: i64,
+    tz: Tz,
+) -> Option<DateTime<Tz>> {
+    let naive = as_datetime::<T>(v)?;
+    Some(Utc.from_utc_datetime(&naive).with_timezone(&tz))
 }
 
 /// Converts an [`ArrowPrimitiveType`] to [`NaiveDate`]

@@ -170,6 +170,7 @@ mod delta;
 pub mod iterator;
 mod raw_pointer;
 pub mod temporal_conversions;
+pub mod timezone;
 mod trusted_len;
 pub mod types;
 

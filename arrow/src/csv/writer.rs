@@ -63,12 +63,9 @@
 //! }
 //! ```
 
-use std::io::Write;
-
-#[cfg(feature = "chrono-tz")]
-use crate::compute::kernels::temporal::using_chrono_tz_and_utc_naive_date_time;
-#[cfg(feature = "chrono-tz")]
+use arrow_array::timezone::Tz;
 use chrono::{DateTime, Utc};
+use std::io::Write;
 
 use crate::csv::map_csv_error;
 use crate::datatypes::*;
@@ -239,45 +236,6 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
-    #[cfg(not(feature = "chrono-tz"))]
-    fn handle_timestamp(
-        &self,
-        time_unit: &TimeUnit,
-        _time_zone: Option<&String>,
-        row_index: usize,
-        col: &ArrayRef,
-    ) -> Result<String> {
-        use TimeUnit::*;
-        let datetime = match time_unit {
-            Second => col
-                .as_any()
-                .downcast_ref::<TimestampSecondArray>()
-                .unwrap()
-                .value_as_datetime(row_index)
-                .unwrap(),
-            Millisecond => col
-                .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .unwrap()
-                .value_as_datetime(row_index)
-                .unwrap(),
-            Microsecond => col
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .unwrap()
-                .value_as_datetime(row_index)
-                .unwrap(),
-            Nanosecond => col
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap()
-                .value_as_datetime(row_index)
-                .unwrap(),
-        };
-        Ok(format!("{}", datetime.format(&self.timestamp_format)))
-    }
-
-    #[cfg(feature = "chrono-tz")]
     fn handle_timestamp(
         &self,
         time_unit: &TimeUnit,
@@ -286,7 +244,6 @@ impl<W: Write> Writer<W> {
         col: &ArrayRef,
     ) -> Result<String> {
         use TimeUnit::*;
-
         let datetime = match time_unit {
             Second => col
                 .as_any()
@@ -313,25 +270,15 @@ impl<W: Write> Writer<W> {
                 .value_as_datetime(row_index)
                 .unwrap(),
         };
-        let tzs = match time_zone {
-            None => "UTC".to_string(),
-            Some(tzs) => tzs.to_string(),
-        };
 
-        match using_chrono_tz_and_utc_naive_date_time(&tzs, datetime) {
+        let tz: Option<Tz> = time_zone.map(|x| x.parse()).transpose()?;
+        match tz {
             Some(tz) => {
                 let utc_time = DateTime::<Utc>::from_utc(datetime, Utc);
-                Ok(format!(
-                    "{}",
-                    utc_time
-                        .with_timezone(&tz)
-                        .format(&self.timestamp_tz_format)
-                ))
+                let local_time = utc_time.with_timezone(&tz);
+                Ok(local_time.format(&self.timestamp_tz_format).to_string())
             }
-            err => Err(ArrowError::ComputeError(format!(
-                "{}: {:?}",
-                "Unable to parse timezone", err
-            ))),
+            None => Ok(datetime.format(&self.timestamp_format).to_string()),
         }
     }
 

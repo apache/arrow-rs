@@ -17,16 +17,16 @@
 
 //! Defines temporal kernels for time and date related functions.
 
-use chrono::{Datelike, NaiveDateTime, NaiveTime, Timelike};
+use chrono::{DateTime, Datelike, NaiveDateTime, NaiveTime, Timelike};
 
 use crate::array::*;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
-use arrow_array::temporal_conversions::{as_datetime, as_time};
+use arrow_array::temporal_conversions::{
+    as_datetime, as_datetime_with_timezone, as_time,
+};
 
-use chrono::format::strftime::StrftimeItems;
-use chrono::format::{parse, Parsed};
-use chrono::FixedOffset;
+use arrow_array::timezone::Tz;
 
 /// This function takes an `ArrayIter` of input array and an extractor `op` which takes
 /// an input `NaiveTime` and returns time component (e.g. hour) as `i32` value.
@@ -87,7 +87,7 @@ where
 /// object used to parse timezone string. `op` is the extractor closure which takes
 /// data time object of `NaiveDateTime` type and returns `i32` value of extracted
 /// component.
-fn extract_component_from_datatime_array<
+fn extract_component_from_datetime_array<
     A: ArrayAccessor<Item = T::Native>,
     T: ArrowTemporalType,
     F,
@@ -95,54 +95,24 @@ fn extract_component_from_datatime_array<
     iter: ArrayIter<A>,
     mut builder: PrimitiveBuilder<Int32Type>,
     tz: &str,
-    mut parsed: Parsed,
     op: F,
 ) -> Result<Int32Array>
 where
-    F: Fn(NaiveDateTime) -> i32,
+    F: Fn(DateTime<Tz>) -> i32,
     i64: From<T::Native>,
 {
-    if (tz.starts_with('+') || tz.starts_with('-')) && !tz.contains(':') {
-        return_compute_error_with!(
-            "Invalid timezone",
-            "Expected format [+-]XX:XX".to_string()
-        )
-    } else {
-        let tz_parse_result = parse(&mut parsed, tz, StrftimeItems::new("%z"));
-        let fixed_offset_from_parsed = match tz_parse_result {
-            Ok(_) => match parsed.to_fixed_offset() {
-                Ok(fo) => Some(fo),
-                err => return_compute_error_with!("Invalid timezone", err),
-            },
-            _ => None,
-        };
-
-        for value in iter {
-            if let Some(value) = value {
-                match as_datetime::<T>(i64::from(value)) {
-                    Some(utc) => {
-                        let fixed_offset = match fixed_offset_from_parsed {
-                            Some(fo) => fo,
-                            None => {
-                                match using_chrono_tz_and_utc_naive_date_time(tz, utc) {
-                                    Some(fo) => fo,
-                                    err => return_compute_error_with!(
-                                        "Unable to parse timezone",
-                                        err
-                                    ),
-                                }
-                            }
-                        };
-                        builder.append_value(op(utc + fixed_offset));
-                    }
-                    err => return_compute_error_with!(
-                        "Unable to read value as datetime",
-                        err
-                    ),
+    let tz: Tz = tz.parse()?;
+    for value in iter {
+        match value {
+            Some(value) => match as_datetime_with_timezone::<T>(value.into(), tz) {
+                Some(time) => builder.append_value(op(time)),
+                _ => {
+                    return Err(ArrowError::ComputeError(
+                        "Unable to read value as datetime".to_string(),
+                    ))
                 }
-            } else {
-                builder.append_null();
-            }
+            },
+            None => builder.append_null(),
         }
     }
     Ok(builder.finish())
@@ -189,35 +159,12 @@ impl<T: Datelike> ChronoDateExt for T {
     }
 }
 
-#[cfg(not(feature = "chrono-tz"))]
-pub fn using_chrono_tz_and_utc_naive_date_time(
-    _tz: &str,
-    _utc: chrono::NaiveDateTime,
-) -> Option<FixedOffset> {
-    None
-}
-
-/// Parse the given string into a string representing fixed-offset that is correct as of the given
-/// UTC NaiveDateTime.
-/// Note that the offset is function of time and can vary depending on whether daylight savings is
-/// in effect or not. e.g. Australia/Sydney is +10:00 or +11:00 depending on DST.
-#[cfg(feature = "chrono-tz")]
-pub fn using_chrono_tz_and_utc_naive_date_time(
-    tz: &str,
-    utc: chrono::NaiveDateTime,
-) -> Option<FixedOffset> {
-    use chrono::{Offset, TimeZone};
-    tz.parse::<chrono_tz::Tz>()
-        .map(|tz| tz.offset_from_utc_datetime(&utc).fix())
-        .ok()
-}
-
 /// Extracts the hours of a given temporal primitive array as an array of integers within
 /// the range of [0, 23].
 pub fn hour<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     hour_generic::<T, _>(array)
 }
@@ -227,7 +174,7 @@ where
 pub fn hour_generic<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     match array.data_type().clone() {
         DataType::Dictionary(_, value_type) => {
@@ -244,7 +191,7 @@ fn hour_internal<T, A: ArrayAccessor<Item = T::Native>>(
 ) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
     match dt {
@@ -257,9 +204,8 @@ where
             Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| t.hour() as i32))
         }
         DataType::Timestamp(_, Some(tz)) => {
-            let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
                 t.hour() as i32
             })
         }
@@ -271,7 +217,7 @@ where
 pub fn year<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     year_generic::<T, _>(array)
 }
@@ -280,7 +226,7 @@ where
 pub fn year_generic<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     match array.data_type().clone() {
         DataType::Dictionary(_, value_type) => {
@@ -297,7 +243,7 @@ fn year_internal<T, A: ArrayAccessor<Item = T::Native>>(
 ) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     match dt {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
@@ -314,7 +260,7 @@ where
 pub fn quarter<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     quarter_generic::<T, _>(array)
 }
@@ -326,7 +272,7 @@ pub fn quarter_generic<T, A: ArrayAccessor<Item = T::Native>>(
 ) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     match array.data_type().clone() {
         DataType::Dictionary(_, value_type) => {
@@ -343,7 +289,7 @@ fn quarter_internal<T, A: ArrayAccessor<Item = T::Native>>(
 ) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
     match dt {
@@ -354,9 +300,8 @@ where
             }))
         }
         DataType::Timestamp(_, Some(tz)) => {
-            let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
                 t.quarter() as i32
             })
         }
@@ -369,7 +314,7 @@ where
 pub fn month<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     month_generic::<T, _>(array)
 }
@@ -380,7 +325,7 @@ pub fn month_generic<T, A: ArrayAccessor<Item = T::Native>>(
 ) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     match array.data_type().clone() {
         DataType::Dictionary(_, value_type) => {
@@ -397,7 +342,7 @@ fn month_internal<T, A: ArrayAccessor<Item = T::Native>>(
 ) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
     match dt {
@@ -408,9 +353,8 @@ where
             }))
         }
         DataType::Timestamp(_, Some(tz)) => {
-            let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
                 t.month() as i32
             })
         }
@@ -427,7 +371,7 @@ where
 pub fn num_days_from_monday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     num_days_from_monday_generic::<T, _>(array)
 }
@@ -443,7 +387,7 @@ pub fn num_days_from_monday_generic<T, A: ArrayAccessor<Item = T::Native>>(
 ) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     match array.data_type().clone() {
         DataType::Dictionary(_, value_type) => {
@@ -465,7 +409,7 @@ fn num_days_from_monday_internal<T, A: ArrayAccessor<Item = T::Native>>(
 ) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
     match dt {
@@ -476,9 +420,8 @@ where
             }))
         }
         DataType::Timestamp(_, Some(tz)) => {
-            let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
                 t.num_days_from_monday()
             })
         }
@@ -495,7 +438,7 @@ where
 pub fn num_days_from_sunday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     num_days_from_sunday_generic::<T, _>(array)
 }
@@ -511,7 +454,7 @@ pub fn num_days_from_sunday_generic<T, A: ArrayAccessor<Item = T::Native>>(
 ) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     match array.data_type().clone() {
         DataType::Dictionary(_, value_type) => {
@@ -533,7 +476,7 @@ fn num_days_from_sunday_internal<T, A: ArrayAccessor<Item = T::Native>>(
 ) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
     match dt {
@@ -544,9 +487,8 @@ where
             }))
         }
         DataType::Timestamp(_, Some(tz)) => {
-            let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
                 t.num_days_from_sunday()
             })
         }
@@ -561,7 +503,7 @@ where
 pub fn day<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     day_generic::<T, _>(array)
 }
@@ -570,7 +512,7 @@ where
 pub fn day_generic<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     match array.data_type().clone() {
         DataType::Dictionary(_, value_type) => {
@@ -587,7 +529,7 @@ fn day_internal<T, A: ArrayAccessor<Item = T::Native>>(
 ) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
     match dt {
@@ -596,9 +538,8 @@ where
             Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| t.day() as i32))
         }
         DataType::Timestamp(_, Some(ref tz)) => {
-            let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
                 t.day() as i32
             })
         }
@@ -611,7 +552,7 @@ where
 pub fn doy<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     doy_generic::<T, _>(array)
 }
@@ -621,7 +562,7 @@ where
 pub fn doy_generic<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     match array.data_type().clone() {
         DataType::Dictionary(_, value_type) => {
@@ -640,7 +581,7 @@ fn doy_internal<T, A: ArrayAccessor<Item = T::Native>>(
 where
     T: ArrowTemporalType + ArrowNumericType,
     T::Native: ArrowNativeType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
     match dt {
@@ -651,9 +592,8 @@ where
             }))
         }
         DataType::Timestamp(_, Some(ref tz)) => {
-            let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
                 t.ordinal() as i32
             })
         }
@@ -665,7 +605,7 @@ where
 pub fn minute<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     minute_generic::<T, _>(array)
 }
@@ -676,7 +616,7 @@ pub fn minute_generic<T, A: ArrayAccessor<Item = T::Native>>(
 ) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     match array.data_type().clone() {
         DataType::Dictionary(_, value_type) => {
@@ -693,7 +633,7 @@ fn minute_internal<T, A: ArrayAccessor<Item = T::Native>>(
 ) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
     match dt {
@@ -704,9 +644,8 @@ where
             }))
         }
         DataType::Timestamp(_, Some(tz)) => {
-            let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
                 t.minute() as i32
             })
         }
@@ -718,7 +657,7 @@ where
 pub fn week<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     week_generic::<T, _>(array)
 }
@@ -727,7 +666,7 @@ where
 pub fn week_generic<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     match array.data_type().clone() {
         DataType::Dictionary(_, value_type) => {
@@ -744,7 +683,7 @@ fn week_internal<T, A: ArrayAccessor<Item = T::Native>>(
 ) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     match dt {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
@@ -762,7 +701,7 @@ where
 pub fn second<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     second_generic::<T, _>(array)
 }
@@ -773,7 +712,7 @@ pub fn second_generic<T, A: ArrayAccessor<Item = T::Native>>(
 ) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     match array.data_type().clone() {
         DataType::Dictionary(_, value_type) => {
@@ -790,7 +729,7 @@ fn second_internal<T, A: ArrayAccessor<Item = T::Native>>(
 ) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
+    i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
     match dt {
@@ -801,9 +740,8 @@ where
             }))
         }
         DataType::Timestamp(_, Some(tz)) => {
-            let scratch = Parsed::new();
             let iter = ArrayIter::new(array);
-            extract_component_from_datatime_array::<A, T, _>(iter, b, tz, scratch, |t| {
+            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
                 t.second() as i32
             })
         }
@@ -814,8 +752,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "chrono-tz")]
-    use chrono::NaiveDate;
 
     #[test]
     fn test_temporal_array_date64_hour() {
@@ -1180,21 +1116,24 @@ mod tests {
     fn test_temporal_array_timestamp_hour_with_timezone_without_colon() {
         let a =
             TimestampSecondArray::from_vec(vec![60 * 60 * 10], Some("+0100".to_string()));
-        assert!(matches!(hour(&a), Err(ArrowError::ComputeError(_))))
+        let err = hour(&a).unwrap_err().to_string();
+        assert!(err.contains("Invalid timezone"), "{}", err);
     }
 
     #[test]
     fn test_temporal_array_timestamp_hour_with_timezone_without_initial_sign() {
         let a =
             TimestampSecondArray::from_vec(vec![60 * 60 * 10], Some("0100".to_string()));
-        assert!(matches!(hour(&a), Err(ArrowError::ComputeError(_))))
+        let err = hour(&a).unwrap_err().to_string();
+        assert!(err.contains("Invalid timezone"), "{}", err);
     }
 
     #[test]
     fn test_temporal_array_timestamp_hour_with_timezone_with_only_colon() {
         let a =
             TimestampSecondArray::from_vec(vec![60 * 60 * 10], Some("01:00".to_string()));
-        assert!(matches!(hour(&a), Err(ArrowError::ComputeError(_))))
+        let err = hour(&a).unwrap_err().to_string();
+        assert!(err.contains("Invalid timezone"), "{}", err);
     }
 
     #[cfg(feature = "chrono-tz")]
@@ -1231,65 +1170,7 @@ mod tests {
             vec![60 * 60 * 10],
             Some("Asia/Kolkatta".to_string()),
         );
-        assert!(matches!(hour(&a), Err(ArrowError::ComputeError(_))))
-    }
-
-    #[cfg(feature = "chrono-tz")]
-    #[test]
-    fn test_using_chrono_tz_and_utc_naive_date_time() {
-        let sydney_tz = "Australia/Sydney".to_string();
-        let sydney_offset_without_dst = FixedOffset::east(10 * 60 * 60);
-        let sydney_offset_with_dst = FixedOffset::east(11 * 60 * 60);
-        // Daylight savings ends
-        // When local daylight time was about to reach
-        // Sunday, 4 April 2021, 3:00:00 am clocks were turned backward 1 hour to
-        // Sunday, 4 April 2021, 2:00:00 am local standard time instead.
-
-        // Daylight savings starts
-        // When local standard time was about to reach
-        // Sunday, 3 October 2021, 2:00:00 am clocks were turned forward 1 hour to
-        // Sunday, 3 October 2021, 3:00:00 am local daylight time instead.
-
-        // Sydney 2021-04-04T02:30:00+11:00 is 2021-04-03T15:30:00Z
-        let utc_just_before_sydney_dst_ends =
-            NaiveDate::from_ymd(2021, 4, 3).and_hms_nano(15, 30, 0, 0);
-        assert_eq!(
-            using_chrono_tz_and_utc_naive_date_time(
-                &sydney_tz,
-                utc_just_before_sydney_dst_ends
-            ),
-            Some(sydney_offset_with_dst)
-        );
-        // Sydney 2021-04-04T02:30:00+10:00 is 2021-04-03T16:30:00Z
-        let utc_just_after_sydney_dst_ends =
-            NaiveDate::from_ymd(2021, 4, 3).and_hms_nano(16, 30, 0, 0);
-        assert_eq!(
-            using_chrono_tz_and_utc_naive_date_time(
-                &sydney_tz,
-                utc_just_after_sydney_dst_ends
-            ),
-            Some(sydney_offset_without_dst)
-        );
-        // Sydney 2021-10-03T01:30:00+10:00 is 2021-10-02T15:30:00Z
-        let utc_just_before_sydney_dst_starts =
-            NaiveDate::from_ymd(2021, 10, 2).and_hms_nano(15, 30, 0, 0);
-        assert_eq!(
-            using_chrono_tz_and_utc_naive_date_time(
-                &sydney_tz,
-                utc_just_before_sydney_dst_starts
-            ),
-            Some(sydney_offset_without_dst)
-        );
-        // Sydney 2021-04-04T03:30:00+11:00 is 2021-10-02T16:30:00Z
-        let utc_just_after_sydney_dst_starts =
-            NaiveDate::from_ymd(2022, 10, 2).and_hms_nano(16, 30, 0, 0);
-        assert_eq!(
-            using_chrono_tz_and_utc_naive_date_time(
-                &sydney_tz,
-                utc_just_after_sydney_dst_starts
-            ),
-            Some(sydney_offset_with_dst)
-        );
+        assert!(matches!(hour(&a), Err(ArrowError::ParseError(_))))
     }
 
     #[test]
