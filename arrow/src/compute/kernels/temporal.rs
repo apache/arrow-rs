@@ -17,7 +17,7 @@
 
 //! Defines temporal kernels for time and date related functions.
 
-use chrono::{DateTime, Datelike, NaiveDateTime, NaiveTime, Timelike};
+use chrono::{DateTime, Datelike, NaiveDateTime, NaiveTime, Offset, Timelike};
 
 use crate::array::*;
 use crate::datatypes::*;
@@ -157,6 +157,20 @@ impl<T: Datelike> ChronoDateExt for T {
     fn num_days_from_sunday(&self) -> i32 {
         self.weekday().num_days_from_sunday() as i32
     }
+}
+
+/// Parse the given string into a string representing fixed-offset that is correct as of the given
+/// UTC NaiveDateTime.
+/// Note that the offset is function of time and can vary depending on whether daylight savings is
+/// in effect or not. e.g. Australia/Sydney is +10:00 or +11:00 depending on DST.
+#[deprecated(note = "Use arrow_array::timezone::Tz instead")]
+pub fn using_chrono_tz_and_utc_naive_date_time(
+    tz: &str,
+    utc: NaiveDateTime,
+) -> Option<chrono::offset::FixedOffset> {
+    use chrono::TimeZone;
+    let tz: Tz = tz.parse().ok()?;
+    Some(tz.offset_from_utc_datetime(&utc).fix())
 }
 
 /// Extracts the hours of a given temporal primitive array as an array of integers within
