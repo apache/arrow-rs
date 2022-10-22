@@ -21,12 +21,32 @@
 //! Please see the [arrow crates.io](https://crates.io/crates/arrow)
 //! page for feature flags and tips to improve performance.
 //!
+//! # Crate Topology
+//!
+//! The `arrow` project is implemented as multiple sub-crates, which are then re-exported by
+//! this top-level `arrow` crate.
+//!
+//! Crate authors can choose to depend on this top-level `arrow` crate, or just
+//! the sub-crates they need.
+//!
+//! The current list of sub-crates is:
+//!
+//! * [`arrow_buffer`] - buffer abstractions for arrow arrays
+//! * [`arrow_schema`] - the logical types for arrow arrays
+//! * [`arrow_data`] - the underlying data of arrow arrays
+//! * [`arrow_array`] - type-safe arrow array abstractions
+//! * [`arrow_select`] - selection kernels for arrow arrays
+//!
+//! _This list is likely to grow as further functionality is split out from the top-level crate_
+//!
 //! # Columnar Format
 //!
-//! The [`array`] module provides statically typed implementations of all the array
-//! types as defined by the [Arrow Columnar Format](https://arrow.apache.org/docs/format/Columnar.html).
+//! [`arrow_array`] provides statically typed implementations of all the array types as defined
+//! by the [Arrow Columnar Format](https://arrow.apache.org/docs/format/Columnar.html)
 //!
-//! For example, an [`Int32Array`](array::Int32Array) represents a nullable array of `i32`
+//! These types can be used directly or are re-exported under [`arrow::array`](crate::array).
+//!
+//! For example, an [`Int32Array`](arrow_array::Int32Array) represents a nullable array of [`i32`]
 //!
 //! ```rust
 //! # use arrow::array::{Array, Int32Array};
@@ -77,7 +97,7 @@
 //! assert_eq!(min(&StringArray::from(vec!["b", "a", "c"])), Some("a"));
 //! ```
 //!
-//! For more examples, consult the [`array`] docs.
+//! For more examples, consult the [arrow_array] docs.
 //!
 //! # Type Erasure / Trait Objects
 //!
@@ -235,7 +255,6 @@
 //! orchestrates the primitives exported by this crate into an embeddable query engine, with
 //! SQL and DataFrame frontends, and heavily influences this crate's roadmap.
 //!
-//! [`array`]: mod@array
 //! [`Array`]: array::Array
 //! [`ArrayRef`]: array::ArrayRef
 //! [`ArrayData`]: array::ArrayData
