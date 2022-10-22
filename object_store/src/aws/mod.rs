@@ -109,6 +109,9 @@ enum Error {
     #[snafu(display("Missing SecretAccessKey"))]
     MissingSecretAccessKey,
 
+    #[snafu(display("Profile support requires aws_profile feature"))]
+    MissingProfileFeature,
+
     #[snafu(display("ETag Header missing from response"))]
     MissingEtag,
 
@@ -599,10 +602,10 @@ impl AmazonS3Builder {
                         retry_config: self.retry_config.clone(),
                     }) as _
                 }
-                _ => match self.profile.and_then(maybe_profile_credentials) {
-                    Some(p) => {
-                        info!("Using profile credentials");
-                        p
+                _ => match self.profile {
+                    Some(profile) => {
+                        info!("Using profile \"{}\" credential provider", profile);
+                        profile_credentials(profile, region.clone())?
                     }
                     None => {
                         info!("Using Instance credential provider");
@@ -659,13 +662,19 @@ impl AmazonS3Builder {
 }
 
 #[cfg(feature = "aws_profile")]
-fn maybe_profile_credentials(profile: String) -> Option<Box<dyn CredentialProvider>> {
-    Some(Box::new(credential::ProfileProvider::new(profile)))
+fn profile_credentials(
+    profile: String,
+    region: String,
+) -> Result<Box<dyn CredentialProvider>> {
+    Ok(Box::new(credential::ProfileProvider::new(profile, region)))
 }
 
 #[cfg(not(feature = "aws_profile"))]
-fn maybe_profile_credentials(profile: String) -> Option<Box<dyn CredentialProvider>> {
-    None
+fn profile_credentials(
+    _profile: String,
+    _region: String,
+) -> Result<Box<dyn CredentialProvider>> {
+    Err(Error::MissingProfileFeature.into())
 }
 
 #[cfg(test)]

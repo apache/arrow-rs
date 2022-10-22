@@ -514,7 +514,9 @@ async fn web_identity(
 mod profile {
     use super::*;
     use aws_config::profile::ProfileFileCredentialsProvider;
+    use aws_config::provider_config::ProviderConfig;
     use aws_types::credentials::ProvideCredentials;
+    use aws_types::region::Region;
     use std::time::SystemTime;
 
     #[derive(Debug)]
@@ -524,10 +526,13 @@ mod profile {
     }
 
     impl ProfileProvider {
-        pub fn new(name: impl Into<String>) -> Self {
+        pub fn new(name: String, region: String) -> Self {
+            let config = ProviderConfig::default().with_region(Some(Region::new(region)));
+
             Self {
                 cache: Default::default(),
                 credentials: ProfileFileCredentialsProvider::builder()
+                    .configure(&config)
                     .profile_name(name)
                     .build(),
             }
