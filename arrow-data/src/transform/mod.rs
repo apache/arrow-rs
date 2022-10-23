@@ -637,6 +637,18 @@ impl<'a> MutableArrayData<'a> {
         unsafe { self.data.freeze(self.dictionary).build_unchecked() }
     }
 
+    /// Creates a [ArrayData] from the pushed regions up to this point, consuming `self`,
+    /// with the provided dictionary values `ArrayData`, without any validation
+    ///
+    /// # Safety
+    ///
+    /// As this doesn't validate the provided dictionary `ArrayData` values, the input
+    /// dictionary values *must* form a valid Arrow dictionary array, or undefined behavior
+    /// can results.
+    pub unsafe fn freeze_with_dictionary(self, dictionary: ArrayData) -> ArrayData {
+        self.data.freeze(Some(dictionary)).build_unchecked()
+    }
+
     /// Creates a [ArrayDataBuilder] from the pushed regions up to this point, consuming `self`.
     /// This is useful for extending the default behavior of MutableArrayData.
     pub fn into_builder(self) -> ArrayDataBuilder {
