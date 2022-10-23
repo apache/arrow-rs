@@ -22,18 +22,29 @@ use criterion::{Criterion, Throughput};
 extern crate arrow;
 
 use arrow::compute::kernels::aggregate::*;
+use arrow::datatypes::{ArrowNativeTypeOp, ArrowNumericType};
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};
+use arrow_array::types::Float64Type;
 
-fn bench_sum(arr_a: &Float32Array) {
+fn bench_sum<T: ArrowNumericType>(arr_a: &PrimitiveArray<T>)
+where
+    T::Native: ArrowNativeTypeOp,
+{
     criterion::black_box(sum(arr_a).unwrap());
 }
 
-fn bench_min(arr_a: &Float32Array) {
+fn bench_min<T: ArrowNumericType>(arr_a: &PrimitiveArray<T>)
+where
+    T::Native: ArrowNativeTypeOp,
+{
     criterion::black_box(min(arr_a).unwrap());
 }
 
-fn bench_max(arr_a: &Float32Array) {
+fn bench_max<T: ArrowNumericType>(arr_a: &PrimitiveArray<T>)
+where
+    T::Native: ArrowNativeTypeOp,
+{
     criterion::black_box(max(arr_a).unwrap());
 }
 
@@ -42,8 +53,8 @@ fn bench_min_string(arr_a: &StringArray) {
 }
 
 fn add_benchmark(c: &mut Criterion) {
-    let arr_a = create_primitive_array::<Float32Type>(4096, 0.0);
     {
+        let arr_a = create_primitive_array::<Float32Type>(4096, 0.0);
         let mut g = c.benchmark_group("float");
         g.throughput(Throughput::Bytes(4096 * std::mem::size_of::<f32>() as u64));
 
@@ -52,6 +63,22 @@ fn add_benchmark(c: &mut Criterion) {
         g.bench_function("max 4096", |b| b.iter(|| bench_max(&arr_a)));
 
         let arr_a = create_primitive_array::<Float32Type>(4096, 0.5);
+
+        g.bench_function("sum nulls 4096", |b| b.iter(|| bench_sum(&arr_a)));
+        g.bench_function("min nulls 4096", |b| b.iter(|| bench_min(&arr_a)));
+        g.bench_function("max nulls 4096", |b| b.iter(|| bench_max(&arr_a)));
+    }
+
+    {
+        let arr_a = create_primitive_array::<Float64Type>(4096, 0.0);
+        let mut g = c.benchmark_group("double");
+        g.throughput(Throughput::Bytes(4096 * std::mem::size_of::<f64>() as u64));
+
+        g.bench_function("sum 4096", |b| b.iter(|| bench_sum(&arr_a)));
+        g.bench_function("min 4096", |b| b.iter(|| bench_min(&arr_a)));
+        g.bench_function("max 4096", |b| b.iter(|| bench_max(&arr_a)));
+
+        let arr_a = create_primitive_array::<Float64Type>(4096, 0.5);
 
         g.bench_function("sum nulls 4096", |b| b.iter(|| bench_sum(&arr_a)));
         g.bench_function("min nulls 4096", |b| b.iter(|| bench_min(&arr_a)));
