@@ -1977,6 +1977,73 @@ mod tests {
     }
 
     #[test]
+    fn test_sort_indices_decimal256_max_min() {
+        test_sort_to_indices_decimal256_array(
+            vec![
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+                Some(i256::from_i128(-1)),
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            None,
+            vec![0, 1, 4, 2, 3],
+        );
+
+        test_sort_to_indices_decimal256_array(
+            vec![
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+                Some(i256::from_i128(-1)),
+            ],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            None,
+            vec![0, 3, 2, 4, 1],
+        );
+
+        test_sort_to_indices_decimal256_array(
+            vec![
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+                Some(i256::from_i128(-1)),
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            Some(4),
+            vec![0, 1, 4, 2],
+        );
+
+        test_sort_to_indices_decimal256_array(
+            vec![
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+                Some(i256::from_i128(-1)),
+            ],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            Some(4),
+            vec![0, 3, 2, 4],
+        );
+    }
+
+    #[test]
     fn test_sort_decimal128() {
         // decimal default
         test_sort_decimal128_array(
@@ -2177,6 +2244,91 @@ mod tests {
                 .iter()
                 .map(|v| v.map(i256::from_i128))
                 .collect(),
+        );
+    }
+
+    #[test]
+    fn test_sort_decimal256_max_min() {
+        test_sort_decimal256_array(
+            vec![
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+                Some(i256::from_i128(-1)),
+                None,
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            None,
+            vec![
+                None,
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(-1)),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+            ],
+        );
+
+        test_sort_decimal256_array(
+            vec![
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+                Some(i256::from_i128(-1)),
+                None,
+            ],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            None,
+            vec![
+                None,
+                None,
+                Some(i256::MAX),
+                Some(i256::from_i128(1)),
+                Some(i256::from_i128(-1)),
+                Some(i256::MIN),
+            ],
+        );
+
+        test_sort_decimal256_array(
+            vec![
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+                Some(i256::from_i128(-1)),
+                None,
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            Some(4),
+            vec![None, None, Some(i256::MIN), Some(i256::from_i128(-1))],
+        );
+
+        test_sort_decimal256_array(
+            vec![
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+                Some(i256::from_i128(-1)),
+                None,
+            ],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            Some(4),
+            vec![None, None, Some(i256::MAX), Some(i256::from_i128(1))],
         );
     }
 
