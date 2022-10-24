@@ -1483,23 +1483,6 @@ mod tests {
         assert_eq!(array1, array2);
     }
 
-    #[cfg(feature = "chrono-tz")]
-    #[test]
-    fn test_with_timezone() {
-        use crate::compute::hour;
-        let a: TimestampMicrosecondArray = vec![37800000000, 86339000000].into();
-
-        let b = hour(&a).unwrap();
-        assert_eq!(10, b.value(0));
-        assert_eq!(23, b.value(1));
-
-        let a = a.with_timezone(String::from("America/Los_Angeles"));
-
-        let b = hour(&a).unwrap();
-        assert_eq!(2, b.value(0));
-        assert_eq!(15, b.value(1));
-    }
-
     #[test]
     #[should_panic(
         expected = "Trying to access an element at index 4 from a PrimitiveArray of length 3"
