@@ -1825,7 +1825,7 @@ mod tests {
         let page_writer = Box::new(SerializedPageWriter::new(&mut writer));
         let props = Arc::new(
             WriterProperties::builder()
-                .set_data_pagesize_limit(15) // actually each page will have size 15-18 bytes
+                .set_data_pagesize_limit(10)
                 .set_write_batch_size(3) // write 3 values at a time
                 .build(),
         );
@@ -1846,16 +1846,14 @@ mod tests {
         );
         let mut res = Vec::new();
         while let Some(page) = page_reader.get_next_page().unwrap() {
-            res.push((page.page_type(), page.num_values()));
+            res.push((page.page_type(), page.num_values(), page.buffer().len()));
         }
         assert_eq!(
             res,
             vec![
-                (PageType::DICTIONARY_PAGE, 10),
-                (PageType::DATA_PAGE, 3),
-                (PageType::DATA_PAGE, 3),
-                (PageType::DATA_PAGE, 3),
-                (PageType::DATA_PAGE, 1)
+                (PageType::DICTIONARY_PAGE, 10, 40),
+                (PageType::DATA_PAGE, 9, 10),
+                (PageType::DATA_PAGE, 1, 3),
             ]
         );
     }

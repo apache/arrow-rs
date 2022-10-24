@@ -38,13 +38,8 @@ pub fn max_buffer_size(
 ) -> usize {
     let bit_width = num_required_bits(max_level as u64);
     match encoding {
-        Encoding::RLE => {
-            RleEncoder::max_buffer_size(bit_width, num_buffered_values)
-                + RleEncoder::min_buffer_size(bit_width)
-        }
-        Encoding::BIT_PACKED => {
-            ceil((num_buffered_values * bit_width as usize) as i64, 8) as usize
-        }
+        Encoding::RLE => RleEncoder::max_buffer_size(bit_width, num_buffered_values),
+        Encoding::BIT_PACKED => ceil(num_buffered_values * bit_width as usize, 8),
         _ => panic!("Unsupported encoding type {}", encoding),
     }
 }

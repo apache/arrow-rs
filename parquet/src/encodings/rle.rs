@@ -42,9 +42,8 @@ use crate::util::{
 /// repeated-value := value that is repeated, using a fixed-width of
 /// round-up-to-next-byte(bit-width)
 
-/// Maximum groups per bit-packed run. Current value is 64.
+/// Maximum groups of 8 values per bit-packed run. Current value is 64.
 const MAX_GROUPS_PER_BIT_PACKED_RUN: usize = 1 << 6;
-const MAX_VALUES_PER_BIT_PACKED_RUN: usize = MAX_GROUPS_PER_BIT_PACKED_RUN * 8;
 
 /// A RLE/Bit-Packing hybrid encoder.
 // TODO: tracking memory usage
@@ -99,31 +98,28 @@ impl RleEncoder {
         }
     }
 
-    /// Returns the minimum buffer size needed to use the encoder for `bit_width`.
-    /// This is the maximum length of a single run for `bit_width`.
-    pub fn min_buffer_size(bit_width: u8) -> usize {
-        let max_bit_packed_run_size = 1 + bit_util::ceil(
-            (MAX_VALUES_PER_BIT_PACKED_RUN * bit_width as usize) as i64,
-            8,
-        );
-        let max_rle_run_size =
-            bit_util::MAX_VLQ_BYTE_LEN + bit_util::ceil(bit_width as i64, 8) as usize;
-        std::cmp::max(max_bit_packed_run_size as usize, max_rle_run_size)
-    }
-
-    /// Returns the maximum buffer size takes to encode `num_values` values with
+    /// Returns the maximum buffer size to encode `num_values` values with
     /// `bit_width`.
     pub fn max_buffer_size(bit_width: u8, num_values: usize) -> usize {
-        // First the maximum size for bit-packed run
-        let bytes_per_run = bit_width;
-        let num_runs = bit_util::ceil(num_values as i64, 8) as usize;
-        let bit_packed_max_size = num_runs + num_runs * bytes_per_run as usize;
+        // The maximum size occurs with the shortest possible runs of 8
+        let num_runs = bit_util::ceil(num_values, 8);
 
-        // Second the maximum size for RLE run
-        let min_rle_run_size = 1 + bit_util::ceil(bit_width as i64, 8) as usize;
-        let rle_max_size =
-            bit_util::ceil(num_values as i64, 8) as usize * min_rle_run_size;
-        std::cmp::max(bit_packed_max_size, rle_max_size) as usize
+        // The number of bytes in a run of 8
+        let bytes_per_run = bit_width as usize;
+
+        // The maximum size if stored as shortest possible bit packed runs of 8
+        let bit_packed_max_size = num_runs + num_runs * bytes_per_run;
+
+        // The length of `8` VLQ encoded
+        let rle_len_prefix = 1;
+
+        // The length of an RLE run of 8
+        let min_rle_run_size = rle_len_prefix + bit_util::ceil(bit_width as usize, 8);
+
+        // The maximum size if stored as shortest possible RLE runs of 8
+        let rle_max_size = num_runs * min_rle_run_size;
+
+        bit_packed_max_size.max(rle_max_size)
     }
 
     /// Encodes `value`, which must be representable with `bit_width` bits.
@@ -905,8 +901,8 @@ mod tests {
     #[test]
     fn test_rle_specific_roundtrip() {
         let bit_width = 1;
-        let buffer_len = RleEncoder::min_buffer_size(bit_width);
         let values: Vec<i16> = vec![0, 1, 1, 1, 1, 0, 0, 0, 0, 1];
+        let buffer_len = RleEncoder::max_buffer_size(bit_width, values.len());
         let mut encoder = RleEncoder::new(bit_width, buffer_len);
         for v in &values {
             encoder.put(*v as u64)

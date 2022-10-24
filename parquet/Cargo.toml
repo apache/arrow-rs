@@ -81,6 +81,10 @@ experimental = []
 # Enable async APIs
 async = ["futures", "tokio"]
 
+[[test]]
+name = "arrow_writer_layout"
+required-features = ["arrow"]
+
 [[bin]]
 name = "parquet-read"
 required-features = ["cli"]
