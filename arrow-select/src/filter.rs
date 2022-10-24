@@ -760,22 +760,22 @@ mod tests {
     def_temporal_test!(
         test_filter_timestamp_second,
         TimestampSecondArray,
-        TimestampSecondArray::from_vec(vec![1, 2, 3, 4], None)
+        TimestampSecondArray::from(vec![1, 2, 3, 4])
     );
     def_temporal_test!(
         test_filter_timestamp_millisecond,
         TimestampMillisecondArray,
-        TimestampMillisecondArray::from_vec(vec![1, 2, 3, 4], None)
+        TimestampMillisecondArray::from(vec![1, 2, 3, 4])
     );
     def_temporal_test!(
         test_filter_timestamp_microsecond,
         TimestampMicrosecondArray,
-        TimestampMicrosecondArray::from_vec(vec![1, 2, 3, 4], None)
+        TimestampMicrosecondArray::from(vec![1, 2, 3, 4])
     );
     def_temporal_test!(
         test_filter_timestamp_nanosecond,
         TimestampNanosecondArray,
-        TimestampNanosecondArray::from_vec(vec![1, 2, 3, 4], None)
+        TimestampNanosecondArray::from(vec![1, 2, 3, 4])
     );
 
     #[test]

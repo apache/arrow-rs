@@ -489,10 +489,11 @@ mod tests {
         ]);
         let c3 = PrimitiveArray::<UInt32Type>::from(vec![3, 2, 1]);
         let c4 = BooleanArray::from(vec![Some(true), Some(false), None]);
-        let c5 = TimestampMillisecondArray::from_opt_vec(
-            vec![None, Some(1555584887378), Some(1555555555555)],
+        let c5 = TimestampMillisecondArray::from(vec![
             None,
-        );
+            Some(1555584887378),
+            Some(1555555555555),
+        ]);
         let c6 = Time32SecondArray::from(vec![1234, 24680, 85563]);
         let c7: DictionaryArray<Int32Type> =
             vec!["cupcakes", "cupcakes", "foo"].into_iter().collect();
