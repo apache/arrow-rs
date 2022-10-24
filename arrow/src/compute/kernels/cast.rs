@@ -3793,10 +3793,12 @@ mod tests {
 
     #[test]
     fn test_cast_timestamp_to_date32() {
-        let a = TimestampMillisecondArray::from_opt_vec(
-            vec![Some(864000000005), Some(1545696000001), None],
-            Some(String::from("UTC")),
-        );
+        let a = TimestampMillisecondArray::from(vec![
+            Some(864000000005),
+            Some(1545696000001),
+            None,
+        ])
+        .with_timezone("UTC".to_string());
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Date32).unwrap();
         let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
@@ -3807,10 +3809,11 @@ mod tests {
 
     #[test]
     fn test_cast_timestamp_to_date64() {
-        let a = TimestampMillisecondArray::from_opt_vec(
-            vec![Some(864000000005), Some(1545696000001), None],
+        let a = TimestampMillisecondArray::from(vec![
+            Some(864000000005),
+            Some(1545696000001),
             None,
-        );
+        ]);
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Date64).unwrap();
         let c = b.as_any().downcast_ref::<Date64Array>().unwrap();
@@ -3821,10 +3824,12 @@ mod tests {
 
     #[test]
     fn test_cast_timestamp_to_i64() {
-        let a = TimestampMillisecondArray::from_opt_vec(
-            vec![Some(864000000005), Some(1545696000001), None],
-            Some("UTC".to_string()),
-        );
+        let a = TimestampMillisecondArray::from(vec![
+            Some(864000000005),
+            Some(1545696000001),
+            None,
+        ])
+        .with_timezone("UTC".to_string());
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Int64).unwrap();
         let c = b.as_any().downcast_ref::<Int64Array>().unwrap();
@@ -3837,10 +3842,12 @@ mod tests {
     #[test]
     #[cfg(feature = "chrono-tz")]
     fn test_cast_timestamp_to_string() {
-        let a = TimestampMillisecondArray::from_opt_vec(
-            vec![Some(864000000005), Some(1545696000001), None],
-            Some("UTC".to_string()),
-        );
+        let a = TimestampMillisecondArray::from(vec![
+            Some(864000000005),
+            Some(1545696000001),
+            None,
+        ])
+        .with_timezone("UTC".to_string());
         let array = Arc::new(a) as ArrayRef;
         dbg!(&array);
         let b = cast(&array, &DataType::Utf8).unwrap();
@@ -3875,10 +3882,11 @@ mod tests {
 
     #[test]
     fn test_cast_between_timestamps() {
-        let a = TimestampMillisecondArray::from_opt_vec(
-            vec![Some(864000003005), Some(1545696002001), None],
+        let a = TimestampMillisecondArray::from(vec![
+            Some(864000003005),
+            Some(1545696002001),
             None,
-        );
+        ]);
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Timestamp(TimeUnit::Second, None)).unwrap();
         let c = b.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
@@ -5474,26 +5482,26 @@ mod tests {
             Arc::new(UInt64Array::from(vec![1, 2])),
             Arc::new(Float32Array::from(vec![1.0, 2.0])),
             Arc::new(Float64Array::from(vec![1.0, 2.0])),
-            Arc::new(TimestampSecondArray::from_vec(vec![1000, 2000], None)),
-            Arc::new(TimestampMillisecondArray::from_vec(vec![1000, 2000], None)),
-            Arc::new(TimestampMicrosecondArray::from_vec(vec![1000, 2000], None)),
-            Arc::new(TimestampNanosecondArray::from_vec(vec![1000, 2000], None)),
-            Arc::new(TimestampSecondArray::from_vec(
-                vec![1000, 2000],
-                Some(tz_name.clone()),
-            )),
-            Arc::new(TimestampMillisecondArray::from_vec(
-                vec![1000, 2000],
-                Some(tz_name.clone()),
-            )),
-            Arc::new(TimestampMicrosecondArray::from_vec(
-                vec![1000, 2000],
-                Some(tz_name.clone()),
-            )),
-            Arc::new(TimestampNanosecondArray::from_vec(
-                vec![1000, 2000],
-                Some(tz_name),
-            )),
+            Arc::new(TimestampSecondArray::from(vec![1000, 2000])),
+            Arc::new(TimestampMillisecondArray::from(vec![1000, 2000])),
+            Arc::new(TimestampMicrosecondArray::from(vec![1000, 2000])),
+            Arc::new(TimestampNanosecondArray::from(vec![1000, 2000])),
+            Arc::new(
+                TimestampSecondArray::from(vec![1000, 2000])
+                    .with_timezone(tz_name.clone()),
+            ),
+            Arc::new(
+                TimestampMillisecondArray::from(vec![1000, 2000])
+                    .with_timezone(tz_name.clone()),
+            ),
+            Arc::new(
+                TimestampMicrosecondArray::from(vec![1000, 2000])
+                    .with_timezone(tz_name.clone()),
+            ),
+            Arc::new(
+                TimestampNanosecondArray::from(vec![1000, 2000])
+                    .with_timezone(tz_name.clone()),
+            ),
             Arc::new(Date32Array::from(vec![1000, 2000])),
             Arc::new(Date64Array::from(vec![1000, 2000])),
             Arc::new(Time32SecondArray::from(vec![1000, 2000])),

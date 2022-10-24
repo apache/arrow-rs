@@ -118,9 +118,9 @@ pub type Float64Array = PrimitiveArray<Float64Type>;
 /// # use arrow_array::TimestampSecondArray;
 /// use chrono::FixedOffset;
 /// // Corresponds to single element array with entry 1970-05-09T14:25:11+0:00
-/// let arr = TimestampSecondArray::from_vec(vec![11111111], None);
+/// let arr = TimestampSecondArray::from(vec![11111111]);
 /// // OR
-/// let arr = TimestampSecondArray::from_opt_vec(vec![Some(11111111)], None);
+/// let arr = TimestampSecondArray::from(vec![Some(11111111)]);
 /// let utc_offset = FixedOffset::east(0);
 ///
 /// assert_eq!(arr.value_as_datetime_with_tz(0, utc_offset).map(|v| v.to_string()).unwrap(), "1970-05-09 14:25:11")
@@ -131,9 +131,9 @@ pub type Float64Array = PrimitiveArray<Float64Type>;
 /// # use arrow_array::TimestampSecondArray;
 /// use chrono::FixedOffset;
 /// // Corresponds to single element array with entry 1969-08-25T09:34:49+0:00
-/// let arr = TimestampSecondArray::from_vec(vec![-11111111], None);
+/// let arr = TimestampSecondArray::from(vec![-11111111]);
 /// // OR
-/// let arr = TimestampSecondArray::from_opt_vec(vec![Some(-11111111)], None);
+/// let arr = TimestampSecondArray::from(vec![Some(-11111111)]);
 /// let utc_offset = FixedOffset::east(0);
 ///
 /// assert_eq!(arr.value_as_datetime_with_tz(0, utc_offset).map(|v| v.to_string()).unwrap(), "1969-08-25 09:34:49")
@@ -144,9 +144,9 @@ pub type Float64Array = PrimitiveArray<Float64Type>;
 /// # use arrow_array::TimestampSecondArray;
 /// use chrono::FixedOffset;
 /// // Corresponds to single element array with entry 1970-05-10T00:25:11+10:00
-/// let arr = TimestampSecondArray::from_vec(vec![11111111], Some("+10:00".to_string()));
+/// let arr = TimestampSecondArray::from(vec![11111111]).with_timezone("+10:00".to_string());
 /// // OR
-/// let arr = TimestampSecondArray::from_opt_vec(vec![Some(11111111)], Some("+10:00".to_string()));
+/// let arr = TimestampSecondArray::from(vec![Some(11111111)]).with_timezone("+10:00".to_string());
 /// let sydney_offset = FixedOffset::east(10 * 60 * 60);
 ///
 /// assert_eq!(arr.value_as_datetime_with_tz(0, sydney_offset).map(|v| v.to_string()).unwrap(), "1970-05-10 00:25:11")
@@ -761,6 +761,7 @@ def_numeric_from_vec!(TimestampNanosecondType);
 
 impl<T: ArrowTimestampType> PrimitiveArray<T> {
     /// Construct a timestamp array from a vec of i64 values and an optional timezone
+    #[deprecated(note = "Use with_timezone_opt instead")]
     pub fn from_vec(data: Vec<i64>, timezone: Option<String>) -> Self
     where
         Self: From<Vec<i64>>,
@@ -769,6 +770,7 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
     }
 
     /// Construct a timestamp array from a vec of `Option<i64>` values and an optional timezone
+    #[deprecated(note = "Use with_timezone_opt instead")]
     pub fn from_opt_vec(data: Vec<Option<i64>>, timezone: Option<String>) -> Self
     where
         Self: From<Vec<Option<i64>>>,
@@ -1150,7 +1152,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_array_from_vec() {
-        let arr = TimestampSecondArray::from_vec(vec![1, -5], None);
+        let arr = TimestampSecondArray::from(vec![1, -5]);
         assert_eq!(2, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
@@ -1158,7 +1160,7 @@ mod tests {
         assert_eq!(-5, arr.value(1));
         assert_eq!(&[1, -5], arr.values());
 
-        let arr = TimestampMillisecondArray::from_vec(vec![1, -5], None);
+        let arr = TimestampMillisecondArray::from(vec![1, -5]);
         assert_eq!(2, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
@@ -1166,7 +1168,7 @@ mod tests {
         assert_eq!(-5, arr.value(1));
         assert_eq!(&[1, -5], arr.values());
 
-        let arr = TimestampMicrosecondArray::from_vec(vec![1, -5], None);
+        let arr = TimestampMicrosecondArray::from(vec![1, -5]);
         assert_eq!(2, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
@@ -1174,7 +1176,7 @@ mod tests {
         assert_eq!(-5, arr.value(1));
         assert_eq!(&[1, -5], arr.values());
 
-        let arr = TimestampNanosecondArray::from_vec(vec![1, -5], None);
+        let arr = TimestampNanosecondArray::from(vec![1, -5]);
         assert_eq!(2, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
@@ -1309,10 +1311,11 @@ mod tests {
     #[test]
     fn test_timestamp_fmt_debug() {
         let arr: PrimitiveArray<TimestampMillisecondType> =
-            TimestampMillisecondArray::from_vec(
-                vec![1546214400000, 1546214400000, -1546214400000],
-                None,
-            );
+            TimestampMillisecondArray::from(vec![
+                1546214400000,
+                1546214400000,
+                -1546214400000,
+            ]);
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, None)>\n[\n  2018-12-31T00:00:00,\n  2018-12-31T00:00:00,\n  1921-01-02T00:00:00,\n]",
             format!("{:?}", arr)
