@@ -16,7 +16,7 @@
 // under the License.
 
 //! The central type in Apache Arrow are arrays, which are a known-length sequence of values
-//! all having the same type. This module provides concrete implementations of each type, as
+//! all having the same type. This crate provides concrete implementations of each type, as
 //! well as an [`Array`] trait that can be used for type-erasure.
 //!
 //! # Downcasting an Array

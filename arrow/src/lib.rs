@@ -21,10 +21,34 @@
 //! Please see the [arrow crates.io](https://crates.io/crates/arrow)
 //! page for feature flags and tips to improve performance.
 //!
+//! # Crate Topology
+//!
+//! The [`arrow`] project is implemented as multiple sub-crates, which are then re-exported by
+//! this top-level crate.
+//!
+//! Crate authors can choose to depend on this top-level crate, or just
+//! the sub-crates they need.
+//!
+//! The current list of sub-crates is:
+//!
+//! * [`arrow-array`][arrow_array] - type-safe arrow array abstractions
+//! * [`arrow-buffer`][arrow_buffer] - buffer abstractions for arrow arrays
+//! * [`arrow-data`][arrow_data] - the underlying data of arrow arrays
+//! * [`arrow-schema`][arrow_schema] - the logical types for arrow arrays
+//! * [`arrow-select`][arrow_select] - selection kernels for arrow arrays
+//!
+//! _This list is likely to grow as further functionality is split out from the top-level crate_
+//!
+//! Some functionality is also distributed independently of this crate:
+//!
+//! * [`arrow-flight`] - support for [Arrow Flight RPC]
+//! * [`arrow-integration-test`] - support for [Arrow JSON Test Format]
+//! * [`parquet`](https://docs.rs/parquet/latest/parquet/) - support for [Apache Parquet]
+//!
 //! # Columnar Format
 //!
-//! The [`array`] module provides statically typed implementations of all the array
-//! types as defined by the [Arrow Columnar Format](https://arrow.apache.org/docs/format/Columnar.html).
+//! The [`array`] module provides statically typed implementations of all the array types as defined
+//! by the [Arrow Columnar Format](https://arrow.apache.org/docs/format/Columnar.html)
 //!
 //! For example, an [`Int32Array`](array::Int32Array) represents a nullable array of `i32`
 //!
@@ -77,7 +101,7 @@
 //! assert_eq!(min(&StringArray::from(vec!["b", "a", "c"])), Some("a"));
 //! ```
 //!
-//! For more examples, consult the [`array`] docs.
+//! For more examples, consult the [arrow_array] docs.
 //!
 //! # Type Erasure / Trait Objects
 //!
@@ -235,6 +259,7 @@
 //! orchestrates the primitives exported by this crate into an embeddable query engine, with
 //! SQL and DataFrame frontends, and heavily influences this crate's roadmap.
 //!
+//! [`arrow`]: https://github.com/apache/arrow-rs
 //! [`array`]: mod@array
 //! [`Array`]: array::Array
 //! [`ArrayRef`]: array::ArrayRef
@@ -242,6 +267,12 @@
 //! [`make_array`]: array::make_array
 //! [`Buffer`]: buffer::Buffer
 //! [`RecordBatch`]: record_batch::RecordBatch
+//! [`arrow-flight`]: https://docs.rs/arrow-flight/latest/arrow_flight/
+//! [`arrow-integration-test`]: https://docs.rs/arrow-integration-test/latest/arrow_integration_test/
+//! [`parquet`]: https://docs.rs/parquet/latest/parquet/
+//! [Arrow Flight RPC]: https://arrow.apache.org/docs/format/Flight.html
+//! [Arrow JSON Test Format]: https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format
+//! [Apache Parquet]: https://parquet.apache.org/
 //! [DataFusion]: https://github.com/apache/arrow-datafusion
 //! [issue tracker]: https://github.com/apache/arrow-rs/issues
 //!
