@@ -259,3 +259,8 @@ required-features = ["test_utils"]
 name = "bitwise_kernel"
 harness = false
 required-features = ["test_utils"]
+
+[[bench]]
+name = "lexsort"
+harness = false
+required-features = ["test_utils"]
