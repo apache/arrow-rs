@@ -61,6 +61,8 @@ jobs:
       - name: Test --all-features
         run: |
           cargo test -p arrow-flight --all-features
+      - name: Verify workspace clean
+        run: git diff --exit-code
 
   clippy:
     name: Clippy
