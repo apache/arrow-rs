@@ -33,7 +33,14 @@ change. Supported object stores include:
 * Memory
 * Custom implementations
 
-
 Originally developed for [InfluxDB IOx](https://github.com/influxdata/influxdb_iox/) and later split out and donated to [Apache Arrow](https://arrow.apache.org/).
 
 See [docs.rs](https://docs.rs/object_store) for usage instructions
+
+## Support for `wasm32-unknown-unknown` target
+
+It's possible to build `object_store` for the `wasm32-unknown-unknown` target, however the cloud storage features `aws`, `azure`, and `gcp` are not supported.
+
+```
+cargo build -p object_store --target wasm32-unknown-unknown
+```
