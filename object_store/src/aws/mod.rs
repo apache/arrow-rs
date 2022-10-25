@@ -109,6 +109,9 @@ enum Error {
     #[snafu(display("Missing SecretAccessKey"))]
     MissingSecretAccessKey,
 
+    #[snafu(display("Profile support requires aws_profile feature"))]
+    MissingProfileFeature,
+
     #[snafu(display("ETag Header missing from response"))]
     MissingEtag,
 
@@ -359,6 +362,7 @@ pub struct AmazonS3Builder {
     imdsv1_fallback: bool,
     virtual_hosted_style_request: bool,
     metadata_endpoint: Option<String>,
+    profile: Option<String>,
 }
 
 impl AmazonS3Builder {
@@ -370,13 +374,14 @@ impl AmazonS3Builder {
     /// Fill the [`AmazonS3Builder`] with regular AWS environment variables
     ///
     /// Variables extracted from environment:
-    /// * AWS_ACCESS_KEY_ID -> access_key_id
-    /// * AWS_SECRET_ACCESS_KEY -> secret_access_key
-    /// * AWS_DEFAULT_REGION -> region
-    /// * AWS_ENDPOINT -> endpoint
-    /// * AWS_SESSION_TOKEN -> token
-    /// * AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
-    /// * AWS_ALLOW_HTTP -> set to "true" to permit HTTP connections without TLS
+    /// * `AWS_ACCESS_KEY_ID` -> access_key_id
+    /// * `AWS_SECRET_ACCESS_KEY` -> secret_access_key
+    /// * `AWS_DEFAULT_REGION` -> region
+    /// * `AWS_ENDPOINT` -> endpoint
+    /// * `AWS_SESSION_TOKEN` -> token
+    /// * `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
+    /// * `AWS_ALLOW_HTTP` -> set to "true" to permit HTTP connections without TLS
+    /// * `AWS_PROFILE` -> set profile name, requires `aws_profile` feature enabled
     /// # Example
     /// ```
     /// use object_store::aws::AmazonS3Builder;
@@ -406,6 +411,10 @@ impl AmazonS3Builder {
 
         if let Ok(token) = std::env::var("AWS_SESSION_TOKEN") {
             builder.token = Some(token);
+        }
+
+        if let Ok(profile) = std::env::var("AWS_PROFILE") {
+            builder.profile = Some(profile);
         }
 
         // This env var is set in ECS
@@ -528,6 +537,24 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Set the AWS profile name, see <https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html>
+    ///
+    /// This makes use of [aws-config] to provide credentials and therefore requires
+    /// the `aws-profile` feature to be enabled
+    ///
+    /// It is strongly encouraged that users instead make use of a credential manager
+    /// such as [aws-vault] not only to avoid the significant additional dependencies,
+    /// but also to avoid storing credentials in [plain text on disk]
+    ///
+    /// [aws-config]: https://docs.rs/aws-config
+    /// [aws-vault]: https://github.com/99designs/aws-vault
+    /// [plain text on disk]: https://99designs.com.au/blog/engineering/aws-vault/
+    #[cfg(feature = "aws_profile")]
+    pub fn with_profile(mut self, profile: impl Into<String>) -> Self {
+        self.profile = Some(profile.into());
+        self
+    }
+
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(self) -> Result<AmazonS3> {
@@ -537,13 +564,13 @@ impl AmazonS3Builder {
         let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
             (Some(key_id), Some(secret_key), token) => {
                 info!("Using Static credential provider");
-                CredentialProvider::Static(StaticCredentialProvider {
+                Box::new(StaticCredentialProvider {
                     credential: Arc::new(AwsCredential {
                         key_id,
                         secret_key,
                         token,
                     }),
-                })
+                }) as _
             }
             (None, Some(_), _) => return Err(Error::MissingAccessKeyId.into()),
             (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
@@ -565,7 +592,7 @@ impl AmazonS3Builder {
                     // Disallow non-HTTPs requests
                     let client = Client::builder().https_only(true).build().unwrap();
 
-                    CredentialProvider::WebIdentity(WebIdentityProvider {
+                    Box::new(WebIdentityProvider {
                         cache: Default::default(),
                         token,
                         session_name,
@@ -573,24 +600,30 @@ impl AmazonS3Builder {
                         endpoint,
                         client,
                         retry_config: self.retry_config.clone(),
-                    })
+                    }) as _
                 }
-                _ => {
-                    info!("Using Instance credential provider");
+                _ => match self.profile {
+                    Some(profile) => {
+                        info!("Using profile \"{}\" credential provider", profile);
+                        profile_credentials(profile, region.clone())?
+                    }
+                    None => {
+                        info!("Using Instance credential provider");
 
-                    // The instance metadata endpoint is access over HTTP
-                    let client = Client::builder().https_only(false).build().unwrap();
+                        // The instance metadata endpoint is access over HTTP
+                        let client = Client::builder().https_only(false).build().unwrap();
 
-                    CredentialProvider::Instance(InstanceCredentialProvider {
-                        cache: Default::default(),
-                        client,
-                        retry_config: self.retry_config.clone(),
-                        imdsv1_fallback: self.imdsv1_fallback,
-                        metadata_endpoint: self
-                            .metadata_endpoint
-                            .unwrap_or_else(|| METADATA_ENDPOINT.into()),
-                    })
-                }
+                        Box::new(InstanceCredentialProvider {
+                            cache: Default::default(),
+                            client,
+                            retry_config: self.retry_config.clone(),
+                            imdsv1_fallback: self.imdsv1_fallback,
+                            metadata_endpoint: self
+                                .metadata_endpoint
+                                .unwrap_or_else(|| METADATA_ENDPOINT.into()),
+                        }) as _
+                    }
+                },
             },
         };
 
@@ -626,6 +659,22 @@ impl AmazonS3Builder {
 
         Ok(AmazonS3 { client })
     }
+}
+
+#[cfg(feature = "aws_profile")]
+fn profile_credentials(
+    profile: String,
+    region: String,
+) -> Result<Box<dyn CredentialProvider>> {
+    Ok(Box::new(credential::ProfileProvider::new(profile, region)))
+}
+
+#[cfg(not(feature = "aws_profile"))]
+fn profile_credentials(
+    _profile: String,
+    _region: String,
+) -> Result<Box<dyn CredentialProvider>> {
+    Err(Error::MissingProfileFeature.into())
 }
 
 #[cfg(test)]
