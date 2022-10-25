@@ -455,8 +455,24 @@ mod tests {
                 RowSelector::select(2),
                 RowSelector::skip(1),
                 RowSelector::select(1),
-                RowSelector::skip(4)
+                RowSelector::skip(4),
             ]
+        );
+    }
+
+    #[test]
+    fn test_and_2() {
+        let a = RowSelection::from(vec![
+            RowSelector::select(3),
+            RowSelector::skip(33),
+            RowSelector::select(3),
+            RowSelector::skip(33),
+        ]);
+        let b = RowSelection::from(vec![RowSelector::select(36), RowSelector::skip(36)]);
+
+        assert_eq!(
+            a.and_then(&b).selectors,
+            vec![RowSelector::select(3), RowSelector::skip(69)]
         );
     }
 
