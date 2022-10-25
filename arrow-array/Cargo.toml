@@ -51,7 +51,7 @@ arrow-data = { version = "25.0.0", path = "../arrow-data" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = { version = "0.7", optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
-half = { version = "2.0", default-features = false }
+half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.12", default-features = false }
 
 [dev-dependencies]
