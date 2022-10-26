@@ -524,25 +524,14 @@ mod tests {
         let mut buffer: Vec<u8> = vec![];
         file.read_to_end(&mut buffer).unwrap();
 
-        let expected = if cfg!(feature = "chrono-tz") {
-            r#"c1,c2,c3,c4,c5,c6,c7
+        let expected = r#"c1,c2,c3,c4,c5,c6,c7
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
 consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
 sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
 consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
 sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
-"#
-        } else {
-            r#"c1,c2,c3,c4,c5,c6,c7
-Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
-Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
-"#
-        };
+"#;
         assert_eq!(expected.to_string(), String::from_utf8(buffer).unwrap());
     }
 
