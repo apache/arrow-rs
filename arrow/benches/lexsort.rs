@@ -89,9 +89,14 @@ fn do_bench(c: &mut Criterion, columns: &[Column], len: usize) {
         })
         .collect();
 
-    c.bench_function(&format!("lexsort_to_indices({:?}): {}", columns, len), |b| {
-        b.iter(|| criterion::black_box(lexsort_to_indices(&sort_columns, None).unwrap()))
-    });
+    c.bench_function(
+        &format!("lexsort_to_indices({:?}): {}", columns, len),
+        |b| {
+            b.iter(|| {
+                criterion::black_box(lexsort_to_indices(&sort_columns, None).unwrap())
+            })
+        },
+    );
 
     c.bench_function(&format!("lexsort_rows({:?}): {}", columns, len), |b| {
         b.iter(|| {
