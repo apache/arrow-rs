@@ -240,9 +240,7 @@ impl RowSelection {
                 .expect("selection exceeds the number of selected rows");
 
             if b.row_count == 0 {
-                second
-                    .next()
-                    .expect("selection contains less than the number of selected rows");
+                second.next().unwrap();
                 continue;
             }
 
