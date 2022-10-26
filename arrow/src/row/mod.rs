@@ -73,7 +73,7 @@
 //! assert_eq!(&c2_values, &["a", "f", "c", "e"]);
 //! ```
 //!
-//! It can also be used to implement a fast lexicographic sort
+//! It can also be used to implement a fast multi-column / lexicographic sort
 //!
 //! ```
 //! # use arrow::row::{RowConverter, SortField};
