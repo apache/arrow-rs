@@ -49,5 +49,4 @@ jobs:
         env:
           RUST_BACKTRACE: full
           RUST_LOG: "trace"
-        run: |
-          bash .github/workflows/miri.sh
+        run: bash .github/workflows/miri.sh

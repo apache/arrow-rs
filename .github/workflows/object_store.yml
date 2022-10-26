@@ -37,11 +37,10 @@ jobs:
       image: amd64/rust
     steps:
       - uses: actions/checkout@v3
-      - name: Setup Rust toolchain with clippy
-        run: |
-          rustup toolchain install stable
-          rustup default stable
-          rustup component add clippy
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Setup Clippy
+        run: rustup component add clippy
       # Run different tests for the library on its own as well as
       # all targets to ensure that it still works in the absence of
       # features that might be enabled by dev-dependencies of other
@@ -68,12 +67,6 @@ jobs:
     name: Emulator Tests
     runs-on: ubuntu-latest
     env:
-      # Disable full debug symbol generation to speed up CI build and keep memory down
-      # "1" means line tables only, which is useful for panic tracebacks.
-      RUSTFLAGS: "-C debuginfo=1"
-      # https://github.com/rust-lang/cargo/issues/10280
-      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      RUST_BACKTRACE: "1"
       # Run integration tests
       TEST_INTEGRATION: 1
       EC2_METADATA_ENDPOINT: http://localhost:1338
@@ -111,9 +104,7 @@ jobs:
           az storage container create -n test-bucket --connection-string 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;QueueEndpoint=http://localhost:10001/devstoreaccount1;'
 
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install stable
-          rustup default stable
+        uses: ./.github/actions/setup-builder
 
       - name: Run object_store tests
         env:
@@ -121,6 +112,23 @@ jobs:
           OBJECT_STORE_AWS_ACCESS_KEY_ID: test
           OBJECT_STORE_AWS_SECRET_ACCESS_KEY: test
           OBJECT_STORE_AWS_ENDPOINT: http://localhost:4566
-        run: |
-          # run tests
-          cargo test -p object_store --features=aws,azure,gcp
+        run: cargo test -p object_store --features=aws,azure,gcp
+
+  # test the object_store crate builds against wasm32 in stable rust
+  wasm32-build:
+    name: Build wasm32
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          target: wasm32-unknown-unknown,wasm32-wasi
+      - name: Build wasm32-unknown-unknown
+        run: cargo build -p object_store --target wasm32-unknown-unknown
+      - name: Build wasm32-wasi
+        run: cargo build -p object_store --target wasm32-wasi
