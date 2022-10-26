@@ -68,6 +68,8 @@ jobs:
         run: cargo test -p arrow-integration-test --all-features
       - name: Test arrow
         run: cargo test -p arrow
+      - name: Test arrow with all features
+        run: cargo test -p arrow --all-features
       - name: Test --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict,dyn_arith_dict
         run: |
           cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict,dyn_arith_dict
