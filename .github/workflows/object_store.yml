@@ -67,6 +67,10 @@ jobs:
     name: Emulator Tests
     runs-on: ubuntu-latest
     env:
+      # Disable full debug symbol generation to speed up CI build and keep memory down
+      # "1" means line tables only, which is useful for panic tracebacks.
+      RUSTFLAGS: "-C debuginfo=1"
+      RUST_BACKTRACE: "1"
       # Run integration tests
       TEST_INTEGRATION: 1
       EC2_METADATA_ENDPOINT: http://localhost:1338
@@ -104,7 +108,9 @@ jobs:
           az storage container create -n test-bucket --connection-string 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;QueueEndpoint=http://localhost:10001/devstoreaccount1;'
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        run: |
+          rustup toolchain install stable
+          rustup default stable
 
       - name: Run object_store tests
         env:
