@@ -1133,8 +1133,16 @@ mod tests {
     fn test_temporal_array_timestamp_hour_with_timezone_without_colon() {
         let a = TimestampSecondArray::from(vec![60 * 60 * 10])
             .with_timezone("+0100".to_string());
-        let err = hour(&a).unwrap_err().to_string();
-        assert!(err.contains("Invalid timezone"), "{}", err);
+        let b = hour(&a).unwrap();
+        assert_eq!(11, b.value(0));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_hour_with_timezone_without_minutes() {
+        let a = TimestampSecondArray::from(vec![60 * 60 * 10])
+            .with_timezone("+01".to_string());
+        let b = hour(&a).unwrap();
+        assert_eq!(11, b.value(0));
     }
 
     #[test]
