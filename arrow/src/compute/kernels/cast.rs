@@ -3853,8 +3853,8 @@ mod tests {
         let b = cast(&array, &DataType::Utf8).unwrap();
         let c = b.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(&DataType::Utf8, c.data_type());
-        assert_eq!("1997-05-19 00:00:00.005", c.value(0));
-        assert_eq!("2018-12-25 00:00:00.001", c.value(1));
+        assert_eq!("1997-05-19 00:00:00.005 +00:00", c.value(0));
+        assert_eq!("2018-12-25 00:00:00.001 +00:00", c.value(1));
         assert!(c.is_null(2));
     }
 
@@ -5754,9 +5754,9 @@ mod tests {
         let out = cast(&(Arc::new(array) as ArrayRef), &DataType::Utf8).unwrap();
 
         let expected = StringArray::from(vec![
-            Some("1970-01-01 20:30:00"),
+            Some("1970-01-01 20:30:00 +10:00"),
             None,
-            Some("1970-01-02 09:58:59"),
+            Some("1970-01-02 09:58:59 +10:00"),
         ]);
 
         assert_eq!(

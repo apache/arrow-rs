@@ -527,11 +527,11 @@ mod tests {
         let expected = if cfg!(feature = "chrono-tz") {
             r#"c1,c2,c3,c4,c5,c6,c7
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000+00:00,06:51:20,cupcakes
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000+00:00,23:46:03,foo
+consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
+sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000+00:00,06:51:20,cupcakes
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000+00:00,23:46:03,foo
+consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
+sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
 "#
         } else {
             r#"c1,c2,c3,c4,c5,c6,c7
@@ -646,8 +646,8 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         }
 
         let left = "c1,c2
-2019-04-18T20:54:47.378000000+10:00,2019-04-18T10:54:47.378000000+00:00
-2021-10-30T17:59:07.000000000+11:00,2021-10-30T06:59:07.000000000+00:00\n";
+2019-04-18T20:54:47.378000000+10:00,2019-04-18T10:54:47.378000000
+2021-10-30T17:59:07.000000000+11:00,2021-10-30T06:59:07.000000000\n";
         let right = writer.writer.into_inner().map(|s| s.to_string());
         assert_eq!(Some(left.to_string()), right.ok());
     }
