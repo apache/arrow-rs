@@ -53,4 +53,5 @@ runs:
         echo "Installing ${{ inputs.rust-version }}"
         rustup toolchain install ${{ inputs.rust-version }}
         rustup default ${{ inputs.rust-version }}
+        rustup target add wasm32-unknown-unknown
         echo "CARGO_TARGET_DIR=/github/home/target" >> $GITHUB_ENV
