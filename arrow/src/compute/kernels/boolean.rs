@@ -1213,7 +1213,7 @@ mod tests {
         ]);
         let comp = comp.slice(2, 3); // Some(false), None, Some(true)
         let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let res = nullif(&a, &comp).unwrap();
+        let res = nullif(&a, comp).unwrap();
         let res = res.as_any().downcast_ref::<Int32Array>().unwrap();
 
         let expected = Int32Array::from(vec![
@@ -1262,7 +1262,7 @@ mod tests {
         ]);
         let comp = comp.slice(18, 3); // Some(false), None, Some(true)
         let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let res = nullif(&a, &comp).unwrap();
+        let res = nullif(&a, comp).unwrap();
         let res = res.as_any().downcast_ref::<Int32Array>().unwrap();
 
         let expected = Int32Array::from(vec![
@@ -1295,7 +1295,7 @@ mod tests {
         ]);
         let comp = comp.slice(2, 3); // Some(false), None, Some(true)
         let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let res = nullif(&a, &comp).unwrap();
+        let res = nullif(&a, comp).unwrap();
         let res = res.as_any().downcast_ref::<BooleanArray>().unwrap();
 
         let expected = BooleanArray::from(vec![
@@ -1387,7 +1387,7 @@ mod tests {
         ]);
         let comp = comp.slice(2, 5); // Some(false), None, Some(true), Some(false), None
         let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let res = nullif(&struct_array, &comp).unwrap();
+        let res = nullif(&struct_array, comp).unwrap();
         let res = res.as_any().downcast_ref::<StructArray>().unwrap();
 
         let expected = create_foo_struct(vec![
