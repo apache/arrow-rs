@@ -18,7 +18,10 @@
 use crate::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
 use crate::iterator::PrimitiveIter;
 use crate::raw_pointer::RawPtrBox;
-use crate::temporal_conversions::{as_date, as_datetime, as_duration, as_time};
+use crate::temporal_conversions::{
+    as_date, as_datetime, as_datetime_with_timezone, as_duration, as_time,
+};
+use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
 use crate::types::*;
 use crate::{print_long_array, Array, ArrayAccessor};
@@ -26,7 +29,7 @@ use arrow_buffer::{i256, ArrowNativeType, Buffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
-use chrono::{Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use half::f16;
 use std::any::Any;
 
@@ -503,12 +506,8 @@ where
     ///
     /// functionally it is same as `value_as_datetime`, however it adds
     /// the passed tz to the to-be-returned NaiveDateTime
-    pub fn value_as_datetime_with_tz(
-        &self,
-        i: usize,
-        tz: FixedOffset,
-    ) -> Option<NaiveDateTime> {
-        as_datetime::<T>(i64::from(self.value(i))).map(|datetime| datetime + tz)
+    pub fn value_as_datetime_with_tz(&self, i: usize, tz: Tz) -> Option<DateTime<Tz>> {
+        as_datetime_with_timezone::<T>(i64::from(self.value(i)), tz)
     }
 
     /// Returns value as a chrono `NaiveDate` by using `Self::datetime()`

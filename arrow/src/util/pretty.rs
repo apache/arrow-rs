@@ -370,13 +370,132 @@ mod tests {
         };
     }
 
+    /// Generate an array with type $ARRAYTYPE with a numeric value of
+    /// $VALUE, and compare $EXPECTED_RESULT to the output of
+    /// formatting that array with `pretty_format_batches`
+    macro_rules! check_datetime_with_timezone {
+        ($ARRAYTYPE:ident, $VALUE:expr, $TZ_STRING:expr, $EXPECTED_RESULT:expr) => {
+            let mut builder = $ARRAYTYPE::builder(10);
+            builder.append_value($VALUE);
+            builder.append_null();
+            let array = builder.finish();
+            let array = array.with_timezone($TZ_STRING);
+
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "f",
+                array.data_type().clone(),
+                true,
+            )]));
+            let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+
+            let table = pretty_format_batches(&[batch])
+                .expect("formatting batches")
+                .to_string();
+
+            let expected = $EXPECTED_RESULT;
+            let actual: Vec<&str> = table.lines().collect();
+
+            assert_eq!(expected, actual, "Actual result:\n\n{:#?}\n\n", actual);
+        };
+    }
+
+    #[test]
+    fn test_pretty_format_timestamp_second_with_utc_timezone() {
+        let expected = vec![
+            "+---------------------------+",
+            "| f                         |",
+            "+---------------------------+",
+            "| 1970-05-09T14:25:11+00:00 |",
+            "|                           |",
+            "+---------------------------+",
+        ];
+        check_datetime_with_timezone!(
+            TimestampSecondArray,
+            11111111,
+            "UTC".to_string(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_pretty_format_timestamp_second_with_non_utc_timezone() {
+        let expected = vec![
+            "+---------------------------+",
+            "| f                         |",
+            "+---------------------------+",
+            "| 1970-05-09T22:25:11+08:00 |",
+            "|                           |",
+            "+---------------------------+",
+        ];
+        check_datetime_with_timezone!(
+            TimestampSecondArray,
+            11111111,
+            "Asia/Taipei".to_string(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_pretty_format_timestamp_second_with_fixed_offset_timezone() {
+        let expected = vec![
+            "+---------------------------+",
+            "| f                         |",
+            "+---------------------------+",
+            "| 1970-05-09T22:25:11+08:00 |",
+            "|                           |",
+            "+---------------------------+",
+        ];
+        check_datetime_with_timezone!(
+            TimestampSecondArray,
+            11111111,
+            "+08:00".to_string(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_pretty_format_timestamp_second_with_incorrect_fixed_offset_timezone() {
+        let expected = vec![
+            "+-------------------------------------------------+",
+            "| f                                               |",
+            "+-------------------------------------------------+",
+            "| 1970-05-09T14:25:11 (Unknown Time Zone '08:00') |",
+            "|                                                 |",
+            "+-------------------------------------------------+",
+        ];
+        check_datetime_with_timezone!(
+            TimestampSecondArray,
+            11111111,
+            "08:00".to_string(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_pretty_format_timestamp_second_with_unknown_timezone() {
+        let expected = vec![
+            "+---------------------------------------------------+",
+            "| f                                                 |",
+            "+---------------------------------------------------+",
+            "| 1970-05-09T14:25:11 (Unknown Time Zone 'Unknown') |",
+            "|                                                   |",
+            "+---------------------------------------------------+",
+        ];
+        check_datetime_with_timezone!(
+            TimestampSecondArray,
+            11111111,
+            "Unknown".to_string(),
+            expected
+        );
+    }
+
     #[test]
     fn test_pretty_format_timestamp_second() {
         let expected = vec![
             "+---------------------+",
             "| f                   |",
             "+---------------------+",
-            "| 1970-05-09 14:25:11 |",
+            "| 1970-05-09T14:25:11 |",
             "|                     |",
             "+---------------------+",
         ];
@@ -389,7 +508,7 @@ mod tests {
             "+-------------------------+",
             "| f                       |",
             "+-------------------------+",
-            "| 1970-01-01 03:05:11.111 |",
+            "| 1970-01-01T03:05:11.111 |",
             "|                         |",
             "+-------------------------+",
         ];
@@ -402,7 +521,7 @@ mod tests {
             "+----------------------------+",
             "| f                          |",
             "+----------------------------+",
-            "| 1970-01-01 00:00:11.111111 |",
+            "| 1970-01-01T00:00:11.111111 |",
             "|                            |",
             "+----------------------------+",
         ];
@@ -415,7 +534,7 @@ mod tests {
             "+-------------------------------+",
             "| f                             |",
             "+-------------------------------+",
-            "| 1970-01-01 00:00:00.011111111 |",
+            "| 1970-01-01T00:00:00.011111111 |",
             "|                               |",
             "+-------------------------------+",
         ];
