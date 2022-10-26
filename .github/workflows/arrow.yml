@@ -68,11 +68,9 @@ jobs:
         run: cargo test -p arrow-integration-test --all-features
       - name: Test arrow
         run: cargo test -p arrow
-      - name: Test arrow with all features
-        run: cargo test -p arrow --all-features
-      - name: Test --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict,dyn_arith_dict
+      - name: Test --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict,dyn_arith_dict,chrono-tz
         run: |
-          cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict,dyn_arith_dict
+          cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict,dyn_arith_dict,chrono-tz
       - name: Run examples
         run: |
           # Test arrow examples
@@ -209,4 +207,4 @@ jobs:
         run: cargo clippy -p arrow-select --all-targets --all-features
       - name: Clippy arrow
         run: |
-          cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict,dyn_arith_dict --all-targets -- -D warnings
+          cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict,dyn_arith_dict,chrono-tz --all-targets -- -D warnings
