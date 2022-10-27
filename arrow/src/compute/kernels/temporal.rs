@@ -1170,10 +1170,8 @@ mod tests {
         // The offset (difference to UTC) is +11:00. Note that daylight savings is in effect on 2021-10-30.
         // When daylight savings is not in effect, Australia/Sydney has an offset difference of +10:00.
 
-        let a = TimestampMillisecondArray::from_opt_vec(
-            vec![Some(1635577147000)],
-            Some("Australia/Sydney".to_string()),
-        );
+        let a = TimestampMillisecondArray::from(vec![Some(1635577147000)])
+            .with_timezone("Australia/Sydney".to_string());
         let b = hour(&a).unwrap();
         assert_eq!(17, b.value(0));
     }
