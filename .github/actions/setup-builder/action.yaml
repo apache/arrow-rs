@@ -58,8 +58,8 @@ runs:
         rustup toolchain install ${{ inputs.rust-version }} --target ${{ inputs.target }}
         rustup default ${{ inputs.rust-version }}
     - name: Disable debuginfo generation
-    # Disable full debug symbol generation to speed up CI build and keep memory down
-    # "1" means line tables only, which is useful for panic tracebacks.    
+      # Disable full debug symbol generation to speed up CI build and keep memory down
+      # "1" means line tables only, which is useful for panic tracebacks.
       shell: bash
       run: echo "RUSTFLAGS=-C debuginfo=1" >> $GITHUB_ENV
     - name: Enable backtraces
