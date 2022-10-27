@@ -73,6 +73,24 @@
 //! assert_eq!(&c2_values, &["a", "f", "c", "e"]);
 //! ```
 //!
+//! It can also be used to implement a fast multi-column / lexicographic sort
+//!
+//! ```
+//! # use arrow::row::{RowConverter, SortField};
+//! # use arrow_array::{ArrayRef, UInt32Array};
+//! fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
+//!     let fields = arrays
+//!         .iter()
+//!         .map(|a| SortField::new(a.data_type().clone()))
+//!         .collect();
+//!     let mut converter = RowConverter::new(fields);
+//!     let rows = converter.convert_columns(&arrays).unwrap();
+//!     let mut sort: Vec<_> = rows.iter().enumerate().collect();
+//!     sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+//!     UInt32Array::from_iter_values(sort.iter().map(|(i, _)| *i as u32))
+//! }
+//! ```
+//!
 //! [non-comparison sorts]:[https://en.wikipedia.org/wiki/Sorting_algorithm#Non-comparison_sorts]
 //! [radix sort]:[https://en.wikipedia.org/wiki/Radix_sort]
 //! [normalized for sorting]:[https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.83.1080&rep=rep1&type=pdf]

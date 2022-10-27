@@ -24,19 +24,24 @@ pub use private::{Tz, TzOffset};
 
 /// Parses a fixed offset of the form "+09:00"
 fn parse_fixed_offset(tz: &str) -> Result<FixedOffset, ArrowError> {
-    if tz.len() != 6 {
-        return Err(ArrowError::ParseError(format!(
-            "Invalid timezone \"{}\": Expected format [+-]XX:XX",
-            tz
-        )));
+    let mut parsed = Parsed::new();
+
+    if let Ok(fixed_offset) = parse(&mut parsed, tz, StrftimeItems::new("%:z"))
+        .and_then(|_| parsed.to_fixed_offset())
+    {
+        return Ok(fixed_offset);
     }
 
-    let mut parsed = Parsed::new();
-    parse(&mut parsed, tz, StrftimeItems::new("%:z"))
+    if let Ok(fixed_offset) = parse(&mut parsed, tz, StrftimeItems::new("%#z"))
         .and_then(|_| parsed.to_fixed_offset())
-        .map_err(|e| {
-            ArrowError::ParseError(format!("Invalid timezone \"{}\": {}", tz, e))
-        })
+    {
+        return Ok(fixed_offset);
+    }
+
+    Err(ArrowError::ParseError(format!(
+        "Invalid timezone \"{}\": Expected format [+-]XX:XX, [+-]XX, or [+-]XXXX",
+        tz
+    )))
 }
 
 #[cfg(feature = "chrono-tz")]
@@ -313,13 +318,19 @@ mod tests {
             9 * 60 * 60
         );
 
+        let tz = "+09".parse::<Tz>().unwrap();
+        assert_eq!(
+            tz.offset_from_utc_date(&t).fix().local_minus_utc(),
+            9 * 60 * 60
+        );
+
+        let tz = "+0900".parse::<Tz>().unwrap();
+        assert_eq!(
+            tz.offset_from_utc_date(&t).fix().local_minus_utc(),
+            9 * 60 * 60
+        );
+
         let err = "+9:00".parse::<Tz>().unwrap_err().to_string();
-        assert!(err.contains("Invalid timezone"), "{}", err);
-
-        let err = "+09".parse::<Tz>().unwrap_err().to_string();
-        assert!(err.contains("Invalid timezone"), "{}", err);
-
-        let err = "+0900".parse::<Tz>().unwrap_err().to_string();
         assert!(err.contains("Invalid timezone"), "{}", err);
     }
 }

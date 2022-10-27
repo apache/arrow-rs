@@ -1133,8 +1133,16 @@ mod tests {
     fn test_temporal_array_timestamp_hour_with_timezone_without_colon() {
         let a = TimestampSecondArray::from(vec![60 * 60 * 10])
             .with_timezone("+0100".to_string());
-        let err = hour(&a).unwrap_err().to_string();
-        assert!(err.contains("Invalid timezone"), "{}", err);
+        let b = hour(&a).unwrap();
+        assert_eq!(11, b.value(0));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_hour_with_timezone_without_minutes() {
+        let a = TimestampSecondArray::from(vec![60 * 60 * 10])
+            .with_timezone("+01".to_string());
+        let b = hour(&a).unwrap();
+        assert_eq!(11, b.value(0));
     }
 
     #[test]
@@ -1170,10 +1178,8 @@ mod tests {
         // The offset (difference to UTC) is +11:00. Note that daylight savings is in effect on 2021-10-30.
         // When daylight savings is not in effect, Australia/Sydney has an offset difference of +10:00.
 
-        let a = TimestampMillisecondArray::from_opt_vec(
-            vec![Some(1635577147000)],
-            Some("Australia/Sydney".to_string()),
-        );
+        let a = TimestampMillisecondArray::from(vec![Some(1635577147000)])
+            .with_timezone("Australia/Sydney".to_string());
         let b = hour(&a).unwrap();
         assert_eq!(17, b.value(0));
     }

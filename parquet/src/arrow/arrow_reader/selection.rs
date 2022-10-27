@@ -223,6 +223,11 @@ impl RowSelection {
     /// returned: NNNNNNNNNNNNYYYYYNNNNYYYYYYYYYYYYYNNNYYNNN
     ///
     ///
+    /// # Panics
+    ///
+    /// Panics if `other` does not have a length equal to the number of rows selected
+    /// by this RowSelection
+    ///
     pub fn and_then(&self, other: &Self) -> Self {
         let mut selectors = vec![];
         let mut first = self.selectors.iter().cloned().peekable();
@@ -230,7 +235,9 @@ impl RowSelection {
 
         let mut to_skip = 0;
         while let Some(b) = second.peek_mut() {
-            let a = first.peek_mut().unwrap();
+            let a = first
+                .peek_mut()
+                .expect("selection exceeds the number of selected rows");
 
             if b.row_count == 0 {
                 second.next().unwrap();
@@ -269,7 +276,10 @@ impl RowSelection {
 
         for v in first {
             if v.row_count != 0 {
-                assert!(v.skip);
+                assert!(
+                    v.skip,
+                    "selection contains less than the number of selected rows"
+                );
                 to_skip += v.row_count
             }
         }
@@ -458,6 +468,32 @@ mod tests {
                 RowSelector::skip(4)
             ]
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "selection exceeds the number of selected rows")]
+    fn test_and_longer() {
+        let a = RowSelection::from(vec![
+            RowSelector::select(3),
+            RowSelector::skip(33),
+            RowSelector::select(3),
+            RowSelector::skip(33),
+        ]);
+        let b = RowSelection::from(vec![RowSelector::select(36)]);
+        a.and_then(&b);
+    }
+
+    #[test]
+    #[should_panic(expected = "selection contains less than the number of selected rows")]
+    fn test_and_shorter() {
+        let a = RowSelection::from(vec![
+            RowSelector::select(3),
+            RowSelector::skip(33),
+            RowSelector::select(3),
+            RowSelector::skip(33),
+        ]);
+        let b = RowSelection::from(vec![RowSelector::select(3)]);
+        a.and_then(&b);
     }
 
     #[test]

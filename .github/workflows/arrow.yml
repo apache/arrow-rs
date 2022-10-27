@@ -165,4 +165,4 @@ jobs:
       - name: Clippy arrow-select with all features
         run: cargo clippy -p arrow-select --all-targets --all-features -- -D warnings
       - name: Clippy arrow
-        run: cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict,dyn_arith_dict --all-targets -- -D warnings
+        run: cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict,dyn_arith_dict,chrono-tz --all-targets -- -D warnings
