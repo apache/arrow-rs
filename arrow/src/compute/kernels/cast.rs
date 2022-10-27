@@ -365,7 +365,12 @@ fn cast_integer_to_decimal256<T: ArrowNumericType>(
 where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<i256>,
 {
-    let mul: i256 = i256::from_i128(10_i128.pow(scale as u32));
+    let mul: i256 = i256::from_i128(10_i128).checked_pow(scale as u32).ok_or(
+        ArrowError::CastError(format!(
+            "Cannot cast to Decimal256({}, {}). The scale causes overflow.",
+            precision, scale
+        )),
+    )?;
 
     cast_primitive_to_decimal256(array, |v| v.as_().wrapping_mul(mul), precision, scale)
 }
