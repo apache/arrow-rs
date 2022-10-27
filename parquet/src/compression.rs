@@ -77,6 +77,8 @@ pub fn create_codec(codec: CodecType) -> Result<Option<Box<dyn Codec>>> {
         CodecType::LZ4 => Ok(Some(Box::new(LZ4Codec::new()))),
         #[cfg(any(feature = "zstd", test))]
         CodecType::ZSTD => Ok(Some(Box::new(ZSTDCodec::new()))),
+        #[cfg(any(feature = "lz4", test))]
+        CodecType::LZ4_RAW => Ok(Some(Box::new(LZ4RawCodec::new()))),
         CodecType::UNCOMPRESSED => Ok(None),
         _ => Err(nyi_err!("The codec type {} is not supported yet", codec)),
     }
@@ -325,6 +327,63 @@ mod zstd_codec {
 #[cfg(any(feature = "zstd", test))]
 pub use zstd_codec::*;
 
+#[cfg(any(feature = "lz4", test))]
+mod lz4_raw_codec {
+    use crate::compression::Codec;
+    use crate::errors::Result;
+
+    /// Codec for LZ4 Raw compression algorithm.
+    pub struct LZ4RawCodec {}
+
+    impl LZ4RawCodec {
+        /// Creates new LZ4 Raw compression codec.
+        pub(crate) fn new() -> Self {
+            Self {}
+        }
+    }
+
+    // Compute max LZ4 uncompress size.
+    // Check https://stackoverflow.com/questions/25740471/lz4-library-decompressed-data-upper-bound-size-estimation
+    fn max_uncompressed_size(compressed_size: usize) -> usize {
+        (compressed_size << 8) - compressed_size - 2526
+    }
+
+    impl Codec for LZ4RawCodec {
+        fn decompress(
+            &mut self,
+            input_buf: &[u8],
+            output_buf: &mut Vec<u8>,
+        ) -> Result<usize> {
+            let offset = output_buf.len();
+            let required_len = max_uncompressed_size(input_buf.len());
+            output_buf.resize(offset + required_len, 0);
+            let required_len: i32 = required_len.try_into().unwrap();
+            match lz4::block::decompress_to_buffer(input_buf, Some(required_len), &mut output_buf[offset..]) {
+                Ok(n) => {
+                    output_buf.truncate(offset + n);
+                    Ok(n)   
+                },
+                Err(e) => Err(e.into()),
+            }
+        }
+
+        fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
+            let offset = output_buf.len();
+            let required_len = lz4::block::compress_bound(input_buf.len())?;
+            output_buf.resize(offset + required_len, 0);
+            match lz4::block::compress_to_buffer(input_buf, None, false, &mut output_buf[offset..]) {
+                Ok(n) => {
+                    output_buf.truncate(offset + n);
+                    Ok(())
+                },
+                Err(e) => Err(e.into()),
+            }
+        }
+    }
+}
+#[cfg(any(feature = "lz4", test))]
+pub use lz4_raw_codec::*;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,5 +474,10 @@ mod tests {
     #[test]
     fn test_codec_zstd() {
         test_codec(CodecType::ZSTD);
+    }
+
+    #[test]
+    fn test_codec_lz4_raw() {
+        test_codec(CodecType::LZ4_RAW);
     }
 }

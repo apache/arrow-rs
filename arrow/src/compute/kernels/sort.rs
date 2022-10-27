@@ -897,6 +897,10 @@ pub struct SortColumn {
 /// assert_eq!(as_primitive_array::<Int64Type>(&sorted_columns[0]).value(1), -64);
 /// assert!(sorted_columns[0].is_null(0));
 /// ```
+///
+/// Note: for multi-column sorts without a limit, using the [row format][crate::row]
+/// may be significantly faster
+///
 pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<ArrayRef>> {
     let indices = lexsort_to_indices(columns, limit)?;
     columns
@@ -907,6 +911,9 @@ pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<Array
 
 /// Sort elements lexicographically from a list of `ArrayRef` into an unsigned integer
 /// (`UInt32Array`) of indices.
+///
+/// Note: for multi-column sorts without a limit, using the [row format][crate::row]
+/// may be significantly faster
 pub fn lexsort_to_indices(
     columns: &[SortColumn],
     limit: Option<usize>,
@@ -942,11 +949,8 @@ pub fn lexsort_to_indices(
         lexicographical_comparator.compare(a, b)
     });
 
-    Ok(UInt32Array::from(
-        (&value_indices)[0..len]
-            .iter()
-            .map(|i| *i as u32)
-            .collect::<Vec<u32>>(),
+    Ok(UInt32Array::from_iter_values(
+        value_indices.iter().map(|i| *i as u32),
     ))
 }
 

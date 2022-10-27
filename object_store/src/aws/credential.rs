@@ -22,6 +22,7 @@ use crate::util::hmac_sha256;
 use crate::{Result, RetryConfig};
 use bytes::Buf;
 use chrono::{DateTime, Utc};
+use futures::future::BoxFuture;
 use futures::TryFutureExt;
 use percent_encoding::utf8_percent_encode;
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -289,27 +290,20 @@ fn canonicalize_headers(header_map: &HeaderMap) -> (String, String) {
 }
 
 /// Provides credentials for use when signing requests
-#[derive(Debug)]
-pub enum CredentialProvider {
-    Static(StaticCredentialProvider),
-    Instance(InstanceCredentialProvider),
-    WebIdentity(WebIdentityProvider),
-}
-
-impl CredentialProvider {
-    pub async fn get_credential(&self) -> Result<Arc<AwsCredential>> {
-        match self {
-            Self::Static(s) => Ok(Arc::clone(&s.credential)),
-            Self::Instance(c) => c.get_credential().await,
-            Self::WebIdentity(c) => c.get_credential().await,
-        }
-    }
+pub trait CredentialProvider: std::fmt::Debug + Send + Sync {
+    fn get_credential(&self) -> BoxFuture<'_, Result<Arc<AwsCredential>>>;
 }
 
 /// A static set of credentials
 #[derive(Debug)]
 pub struct StaticCredentialProvider {
     pub credential: Arc<AwsCredential>,
+}
+
+impl CredentialProvider for StaticCredentialProvider {
+    fn get_credential(&self) -> BoxFuture<'_, Result<Arc<AwsCredential>>> {
+        Box::pin(futures::future::ready(Ok(Arc::clone(&self.credential))))
+    }
 }
 
 /// Credentials sourced from the instance metadata service
@@ -324,22 +318,20 @@ pub struct InstanceCredentialProvider {
     pub metadata_endpoint: String,
 }
 
-impl InstanceCredentialProvider {
-    async fn get_credential(&self) -> Result<Arc<AwsCredential>> {
-        self.cache
-            .get_or_insert_with(|| {
-                instance_creds(
-                    &self.client,
-                    &self.retry_config,
-                    &self.metadata_endpoint,
-                    self.imdsv1_fallback,
-                )
-                .map_err(|source| crate::Error::Generic {
-                    store: "S3",
-                    source,
-                })
+impl CredentialProvider for InstanceCredentialProvider {
+    fn get_credential(&self) -> BoxFuture<'_, Result<Arc<AwsCredential>>> {
+        Box::pin(self.cache.get_or_insert_with(|| {
+            instance_creds(
+                &self.client,
+                &self.retry_config,
+                &self.metadata_endpoint,
+                self.imdsv1_fallback,
+            )
+            .map_err(|source| crate::Error::Generic {
+                store: "S3",
+                source,
             })
-            .await
+        }))
     }
 }
 
@@ -357,24 +349,22 @@ pub struct WebIdentityProvider {
     pub retry_config: RetryConfig,
 }
 
-impl WebIdentityProvider {
-    async fn get_credential(&self) -> Result<Arc<AwsCredential>> {
-        self.cache
-            .get_or_insert_with(|| {
-                web_identity(
-                    &self.client,
-                    &self.retry_config,
-                    &self.token,
-                    &self.role_arn,
-                    &self.session_name,
-                    &self.endpoint,
-                )
-                .map_err(|source| crate::Error::Generic {
-                    store: "S3",
-                    source,
-                })
+impl CredentialProvider for WebIdentityProvider {
+    fn get_credential(&self) -> BoxFuture<'_, Result<Arc<AwsCredential>>> {
+        Box::pin(self.cache.get_or_insert_with(|| {
+            web_identity(
+                &self.client,
+                &self.retry_config,
+                &self.token,
+                &self.role_arn,
+                &self.session_name,
+                &self.endpoint,
+            )
+            .map_err(|source| crate::Error::Generic {
+                store: "S3",
+                source,
             })
-            .await
+        }))
     }
 }
 
@@ -519,6 +509,74 @@ async fn web_identity(
         expiry: Instant::now() + ttl,
     })
 }
+
+#[cfg(feature = "aws_profile")]
+mod profile {
+    use super::*;
+    use aws_config::profile::ProfileFileCredentialsProvider;
+    use aws_config::provider_config::ProviderConfig;
+    use aws_types::credentials::ProvideCredentials;
+    use aws_types::region::Region;
+    use std::time::SystemTime;
+
+    #[derive(Debug)]
+    pub struct ProfileProvider {
+        cache: TokenCache<Arc<AwsCredential>>,
+        credentials: ProfileFileCredentialsProvider,
+    }
+
+    impl ProfileProvider {
+        pub fn new(name: String, region: String) -> Self {
+            let config = ProviderConfig::default().with_region(Some(Region::new(region)));
+
+            Self {
+                cache: Default::default(),
+                credentials: ProfileFileCredentialsProvider::builder()
+                    .configure(&config)
+                    .profile_name(name)
+                    .build(),
+            }
+        }
+    }
+
+    impl CredentialProvider for ProfileProvider {
+        fn get_credential(&self) -> BoxFuture<'_, Result<Arc<AwsCredential>>> {
+            Box::pin(self.cache.get_or_insert_with(move || async move {
+                let c =
+                    self.credentials
+                        .provide_credentials()
+                        .await
+                        .map_err(|source| crate::Error::Generic {
+                            store: "S3",
+                            source: Box::new(source),
+                        })?;
+
+                let t_now = SystemTime::now();
+                let expiry = match c.expiry().and_then(|e| e.duration_since(t_now).ok()) {
+                    Some(ttl) => Instant::now() + ttl,
+                    None => {
+                        return Err(crate::Error::Generic {
+                            store: "S3",
+                            source: "Invalid expiry".into(),
+                        })
+                    }
+                };
+
+                Ok(TemporaryToken {
+                    token: Arc::new(AwsCredential {
+                        key_id: c.access_key_id().to_string(),
+                        secret_key: c.secret_access_key().to_string(),
+                        token: c.session_token().map(ToString::to_string),
+                    }),
+                    expiry,
+                })
+            }))
+        }
+    }
+}
+
+#[cfg(feature = "aws_profile")]
+pub use profile::ProfileProvider;
 
 #[cfg(test)]
 mod tests {

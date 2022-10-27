@@ -524,25 +524,14 @@ mod tests {
         let mut buffer: Vec<u8> = vec![];
         file.read_to_end(&mut buffer).unwrap();
 
-        let expected = if cfg!(feature = "chrono-tz") {
-            r#"c1,c2,c3,c4,c5,c6,c7
-Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000+00:00,06:51:20,cupcakes
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000+00:00,23:46:03,foo
-Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000+00:00,06:51:20,cupcakes
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000+00:00,23:46:03,foo
-"#
-        } else {
-            r#"c1,c2,c3,c4,c5,c6,c7
+        let expected = r#"c1,c2,c3,c4,c5,c6,c7
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
 consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
 sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
 consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
 sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
-"#
-        };
+"#;
         assert_eq!(expected.to_string(), String::from_utf8(buffer).unwrap());
     }
 
@@ -621,19 +610,19 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
             Field::new("c2", DataType::Timestamp(TimeUnit::Millisecond, None), true),
         ]);
 
-        let c1 = TimestampMillisecondArray::from_opt_vec(
+        let c1 = TimestampMillisecondArray::from(
             // 1555584887 converts to 2019-04-18, 20:54:47 in time zone Australia/Sydney (AEST).
             // The offset (difference to UTC) is +10:00.
             // 1635577147 converts to 2021-10-30 17:59:07 in time zone Australia/Sydney (AEDT)
             // The offset (difference to UTC) is +11:00. Note that daylight savings is in effect on 2021-10-30.
             //
             vec![Some(1555584887378), Some(1635577147000)],
-            Some("Australia/Sydney".to_string()),
-        );
-        let c2 = TimestampMillisecondArray::from_opt_vec(
-            vec![Some(1555584887378), Some(1635577147000)],
-            None,
-        );
+        )
+        .with_timezone("Australia/Sydney".to_string());
+        let c2 = TimestampMillisecondArray::from(vec![
+            Some(1555584887378),
+            Some(1635577147000),
+        ]);
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)])
                 .unwrap();
@@ -646,8 +635,8 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         }
 
         let left = "c1,c2
-2019-04-18T20:54:47.378000000+10:00,2019-04-18T10:54:47.378000000+00:00
-2021-10-30T17:59:07.000000000+11:00,2021-10-30T06:59:07.000000000+00:00\n";
+2019-04-18T20:54:47.378000000+10:00,2019-04-18T10:54:47.378000000
+2021-10-30T17:59:07.000000000+11:00,2021-10-30T06:59:07.000000000\n";
         let right = writer.writer.into_inner().map(|s| s.to_string());
         assert_eq!(Some(left.to_string()), right.ok());
     }
@@ -722,7 +711,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         ];
         let c1 = Date32Array::from(vec![3, 2, 1]);
         let c2 = Date64Array::from(vec![3, 2, 1]);
-        let c3 = TimestampNanosecondArray::from_vec(nanoseconds.clone(), None);
+        let c3 = TimestampNanosecondArray::from(nanoseconds.clone());
 
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
@@ -767,7 +756,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         let expected = vec![Some(3), Some(2), Some(1)];
         assert_eq!(actual, expected);
         let actual = c3.into_iter().collect::<Vec<_>>();
-        let expected = nanoseconds.into_iter().map(|x| Some(x)).collect::<Vec<_>>();
+        let expected = nanoseconds.into_iter().map(Some).collect::<Vec<_>>();
         assert_eq!(actual, expected);
     }
 }

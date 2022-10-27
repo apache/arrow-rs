@@ -50,6 +50,8 @@ jobs:
         run: cargo clippy -p object_store -- -D warnings
       - name: Run clippy with aws feature
         run: cargo clippy -p object_store --features aws -- -D warnings
+      - name: Run clippy with aws_profile feature
+        run: cargo clippy -p object_store --features aws_profile -- -D warnings
       - name: Run clippy with gcp feature
         run: cargo clippy -p object_store --features gcp -- -D warnings
       - name: Run clippy with azure feature

@@ -2390,4 +2390,35 @@ mod tests {
             assert_eq!(full.column(idx), projected.column(0));
         }
     }
+
+    #[test]
+    fn test_read_lz4_raw() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{}/lz4_raw_compressed.parquet", testdata);
+        let file = File::open(&path).unwrap();
+
+        let batches = ParquetRecordBatchReader::try_new(file, 1024)
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_columns(), 3);
+        assert_eq!(batch.num_rows(), 4);
+
+        // https://github.com/apache/parquet-testing/pull/18
+        let a: &Int64Array = batch.column(0).as_any().downcast_ref().unwrap();
+        assert_eq!(
+            a.values(),
+            &[1593604800, 1593604800, 1593604801, 1593604801]
+        );
+
+        let a: &BinaryArray = batch.column(1).as_any().downcast_ref().unwrap();
+        let a: Vec<_> = a.iter().flatten().collect();
+        assert_eq!(a, &[b"abc", b"def", b"abc", b"def"]);
+
+        let a: &Float64Array = batch.column(2).as_any().downcast_ref().unwrap();
+        assert_eq!(a.values(), &[42.000000, 7.700000, 42.125000, 7.700000]);
+    }
 }

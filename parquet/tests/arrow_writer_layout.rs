@@ -249,7 +249,7 @@ fn test_primitive() {
 
     do_test(LayoutTest {
         props,
-        batches: vec![batch],
+        batches: vec![batch.clone()],
         layout: Layout {
             row_groups: vec![RowGroup {
                 columns: vec![ColumnChunk {
@@ -304,6 +304,34 @@ fn test_primitive() {
                         encoding: Encoding::PLAIN,
                         page_type: PageType::DICTIONARY_PAGE,
                     }),
+                }],
+            }],
+        },
+    });
+
+    // Test row count limit
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_data_page_row_count_limit(100)
+        .set_write_batch_size(100)
+        .build();
+
+    do_test(LayoutTest {
+        props,
+        batches: vec![batch],
+        layout: Layout {
+            row_groups: vec![RowGroup {
+                columns: vec![ColumnChunk {
+                    pages: (0..20)
+                        .map(|_| Page {
+                            rows: 100,
+                            page_header_size: 34,
+                            compressed_size: 400,
+                            encoding: Encoding::PLAIN,
+                            page_type: PageType::DATA_PAGE,
+                        })
+                        .collect(),
+                    dictionary_page: None,
                 }],
             }],
         },

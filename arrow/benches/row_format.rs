@@ -45,6 +45,10 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
 
     let mut converter = RowConverter::new(fields);
     let rows = converter.convert_columns(&cols).unwrap();
+    // using a pre-prepared row converter should be faster than the first time
+    c.bench_function(&format!("convert_columns_prepared {}", name), |b| {
+        b.iter(|| black_box(converter.convert_columns(&cols).unwrap()));
+    });
 
     c.bench_function(&format!("convert_rows {}", name), |b| {
         b.iter(|| black_box(converter.convert_rows(&rows).unwrap()));

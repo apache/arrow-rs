@@ -60,31 +60,30 @@ fn do_bench(
 }
 
 fn add_benchmark(c: &mut Criterion) {
-    let a = create_primitive_array::<Int32Type>(1024, 0.);
+    let i32 = create_primitive_array::<Int32Type>(1024, 0.);
+    let i32_opt = create_primitive_array::<Int32Type>(1024, 0.5);
+    let string = create_string_array_with_len::<i32>(1024, 0., 20);
+    let string_opt = create_string_array_with_len::<i32>(1024, 0.5, 20);
 
-    do_bench(c, "i32(0.0)", 100, &a, &[0..100, 100..230, 450..1000]);
-    do_bench(c, "i32(0.0)", 400, &a, &[0..100, 100..230, 450..1000]);
-    do_bench(c, "i32(0.0)", 1024, &a, &[0..100, 100..230, 450..1000]);
-    do_bench(
-        c,
-        "i32(0.0)",
-        1024,
-        &a,
-        &[0..100, 100..230, 450..1000, 0..1000],
-    );
+    let cases: &[(&str, &dyn Array)] = &[
+        ("i32(0.0)", &i32),
+        ("i32(0.5)", &i32_opt),
+        ("str(20, 0.0)", &string),
+        ("str(20, 0.5)", &string_opt),
+    ];
 
-    let a = create_primitive_array::<Int32Type>(1024, 0.5);
+    for (prefix, base) in cases {
+        let slices: &[(usize, &[_])] = &[
+            (100, &[0..100, 100..230, 450..1000]),
+            (400, &[0..100, 100..230, 450..1000]),
+            (1024, &[0..100, 100..230, 450..1000]),
+            (1024, &[0..100, 100..230, 450..1000, 0..1000]),
+        ];
 
-    do_bench(c, "i32(0.5)", 100, &a, &[0..100, 100..230, 450..1000]);
-    do_bench(c, "i32(0.5)", 400, &a, &[0..100, 100..230, 450..1000]);
-    do_bench(c, "i32(0.5)", 1024, &a, &[0..100, 100..230, 450..1000]);
-    do_bench(
-        c,
-        "i32(0.5)",
-        1024,
-        &a,
-        &[0..100, 100..230, 450..1000, 0..1000],
-    );
+        for (len, slice) in slices {
+            do_bench(c, prefix, *len, *base, slice);
+        }
+    }
 }
 
 criterion_group!(benches, add_benchmark);
