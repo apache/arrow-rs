@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use num::cast::AsPrimitive;
 use num::BigInt;
 use std::cmp::Ordering;
 
@@ -394,6 +395,21 @@ fn mulx(a: u128, b: u128) -> (u128, u128) {
 
     (low, high)
 }
+
+macro_rules! define_as_primitive {
+    ($native_ty:ty) => {
+        impl AsPrimitive<i256> for $native_ty {
+            fn as_(self) -> i256 {
+                i256::from_i128(self as i128)
+            }
+        }
+    };
+}
+
+define_as_primitive!(i8);
+define_as_primitive!(i16);
+define_as_primitive!(i32);
+define_as_primitive!(i64);
 
 #[cfg(test)]
 mod tests {
