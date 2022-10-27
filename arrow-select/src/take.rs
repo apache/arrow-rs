@@ -21,9 +21,7 @@ use std::{ops::AddAssign, sync::Arc};
 
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{
-    bit_util, buffer::buffer_bin_and, ArrowNativeType, Buffer, MutableBuffer,
-};
+use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
@@ -675,12 +673,7 @@ where
             *offset = length_so_far;
         }
 
-        nulls = match indices.data_ref().null_buffer() {
-            Some(buffer) => {
-                Some(buffer_bin_and(buffer, 0, &null_buf.into(), 0, data_len))
-            }
-            None => Some(null_buf.into()),
-        };
+        nulls = Some(null_buf.into())
     }
 
     let array_data = ArrayData::builder(GenericStringArray::<OffsetSize>::DATA_TYPE)
@@ -1545,6 +1538,23 @@ mod tests {
     #[test]
     fn test_take_large_string() {
         _test_take_string::<LargeStringArray>()
+    }
+
+    #[test]
+    fn test_take_slice_string() {
+        let strings =
+            StringArray::from(vec![Some("hello"), None, Some("world"), None, Some("hi")]);
+        let indices = Int32Array::from(vec![Some(0), Some(1), None, Some(0), Some(2)]);
+        let indices_slice = indices.slice(1, 4);
+        let indices_slice = indices_slice
+            .as_ref()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+
+        let expected = StringArray::from(vec![None, None, Some("hello"), Some("world")]);
+        let result = take(&strings, indices_slice, None).unwrap();
+        assert_eq!(result.as_ref(), &expected);
     }
 
     macro_rules! test_take_list {
