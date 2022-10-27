@@ -541,6 +541,18 @@ fn set_column_for_json_rows(
                 row.insert(col_name.to_string(), serde_json::Value::Object(obj));
             }
         }
+        DataType::Decimal128(..) => {
+            let decimal_array = as_decimal_array(array);
+            rows.iter_mut()
+                .enumerate()
+                .take(row_count)
+                .for_each(|(i, row)| {
+                    if !decimal_array.is_null(i) {
+                        let v = decimal_array.value_as_string(i);
+                        row.insert(col_name.to_string(), v.into());
+                    }
+                });
+        }
         _ => {
             return Err(ArrowError::JsonError(format!(
                 "data type {:?} not supported in nested map for json writer",
@@ -774,14 +786,26 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new("c1", DataType::Int32, true),
             Field::new("c2", DataType::Utf8, true),
+            Field::new("c3", DataType::Decimal128(4, 3), true),
         ]);
 
         let a = Int32Array::from(vec![Some(1), Some(2), Some(3), None, Some(5)]);
         let b = StringArray::from(vec![Some("a"), Some("b"), Some("c"), Some("d"), None]);
+        let c = Decimal128Array::from(vec![
+            Some(1234i128),
+            Some(4567i128),
+            Some(-1234i128),
+            Some(0i128),
+            None,
+        ])
+        .with_precision_and_scale(4, 3)
+        .unwrap();
 
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
-                .unwrap();
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(a), Arc::new(b), Arc::new(c)],
+        )
+        .unwrap();
 
         let mut buf = Vec::new();
         {
@@ -791,10 +815,10 @@ mod tests {
 
         assert_json_eq(
             &buf,
-            r#"{"c1":1,"c2":"a"}
-{"c1":2,"c2":"b"}
-{"c1":3,"c2":"c"}
-{"c2":"d"}
+            r#"{"c1":1,"c2":"a","c3":"1.234"}
+{"c1":2,"c2":"b","c3":"4.567"}
+{"c1":3,"c2":"c","c3":"-1.234"}
+{"c2":"d","c3":"0.000"}
 {"c1":5}
 "#,
         );
