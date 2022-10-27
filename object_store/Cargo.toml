@@ -55,7 +55,7 @@ rustls-pemfile = { version = "1.0", default-features = false, optional = true }
 getrandom = { version = "0.2", features = ["js"], optional = true }
 
 # AWS Profile support
-aws-types = { version = "0.49", optional = true }
+aws-types = { version = "0.51", optional = true }
 aws-config = { version = "0.49", optional = true }
 
 [features]
