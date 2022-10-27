@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{Array, GenericBinaryArray, GenericListArray, OffsetSizeTrait, GenericByteArray};
+use crate::types::GenericStringType;
+use crate::{
+    Array, GenericBinaryArray, GenericByteArray, GenericListArray, OffsetSizeTrait,
+};
 use arrow_buffer::{bit_util, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
-use crate::types::GenericStringType;
 
 /// Generic struct for \[Large\]StringArray
 ///
@@ -265,9 +267,9 @@ pub type LargeStringArray = GenericStringArray<i64>;
 
 #[cfg(test)]
 mod tests {
-    use arrow_buffer::Buffer;
     use super::*;
     use crate::builder::{ListBuilder, StringBuilder};
+    use arrow_buffer::Buffer;
     use arrow_schema::Field;
 
     #[test]

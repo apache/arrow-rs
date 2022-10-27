@@ -29,7 +29,13 @@ use std::any::Any;
 /// Generic struct for variable-size byte arrays
 ///
 /// See [`StringArray`] and [`LargeStringArray`] for storing string data
+///
 /// See [`BinaryArray`] and [`LargeBinaryArray`] for storing arbitrary bytes
+///
+/// [`StringArray`]: crate::StringArray
+/// [`LargeStringArray`]: crate::LargeStringArray
+/// [`BinaryArray`]: crate::BinaryArray
+/// [`LargeBinaryArray`]: crate::LargeBinaryArray
 pub struct GenericByteArray<T: ByteArrayType> {
     data: ArrayData,
     value_offsets: RawPtrBox<T::Offset>,
