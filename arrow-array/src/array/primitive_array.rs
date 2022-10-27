@@ -124,7 +124,7 @@ pub type Float64Array = PrimitiveArray<Float64Type>;
 /// let arr = TimestampSecondArray::from(vec![11111111]);
 /// // OR
 /// let arr = TimestampSecondArray::from(vec![Some(11111111)]);
-/// let utc_tz: Tz = "UTC".parse().unwrap();
+/// let utc_tz: Tz = "+00:00".parse().unwrap();
 ///
 /// assert_eq!(arr.value_as_datetime_with_tz(0, utc_tz).map(|v| v.to_string()).unwrap(), "1970-05-09 14:25:11 +00:00")
 /// ```
@@ -137,7 +137,7 @@ pub type Float64Array = PrimitiveArray<Float64Type>;
 /// let arr = TimestampSecondArray::from(vec![-11111111]);
 /// // OR
 /// let arr = TimestampSecondArray::from(vec![Some(-11111111)]);
-/// let utc_tz: Tz = "UTC".parse().unwrap();
+/// let utc_tz: Tz = "+00:00".parse().unwrap();
 ///
 /// assert_eq!(arr.value_as_datetime_with_tz(0, utc_tz).map(|v| v.to_string()).unwrap(), "1969-08-25 09:34:49 +00:00")
 /// ```
