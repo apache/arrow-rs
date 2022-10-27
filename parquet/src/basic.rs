@@ -282,6 +282,7 @@ pub enum Encoding {
 
 /// Supported compression algorithms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum Compression {
     UNCOMPRESSED,
     SNAPPY,
@@ -290,6 +291,7 @@ pub enum Compression {
     BROTLI,
     LZ4,
     ZSTD,
+    LZ4_RAW,
 }
 
 // ----------------------------------------------------------------------
@@ -826,6 +828,7 @@ impl TryFrom<parquet::CompressionCodec> for Compression {
             parquet::CompressionCodec::BROTLI => Compression::BROTLI,
             parquet::CompressionCodec::LZ4 => Compression::LZ4,
             parquet::CompressionCodec::ZSTD => Compression::ZSTD,
+            parquet::CompressionCodec::LZ4_RAW => Compression::LZ4_RAW,
             _ => {
                 return Err(general_err!(
                     "unexpected parquet compression codec: {}",
@@ -846,6 +849,7 @@ impl From<Compression> for parquet::CompressionCodec {
             Compression::BROTLI => parquet::CompressionCodec::BROTLI,
             Compression::LZ4 => parquet::CompressionCodec::LZ4,
             Compression::ZSTD => parquet::CompressionCodec::ZSTD,
+            Compression::LZ4_RAW => parquet::CompressionCodec::LZ4_RAW,
         }
     }
 }

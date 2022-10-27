@@ -569,11 +569,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         //
         // In such a scenario the dictionary decoder may return an estimated encoded
         // size in excess of the page size limit, even when there are no buffered values
-        if self.encoder.num_values() == 0 {
+        if self.page_metrics.num_buffered_values == 0 {
             return false;
         }
 
-        self.encoder.estimated_data_page_size() >= self.props.data_pagesize_limit()
+        self.page_metrics.num_buffered_rows as usize
+            >= self.props.data_page_row_count_limit()
+            || self.encoder.estimated_data_page_size() >= self.props.data_pagesize_limit()
     }
 
     /// Performs dictionary fallback.
