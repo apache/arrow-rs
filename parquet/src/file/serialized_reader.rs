@@ -420,7 +420,11 @@ pub(crate) fn decode_page(
             let mut decompressed = Vec::with_capacity(uncompressed_size);
             let compressed = &buffer.as_ref()[offset..];
             decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
-            decompressor.decompress(compressed, &mut decompressed)?;
+            decompressor.decompress(
+                compressed,
+                &mut decompressed,
+                Some(uncompressed_size),
+            )?;
 
             if decompressed.len() != uncompressed_size {
                 return Err(general_err!(
