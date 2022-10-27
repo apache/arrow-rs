@@ -119,40 +119,40 @@ pub type Float64Array = PrimitiveArray<Float64Type>;
 /// # Example: UTC timestamps post epoch
 /// ```
 /// # use arrow_array::TimestampSecondArray;
-/// use chrono::FixedOffset;
+/// use arrow_array::timezone::Tz;
 /// // Corresponds to single element array with entry 1970-05-09T14:25:11+0:00
 /// let arr = TimestampSecondArray::from(vec![11111111]);
 /// // OR
 /// let arr = TimestampSecondArray::from(vec![Some(11111111)]);
-/// let utc_offset = FixedOffset::east(0);
+/// let utc_tz: Tz = "UTC".parse().unwrap();
 ///
-/// assert_eq!(arr.value_as_datetime_with_tz(0, utc_offset).map(|v| v.to_string()).unwrap(), "1970-05-09 14:25:11")
+/// assert_eq!(arr.value_as_datetime_with_tz(0, utc_tz).map(|v| v.to_string()).unwrap(), "1970-05-09 14:25:11 +00:00")
 /// ```
 ///
 /// # Example: UTC timestamps pre epoch
 /// ```
 /// # use arrow_array::TimestampSecondArray;
-/// use chrono::FixedOffset;
+/// use arrow_array::timezone::Tz;
 /// // Corresponds to single element array with entry 1969-08-25T09:34:49+0:00
 /// let arr = TimestampSecondArray::from(vec![-11111111]);
 /// // OR
 /// let arr = TimestampSecondArray::from(vec![Some(-11111111)]);
-/// let utc_offset = FixedOffset::east(0);
+/// let utc_tz: Tz = "UTC".parse().unwrap();
 ///
-/// assert_eq!(arr.value_as_datetime_with_tz(0, utc_offset).map(|v| v.to_string()).unwrap(), "1969-08-25 09:34:49")
+/// assert_eq!(arr.value_as_datetime_with_tz(0, utc_tz).map(|v| v.to_string()).unwrap(), "1969-08-25 09:34:49 +00:00")
 /// ```
 ///
 /// # Example: With timezone specified
 /// ```
 /// # use arrow_array::TimestampSecondArray;
-/// use chrono::FixedOffset;
+/// use arrow_array::timezone::Tz;
 /// // Corresponds to single element array with entry 1970-05-10T00:25:11+10:00
 /// let arr = TimestampSecondArray::from(vec![11111111]).with_timezone("+10:00".to_string());
 /// // OR
 /// let arr = TimestampSecondArray::from(vec![Some(11111111)]).with_timezone("+10:00".to_string());
-/// let sydney_offset = FixedOffset::east(10 * 60 * 60);
+/// let sydney_tz: Tz = "+10:00".parse().unwrap();
 ///
-/// assert_eq!(arr.value_as_datetime_with_tz(0, sydney_offset).map(|v| v.to_string()).unwrap(), "1970-05-10 00:25:11")
+/// assert_eq!(arr.value_as_datetime_with_tz(0, sydney_tz).map(|v| v.to_string()).unwrap(), "1970-05-10 00:25:11 +10:00")
 /// ```
 ///
 pub type TimestampSecondArray = PrimitiveArray<TimestampSecondType>;
