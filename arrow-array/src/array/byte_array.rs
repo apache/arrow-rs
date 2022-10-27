@@ -74,7 +74,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         }
     }
 
-    /// Returns the element at index `i` as bytes slice
+    /// Returns the element at index `i`
     /// # Safety
     /// Caller is responsible for ensuring that the index is within the bounds of the array
     pub unsafe fn value_unchecked(&self, i: usize) -> &T::Native {
@@ -100,7 +100,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         T::Native::from_bytes_unchecked(b)
     }
 
-    /// Returns the element at index `i` as bytes slice
+    /// Returns the element at index `i`
     /// # Panics
     /// Panics if index `i` is out of bounds.
     pub fn value(&self, i: usize) -> &T::Native {
