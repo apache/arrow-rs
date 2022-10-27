@@ -400,6 +400,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(features = "chrono-tz")]
     fn test_pretty_format_timestamp_second_with_utc_timezone() {
         let expected = vec![
             "+---------------------------+",
@@ -418,6 +419,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(features = "chrono-tz")]
     fn test_pretty_format_timestamp_second_with_non_utc_timezone() {
         let expected = vec![
             "+---------------------------+",
