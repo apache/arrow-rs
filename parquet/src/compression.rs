@@ -329,8 +329,6 @@ pub use zstd_codec::*;
 
 #[cfg(any(feature = "lz4", test))]
 mod lz4_raw_codec {
-    use std::io::{Read, Write};
-
     use crate::compression::Codec;
     use crate::errors::Result;
 
