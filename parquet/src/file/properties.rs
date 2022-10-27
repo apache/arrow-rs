@@ -289,7 +289,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets data page size limit
+    /// Sets best effort maximum size of a data page in bytes
     ///
     /// Note: this is a best effort limit based on the write batch size
     pub fn set_data_pagesize_limit(mut self, value: usize) -> Self {
@@ -297,7 +297,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets data page row count limit
+    /// Sets best effort maximum number of rows in a data page
     ///
     ///
     /// This can be used to limit the number of rows within a page to
@@ -309,7 +309,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets dictionary page size limit
+    /// Sets best effort maximum dictionary page size, in bytes
     ///
     /// Note: this is a best effort limit based on the write batch size
     pub fn set_dictionary_pagesize_limit(mut self, value: usize) -> Self {
