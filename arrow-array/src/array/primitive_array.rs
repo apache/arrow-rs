@@ -535,8 +535,9 @@ where
 
 impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "PrimitiveArray<{:?}>\n[\n", T::DATA_TYPE)?;
-        print_long_array(self, f, |array, index, f| match T::DATA_TYPE {
+        let data_type = self.data_type();
+        write!(f, "PrimitiveArray<{:?}>\n[\n", data_type)?;
+        print_long_array(self, f, |array, index, f| match data_type {
             DataType::Date32 | DataType::Date64 => {
                 let v = self.value(index).to_isize().unwrap() as i64;
                 match as_date::<T>(v) {
@@ -1318,6 +1319,36 @@ mod tests {
             ]);
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, None)>\n[\n  2018-12-31T00:00:00,\n  2018-12-31T00:00:00,\n  1921-01-02T00:00:00,\n]",
+            format!("{:?}", arr)
+        );
+    }
+
+    #[test]
+    fn test_timestamp_with_tz_fmt_debug() {
+        let arr: PrimitiveArray<TimestampMillisecondType> =
+            TimestampMillisecondArray::from(vec![
+                1546214400000,
+                1546214400000,
+                -1546214400000,
+            ])
+            .with_timezone("Asia/Taipei".to_string());
+        assert_eq!(
+            "PrimitiveArray<Timestamp(Millisecond, Some(\"Asia/Taipei\"))>\n[\n  2018-12-31T00:00:00,\n  2018-12-31T00:00:00,\n  1921-01-02T00:00:00,\n]",
+            format!("{:?}", arr)
+        );
+    }
+
+    #[test]
+    fn test_timestamp_with_fixed_offset_tz_fmt_debug() {
+        let arr: PrimitiveArray<TimestampMillisecondType> =
+            TimestampMillisecondArray::from(vec![
+                1546214400000,
+                1546214400000,
+                -1546214400000,
+            ])
+            .with_timezone("+08:00".to_string());
+        assert_eq!(
+            "PrimitiveArray<Timestamp(Millisecond, Some(\"+08:00\"))>\n[\n  2018-12-31T00:00:00,\n  2018-12-31T00:00:00,\n  1921-01-02T00:00:00,\n]",
             format!("{:?}", arr)
         );
     }
