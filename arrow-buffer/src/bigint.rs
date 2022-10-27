@@ -305,6 +305,55 @@ impl i256 {
         let (val, overflow) = Self::from_bigint_with_overflow(l % r);
         (!overflow).then_some(val)
     }
+
+    /// Performs checked exponentiation
+    #[inline]
+    pub fn checked_pow(self, mut exp: u32) -> Option<Self> {
+        if exp == 0 {
+            return Some(i256::from_i128(1));
+        }
+
+        let mut base = self;
+        let mut acc: Self = i256::from_i128(1);
+
+        while exp > 1 {
+            if (exp & 1) == 1 {
+                acc = acc.checked_mul(base)?;
+            }
+            exp /= 2;
+            base = base.checked_mul(base)?;
+        }
+        // since exp!=0, finally the exp must be 1.
+        // Deal with the final bit of the exponent separately, since
+        // squaring the base afterwards is not necessary and may cause a
+        // needless overflow.
+        acc.checked_mul(base)
+    }
+
+    /// Performs wrapping exponentiation
+    #[inline]
+    pub fn wrapping_pow(self, mut exp: u32) -> Self {
+        if exp == 0 {
+            return i256::from_i128(1);
+        }
+
+        let mut base = self;
+        let mut acc: Self = i256::from_i128(1);
+
+        while exp > 1 {
+            if (exp & 1) == 1 {
+                acc = acc.wrapping_mul(base);
+            }
+            exp /= 2;
+            base = base.wrapping_mul(base);
+        }
+
+        // since exp!=0, finally the exp must be 1.
+        // Deal with the final bit of the exponent separately, since
+        // squaring the base afterwards is not necessary and may cause a
+        // needless overflow.
+        acc.wrapping_mul(base)
+    }
 }
 
 /// Performs an unsigned multiplication of `a * b` returning a tuple of
@@ -454,6 +503,39 @@ mod tests {
                 br,
                 expected
             ),
+        }
+
+        // Exponentiation
+        for exp in vec![0, 1, 3, 8, 100].into_iter() {
+            let actual = il.wrapping_pow(exp);
+            let (expected, overflow) =
+                i256::from_bigint_with_overflow(bl.clone().pow(exp));
+            assert_eq!(actual.to_string(), expected.to_string());
+
+            let checked = il.checked_pow(exp);
+            match overflow {
+                true => assert!(
+                    checked.is_none(),
+                    "{} ^ {} = {} vs {} * {} = {}",
+                    il,
+                    exp,
+                    actual,
+                    bl,
+                    exp,
+                    expected
+                ),
+                false => assert_eq!(
+                    checked.unwrap(),
+                    actual,
+                    "{} ^ {} = {} vs {} * {} = {}",
+                    il,
+                    exp,
+                    actual,
+                    bl,
+                    exp,
+                    expected
+                ),
+            }
         }
     }
 
