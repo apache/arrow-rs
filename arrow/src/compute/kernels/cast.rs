@@ -5499,8 +5499,7 @@ mod tests {
                     .with_timezone(tz_name.clone()),
             ),
             Arc::new(
-                TimestampNanosecondArray::from(vec![1000, 2000])
-                    .with_timezone(tz_name.clone()),
+                TimestampNanosecondArray::from(vec![1000, 2000]).with_timezone(tz_name),
             ),
             Arc::new(Date32Array::from(vec![1000, 2000])),
             Arc::new(Date64Array::from(vec![1000, 2000])),
