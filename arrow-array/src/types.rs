@@ -472,17 +472,6 @@ mod private {
     impl DecimalTypeSealed for Decimal256Type {}
 }
 
-/// Trait representing the in-memory layout of a decimal type
-pub trait NativeDecimalType: Send + Sync + Copy + AsRef<[u8]> {
-    fn from_slice(slice: &[u8]) -> Self;
-}
-
-impl<const N: usize> NativeDecimalType for [u8; N] {
-    fn from_slice(slice: &[u8]) -> Self {
-        slice.try_into().unwrap()
-    }
-}
-
 /// A trait over the decimal types, used by [`DecimalArray`] to provide a generic
 /// implementation across the various decimal types
 ///
