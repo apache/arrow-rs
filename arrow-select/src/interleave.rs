@@ -92,9 +92,14 @@ pub fn interleave(
 }
 
 /// Common functionality for interleaving arrays
+///
+/// T is the concrete Array type
 struct Interleave<'a, T> {
+    /// The input arrays downcast to T
     arrays: Vec<&'a T>,
+    /// The number of nulls in the interleaved output
     null_count: usize,
+    /// The null buffer of the interleaved output
     nulls: Option<Buffer>,
 }
 
@@ -163,8 +168,8 @@ fn interleave_string<O: OffsetSizeTrait>(
     offsets.append(O::from_usize(0).unwrap());
     for (a, b) in indices {
         let o = interleaved.arrays[*a].value_offsets();
-        let len = o[*b + 1].as_usize() - o[*b].as_usize();
-        capacity += len;
+        let element_len = o[*b + 1].as_usize() - o[*b].as_usize();
+        capacity += element_len;
         offsets.append(O::from_usize(capacity).expect("overflow"));
     }
 
