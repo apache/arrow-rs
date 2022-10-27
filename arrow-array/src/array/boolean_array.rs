@@ -103,6 +103,53 @@ impl BooleanArray {
         &self.data.buffers()[0]
     }
 
+    /// Returns the number of true values within this buffer
+    pub fn true_count(&self) -> usize {
+        match self.data.null_buffer() {
+            Some(nulls) => {
+                let null_chunks = nulls.bit_chunks(self.offset(), self.len());
+                let value_chunks = self.values().bit_chunks(self.offset(), self.len());
+                null_chunks
+                    .iter()
+                    .zip(value_chunks.iter())
+                    .chain(std::iter::once((
+                        null_chunks.remainder_bits(),
+                        value_chunks.remainder_bits(),
+                    )))
+                    .map(|(a, b)| (a & b).count_ones() as usize)
+                    .sum()
+            }
+            None => self
+                .values()
+                .count_set_bits_offset(self.offset(), self.len()),
+        }
+    }
+
+    /// Returns the number of false values within this buffer
+    pub fn false_count(&self) -> usize {
+        match self.data.null_buffer() {
+            Some(nulls) => {
+                let null_chunks = nulls.bit_chunks(self.offset(), self.len());
+                let value_chunks = self.values().bit_chunks(self.offset(), self.len());
+                null_chunks
+                    .iter()
+                    .zip(value_chunks.iter())
+                    .chain(std::iter::once((
+                        null_chunks.remainder_bits(),
+                        value_chunks.remainder_bits(),
+                    )))
+                    .map(|(a, b)| (a & !b).count_ones() as usize)
+                    .sum()
+            }
+            None => {
+                let true_count = self
+                    .values()
+                    .count_set_bits_offset(self.offset(), self.len());
+                self.len() - true_count
+            }
+        }
+    }
+
     /// Returns the boolean value at index `i`.
     ///
     /// # Safety
@@ -285,6 +332,7 @@ impl<Ptr: std::borrow::Borrow<Option<bool>>> FromIterator<Ptr> for BooleanArray 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{thread_rng, Rng};
 
     #[test]
     fn test_boolean_fmt_debug() {
@@ -430,5 +478,30 @@ mod tests {
     )]
     fn test_from_array_data_validation() {
         let _ = BooleanArray::from(ArrayData::new_empty(&DataType::Int32));
+    }
+
+    #[test]
+    fn test_true_false_count() {
+        let mut rng = thread_rng();
+
+        for _ in 0..10 {
+            let d: Vec<_> = (0..2000).map(|_| rng.gen_bool(0.5)).collect();
+            let b = BooleanArray::from(d.clone());
+
+            let expected_true = d.iter().filter(|x| **x).count();
+            assert_eq!(b.true_count(), expected_true);
+            assert_eq!(b.false_count(), d.len() - expected_true);
+
+            let d: Vec<_> = (0..2000)
+                .map(|_| rng.gen_bool(0.5).then(|| rng.gen_bool(0.5)))
+                .collect();
+            let b = BooleanArray::from(d.clone());
+
+            let expected_true = d.iter().filter(|x| matches!(x, Some(true))).count();
+            assert_eq!(b.true_count(), expected_true);
+
+            let expected_false = d.iter().filter(|x| matches!(x, Some(false))).count();
+            assert_eq!(b.false_count(), expected_false);
+        }
     }
 }
