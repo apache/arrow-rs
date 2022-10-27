@@ -354,8 +354,6 @@ where
 {
     let mul: i128 = 10_i128.pow(scale as u32);
 
-    // with_precision_and_scale validates the
-    // value is within range for the output precision
     cast_primitive_to_decimal128(array, |v| v.as_() * mul, precision, scale)
 }
 
@@ -369,8 +367,6 @@ where
 {
     let mul: i256 = i256::from_i128(10_i128.pow(scale as u32));
 
-    // with_precision_and_scale validates the
-    // value is within range for the output precision
     cast_primitive_to_decimal256(array, |v| v.as_().wrapping_mul(mul), precision, scale)
 }
 
@@ -384,16 +380,7 @@ where
 {
     let mul = 10_f64.powi(scale as i32);
 
-    cast_primitive_to_decimal128(
-        array,
-        |v| {
-            // with_precision_and_scale validates the
-            // value is within range for the output precision
-            (v.as_() * mul) as i128
-        },
-        precision,
-        scale,
-    )
+    cast_primitive_to_decimal128(array, |v| (v.as_() * mul) as i128, precision, scale)
 }
 
 fn cast_floating_point_to_decimal256<T: ArrowNumericType>(
@@ -408,11 +395,7 @@ where
 
     cast_primitive_to_decimal256(
         array,
-        |v| {
-            // with_precision_and_scale validates the
-            // value is within range for the output precision
-            i256::from_i128((v.as_() * mul) as i128)
-        },
+        |v| i256::from_i128((v.as_() * mul) as i128),
         precision,
         scale,
     )
