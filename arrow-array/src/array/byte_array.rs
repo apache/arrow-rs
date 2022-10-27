@@ -28,7 +28,7 @@ use std::any::Any;
 
 /// Generic struct for variable-size byte arrays
 ///
-/// See [`StringArray`] and [`LargeStringArray`] for storing string data
+/// See [`StringArray`] and [`LargeStringArray`] for storing utf8 encoded string data
 ///
 /// See [`BinaryArray`] and [`LargeBinaryArray`] for storing arbitrary bytes
 ///
@@ -47,6 +47,8 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     pub const DATA_TYPE: DataType = T::DATA_TYPE;
 
     /// Returns the length for value at index `i`.
+    /// # Panics
+    /// Panics if index `i` is out of bounds.
     #[inline]
     pub fn value_length(&self, i: usize) -> T::Offset {
         let offsets = self.value_offsets();

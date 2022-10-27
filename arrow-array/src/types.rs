@@ -466,6 +466,9 @@ impl Date64Type {
     }
 }
 
+/// Crate private types for Decimal Arrays
+///
+/// Not intended to be used outside this crate
 mod decimal {
     use super::*;
 
@@ -576,6 +579,9 @@ fn format_decimal_str(value_str: &str, precision: usize, scale: usize) -> String
     }
 }
 
+/// Crate private types for Byte Arrays
+///
+/// Not intended to be used outside this crate
 pub(crate) mod bytes {
     use super::*;
 
@@ -609,6 +615,7 @@ pub(crate) mod bytes {
 pub trait ByteArrayType: 'static + Send + Sync + bytes::ByteArrayTypeSealed {
     type Offset: OffsetSizeTrait;
     type Native: bytes::ByteArrayNativeType + AsRef<[u8]> + ?Sized;
+    /// "Binary" or "String", for use in error messages
     const PREFIX: &'static str;
     const DATA_TYPE: DataType;
 }
