@@ -27,18 +27,19 @@ use crate::array::*;
 use crate::buffer::{buffer_unary_not, Buffer, MutableBuffer};
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{
-    ArrowNativeType, ArrowNativeTypeOp, ArrowNumericType, DataType, Date32Type,
-    Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    ArrowNativeTypeOp, ArrowNumericType, DataType, Date32Type, Date64Type, Float32Type,
+    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 #[allow(unused_imports)]
 use crate::downcast_dictionary_array;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
+use arrow_select::take::take;
+use num::ToPrimitive;
 use regex::Regex;
 use std::collections::HashMap;
 
@@ -1815,21 +1816,11 @@ fn unpack_dict_comparison<K>(
 ) -> Result<BooleanArray>
 where
     K: ArrowNumericType,
+    K::Native: ToPrimitive,
 {
-    assert_eq!(dict_comparison.len(), dict.values().len());
-
-    let result: BooleanArray = dict
-        .keys()
-        .iter()
-        .map(|key| {
-            key.map(|key| unsafe {
-                let key = key.as_usize();
-                dict_comparison.value_unchecked(key)
-            })
-        })
-        .collect();
-
-    Ok(result)
+    // TODO: Use take_boolean (#2967)
+    let array = take(&dict_comparison, dict.keys(), None)?;
+    Ok(BooleanArray::from(array.data().clone()))
 }
 
 /// Helper function to perform boolean lambda function on values from two arrays using
