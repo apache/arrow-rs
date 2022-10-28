@@ -423,7 +423,7 @@ pub(crate) fn decode_page(
             decompressor.decompress(
                 compressed,
                 &mut decompressed,
-                Some(uncompressed_size),
+                Some(uncompressed_size - offset),
             )?;
 
             if decompressed.len() != uncompressed_size {
