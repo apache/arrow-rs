@@ -41,8 +41,8 @@ use std::sync::Arc;
 
 use crate::buffer::MutableBuffer;
 use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
-use crate::compute::try_unary;
 use crate::compute::{divide_scalar, multiply_scalar};
+use crate::compute::{try_unary, unary};
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::temporal_conversions::{
@@ -306,44 +306,6 @@ pub fn cast(array: &ArrayRef, to_type: &DataType) -> Result<ArrayRef> {
     cast_with_options(array, to_type, &DEFAULT_CAST_OPTIONS)
 }
 
-/// Cast the primitive array to defined decimal128 data type array
-fn cast_primitive_to_decimal128<T: ArrayAccessor, F>(
-    array: T,
-    op: F,
-    precision: u8,
-    scale: u8,
-) -> Result<ArrayRef>
-where
-    F: Fn(T::Item) -> i128,
-{
-    #[allow(clippy::redundant_closure)]
-    let decimal_array = ArrayIter::new(array)
-        .map(|v| v.map(|v| op(v)))
-        .collect::<Decimal128Array>()
-        .with_precision_and_scale(precision, scale)?;
-
-    Ok(Arc::new(decimal_array))
-}
-
-/// Cast the primitive array to defined decimal256 data type array
-fn cast_primitive_to_decimal256<T: ArrayAccessor, F>(
-    array: T,
-    op: F,
-    precision: u8,
-    scale: u8,
-) -> Result<ArrayRef>
-where
-    F: Fn(T::Item) -> i256,
-{
-    #[allow(clippy::redundant_closure)]
-    let decimal_array = ArrayIter::new(array)
-        .map(|v| v.map(|v| op(v)))
-        .collect::<Decimal256Array>()
-        .with_precision_and_scale(precision, scale)?;
-
-    Ok(Arc::new(decimal_array))
-}
-
 fn cast_integer_to_decimal128<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
     precision: u8,
@@ -354,7 +316,9 @@ where
 {
     let mul: i128 = 10_i128.pow(scale as u32);
 
-    cast_primitive_to_decimal128(array, |v| v.as_() * mul, precision, scale)
+    unary::<T, _, Decimal128Type>(array, |v| v.as_() * mul)
+        .with_precision_and_scale(precision, scale)
+        .map(|a| Arc::new(a) as ArrayRef)
 }
 
 fn cast_integer_to_decimal256<T: ArrowNumericType>(
@@ -374,7 +338,9 @@ where
             ))
         })?;
 
-    cast_primitive_to_decimal256(array, |v| v.as_().wrapping_mul(mul), precision, scale)
+    unary::<T, _, Decimal256Type>(array, |v| v.as_().wrapping_mul(mul))
+        .with_precision_and_scale(precision, scale)
+        .map(|a| Arc::new(a) as ArrayRef)
 }
 
 fn cast_floating_point_to_decimal128<T: ArrowNumericType>(
@@ -387,7 +353,9 @@ where
 {
     let mul = 10_f64.powi(scale as i32);
 
-    cast_primitive_to_decimal128(array, |v| (v.as_() * mul) as i128, precision, scale)
+    unary::<T, _, Decimal128Type>(array, |v| (v.as_() * mul) as i128)
+        .with_precision_and_scale(precision, scale)
+        .map(|a| Arc::new(a) as ArrayRef)
 }
 
 fn cast_floating_point_to_decimal256<T: ArrowNumericType>(
@@ -400,12 +368,9 @@ where
 {
     let mul = 10_f64.powi(scale as i32);
 
-    cast_primitive_to_decimal256(
-        array,
-        |v| i256::from_i128((v.as_() * mul) as i128),
-        precision,
-        scale,
-    )
+    unary::<T, _, Decimal256Type>(array, |v| i256::from_i128((v.as_() * mul) as i128))
+        .with_precision_and_scale(precision, scale)
+        .map(|a| Arc::new(a) as ArrayRef)
 }
 
 /// Cast the primitive array using [`PrimitiveArray::reinterpret_cast`]
