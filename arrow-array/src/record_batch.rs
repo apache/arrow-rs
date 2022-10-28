@@ -377,6 +377,15 @@ impl RecordBatch {
         let schema = Arc::new(Schema::new(fields));
         RecordBatch::try_new(schema, columns)
     }
+
+    /// Returns the total number of bytes of memory occupied physically by this batch.
+    pub fn byte_size(&self) -> usize {
+        self
+            .columns()
+            .iter()
+            .map(|array| array.get_array_memory_size())
+            .sum()
+    }
 }
 
 /// Options that control the behaviour used when creating a [`RecordBatch`].
@@ -469,6 +478,22 @@ mod tests {
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
                 .unwrap();
         check_batch(record_batch, 5)
+    }
+
+    #[test]
+    fn byte_size_should_not_regress() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let b = StringArray::from(vec!["a", "b", "c", "d", "e"]);
+
+        let record_batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
+                .unwrap();
+        assert_eq!(record_batch.byte_size(), 592);
     }
 
     fn check_batch(record_batch: RecordBatch, num_rows: usize) {
