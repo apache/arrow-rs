@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-schema"
-version = "25.0.0"
+version = "26.0.0"
 description = "Defines the logical types for arrow arrays"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
