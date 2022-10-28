@@ -201,7 +201,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         if data.buffers().len() != 1 {
             return Err(ArrowError::InvalidArgumentError(
                 format!("ListArray data should contain a single buffer only (value offsets), had {}",
-                        data.len())));
+                        data.buffers().len())));
         }
 
         if data.child_data().len() != 1 {
