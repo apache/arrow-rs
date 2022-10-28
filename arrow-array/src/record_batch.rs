@@ -379,7 +379,7 @@ impl RecordBatch {
     }
 
     /// Returns the total number of bytes of memory occupied physically by this batch.
-    pub fn byte_size(&self) -> usize {
+    pub fn get_array_memory_size(&self) -> usize {
         self.columns()
             .iter()
             .map(|array| array.get_array_memory_size())
@@ -492,7 +492,7 @@ mod tests {
         let record_batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
                 .unwrap();
-        assert_eq!(record_batch.byte_size(), 592);
+        assert_eq!(record_batch.get_array_memory_size(), 592);
     }
 
     fn check_batch(record_batch: RecordBatch, num_rows: usize) {
