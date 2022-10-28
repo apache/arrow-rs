@@ -380,8 +380,7 @@ impl RecordBatch {
 
     /// Returns the total number of bytes of memory occupied physically by this batch.
     pub fn byte_size(&self) -> usize {
-        self
-            .columns()
+        self.columns()
             .iter()
             .map(|array| array.get_array_memory_size())
             .sum()
