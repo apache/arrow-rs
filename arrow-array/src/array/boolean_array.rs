@@ -103,7 +103,7 @@ impl BooleanArray {
         &self.data.buffers()[0]
     }
 
-    /// Returns the number of true values within this buffer
+    /// Returns the number of non null, true values within this array
     pub fn true_count(&self) -> usize {
         match self.data.null_buffer() {
             Some(nulls) => {
@@ -125,29 +125,9 @@ impl BooleanArray {
         }
     }
 
-    /// Returns the number of false values within this buffer
+    /// Returns the number of non null, false values within this array
     pub fn false_count(&self) -> usize {
-        match self.data.null_buffer() {
-            Some(nulls) => {
-                let null_chunks = nulls.bit_chunks(self.offset(), self.len());
-                let value_chunks = self.values().bit_chunks(self.offset(), self.len());
-                null_chunks
-                    .iter()
-                    .zip(value_chunks.iter())
-                    .chain(std::iter::once((
-                        null_chunks.remainder_bits(),
-                        value_chunks.remainder_bits(),
-                    )))
-                    .map(|(a, b)| (a & !b).count_ones() as usize)
-                    .sum()
-            }
-            None => {
-                let true_count = self
-                    .values()
-                    .count_set_bits_offset(self.offset(), self.len());
-                self.len() - true_count
-            }
-        }
+        self.len() - self.null_count() - self.true_count()
     }
 
     /// Returns the boolean value at index `i`.
@@ -485,6 +465,7 @@ mod tests {
         let mut rng = thread_rng();
 
         for _ in 0..10 {
+            // No nulls
             let d: Vec<_> = (0..2000).map(|_| rng.gen_bool(0.5)).collect();
             let b = BooleanArray::from(d.clone());
 
@@ -492,6 +473,7 @@ mod tests {
             assert_eq!(b.true_count(), expected_true);
             assert_eq!(b.false_count(), d.len() - expected_true);
 
+            // With nulls
             let d: Vec<_> = (0..2000)
                 .map(|_| rng.gen_bool(0.5).then(|| rng.gen_bool(0.5)))
                 .collect();
