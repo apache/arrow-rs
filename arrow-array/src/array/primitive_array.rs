@@ -18,7 +18,10 @@
 use crate::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
 use crate::iterator::PrimitiveIter;
 use crate::raw_pointer::RawPtrBox;
-use crate::temporal_conversions::{as_date, as_datetime, as_duration, as_time};
+use crate::temporal_conversions::{
+    as_date, as_datetime, as_datetime_with_timezone, as_duration, as_time,
+};
+use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
 use crate::types::*;
 use crate::{print_long_array, Array, ArrayAccessor};
@@ -26,7 +29,7 @@ use arrow_buffer::{i256, ArrowNativeType, Buffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
-use chrono::{Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use half::f16;
 use std::any::Any;
 
@@ -116,40 +119,40 @@ pub type Float64Array = PrimitiveArray<Float64Type>;
 /// # Example: UTC timestamps post epoch
 /// ```
 /// # use arrow_array::TimestampSecondArray;
-/// use chrono::FixedOffset;
+/// use arrow_array::timezone::Tz;
 /// // Corresponds to single element array with entry 1970-05-09T14:25:11+0:00
 /// let arr = TimestampSecondArray::from(vec![11111111]);
 /// // OR
 /// let arr = TimestampSecondArray::from(vec![Some(11111111)]);
-/// let utc_offset = FixedOffset::east(0);
+/// let utc_tz: Tz = "+00:00".parse().unwrap();
 ///
-/// assert_eq!(arr.value_as_datetime_with_tz(0, utc_offset).map(|v| v.to_string()).unwrap(), "1970-05-09 14:25:11")
+/// assert_eq!(arr.value_as_datetime_with_tz(0, utc_tz).map(|v| v.to_string()).unwrap(), "1970-05-09 14:25:11 +00:00")
 /// ```
 ///
 /// # Example: UTC timestamps pre epoch
 /// ```
 /// # use arrow_array::TimestampSecondArray;
-/// use chrono::FixedOffset;
+/// use arrow_array::timezone::Tz;
 /// // Corresponds to single element array with entry 1969-08-25T09:34:49+0:00
 /// let arr = TimestampSecondArray::from(vec![-11111111]);
 /// // OR
 /// let arr = TimestampSecondArray::from(vec![Some(-11111111)]);
-/// let utc_offset = FixedOffset::east(0);
+/// let utc_tz: Tz = "+00:00".parse().unwrap();
 ///
-/// assert_eq!(arr.value_as_datetime_with_tz(0, utc_offset).map(|v| v.to_string()).unwrap(), "1969-08-25 09:34:49")
+/// assert_eq!(arr.value_as_datetime_with_tz(0, utc_tz).map(|v| v.to_string()).unwrap(), "1969-08-25 09:34:49 +00:00")
 /// ```
 ///
 /// # Example: With timezone specified
 /// ```
 /// # use arrow_array::TimestampSecondArray;
-/// use chrono::FixedOffset;
+/// use arrow_array::timezone::Tz;
 /// // Corresponds to single element array with entry 1970-05-10T00:25:11+10:00
 /// let arr = TimestampSecondArray::from(vec![11111111]).with_timezone("+10:00".to_string());
 /// // OR
 /// let arr = TimestampSecondArray::from(vec![Some(11111111)]).with_timezone("+10:00".to_string());
-/// let sydney_offset = FixedOffset::east(10 * 60 * 60);
+/// let sydney_tz: Tz = "+10:00".parse().unwrap();
 ///
-/// assert_eq!(arr.value_as_datetime_with_tz(0, sydney_offset).map(|v| v.to_string()).unwrap(), "1970-05-10 00:25:11")
+/// assert_eq!(arr.value_as_datetime_with_tz(0, sydney_tz).map(|v| v.to_string()).unwrap(), "1970-05-10 00:25:11 +10:00")
 /// ```
 ///
 pub type TimestampSecondArray = PrimitiveArray<TimestampSecondType>;
@@ -503,12 +506,8 @@ where
     ///
     /// functionally it is same as `value_as_datetime`, however it adds
     /// the passed tz to the to-be-returned NaiveDateTime
-    pub fn value_as_datetime_with_tz(
-        &self,
-        i: usize,
-        tz: FixedOffset,
-    ) -> Option<NaiveDateTime> {
-        as_datetime::<T>(i64::from(self.value(i))).map(|datetime| datetime + tz)
+    pub fn value_as_datetime_with_tz(&self, i: usize, tz: Tz) -> Option<DateTime<Tz>> {
+        as_datetime_with_timezone::<T>(i64::from(self.value(i)), tz)
     }
 
     /// Returns value as a chrono `NaiveDate` by using `Self::datetime()`
