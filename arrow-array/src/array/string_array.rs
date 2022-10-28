@@ -15,65 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::iterator::GenericStringIter;
-use crate::raw_pointer::RawPtrBox;
+use crate::types::GenericStringType;
 use crate::{
-    empty_offsets, print_long_array, Array, ArrayAccessor, GenericBinaryArray,
-    GenericListArray, OffsetSizeTrait,
+    Array, GenericBinaryArray, GenericByteArray, GenericListArray, OffsetSizeTrait,
 };
-use arrow_buffer::{bit_util, Buffer, MutableBuffer};
+use arrow_buffer::{bit_util, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
-use std::any::Any;
 
 /// Generic struct for \[Large\]StringArray
 ///
 /// See [`StringArray`] and [`LargeStringArray`] for storing
 /// specific string data.
-pub struct GenericStringArray<OffsetSize: OffsetSizeTrait> {
-    data: ArrayData,
-    value_offsets: RawPtrBox<OffsetSize>,
-    value_data: RawPtrBox<u8>,
-}
+pub type GenericStringArray<OffsetSize> = GenericByteArray<GenericStringType<OffsetSize>>;
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
-    /// Data type of the array.
-    pub const DATA_TYPE: DataType = if OffsetSize::IS_LARGE {
-        DataType::LargeUtf8
-    } else {
-        DataType::Utf8
-    };
-
     /// Get the data type of the array.
     #[deprecated(note = "please use `Self::DATA_TYPE` instead")]
     pub const fn get_data_type() -> DataType {
         Self::DATA_TYPE
-    }
-
-    /// Returns the length for the element at index `i`.
-    #[inline]
-    pub fn value_length(&self, i: usize) -> OffsetSize {
-        let offsets = self.value_offsets();
-        offsets[i + 1] - offsets[i]
-    }
-
-    /// Returns the offset values in the offsets buffer
-    #[inline]
-    pub fn value_offsets(&self) -> &[OffsetSize] {
-        // Soundness
-        //     pointer alignment & location is ensured by RawPtrBox
-        //     buffer bounds/offset is ensured by the ArrayData instance.
-        unsafe {
-            std::slice::from_raw_parts(
-                self.value_offsets.as_ptr().add(self.data.offset()),
-                self.len() + 1,
-            )
-        }
-    }
-
-    /// Returns a clone of the value data buffer
-    pub fn value_data(&self) -> Buffer {
-        self.data.buffers()[1].clone()
     }
 
     /// Returns the number of `Unicode Scalar Value` in the string at index `i`.
@@ -83,45 +43,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     /// please use the function [`value_length`](#method.value_length) which has O(1) time complexity.
     pub fn num_chars(&self, i: usize) -> usize {
         self.value(i).chars().count()
-    }
-
-    /// Returns the element at index
-    /// # Safety
-    /// caller is responsible for ensuring that index is within the array bounds
-    #[inline]
-    pub unsafe fn value_unchecked(&self, i: usize) -> &str {
-        let end = self.value_offsets().get_unchecked(i + 1).as_usize();
-        let start = self.value_offsets().get_unchecked(i).as_usize();
-
-        // Soundness
-        // pointer alignment & location is ensured by RawPtrBox
-        // buffer bounds/offset is ensured by the value_offset invariants
-        // ISSUE: utf-8 well formedness is not checked
-
-        // Safety of `to_isize().unwrap()`
-        // `start` and `end` are &OffsetSize, which is a generic type that implements the
-        // OffsetSizeTrait. Currently, only i32 and i64 implement OffsetSizeTrait,
-        // both of which should cleanly cast to isize on an architecture that supports
-        // 32/64-bit offsets
-        let slice =
-            std::slice::from_raw_parts(self.value_data.as_ptr().add(start), end - start);
-        std::str::from_utf8_unchecked(slice)
-    }
-
-    /// Returns the element at index `i` as &str
-    /// # Panics
-    /// Panics if index `i` is out of bounds.
-    #[inline]
-    pub fn value(&self, i: usize) -> &str {
-        assert!(
-            i < self.data.len(),
-            "Trying to access an element at index {} from a StringArray of length {}",
-            i,
-            self.len()
-        );
-        // Safety:
-        // `i < self.data.len()
-        unsafe { self.value_unchecked(i) }
     }
 
     /// Convert a list array to a string array.
@@ -283,62 +204,6 @@ where
     }
 }
 
-impl<'a, T: OffsetSizeTrait> IntoIterator for &'a GenericStringArray<T> {
-    type Item = Option<&'a str>;
-    type IntoIter = GenericStringIter<'a, T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        GenericStringIter::<'a, T>::new(self)
-    }
-}
-
-impl<'a, T: OffsetSizeTrait> GenericStringArray<T> {
-    /// constructs a new iterator
-    pub fn iter(&'a self) -> GenericStringIter<'a, T> {
-        GenericStringIter::<'a, T>::new(self)
-    }
-}
-
-impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericStringArray<OffsetSize> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let prefix = OffsetSize::PREFIX;
-
-        write!(f, "{}StringArray\n[\n", prefix)?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
-        })?;
-        write!(f, "]")
-    }
-}
-
-impl<OffsetSize: OffsetSizeTrait> Array for GenericStringArray<OffsetSize> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
-    fn into_data(self) -> ArrayData {
-        self.into()
-    }
-}
-
-impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor
-    for &'a GenericStringArray<OffsetSize>
-{
-    type Item = &'a str;
-
-    fn value(&self, index: usize) -> Self::Item {
-        GenericStringArray::value(self, index)
-    }
-
-    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-        GenericStringArray::value_unchecked(self, index)
-    }
-}
-
 impl<OffsetSize: OffsetSizeTrait> From<GenericListArray<OffsetSize>>
     for GenericStringArray<OffsetSize>
 {
@@ -353,32 +218,6 @@ impl<OffsetSize: OffsetSizeTrait> From<GenericBinaryArray<OffsetSize>>
     fn from(v: GenericBinaryArray<OffsetSize>) -> Self {
         let builder = v.into_data().into_builder().data_type(Self::DATA_TYPE);
         Self::from(builder.build().unwrap())
-    }
-}
-
-impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericStringArray<OffsetSize> {
-    fn from(data: ArrayData) -> Self {
-        assert_eq!(
-            data.data_type(),
-            &Self::DATA_TYPE,
-            "[Large]StringArray expects Datatype::[Large]Utf8"
-        );
-        assert_eq!(
-            data.buffers().len(),
-            2,
-            "StringArray data should contain 2 buffers only (offsets and values)"
-        );
-        // Handle case of empty offsets
-        let offsets = match data.is_empty() && data.buffers()[0].is_empty() {
-            true => empty_offsets::<OffsetSize>().as_ptr() as *const _,
-            false => data.buffers()[0].as_ptr(),
-        };
-        let values = data.buffers()[1].as_ptr();
-        Self {
-            data,
-            value_offsets: unsafe { RawPtrBox::new(offsets) },
-            value_data: unsafe { RawPtrBox::new(values) },
-        }
     }
 }
 
@@ -399,12 +238,6 @@ impl<OffsetSize: OffsetSizeTrait> From<Vec<&str>> for GenericStringArray<OffsetS
 impl<OffsetSize: OffsetSizeTrait> From<Vec<String>> for GenericStringArray<OffsetSize> {
     fn from(v: Vec<String>) -> Self {
         Self::from_iter_values(v)
-    }
-}
-
-impl<OffsetSize: OffsetSizeTrait> From<GenericStringArray<OffsetSize>> for ArrayData {
-    fn from(array: GenericStringArray<OffsetSize>) -> Self {
-        array.data
     }
 }
 
@@ -436,6 +269,7 @@ pub type LargeStringArray = GenericStringArray<i64>;
 mod tests {
     use super::*;
     use crate::builder::{ListBuilder, StringBuilder};
+    use arrow_buffer::Buffer;
     use arrow_schema::Field;
 
     #[test]
@@ -464,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "[Large]StringArray expects Datatype::[Large]Utf8")]
+    #[should_panic(expected = "StringArray expects DataType::Utf8")]
     fn test_string_array_from_int() {
         let array = LargeStringArray::from(vec!["a", "b"]);
         drop(StringArray::from(array.into_data()));

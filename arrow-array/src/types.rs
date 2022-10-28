@@ -19,6 +19,7 @@
 
 use crate::array::ArrowPrimitiveType;
 use crate::delta::shift_months;
+use crate::OffsetSizeTrait;
 use arrow_buffer::i256;
 use arrow_data::decimal::{
     validate_decimal256_precision_with_lt_bytes, validate_decimal_precision,
@@ -28,6 +29,7 @@ use arrow_data::decimal::{
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use chrono::{Duration, NaiveDate};
 use half::f16;
+use std::marker::PhantomData;
 use std::ops::{Add, Sub};
 
 // BooleanType is special: its bit-width is not the size of the primitive type, and its `index`
@@ -464,7 +466,10 @@ impl Date64Type {
     }
 }
 
-mod private {
+/// Crate private types for Decimal Arrays
+///
+/// Not intended to be used outside this crate
+mod decimal {
     use super::*;
 
     pub trait DecimalTypeSealed {}
@@ -482,7 +487,7 @@ mod private {
 /// [`Decimal128Array`]: [crate::array::Decimal128Array]
 /// [`Decimal256Array`]: [crate::array::Decimal256Array]
 pub trait DecimalType:
-    'static + Send + Sync + ArrowPrimitiveType + private::DecimalTypeSealed
+    'static + Send + Sync + ArrowPrimitiveType + decimal::DecimalTypeSealed
 {
     const BYTE_LENGTH: usize;
     const MAX_PRECISION: u8;
@@ -573,6 +578,87 @@ fn format_decimal_str(value_str: &str, precision: usize, scale: usize) -> String
         format!("{}0.{:0>width$}", sign, rest, width = scale)
     }
 }
+
+/// Crate private types for Byte Arrays
+///
+/// Not intended to be used outside this crate
+pub(crate) mod bytes {
+    use super::*;
+
+    pub trait ByteArrayTypeSealed {}
+    impl<O: OffsetSizeTrait> ByteArrayTypeSealed for GenericStringType<O> {}
+    impl<O: OffsetSizeTrait> ByteArrayTypeSealed for GenericBinaryType<O> {}
+
+    pub trait ByteArrayNativeType: std::fmt::Debug + Send + Sync {
+        /// # Safety
+        ///
+        /// `b` must be a valid byte sequence for `Self`
+        unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self;
+    }
+
+    impl ByteArrayNativeType for [u8] {
+        unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
+            b
+        }
+    }
+
+    impl ByteArrayNativeType for str {
+        unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
+            std::str::from_utf8_unchecked(b)
+        }
+    }
+}
+
+/// A trait over the variable-size byte array types
+///
+/// See [Variable Size Binary Layout](https://arrow.apache.org/docs/format/Columnar.html#variable-size-binary-layout)
+pub trait ByteArrayType: 'static + Send + Sync + bytes::ByteArrayTypeSealed {
+    type Offset: OffsetSizeTrait;
+    type Native: bytes::ByteArrayNativeType + AsRef<[u8]> + ?Sized;
+    /// "Binary" or "String", for use in error messages
+    const PREFIX: &'static str;
+    const DATA_TYPE: DataType;
+}
+
+/// [`ByteArrayType`] for string arrays
+pub struct GenericStringType<O: OffsetSizeTrait> {
+    phantom: PhantomData<O>,
+}
+
+impl<O: OffsetSizeTrait> ByteArrayType for GenericStringType<O> {
+    type Offset = O;
+    type Native = str;
+    const PREFIX: &'static str = "String";
+
+    const DATA_TYPE: DataType = if O::IS_LARGE {
+        DataType::LargeUtf8
+    } else {
+        DataType::Utf8
+    };
+}
+
+pub type Utf8Type = GenericStringType<i32>;
+pub type LargeUtf8Type = GenericStringType<i64>;
+
+/// [`ByteArrayType`] for binary arrays
+pub struct GenericBinaryType<O: OffsetSizeTrait> {
+    phantom: PhantomData<O>,
+}
+
+impl<O: OffsetSizeTrait> ByteArrayType for GenericBinaryType<O> {
+    type Offset = O;
+    type Native = [u8];
+    const PREFIX: &'static str = "Binary";
+
+    const DATA_TYPE: DataType = if O::IS_LARGE {
+        DataType::LargeBinary
+    } else {
+        DataType::Binary
+    };
+}
+
+pub type BinaryType = GenericBinaryType<i32>;
+pub type LargeBinaryType = GenericBinaryType<i64>;
 
 #[cfg(test)]
 mod tests {
