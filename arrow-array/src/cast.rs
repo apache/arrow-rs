@@ -461,6 +461,7 @@ array_downcast_fn!(as_decimal_array, Decimal128Array);
 
 #[cfg(test)]
 mod tests {
+    use arrow_buffer::i256;
     use std::sync::Arc;
 
     use super::*;
@@ -495,5 +496,19 @@ mod tests {
         // should also work when wrapped in an Arc
         let array: ArrayRef = Arc::new(array);
         assert!(!as_string_array(&array).is_empty())
+    }
+
+    #[test]
+    fn test_decimal128array() {
+        let a = Decimal128Array::from_iter_values([1, 2, 4, 5]);
+        assert!(!as_primitive_array::<Decimal128Type>(&a).is_empty());
+    }
+
+    #[test]
+    fn test_decimal256array() {
+        let a = Decimal256Array::from_iter_values(
+            [1, 2, 4, 5].into_iter().map(i256::from_i128),
+        );
+        assert!(!as_primitive_array::<Decimal256Type>(&a).is_empty());
     }
 }
