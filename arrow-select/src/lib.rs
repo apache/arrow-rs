@@ -17,6 +17,7 @@
 
 //! Arrow selection kernels
 
+pub mod concat;
 pub mod filter;
 pub mod interleave;
 pub mod take;

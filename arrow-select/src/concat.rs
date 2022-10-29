@@ -20,8 +20,8 @@
 //! Example:
 //!
 //! ```
-//! use arrow::array::{ArrayRef, StringArray};
-//! use arrow::compute::concat;
+//! use arrow_array::{ArrayRef, StringArray};
+//! use arrow_select::concat::concat;
 //!
 //! let arr = concat(&[
 //!     &StringArray::from(vec!["hello", "world"]),
@@ -30,10 +30,10 @@
 //! assert_eq!(arr.len(), 3);
 //! ```
 
-use crate::array::*;
-use crate::datatypes::{DataType, SchemaRef};
-use crate::error::{ArrowError, Result};
-use crate::record_batch::RecordBatch;
+use arrow_array::*;
+use arrow_data::transform::{Capacities, MutableArrayData};
+use arrow_data::ArrayData;
+use arrow_schema::{ArrowError, DataType, SchemaRef};
 
 fn compute_str_values_length<Offset: OffsetSizeTrait>(arrays: &[&ArrayData]) -> usize {
     arrays
@@ -51,7 +51,7 @@ fn compute_str_values_length<Offset: OffsetSizeTrait>(arrays: &[&ArrayData]) -> 
 }
 
 /// Concatenate multiple [Array] of the same type into a single [ArrayRef].
-pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef> {
+pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
     if arrays.is_empty() {
         return Err(ArrowError::ComputeError(
             "concat requires input of at least one array".to_string(),
@@ -107,7 +107,7 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef> {
 pub fn concat_batches(
     schema: &SchemaRef,
     batches: &[RecordBatch],
-) -> Result<RecordBatch> {
+) -> Result<RecordBatch, ArrowError> {
     if batches.is_empty() {
         return Ok(RecordBatch::new_empty(schema.clone()));
     }
@@ -138,7 +138,8 @@ pub fn concat_batches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datatypes::*;
+    use arrow_array::types::*;
+    use arrow_schema::{Field, Schema};
     use std::sync::Arc;
 
     #[test]
@@ -148,18 +149,17 @@ mod tests {
     }
 
     #[test]
-    fn test_concat_one_element_vec() -> Result<()> {
+    fn test_concat_one_element_vec() {
         let arr = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
             Some(-1),
             Some(2),
             None,
         ])) as ArrayRef;
-        let result = concat(&[arr.as_ref()])?;
+        let result = concat(&[arr.as_ref()]).unwrap();
         assert_eq!(
             &arr, &result,
             "concatenating single element array gives back the same result"
         );
-        Ok(())
     }
 
     #[test]
@@ -172,12 +172,13 @@ mod tests {
     }
 
     #[test]
-    fn test_concat_string_arrays() -> Result<()> {
+    fn test_concat_string_arrays() {
         let arr = concat(&[
             &StringArray::from(vec!["hello", "world"]),
             &StringArray::from(vec!["2", "3", "4"]),
             &StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]),
-        ])?;
+        ])
+        .unwrap();
 
         let expected_output = Arc::new(StringArray::from(vec![
             Some("hello"),
@@ -192,12 +193,10 @@ mod tests {
         ])) as ArrayRef;
 
         assert_eq!(&arr, &expected_output);
-
-        Ok(())
     }
 
     #[test]
-    fn test_concat_primitive_arrays() -> Result<()> {
+    fn test_concat_primitive_arrays() {
         let arr = concat(&[
             &PrimitiveArray::<Int64Type>::from(vec![
                 Some(-1),
@@ -213,7 +212,8 @@ mod tests {
                 None,
             ]),
             &PrimitiveArray::<Int64Type>::from(vec![Some(256), Some(512), Some(1024)]),
-        ])?;
+        ])
+        .unwrap();
 
         let expected_output = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
             Some(-1),
@@ -231,12 +231,10 @@ mod tests {
         ])) as ArrayRef;
 
         assert_eq!(&arr, &expected_output);
-
-        Ok(())
     }
 
     #[test]
-    fn test_concat_primitive_array_slices() -> Result<()> {
+    fn test_concat_primitive_array_slices() {
         let input_1 = PrimitiveArray::<Int64Type>::from(vec![
             Some(-1),
             Some(-1),
@@ -253,7 +251,7 @@ mod tests {
             None,
         ])
         .slice(1, 3);
-        let arr = concat(&[input_1.as_ref(), input_2.as_ref()])?;
+        let arr = concat(&[input_1.as_ref(), input_2.as_ref()]).unwrap();
 
         let expected_output = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
             Some(-1),
@@ -265,12 +263,10 @@ mod tests {
         ])) as ArrayRef;
 
         assert_eq!(&arr, &expected_output);
-
-        Ok(())
     }
 
     #[test]
-    fn test_concat_boolean_primitive_arrays() -> Result<()> {
+    fn test_concat_boolean_primitive_arrays() {
         let arr = concat(&[
             &BooleanArray::from(vec![
                 Some(true),
@@ -281,7 +277,8 @@ mod tests {
                 Some(false),
             ]),
             &BooleanArray::from(vec![None, Some(false), Some(true), Some(false)]),
-        ])?;
+        ])
+        .unwrap();
 
         let expected_output = Arc::new(BooleanArray::from(vec![
             Some(true),
@@ -297,12 +294,10 @@ mod tests {
         ])) as ArrayRef;
 
         assert_eq!(&arr, &expected_output);
-
-        Ok(())
     }
 
     #[test]
-    fn test_concat_primitive_list_arrays() -> Result<()> {
+    fn test_concat_primitive_list_arrays() {
         let list1 = vec![
             Some(vec![Some(-1), Some(-1), Some(2), None, None]),
             Some(vec![]),
@@ -324,7 +319,7 @@ mod tests {
         let list3_array =
             ListArray::from_iter_primitive::<Int64Type, _, _>(list3.clone());
 
-        let array_result = concat(&[&list1_array, &list2_array, &list3_array])?;
+        let array_result = concat(&[&list1_array, &list2_array, &list3_array]).unwrap();
 
         let expected = list1
             .into_iter()
@@ -333,12 +328,10 @@ mod tests {
         let array_expected = ListArray::from_iter_primitive::<Int64Type, _, _>(expected);
 
         assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
-
-        Ok(())
     }
 
     #[test]
-    fn test_concat_struct_arrays() -> Result<()> {
+    fn test_concat_struct_arrays() {
         let field = Field::new("field", DataType::Int64, true);
         let input_primitive_1: ArrayRef =
             Arc::new(PrimitiveArray::<Int64Type>::from(vec![
@@ -367,7 +360,7 @@ mod tests {
             ]));
         let input_struct_3 = StructArray::from(vec![(field, input_primitive_3)]);
 
-        let arr = concat(&[&input_struct_1, &input_struct_2, &input_struct_3])?;
+        let arr = concat(&[&input_struct_1, &input_struct_2, &input_struct_3]).unwrap();
 
         let expected_primitive_output = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
             Some(-1),
@@ -390,12 +383,10 @@ mod tests {
             .unwrap()
             .column(0);
         assert_eq!(actual_primitive, &expected_primitive_output);
-
-        Ok(())
     }
 
     #[test]
-    fn test_concat_struct_array_slices() -> Result<()> {
+    fn test_concat_struct_array_slices() {
         let field = Field::new("field", DataType::Int64, true);
         let input_primitive_1: ArrayRef =
             Arc::new(PrimitiveArray::<Int64Type>::from(vec![
@@ -419,7 +410,8 @@ mod tests {
         let arr = concat(&[
             input_struct_1.slice(1, 3).as_ref(),
             input_struct_2.slice(1, 2).as_ref(),
-        ])?;
+        ])
+        .unwrap();
 
         let expected_primitive_output = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
             Some(-1),
@@ -435,39 +427,35 @@ mod tests {
             .unwrap()
             .column(0);
         assert_eq!(actual_primitive, &expected_primitive_output);
-
-        Ok(())
     }
 
     #[test]
-    fn test_string_array_slices() -> Result<()> {
+    fn test_string_array_slices() {
         let input_1 = StringArray::from(vec!["hello", "A", "B", "C"]);
         let input_2 = StringArray::from(vec!["world", "D", "E", "Z"]);
 
-        let arr = concat(&[input_1.slice(1, 3).as_ref(), input_2.slice(1, 2).as_ref()])?;
+        let arr = concat(&[input_1.slice(1, 3).as_ref(), input_2.slice(1, 2).as_ref()])
+            .unwrap();
 
         let expected_output = StringArray::from(vec!["A", "B", "C", "D", "E"]);
 
         let actual_output = arr.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(actual_output, &expected_output);
-
-        Ok(())
     }
 
     #[test]
-    fn test_string_array_with_null_slices() -> Result<()> {
+    fn test_string_array_with_null_slices() {
         let input_1 = StringArray::from(vec![Some("hello"), None, Some("A"), Some("C")]);
         let input_2 = StringArray::from(vec![None, Some("world"), Some("D"), None]);
 
-        let arr = concat(&[input_1.slice(1, 3).as_ref(), input_2.slice(1, 2).as_ref()])?;
+        let arr = concat(&[input_1.slice(1, 3).as_ref(), input_2.slice(1, 2).as_ref()])
+            .unwrap();
 
         let expected_output =
             StringArray::from(vec![None, Some("A"), Some("C"), Some("world"), Some("D")]);
 
         let actual_output = arr.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(actual_output, &expected_output);
-
-        Ok(())
     }
 
     fn collect_string_dictionary(
@@ -539,7 +527,7 @@ mod tests {
     }
 
     #[test]
-    fn test_concat_string_sizes() -> Result<()> {
+    fn test_concat_string_sizes() {
         let a: LargeStringArray = ((0..150).map(|_| Some("foo"))).collect();
         let b: LargeStringArray = ((0..150).map(|_| Some("foo"))).collect();
         let c = LargeStringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
@@ -550,11 +538,9 @@ mod tests {
         // 909
         // closest 64 byte aligned cap = 960
 
-        let arr = concat(&[&a, &b, &c])?;
+        let arr = concat(&[&a, &b, &c]).unwrap();
         // this would have been 1280 if we did not precompute the value lengths.
         assert_eq!(arr.data().buffers()[1].capacity(), 960);
-
-        Ok(())
     }
 
     #[test]
