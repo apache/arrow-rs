@@ -173,12 +173,6 @@ impl<W: Write> SerializedFileWriter<W> {
     }
 
     /// Closes and finalises file writer, returning the file metadata.
-    ///
-    /// All row groups must be appended before this method is called.
-    /// No writes are allowed after this point.
-    ///
-    /// Can be called multiple times. It is up to implementation to either result in
-    /// no-op, or return an `Err` for subsequent calls.
     pub fn close(mut self) -> Result<parquet::FileMetaData> {
         self.assert_previous_writer_closed()?;
         let metadata = self.write_metadata()?;
@@ -431,10 +425,6 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
     }
 
     /// Closes this row group writer and returns row group metadata.
-    /// After calling this method row group writer must not be used.
-    ///
-    /// Can be called multiple times. In subsequent calls will result in no-op and return
-    /// already created row group metadata.
     pub fn close(mut self) -> Result<RowGroupMetaDataPtr> {
         if self.row_group_metadata.is_none() {
             self.assert_previous_writer_closed()?;

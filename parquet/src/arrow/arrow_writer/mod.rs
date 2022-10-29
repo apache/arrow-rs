@@ -583,7 +583,7 @@ fn get_decimal_array_slice(
     indices: &[usize],
 ) -> Vec<FixedLenByteArray> {
     let mut values = Vec::with_capacity(indices.len());
-    let size = decimal_length_from_precision(array.precision().unwrap());
+    let size = decimal_length_from_precision(array.precision());
     for i in indices {
         let as_be_bytes = array.value(*i).to_be_bytes();
         let resized_value = as_be_bytes[(16 - size)..].to_vec();
@@ -1417,7 +1417,7 @@ mod tests {
     #[test]
     fn timestamp_second_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
-        let values = Arc::new(TimestampSecondArray::from_vec(raw_values, None));
+        let values = Arc::new(TimestampSecondArray::from(raw_values));
 
         one_column_roundtrip(values, false);
     }
@@ -1425,7 +1425,7 @@ mod tests {
     #[test]
     fn timestamp_millisecond_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
-        let values = Arc::new(TimestampMillisecondArray::from_vec(raw_values, None));
+        let values = Arc::new(TimestampMillisecondArray::from(raw_values));
 
         one_column_roundtrip(values, false);
     }
@@ -1433,7 +1433,7 @@ mod tests {
     #[test]
     fn timestamp_microsecond_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
-        let values = Arc::new(TimestampMicrosecondArray::from_vec(raw_values, None));
+        let values = Arc::new(TimestampMicrosecondArray::from(raw_values));
 
         one_column_roundtrip(values, false);
     }
@@ -1441,7 +1441,7 @@ mod tests {
     #[test]
     fn timestamp_nanosecond_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
-        let values = Arc::new(TimestampNanosecondArray::from_vec(raw_values, None));
+        let values = Arc::new(TimestampNanosecondArray::from(raw_values));
 
         one_column_roundtrip(values, false);
     }

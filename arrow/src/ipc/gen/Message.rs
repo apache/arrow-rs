@@ -43,7 +43,7 @@ pub const ENUM_MAX_COMPRESSION_TYPE: i8 = 1;
 pub const ENUM_VALUES_COMPRESSION_TYPE: [CompressionType; 2] =
     [CompressionType::LZ4_FRAME, CompressionType::ZSTD];
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct CompressionType(pub i8);
 #[allow(non_upper_case_globals)]
@@ -63,8 +63,8 @@ impl CompressionType {
         }
     }
 }
-impl std::fmt::Debug for CompressionType {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for CompressionType {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         if let Some(name) = self.variant_name() {
             f.write_str(name)
         } else {
@@ -75,8 +75,8 @@ impl std::fmt::Debug for CompressionType {
 impl<'a> flatbuffers::Follow<'a> for CompressionType {
     type Inner = Self;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = unsafe { flatbuffers::read_scalar_at::<i8>(buf, loc) };
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
         Self(b)
     }
 }
@@ -84,20 +84,21 @@ impl<'a> flatbuffers::Follow<'a> for CompressionType {
 impl flatbuffers::Push for CompressionType {
     type Output = CompressionType;
     #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        unsafe { flatbuffers::emplace_scalar::<i8>(dst, self.0) };
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        flatbuffers::emplace_scalar::<i8>(dst, self.0);
     }
 }
 
 impl flatbuffers::EndianScalar for CompressionType {
+    type Scalar = i8;
     #[inline]
-    fn to_little_endian(self) -> Self {
-        let b = i8::to_le(self.0);
-        Self(b)
+    fn to_little_endian(self) -> i8 {
+        self.0.to_le()
     }
     #[inline]
-    fn from_little_endian(self) -> Self {
-        let b = i8::from_le(self.0);
+    #[allow(clippy::wrong_self_convention)]
+    fn from_little_endian(v: i8) -> Self {
+        let b = i8::from_le(v);
         Self(b)
     }
 }
@@ -135,7 +136,7 @@ pub const ENUM_VALUES_BODY_COMPRESSION_METHOD: [BodyCompressionMethod; 1] =
 /// Provided for forward compatibility in case we need to support different
 /// strategies for compressing the IPC message body (like whole-body
 /// compression rather than buffer-level) in the future
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct BodyCompressionMethod(pub i8);
 #[allow(non_upper_case_globals)]
@@ -160,8 +161,8 @@ impl BodyCompressionMethod {
         }
     }
 }
-impl std::fmt::Debug for BodyCompressionMethod {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for BodyCompressionMethod {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         if let Some(name) = self.variant_name() {
             f.write_str(name)
         } else {
@@ -172,8 +173,8 @@ impl std::fmt::Debug for BodyCompressionMethod {
 impl<'a> flatbuffers::Follow<'a> for BodyCompressionMethod {
     type Inner = Self;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = unsafe { flatbuffers::read_scalar_at::<i8>(buf, loc) };
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
         Self(b)
     }
 }
@@ -181,20 +182,21 @@ impl<'a> flatbuffers::Follow<'a> for BodyCompressionMethod {
 impl flatbuffers::Push for BodyCompressionMethod {
     type Output = BodyCompressionMethod;
     #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        unsafe { flatbuffers::emplace_scalar::<i8>(dst, self.0) };
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        flatbuffers::emplace_scalar::<i8>(dst, self.0);
     }
 }
 
 impl flatbuffers::EndianScalar for BodyCompressionMethod {
+    type Scalar = i8;
     #[inline]
-    fn to_little_endian(self) -> Self {
-        let b = i8::to_le(self.0);
-        Self(b)
+    fn to_little_endian(self) -> i8 {
+        self.0.to_le()
     }
     #[inline]
-    fn from_little_endian(self) -> Self {
-        let b = i8::from_le(self.0);
+    #[allow(clippy::wrong_self_convention)]
+    fn from_little_endian(v: i8) -> Self {
+        let b = i8::from_le(v);
         Self(b)
     }
 }
@@ -243,7 +245,7 @@ pub const ENUM_VALUES_MESSAGE_HEADER: [MessageHeader; 6] = [
 /// Arrow implementations do not need to implement all of the message types,
 /// which may include experimental metadata types. For maximum compatibility,
 /// it is best to send data using RecordBatch
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct MessageHeader(pub u8);
 #[allow(non_upper_case_globals)]
@@ -278,8 +280,8 @@ impl MessageHeader {
         }
     }
 }
-impl std::fmt::Debug for MessageHeader {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for MessageHeader {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         if let Some(name) = self.variant_name() {
             f.write_str(name)
         } else {
@@ -287,12 +289,11 @@ impl std::fmt::Debug for MessageHeader {
         }
     }
 }
-pub struct MessageHeaderUnionTableOffset {}
 impl<'a> flatbuffers::Follow<'a> for MessageHeader {
     type Inner = Self;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = unsafe { flatbuffers::read_scalar_at::<u8>(buf, loc) };
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
         Self(b)
     }
 }
@@ -300,20 +301,21 @@ impl<'a> flatbuffers::Follow<'a> for MessageHeader {
 impl flatbuffers::Push for MessageHeader {
     type Output = MessageHeader;
     #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        unsafe { flatbuffers::emplace_scalar::<u8>(dst, self.0) };
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        flatbuffers::emplace_scalar::<u8>(dst, self.0);
     }
 }
 
 impl flatbuffers::EndianScalar for MessageHeader {
+    type Scalar = u8;
     #[inline]
-    fn to_little_endian(self) -> Self {
-        let b = u8::to_le(self.0);
-        Self(b)
+    fn to_little_endian(self) -> u8 {
+        self.0.to_le()
     }
     #[inline]
-    fn from_little_endian(self) -> Self {
-        let b = u8::from_le(self.0);
+    #[allow(clippy::wrong_self_convention)]
+    fn from_little_endian(v: u8) -> Self {
+        let b = u8::from_le(v);
         Self(b)
     }
 }
@@ -330,6 +332,8 @@ impl<'a> flatbuffers::Verifiable for MessageHeader {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for MessageHeader {}
+pub struct MessageHeaderUnionTableOffset {}
+
 /// ----------------------------------------------------------------------
 /// Data structures for describing a table row batch (a collection of
 /// equal-length Arrow arrays)
@@ -343,8 +347,13 @@ impl flatbuffers::SimpleToVerifyInSlice for MessageHeader {}
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq)]
 pub struct FieldNode(pub [u8; 16]);
-impl std::fmt::Debug for FieldNode {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl Default for FieldNode {
+    fn default() -> Self {
+        Self([0; 16])
+    }
+}
+impl core::fmt::Debug for FieldNode {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         f.debug_struct("FieldNode")
             .field("length", &self.length())
             .field("null_count", &self.null_count())
@@ -353,45 +362,28 @@ impl std::fmt::Debug for FieldNode {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for FieldNode {}
-impl flatbuffers::SafeSliceAccess for FieldNode {}
 impl<'a> flatbuffers::Follow<'a> for FieldNode {
     type Inner = &'a FieldNode;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         <&'a FieldNode>::follow(buf, loc)
     }
 }
 impl<'a> flatbuffers::Follow<'a> for &'a FieldNode {
     type Inner = &'a FieldNode;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         flatbuffers::follow_cast_ref::<FieldNode>(buf, loc)
     }
 }
 impl<'b> flatbuffers::Push for FieldNode {
     type Output = FieldNode;
     #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        let src = unsafe {
-            ::std::slice::from_raw_parts(
-                self as *const FieldNode as *const u8,
-                Self::size(),
-            )
-        };
-        dst.copy_from_slice(src);
-    }
-}
-impl<'b> flatbuffers::Push for &'b FieldNode {
-    type Output = FieldNode;
-
-    #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        let src = unsafe {
-            ::std::slice::from_raw_parts(
-                *self as *const FieldNode as *const u8,
-                Self::size(),
-            )
-        };
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        let src = ::core::slice::from_raw_parts(
+            self as *const FieldNode as *const u8,
+            Self::size(),
+        );
         dst.copy_from_slice(src);
     }
 }
@@ -406,7 +398,8 @@ impl<'a> flatbuffers::Verifiable for FieldNode {
         v.in_buffer::<Self>(pos)
     }
 }
-impl FieldNode {
+
+impl<'a> FieldNode {
     #[allow(clippy::too_many_arguments)]
     pub fn new(length: i64, null_count: i64) -> Self {
         let mut s = Self([0; 16]);
@@ -418,25 +411,30 @@ impl FieldNode {
     /// The number of value slots in the Arrow array at this level of a nested
     /// tree
     pub fn length(&self) -> i64 {
-        let mut mem = core::mem::MaybeUninit::<i64>::uninit();
-        unsafe {
+        let mut mem = core::mem::MaybeUninit::<<i64 as EndianScalar>::Scalar>::uninit();
+        // Safety:
+        // Created from a valid Table for this object
+        // Which contains a valid value in this slot
+        EndianScalar::from_little_endian(unsafe {
             core::ptr::copy_nonoverlapping(
                 self.0[0..].as_ptr(),
                 mem.as_mut_ptr() as *mut u8,
-                core::mem::size_of::<i64>(),
+                core::mem::size_of::<<i64 as EndianScalar>::Scalar>(),
             );
             mem.assume_init()
-        }
-        .from_little_endian()
+        })
     }
 
     pub fn set_length(&mut self, x: i64) {
         let x_le = x.to_little_endian();
+        // Safety:
+        // Created from a valid Table for this object
+        // Which contains a valid value in this slot
         unsafe {
             core::ptr::copy_nonoverlapping(
-                &x_le as *const i64 as *const u8,
+                &x_le as *const _ as *const u8,
                 self.0[0..].as_mut_ptr(),
-                core::mem::size_of::<i64>(),
+                core::mem::size_of::<<i64 as EndianScalar>::Scalar>(),
             );
         }
     }
@@ -445,25 +443,30 @@ impl FieldNode {
     /// to write their physical validity bitmap out as a materialized buffer,
     /// instead setting the length of the bitmap buffer to 0.
     pub fn null_count(&self) -> i64 {
-        let mut mem = core::mem::MaybeUninit::<i64>::uninit();
-        unsafe {
+        let mut mem = core::mem::MaybeUninit::<<i64 as EndianScalar>::Scalar>::uninit();
+        // Safety:
+        // Created from a valid Table for this object
+        // Which contains a valid value in this slot
+        EndianScalar::from_little_endian(unsafe {
             core::ptr::copy_nonoverlapping(
                 self.0[8..].as_ptr(),
                 mem.as_mut_ptr() as *mut u8,
-                core::mem::size_of::<i64>(),
+                core::mem::size_of::<<i64 as EndianScalar>::Scalar>(),
             );
             mem.assume_init()
-        }
-        .from_little_endian()
+        })
     }
 
     pub fn set_null_count(&mut self, x: i64) {
         let x_le = x.to_little_endian();
+        // Safety:
+        // Created from a valid Table for this object
+        // Which contains a valid value in this slot
         unsafe {
             core::ptr::copy_nonoverlapping(
-                &x_le as *const i64 as *const u8,
+                &x_le as *const _ as *const u8,
                 self.0[8..].as_mut_ptr(),
-                core::mem::size_of::<i64>(),
+                core::mem::size_of::<<i64 as EndianScalar>::Scalar>(),
             );
         }
     }
@@ -482,16 +485,19 @@ pub struct BodyCompression<'a> {
 impl<'a> flatbuffers::Follow<'a> for BodyCompression<'a> {
     type Inner = BodyCompression<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> BodyCompression<'a> {
+    pub const VT_CODEC: flatbuffers::VOffsetT = 4;
+    pub const VT_METHOD: flatbuffers::VOffsetT = 6;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         BodyCompression { _tab: table }
     }
     #[allow(unused_mut)]
@@ -505,28 +511,36 @@ impl<'a> BodyCompression<'a> {
         builder.finish()
     }
 
-    pub const VT_CODEC: flatbuffers::VOffsetT = 4;
-    pub const VT_METHOD: flatbuffers::VOffsetT = 6;
-
-    /// Compressor library
+    /// Compressor library.
+    /// For LZ4_FRAME, each compressed buffer must consist of a single frame.
     #[inline]
     pub fn codec(&self) -> CompressionType {
-        self._tab
-            .get::<CompressionType>(
-                BodyCompression::VT_CODEC,
-                Some(CompressionType::LZ4_FRAME),
-            )
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<CompressionType>(
+                    BodyCompression::VT_CODEC,
+                    Some(CompressionType::LZ4_FRAME),
+                )
+                .unwrap()
+        }
     }
     /// Indicates the way the record batch body was compressed
     #[inline]
     pub fn method(&self) -> BodyCompressionMethod {
-        self._tab
-            .get::<BodyCompressionMethod>(
-                BodyCompression::VT_METHOD,
-                Some(BodyCompressionMethod::BUFFER),
-            )
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<BodyCompressionMethod>(
+                    BodyCompression::VT_METHOD,
+                    Some(BodyCompressionMethod::BUFFER),
+                )
+                .unwrap()
+        }
     }
 }
 
@@ -538,8 +552,8 @@ impl flatbuffers::Verifiable for BodyCompression<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-            .visit_field::<CompressionType>(&"codec", Self::VT_CODEC, false)?
-            .visit_field::<BodyCompressionMethod>(&"method", Self::VT_METHOD, false)?
+            .visit_field::<CompressionType>("codec", Self::VT_CODEC, false)?
+            .visit_field::<BodyCompressionMethod>("method", Self::VT_METHOD, false)?
             .finish();
         Ok(())
     }
@@ -557,6 +571,7 @@ impl<'a> Default for BodyCompressionArgs {
         }
     }
 }
+
 pub struct BodyCompressionBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -595,8 +610,8 @@ impl<'a: 'b, 'b> BodyCompressionBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for BodyCompression<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for BodyCompression<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("BodyCompression");
         ds.field("codec", &self.codec());
         ds.field("method", &self.method());
@@ -616,16 +631,21 @@ pub struct RecordBatch<'a> {
 impl<'a> flatbuffers::Follow<'a> for RecordBatch<'a> {
     type Inner = RecordBatch<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> RecordBatch<'a> {
+    pub const VT_LENGTH: flatbuffers::VOffsetT = 4;
+    pub const VT_NODES: flatbuffers::VOffsetT = 6;
+    pub const VT_BUFFERS: flatbuffers::VOffsetT = 8;
+    pub const VT_COMPRESSION: flatbuffers::VOffsetT = 10;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         RecordBatch { _tab: table }
     }
     #[allow(unused_mut)]
@@ -647,28 +667,32 @@ impl<'a> RecordBatch<'a> {
         builder.finish()
     }
 
-    pub const VT_LENGTH: flatbuffers::VOffsetT = 4;
-    pub const VT_NODES: flatbuffers::VOffsetT = 6;
-    pub const VT_BUFFERS: flatbuffers::VOffsetT = 8;
-    pub const VT_COMPRESSION: flatbuffers::VOffsetT = 10;
-
     /// number of records / rows. The arrays in the batch should all have this
     /// length
     #[inline]
     pub fn length(&self) -> i64 {
-        self._tab
-            .get::<i64>(RecordBatch::VT_LENGTH, Some(0))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<i64>(RecordBatch::VT_LENGTH, Some(0))
+                .unwrap()
+        }
     }
     /// Nodes correspond to the pre-ordered flattened logical schema
     #[inline]
-    pub fn nodes(&self) -> Option<&'a [FieldNode]> {
-        self._tab
-            .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, FieldNode>>>(
-                RecordBatch::VT_NODES,
-                None,
-            )
-            .map(|v| v.safe_slice())
+    pub fn nodes(&self) -> Option<flatbuffers::Vector<'a, FieldNode>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, FieldNode>>>(
+                    RecordBatch::VT_NODES,
+                    None,
+                )
+        }
     }
     /// Buffers correspond to the pre-ordered flattened buffer tree
     ///
@@ -677,22 +701,31 @@ impl<'a> RecordBatch<'a> {
     /// bitmap and 1 for the values. For struct arrays, there will only be a
     /// single buffer for the validity (nulls) bitmap
     #[inline]
-    pub fn buffers(&self) -> Option<&'a [Buffer]> {
-        self._tab
-            .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, Buffer>>>(
-                RecordBatch::VT_BUFFERS,
-                None,
-            )
-            .map(|v| v.safe_slice())
+    pub fn buffers(&self) -> Option<flatbuffers::Vector<'a, Buffer>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, Buffer>>>(
+                    RecordBatch::VT_BUFFERS,
+                    None,
+                )
+        }
     }
     /// Optional compression of the message body
     #[inline]
     pub fn compression(&self) -> Option<BodyCompression<'a>> {
-        self._tab
-            .get::<flatbuffers::ForwardsUOffset<BodyCompression>>(
-                RecordBatch::VT_COMPRESSION,
-                None,
-            )
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<flatbuffers::ForwardsUOffset<BodyCompression>>(
+                    RecordBatch::VT_COMPRESSION,
+                    None,
+                )
+        }
     }
 }
 
@@ -704,10 +737,10 @@ impl flatbuffers::Verifiable for RecordBatch<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-     .visit_field::<i64>(&"length", Self::VT_LENGTH, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, FieldNode>>>(&"nodes", Self::VT_NODES, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, Buffer>>>(&"buffers", Self::VT_BUFFERS, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<BodyCompression>>(&"compression", Self::VT_COMPRESSION, false)?
+     .visit_field::<i64>("length", Self::VT_LENGTH, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, FieldNode>>>("nodes", Self::VT_NODES, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, Buffer>>>("buffers", Self::VT_BUFFERS, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<BodyCompression>>("compression", Self::VT_COMPRESSION, false)?
      .finish();
         Ok(())
     }
@@ -729,6 +762,7 @@ impl<'a> Default for RecordBatchArgs<'a> {
         }
     }
 }
+
 pub struct RecordBatchBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -785,8 +819,8 @@ impl<'a: 'b, 'b> RecordBatchBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for RecordBatch<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for RecordBatch<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("RecordBatch");
         ds.field("length", &self.length());
         ds.field("nodes", &self.nodes());
@@ -811,16 +845,20 @@ pub struct DictionaryBatch<'a> {
 impl<'a> flatbuffers::Follow<'a> for DictionaryBatch<'a> {
     type Inner = DictionaryBatch<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> DictionaryBatch<'a> {
+    pub const VT_ID: flatbuffers::VOffsetT = 4;
+    pub const VT_DATA: flatbuffers::VOffsetT = 6;
+    pub const VT_ISDELTA: flatbuffers::VOffsetT = 8;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         DictionaryBatch { _tab: table }
     }
     #[allow(unused_mut)]
@@ -837,31 +875,42 @@ impl<'a> DictionaryBatch<'a> {
         builder.finish()
     }
 
-    pub const VT_ID: flatbuffers::VOffsetT = 4;
-    pub const VT_DATA: flatbuffers::VOffsetT = 6;
-    pub const VT_ISDELTA: flatbuffers::VOffsetT = 8;
-
     #[inline]
     pub fn id(&self) -> i64 {
-        self._tab
-            .get::<i64>(DictionaryBatch::VT_ID, Some(0))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<i64>(DictionaryBatch::VT_ID, Some(0))
+                .unwrap()
+        }
     }
     #[inline]
     pub fn data(&self) -> Option<RecordBatch<'a>> {
-        self._tab.get::<flatbuffers::ForwardsUOffset<RecordBatch>>(
-            DictionaryBatch::VT_DATA,
-            None,
-        )
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<flatbuffers::ForwardsUOffset<RecordBatch>>(
+                DictionaryBatch::VT_DATA,
+                None,
+            )
+        }
     }
     /// If isDelta is true the values in the dictionary are to be appended to a
     /// dictionary with the indicated id. If isDelta is false this dictionary
     /// should replace the existing dictionary.
     #[inline]
     pub fn isDelta(&self) -> bool {
-        self._tab
-            .get::<bool>(DictionaryBatch::VT_ISDELTA, Some(false))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<bool>(DictionaryBatch::VT_ISDELTA, Some(false))
+                .unwrap()
+        }
     }
 }
 
@@ -873,13 +922,13 @@ impl flatbuffers::Verifiable for DictionaryBatch<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-            .visit_field::<i64>(&"id", Self::VT_ID, false)?
+            .visit_field::<i64>("id", Self::VT_ID, false)?
             .visit_field::<flatbuffers::ForwardsUOffset<RecordBatch>>(
-                &"data",
+                "data",
                 Self::VT_DATA,
                 false,
             )?
-            .visit_field::<bool>(&"isDelta", Self::VT_ISDELTA, false)?
+            .visit_field::<bool>("isDelta", Self::VT_ISDELTA, false)?
             .finish();
         Ok(())
     }
@@ -899,6 +948,7 @@ impl<'a> Default for DictionaryBatchArgs<'a> {
         }
     }
 }
+
 pub struct DictionaryBatchBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -938,8 +988,8 @@ impl<'a: 'b, 'b> DictionaryBatchBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for DictionaryBatch<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for DictionaryBatch<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("DictionaryBatch");
         ds.field("id", &self.id());
         ds.field("data", &self.data());
@@ -957,16 +1007,22 @@ pub struct Message<'a> {
 impl<'a> flatbuffers::Follow<'a> for Message<'a> {
     type Inner = Message<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Message<'a> {
+    pub const VT_VERSION: flatbuffers::VOffsetT = 4;
+    pub const VT_HEADER_TYPE: flatbuffers::VOffsetT = 6;
+    pub const VT_HEADER: flatbuffers::VOffsetT = 8;
+    pub const VT_BODYLENGTH: flatbuffers::VOffsetT = 10;
+    pub const VT_CUSTOM_METADATA: flatbuffers::VOffsetT = 12;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Message { _tab: table }
     }
     #[allow(unused_mut)]
@@ -987,51 +1043,75 @@ impl<'a> Message<'a> {
         builder.finish()
     }
 
-    pub const VT_VERSION: flatbuffers::VOffsetT = 4;
-    pub const VT_HEADER_TYPE: flatbuffers::VOffsetT = 6;
-    pub const VT_HEADER: flatbuffers::VOffsetT = 8;
-    pub const VT_BODYLENGTH: flatbuffers::VOffsetT = 10;
-    pub const VT_CUSTOM_METADATA: flatbuffers::VOffsetT = 12;
-
     #[inline]
     pub fn version(&self) -> MetadataVersion {
-        self._tab
-            .get::<MetadataVersion>(Message::VT_VERSION, Some(MetadataVersion::V1))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<MetadataVersion>(Message::VT_VERSION, Some(MetadataVersion::V1))
+                .unwrap()
+        }
     }
     #[inline]
     pub fn header_type(&self) -> MessageHeader {
-        self._tab
-            .get::<MessageHeader>(Message::VT_HEADER_TYPE, Some(MessageHeader::NONE))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<MessageHeader>(Message::VT_HEADER_TYPE, Some(MessageHeader::NONE))
+                .unwrap()
+        }
     }
     #[inline]
     pub fn header(&self) -> Option<flatbuffers::Table<'a>> {
-        self._tab
-            .get::<flatbuffers::ForwardsUOffset<flatbuffers::Table<'a>>>(
-                Message::VT_HEADER,
-                None,
-            )
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<flatbuffers::ForwardsUOffset<flatbuffers::Table<'a>>>(
+                    Message::VT_HEADER,
+                    None,
+                )
+        }
     }
     #[inline]
     pub fn bodyLength(&self) -> i64 {
-        self._tab
-            .get::<i64>(Message::VT_BODYLENGTH, Some(0))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<i64>(Message::VT_BODYLENGTH, Some(0))
+                .unwrap()
+        }
     }
     #[inline]
     pub fn custom_metadata(
         &self,
     ) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue<'a>>>> {
-        self._tab.get::<flatbuffers::ForwardsUOffset<
-            flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue>>,
-        >>(Message::VT_CUSTOM_METADATA, None)
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<flatbuffers::ForwardsUOffset<
+                flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue>>,
+            >>(Message::VT_CUSTOM_METADATA, None)
+        }
     }
     #[inline]
     #[allow(non_snake_case)]
     pub fn header_as_schema(&self) -> Option<Schema<'a>> {
         if self.header_type() == MessageHeader::Schema {
-            self.header().map(Schema::init_from_table)
+            self.header().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { Schema::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -1041,7 +1121,12 @@ impl<'a> Message<'a> {
     #[allow(non_snake_case)]
     pub fn header_as_dictionary_batch(&self) -> Option<DictionaryBatch<'a>> {
         if self.header_type() == MessageHeader::DictionaryBatch {
-            self.header().map(DictionaryBatch::init_from_table)
+            self.header().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { DictionaryBatch::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -1051,7 +1136,12 @@ impl<'a> Message<'a> {
     #[allow(non_snake_case)]
     pub fn header_as_record_batch(&self) -> Option<RecordBatch<'a>> {
         if self.header_type() == MessageHeader::RecordBatch {
-            self.header().map(RecordBatch::init_from_table)
+            self.header().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { RecordBatch::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -1061,7 +1151,12 @@ impl<'a> Message<'a> {
     #[allow(non_snake_case)]
     pub fn header_as_tensor(&self) -> Option<Tensor<'a>> {
         if self.header_type() == MessageHeader::Tensor {
-            self.header().map(Tensor::init_from_table)
+            self.header().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { Tensor::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -1071,7 +1166,12 @@ impl<'a> Message<'a> {
     #[allow(non_snake_case)]
     pub fn header_as_sparse_tensor(&self) -> Option<SparseTensor<'a>> {
         if self.header_type() == MessageHeader::SparseTensor {
-            self.header().map(SparseTensor::init_from_table)
+            self.header().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { SparseTensor::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -1086,8 +1186,8 @@ impl flatbuffers::Verifiable for Message<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-     .visit_field::<MetadataVersion>(&"version", Self::VT_VERSION, false)?
-     .visit_union::<MessageHeader, _>(&"header_type", Self::VT_HEADER_TYPE, &"header", Self::VT_HEADER, false, |key, v, pos| {
+     .visit_field::<MetadataVersion>("version", Self::VT_VERSION, false)?
+     .visit_union::<MessageHeader, _>("header_type", Self::VT_HEADER_TYPE, "header", Self::VT_HEADER, false, |key, v, pos| {
         match key {
           MessageHeader::Schema => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Schema>>("MessageHeader::Schema", pos),
           MessageHeader::DictionaryBatch => v.verify_union_variant::<flatbuffers::ForwardsUOffset<DictionaryBatch>>("MessageHeader::DictionaryBatch", pos),
@@ -1097,8 +1197,8 @@ impl flatbuffers::Verifiable for Message<'_> {
           _ => Ok(()),
         }
      })?
-     .visit_field::<i64>(&"bodyLength", Self::VT_BODYLENGTH, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<KeyValue>>>>(&"custom_metadata", Self::VT_CUSTOM_METADATA, false)?
+     .visit_field::<i64>("bodyLength", Self::VT_BODYLENGTH, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<KeyValue>>>>("custom_metadata", Self::VT_CUSTOM_METADATA, false)?
      .finish();
         Ok(())
     }
@@ -1126,6 +1226,7 @@ impl<'a> Default for MessageArgs<'a> {
         }
     }
 }
+
 pub struct MessageBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -1189,8 +1290,8 @@ impl<'a: 'b, 'b> MessageBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Message<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Message<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Message");
         ds.field("version", &self.version());
         ds.field("header_type", &self.header_type());
@@ -1255,18 +1356,6 @@ impl std::fmt::Debug for Message<'_> {
         ds.finish()
     }
 }
-#[inline]
-#[deprecated(since = "2.0.0", note = "Deprecated in favor of `root_as...` methods.")]
-pub fn get_root_as_message<'a>(buf: &'a [u8]) -> Message<'a> {
-    unsafe { flatbuffers::root_unchecked::<Message<'a>>(buf) }
-}
-
-#[inline]
-#[deprecated(since = "2.0.0", note = "Deprecated in favor of `root_as...` methods.")]
-pub fn get_size_prefixed_root_as_message<'a>(buf: &'a [u8]) -> Message<'a> {
-    unsafe { flatbuffers::size_prefixed_root_unchecked::<Message<'a>>(buf) }
-}
-
 #[inline]
 /// Verifies that a buffer of bytes contains a `Message`
 /// and returns it.

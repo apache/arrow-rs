@@ -201,6 +201,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 
     fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()> {
+        self.num_values += indices.len();
         let slice: Vec<_> = indices.iter().map(|idx| values[*idx].clone()).collect();
         self.write_slice(&slice)
     }

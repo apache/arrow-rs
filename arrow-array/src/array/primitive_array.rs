@@ -16,18 +16,20 @@
 // under the License.
 
 use crate::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
-use crate::decimal::Decimal;
 use crate::iterator::PrimitiveIter;
 use crate::raw_pointer::RawPtrBox;
-use crate::temporal_conversions::{as_date, as_datetime, as_duration, as_time};
+use crate::temporal_conversions::{
+    as_date, as_datetime, as_datetime_with_timezone, as_duration, as_time,
+};
+use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
 use crate::types::*;
 use crate::{print_long_array, Array, ArrayAccessor};
-use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{i256, ArrowNativeType, Buffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
-use chrono::{Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use half::f16;
 use std::any::Any;
 
@@ -117,40 +119,40 @@ pub type Float64Array = PrimitiveArray<Float64Type>;
 /// # Example: UTC timestamps post epoch
 /// ```
 /// # use arrow_array::TimestampSecondArray;
-/// use chrono::FixedOffset;
+/// use arrow_array::timezone::Tz;
 /// // Corresponds to single element array with entry 1970-05-09T14:25:11+0:00
-/// let arr = TimestampSecondArray::from_vec(vec![11111111], None);
+/// let arr = TimestampSecondArray::from(vec![11111111]);
 /// // OR
-/// let arr = TimestampSecondArray::from_opt_vec(vec![Some(11111111)], None);
-/// let utc_offset = FixedOffset::east(0);
+/// let arr = TimestampSecondArray::from(vec![Some(11111111)]);
+/// let utc_tz: Tz = "+00:00".parse().unwrap();
 ///
-/// assert_eq!(arr.value_as_datetime_with_tz(0, utc_offset).map(|v| v.to_string()).unwrap(), "1970-05-09 14:25:11")
+/// assert_eq!(arr.value_as_datetime_with_tz(0, utc_tz).map(|v| v.to_string()).unwrap(), "1970-05-09 14:25:11 +00:00")
 /// ```
 ///
 /// # Example: UTC timestamps pre epoch
 /// ```
 /// # use arrow_array::TimestampSecondArray;
-/// use chrono::FixedOffset;
+/// use arrow_array::timezone::Tz;
 /// // Corresponds to single element array with entry 1969-08-25T09:34:49+0:00
-/// let arr = TimestampSecondArray::from_vec(vec![-11111111], None);
+/// let arr = TimestampSecondArray::from(vec![-11111111]);
 /// // OR
-/// let arr = TimestampSecondArray::from_opt_vec(vec![Some(-11111111)], None);
-/// let utc_offset = FixedOffset::east(0);
+/// let arr = TimestampSecondArray::from(vec![Some(-11111111)]);
+/// let utc_tz: Tz = "+00:00".parse().unwrap();
 ///
-/// assert_eq!(arr.value_as_datetime_with_tz(0, utc_offset).map(|v| v.to_string()).unwrap(), "1969-08-25 09:34:49")
+/// assert_eq!(arr.value_as_datetime_with_tz(0, utc_tz).map(|v| v.to_string()).unwrap(), "1969-08-25 09:34:49 +00:00")
 /// ```
 ///
 /// # Example: With timezone specified
 /// ```
 /// # use arrow_array::TimestampSecondArray;
-/// use chrono::FixedOffset;
+/// use arrow_array::timezone::Tz;
 /// // Corresponds to single element array with entry 1970-05-10T00:25:11+10:00
-/// let arr = TimestampSecondArray::from_vec(vec![11111111], Some("+10:00".to_string()));
+/// let arr = TimestampSecondArray::from(vec![11111111]).with_timezone("+10:00".to_string());
 /// // OR
-/// let arr = TimestampSecondArray::from_opt_vec(vec![Some(11111111)], Some("+10:00".to_string()));
-/// let sydney_offset = FixedOffset::east(10 * 60 * 60);
+/// let arr = TimestampSecondArray::from(vec![Some(11111111)]).with_timezone("+10:00".to_string());
+/// let sydney_tz: Tz = "+10:00".parse().unwrap();
 ///
-/// assert_eq!(arr.value_as_datetime_with_tz(0, sydney_offset).map(|v| v.to_string()).unwrap(), "1970-05-10 00:25:11")
+/// assert_eq!(arr.value_as_datetime_with_tz(0, sydney_tz).map(|v| v.to_string()).unwrap(), "1970-05-10 00:25:11 +10:00")
 /// ```
 ///
 pub type TimestampSecondArray = PrimitiveArray<TimestampSecondType>;
@@ -504,12 +506,8 @@ where
     ///
     /// functionally it is same as `value_as_datetime`, however it adds
     /// the passed tz to the to-be-returned NaiveDateTime
-    pub fn value_as_datetime_with_tz(
-        &self,
-        i: usize,
-        tz: FixedOffset,
-    ) -> Option<NaiveDateTime> {
-        as_datetime::<T>(i64::from(self.value(i))).map(|datetime| datetime + tz)
+    pub fn value_as_datetime_with_tz(&self, i: usize, tz: Tz) -> Option<DateTime<Tz>> {
+        as_datetime_with_timezone::<T>(i64::from(self.value(i)), tz)
     }
 
     /// Returns value as a chrono `NaiveDate` by using `Self::datetime()`
@@ -536,8 +534,9 @@ where
 
 impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "PrimitiveArray<{:?}>\n[\n", T::DATA_TYPE)?;
-        print_long_array(self, f, |array, index, f| match T::DATA_TYPE {
+        let data_type = self.data_type();
+        write!(f, "PrimitiveArray<{:?}>\n[\n", data_type)?;
+        print_long_array(self, f, |array, index, f| match data_type {
             DataType::Date32 | DataType::Date64 => {
                 let v = self.value(index).to_isize().unwrap() as i64;
                 match as_date::<T>(v) {
@@ -762,13 +761,21 @@ def_numeric_from_vec!(TimestampNanosecondType);
 
 impl<T: ArrowTimestampType> PrimitiveArray<T> {
     /// Construct a timestamp array from a vec of i64 values and an optional timezone
-    pub fn from_vec(data: Vec<i64>, timezone: Option<String>) -> Self {
-        let array_data =
-            ArrayData::builder(DataType::Timestamp(T::get_time_unit(), timezone))
-                .len(data.len())
-                .add_buffer(Buffer::from_slice_ref(&data));
-        let array_data = unsafe { array_data.build_unchecked() };
-        PrimitiveArray::from(array_data)
+    #[deprecated(note = "Use with_timezone_opt instead")]
+    pub fn from_vec(data: Vec<i64>, timezone: Option<String>) -> Self
+    where
+        Self: From<Vec<i64>>,
+    {
+        Self::from(data).with_timezone_opt(timezone)
+    }
+
+    /// Construct a timestamp array from a vec of `Option<i64>` values and an optional timezone
+    #[deprecated(note = "Use with_timezone_opt instead")]
+    pub fn from_opt_vec(data: Vec<Option<i64>>, timezone: Option<String>) -> Self
+    where
+        Self: From<Vec<Option<i64>>>,
+    {
+        Self::from(data).with_timezone_opt(timezone)
     }
 
     /// Construct a timestamp array with new timezone
@@ -785,36 +792,6 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
                 .data_type(DataType::Timestamp(T::get_time_unit(), timezone))
                 .build_unchecked()
         };
-        PrimitiveArray::from(array_data)
-    }
-}
-
-impl<T: ArrowTimestampType> PrimitiveArray<T> {
-    /// Construct a timestamp array from a vec of `Option<i64>` values and an optional timezone
-    pub fn from_opt_vec(data: Vec<Option<i64>>, timezone: Option<String>) -> Self {
-        // TODO: duplicated from def_numeric_from_vec! macro, it looks possible to convert to generic
-        let data_len = data.len();
-        let mut null_buf = MutableBuffer::new_null(data_len);
-        let mut val_buf = MutableBuffer::new(data_len * std::mem::size_of::<i64>());
-
-        {
-            let null_slice = null_buf.as_slice_mut();
-            for (i, v) in data.iter().enumerate() {
-                if let Some(n) = v {
-                    bit_util::set_bit(null_slice, i);
-                    val_buf.push(*n);
-                } else {
-                    val_buf.push(0i64);
-                }
-            }
-        }
-
-        let array_data =
-            ArrayData::builder(DataType::Timestamp(T::get_time_unit(), timezone))
-                .len(data_len)
-                .add_buffer(val_buf.into())
-                .null_bit_buffer(Some(null_buf.into()));
-        let array_data = unsafe { array_data.build_unchecked() };
         PrimitiveArray::from(array_data)
     }
 }
@@ -917,67 +894,62 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
         })
     }
 
-    pub fn value_as_string(&self, row: usize) -> Result<String, ArrowError> {
-        let p = self.precision()?;
-        let s = self.scale()?;
-        Ok(Decimal::<T>::new(p, s, &T::to_native(self.value(row))).to_string())
+    /// Returns [`Self::value`] formatted as a string
+    pub fn value_as_string(&self, row: usize) -> String {
+        T::format_decimal(self.value(row), self.precision(), self.scale())
     }
 
-    pub fn precision(&self) -> Result<u8, ArrowError> {
+    /// Returns the decimal precision of this array
+    pub fn precision(&self) -> u8 {
         match T::BYTE_LENGTH {
             16 => {
                 if let DataType::Decimal128(p, _) = self.data().data_type() {
-                    Ok(*p)
+                    *p
                 } else {
-                    Err(ArrowError::InvalidArgumentError(format!(
+                    unreachable!(
                         "Decimal128Array datatype is not DataType::Decimal128 but {}",
                         self.data_type()
-                    )))
+                    )
                 }
             }
             32 => {
                 if let DataType::Decimal256(p, _) = self.data().data_type() {
-                    Ok(*p)
+                    *p
                 } else {
-                    Err(ArrowError::InvalidArgumentError(format!(
+                    unreachable!(
                         "Decimal256Array datatype is not DataType::Decimal256 but {}",
                         self.data_type()
-                    )))
+                    )
                 }
             }
-            other => Err(ArrowError::InvalidArgumentError(format!(
-                "Unsupported byte length for decimal array {}",
-                other
-            ))),
+            other => unreachable!("Unsupported byte length for decimal array {}", other),
         }
     }
 
-    pub fn scale(&self) -> Result<u8, ArrowError> {
+    /// Returns the decimal scale of this array
+    pub fn scale(&self) -> u8 {
         match T::BYTE_LENGTH {
             16 => {
                 if let DataType::Decimal128(_, s) = self.data().data_type() {
-                    Ok(*s)
+                    *s
                 } else {
-                    Err(ArrowError::InvalidArgumentError(format!(
+                    unreachable!(
                         "Decimal128Array datatype is not DataType::Decimal128 but {}",
                         self.data_type()
-                    )))
+                    )
                 }
             }
             32 => {
                 if let DataType::Decimal256(_, s) = self.data().data_type() {
-                    Ok(*s)
+                    *s
                 } else {
-                    Err(ArrowError::InvalidArgumentError(format!(
+                    unreachable!(
                         "Decimal256Array datatype is not DataType::Decimal256 but {}",
                         self.data_type()
-                    )))
+                    )
                 }
             }
-            other => Err(ArrowError::InvalidArgumentError(format!(
-                "Unsupported byte length for decimal array {}",
-                other
-            ))),
+            other => unreachable!("Unsupported byte length for decimal array {}", other),
         }
     }
 }
@@ -1180,7 +1152,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_array_from_vec() {
-        let arr = TimestampSecondArray::from_vec(vec![1, -5], None);
+        let arr = TimestampSecondArray::from(vec![1, -5]);
         assert_eq!(2, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
@@ -1188,7 +1160,7 @@ mod tests {
         assert_eq!(-5, arr.value(1));
         assert_eq!(&[1, -5], arr.values());
 
-        let arr = TimestampMillisecondArray::from_vec(vec![1, -5], None);
+        let arr = TimestampMillisecondArray::from(vec![1, -5]);
         assert_eq!(2, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
@@ -1196,7 +1168,7 @@ mod tests {
         assert_eq!(-5, arr.value(1));
         assert_eq!(&[1, -5], arr.values());
 
-        let arr = TimestampMicrosecondArray::from_vec(vec![1, -5], None);
+        let arr = TimestampMicrosecondArray::from(vec![1, -5]);
         assert_eq!(2, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
@@ -1204,7 +1176,7 @@ mod tests {
         assert_eq!(-5, arr.value(1));
         assert_eq!(&[1, -5], arr.values());
 
-        let arr = TimestampNanosecondArray::from_vec(vec![1, -5], None);
+        let arr = TimestampNanosecondArray::from(vec![1, -5]);
         assert_eq!(2, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
@@ -1339,12 +1311,43 @@ mod tests {
     #[test]
     fn test_timestamp_fmt_debug() {
         let arr: PrimitiveArray<TimestampMillisecondType> =
-            TimestampMillisecondArray::from_vec(
-                vec![1546214400000, 1546214400000, -1546214400000],
-                None,
-            );
+            TimestampMillisecondArray::from(vec![
+                1546214400000,
+                1546214400000,
+                -1546214400000,
+            ]);
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, None)>\n[\n  2018-12-31T00:00:00,\n  2018-12-31T00:00:00,\n  1921-01-02T00:00:00,\n]",
+            format!("{:?}", arr)
+        );
+    }
+
+    #[test]
+    fn test_timestamp_with_tz_fmt_debug() {
+        let arr: PrimitiveArray<TimestampMillisecondType> =
+            TimestampMillisecondArray::from(vec![
+                1546214400000,
+                1546214400000,
+                -1546214400000,
+            ])
+            .with_timezone("Asia/Taipei".to_string());
+        assert_eq!(
+            "PrimitiveArray<Timestamp(Millisecond, Some(\"Asia/Taipei\"))>\n[\n  2018-12-31T00:00:00,\n  2018-12-31T00:00:00,\n  1921-01-02T00:00:00,\n]",
+            format!("{:?}", arr)
+        );
+    }
+
+    #[test]
+    fn test_timestamp_with_fixed_offset_tz_fmt_debug() {
+        let arr: PrimitiveArray<TimestampMillisecondType> =
+            TimestampMillisecondArray::from(vec![
+                1546214400000,
+                1546214400000,
+                -1546214400000,
+            ])
+            .with_timezone("+08:00".to_string());
+        assert_eq!(
+            "PrimitiveArray<Timestamp(Millisecond, Some(\"+08:00\"))>\n[\n  2018-12-31T00:00:00,\n  2018-12-31T00:00:00,\n  1921-01-02T00:00:00,\n]",
             format!("{:?}", arr)
         );
     }
@@ -1368,11 +1371,24 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "invalid time")]
     fn test_time32second_invalid_neg() {
-        // The panic should come from chrono, not from arrow
+        // chrono::NaiveDatetime::from_timestamp_opt returns None while input is invalid
         let arr: PrimitiveArray<Time32SecondType> = vec![-7201, -60054].into();
-        println!("{:?}", arr);
+        assert_eq!(
+            "PrimitiveArray<Time32(Second)>\n[\n  null,\n  null,\n]",
+            format!("{:?}", arr)
+        )
+    }
+
+    #[test]
+    fn test_timestamp_micros_out_of_range() {
+        // replicate the issue from https://github.com/apache/arrow-datafusion/issues/3832
+        let arr: PrimitiveArray<TimestampMicrosecondType> =
+            vec![9065525203050843594].into();
+        assert_eq!(
+            "PrimitiveArray<Timestamp(Microsecond, None)>\n[\n  null,\n]",
+            format!("{:?}", arr)
+        )
     }
 
     #[test]
@@ -1476,23 +1492,6 @@ mod tests {
         assert_eq!(array1, array2);
     }
 
-    #[cfg(feature = "chrono-tz")]
-    #[test]
-    fn test_with_timezone() {
-        use crate::compute::hour;
-        let a: TimestampMicrosecondArray = vec![37800000000, 86339000000].into();
-
-        let b = hour(&a).unwrap();
-        assert_eq!(10, b.value(0));
-        assert_eq!(23, b.value(1));
-
-        let a = a.with_timezone(String::from("America/Los_Angeles"));
-
-        let b = hour(&a).unwrap();
-        assert_eq!(2, b.value(0));
-        assert_eq!(15, b.value(1));
-    }
-
     #[test]
     #[should_panic(
         expected = "Trying to access an element at index 4 from a PrimitiveArray of length 3"
@@ -1564,8 +1563,8 @@ mod tests {
             .build()
             .unwrap();
         let decimal_array = Decimal128Array::from(array_data);
-        assert_eq!(8_887_000_000_i128, decimal_array.value(0).into());
-        assert_eq!(-8_887_000_000_i128, decimal_array.value(1).into());
+        assert_eq!(8_887_000_000_i128, decimal_array.value(0));
+        assert_eq!(-8_887_000_000_i128, decimal_array.value(1));
     }
 
     #[test]
@@ -1576,7 +1575,7 @@ mod tests {
         let result = decimal_builder.finish().with_precision_and_scale(5, 3);
         assert!(result.is_ok());
         let arr = result.unwrap();
-        assert_eq!("12.345", arr.value_as_string(1).unwrap());
+        assert_eq!("12.345", arr.value_as_string(1));
 
         // Validate it explicitly
         let result = arr.validate_decimal_precision(5);
@@ -1594,8 +1593,8 @@ mod tests {
         let result = decimal_builder.finish().with_precision_and_scale(2, 1);
         assert!(result.is_ok());
         let arr = result.unwrap();
-        assert_eq!("9.9", arr.value_as_string(1).unwrap());
-        assert_eq!("-9.9", arr.value_as_string(3).unwrap());
+        assert_eq!("9.9", arr.value_as_string(1));
+        assert_eq!("-9.9", arr.value_as_string(3));
 
         // Validate it explicitly
         let result = arr.validate_decimal_precision(2);
@@ -1611,11 +1610,11 @@ mod tests {
         let array = Decimal128Array::from_iter_values(vec![-100, 0, 101].into_iter());
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal128(38, 10));
-        assert_eq!(-100_i128, array.value(0).into());
+        assert_eq!(-100_i128, array.value(0));
         assert!(!array.is_null(0));
-        assert_eq!(0_i128, array.value(1).into());
+        assert_eq!(0_i128, array.value(1));
         assert!(!array.is_null(1));
-        assert_eq!(101_i128, array.value(2).into());
+        assert_eq!(101_i128, array.value(2));
         assert!(!array.is_null(2));
     }
 
@@ -1625,10 +1624,10 @@ mod tests {
             vec![Some(-100), None, Some(101)].into_iter().collect();
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal128(38, 10));
-        assert_eq!(-100_i128, array.value(0).into());
+        assert_eq!(-100_i128, array.value(0));
         assert!(!array.is_null(0));
         assert!(array.is_null(1));
-        assert_eq!(101_i128, array.value(2).into());
+        assert_eq!(101_i128, array.value(2));
         assert!(!array.is_null(2));
     }
 
@@ -1661,13 +1660,13 @@ mod tests {
             .with_precision_and_scale(6, 3)
             .unwrap();
 
-        assert_eq!("123.450", arr.value_as_string(0).unwrap());
-        assert_eq!("-123.450", arr.value_as_string(1).unwrap());
-        assert_eq!("0.100", arr.value_as_string(2).unwrap());
-        assert_eq!("-0.100", arr.value_as_string(3).unwrap());
-        assert_eq!("0.010", arr.value_as_string(4).unwrap());
-        assert_eq!("-0.010", arr.value_as_string(5).unwrap());
-        assert_eq!("0.000", arr.value_as_string(6).unwrap());
+        assert_eq!("123.450", arr.value_as_string(0));
+        assert_eq!("-123.450", arr.value_as_string(1));
+        assert_eq!("0.100", arr.value_as_string(2));
+        assert_eq!("-0.100", arr.value_as_string(3));
+        assert_eq!("0.010", arr.value_as_string(4));
+        assert_eq!("-0.010", arr.value_as_string(5));
+        assert_eq!("0.000", arr.value_as_string(6));
     }
 
     #[test]
@@ -1677,12 +1676,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(arr.data_type(), &DataType::Decimal128(20, 2));
-        assert_eq!(arr.precision().unwrap(), 20);
-        assert_eq!(arr.scale().unwrap(), 2);
+        assert_eq!(arr.precision(), 20);
+        assert_eq!(arr.scale(), 2);
 
-        let actual: Vec<_> = (0..arr.len())
-            .map(|i| arr.value_as_string(i).unwrap())
-            .collect();
+        let actual: Vec<_> = (0..arr.len()).map(|i| arr.value_as_string(i)).collect();
         let expected = vec!["123.45", "4.56", "78.90", "-1232234234324.32"];
 
         assert_eq!(actual, expected);
@@ -1748,9 +1745,7 @@ mod tests {
         let value2 = i256::from_i128(56789);
 
         let mut array: Decimal256Array =
-            vec![Some(value1.clone()), None, Some(value2.clone())]
-                .into_iter()
-                .collect();
+            vec![Some(value1), None, Some(value2)].into_iter().collect();
         array = array.with_precision_and_scale(76, 10).unwrap();
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal256(76, 10));
@@ -1768,10 +1763,10 @@ mod tests {
         array = array.with_precision_and_scale(38, 10).unwrap();
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal128(38, 10));
-        assert_eq!(-100_i128, array.value(0).into());
+        assert_eq!(-100_i128, array.value(0));
         assert!(!array.is_null(0));
         assert!(array.is_null(1));
-        assert_eq!(101_i128, array.value(2).into());
+        assert_eq!(101_i128, array.value(2));
         assert!(!array.is_null(2));
     }
 

@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Re-exports APIs from [arrow_array]
+//! Statically typed implementations of Arrow Arrays
+//!
+//! **See [arrow_array] for examples and usage instructions**
 
 #[cfg(feature = "ffi")]
 mod ffi;

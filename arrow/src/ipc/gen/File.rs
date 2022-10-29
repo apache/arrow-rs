@@ -27,8 +27,13 @@ use std::{cmp::Ordering, mem};
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq)]
 pub struct Block(pub [u8; 24]);
-impl std::fmt::Debug for Block {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl Default for Block {
+    fn default() -> Self {
+        Self([0; 24])
+    }
+}
+impl core::fmt::Debug for Block {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         f.debug_struct("Block")
             .field("offset", &self.offset())
             .field("metaDataLength", &self.metaDataLength())
@@ -38,39 +43,28 @@ impl std::fmt::Debug for Block {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for Block {}
-impl flatbuffers::SafeSliceAccess for Block {}
 impl<'a> flatbuffers::Follow<'a> for Block {
     type Inner = &'a Block;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         <&'a Block>::follow(buf, loc)
     }
 }
 impl<'a> flatbuffers::Follow<'a> for &'a Block {
     type Inner = &'a Block;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         flatbuffers::follow_cast_ref::<Block>(buf, loc)
     }
 }
 impl<'b> flatbuffers::Push for Block {
     type Output = Block;
     #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        let src = unsafe {
-            ::std::slice::from_raw_parts(self as *const Block as *const u8, Self::size())
-        };
-        dst.copy_from_slice(src);
-    }
-}
-impl<'b> flatbuffers::Push for &'b Block {
-    type Output = Block;
-
-    #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        let src = unsafe {
-            ::std::slice::from_raw_parts(*self as *const Block as *const u8, Self::size())
-        };
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        let src = ::core::slice::from_raw_parts(
+            self as *const Block as *const u8,
+            Self::size(),
+        );
         dst.copy_from_slice(src);
     }
 }
@@ -85,7 +79,8 @@ impl<'a> flatbuffers::Verifiable for Block {
         v.in_buffer::<Self>(pos)
     }
 }
-impl Block {
+
+impl<'a> Block {
     #[allow(clippy::too_many_arguments)]
     pub fn new(offset: i64, metaDataLength: i32, bodyLength: i64) -> Self {
         let mut s = Self([0; 24]);
@@ -97,50 +92,60 @@ impl Block {
 
     /// Index to the start of the RecordBlock (note this is past the Message header)
     pub fn offset(&self) -> i64 {
-        let mut mem = core::mem::MaybeUninit::<i64>::uninit();
-        unsafe {
+        let mut mem = core::mem::MaybeUninit::<<i64 as EndianScalar>::Scalar>::uninit();
+        // Safety:
+        // Created from a valid Table for this object
+        // Which contains a valid value in this slot
+        EndianScalar::from_little_endian(unsafe {
             core::ptr::copy_nonoverlapping(
                 self.0[0..].as_ptr(),
                 mem.as_mut_ptr() as *mut u8,
-                core::mem::size_of::<i64>(),
+                core::mem::size_of::<<i64 as EndianScalar>::Scalar>(),
             );
             mem.assume_init()
-        }
-        .from_little_endian()
+        })
     }
 
     pub fn set_offset(&mut self, x: i64) {
         let x_le = x.to_little_endian();
+        // Safety:
+        // Created from a valid Table for this object
+        // Which contains a valid value in this slot
         unsafe {
             core::ptr::copy_nonoverlapping(
-                &x_le as *const i64 as *const u8,
+                &x_le as *const _ as *const u8,
                 self.0[0..].as_mut_ptr(),
-                core::mem::size_of::<i64>(),
+                core::mem::size_of::<<i64 as EndianScalar>::Scalar>(),
             );
         }
     }
 
     /// Length of the metadata
     pub fn metaDataLength(&self) -> i32 {
-        let mut mem = core::mem::MaybeUninit::<i32>::uninit();
-        unsafe {
+        let mut mem = core::mem::MaybeUninit::<<i32 as EndianScalar>::Scalar>::uninit();
+        // Safety:
+        // Created from a valid Table for this object
+        // Which contains a valid value in this slot
+        EndianScalar::from_little_endian(unsafe {
             core::ptr::copy_nonoverlapping(
                 self.0[8..].as_ptr(),
                 mem.as_mut_ptr() as *mut u8,
-                core::mem::size_of::<i32>(),
+                core::mem::size_of::<<i32 as EndianScalar>::Scalar>(),
             );
             mem.assume_init()
-        }
-        .from_little_endian()
+        })
     }
 
     pub fn set_metaDataLength(&mut self, x: i32) {
         let x_le = x.to_little_endian();
+        // Safety:
+        // Created from a valid Table for this object
+        // Which contains a valid value in this slot
         unsafe {
             core::ptr::copy_nonoverlapping(
-                &x_le as *const i32 as *const u8,
+                &x_le as *const _ as *const u8,
                 self.0[8..].as_mut_ptr(),
-                core::mem::size_of::<i32>(),
+                core::mem::size_of::<<i32 as EndianScalar>::Scalar>(),
             );
         }
     }
@@ -148,25 +153,30 @@ impl Block {
     /// Length of the data (this is aligned so there can be a gap between this and
     /// the metadata).
     pub fn bodyLength(&self) -> i64 {
-        let mut mem = core::mem::MaybeUninit::<i64>::uninit();
-        unsafe {
+        let mut mem = core::mem::MaybeUninit::<<i64 as EndianScalar>::Scalar>::uninit();
+        // Safety:
+        // Created from a valid Table for this object
+        // Which contains a valid value in this slot
+        EndianScalar::from_little_endian(unsafe {
             core::ptr::copy_nonoverlapping(
                 self.0[16..].as_ptr(),
                 mem.as_mut_ptr() as *mut u8,
-                core::mem::size_of::<i64>(),
+                core::mem::size_of::<<i64 as EndianScalar>::Scalar>(),
             );
             mem.assume_init()
-        }
-        .from_little_endian()
+        })
     }
 
     pub fn set_bodyLength(&mut self, x: i64) {
         let x_le = x.to_little_endian();
+        // Safety:
+        // Created from a valid Table for this object
+        // Which contains a valid value in this slot
         unsafe {
             core::ptr::copy_nonoverlapping(
-                &x_le as *const i64 as *const u8,
+                &x_le as *const _ as *const u8,
                 self.0[16..].as_mut_ptr(),
-                core::mem::size_of::<i64>(),
+                core::mem::size_of::<<i64 as EndianScalar>::Scalar>(),
             );
         }
     }
@@ -185,16 +195,22 @@ pub struct Footer<'a> {
 impl<'a> flatbuffers::Follow<'a> for Footer<'a> {
     type Inner = Footer<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Footer<'a> {
+    pub const VT_VERSION: flatbuffers::VOffsetT = 4;
+    pub const VT_SCHEMA: flatbuffers::VOffsetT = 6;
+    pub const VT_DICTIONARIES: flatbuffers::VOffsetT = 8;
+    pub const VT_RECORDBATCHES: flatbuffers::VOffsetT = 10;
+    pub const VT_CUSTOM_METADATA: flatbuffers::VOffsetT = 12;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Footer { _tab: table }
     }
     #[allow(unused_mut)]
@@ -219,49 +235,66 @@ impl<'a> Footer<'a> {
         builder.finish()
     }
 
-    pub const VT_VERSION: flatbuffers::VOffsetT = 4;
-    pub const VT_SCHEMA: flatbuffers::VOffsetT = 6;
-    pub const VT_DICTIONARIES: flatbuffers::VOffsetT = 8;
-    pub const VT_RECORDBATCHES: flatbuffers::VOffsetT = 10;
-    pub const VT_CUSTOM_METADATA: flatbuffers::VOffsetT = 12;
-
     #[inline]
     pub fn version(&self) -> MetadataVersion {
-        self._tab
-            .get::<MetadataVersion>(Footer::VT_VERSION, Some(MetadataVersion::V1))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<MetadataVersion>(Footer::VT_VERSION, Some(MetadataVersion::V1))
+                .unwrap()
+        }
     }
     #[inline]
     pub fn schema(&self) -> Option<Schema<'a>> {
-        self._tab
-            .get::<flatbuffers::ForwardsUOffset<Schema>>(Footer::VT_SCHEMA, None)
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<flatbuffers::ForwardsUOffset<Schema>>(Footer::VT_SCHEMA, None)
+        }
     }
     #[inline]
-    pub fn dictionaries(&self) -> Option<&'a [Block]> {
-        self._tab
-            .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, Block>>>(
-                Footer::VT_DICTIONARIES,
-                None,
-            )
-            .map(|v| v.safe_slice())
+    pub fn dictionaries(&self) -> Option<flatbuffers::Vector<'a, Block>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, Block>>>(
+                    Footer::VT_DICTIONARIES,
+                    None,
+                )
+        }
     }
     #[inline]
-    pub fn recordBatches(&self) -> Option<&'a [Block]> {
-        self._tab
-            .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, Block>>>(
-                Footer::VT_RECORDBATCHES,
-                None,
-            )
-            .map(|v| v.safe_slice())
+    pub fn recordBatches(&self) -> Option<flatbuffers::Vector<'a, Block>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, Block>>>(
+                    Footer::VT_RECORDBATCHES,
+                    None,
+                )
+        }
     }
     /// User-defined metadata
     #[inline]
     pub fn custom_metadata(
         &self,
     ) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue<'a>>>> {
-        self._tab.get::<flatbuffers::ForwardsUOffset<
-            flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue>>,
-        >>(Footer::VT_CUSTOM_METADATA, None)
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<flatbuffers::ForwardsUOffset<
+                flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue>>,
+            >>(Footer::VT_CUSTOM_METADATA, None)
+        }
     }
 }
 
@@ -273,25 +306,25 @@ impl flatbuffers::Verifiable for Footer<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-            .visit_field::<MetadataVersion>(&"version", Self::VT_VERSION, false)?
+            .visit_field::<MetadataVersion>("version", Self::VT_VERSION, false)?
             .visit_field::<flatbuffers::ForwardsUOffset<Schema>>(
-                &"schema",
+                "schema",
                 Self::VT_SCHEMA,
                 false,
             )?
             .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, Block>>>(
-                &"dictionaries",
+                "dictionaries",
                 Self::VT_DICTIONARIES,
                 false,
             )?
             .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, Block>>>(
-                &"recordBatches",
+                "recordBatches",
                 Self::VT_RECORDBATCHES,
                 false,
             )?
             .visit_field::<flatbuffers::ForwardsUOffset<
                 flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<KeyValue>>,
-            >>(&"custom_metadata", Self::VT_CUSTOM_METADATA, false)?
+            >>("custom_metadata", Self::VT_CUSTOM_METADATA, false)?
             .finish();
         Ok(())
     }
@@ -319,6 +352,7 @@ impl<'a> Default for FooterArgs<'a> {
         }
     }
 }
+
 pub struct FooterBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -389,8 +423,8 @@ impl<'a: 'b, 'b> FooterBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Footer<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Footer<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Footer");
         ds.field("version", &self.version());
         ds.field("schema", &self.schema());
@@ -400,18 +434,6 @@ impl std::fmt::Debug for Footer<'_> {
         ds.finish()
     }
 }
-#[inline]
-#[deprecated(since = "2.0.0", note = "Deprecated in favor of `root_as...` methods.")]
-pub fn get_root_as_footer<'a>(buf: &'a [u8]) -> Footer<'a> {
-    unsafe { flatbuffers::root_unchecked::<Footer<'a>>(buf) }
-}
-
-#[inline]
-#[deprecated(since = "2.0.0", note = "Deprecated in favor of `root_as...` methods.")]
-pub fn get_size_prefixed_root_as_footer<'a>(buf: &'a [u8]) -> Footer<'a> {
-    unsafe { flatbuffers::size_prefixed_root_unchecked::<Footer<'a>>(buf) }
-}
-
 #[inline]
 /// Verifies that a buffer of bytes contains a `Footer`
 /// and returns it.

@@ -63,12 +63,9 @@
 //! }
 //! ```
 
-use std::io::Write;
-
-#[cfg(feature = "chrono-tz")]
-use crate::compute::kernels::temporal::using_chrono_tz_and_utc_naive_date_time;
-#[cfg(feature = "chrono-tz")]
+use arrow_array::timezone::Tz;
 use chrono::{DateTime, Utc};
+use std::io::Write;
 
 use crate::csv::map_csv_error;
 use crate::datatypes::*;
@@ -239,45 +236,6 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
-    #[cfg(not(feature = "chrono-tz"))]
-    fn handle_timestamp(
-        &self,
-        time_unit: &TimeUnit,
-        _time_zone: Option<&String>,
-        row_index: usize,
-        col: &ArrayRef,
-    ) -> Result<String> {
-        use TimeUnit::*;
-        let datetime = match time_unit {
-            Second => col
-                .as_any()
-                .downcast_ref::<TimestampSecondArray>()
-                .unwrap()
-                .value_as_datetime(row_index)
-                .unwrap(),
-            Millisecond => col
-                .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .unwrap()
-                .value_as_datetime(row_index)
-                .unwrap(),
-            Microsecond => col
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .unwrap()
-                .value_as_datetime(row_index)
-                .unwrap(),
-            Nanosecond => col
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap()
-                .value_as_datetime(row_index)
-                .unwrap(),
-        };
-        Ok(format!("{}", datetime.format(&self.timestamp_format)))
-    }
-
-    #[cfg(feature = "chrono-tz")]
     fn handle_timestamp(
         &self,
         time_unit: &TimeUnit,
@@ -286,7 +244,6 @@ impl<W: Write> Writer<W> {
         col: &ArrayRef,
     ) -> Result<String> {
         use TimeUnit::*;
-
         let datetime = match time_unit {
             Second => col
                 .as_any()
@@ -313,25 +270,15 @@ impl<W: Write> Writer<W> {
                 .value_as_datetime(row_index)
                 .unwrap(),
         };
-        let tzs = match time_zone {
-            None => "UTC".to_string(),
-            Some(tzs) => tzs.to_string(),
-        };
 
-        match using_chrono_tz_and_utc_naive_date_time(&tzs, datetime) {
+        let tz: Option<Tz> = time_zone.map(|x| x.parse()).transpose()?;
+        match tz {
             Some(tz) => {
                 let utc_time = DateTime::<Utc>::from_utc(datetime, Utc);
-                Ok(format!(
-                    "{}",
-                    utc_time
-                        .with_timezone(&tz)
-                        .format(&self.timestamp_tz_format)
-                ))
+                let local_time = utc_time.with_timezone(&tz);
+                Ok(local_time.format(&self.timestamp_tz_format).to_string())
             }
-            err => Err(ArrowError::ComputeError(format!(
-                "{}: {:?}",
-                "Unable to parse timezone", err
-            ))),
+            None => Ok(datetime.format(&self.timestamp_format).to_string()),
         }
     }
 
@@ -542,10 +489,11 @@ mod tests {
         ]);
         let c3 = PrimitiveArray::<UInt32Type>::from(vec![3, 2, 1]);
         let c4 = BooleanArray::from(vec![Some(true), Some(false), None]);
-        let c5 = TimestampMillisecondArray::from_opt_vec(
-            vec![None, Some(1555584887378), Some(1555555555555)],
+        let c5 = TimestampMillisecondArray::from(vec![
             None,
-        );
+            Some(1555584887378),
+            Some(1555555555555),
+        ]);
         let c6 = Time32SecondArray::from(vec![1234, 24680, 85563]);
         let c7: DictionaryArray<Int32Type> =
             vec!["cupcakes", "cupcakes", "foo"].into_iter().collect();
@@ -576,25 +524,14 @@ mod tests {
         let mut buffer: Vec<u8> = vec![];
         file.read_to_end(&mut buffer).unwrap();
 
-        let expected = if cfg!(feature = "chrono-tz") {
-            r#"c1,c2,c3,c4,c5,c6,c7
-Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000+00:00,06:51:20,cupcakes
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000+00:00,23:46:03,foo
-Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000+00:00,06:51:20,cupcakes
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000+00:00,23:46:03,foo
-"#
-        } else {
-            r#"c1,c2,c3,c4,c5,c6,c7
+        let expected = r#"c1,c2,c3,c4,c5,c6,c7
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
 consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
 sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
 consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
 sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
-"#
-        };
+"#;
         assert_eq!(expected.to_string(), String::from_utf8(buffer).unwrap());
     }
 
@@ -673,19 +610,19 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
             Field::new("c2", DataType::Timestamp(TimeUnit::Millisecond, None), true),
         ]);
 
-        let c1 = TimestampMillisecondArray::from_opt_vec(
+        let c1 = TimestampMillisecondArray::from(
             // 1555584887 converts to 2019-04-18, 20:54:47 in time zone Australia/Sydney (AEST).
             // The offset (difference to UTC) is +10:00.
             // 1635577147 converts to 2021-10-30 17:59:07 in time zone Australia/Sydney (AEDT)
             // The offset (difference to UTC) is +11:00. Note that daylight savings is in effect on 2021-10-30.
             //
             vec![Some(1555584887378), Some(1635577147000)],
-            Some("Australia/Sydney".to_string()),
-        );
-        let c2 = TimestampMillisecondArray::from_opt_vec(
-            vec![Some(1555584887378), Some(1635577147000)],
-            None,
-        );
+        )
+        .with_timezone("Australia/Sydney".to_string());
+        let c2 = TimestampMillisecondArray::from(vec![
+            Some(1555584887378),
+            Some(1635577147000),
+        ]);
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)])
                 .unwrap();
@@ -698,8 +635,8 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         }
 
         let left = "c1,c2
-2019-04-18T20:54:47.378000000+10:00,2019-04-18T10:54:47.378000000+00:00
-2021-10-30T17:59:07.000000000+11:00,2021-10-30T06:59:07.000000000+00:00\n";
+2019-04-18T20:54:47.378000000+10:00,2019-04-18T10:54:47.378000000
+2021-10-30T17:59:07.000000000+11:00,2021-10-30T06:59:07.000000000\n";
         let right = writer.writer.into_inner().map(|s| s.to_string());
         assert_eq!(Some(left.to_string()), right.ok());
     }
@@ -774,7 +711,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         ];
         let c1 = Date32Array::from(vec![3, 2, 1]);
         let c2 = Date64Array::from(vec![3, 2, 1]);
-        let c3 = TimestampNanosecondArray::from_vec(nanoseconds.clone(), None);
+        let c3 = TimestampNanosecondArray::from(nanoseconds.clone());
 
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
@@ -819,7 +756,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         let expected = vec![Some(3), Some(2), Some(1)];
         assert_eq!(actual, expected);
         let actual = c3.into_iter().collect::<Vec<_>>();
-        let expected = nanoseconds.into_iter().map(|x| Some(x)).collect::<Vec<_>>();
+        let expected = nanoseconds.into_iter().map(Some).collect::<Vec<_>>();
         assert_eq!(actual, expected);
     }
 }

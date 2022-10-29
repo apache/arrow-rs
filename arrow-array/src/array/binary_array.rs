@@ -15,116 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::iterator::GenericBinaryIter;
-use crate::raw_pointer::RawPtrBox;
-use crate::{
-    empty_offsets, print_long_array, Array, ArrayAccessor, GenericListArray,
-    OffsetSizeTrait,
-};
+use crate::types::GenericBinaryType;
+use crate::{Array, GenericByteArray, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
-use std::any::Any;
 
 /// See [`BinaryArray`] and [`LargeBinaryArray`] for storing
 /// binary data.
-pub struct GenericBinaryArray<OffsetSize: OffsetSizeTrait> {
-    data: ArrayData,
-    value_offsets: RawPtrBox<OffsetSize>,
-    value_data: RawPtrBox<u8>,
-}
+pub type GenericBinaryArray<OffsetSize> = GenericByteArray<GenericBinaryType<OffsetSize>>;
 
 impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
-    /// Data type of the array.
-    pub const DATA_TYPE: DataType = if OffsetSize::IS_LARGE {
-        DataType::LargeBinary
-    } else {
-        DataType::Binary
-    };
-
     /// Get the data type of the array.
     #[deprecated(note = "please use `Self::DATA_TYPE` instead")]
     pub const fn get_data_type() -> DataType {
         Self::DATA_TYPE
-    }
-
-    /// Returns the length for value at index `i`.
-    #[inline]
-    pub fn value_length(&self, i: usize) -> OffsetSize {
-        let offsets = self.value_offsets();
-        offsets[i + 1] - offsets[i]
-    }
-
-    /// Returns a clone of the value data buffer
-    pub fn value_data(&self) -> Buffer {
-        self.data.buffers()[1].clone()
-    }
-
-    /// Returns the offset values in the offsets buffer
-    #[inline]
-    pub fn value_offsets(&self) -> &[OffsetSize] {
-        // Soundness
-        //     pointer alignment & location is ensured by RawPtrBox
-        //     buffer bounds/offset is ensured by the ArrayData instance.
-        unsafe {
-            std::slice::from_raw_parts(
-                self.value_offsets.as_ptr().add(self.data.offset()),
-                self.len() + 1,
-            )
-        }
-    }
-
-    /// Returns the element at index `i` as bytes slice
-    /// # Safety
-    /// Caller is responsible for ensuring that the index is within the bounds of the array
-    pub unsafe fn value_unchecked(&self, i: usize) -> &[u8] {
-        let end = *self.value_offsets().get_unchecked(i + 1);
-        let start = *self.value_offsets().get_unchecked(i);
-
-        // Soundness
-        // pointer alignment & location is ensured by RawPtrBox
-        // buffer bounds/offset is ensured by the value_offset invariants
-
-        // Safety of `to_isize().unwrap()`
-        // `start` and `end` are &OffsetSize, which is a generic type that implements the
-        // OffsetSizeTrait. Currently, only i32 and i64 implement OffsetSizeTrait,
-        // both of which should cleanly cast to isize on an architecture that supports
-        // 32/64-bit offsets
-        std::slice::from_raw_parts(
-            self.value_data.as_ptr().offset(start.to_isize().unwrap()),
-            (end - start).to_usize().unwrap(),
-        )
-    }
-
-    /// Returns the element at index `i` as bytes slice
-    /// # Panics
-    /// Panics if index `i` is out of bounds.
-    pub fn value(&self, i: usize) -> &[u8] {
-        assert!(
-            i < self.data.len(),
-            "Trying to access an element at index {} from a BinaryArray of length {}",
-            i,
-            self.len()
-        );
-        //Soundness: length checked above, offset buffer length is 1 larger than logical array length
-        let end = unsafe { self.value_offsets().get_unchecked(i + 1) };
-        let start = unsafe { self.value_offsets().get_unchecked(i) };
-
-        // Soundness
-        // pointer alignment & location is ensured by RawPtrBox
-        // buffer bounds/offset is ensured by the value_offset invariants
-
-        // Safety of `to_isize().unwrap()`
-        // `start` and `end` are &OffsetSize, which is a generic type that implements the
-        // OffsetSizeTrait. Currently, only i32 and i64 implement OffsetSizeTrait,
-        // both of which should cleanly cast to isize on an architecture that supports
-        // 32/64-bit offsets
-        unsafe {
-            std::slice::from_raw_parts(
-                self.value_data.as_ptr().offset(start.to_isize().unwrap()),
-                (*end - *start).to_usize().unwrap(),
-            )
-        }
     }
 
     /// Creates a [GenericBinaryArray] from a vector of byte slices
@@ -230,85 +135,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     ) -> impl Iterator<Item = Option<&[u8]>> + 'a {
         indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
     }
-
-    /// constructs a new iterator
-    pub fn iter(&self) -> GenericBinaryIter<'_, OffsetSize> {
-        GenericBinaryIter::<'_, OffsetSize>::new(self)
-    }
-}
-
-impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericBinaryArray<OffsetSize> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let prefix = OffsetSize::PREFIX;
-
-        write!(f, "{}BinaryArray\n[\n", prefix)?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
-        })?;
-        write!(f, "]")
-    }
-}
-
-impl<OffsetSize: OffsetSizeTrait> Array for GenericBinaryArray<OffsetSize> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
-    fn into_data(self) -> ArrayData {
-        self.into()
-    }
-}
-
-impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor
-    for &'a GenericBinaryArray<OffsetSize>
-{
-    type Item = &'a [u8];
-
-    fn value(&self, index: usize) -> Self::Item {
-        GenericBinaryArray::value(self, index)
-    }
-
-    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-        GenericBinaryArray::value_unchecked(self, index)
-    }
-}
-
-impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericBinaryArray<OffsetSize> {
-    fn from(data: ArrayData) -> Self {
-        assert_eq!(
-            data.data_type(),
-            &Self::DATA_TYPE,
-            "[Large]BinaryArray expects Datatype::[Large]Binary"
-        );
-        assert_eq!(
-            data.buffers().len(),
-            2,
-            "BinaryArray data should contain 2 buffers only (offsets and values)"
-        );
-        // Handle case of empty offsets
-        let offsets = match data.is_empty() && data.buffers()[0].is_empty() {
-            true => empty_offsets::<OffsetSize>().as_ptr() as *const _,
-            false => data.buffers()[0].as_ptr(),
-        };
-        let values = data.buffers()[1].as_ptr();
-        Self {
-            data,
-            // SAFETY:
-            // ArrayData must be valid, and validated data type above
-            value_offsets: unsafe { RawPtrBox::new(offsets) },
-            value_data: unsafe { RawPtrBox::new(values) },
-        }
-    }
-}
-
-impl<OffsetSize: OffsetSizeTrait> From<GenericBinaryArray<OffsetSize>> for ArrayData {
-    fn from(array: GenericBinaryArray<OffsetSize>) -> Self {
-        array.data
-    }
 }
 
 impl<OffsetSize: OffsetSizeTrait> From<Vec<Option<&[u8]>>>
@@ -371,15 +197,6 @@ where
             .null_bit_buffer(Some(null_buf.into()));
         let array_data = unsafe { array_data.build_unchecked() };
         Self::from(array_data)
-    }
-}
-
-impl<'a, T: OffsetSizeTrait> IntoIterator for &'a GenericBinaryArray<T> {
-    type Item = Option<&'a [u8]>;
-    type IntoIter = GenericBinaryIter<'a, T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        GenericBinaryIter::<'a, T>::new(self)
     }
 }
 
@@ -836,7 +653,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "[Large]BinaryArray expects Datatype::[Large]Binary")]
+    #[should_panic(expected = "LargeBinaryArray expects DataType::LargeBinary")]
     fn test_binary_array_validation() {
         let array = BinaryArray::from_iter_values(&[&[1, 2]]);
         let _ = LargeBinaryArray::from(array.into_data());

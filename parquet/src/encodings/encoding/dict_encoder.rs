@@ -162,8 +162,7 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
 
     fn estimated_data_encoded_size(&self) -> usize {
         let bit_width = self.bit_width();
-        1 + RleEncoder::min_buffer_size(bit_width)
-            + RleEncoder::max_buffer_size(bit_width, self.indices.len())
+        RleEncoder::max_buffer_size(bit_width, self.indices.len())
     }
 
     fn flush_buffer(&mut self) -> Result<ByteBufferPtr> {

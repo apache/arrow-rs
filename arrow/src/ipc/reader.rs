@@ -20,6 +20,7 @@
 //! The `FileReader` and `StreamReader` have similar interfaces,
 //! however the `FileReader` expects a reader that supports `Seek`ing
 
+use arrow_buffer::i256;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -71,10 +72,10 @@ fn read_buffer(
 ///     - cast the 64-bit array to the appropriate data type
 #[allow(clippy::too_many_arguments)]
 fn create_array(
-    nodes: &[ipc::FieldNode],
+    nodes: flatbuffers::Vector<'_, ipc::FieldNode>,
     field: &Field,
     data: &Buffer,
-    buffers: &[ipc::Buffer],
+    buffers: flatbuffers::Vector<'_, ipc::Buffer>,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     mut node_index: usize,
     mut buffer_index: usize,
@@ -85,12 +86,13 @@ fn create_array(
     let array = match data_type {
         Utf8 | Binary | LargeBinary | LargeUtf8 => {
             let array = create_primitive_array(
-                &nodes[node_index],
+                nodes.get(node_index),
                 data_type,
-                &buffers[buffer_index..buffer_index + 3]
-                    .iter()
-                    .map(|buf| read_buffer(buf, data, compression_codec))
-                    .collect::<Result<Vec<Buffer>>>()?,
+                &[
+                    read_buffer(buffers.get(buffer_index), data, compression_codec)?,
+                    read_buffer(buffers.get(buffer_index + 1), data, compression_codec)?,
+                    read_buffer(buffers.get(buffer_index + 2), data, compression_codec)?,
+                ],
             );
             node_index += 1;
             buffer_index += 3;
@@ -98,23 +100,23 @@ fn create_array(
         }
         FixedSizeBinary(_) => {
             let array = create_primitive_array(
-                &nodes[node_index],
+                nodes.get(node_index),
                 data_type,
-                &buffers[buffer_index..buffer_index + 2]
-                    .iter()
-                    .map(|buf| read_buffer(buf, data, compression_codec))
-                    .collect::<Result<Vec<Buffer>>>()?,
+                &[
+                    read_buffer(buffers.get(buffer_index), data, compression_codec)?,
+                    read_buffer(buffers.get(buffer_index + 1), data, compression_codec)?,
+                ],
             );
             node_index += 1;
             buffer_index += 2;
             array
         }
         List(ref list_field) | LargeList(ref list_field) | Map(ref list_field, _) => {
-            let list_node = &nodes[node_index];
-            let list_buffers: Vec<Buffer> = buffers[buffer_index..buffer_index + 2]
-                .iter()
-                .map(|buf| read_buffer(buf, data, compression_codec))
-                .collect::<Result<_>>()?;
+            let list_node = nodes.get(node_index);
+            let list_buffers = [
+                read_buffer(buffers.get(buffer_index), data, compression_codec)?,
+                read_buffer(buffers.get(buffer_index + 1), data, compression_codec)?,
+            ];
             node_index += 1;
             buffer_index += 2;
             let triple = create_array(
@@ -131,14 +133,15 @@ fn create_array(
             node_index = triple.1;
             buffer_index = triple.2;
 
-            create_list_array(list_node, data_type, &list_buffers[..], triple.0)
+            create_list_array(list_node, data_type, &list_buffers, triple.0)
         }
         FixedSizeList(ref list_field, _) => {
-            let list_node = &nodes[node_index];
-            let list_buffers: Vec<Buffer> = buffers[buffer_index..=buffer_index]
-                .iter()
-                .map(|buf| read_buffer(buf, data, compression_codec))
-                .collect::<Result<_>>()?;
+            let list_node = nodes.get(node_index);
+            let list_buffers = [read_buffer(
+                buffers.get(buffer_index),
+                data,
+                compression_codec,
+            )?];
             node_index += 1;
             buffer_index += 1;
             let triple = create_array(
@@ -155,12 +158,12 @@ fn create_array(
             node_index = triple.1;
             buffer_index = triple.2;
 
-            create_list_array(list_node, data_type, &list_buffers[..], triple.0)
+            create_list_array(list_node, data_type, &list_buffers, triple.0)
         }
         Struct(struct_fields) => {
-            let struct_node = &nodes[node_index];
-            let null_buffer: Buffer =
-                read_buffer(&buffers[buffer_index], data, compression_codec)?;
+            let struct_node = nodes.get(node_index);
+            let null_buffer =
+                read_buffer(buffers.get(buffer_index), data, compression_codec)?;
             node_index += 1;
             buffer_index += 1;
 
@@ -195,11 +198,11 @@ fn create_array(
         }
         // Create dictionary array from RecordBatch
         Dictionary(_, _) => {
-            let index_node = &nodes[node_index];
-            let index_buffers: Vec<Buffer> = buffers[buffer_index..buffer_index + 2]
-                .iter()
-                .map(|buf| read_buffer(buf, data, compression_codec))
-                .collect::<Result<_>>()?;
+            let index_node = nodes.get(node_index);
+            let index_buffers = [
+                read_buffer(buffers.get(buffer_index), data, compression_codec)?,
+                read_buffer(buffers.get(buffer_index + 1), data, compression_codec)?,
+            ];
 
             let dict_id = field.dict_id().ok_or_else(|| {
                 ArrowError::IoError(format!("Field {} does not have dict id", field))
@@ -217,12 +220,12 @@ fn create_array(
             create_dictionary_array(
                 index_node,
                 data_type,
-                &index_buffers[..],
+                &index_buffers,
                 value_array.clone(),
             )
         }
         Union(fields, field_type_ids, mode) => {
-            let union_node = nodes[node_index];
+            let union_node = nodes.get(node_index);
             node_index += 1;
 
             let len = union_node.length() as usize;
@@ -230,12 +233,12 @@ fn create_array(
             // In V4, union types has validity bitmap
             // In V5 and later, union types have no validity bitmap
             if metadata < &ipc::MetadataVersion::V5 {
-                read_buffer(&buffers[buffer_index], data, compression_codec)?;
+                read_buffer(buffers.get(buffer_index), data, compression_codec)?;
                 buffer_index += 1;
             }
 
             let type_ids: Buffer =
-                read_buffer(&buffers[buffer_index], data, compression_codec)?[..len]
+                read_buffer(buffers.get(buffer_index), data, compression_codec)?[..len]
                     .into();
 
             buffer_index += 1;
@@ -243,7 +246,7 @@ fn create_array(
             let value_offsets = match mode {
                 UnionMode::Dense => {
                     let buffer =
-                        read_buffer(&buffers[buffer_index], data, compression_codec)?;
+                        read_buffer(buffers.get(buffer_index), data, compression_codec)?;
                     buffer_index += 1;
                     Some(buffer[..len * 4].into())
                 }
@@ -276,8 +279,9 @@ fn create_array(
             Arc::new(array)
         }
         Null => {
-            let length = nodes[node_index].length();
-            let null_count = nodes[node_index].null_count();
+            let node = nodes.get(node_index);
+            let length = node.length();
+            let null_count = node.null_count();
 
             if length != null_count {
                 return Err(ArrowError::IoError(format!(
@@ -297,12 +301,12 @@ fn create_array(
         }
         _ => {
             let array = create_primitive_array(
-                &nodes[node_index],
+                nodes.get(node_index),
                 data_type,
-                &buffers[buffer_index..buffer_index + 2]
-                    .iter()
-                    .map(|buf| read_buffer(buf, data, compression_codec))
-                    .collect::<Result<Vec<Buffer>>>()?,
+                &[
+                    read_buffer(buffers.get(buffer_index), data, compression_codec)?,
+                    read_buffer(buffers.get(buffer_index + 1), data, compression_codec)?,
+                ],
             );
             node_index += 1;
             buffer_index += 2;
@@ -477,30 +481,56 @@ fn create_primitive_array(
         | Timestamp(_, _)
         | Date64
         | Duration(_)
-        | Interval(IntervalUnit::DayTime)
-        | Interval(IntervalUnit::MonthDayNano) => ArrayData::builder(data_type.clone())
+        | Interval(IntervalUnit::DayTime) => ArrayData::builder(data_type.clone())
             .len(length)
             .add_buffer(buffers[1].clone())
             .null_bit_buffer(null_buffer)
             .build()
             .unwrap(),
-        Decimal128(_, _) | Decimal256(_, _) => {
-            // read 2 buffers: null buffer (optional) and data buffer
-            let builder = ArrayData::builder(data_type.clone())
-                .len(length)
-                .add_buffer(buffers[1].clone())
-                .null_bit_buffer(null_buffer);
+        Interval(IntervalUnit::MonthDayNano) | Decimal128(_, _) => {
+            let buffer = get_aligned_buffer::<i128>(&buffers[1], length);
 
-            // Don't validate the decimal array so far,
-            // becasue validating decimal is some what complicated
-            // and there is no conclusion on whether we should do it.
-            // For more infomation, please look at https://github.com/apache/arrow-rs/issues/2387
-            unsafe { builder.build_unchecked() }
+            // read 2 buffers: null buffer (optional) and data buffer
+            ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_buffer(buffer)
+                .null_bit_buffer(null_buffer)
+                .build()
+                .unwrap()
+        }
+        Decimal256(_, _) => {
+            let buffer = get_aligned_buffer::<i256>(&buffers[1], length);
+
+            // read 2 buffers: null buffer (optional) and data buffer
+            ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_buffer(buffer)
+                .null_bit_buffer(null_buffer)
+                .build()
+                .unwrap()
         }
         t => unreachable!("Data type {:?} either unsupported or not primitive", t),
     };
 
     make_array(array_data)
+}
+
+/// Checks if given `Buffer` is properly aligned with `T`.
+/// If not, copying the data and padded it for alignment.
+fn get_aligned_buffer<T>(buffer: &Buffer, length: usize) -> Buffer {
+    let ptr = buffer.as_ptr();
+    let align_req = std::mem::align_of::<T>();
+    let align_offset = ptr.align_offset(align_req);
+    // The buffer is not aligned properly. The writer might use a smaller alignment
+    // e.g. 8 bytes, but on some platform (e.g. ARM) i128 requires 16 bytes alignment.
+    // We need to copy the buffer as fallback.
+    if align_offset != 0 {
+        let len_in_bytes = (length * std::mem::size_of::<T>()).min(buffer.len());
+        let slice = &buffer.as_slice()[0..len_in_bytes];
+        Buffer::from_slice_ref(&slice)
+    } else {
+        buffer.clone()
+    }
 }
 
 /// Reads the correct number of buffers based on list type and null_count, and creates a
@@ -848,7 +878,7 @@ impl<R: Read + Seek> FileReader<R> {
         Ok(Self {
             reader,
             schema: Arc::new(schema),
-            blocks: blocks.to_vec(),
+            blocks: blocks.iter().copied().collect(),
             current_block: 0,
             total_blocks,
             dictionaries_by_id,

@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-buffer"
-version = "24.0.0"
+version = "26.0.0"
 description = "Buffer abstractions for Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -39,7 +39,7 @@ bench = false
 
 [dependencies]
 num = { version = "0.4", default-features = false, features = ["std"] }
-half = { version = "2.0", default-features = false }
+half = { version = "2.1", default-features = false }
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }

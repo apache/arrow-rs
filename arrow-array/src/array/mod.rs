@@ -31,6 +31,9 @@ pub use binary_array::*;
 mod boolean_array;
 pub use boolean_array::*;
 
+mod byte_array;
+pub use byte_array::*;
+
 mod dictionary_array;
 pub use dictionary_array::*;
 

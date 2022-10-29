@@ -888,7 +888,7 @@ mod tests {
         // DICTIONARY
         // NOTE: The final size is almost the same because the dictionary entries are
         // preserved after encoded values have been written.
-        run_test::<Int32Type>(Encoding::RLE_DICTIONARY, -1, &[123, 1024], 11, 68, 66);
+        run_test::<Int32Type>(Encoding::RLE_DICTIONARY, -1, &[123, 1024], 0, 2, 0);
 
         // DELTA_BINARY_PACKED
         run_test::<Int32Type>(Encoding::DELTA_BINARY_PACKED, -1, &[123; 1024], 0, 35, 0);

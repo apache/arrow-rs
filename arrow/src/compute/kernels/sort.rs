@@ -146,7 +146,12 @@ pub fn sort_to_indices(
     let (v, n) = partition_validity(values);
 
     Ok(match values.data_type() {
-        DataType::Decimal128(_, _) => sort_decimal(values, v, n, cmp, &options, limit),
+        DataType::Decimal128(_, _) => {
+            sort_primitive::<Decimal128Type, _>(values, v, n, cmp, &options, limit)
+        }
+        DataType::Decimal256(_, _) => {
+            sort_primitive::<Decimal256Type, _>(values, v, n, cmp, &options, limit)
+        }
         DataType::Boolean => sort_boolean(values, v, n, &options, limit),
         DataType::Int8 => {
             sort_primitive::<Int8Type, _>(values, v, n, cmp, &options, limit)
@@ -472,37 +477,6 @@ fn sort_boolean(
     };
 
     UInt32Array::from(result_data)
-}
-
-/// Sort Decimal array
-fn sort_decimal<F>(
-    decimal_values: &ArrayRef,
-    value_indices: Vec<u32>,
-    null_indices: Vec<u32>,
-    cmp: F,
-    options: &SortOptions,
-    limit: Option<usize>,
-) -> UInt32Array
-where
-    F: Fn(i128, i128) -> std::cmp::Ordering,
-{
-    // downcast to decimal array
-    let decimal_array = decimal_values
-        .as_any()
-        .downcast_ref::<Decimal128Array>()
-        .expect("Unable to downcast to decimal array");
-    let valids = value_indices
-        .into_iter()
-        .map(|index| (index, decimal_array.value(index as usize)))
-        .collect::<Vec<(u32, i128)>>();
-    sort_primitive_inner(
-        decimal_values.len(),
-        null_indices,
-        cmp,
-        options,
-        limit,
-        valids,
-    )
 }
 
 /// Sort primitive values
@@ -923,6 +897,10 @@ pub struct SortColumn {
 /// assert_eq!(as_primitive_array::<Int64Type>(&sorted_columns[0]).value(1), -64);
 /// assert!(sorted_columns[0].is_null(0));
 /// ```
+///
+/// Note: for multi-column sorts without a limit, using the [row format][crate::row]
+/// may be significantly faster
+///
 pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<ArrayRef>> {
     let indices = lexsort_to_indices(columns, limit)?;
     columns
@@ -933,6 +911,9 @@ pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<Array
 
 /// Sort elements lexicographically from a list of `ArrayRef` into an unsigned integer
 /// (`UInt32Array`) of indices.
+///
+/// Note: for multi-column sorts without a limit, using the [row format][crate::row]
+/// may be significantly faster
 pub fn lexsort_to_indices(
     columns: &[SortColumn],
     limit: Option<usize>,
@@ -968,11 +949,8 @@ pub fn lexsort_to_indices(
         lexicographical_comparator.compare(a, b)
     });
 
-    Ok(UInt32Array::from(
-        (&value_indices)[0..len]
-            .iter()
-            .map(|i| *i as u32)
-            .collect::<Vec<u32>>(),
+    Ok(UInt32Array::from_iter_values(
+        value_indices.iter().map(|i| *i as u32),
     ))
 }
 
@@ -1106,42 +1084,77 @@ fn sort_valids_array<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compute::util::tests::{
-        build_fixed_size_list_nullable, build_generic_list_nullable,
-    };
+    use arrow_buffer::i256;
     use rand::rngs::StdRng;
     use rand::{Rng, RngCore, SeedableRng};
     use std::convert::TryFrom;
     use std::sync::Arc;
 
-    fn create_decimal_array(data: Vec<Option<i128>>) -> Decimal128Array {
+    fn create_decimal128_array(data: Vec<Option<i128>>) -> Decimal128Array {
         data.into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap()
     }
 
-    fn test_sort_to_indices_decimal_array(
+    fn create_decimal256_array(data: Vec<Option<i256>>) -> Decimal256Array {
+        data.into_iter()
+            .collect::<Decimal256Array>()
+            .with_precision_and_scale(53, 6)
+            .unwrap()
+    }
+
+    fn test_sort_to_indices_decimal128_array(
         data: Vec<Option<i128>>,
         options: Option<SortOptions>,
         limit: Option<usize>,
         expected_data: Vec<u32>,
     ) {
-        let output = create_decimal_array(data);
+        let output = create_decimal128_array(data);
         let expected = UInt32Array::from(expected_data);
         let output =
             sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
-    fn test_sort_decimal_array(
+    fn test_sort_to_indices_decimal256_array(
+        data: Vec<Option<i256>>,
+        options: Option<SortOptions>,
+        limit: Option<usize>,
+        expected_data: Vec<u32>,
+    ) {
+        let output = create_decimal256_array(data);
+        let expected = UInt32Array::from(expected_data);
+        let output =
+            sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        assert_eq!(output, expected)
+    }
+
+    fn test_sort_decimal128_array(
         data: Vec<Option<i128>>,
         options: Option<SortOptions>,
         limit: Option<usize>,
         expected_data: Vec<Option<i128>>,
     ) {
-        let output = create_decimal_array(data);
-        let expected = Arc::new(create_decimal_array(expected_data)) as ArrayRef;
+        let output = create_decimal128_array(data);
+        let expected = Arc::new(create_decimal128_array(expected_data)) as ArrayRef;
+        let output = match limit {
+            Some(_) => {
+                sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap()
+            }
+            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
+        };
+        assert_eq!(&output, &expected)
+    }
+
+    fn test_sort_decimal256_array(
+        data: Vec<Option<i256>>,
+        options: Option<SortOptions>,
+        limit: Option<usize>,
+        expected_data: Vec<Option<i256>>,
+    ) {
+        let output = create_decimal256_array(data);
+        let expected = Arc::new(create_decimal256_array(expected_data)) as ArrayRef;
         let output = match limit {
             Some(_) => {
                 sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap()
@@ -1356,12 +1369,15 @@ mod tests {
     {
         // for FixedSizedList
         if let Some(length) = fixed_length {
-            let input = Arc::new(build_fixed_size_list_nullable(data.clone(), length));
+            let input = Arc::new(FixedSizeListArray::from_iter_primitive::<T, _, _>(
+                data.clone(),
+                length,
+            ));
             let sorted = match limit {
                 Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
                 _ => sort(&(input as ArrayRef), options).unwrap(),
             };
-            let expected = Arc::new(build_fixed_size_list_nullable(
+            let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<T, _, _>(
                 expected_data.clone(),
                 length,
             )) as ArrayRef;
@@ -1370,25 +1386,26 @@ mod tests {
         }
 
         // for List
-        let input = Arc::new(build_generic_list_nullable::<i32, T>(data.clone()));
+        let input = Arc::new(ListArray::from_iter_primitive::<T, _, _>(data.clone()));
         let sorted = match limit {
             Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
             _ => sort(&(input as ArrayRef), options).unwrap(),
         };
-        let expected =
-            Arc::new(build_generic_list_nullable::<i32, T>(expected_data.clone()))
-                as ArrayRef;
+        let expected = Arc::new(ListArray::from_iter_primitive::<T, _, _>(
+            expected_data.clone(),
+        )) as ArrayRef;
 
         assert_eq!(&sorted, &expected);
 
         // for LargeList
-        let input = Arc::new(build_generic_list_nullable::<i64, T>(data));
+        let input = Arc::new(LargeListArray::from_iter_primitive::<T, _, _>(data));
         let sorted = match limit {
             Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
             _ => sort(&(input as ArrayRef), options).unwrap(),
         };
-        let expected =
-            Arc::new(build_generic_list_nullable::<i64, T>(expected_data)) as ArrayRef;
+        let expected = Arc::new(LargeListArray::from_iter_primitive::<T, _, _>(
+            expected_data,
+        )) as ArrayRef;
 
         assert_eq!(&sorted, &expected);
     }
@@ -1786,14 +1803,14 @@ mod tests {
     #[test]
     fn test_sort_indices_decimal128() {
         // decimal default
-        test_sort_to_indices_decimal_array(
+        test_sort_to_indices_decimal128_array(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             None,
             None,
             vec![0, 6, 4, 2, 3, 5, 1],
         );
         // decimal descending
-        test_sort_to_indices_decimal_array(
+        test_sort_to_indices_decimal128_array(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -1803,7 +1820,7 @@ mod tests {
             vec![1, 5, 3, 2, 4, 6, 0],
         );
         // decimal null_first and descending
-        test_sort_to_indices_decimal_array(
+        test_sort_to_indices_decimal128_array(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -1813,7 +1830,7 @@ mod tests {
             vec![6, 0, 1, 5, 3, 2, 4],
         );
         // decimal null_first
-        test_sort_to_indices_decimal_array(
+        test_sort_to_indices_decimal128_array(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: false,
@@ -1823,14 +1840,14 @@ mod tests {
             vec![0, 6, 4, 2, 3, 5, 1],
         );
         // limit
-        test_sort_to_indices_decimal_array(
+        test_sort_to_indices_decimal128_array(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             None,
             Some(3),
             vec![0, 6, 4],
         );
         // limit descending
-        test_sort_to_indices_decimal_array(
+        test_sort_to_indices_decimal128_array(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -1840,7 +1857,7 @@ mod tests {
             vec![1, 5, 3],
         );
         // limit descending null_first
-        test_sort_to_indices_decimal_array(
+        test_sort_to_indices_decimal128_array(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -1850,7 +1867,7 @@ mod tests {
             vec![6, 0, 1],
         );
         // limit null_first
-        test_sort_to_indices_decimal_array(
+        test_sort_to_indices_decimal128_array(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: false,
@@ -1862,16 +1879,185 @@ mod tests {
     }
 
     #[test]
+    fn test_sort_indices_decimal256() {
+        // decimal default
+        test_sort_to_indices_decimal256_array(
+            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+            None,
+            None,
+            vec![0, 6, 4, 2, 3, 5, 1],
+        );
+        // decimal descending
+        test_sort_to_indices_decimal256_array(
+            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+            Some(SortOptions {
+                descending: true,
+                nulls_first: false,
+            }),
+            None,
+            vec![1, 5, 3, 2, 4, 6, 0],
+        );
+        // decimal null_first and descending
+        test_sort_to_indices_decimal256_array(
+            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            None,
+            vec![6, 0, 1, 5, 3, 2, 4],
+        );
+        // decimal null_first
+        test_sort_to_indices_decimal256_array(
+            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            None,
+            vec![0, 6, 4, 2, 3, 5, 1],
+        );
+        // limit
+        test_sort_to_indices_decimal256_array(
+            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+            None,
+            Some(3),
+            vec![0, 6, 4],
+        );
+        // limit descending
+        test_sort_to_indices_decimal256_array(
+            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+            Some(SortOptions {
+                descending: true,
+                nulls_first: false,
+            }),
+            Some(3),
+            vec![1, 5, 3],
+        );
+        // limit descending null_first
+        test_sort_to_indices_decimal256_array(
+            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            Some(3),
+            vec![6, 0, 1],
+        );
+        // limit null_first
+        test_sort_to_indices_decimal256_array(
+            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            Some(3),
+            vec![0, 6, 4],
+        );
+    }
+
+    #[test]
+    fn test_sort_indices_decimal256_max_min() {
+        test_sort_to_indices_decimal256_array(
+            vec![
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+                Some(i256::from_i128(-1)),
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            None,
+            vec![0, 1, 4, 2, 3],
+        );
+
+        test_sort_to_indices_decimal256_array(
+            vec![
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+                Some(i256::from_i128(-1)),
+            ],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            None,
+            vec![0, 3, 2, 4, 1],
+        );
+
+        test_sort_to_indices_decimal256_array(
+            vec![
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+                Some(i256::from_i128(-1)),
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            Some(4),
+            vec![0, 1, 4, 2],
+        );
+
+        test_sort_to_indices_decimal256_array(
+            vec![
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+                Some(i256::from_i128(-1)),
+            ],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            Some(4),
+            vec![0, 3, 2, 4],
+        );
+    }
+
+    #[test]
     fn test_sort_decimal128() {
         // decimal default
-        test_sort_decimal_array(
+        test_sort_decimal128_array(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             None,
             None,
             vec![None, None, Some(1), Some(2), Some(3), Some(4), Some(5)],
         );
         // decimal descending
-        test_sort_decimal_array(
+        test_sort_decimal128_array(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -1881,7 +2067,7 @@ mod tests {
             vec![Some(5), Some(4), Some(3), Some(2), Some(1), None, None],
         );
         // decimal null_first and descending
-        test_sort_decimal_array(
+        test_sort_decimal128_array(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -1891,7 +2077,7 @@ mod tests {
             vec![None, None, Some(5), Some(4), Some(3), Some(2), Some(1)],
         );
         // decimal null_first
-        test_sort_decimal_array(
+        test_sort_decimal128_array(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: false,
@@ -1901,14 +2087,14 @@ mod tests {
             vec![None, None, Some(1), Some(2), Some(3), Some(4), Some(5)],
         );
         // limit
-        test_sort_decimal_array(
+        test_sort_decimal128_array(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             None,
             Some(3),
             vec![None, None, Some(1)],
         );
         // limit descending
-        test_sort_decimal_array(
+        test_sort_decimal128_array(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -1918,7 +2104,7 @@ mod tests {
             vec![Some(5), Some(4), Some(3)],
         );
         // limit descending null_first
-        test_sort_decimal_array(
+        test_sort_decimal128_array(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -1928,7 +2114,7 @@ mod tests {
             vec![None, None, Some(5)],
         );
         // limit null_first
-        test_sort_decimal_array(
+        test_sort_decimal128_array(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: false,
@@ -1936,6 +2122,217 @@ mod tests {
             }),
             Some(3),
             vec![None, None, Some(1)],
+        );
+    }
+
+    #[test]
+    fn test_sort_decimal256() {
+        // decimal default
+        test_sort_decimal256_array(
+            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+            None,
+            None,
+            vec![None, None, Some(1), Some(2), Some(3), Some(4), Some(5)]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+        );
+        // decimal descending
+        test_sort_decimal256_array(
+            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+            Some(SortOptions {
+                descending: true,
+                nulls_first: false,
+            }),
+            None,
+            vec![Some(5), Some(4), Some(3), Some(2), Some(1), None, None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+        );
+        // decimal null_first and descending
+        test_sort_decimal256_array(
+            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            None,
+            vec![None, None, Some(5), Some(4), Some(3), Some(2), Some(1)]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+        );
+        // decimal null_first
+        test_sort_decimal256_array(
+            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            None,
+            vec![None, None, Some(1), Some(2), Some(3), Some(4), Some(5)]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+        );
+        // limit
+        test_sort_decimal256_array(
+            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+            None,
+            Some(3),
+            vec![None, None, Some(1)]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+        );
+        // limit descending
+        test_sort_decimal256_array(
+            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+            Some(SortOptions {
+                descending: true,
+                nulls_first: false,
+            }),
+            Some(3),
+            vec![Some(5), Some(4), Some(3)]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+        );
+        // limit descending null_first
+        test_sort_decimal256_array(
+            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            Some(3),
+            vec![None, None, Some(5)]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+        );
+        // limit null_first
+        test_sort_decimal256_array(
+            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            Some(3),
+            vec![None, None, Some(1)]
+                .iter()
+                .map(|v| v.map(i256::from_i128))
+                .collect(),
+        );
+    }
+
+    #[test]
+    fn test_sort_decimal256_max_min() {
+        test_sort_decimal256_array(
+            vec![
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+                Some(i256::from_i128(-1)),
+                None,
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            None,
+            vec![
+                None,
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(-1)),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+            ],
+        );
+
+        test_sort_decimal256_array(
+            vec![
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+                Some(i256::from_i128(-1)),
+                None,
+            ],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            None,
+            vec![
+                None,
+                None,
+                Some(i256::MAX),
+                Some(i256::from_i128(1)),
+                Some(i256::from_i128(-1)),
+                Some(i256::MIN),
+            ],
+        );
+
+        test_sort_decimal256_array(
+            vec![
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+                Some(i256::from_i128(-1)),
+                None,
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            Some(4),
+            vec![None, None, Some(i256::MIN), Some(i256::from_i128(-1))],
+        );
+
+        test_sort_decimal256_array(
+            vec![
+                None,
+                Some(i256::MIN),
+                Some(i256::from_i128(1)),
+                Some(i256::MAX),
+                Some(i256::from_i128(-1)),
+                None,
+            ],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            Some(4),
+            vec![None, None, Some(i256::MAX), Some(i256::from_i128(1))],
         );
     }
 

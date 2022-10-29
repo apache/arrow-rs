@@ -45,7 +45,7 @@ pub const ENUM_VALUES_METADATA_VERSION: [MetadataVersion; 5] = [
     MetadataVersion::V5,
 ];
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct MetadataVersion(pub i16);
 #[allow(non_upper_case_globals)]
@@ -83,8 +83,8 @@ impl MetadataVersion {
         }
     }
 }
-impl std::fmt::Debug for MetadataVersion {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for MetadataVersion {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         if let Some(name) = self.variant_name() {
             f.write_str(name)
         } else {
@@ -95,8 +95,8 @@ impl std::fmt::Debug for MetadataVersion {
 impl<'a> flatbuffers::Follow<'a> for MetadataVersion {
     type Inner = Self;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = unsafe { flatbuffers::read_scalar_at::<i16>(buf, loc) };
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
         Self(b)
     }
 }
@@ -104,20 +104,21 @@ impl<'a> flatbuffers::Follow<'a> for MetadataVersion {
 impl flatbuffers::Push for MetadataVersion {
     type Output = MetadataVersion;
     #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        unsafe { flatbuffers::emplace_scalar::<i16>(dst, self.0) };
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        flatbuffers::emplace_scalar::<i16>(dst, self.0);
     }
 }
 
 impl flatbuffers::EndianScalar for MetadataVersion {
+    type Scalar = i16;
     #[inline]
-    fn to_little_endian(self) -> Self {
-        let b = i16::to_le(self.0);
-        Self(b)
+    fn to_little_endian(self) -> i16 {
+        self.0.to_le()
     }
     #[inline]
-    fn from_little_endian(self) -> Self {
-        let b = i16::from_le(self.0);
+    #[allow(clippy::wrong_self_convention)]
+    fn from_little_endian(v: i16) -> Self {
+        let b = i16::from_le(v);
         Self(b)
     }
 }
@@ -172,7 +173,7 @@ pub const ENUM_VALUES_FEATURE: [Feature; 3] = [
 /// Enums added to this list should be assigned power-of-two values
 /// to facilitate exchanging and comparing bitmaps for supported
 /// features.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct Feature(pub i64);
 #[allow(non_upper_case_globals)]
@@ -204,8 +205,8 @@ impl Feature {
         }
     }
 }
-impl std::fmt::Debug for Feature {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for Feature {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         if let Some(name) = self.variant_name() {
             f.write_str(name)
         } else {
@@ -216,8 +217,8 @@ impl std::fmt::Debug for Feature {
 impl<'a> flatbuffers::Follow<'a> for Feature {
     type Inner = Self;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = unsafe { flatbuffers::read_scalar_at::<i64>(buf, loc) };
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        let b = flatbuffers::read_scalar_at::<i64>(buf, loc);
         Self(b)
     }
 }
@@ -225,20 +226,21 @@ impl<'a> flatbuffers::Follow<'a> for Feature {
 impl flatbuffers::Push for Feature {
     type Output = Feature;
     #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        unsafe { flatbuffers::emplace_scalar::<i64>(dst, self.0) };
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        flatbuffers::emplace_scalar::<i64>(dst, self.0);
     }
 }
 
 impl flatbuffers::EndianScalar for Feature {
+    type Scalar = i64;
     #[inline]
-    fn to_little_endian(self) -> Self {
-        let b = i64::to_le(self.0);
-        Self(b)
+    fn to_little_endian(self) -> i64 {
+        self.0.to_le()
     }
     #[inline]
-    fn from_little_endian(self) -> Self {
-        let b = i64::from_le(self.0);
+    #[allow(clippy::wrong_self_convention)]
+    fn from_little_endian(v: i64) -> Self {
+        let b = i64::from_le(v);
         Self(b)
     }
 }
@@ -272,7 +274,7 @@ pub const ENUM_MAX_UNION_MODE: i16 = 1;
 #[allow(non_camel_case_types)]
 pub const ENUM_VALUES_UNION_MODE: [UnionMode; 2] = [UnionMode::Sparse, UnionMode::Dense];
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct UnionMode(pub i16);
 #[allow(non_upper_case_globals)]
@@ -292,8 +294,8 @@ impl UnionMode {
         }
     }
 }
-impl std::fmt::Debug for UnionMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for UnionMode {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         if let Some(name) = self.variant_name() {
             f.write_str(name)
         } else {
@@ -304,8 +306,8 @@ impl std::fmt::Debug for UnionMode {
 impl<'a> flatbuffers::Follow<'a> for UnionMode {
     type Inner = Self;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = unsafe { flatbuffers::read_scalar_at::<i16>(buf, loc) };
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
         Self(b)
     }
 }
@@ -313,20 +315,21 @@ impl<'a> flatbuffers::Follow<'a> for UnionMode {
 impl flatbuffers::Push for UnionMode {
     type Output = UnionMode;
     #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        unsafe { flatbuffers::emplace_scalar::<i16>(dst, self.0) };
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        flatbuffers::emplace_scalar::<i16>(dst, self.0);
     }
 }
 
 impl flatbuffers::EndianScalar for UnionMode {
+    type Scalar = i16;
     #[inline]
-    fn to_little_endian(self) -> Self {
-        let b = i16::to_le(self.0);
-        Self(b)
+    fn to_little_endian(self) -> i16 {
+        self.0.to_le()
     }
     #[inline]
-    fn from_little_endian(self) -> Self {
-        let b = i16::from_le(self.0);
+    #[allow(clippy::wrong_self_convention)]
+    fn from_little_endian(v: i16) -> Self {
+        let b = i16::from_le(v);
         Self(b)
     }
 }
@@ -361,7 +364,7 @@ pub const ENUM_MAX_PRECISION: i16 = 2;
 pub const ENUM_VALUES_PRECISION: [Precision; 3] =
     [Precision::HALF, Precision::SINGLE, Precision::DOUBLE];
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct Precision(pub i16);
 #[allow(non_upper_case_globals)]
@@ -383,8 +386,8 @@ impl Precision {
         }
     }
 }
-impl std::fmt::Debug for Precision {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for Precision {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         if let Some(name) = self.variant_name() {
             f.write_str(name)
         } else {
@@ -395,8 +398,8 @@ impl std::fmt::Debug for Precision {
 impl<'a> flatbuffers::Follow<'a> for Precision {
     type Inner = Self;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = unsafe { flatbuffers::read_scalar_at::<i16>(buf, loc) };
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
         Self(b)
     }
 }
@@ -404,20 +407,21 @@ impl<'a> flatbuffers::Follow<'a> for Precision {
 impl flatbuffers::Push for Precision {
     type Output = Precision;
     #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        unsafe { flatbuffers::emplace_scalar::<i16>(dst, self.0) };
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        flatbuffers::emplace_scalar::<i16>(dst, self.0);
     }
 }
 
 impl flatbuffers::EndianScalar for Precision {
+    type Scalar = i16;
     #[inline]
-    fn to_little_endian(self) -> Self {
-        let b = i16::to_le(self.0);
-        Self(b)
+    fn to_little_endian(self) -> i16 {
+        self.0.to_le()
     }
     #[inline]
-    fn from_little_endian(self) -> Self {
-        let b = i16::from_le(self.0);
+    #[allow(clippy::wrong_self_convention)]
+    fn from_little_endian(v: i16) -> Self {
+        let b = i16::from_le(v);
         Self(b)
     }
 }
@@ -451,7 +455,7 @@ pub const ENUM_MAX_DATE_UNIT: i16 = 1;
 #[allow(non_camel_case_types)]
 pub const ENUM_VALUES_DATE_UNIT: [DateUnit; 2] = [DateUnit::DAY, DateUnit::MILLISECOND];
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct DateUnit(pub i16);
 #[allow(non_upper_case_globals)]
@@ -471,8 +475,8 @@ impl DateUnit {
         }
     }
 }
-impl std::fmt::Debug for DateUnit {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for DateUnit {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         if let Some(name) = self.variant_name() {
             f.write_str(name)
         } else {
@@ -483,8 +487,8 @@ impl std::fmt::Debug for DateUnit {
 impl<'a> flatbuffers::Follow<'a> for DateUnit {
     type Inner = Self;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = unsafe { flatbuffers::read_scalar_at::<i16>(buf, loc) };
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
         Self(b)
     }
 }
@@ -492,20 +496,21 @@ impl<'a> flatbuffers::Follow<'a> for DateUnit {
 impl flatbuffers::Push for DateUnit {
     type Output = DateUnit;
     #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        unsafe { flatbuffers::emplace_scalar::<i16>(dst, self.0) };
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        flatbuffers::emplace_scalar::<i16>(dst, self.0);
     }
 }
 
 impl flatbuffers::EndianScalar for DateUnit {
+    type Scalar = i16;
     #[inline]
-    fn to_little_endian(self) -> Self {
-        let b = i16::to_le(self.0);
-        Self(b)
+    fn to_little_endian(self) -> i16 {
+        self.0.to_le()
     }
     #[inline]
-    fn from_little_endian(self) -> Self {
-        let b = i16::from_le(self.0);
+    #[allow(clippy::wrong_self_convention)]
+    fn from_little_endian(v: i16) -> Self {
+        let b = i16::from_le(v);
         Self(b)
     }
 }
@@ -544,7 +549,7 @@ pub const ENUM_VALUES_TIME_UNIT: [TimeUnit; 4] = [
     TimeUnit::NANOSECOND,
 ];
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct TimeUnit(pub i16);
 #[allow(non_upper_case_globals)]
@@ -573,8 +578,8 @@ impl TimeUnit {
         }
     }
 }
-impl std::fmt::Debug for TimeUnit {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for TimeUnit {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         if let Some(name) = self.variant_name() {
             f.write_str(name)
         } else {
@@ -585,8 +590,8 @@ impl std::fmt::Debug for TimeUnit {
 impl<'a> flatbuffers::Follow<'a> for TimeUnit {
     type Inner = Self;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = unsafe { flatbuffers::read_scalar_at::<i16>(buf, loc) };
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
         Self(b)
     }
 }
@@ -594,20 +599,21 @@ impl<'a> flatbuffers::Follow<'a> for TimeUnit {
 impl flatbuffers::Push for TimeUnit {
     type Output = TimeUnit;
     #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        unsafe { flatbuffers::emplace_scalar::<i16>(dst, self.0) };
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        flatbuffers::emplace_scalar::<i16>(dst, self.0);
     }
 }
 
 impl flatbuffers::EndianScalar for TimeUnit {
+    type Scalar = i16;
     #[inline]
-    fn to_little_endian(self) -> Self {
-        let b = i16::to_le(self.0);
-        Self(b)
+    fn to_little_endian(self) -> i16 {
+        self.0.to_le()
     }
     #[inline]
-    fn from_little_endian(self) -> Self {
-        let b = i16::from_le(self.0);
+    #[allow(clippy::wrong_self_convention)]
+    fn from_little_endian(v: i16) -> Self {
+        let b = i16::from_le(v);
         Self(b)
     }
 }
@@ -633,7 +639,7 @@ pub const ENUM_MIN_INTERVAL_UNIT: i16 = 0;
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
-pub const ENUM_MAX_INTERVAL_UNIT: i16 = 1;
+pub const ENUM_MAX_INTERVAL_UNIT: i16 = 2;
 #[deprecated(
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
@@ -645,7 +651,7 @@ pub const ENUM_VALUES_INTERVAL_UNIT: [IntervalUnit; 3] = [
     IntervalUnit::MONTH_DAY_NANO,
 ];
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct IntervalUnit(pub i16);
 #[allow(non_upper_case_globals)]
@@ -668,8 +674,8 @@ impl IntervalUnit {
         }
     }
 }
-impl std::fmt::Debug for IntervalUnit {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for IntervalUnit {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         if let Some(name) = self.variant_name() {
             f.write_str(name)
         } else {
@@ -680,8 +686,8 @@ impl std::fmt::Debug for IntervalUnit {
 impl<'a> flatbuffers::Follow<'a> for IntervalUnit {
     type Inner = Self;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = unsafe { flatbuffers::read_scalar_at::<i16>(buf, loc) };
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
         Self(b)
     }
 }
@@ -689,20 +695,21 @@ impl<'a> flatbuffers::Follow<'a> for IntervalUnit {
 impl flatbuffers::Push for IntervalUnit {
     type Output = IntervalUnit;
     #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        unsafe { flatbuffers::emplace_scalar::<i16>(dst, self.0) };
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        flatbuffers::emplace_scalar::<i16>(dst, self.0);
     }
 }
 
 impl flatbuffers::EndianScalar for IntervalUnit {
+    type Scalar = i16;
     #[inline]
-    fn to_little_endian(self) -> Self {
-        let b = i16::to_le(self.0);
-        Self(b)
+    fn to_little_endian(self) -> i16 {
+        self.0.to_le()
     }
     #[inline]
-    fn from_little_endian(self) -> Self {
-        let b = i16::from_le(self.0);
+    #[allow(clippy::wrong_self_convention)]
+    fn from_little_endian(v: i16) -> Self {
+        let b = i16::from_le(v);
         Self(b)
     }
 }
@@ -762,7 +769,7 @@ pub const ENUM_VALUES_TYPE: [Type; 22] = [
 /// ----------------------------------------------------------------------
 /// Top-level Type value, enabling extensible type-specific metadata. We can
 /// add new logical types to Type without breaking backwards compatibility
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct Type(pub u8);
 #[allow(non_upper_case_globals)]
@@ -845,8 +852,8 @@ impl Type {
         }
     }
 }
-impl std::fmt::Debug for Type {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for Type {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         if let Some(name) = self.variant_name() {
             f.write_str(name)
         } else {
@@ -854,12 +861,11 @@ impl std::fmt::Debug for Type {
         }
     }
 }
-pub struct TypeUnionTableOffset {}
 impl<'a> flatbuffers::Follow<'a> for Type {
     type Inner = Self;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = unsafe { flatbuffers::read_scalar_at::<u8>(buf, loc) };
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
         Self(b)
     }
 }
@@ -867,20 +873,21 @@ impl<'a> flatbuffers::Follow<'a> for Type {
 impl flatbuffers::Push for Type {
     type Output = Type;
     #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        unsafe { flatbuffers::emplace_scalar::<u8>(dst, self.0) };
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        flatbuffers::emplace_scalar::<u8>(dst, self.0);
     }
 }
 
 impl flatbuffers::EndianScalar for Type {
+    type Scalar = u8;
     #[inline]
-    fn to_little_endian(self) -> Self {
-        let b = u8::to_le(self.0);
-        Self(b)
+    fn to_little_endian(self) -> u8 {
+        self.0.to_le()
     }
     #[inline]
-    fn from_little_endian(self) -> Self {
-        let b = u8::from_le(self.0);
+    #[allow(clippy::wrong_self_convention)]
+    fn from_little_endian(v: u8) -> Self {
+        let b = u8::from_le(v);
         Self(b)
     }
 }
@@ -897,6 +904,8 @@ impl<'a> flatbuffers::Verifiable for Type {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for Type {}
+pub struct TypeUnionTableOffset {}
+
 #[deprecated(
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
@@ -919,7 +928,7 @@ pub const ENUM_VALUES_DICTIONARY_KIND: [DictionaryKind; 1] = [DictionaryKind::De
 /// Maintained for forwards compatibility, in the future
 /// Dictionaries might be explicit maps between integers and values
 /// allowing for non-contiguous index values
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct DictionaryKind(pub i16);
 #[allow(non_upper_case_globals)]
@@ -937,8 +946,8 @@ impl DictionaryKind {
         }
     }
 }
-impl std::fmt::Debug for DictionaryKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for DictionaryKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         if let Some(name) = self.variant_name() {
             f.write_str(name)
         } else {
@@ -949,8 +958,8 @@ impl std::fmt::Debug for DictionaryKind {
 impl<'a> flatbuffers::Follow<'a> for DictionaryKind {
     type Inner = Self;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = unsafe { flatbuffers::read_scalar_at::<i16>(buf, loc) };
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
         Self(b)
     }
 }
@@ -958,20 +967,21 @@ impl<'a> flatbuffers::Follow<'a> for DictionaryKind {
 impl flatbuffers::Push for DictionaryKind {
     type Output = DictionaryKind;
     #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        unsafe { flatbuffers::emplace_scalar::<i16>(dst, self.0) };
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        flatbuffers::emplace_scalar::<i16>(dst, self.0);
     }
 }
 
 impl flatbuffers::EndianScalar for DictionaryKind {
+    type Scalar = i16;
     #[inline]
-    fn to_little_endian(self) -> Self {
-        let b = i16::to_le(self.0);
-        Self(b)
+    fn to_little_endian(self) -> i16 {
+        self.0.to_le()
     }
     #[inline]
-    fn from_little_endian(self) -> Self {
-        let b = i16::from_le(self.0);
+    #[allow(clippy::wrong_self_convention)]
+    fn from_little_endian(v: i16) -> Self {
+        let b = i16::from_le(v);
         Self(b)
     }
 }
@@ -1007,7 +1017,7 @@ pub const ENUM_VALUES_ENDIANNESS: [Endianness; 2] = [Endianness::Little, Endiann
 
 /// ----------------------------------------------------------------------
 /// Endianness of the platform producing the data
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct Endianness(pub i16);
 #[allow(non_upper_case_globals)]
@@ -1027,8 +1037,8 @@ impl Endianness {
         }
     }
 }
-impl std::fmt::Debug for Endianness {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for Endianness {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         if let Some(name) = self.variant_name() {
             f.write_str(name)
         } else {
@@ -1039,8 +1049,8 @@ impl std::fmt::Debug for Endianness {
 impl<'a> flatbuffers::Follow<'a> for Endianness {
     type Inner = Self;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = unsafe { flatbuffers::read_scalar_at::<i16>(buf, loc) };
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
         Self(b)
     }
 }
@@ -1048,20 +1058,21 @@ impl<'a> flatbuffers::Follow<'a> for Endianness {
 impl flatbuffers::Push for Endianness {
     type Output = Endianness;
     #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        unsafe { flatbuffers::emplace_scalar::<i16>(dst, self.0) };
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        flatbuffers::emplace_scalar::<i16>(dst, self.0);
     }
 }
 
 impl flatbuffers::EndianScalar for Endianness {
+    type Scalar = i16;
     #[inline]
-    fn to_little_endian(self) -> Self {
-        let b = i16::to_le(self.0);
-        Self(b)
+    fn to_little_endian(self) -> i16 {
+        self.0.to_le()
     }
     #[inline]
-    fn from_little_endian(self) -> Self {
-        let b = i16::from_le(self.0);
+    #[allow(clippy::wrong_self_convention)]
+    fn from_little_endian(v: i16) -> Self {
+        let b = i16::from_le(v);
         Self(b)
     }
 }
@@ -1084,8 +1095,13 @@ impl flatbuffers::SimpleToVerifyInSlice for Endianness {}
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq)]
 pub struct Buffer(pub [u8; 16]);
-impl std::fmt::Debug for Buffer {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl Default for Buffer {
+    fn default() -> Self {
+        Self([0; 16])
+    }
+}
+impl core::fmt::Debug for Buffer {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         f.debug_struct("Buffer")
             .field("offset", &self.offset())
             .field("length", &self.length())
@@ -1094,42 +1110,28 @@ impl std::fmt::Debug for Buffer {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for Buffer {}
-impl flatbuffers::SafeSliceAccess for Buffer {}
 impl<'a> flatbuffers::Follow<'a> for Buffer {
     type Inner = &'a Buffer;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         <&'a Buffer>::follow(buf, loc)
     }
 }
 impl<'a> flatbuffers::Follow<'a> for &'a Buffer {
     type Inner = &'a Buffer;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         flatbuffers::follow_cast_ref::<Buffer>(buf, loc)
     }
 }
 impl<'b> flatbuffers::Push for Buffer {
     type Output = Buffer;
     #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        let src = unsafe {
-            ::std::slice::from_raw_parts(self as *const Buffer as *const u8, Self::size())
-        };
-        dst.copy_from_slice(src);
-    }
-}
-impl<'b> flatbuffers::Push for &'b Buffer {
-    type Output = Buffer;
-
-    #[inline]
-    fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        let src = unsafe {
-            ::std::slice::from_raw_parts(
-                *self as *const Buffer as *const u8,
-                Self::size(),
-            )
-        };
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        let src = ::core::slice::from_raw_parts(
+            self as *const Buffer as *const u8,
+            Self::size(),
+        );
         dst.copy_from_slice(src);
     }
 }
@@ -1144,7 +1146,8 @@ impl<'a> flatbuffers::Verifiable for Buffer {
         v.in_buffer::<Self>(pos)
     }
 }
-impl Buffer {
+
+impl<'a> Buffer {
     #[allow(clippy::too_many_arguments)]
     pub fn new(offset: i64, length: i64) -> Self {
         let mut s = Self([0; 16]);
@@ -1156,25 +1159,30 @@ impl Buffer {
     /// The relative offset into the shared memory page where the bytes for this
     /// buffer starts
     pub fn offset(&self) -> i64 {
-        let mut mem = core::mem::MaybeUninit::<i64>::uninit();
-        unsafe {
+        let mut mem = core::mem::MaybeUninit::<<i64 as EndianScalar>::Scalar>::uninit();
+        // Safety:
+        // Created from a valid Table for this object
+        // Which contains a valid value in this slot
+        EndianScalar::from_little_endian(unsafe {
             core::ptr::copy_nonoverlapping(
                 self.0[0..].as_ptr(),
                 mem.as_mut_ptr() as *mut u8,
-                core::mem::size_of::<i64>(),
+                core::mem::size_of::<<i64 as EndianScalar>::Scalar>(),
             );
             mem.assume_init()
-        }
-        .from_little_endian()
+        })
     }
 
     pub fn set_offset(&mut self, x: i64) {
         let x_le = x.to_little_endian();
+        // Safety:
+        // Created from a valid Table for this object
+        // Which contains a valid value in this slot
         unsafe {
             core::ptr::copy_nonoverlapping(
-                &x_le as *const i64 as *const u8,
+                &x_le as *const _ as *const u8,
                 self.0[0..].as_mut_ptr(),
-                core::mem::size_of::<i64>(),
+                core::mem::size_of::<<i64 as EndianScalar>::Scalar>(),
             );
         }
     }
@@ -1185,25 +1193,30 @@ impl Buffer {
     /// after a buffer, but such padding bytes do not need to be accounted for in
     /// the size here.
     pub fn length(&self) -> i64 {
-        let mut mem = core::mem::MaybeUninit::<i64>::uninit();
-        unsafe {
+        let mut mem = core::mem::MaybeUninit::<<i64 as EndianScalar>::Scalar>::uninit();
+        // Safety:
+        // Created from a valid Table for this object
+        // Which contains a valid value in this slot
+        EndianScalar::from_little_endian(unsafe {
             core::ptr::copy_nonoverlapping(
                 self.0[8..].as_ptr(),
                 mem.as_mut_ptr() as *mut u8,
-                core::mem::size_of::<i64>(),
+                core::mem::size_of::<<i64 as EndianScalar>::Scalar>(),
             );
             mem.assume_init()
-        }
-        .from_little_endian()
+        })
     }
 
     pub fn set_length(&mut self, x: i64) {
         let x_le = x.to_little_endian();
+        // Safety:
+        // Created from a valid Table for this object
+        // Which contains a valid value in this slot
         unsafe {
             core::ptr::copy_nonoverlapping(
-                &x_le as *const i64 as *const u8,
+                &x_le as *const _ as *const u8,
                 self.0[8..].as_mut_ptr(),
-                core::mem::size_of::<i64>(),
+                core::mem::size_of::<<i64 as EndianScalar>::Scalar>(),
             );
         }
     }
@@ -1220,16 +1233,16 @@ pub struct Null<'a> {
 impl<'a> flatbuffers::Follow<'a> for Null<'a> {
     type Inner = Null<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Null<'a> {
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Null { _tab: table }
     }
     #[allow(unused_mut)]
@@ -1260,6 +1273,7 @@ impl<'a> Default for NullArgs {
         NullArgs {}
     }
 }
+
 pub struct NullBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -1280,8 +1294,8 @@ impl<'a: 'b, 'b> NullBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Null<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Null<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Null");
         ds.finish()
     }
@@ -1299,16 +1313,16 @@ pub struct Struct_<'a> {
 impl<'a> flatbuffers::Follow<'a> for Struct_<'a> {
     type Inner = Struct_<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Struct_<'a> {
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Struct_ { _tab: table }
     }
     #[allow(unused_mut)]
@@ -1339,6 +1353,7 @@ impl<'a> Default for Struct_Args {
         Struct_Args {}
     }
 }
+
 pub struct Struct_Builder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -1361,8 +1376,8 @@ impl<'a: 'b, 'b> Struct_Builder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Struct_<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Struct_<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Struct_");
         ds.finish()
     }
@@ -1377,16 +1392,16 @@ pub struct List<'a> {
 impl<'a> flatbuffers::Follow<'a> for List<'a> {
     type Inner = List<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> List<'a> {
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         List { _tab: table }
     }
     #[allow(unused_mut)]
@@ -1417,6 +1432,7 @@ impl<'a> Default for ListArgs {
         ListArgs {}
     }
 }
+
 pub struct ListBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -1437,8 +1453,8 @@ impl<'a: 'b, 'b> ListBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for List<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for List<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("List");
         ds.finish()
     }
@@ -1455,16 +1471,16 @@ pub struct LargeList<'a> {
 impl<'a> flatbuffers::Follow<'a> for LargeList<'a> {
     type Inner = LargeList<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> LargeList<'a> {
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         LargeList { _tab: table }
     }
     #[allow(unused_mut)]
@@ -1495,6 +1511,7 @@ impl<'a> Default for LargeListArgs {
         LargeListArgs {}
     }
 }
+
 pub struct LargeListBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -1517,8 +1534,8 @@ impl<'a: 'b, 'b> LargeListBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for LargeList<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for LargeList<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("LargeList");
         ds.finish()
     }
@@ -1533,16 +1550,18 @@ pub struct FixedSizeList<'a> {
 impl<'a> flatbuffers::Follow<'a> for FixedSizeList<'a> {
     type Inner = FixedSizeList<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> FixedSizeList<'a> {
+    pub const VT_LISTSIZE: flatbuffers::VOffsetT = 4;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         FixedSizeList { _tab: table }
     }
     #[allow(unused_mut)]
@@ -1555,14 +1574,17 @@ impl<'a> FixedSizeList<'a> {
         builder.finish()
     }
 
-    pub const VT_LISTSIZE: flatbuffers::VOffsetT = 4;
-
     /// Number of list items per value
     #[inline]
     pub fn listSize(&self) -> i32 {
-        self._tab
-            .get::<i32>(FixedSizeList::VT_LISTSIZE, Some(0))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<i32>(FixedSizeList::VT_LISTSIZE, Some(0))
+                .unwrap()
+        }
     }
 }
 
@@ -1574,7 +1596,7 @@ impl flatbuffers::Verifiable for FixedSizeList<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-            .visit_field::<i32>(&"listSize", Self::VT_LISTSIZE, false)?
+            .visit_field::<i32>("listSize", Self::VT_LISTSIZE, false)?
             .finish();
         Ok(())
     }
@@ -1588,6 +1610,7 @@ impl<'a> Default for FixedSizeListArgs {
         FixedSizeListArgs { listSize: 0 }
     }
 }
+
 pub struct FixedSizeListBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -1615,8 +1638,8 @@ impl<'a: 'b, 'b> FixedSizeListBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for FixedSizeList<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for FixedSizeList<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("FixedSizeList");
         ds.field("listSize", &self.listSize());
         ds.finish()
@@ -1657,16 +1680,18 @@ pub struct Map<'a> {
 impl<'a> flatbuffers::Follow<'a> for Map<'a> {
     type Inner = Map<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Map<'a> {
+    pub const VT_KEYSSORTED: flatbuffers::VOffsetT = 4;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Map { _tab: table }
     }
     #[allow(unused_mut)]
@@ -1679,14 +1704,17 @@ impl<'a> Map<'a> {
         builder.finish()
     }
 
-    pub const VT_KEYSSORTED: flatbuffers::VOffsetT = 4;
-
     /// Set to true if the keys within each value are sorted
     #[inline]
     pub fn keysSorted(&self) -> bool {
-        self._tab
-            .get::<bool>(Map::VT_KEYSSORTED, Some(false))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<bool>(Map::VT_KEYSSORTED, Some(false))
+                .unwrap()
+        }
     }
 }
 
@@ -1698,7 +1726,7 @@ impl flatbuffers::Verifiable for Map<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-            .visit_field::<bool>(&"keysSorted", Self::VT_KEYSSORTED, false)?
+            .visit_field::<bool>("keysSorted", Self::VT_KEYSSORTED, false)?
             .finish();
         Ok(())
     }
@@ -1712,6 +1740,7 @@ impl<'a> Default for MapArgs {
         MapArgs { keysSorted: false }
     }
 }
+
 pub struct MapBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -1737,8 +1766,8 @@ impl<'a: 'b, 'b> MapBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Map<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Map<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Map");
         ds.field("keysSorted", &self.keysSorted());
         ds.finish()
@@ -1758,16 +1787,19 @@ pub struct Union<'a> {
 impl<'a> flatbuffers::Follow<'a> for Union<'a> {
     type Inner = Union<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Union<'a> {
+    pub const VT_MODE: flatbuffers::VOffsetT = 4;
+    pub const VT_TYPEIDS: flatbuffers::VOffsetT = 6;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Union { _tab: table }
     }
     #[allow(unused_mut)]
@@ -1783,22 +1815,29 @@ impl<'a> Union<'a> {
         builder.finish()
     }
 
-    pub const VT_MODE: flatbuffers::VOffsetT = 4;
-    pub const VT_TYPEIDS: flatbuffers::VOffsetT = 6;
-
     #[inline]
     pub fn mode(&self) -> UnionMode {
-        self._tab
-            .get::<UnionMode>(Union::VT_MODE, Some(UnionMode::Sparse))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<UnionMode>(Union::VT_MODE, Some(UnionMode::Sparse))
+                .unwrap()
+        }
     }
     #[inline]
     pub fn typeIds(&self) -> Option<flatbuffers::Vector<'a, i32>> {
-        self._tab
-            .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, i32>>>(
-                Union::VT_TYPEIDS,
-                None,
-            )
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, i32>>>(
+                    Union::VT_TYPEIDS,
+                    None,
+                )
+        }
     }
 }
 
@@ -1810,9 +1849,9 @@ impl flatbuffers::Verifiable for Union<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-            .visit_field::<UnionMode>(&"mode", Self::VT_MODE, false)?
+            .visit_field::<UnionMode>("mode", Self::VT_MODE, false)?
             .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, i32>>>(
-                &"typeIds",
+                "typeIds",
                 Self::VT_TYPEIDS,
                 false,
             )?
@@ -1833,6 +1872,7 @@ impl<'a> Default for UnionArgs<'a> {
         }
     }
 }
+
 pub struct UnionBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -1866,8 +1906,8 @@ impl<'a: 'b, 'b> UnionBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Union<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Union<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Union");
         ds.field("mode", &self.mode());
         ds.field("typeIds", &self.typeIds());
@@ -1884,16 +1924,19 @@ pub struct Int<'a> {
 impl<'a> flatbuffers::Follow<'a> for Int<'a> {
     type Inner = Int<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Int<'a> {
+    pub const VT_BITWIDTH: flatbuffers::VOffsetT = 4;
+    pub const VT_IS_SIGNED: flatbuffers::VOffsetT = 6;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Int { _tab: table }
     }
     #[allow(unused_mut)]
@@ -1907,18 +1950,23 @@ impl<'a> Int<'a> {
         builder.finish()
     }
 
-    pub const VT_BITWIDTH: flatbuffers::VOffsetT = 4;
-    pub const VT_IS_SIGNED: flatbuffers::VOffsetT = 6;
-
     #[inline]
     pub fn bitWidth(&self) -> i32 {
-        self._tab.get::<i32>(Int::VT_BITWIDTH, Some(0)).unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe { self._tab.get::<i32>(Int::VT_BITWIDTH, Some(0)).unwrap() }
     }
     #[inline]
     pub fn is_signed(&self) -> bool {
-        self._tab
-            .get::<bool>(Int::VT_IS_SIGNED, Some(false))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<bool>(Int::VT_IS_SIGNED, Some(false))
+                .unwrap()
+        }
     }
 }
 
@@ -1930,8 +1978,8 @@ impl flatbuffers::Verifiable for Int<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-            .visit_field::<i32>(&"bitWidth", Self::VT_BITWIDTH, false)?
-            .visit_field::<bool>(&"is_signed", Self::VT_IS_SIGNED, false)?
+            .visit_field::<i32>("bitWidth", Self::VT_BITWIDTH, false)?
+            .visit_field::<bool>("is_signed", Self::VT_IS_SIGNED, false)?
             .finish();
         Ok(())
     }
@@ -1949,6 +1997,7 @@ impl<'a> Default for IntArgs {
         }
     }
 }
+
 pub struct IntBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -1978,8 +2027,8 @@ impl<'a: 'b, 'b> IntBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Int<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Int<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Int");
         ds.field("bitWidth", &self.bitWidth());
         ds.field("is_signed", &self.is_signed());
@@ -1996,16 +2045,18 @@ pub struct FloatingPoint<'a> {
 impl<'a> flatbuffers::Follow<'a> for FloatingPoint<'a> {
     type Inner = FloatingPoint<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> FloatingPoint<'a> {
+    pub const VT_PRECISION: flatbuffers::VOffsetT = 4;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         FloatingPoint { _tab: table }
     }
     #[allow(unused_mut)]
@@ -2018,13 +2069,16 @@ impl<'a> FloatingPoint<'a> {
         builder.finish()
     }
 
-    pub const VT_PRECISION: flatbuffers::VOffsetT = 4;
-
     #[inline]
     pub fn precision(&self) -> Precision {
-        self._tab
-            .get::<Precision>(FloatingPoint::VT_PRECISION, Some(Precision::HALF))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<Precision>(FloatingPoint::VT_PRECISION, Some(Precision::HALF))
+                .unwrap()
+        }
     }
 }
 
@@ -2036,7 +2090,7 @@ impl flatbuffers::Verifiable for FloatingPoint<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-            .visit_field::<Precision>(&"precision", Self::VT_PRECISION, false)?
+            .visit_field::<Precision>("precision", Self::VT_PRECISION, false)?
             .finish();
         Ok(())
     }
@@ -2052,6 +2106,7 @@ impl<'a> Default for FloatingPointArgs {
         }
     }
 }
+
 pub struct FloatingPointBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -2082,8 +2137,8 @@ impl<'a: 'b, 'b> FloatingPointBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for FloatingPoint<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for FloatingPoint<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("FloatingPoint");
         ds.field("precision", &self.precision());
         ds.finish()
@@ -2100,16 +2155,16 @@ pub struct Utf8<'a> {
 impl<'a> flatbuffers::Follow<'a> for Utf8<'a> {
     type Inner = Utf8<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Utf8<'a> {
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Utf8 { _tab: table }
     }
     #[allow(unused_mut)]
@@ -2140,6 +2195,7 @@ impl<'a> Default for Utf8Args {
         Utf8Args {}
     }
 }
+
 pub struct Utf8Builder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -2160,8 +2216,8 @@ impl<'a: 'b, 'b> Utf8Builder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Utf8<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Utf8<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Utf8");
         ds.finish()
     }
@@ -2177,16 +2233,16 @@ pub struct Binary<'a> {
 impl<'a> flatbuffers::Follow<'a> for Binary<'a> {
     type Inner = Binary<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Binary<'a> {
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Binary { _tab: table }
     }
     #[allow(unused_mut)]
@@ -2217,6 +2273,7 @@ impl<'a> Default for BinaryArgs {
         BinaryArgs {}
     }
 }
+
 pub struct BinaryBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -2239,8 +2296,8 @@ impl<'a: 'b, 'b> BinaryBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Binary<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Binary<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Binary");
         ds.finish()
     }
@@ -2257,16 +2314,16 @@ pub struct LargeUtf8<'a> {
 impl<'a> flatbuffers::Follow<'a> for LargeUtf8<'a> {
     type Inner = LargeUtf8<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> LargeUtf8<'a> {
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         LargeUtf8 { _tab: table }
     }
     #[allow(unused_mut)]
@@ -2297,6 +2354,7 @@ impl<'a> Default for LargeUtf8Args {
         LargeUtf8Args {}
     }
 }
+
 pub struct LargeUtf8Builder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -2319,8 +2377,8 @@ impl<'a: 'b, 'b> LargeUtf8Builder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for LargeUtf8<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for LargeUtf8<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("LargeUtf8");
         ds.finish()
     }
@@ -2337,16 +2395,16 @@ pub struct LargeBinary<'a> {
 impl<'a> flatbuffers::Follow<'a> for LargeBinary<'a> {
     type Inner = LargeBinary<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> LargeBinary<'a> {
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         LargeBinary { _tab: table }
     }
     #[allow(unused_mut)]
@@ -2377,6 +2435,7 @@ impl<'a> Default for LargeBinaryArgs {
         LargeBinaryArgs {}
     }
 }
+
 pub struct LargeBinaryBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -2399,8 +2458,8 @@ impl<'a: 'b, 'b> LargeBinaryBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for LargeBinary<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for LargeBinary<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("LargeBinary");
         ds.finish()
     }
@@ -2415,16 +2474,18 @@ pub struct FixedSizeBinary<'a> {
 impl<'a> flatbuffers::Follow<'a> for FixedSizeBinary<'a> {
     type Inner = FixedSizeBinary<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> FixedSizeBinary<'a> {
+    pub const VT_BYTEWIDTH: flatbuffers::VOffsetT = 4;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         FixedSizeBinary { _tab: table }
     }
     #[allow(unused_mut)]
@@ -2437,14 +2498,17 @@ impl<'a> FixedSizeBinary<'a> {
         builder.finish()
     }
 
-    pub const VT_BYTEWIDTH: flatbuffers::VOffsetT = 4;
-
     /// Number of bytes per value
     #[inline]
     pub fn byteWidth(&self) -> i32 {
-        self._tab
-            .get::<i32>(FixedSizeBinary::VT_BYTEWIDTH, Some(0))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<i32>(FixedSizeBinary::VT_BYTEWIDTH, Some(0))
+                .unwrap()
+        }
     }
 }
 
@@ -2456,7 +2520,7 @@ impl flatbuffers::Verifiable for FixedSizeBinary<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-            .visit_field::<i32>(&"byteWidth", Self::VT_BYTEWIDTH, false)?
+            .visit_field::<i32>("byteWidth", Self::VT_BYTEWIDTH, false)?
             .finish();
         Ok(())
     }
@@ -2470,6 +2534,7 @@ impl<'a> Default for FixedSizeBinaryArgs {
         FixedSizeBinaryArgs { byteWidth: 0 }
     }
 }
+
 pub struct FixedSizeBinaryBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -2497,8 +2562,8 @@ impl<'a: 'b, 'b> FixedSizeBinaryBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for FixedSizeBinary<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for FixedSizeBinary<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("FixedSizeBinary");
         ds.field("byteWidth", &self.byteWidth());
         ds.finish()
@@ -2514,16 +2579,16 @@ pub struct Bool<'a> {
 impl<'a> flatbuffers::Follow<'a> for Bool<'a> {
     type Inner = Bool<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Bool<'a> {
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Bool { _tab: table }
     }
     #[allow(unused_mut)]
@@ -2554,6 +2619,7 @@ impl<'a> Default for BoolArgs {
         BoolArgs {}
     }
 }
+
 pub struct BoolBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -2574,8 +2640,8 @@ impl<'a: 'b, 'b> BoolBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Bool<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Bool<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Bool");
         ds.finish()
     }
@@ -2594,16 +2660,20 @@ pub struct Decimal<'a> {
 impl<'a> flatbuffers::Follow<'a> for Decimal<'a> {
     type Inner = Decimal<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Decimal<'a> {
+    pub const VT_PRECISION: flatbuffers::VOffsetT = 4;
+    pub const VT_SCALE: flatbuffers::VOffsetT = 6;
+    pub const VT_BITWIDTH: flatbuffers::VOffsetT = 8;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Decimal { _tab: table }
     }
     #[allow(unused_mut)]
@@ -2618,29 +2688,38 @@ impl<'a> Decimal<'a> {
         builder.finish()
     }
 
-    pub const VT_PRECISION: flatbuffers::VOffsetT = 4;
-    pub const VT_SCALE: flatbuffers::VOffsetT = 6;
-    pub const VT_BITWIDTH: flatbuffers::VOffsetT = 8;
-
     /// Total number of decimal digits
     #[inline]
     pub fn precision(&self) -> i32 {
-        self._tab
-            .get::<i32>(Decimal::VT_PRECISION, Some(0))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<i32>(Decimal::VT_PRECISION, Some(0))
+                .unwrap()
+        }
     }
     /// Number of digits after the decimal point "."
     #[inline]
     pub fn scale(&self) -> i32 {
-        self._tab.get::<i32>(Decimal::VT_SCALE, Some(0)).unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe { self._tab.get::<i32>(Decimal::VT_SCALE, Some(0)).unwrap() }
     }
     /// Number of bits per value. The only accepted widths are 128 and 256.
     /// We use bitWidth for consistency with Int::bitWidth.
     #[inline]
     pub fn bitWidth(&self) -> i32 {
-        self._tab
-            .get::<i32>(Decimal::VT_BITWIDTH, Some(128))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<i32>(Decimal::VT_BITWIDTH, Some(128))
+                .unwrap()
+        }
     }
 }
 
@@ -2652,9 +2731,9 @@ impl flatbuffers::Verifiable for Decimal<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-            .visit_field::<i32>(&"precision", Self::VT_PRECISION, false)?
-            .visit_field::<i32>(&"scale", Self::VT_SCALE, false)?
-            .visit_field::<i32>(&"bitWidth", Self::VT_BITWIDTH, false)?
+            .visit_field::<i32>("precision", Self::VT_PRECISION, false)?
+            .visit_field::<i32>("scale", Self::VT_SCALE, false)?
+            .visit_field::<i32>("bitWidth", Self::VT_BITWIDTH, false)?
             .finish();
         Ok(())
     }
@@ -2674,6 +2753,7 @@ impl<'a> Default for DecimalArgs {
         }
     }
 }
+
 pub struct DecimalBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -2710,8 +2790,8 @@ impl<'a: 'b, 'b> DecimalBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Decimal<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Decimal<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Decimal");
         ds.field("precision", &self.precision());
         ds.field("scale", &self.scale());
@@ -2722,8 +2802,8 @@ impl std::fmt::Debug for Decimal<'_> {
 pub enum DateOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
-/// Date is either a 32-bit or 64-bit type representing elapsed time since UNIX
-/// epoch (1970-01-01), stored in either of two units:
+/// Date is either a 32-bit or 64-bit signed integer type representing an
+/// elapsed time since UNIX epoch (1970-01-01), stored in either of two units:
 ///
 /// * Milliseconds (64 bits) indicating UNIX time elapsed since the epoch (no
 ///   leap seconds), where the values are evenly divisible by 86400000
@@ -2735,16 +2815,18 @@ pub struct Date<'a> {
 impl<'a> flatbuffers::Follow<'a> for Date<'a> {
     type Inner = Date<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Date<'a> {
+    pub const VT_UNIT: flatbuffers::VOffsetT = 4;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Date { _tab: table }
     }
     #[allow(unused_mut)]
@@ -2757,13 +2839,16 @@ impl<'a> Date<'a> {
         builder.finish()
     }
 
-    pub const VT_UNIT: flatbuffers::VOffsetT = 4;
-
     #[inline]
     pub fn unit(&self) -> DateUnit {
-        self._tab
-            .get::<DateUnit>(Date::VT_UNIT, Some(DateUnit::MILLISECOND))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<DateUnit>(Date::VT_UNIT, Some(DateUnit::MILLISECOND))
+                .unwrap()
+        }
     }
 }
 
@@ -2775,7 +2860,7 @@ impl flatbuffers::Verifiable for Date<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-            .visit_field::<DateUnit>(&"unit", Self::VT_UNIT, false)?
+            .visit_field::<DateUnit>("unit", Self::VT_UNIT, false)?
             .finish();
         Ok(())
     }
@@ -2791,6 +2876,7 @@ impl<'a> Default for DateArgs {
         }
     }
 }
+
 pub struct DateBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -2816,8 +2902,8 @@ impl<'a: 'b, 'b> DateBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Date<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Date<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Date");
         ds.field("unit", &self.unit());
         ds.finish()
@@ -2826,9 +2912,20 @@ impl std::fmt::Debug for Date<'_> {
 pub enum TimeOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
-/// Time type. The physical storage type depends on the unit
-/// - SECOND and MILLISECOND: 32 bits
-/// - MICROSECOND and NANOSECOND: 64 bits
+/// Time is either a 32-bit or 64-bit signed integer type representing an
+/// elapsed time since midnight, stored in either of four units: seconds,
+/// milliseconds, microseconds or nanoseconds.
+///
+/// The integer `bitWidth` depends on the `unit` and must be one of the following:
+/// * SECOND and MILLISECOND: 32 bits
+/// * MICROSECOND and NANOSECOND: 64 bits
+///
+/// The allowed values are between 0 (inclusive) and 86400 (=24*60*60) seconds
+/// (exclusive), adjusted for the time unit (for example, up to 86400000
+/// exclusive for the MILLISECOND unit).
+/// This definition doesn't allow for leap seconds. Time values from
+/// measurements with leap seconds will need to be corrected when ingesting
+/// into Arrow (for example by replacing the value 86400 with 86399).
 pub struct Time<'a> {
     pub _tab: flatbuffers::Table<'a>,
 }
@@ -2836,16 +2933,19 @@ pub struct Time<'a> {
 impl<'a> flatbuffers::Follow<'a> for Time<'a> {
     type Inner = Time<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Time<'a> {
+    pub const VT_UNIT: flatbuffers::VOffsetT = 4;
+    pub const VT_BITWIDTH: flatbuffers::VOffsetT = 6;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Time { _tab: table }
     }
     #[allow(unused_mut)]
@@ -2859,18 +2959,23 @@ impl<'a> Time<'a> {
         builder.finish()
     }
 
-    pub const VT_UNIT: flatbuffers::VOffsetT = 4;
-    pub const VT_BITWIDTH: flatbuffers::VOffsetT = 6;
-
     #[inline]
     pub fn unit(&self) -> TimeUnit {
-        self._tab
-            .get::<TimeUnit>(Time::VT_UNIT, Some(TimeUnit::MILLISECOND))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<TimeUnit>(Time::VT_UNIT, Some(TimeUnit::MILLISECOND))
+                .unwrap()
+        }
     }
     #[inline]
     pub fn bitWidth(&self) -> i32 {
-        self._tab.get::<i32>(Time::VT_BITWIDTH, Some(32)).unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe { self._tab.get::<i32>(Time::VT_BITWIDTH, Some(32)).unwrap() }
     }
 }
 
@@ -2882,8 +2987,8 @@ impl flatbuffers::Verifiable for Time<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-            .visit_field::<TimeUnit>(&"unit", Self::VT_UNIT, false)?
-            .visit_field::<i32>(&"bitWidth", Self::VT_BITWIDTH, false)?
+            .visit_field::<TimeUnit>("unit", Self::VT_UNIT, false)?
+            .visit_field::<i32>("bitWidth", Self::VT_BITWIDTH, false)?
             .finish();
         Ok(())
     }
@@ -2901,6 +3006,7 @@ impl<'a> Default for TimeArgs {
         }
     }
 }
+
 pub struct TimeBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -2930,8 +3036,8 @@ impl<'a: 'b, 'b> TimeBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Time<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Time<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Time");
         ds.field("unit", &self.unit());
         ds.field("bitWidth", &self.bitWidth());
@@ -2941,12 +3047,111 @@ impl std::fmt::Debug for Time<'_> {
 pub enum TimestampOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
-/// Time elapsed from the Unix epoch, 00:00:00.000 on 1 January 1970, excluding
-/// leap seconds, as a 64-bit integer. Note that UNIX time does not include
-/// leap seconds.
+/// Timestamp is a 64-bit signed integer representing an elapsed time since a
+/// fixed epoch, stored in either of four units: seconds, milliseconds,
+/// microseconds or nanoseconds, and is optionally annotated with a timezone.
 ///
-/// The Timestamp metadata supports both "time zone naive" and "time zone
-/// aware" timestamps. Read about the timezone attribute for more detail
+/// Timestamp values do not include any leap seconds (in other words, all
+/// days are considered 86400 seconds long).
+///
+/// Timestamps with a non-empty timezone
+/// ------------------------------------
+///
+/// If a Timestamp column has a non-empty timezone value, its epoch is
+/// 1970-01-01 00:00:00 (January 1st 1970, midnight) in the *UTC* timezone
+/// (the Unix epoch), regardless of the Timestamp's own timezone.
+///
+/// Therefore, timestamp values with a non-empty timezone correspond to
+/// physical points in time together with some additional information about
+/// how the data was obtained and/or how to display it (the timezone).
+///
+///   For example, the timestamp value 0 with the timezone string "Europe/Paris"
+///   corresponds to "January 1st 1970, 00h00" in the UTC timezone, but the
+///   application may prefer to display it as "January 1st 1970, 01h00" in
+///   the Europe/Paris timezone (which is the same physical point in time).
+///
+/// One consequence is that timestamp values with a non-empty timezone
+/// can be compared and ordered directly, since they all share the same
+/// well-known point of reference (the Unix epoch).
+///
+/// Timestamps with an unset / empty timezone
+/// -----------------------------------------
+///
+/// If a Timestamp column has no timezone value, its epoch is
+/// 1970-01-01 00:00:00 (January 1st 1970, midnight) in an *unknown* timezone.
+///
+/// Therefore, timestamp values without a timezone cannot be meaningfully
+/// interpreted as physical points in time, but only as calendar / clock
+/// indications ("wall clock time") in an unspecified timezone.
+///
+///   For example, the timestamp value 0 with an empty timezone string
+///   corresponds to "January 1st 1970, 00h00" in an unknown timezone: there
+///   is not enough information to interpret it as a well-defined physical
+///   point in time.
+///
+/// One consequence is that timestamp values without a timezone cannot
+/// be reliably compared or ordered, since they may have different points of
+/// reference.  In particular, it is *not* possible to interpret an unset
+/// or empty timezone as the same as "UTC".
+///
+/// Conversion between timezones
+/// ----------------------------
+///
+/// If a Timestamp column has a non-empty timezone, changing the timezone
+/// to a different non-empty value is a metadata-only operation:
+/// the timestamp values need not change as their point of reference remains
+/// the same (the Unix epoch).
+///
+/// However, if a Timestamp column has no timezone value, changing it to a
+/// non-empty value requires to think about the desired semantics.
+/// One possibility is to assume that the original timestamp values are
+/// relative to the epoch of the timezone being set; timestamp values should
+/// then adjusted to the Unix epoch (for example, changing the timezone from
+/// empty to "Europe/Paris" would require converting the timestamp values
+/// from "Europe/Paris" to "UTC", which seems counter-intuitive but is
+/// nevertheless correct).
+///
+/// Guidelines for encoding data from external libraries
+/// ----------------------------------------------------
+///
+/// Date & time libraries often have multiple different data types for temporal
+/// data. In order to ease interoperability between different implementations the
+/// Arrow project has some recommendations for encoding these types into a Timestamp
+/// column.
+///
+/// An "instant" represents a physical point in time that has no relevant timezone
+/// (for example, astronomical data). To encode an instant, use a Timestamp with
+/// the timezone string set to "UTC", and make sure the Timestamp values
+/// are relative to the UTC epoch (January 1st 1970, midnight).
+///
+/// A "zoned date-time" represents a physical point in time annotated with an
+/// informative timezone (for example, the timezone in which the data was
+/// recorded).  To encode a zoned date-time, use a Timestamp with the timezone
+/// string set to the name of the timezone, and make sure the Timestamp values
+/// are relative to the UTC epoch (January 1st 1970, midnight).
+///
+///  (There is some ambiguity between an instant and a zoned date-time with the
+///   UTC timezone.  Both of these are stored the same in Arrow.  Typically,
+///   this distinction does not matter.  If it does, then an application should
+///   use custom metadata or an extension type to distinguish between the two cases.)
+///
+/// An "offset date-time" represents a physical point in time combined with an
+/// explicit offset from UTC.  To encode an offset date-time, use a Timestamp
+/// with the timezone string set to the numeric timezone offset string
+/// (e.g. "+03:00"), and make sure the Timestamp values are relative to
+/// the UTC epoch (January 1st 1970, midnight).
+///
+/// A "naive date-time" (also called "local date-time" in some libraries)
+/// represents a wall clock time combined with a calendar date, but with
+/// no indication of how to map this information to a physical point in time.
+/// Naive date-times must be handled with care because of this missing
+/// information, and also because daylight saving time (DST) may make
+/// some values ambiguous or non-existent. A naive date-time may be
+/// stored as a struct with Date and Time fields. However, it may also be
+/// encoded into a Timestamp column with an empty timezone. The timestamp
+/// values should be computed "as if" the timezone of the date-time values
+/// was UTC; for example, the naive date-time "January 1st 1970, 00h00" would
+/// be encoded as timestamp value 0.
 pub struct Timestamp<'a> {
     pub _tab: flatbuffers::Table<'a>,
 }
@@ -2954,16 +3159,19 @@ pub struct Timestamp<'a> {
 impl<'a> flatbuffers::Follow<'a> for Timestamp<'a> {
     type Inner = Timestamp<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Timestamp<'a> {
+    pub const VT_UNIT: flatbuffers::VOffsetT = 4;
+    pub const VT_TIMEZONE: flatbuffers::VOffsetT = 6;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Timestamp { _tab: table }
     }
     #[allow(unused_mut)]
@@ -2979,39 +3187,36 @@ impl<'a> Timestamp<'a> {
         builder.finish()
     }
 
-    pub const VT_UNIT: flatbuffers::VOffsetT = 4;
-    pub const VT_TIMEZONE: flatbuffers::VOffsetT = 6;
-
     #[inline]
     pub fn unit(&self) -> TimeUnit {
-        self._tab
-            .get::<TimeUnit>(Timestamp::VT_UNIT, Some(TimeUnit::SECOND))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<TimeUnit>(Timestamp::VT_UNIT, Some(TimeUnit::SECOND))
+                .unwrap()
+        }
     }
-    /// The time zone is a string indicating the name of a time zone, one of:
+    /// The timezone is an optional string indicating the name of a timezone,
+    /// one of:
     ///
-    /// * As used in the Olson time zone database (the "tz database" or
-    ///   "tzdata"), such as "America/New_York"
-    /// * An absolute time zone offset of the form +XX:XX or -XX:XX, such as +07:30
+    /// * As used in the Olson timezone database (the "tz database" or
+    ///   "tzdata"), such as "America/New_York".
+    /// * An absolute timezone offset of the form "+XX:XX" or "-XX:XX",
+    ///   such as "+07:30".
     ///
     /// Whether a timezone string is present indicates different semantics about
-    /// the data:
-    ///
-    /// * If the time zone is null or equal to an empty string, the data is "time
-    ///   zone naive" and shall be displayed *as is* to the user, not localized
-    ///   to the locale of the user. This data can be though of as UTC but
-    ///   without having "UTC" as the time zone, it is not considered to be
-    ///   localized to any time zone
-    ///
-    /// * If the time zone is set to a valid value, values can be displayed as
-    ///   "localized" to that time zone, even though the underlying 64-bit
-    ///   integers are identical to the same data stored in UTC. Converting
-    ///   between time zones is a metadata-only operation and does not change the
-    ///   underlying values
+    /// the data (see above).
     #[inline]
     pub fn timezone(&self) -> Option<&'a str> {
-        self._tab
-            .get::<flatbuffers::ForwardsUOffset<&str>>(Timestamp::VT_TIMEZONE, None)
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<flatbuffers::ForwardsUOffset<&str>>(Timestamp::VT_TIMEZONE, None)
+        }
     }
 }
 
@@ -3023,9 +3228,9 @@ impl flatbuffers::Verifiable for Timestamp<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-            .visit_field::<TimeUnit>(&"unit", Self::VT_UNIT, false)?
+            .visit_field::<TimeUnit>("unit", Self::VT_UNIT, false)?
             .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
-                &"timezone",
+                "timezone",
                 Self::VT_TIMEZONE,
                 false,
             )?
@@ -3046,6 +3251,7 @@ impl<'a> Default for TimestampArgs<'a> {
         }
     }
 }
+
 pub struct TimestampBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -3080,8 +3286,8 @@ impl<'a: 'b, 'b> TimestampBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Timestamp<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Timestamp<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Timestamp");
         ds.field("unit", &self.unit());
         ds.field("timezone", &self.timezone());
@@ -3098,16 +3304,18 @@ pub struct Interval<'a> {
 impl<'a> flatbuffers::Follow<'a> for Interval<'a> {
     type Inner = Interval<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Interval<'a> {
+    pub const VT_UNIT: flatbuffers::VOffsetT = 4;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Interval { _tab: table }
     }
     #[allow(unused_mut)]
@@ -3120,13 +3328,16 @@ impl<'a> Interval<'a> {
         builder.finish()
     }
 
-    pub const VT_UNIT: flatbuffers::VOffsetT = 4;
-
     #[inline]
     pub fn unit(&self) -> IntervalUnit {
-        self._tab
-            .get::<IntervalUnit>(Interval::VT_UNIT, Some(IntervalUnit::YEAR_MONTH))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<IntervalUnit>(Interval::VT_UNIT, Some(IntervalUnit::YEAR_MONTH))
+                .unwrap()
+        }
     }
 }
 
@@ -3138,7 +3349,7 @@ impl flatbuffers::Verifiable for Interval<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-            .visit_field::<IntervalUnit>(&"unit", Self::VT_UNIT, false)?
+            .visit_field::<IntervalUnit>("unit", Self::VT_UNIT, false)?
             .finish();
         Ok(())
     }
@@ -3154,6 +3365,7 @@ impl<'a> Default for IntervalArgs {
         }
     }
 }
+
 pub struct IntervalBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -3184,8 +3396,8 @@ impl<'a: 'b, 'b> IntervalBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Interval<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Interval<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Interval");
         ds.field("unit", &self.unit());
         ds.finish()
@@ -3201,16 +3413,18 @@ pub struct Duration<'a> {
 impl<'a> flatbuffers::Follow<'a> for Duration<'a> {
     type Inner = Duration<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Duration<'a> {
+    pub const VT_UNIT: flatbuffers::VOffsetT = 4;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Duration { _tab: table }
     }
     #[allow(unused_mut)]
@@ -3223,13 +3437,16 @@ impl<'a> Duration<'a> {
         builder.finish()
     }
 
-    pub const VT_UNIT: flatbuffers::VOffsetT = 4;
-
     #[inline]
     pub fn unit(&self) -> TimeUnit {
-        self._tab
-            .get::<TimeUnit>(Duration::VT_UNIT, Some(TimeUnit::MILLISECOND))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<TimeUnit>(Duration::VT_UNIT, Some(TimeUnit::MILLISECOND))
+                .unwrap()
+        }
     }
 }
 
@@ -3241,7 +3458,7 @@ impl flatbuffers::Verifiable for Duration<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-            .visit_field::<TimeUnit>(&"unit", Self::VT_UNIT, false)?
+            .visit_field::<TimeUnit>("unit", Self::VT_UNIT, false)?
             .finish();
         Ok(())
     }
@@ -3257,6 +3474,7 @@ impl<'a> Default for DurationArgs {
         }
     }
 }
+
 pub struct DurationBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -3284,8 +3502,8 @@ impl<'a: 'b, 'b> DurationBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Duration<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Duration<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Duration");
         ds.field("unit", &self.unit());
         ds.finish()
@@ -3304,16 +3522,19 @@ pub struct KeyValue<'a> {
 impl<'a> flatbuffers::Follow<'a> for KeyValue<'a> {
     type Inner = KeyValue<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> KeyValue<'a> {
+    pub const VT_KEY: flatbuffers::VOffsetT = 4;
+    pub const VT_VALUE: flatbuffers::VOffsetT = 6;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         KeyValue { _tab: table }
     }
     #[allow(unused_mut)]
@@ -3331,18 +3552,25 @@ impl<'a> KeyValue<'a> {
         builder.finish()
     }
 
-    pub const VT_KEY: flatbuffers::VOffsetT = 4;
-    pub const VT_VALUE: flatbuffers::VOffsetT = 6;
-
     #[inline]
     pub fn key(&self) -> Option<&'a str> {
-        self._tab
-            .get::<flatbuffers::ForwardsUOffset<&str>>(KeyValue::VT_KEY, None)
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<flatbuffers::ForwardsUOffset<&str>>(KeyValue::VT_KEY, None)
+        }
     }
     #[inline]
     pub fn value(&self) -> Option<&'a str> {
-        self._tab
-            .get::<flatbuffers::ForwardsUOffset<&str>>(KeyValue::VT_VALUE, None)
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<flatbuffers::ForwardsUOffset<&str>>(KeyValue::VT_VALUE, None)
+        }
     }
 }
 
@@ -3355,12 +3583,12 @@ impl flatbuffers::Verifiable for KeyValue<'_> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
             .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
-                &"key",
+                "key",
                 Self::VT_KEY,
                 false,
             )?
             .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
-                &"value",
+                "value",
                 Self::VT_VALUE,
                 false,
             )?
@@ -3381,6 +3609,7 @@ impl<'a> Default for KeyValueArgs<'a> {
         }
     }
 }
+
 pub struct KeyValueBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -3413,8 +3642,8 @@ impl<'a: 'b, 'b> KeyValueBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for KeyValue<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for KeyValue<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("KeyValue");
         ds.field("key", &self.key());
         ds.field("value", &self.value());
@@ -3431,16 +3660,21 @@ pub struct DictionaryEncoding<'a> {
 impl<'a> flatbuffers::Follow<'a> for DictionaryEncoding<'a> {
     type Inner = DictionaryEncoding<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> DictionaryEncoding<'a> {
+    pub const VT_ID: flatbuffers::VOffsetT = 4;
+    pub const VT_INDEXTYPE: flatbuffers::VOffsetT = 6;
+    pub const VT_ISORDERED: flatbuffers::VOffsetT = 8;
+    pub const VT_DICTIONARYKIND: flatbuffers::VOffsetT = 10;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         DictionaryEncoding { _tab: table }
     }
     #[allow(unused_mut)]
@@ -3458,19 +3692,19 @@ impl<'a> DictionaryEncoding<'a> {
         builder.finish()
     }
 
-    pub const VT_ID: flatbuffers::VOffsetT = 4;
-    pub const VT_INDEXTYPE: flatbuffers::VOffsetT = 6;
-    pub const VT_ISORDERED: flatbuffers::VOffsetT = 8;
-    pub const VT_DICTIONARYKIND: flatbuffers::VOffsetT = 10;
-
     /// The known dictionary id in the application where this data is used. In
     /// the file or streaming formats, the dictionary ids are found in the
     /// DictionaryBatch messages
     #[inline]
     pub fn id(&self) -> i64 {
-        self._tab
-            .get::<i64>(DictionaryEncoding::VT_ID, Some(0))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<i64>(DictionaryEncoding::VT_ID, Some(0))
+                .unwrap()
+        }
     }
     /// The dictionary indices are constrained to be non-negative integers. If
     /// this field is null, the indices must be signed int32. To maximize
@@ -3479,10 +3713,15 @@ impl<'a> DictionaryEncoding<'a> {
     /// and to avoid uint64 indices unless they are required by an application.
     #[inline]
     pub fn indexType(&self) -> Option<Int<'a>> {
-        self._tab.get::<flatbuffers::ForwardsUOffset<Int>>(
-            DictionaryEncoding::VT_INDEXTYPE,
-            None,
-        )
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<flatbuffers::ForwardsUOffset<Int>>(
+                DictionaryEncoding::VT_INDEXTYPE,
+                None,
+            )
+        }
     }
     /// By default, dictionaries are not ordered, or the order does not have
     /// semantic meaning. In some statistical, applications, dictionary-encoding
@@ -3490,18 +3729,28 @@ impl<'a> DictionaryEncoding<'a> {
     /// preserve that metadata here
     #[inline]
     pub fn isOrdered(&self) -> bool {
-        self._tab
-            .get::<bool>(DictionaryEncoding::VT_ISORDERED, Some(false))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<bool>(DictionaryEncoding::VT_ISORDERED, Some(false))
+                .unwrap()
+        }
     }
     #[inline]
     pub fn dictionaryKind(&self) -> DictionaryKind {
-        self._tab
-            .get::<DictionaryKind>(
-                DictionaryEncoding::VT_DICTIONARYKIND,
-                Some(DictionaryKind::DenseArray),
-            )
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<DictionaryKind>(
+                    DictionaryEncoding::VT_DICTIONARYKIND,
+                    Some(DictionaryKind::DenseArray),
+                )
+                .unwrap()
+        }
     }
 }
 
@@ -3513,15 +3762,15 @@ impl flatbuffers::Verifiable for DictionaryEncoding<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-            .visit_field::<i64>(&"id", Self::VT_ID, false)?
+            .visit_field::<i64>("id", Self::VT_ID, false)?
             .visit_field::<flatbuffers::ForwardsUOffset<Int>>(
-                &"indexType",
+                "indexType",
                 Self::VT_INDEXTYPE,
                 false,
             )?
-            .visit_field::<bool>(&"isOrdered", Self::VT_ISORDERED, false)?
+            .visit_field::<bool>("isOrdered", Self::VT_ISORDERED, false)?
             .visit_field::<DictionaryKind>(
-                &"dictionaryKind",
+                "dictionaryKind",
                 Self::VT_DICTIONARYKIND,
                 false,
             )?
@@ -3546,6 +3795,7 @@ impl<'a> Default for DictionaryEncodingArgs<'a> {
         }
     }
 }
+
 pub struct DictionaryEncodingBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -3592,8 +3842,8 @@ impl<'a: 'b, 'b> DictionaryEncodingBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for DictionaryEncoding<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for DictionaryEncoding<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("DictionaryEncoding");
         ds.field("id", &self.id());
         ds.field("indexType", &self.indexType());
@@ -3615,16 +3865,24 @@ pub struct Field<'a> {
 impl<'a> flatbuffers::Follow<'a> for Field<'a> {
     type Inner = Field<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Field<'a> {
+    pub const VT_NAME: flatbuffers::VOffsetT = 4;
+    pub const VT_NULLABLE: flatbuffers::VOffsetT = 6;
+    pub const VT_TYPE_TYPE: flatbuffers::VOffsetT = 8;
+    pub const VT_TYPE_: flatbuffers::VOffsetT = 10;
+    pub const VT_DICTIONARY: flatbuffers::VOffsetT = 12;
+    pub const VT_CHILDREN: flatbuffers::VOffsetT = 14;
+    pub const VT_CUSTOM_METADATA: flatbuffers::VOffsetT = 16;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Field { _tab: table }
     }
     #[allow(unused_mut)]
@@ -3653,50 +3911,67 @@ impl<'a> Field<'a> {
         builder.finish()
     }
 
-    pub const VT_NAME: flatbuffers::VOffsetT = 4;
-    pub const VT_NULLABLE: flatbuffers::VOffsetT = 6;
-    pub const VT_TYPE_TYPE: flatbuffers::VOffsetT = 8;
-    pub const VT_TYPE_: flatbuffers::VOffsetT = 10;
-    pub const VT_DICTIONARY: flatbuffers::VOffsetT = 12;
-    pub const VT_CHILDREN: flatbuffers::VOffsetT = 14;
-    pub const VT_CUSTOM_METADATA: flatbuffers::VOffsetT = 16;
-
     /// Name is not required, in i.e. a List
     #[inline]
     pub fn name(&self) -> Option<&'a str> {
-        self._tab
-            .get::<flatbuffers::ForwardsUOffset<&str>>(Field::VT_NAME, None)
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<flatbuffers::ForwardsUOffset<&str>>(Field::VT_NAME, None)
+        }
     }
     /// Whether or not this field can contain nulls. Should be true in general.
     #[inline]
     pub fn nullable(&self) -> bool {
-        self._tab
-            .get::<bool>(Field::VT_NULLABLE, Some(false))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<bool>(Field::VT_NULLABLE, Some(false))
+                .unwrap()
+        }
     }
     #[inline]
     pub fn type_type(&self) -> Type {
-        self._tab
-            .get::<Type>(Field::VT_TYPE_TYPE, Some(Type::NONE))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<Type>(Field::VT_TYPE_TYPE, Some(Type::NONE))
+                .unwrap()
+        }
     }
     /// This is the type of the decoded value if the field is dictionary encoded.
     #[inline]
     pub fn type_(&self) -> Option<flatbuffers::Table<'a>> {
-        self._tab
-            .get::<flatbuffers::ForwardsUOffset<flatbuffers::Table<'a>>>(
-                Field::VT_TYPE_,
-                None,
-            )
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<flatbuffers::ForwardsUOffset<flatbuffers::Table<'a>>>(
+                    Field::VT_TYPE_,
+                    None,
+                )
+        }
     }
     /// Present only if the field is dictionary encoded.
     #[inline]
     pub fn dictionary(&self) -> Option<DictionaryEncoding<'a>> {
-        self._tab
-            .get::<flatbuffers::ForwardsUOffset<DictionaryEncoding>>(
-                Field::VT_DICTIONARY,
-                None,
-            )
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<flatbuffers::ForwardsUOffset<DictionaryEncoding>>(
+                    Field::VT_DICTIONARY,
+                    None,
+                )
+        }
     }
     /// children apply only to nested data types like Struct, List and Union. For
     /// primitive types children will have length 0.
@@ -3704,24 +3979,39 @@ impl<'a> Field<'a> {
     pub fn children(
         &self,
     ) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Field<'a>>>> {
-        self._tab.get::<flatbuffers::ForwardsUOffset<
-            flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Field>>,
-        >>(Field::VT_CHILDREN, None)
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<flatbuffers::ForwardsUOffset<
+                flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Field>>,
+            >>(Field::VT_CHILDREN, None)
+        }
     }
     /// User-defined metadata
     #[inline]
     pub fn custom_metadata(
         &self,
     ) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue<'a>>>> {
-        self._tab.get::<flatbuffers::ForwardsUOffset<
-            flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue>>,
-        >>(Field::VT_CUSTOM_METADATA, None)
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<flatbuffers::ForwardsUOffset<
+                flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue>>,
+            >>(Field::VT_CUSTOM_METADATA, None)
+        }
     }
     #[inline]
     #[allow(non_snake_case)]
     pub fn type_as_null(&self) -> Option<Null<'a>> {
         if self.type_type() == Type::Null {
-            self.type_().map(Null::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { Null::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3731,7 +4021,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_int(&self) -> Option<Int<'a>> {
         if self.type_type() == Type::Int {
-            self.type_().map(Int::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { Int::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3741,7 +4036,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_floating_point(&self) -> Option<FloatingPoint<'a>> {
         if self.type_type() == Type::FloatingPoint {
-            self.type_().map(FloatingPoint::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { FloatingPoint::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3751,7 +4051,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_binary(&self) -> Option<Binary<'a>> {
         if self.type_type() == Type::Binary {
-            self.type_().map(Binary::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { Binary::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3761,7 +4066,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_utf_8(&self) -> Option<Utf8<'a>> {
         if self.type_type() == Type::Utf8 {
-            self.type_().map(Utf8::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { Utf8::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3771,7 +4081,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_bool(&self) -> Option<Bool<'a>> {
         if self.type_type() == Type::Bool {
-            self.type_().map(Bool::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { Bool::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3781,7 +4096,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_decimal(&self) -> Option<Decimal<'a>> {
         if self.type_type() == Type::Decimal {
-            self.type_().map(Decimal::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { Decimal::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3791,7 +4111,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_date(&self) -> Option<Date<'a>> {
         if self.type_type() == Type::Date {
-            self.type_().map(Date::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { Date::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3801,7 +4126,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_time(&self) -> Option<Time<'a>> {
         if self.type_type() == Type::Time {
-            self.type_().map(Time::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { Time::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3811,7 +4141,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_timestamp(&self) -> Option<Timestamp<'a>> {
         if self.type_type() == Type::Timestamp {
-            self.type_().map(Timestamp::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { Timestamp::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3821,7 +4156,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_interval(&self) -> Option<Interval<'a>> {
         if self.type_type() == Type::Interval {
-            self.type_().map(Interval::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { Interval::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3831,7 +4171,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_list(&self) -> Option<List<'a>> {
         if self.type_type() == Type::List {
-            self.type_().map(List::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { List::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3841,7 +4186,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_struct_(&self) -> Option<Struct_<'a>> {
         if self.type_type() == Type::Struct_ {
-            self.type_().map(Struct_::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { Struct_::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3851,7 +4201,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_union(&self) -> Option<Union<'a>> {
         if self.type_type() == Type::Union {
-            self.type_().map(Union::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { Union::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3861,7 +4216,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_fixed_size_binary(&self) -> Option<FixedSizeBinary<'a>> {
         if self.type_type() == Type::FixedSizeBinary {
-            self.type_().map(FixedSizeBinary::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { FixedSizeBinary::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3871,7 +4231,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_fixed_size_list(&self) -> Option<FixedSizeList<'a>> {
         if self.type_type() == Type::FixedSizeList {
-            self.type_().map(FixedSizeList::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { FixedSizeList::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3881,7 +4246,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_map(&self) -> Option<Map<'a>> {
         if self.type_type() == Type::Map {
-            self.type_().map(Map::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { Map::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3891,7 +4261,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_duration(&self) -> Option<Duration<'a>> {
         if self.type_type() == Type::Duration {
-            self.type_().map(Duration::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { Duration::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3901,7 +4276,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_large_binary(&self) -> Option<LargeBinary<'a>> {
         if self.type_type() == Type::LargeBinary {
-            self.type_().map(LargeBinary::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { LargeBinary::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3911,7 +4291,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_large_utf_8(&self) -> Option<LargeUtf8<'a>> {
         if self.type_type() == Type::LargeUtf8 {
-            self.type_().map(LargeUtf8::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { LargeUtf8::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3921,7 +4306,12 @@ impl<'a> Field<'a> {
     #[allow(non_snake_case)]
     pub fn type_as_large_list(&self) -> Option<LargeList<'a>> {
         if self.type_type() == Type::LargeList {
-            self.type_().map(LargeList::init_from_table)
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { LargeList::init_from_table(t) }
+            })
         } else {
             None
         }
@@ -3936,9 +4326,9 @@ impl flatbuffers::Verifiable for Field<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-     .visit_field::<flatbuffers::ForwardsUOffset<&str>>(&"name", Self::VT_NAME, false)?
-     .visit_field::<bool>(&"nullable", Self::VT_NULLABLE, false)?
-     .visit_union::<Type, _>(&"type_type", Self::VT_TYPE_TYPE, &"type_", Self::VT_TYPE_, false, |key, v, pos| {
+     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("name", Self::VT_NAME, false)?
+     .visit_field::<bool>("nullable", Self::VT_NULLABLE, false)?
+     .visit_union::<Type, _>("type_type", Self::VT_TYPE_TYPE, "type_", Self::VT_TYPE_, false, |key, v, pos| {
         match key {
           Type::Null => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Null>>("Type::Null", pos),
           Type::Int => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Int>>("Type::Int", pos),
@@ -3964,9 +4354,9 @@ impl flatbuffers::Verifiable for Field<'_> {
           _ => Ok(()),
         }
      })?
-     .visit_field::<flatbuffers::ForwardsUOffset<DictionaryEncoding>>(&"dictionary", Self::VT_DICTIONARY, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Field>>>>(&"children", Self::VT_CHILDREN, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<KeyValue>>>>(&"custom_metadata", Self::VT_CUSTOM_METADATA, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<DictionaryEncoding>>("dictionary", Self::VT_DICTIONARY, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Field>>>>("children", Self::VT_CHILDREN, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<KeyValue>>>>("custom_metadata", Self::VT_CUSTOM_METADATA, false)?
      .finish();
         Ok(())
     }
@@ -4002,6 +4392,7 @@ impl<'a> Default for FieldArgs<'a> {
         }
     }
 }
+
 pub struct FieldBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -4078,8 +4469,8 @@ impl<'a: 'b, 'b> FieldBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Field<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Field<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Field");
         ds.field("name", &self.name());
         ds.field("nullable", &self.nullable());
@@ -4318,16 +4709,21 @@ pub struct Schema<'a> {
 impl<'a> flatbuffers::Follow<'a> for Schema<'a> {
     type Inner = Schema<'a>;
     #[inline]
-    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
-            _tab: flatbuffers::Table { buf, loc },
+            _tab: flatbuffers::Table::new(buf, loc),
         }
     }
 }
 
 impl<'a> Schema<'a> {
+    pub const VT_ENDIANNESS: flatbuffers::VOffsetT = 4;
+    pub const VT_FIELDS: flatbuffers::VOffsetT = 6;
+    pub const VT_CUSTOM_METADATA: flatbuffers::VOffsetT = 8;
+    pub const VT_FEATURES: flatbuffers::VOffsetT = 10;
+
     #[inline]
-    pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
         Schema { _tab: table }
     }
     #[allow(unused_mut)]
@@ -4349,44 +4745,59 @@ impl<'a> Schema<'a> {
         builder.finish()
     }
 
-    pub const VT_ENDIANNESS: flatbuffers::VOffsetT = 4;
-    pub const VT_FIELDS: flatbuffers::VOffsetT = 6;
-    pub const VT_CUSTOM_METADATA: flatbuffers::VOffsetT = 8;
-    pub const VT_FEATURES: flatbuffers::VOffsetT = 10;
-
     /// endianness of the buffer
     /// it is Little Endian by default
     /// if endianness doesn't match the underlying system then the vectors need to be converted
     #[inline]
     pub fn endianness(&self) -> Endianness {
-        self._tab
-            .get::<Endianness>(Schema::VT_ENDIANNESS, Some(Endianness::Little))
-            .unwrap()
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<Endianness>(Schema::VT_ENDIANNESS, Some(Endianness::Little))
+                .unwrap()
+        }
     }
     #[inline]
     pub fn fields(
         &self,
     ) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Field<'a>>>> {
-        self._tab.get::<flatbuffers::ForwardsUOffset<
-            flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Field>>,
-        >>(Schema::VT_FIELDS, None)
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<flatbuffers::ForwardsUOffset<
+                flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Field>>,
+            >>(Schema::VT_FIELDS, None)
+        }
     }
     #[inline]
     pub fn custom_metadata(
         &self,
     ) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue<'a>>>> {
-        self._tab.get::<flatbuffers::ForwardsUOffset<
-            flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue>>,
-        >>(Schema::VT_CUSTOM_METADATA, None)
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<flatbuffers::ForwardsUOffset<
+                flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue>>,
+            >>(Schema::VT_CUSTOM_METADATA, None)
+        }
     }
     /// Features used in the stream/file.
     #[inline]
     pub fn features(&self) -> Option<flatbuffers::Vector<'a, Feature>> {
-        self._tab
-            .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, Feature>>>(
-                Schema::VT_FEATURES,
-                None,
-            )
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, Feature>>>(
+                    Schema::VT_FEATURES,
+                    None,
+                )
+        }
     }
 }
 
@@ -4398,10 +4809,10 @@ impl flatbuffers::Verifiable for Schema<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-     .visit_field::<Endianness>(&"endianness", Self::VT_ENDIANNESS, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Field>>>>(&"fields", Self::VT_FIELDS, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<KeyValue>>>>(&"custom_metadata", Self::VT_CUSTOM_METADATA, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, Feature>>>(&"features", Self::VT_FEATURES, false)?
+     .visit_field::<Endianness>("endianness", Self::VT_ENDIANNESS, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Field>>>>("fields", Self::VT_FIELDS, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<KeyValue>>>>("custom_metadata", Self::VT_CUSTOM_METADATA, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, Feature>>>("features", Self::VT_FEATURES, false)?
      .finish();
         Ok(())
     }
@@ -4431,6 +4842,7 @@ impl<'a> Default for SchemaArgs<'a> {
         }
     }
 }
+
 pub struct SchemaBuilder<'a: 'b, 'b> {
     fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
     start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
@@ -4491,8 +4903,8 @@ impl<'a: 'b, 'b> SchemaBuilder<'a, 'b> {
     }
 }
 
-impl std::fmt::Debug for Schema<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Schema<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut ds = f.debug_struct("Schema");
         ds.field("endianness", &self.endianness());
         ds.field("fields", &self.fields());
@@ -4501,18 +4913,6 @@ impl std::fmt::Debug for Schema<'_> {
         ds.finish()
     }
 }
-#[inline]
-#[deprecated(since = "2.0.0", note = "Deprecated in favor of `root_as...` methods.")]
-pub fn get_root_as_schema<'a>(buf: &'a [u8]) -> Schema<'a> {
-    unsafe { flatbuffers::root_unchecked::<Schema<'a>>(buf) }
-}
-
-#[inline]
-#[deprecated(since = "2.0.0", note = "Deprecated in favor of `root_as...` methods.")]
-pub fn get_size_prefixed_root_as_schema<'a>(buf: &'a [u8]) -> Schema<'a> {
-    unsafe { flatbuffers::size_prefixed_root_unchecked::<Schema<'a>>(buf) }
-}
-
 #[inline]
 /// Verifies that a buffer of bytes contains a `Schema`
 /// and returns it.

@@ -892,14 +892,10 @@ mod tests {
         let ts_millis = ts_micros / 1000;
         let ts_secs = ts_millis / 1000;
 
-        let arr_nanos =
-            TimestampNanosecondArray::from_opt_vec(vec![Some(ts_nanos), None], None);
-        let arr_micros =
-            TimestampMicrosecondArray::from_opt_vec(vec![Some(ts_micros), None], None);
-        let arr_millis =
-            TimestampMillisecondArray::from_opt_vec(vec![Some(ts_millis), None], None);
-        let arr_secs =
-            TimestampSecondArray::from_opt_vec(vec![Some(ts_secs), None], None);
+        let arr_nanos = TimestampNanosecondArray::from(vec![Some(ts_nanos), None]);
+        let arr_micros = TimestampMicrosecondArray::from(vec![Some(ts_micros), None]);
+        let arr_millis = TimestampMillisecondArray::from(vec![Some(ts_millis), None]);
+        let arr_secs = TimestampSecondArray::from(vec![Some(ts_secs), None]);
         let arr_names = StringArray::from(vec![Some("a"), Some("b")]);
 
         let schema = Schema::new(vec![

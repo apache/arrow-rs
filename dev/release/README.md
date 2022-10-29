@@ -70,7 +70,7 @@ git pull
 git checkout -b <RELEASE_BRANCH>
 
 # Update versions. Make sure to run it before the next step since we do not want CHANGELOG-old.md affected.
-sed -i '' -e 's/14.0.0/24.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
+sed -i '' -e 's/14.0.0/26.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
 git commit -a -m 'Update version'
 
 # Copy the content of CHANGELOG.md to the beginning of CHANGELOG-old.md
@@ -78,13 +78,16 @@ git commit -a -m 'Update version'
 # ensure your github token is available
 export ARROW_GITHUB_API_TOKEN=<TOKEN>
 
+
 # manully edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
 ./dev/release/update_change_log.sh
 
 # run automated script to copy labels to issues based on referenced PRs
-# (NOTE this must be done by a committer / other who has
+# (NOTE 1:  this must be done by a committer / other who has
 # write access to the repository)
+#
+# NOTE 2: this must be done after creating the initial CHANGELOG file
 python dev/release/label_issues.py
 
 # review change log / edit issues and labels if needed, rerun
@@ -257,6 +260,7 @@ Rust Arrow Crates:
 (cd arrow-flight && cargo publish)
 (cd parquet && cargo publish)
 (cd parquet_derive && cargo publish)
+(cd arrow-integration-test && cargo publish)
 ```
 
 `object_store`

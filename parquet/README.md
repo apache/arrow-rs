@@ -69,6 +69,14 @@ The `parquet` crate provides the following features which may be enabled in your
 - [ ] Predicate pushdown
 - [x] Parquet format 4.0.0 support
 
+## Support for `wasm32-unknown-unknown` target
+
+It's possible to build `parquet` for the `wasm32-unknown-unknown` target, however not all the compression features are currently unsupported due to issues with the upstream crates. In particular, the `zstd` and `lz4` features may have compilation issues. See issue [#180](https://github.com/apache/arrow-rs/issues/180).
+
+```
+cargo build -p parquet --target wasm32-unknown-unknown --no-default-features --features cli,snap,flate2,brotli
+```
+
 ## License
 
 Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0.

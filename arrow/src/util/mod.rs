@@ -32,5 +32,4 @@ pub mod string_writer;
 #[cfg(any(test, feature = "test_utils"))]
 pub mod test_util;
 
-pub use arrow_array::decimal;
 pub(crate) mod reader_parser;

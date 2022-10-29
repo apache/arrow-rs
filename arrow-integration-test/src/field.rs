@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::util::datatype::{data_type_from_json, data_type_to_json};
+use crate::{data_type_from_json, data_type_to_json};
 use arrow::datatypes::{DataType, Field};
 use arrow::error::{ArrowError, Result};
 use std::collections::BTreeMap;

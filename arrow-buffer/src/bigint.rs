@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use num::cast::AsPrimitive;
 use num::BigInt;
 use std::cmp::Ordering;
 
@@ -86,6 +87,15 @@ impl i256 {
         }
     }
 
+    /// Create an integer value from its representation as a byte array in little-endian.
+    #[inline]
+    pub fn from_be_bytes(b: [u8; 32]) -> Self {
+        Self {
+            high: i128::from_be_bytes(b[0..16].try_into().unwrap()),
+            low: u128::from_be_bytes(b[16..32].try_into().unwrap()),
+        }
+    }
+
     pub fn from_i128(v: i128) -> Self {
         let mut bytes = if num::Signed::is_negative(&v) {
             [255_u8; 32]
@@ -127,6 +137,17 @@ impl i256 {
         *t_low = self.low.to_le_bytes();
         let t_high: &mut [u8; 16] = (&mut t[16..32]).try_into().unwrap();
         *t_high = self.high.to_le_bytes();
+        t
+    }
+
+    /// Return the memory representation of this integer as a byte array in big-endian byte order.
+    #[inline]
+    pub fn to_be_bytes(self) -> [u8; 32] {
+        let mut t = [0; 32];
+        let t_low: &mut [u8; 16] = (&mut t[0..16]).try_into().unwrap();
+        *t_low = self.high.to_be_bytes();
+        let t_high: &mut [u8; 16] = (&mut t[16..32]).try_into().unwrap();
+        *t_high = self.low.to_be_bytes();
         t
     }
 
@@ -285,6 +306,55 @@ impl i256 {
         let (val, overflow) = Self::from_bigint_with_overflow(l % r);
         (!overflow).then_some(val)
     }
+
+    /// Performs checked exponentiation
+    #[inline]
+    pub fn checked_pow(self, mut exp: u32) -> Option<Self> {
+        if exp == 0 {
+            return Some(i256::from_i128(1));
+        }
+
+        let mut base = self;
+        let mut acc: Self = i256::from_i128(1);
+
+        while exp > 1 {
+            if (exp & 1) == 1 {
+                acc = acc.checked_mul(base)?;
+            }
+            exp /= 2;
+            base = base.checked_mul(base)?;
+        }
+        // since exp!=0, finally the exp must be 1.
+        // Deal with the final bit of the exponent separately, since
+        // squaring the base afterwards is not necessary and may cause a
+        // needless overflow.
+        acc.checked_mul(base)
+    }
+
+    /// Performs wrapping exponentiation
+    #[inline]
+    pub fn wrapping_pow(self, mut exp: u32) -> Self {
+        if exp == 0 {
+            return i256::from_i128(1);
+        }
+
+        let mut base = self;
+        let mut acc: Self = i256::from_i128(1);
+
+        while exp > 1 {
+            if (exp & 1) == 1 {
+                acc = acc.wrapping_mul(base);
+            }
+            exp /= 2;
+            base = base.wrapping_mul(base);
+        }
+
+        // since exp!=0, finally the exp must be 1.
+        // Deal with the final bit of the exponent separately, since
+        // squaring the base afterwards is not necessary and may cause a
+        // needless overflow.
+        acc.wrapping_mul(base)
+    }
 }
 
 /// Performs an unsigned multiplication of `a * b` returning a tuple of
@@ -349,6 +419,21 @@ derive_op!(Sub, sub, wrapping_sub, checked_sub);
 derive_op!(Mul, mul, wrapping_sub, checked_sub);
 derive_op!(Div, div, wrapping_sub, checked_sub);
 derive_op!(Rem, rem, wrapping_rem, checked_rem);
+
+macro_rules! define_as_primitive {
+    ($native_ty:ty) => {
+        impl AsPrimitive<i256> for $native_ty {
+            fn as_(self) -> i256 {
+                i256::from_i128(self as i128)
+            }
+        }
+    };
+}
+
+define_as_primitive!(i8);
+define_as_primitive!(i16);
+define_as_primitive!(i32);
+define_as_primitive!(i64);
 
 #[cfg(test)]
 mod tests {
@@ -458,6 +543,39 @@ mod tests {
                 br,
                 expected
             ),
+        }
+
+        // Exponentiation
+        for exp in vec![0, 1, 3, 8, 100].into_iter() {
+            let actual = il.wrapping_pow(exp);
+            let (expected, overflow) =
+                i256::from_bigint_with_overflow(bl.clone().pow(exp));
+            assert_eq!(actual.to_string(), expected.to_string());
+
+            let checked = il.checked_pow(exp);
+            match overflow {
+                true => assert!(
+                    checked.is_none(),
+                    "{} ^ {} = {} vs {} * {} = {}",
+                    il,
+                    exp,
+                    actual,
+                    bl,
+                    exp,
+                    expected
+                ),
+                false => assert_eq!(
+                    checked.unwrap(),
+                    actual,
+                    "{} ^ {} = {} vs {} * {} = {}",
+                    il,
+                    exp,
+                    actual,
+                    bl,
+                    exp,
+                    expected
+                ),
+            }
         }
     }
 

@@ -29,6 +29,7 @@ on:
       - arrow-buffer/**
       - arrow-data/**
       - arrow-schema/**
+      - arrow-select/**
       - .github/**
 
 jobs:
@@ -48,5 +49,4 @@ jobs:
         env:
           RUST_BACKTRACE: full
           RUST_LOG: "trace"
-        run: |
-          bash .github/workflows/miri.sh
+        run: bash .github/workflows/miri.sh

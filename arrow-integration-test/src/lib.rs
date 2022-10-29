@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Utils for JSON integration testing
+//! Support for the [Apache Arrow JSON test data format](https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format)
 //!
 //! These utilities define structs that read the integration JSON format for integration testing purposes.
+//!
+//! This is not a canonical format, but provides a human-readable way of verifying language implementations
 
 use hex::decode;
 use num::BigInt;
@@ -40,8 +42,8 @@ mod datatype;
 mod field;
 mod schema;
 
-use crate::util::datatype::data_type_to_json;
-use crate::util::field::field_from_json;
+pub use datatype::*;
+pub use field::*;
 pub use schema::*;
 
 /// A struct that represents an Arrow file with a schema and record batches
@@ -1238,34 +1240,28 @@ mod tests {
             None,
             Some(16584393546415),
         ]);
-        let ts_secs = TimestampSecondArray::from_opt_vec(
-            vec![None, Some(193438817552), None],
+        let ts_secs = TimestampSecondArray::from(vec![None, Some(193438817552), None]);
+        let ts_millis = TimestampMillisecondArray::from(vec![
             None,
-        );
-        let ts_millis = TimestampMillisecondArray::from_opt_vec(
-            vec![None, Some(38606916383008), Some(58113709376587)],
+            Some(38606916383008),
+            Some(58113709376587),
+        ]);
+        let ts_micros = TimestampMicrosecondArray::from(vec![None, None, None]);
+        let ts_nanos =
+            TimestampNanosecondArray::from(vec![None, None, Some(-6473623571954960143)]);
+        let ts_secs_tz = TimestampSecondArray::from(vec![None, Some(193438817552), None])
+            .with_timezone_opt(secs_tz);
+        let ts_millis_tz = TimestampMillisecondArray::from(vec![
             None,
-        );
-        let ts_micros =
-            TimestampMicrosecondArray::from_opt_vec(vec![None, None, None], None);
-        let ts_nanos = TimestampNanosecondArray::from_opt_vec(
-            vec![None, None, Some(-6473623571954960143)],
-            None,
-        );
-        let ts_secs_tz = TimestampSecondArray::from_opt_vec(
-            vec![None, Some(193438817552), None],
-            secs_tz,
-        );
-        let ts_millis_tz = TimestampMillisecondArray::from_opt_vec(
-            vec![None, Some(38606916383008), Some(58113709376587)],
-            millis_tz,
-        );
-        let ts_micros_tz =
-            TimestampMicrosecondArray::from_opt_vec(vec![None, None, None], micros_tz);
-        let ts_nanos_tz = TimestampNanosecondArray::from_opt_vec(
-            vec![None, None, Some(-6473623571954960143)],
-            nanos_tz,
-        );
+            Some(38606916383008),
+            Some(58113709376587),
+        ])
+        .with_timezone_opt(millis_tz);
+        let ts_micros_tz = TimestampMicrosecondArray::from(vec![None, None, None])
+            .with_timezone_opt(micros_tz);
+        let ts_nanos_tz =
+            TimestampNanosecondArray::from(vec![None, None, Some(-6473623571954960143)])
+                .with_timezone_opt(nanos_tz);
         let utf8s = StringArray::from(vec![Some("aa"), None, Some("bbb")]);
 
         let value_data = Int32Array::from(vec![None, Some(2), None, None]);

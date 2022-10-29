@@ -569,11 +569,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         //
         // In such a scenario the dictionary decoder may return an estimated encoded
         // size in excess of the page size limit, even when there are no buffered values
-        if self.encoder.num_values() == 0 {
+        if self.page_metrics.num_buffered_values == 0 {
             return false;
         }
 
-        self.encoder.estimated_data_page_size() >= self.props.data_pagesize_limit()
+        self.page_metrics.num_buffered_rows as usize
+            >= self.props.data_page_row_count_limit()
+            || self.encoder.estimated_data_page_size() >= self.props.data_pagesize_limit()
     }
 
     /// Performs dictionary fallback.
@@ -1825,7 +1827,7 @@ mod tests {
         let page_writer = Box::new(SerializedPageWriter::new(&mut writer));
         let props = Arc::new(
             WriterProperties::builder()
-                .set_data_pagesize_limit(15) // actually each page will have size 15-18 bytes
+                .set_data_pagesize_limit(10)
                 .set_write_batch_size(3) // write 3 values at a time
                 .build(),
         );
@@ -1846,16 +1848,14 @@ mod tests {
         );
         let mut res = Vec::new();
         while let Some(page) = page_reader.get_next_page().unwrap() {
-            res.push((page.page_type(), page.num_values()));
+            res.push((page.page_type(), page.num_values(), page.buffer().len()));
         }
         assert_eq!(
             res,
             vec![
-                (PageType::DICTIONARY_PAGE, 10),
-                (PageType::DATA_PAGE, 3),
-                (PageType::DATA_PAGE, 3),
-                (PageType::DATA_PAGE, 3),
-                (PageType::DATA_PAGE, 1)
+                (PageType::DICTIONARY_PAGE, 10, 40),
+                (PageType::DATA_PAGE, 9, 10),
+                (PageType::DATA_PAGE, 1, 3),
             ]
         );
     }

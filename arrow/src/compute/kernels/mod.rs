@@ -27,15 +27,14 @@ pub mod cast_utils;
 pub mod comparison;
 pub mod concat;
 pub mod concat_elements;
-pub mod filter;
-pub mod interleave;
 pub mod length;
 pub mod limit;
 pub mod partition;
 pub mod regexp;
 pub mod sort;
 pub mod substring;
-pub mod take;
 pub mod temporal;
 pub mod window;
 pub mod zip;
+
+pub use arrow_select::{filter, interleave, take};
