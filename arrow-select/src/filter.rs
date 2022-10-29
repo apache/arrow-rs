@@ -542,8 +542,8 @@ where
     PrimitiveArray::from(data)
 }
 
-/// [`FilterString`] is created from a source [`GenericStringArray`] and can be
-/// used to build a new [`GenericStringArray`] by copying values from the source
+/// [`FilterBytes`] is created from a source [`GenericByteArray`] and can be
+/// used to build a new [`GenericByteArray`] by copying values from the source
 ///
 /// TODO(raphael): Could this be used for the take kernel as well?
 struct FilterBytes<'a, OffsetSize> {
