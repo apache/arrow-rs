@@ -326,6 +326,30 @@ fn mulx(a: u128, b: u128) -> (u128, u128) {
     (low, high)
 }
 
+macro_rules! derive_op {
+    ($t:ident, $op:ident, $wrapping:ident, $checked:ident) => {
+        impl std::ops::$t for i256 {
+            type Output = i256;
+
+            #[cfg(debug_assertions)]
+            fn $op(self, rhs: Self) -> Self::Output {
+                self.$checked(rhs).expect("i256 overflow")
+            }
+
+            #[cfg(not(debug_assertions))]
+            fn $op(self, rhs: Self) -> Self::Output {
+                self.$wrapping(rhs)
+            }
+        }
+    };
+}
+
+derive_op!(Add, add, wrapping_add, checked_add);
+derive_op!(Sub, sub, wrapping_sub, checked_sub);
+derive_op!(Mul, mul, wrapping_sub, checked_sub);
+derive_op!(Div, div, wrapping_sub, checked_sub);
+derive_op!(Rem, rem, wrapping_rem, checked_rem);
+
 #[cfg(test)]
 mod tests {
     use super::*;
