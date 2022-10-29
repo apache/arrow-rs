@@ -25,7 +25,6 @@ pub mod boolean;
 pub mod cast;
 pub mod cast_utils;
 pub mod comparison;
-pub mod concat;
 pub mod concat_elements;
 pub mod length;
 pub mod limit;
@@ -37,4 +36,4 @@ pub mod temporal;
 pub mod window;
 pub mod zip;
 
-pub use arrow_select::{filter, interleave, take};
+pub use arrow_select::{concat, filter, interleave, take};
