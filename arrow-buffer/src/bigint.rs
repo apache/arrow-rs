@@ -495,11 +495,11 @@ mod tests {
         assert_eq!(ir.to_i128(), br.to_i128(), "{}", br);
 
         // Absolute value
-        let (abs, overflow) = i256::from_bigint_with_overflow(bl.clone().abs());
+        let (abs, overflow) = i256::from_bigint_with_overflow(bl.abs());
         assert_eq!(il.wrapping_abs(), abs);
         assert_eq!(il.checked_abs().is_none(), overflow);
 
-        let (abs, overflow) = i256::from_bigint_with_overflow(br.clone().abs());
+        let (abs, overflow) = i256::from_bigint_with_overflow(br.abs());
         assert_eq!(ir.wrapping_abs(), abs);
         assert_eq!(ir.checked_abs().is_none(), overflow);
 
