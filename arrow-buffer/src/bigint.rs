@@ -189,6 +189,18 @@ impl i256 {
         (self != Self::MIN).then(|| self.wrapping_abs())
     }
 
+    /// Negates this i256
+    #[inline]
+    pub fn wrapping_neg(self) -> Self {
+        Self::from_parts(!self.low, !self.high).wrapping_add(i256::ONE)
+    }
+
+    /// Negates this i256 returning `None` if `Self == Self::MIN`
+    #[inline]
+    pub fn checked_neg(self) -> Option<Self> {
+        (self != Self::MIN).then(|| self.wrapping_neg())
+    }
+
     /// Performs wrapping addition
     #[inline]
     pub fn wrapping_add(self, other: Self) -> Self {
@@ -396,6 +408,30 @@ fn mulx(a: u128, b: u128) -> (u128, u128) {
     (low, high)
 }
 
+macro_rules! derive_op {
+    ($t:ident, $op:ident, $wrapping:ident, $checked:ident) => {
+        impl std::ops::$t for i256 {
+            type Output = i256;
+
+            #[cfg(debug_assertions)]
+            fn $op(self, rhs: Self) -> Self::Output {
+                self.$checked(rhs).expect("i256 overflow")
+            }
+
+            #[cfg(not(debug_assertions))]
+            fn $op(self, rhs: Self) -> Self::Output {
+                self.$wrapping(rhs)
+            }
+        }
+    };
+}
+
+derive_op!(Add, add, wrapping_add, checked_add);
+derive_op!(Sub, sub, wrapping_sub, checked_sub);
+derive_op!(Mul, mul, wrapping_mul, checked_mul);
+derive_op!(Div, div, wrapping_div, checked_div);
+derive_op!(Rem, rem, wrapping_rem, checked_rem);
+
 macro_rules! define_as_primitive {
     ($native_ty:ty) => {
         impl AsPrimitive<i256> for $native_ty {
@@ -416,6 +452,7 @@ mod tests {
     use super::*;
     use num::{BigInt, FromPrimitive, Signed, ToPrimitive};
     use rand::{thread_rng, Rng};
+    use std::ops::Neg;
 
     #[test]
     fn test_signed_cmp() {
@@ -465,6 +502,16 @@ mod tests {
         let (abs, overflow) = i256::from_bigint_with_overflow(br.abs());
         assert_eq!(ir.wrapping_abs(), abs);
         assert_eq!(ir.checked_abs().is_none(), overflow);
+
+        // Negation
+        let (neg, overflow) = i256::from_bigint_with_overflow(bl.clone().neg());
+        assert_eq!(il.wrapping_neg(), neg);
+        assert_eq!(il.checked_neg().is_none(), overflow);
+
+        // Negation
+        let (neg, overflow) = i256::from_bigint_with_overflow(br.clone().neg());
+        assert_eq!(ir.wrapping_neg(), neg);
+        assert_eq!(ir.checked_neg().is_none(), overflow);
 
         // Addition
         let actual = il.wrapping_add(ir);

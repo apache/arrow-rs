@@ -1625,6 +1625,7 @@ mod tests {
     use super::*;
     use crate::array::Int32Array;
     use crate::datatypes::{Date64Type, Int32Type, Int8Type};
+    use arrow_buffer::i256;
     use chrono::NaiveDate;
     use half::f16;
 
@@ -2896,6 +2897,68 @@ mod tests {
 
         let overflow = divide_dyn_checked(&a, &b);
         overflow.expect_err("overflow should be detected");
+    }
+
+    #[test]
+    fn test_decimal128() {
+        let a = Decimal128Array::from_iter_values([1, 2, 4, 5]);
+        let b = Decimal128Array::from_iter_values([7, -3, 6, 3]);
+        let e = Decimal128Array::from_iter_values([8, -1, 10, 8]);
+        let r = add(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = Decimal128Array::from_iter_values([-6, 5, -2, 2]);
+        let r = subtract(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = Decimal128Array::from_iter_values([7, -6, 24, 15]);
+        let r = multiply(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let a = Decimal128Array::from_iter_values([23, 56, 32, 55]);
+        let b = Decimal128Array::from_iter_values([1, -2, 4, 5]);
+        let e = Decimal128Array::from_iter_values([23, -28, 8, 11]);
+        let r = divide(&a, &b).unwrap();
+        assert_eq!(e, r);
+    }
+
+    #[test]
+    fn test_decimal256() {
+        let a = Decimal256Array::from_iter_values(
+            [1, 2, 4, 5].into_iter().map(i256::from_i128),
+        );
+        let b = Decimal256Array::from_iter_values(
+            [7, -3, 6, 3].into_iter().map(i256::from_i128),
+        );
+        let e = Decimal256Array::from_iter_values(
+            [8, -1, 10, 8].into_iter().map(i256::from_i128),
+        );
+        let r = add(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = Decimal256Array::from_iter_values(
+            [-6, 5, -2, 2].into_iter().map(i256::from_i128),
+        );
+        let r = subtract(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = Decimal256Array::from_iter_values(
+            [7, -6, 24, 15].into_iter().map(i256::from_i128),
+        );
+        let r = multiply(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let a = Decimal256Array::from_iter_values(
+            [23, 56, 32, 55].into_iter().map(i256::from_i128),
+        );
+        let b = Decimal256Array::from_iter_values(
+            [1, -2, 4, 5].into_iter().map(i256::from_i128),
+        );
+        let e = Decimal256Array::from_iter_values(
+            [23, -28, 8, 11].into_iter().map(i256::from_i128),
+        );
+        let r = divide(&a, &b).unwrap();
+        assert_eq!(e, r);
     }
 
     #[test]

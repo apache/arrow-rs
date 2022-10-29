@@ -365,6 +365,7 @@ make_numeric_type!(DurationSecondType, i64, i64x8, m64x8);
 make_numeric_type!(DurationMillisecondType, i64, i64x8, m64x8);
 make_numeric_type!(DurationMicrosecondType, i64, i64x8, m64x8);
 make_numeric_type!(DurationNanosecondType, i64, i64x8, m64x8);
+make_numeric_type!(Decimal128Type, i128, i128x4, m128x4);
 
 #[cfg(not(feature = "simd"))]
 impl ArrowNumericType for Float16Type {}
@@ -459,6 +460,98 @@ impl ArrowNumericType for Float16Type {
 
     fn unary_op<F: Fn(Self::Simd) -> Self::Simd>(a: Self::Simd, op: F) -> Self::Simd {
         Float32Type::unary_op(a, op)
+    }
+}
+
+#[cfg(not(feature = "simd"))]
+impl ArrowNumericType for Decimal256Type {}
+
+#[cfg(feature = "simd")]
+impl ArrowNumericType for Decimal256Type {
+    type Simd = i256;
+    type SimdMask = bool;
+
+    fn lanes() -> usize {
+        1
+    }
+
+    fn init(value: Self::Native) -> Self::Simd {
+        value
+    }
+
+    fn load(slice: &[Self::Native]) -> Self::Simd {
+        slice[0]
+    }
+
+    fn mask_init(value: bool) -> Self::SimdMask {
+        value
+    }
+
+    fn mask_from_u64(mask: u64) -> Self::SimdMask {
+        mask != 0
+    }
+
+    fn mask_to_u64(mask: &Self::SimdMask) -> u64 {
+        *mask as u64
+    }
+
+    fn mask_get(mask: &Self::SimdMask, _idx: usize) -> bool {
+        *mask
+    }
+
+    fn mask_set(_mask: Self::SimdMask, _idx: usize, value: bool) -> Self::SimdMask {
+        value
+    }
+
+    fn mask_select(mask: Self::SimdMask, a: Self::Simd, b: Self::Simd) -> Self::Simd {
+        match mask {
+            true => a,
+            false => b,
+        }
+    }
+
+    fn mask_any(mask: Self::SimdMask) -> bool {
+        mask
+    }
+
+    fn bin_op<F: Fn(Self::Simd, Self::Simd) -> Self::Simd>(
+        left: Self::Simd,
+        right: Self::Simd,
+        op: F,
+    ) -> Self::Simd {
+        op(left, right)
+    }
+
+    fn eq(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
+        left.eq(&right)
+    }
+
+    fn ne(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
+        left.ne(&right)
+    }
+
+    fn lt(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
+        left.lt(&right)
+    }
+
+    fn le(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
+        left.le(&right)
+    }
+
+    fn gt(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
+        left.gt(&right)
+    }
+
+    fn ge(left: Self::Simd, right: Self::Simd) -> Self::SimdMask {
+        left.ge(&right)
+    }
+
+    fn write(simd_result: Self::Simd, slice: &mut [Self::Native]) {
+        slice[0] = simd_result
+    }
+
+    fn unary_op<F: Fn(Self::Simd) -> Self::Simd>(a: Self::Simd, op: F) -> Self::Simd {
+        op(a)
     }
 }
 
