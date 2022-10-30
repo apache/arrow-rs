@@ -2259,6 +2259,12 @@ macro_rules! typed_compares {
             (DataType::Float64, DataType::Float64) => {
                 cmp_primitive_array::<Float64Type, _>($LEFT, $RIGHT, $OP_FLOAT)
             }
+            (DataType::Decimal128(_, s1), DataType::Decimal128(_, s2)) if s1 == s2 => {
+                cmp_primitive_array::<Decimal128Type, _>($LEFT, $RIGHT, $OP)
+            }
+            (DataType::Decimal256(_, s1), DataType::Decimal256(_, s2)) if s1 == s2 => {
+                cmp_primitive_array::<Decimal256Type, _>($LEFT, $RIGHT, $OP)
+            }
             (DataType::Utf8, DataType::Utf8) => {
                 compare_op(as_string_array($LEFT), as_string_array($RIGHT), $OP)
             }
@@ -6730,5 +6736,89 @@ mod tests {
             vec![Some(false), Some(false), Some(true), Some(true), Some(true), Some(false)],
         );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_decimal128() {
+        let a = Decimal128Array::from_iter_values([1, 2, 4, 5]);
+        let b = Decimal128Array::from_iter_values([7, -3, 4, 3]);
+        let e = BooleanArray::from(vec![false, false, true, false]);
+        let r = eq(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let r = eq_dyn(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = BooleanArray::from(vec![true, false, false, false]);
+        let r = lt(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let r = lt_dyn(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = BooleanArray::from(vec![true, false, true, false]);
+        let r = lt_eq(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let r = lt_eq_dyn(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = BooleanArray::from(vec![false, true, false, true]);
+        let r = gt(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let r = gt_dyn(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = BooleanArray::from(vec![false, true, true, true]);
+        let r = gt_eq(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let r = gt_eq_dyn(&a, &b).unwrap();
+        assert_eq!(e, r);
+    }
+
+    #[test]
+    fn test_decimal256() {
+        let a = Decimal256Array::from_iter_values(
+            [1, 2, 4, 5].into_iter().map(i256::from_i128),
+        );
+        let b = Decimal256Array::from_iter_values(
+            [7, -3, 4, 3].into_iter().map(i256::from_i128),
+        );
+        let e = BooleanArray::from(vec![false, false, true, false]);
+        let r = eq(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let r = eq_dyn(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = BooleanArray::from(vec![true, false, false, false]);
+        let r = lt(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let r = lt_dyn(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = BooleanArray::from(vec![true, false, true, false]);
+        let r = lt_eq(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let r = lt_eq_dyn(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = BooleanArray::from(vec![false, true, false, true]);
+        let r = gt(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let r = gt_dyn(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = BooleanArray::from(vec![false, true, true, true]);
+        let r = gt_eq(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let r = gt_eq_dyn(&a, &b).unwrap();
+        assert_eq!(e, r);
     }
 }
