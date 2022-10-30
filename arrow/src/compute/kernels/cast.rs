@@ -61,7 +61,7 @@ use num::cast::AsPrimitive;
 use num::{NumCast, ToPrimitive};
 
 /// CastOptions provides a way to override the default cast behaviors
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CastOptions {
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
     pub safe: bool,
