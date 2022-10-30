@@ -2159,6 +2159,12 @@ macro_rules! typed_cmp_dict_non_dict {
                 (DataType::Float64, DataType::Float64) => {
                     typed_dict_non_dict_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), Float64Type, $OP_BOOL, $OP_FLOAT)
                 }
+                (DataType::Decimal128(_, s1), DataType::Decimal128(_, s2)) if s1 == s2 => {
+                    typed_dict_non_dict_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), Decimal128Type, $OP_BOOL, $OP)
+                }
+                (DataType::Decimal256(_, s1), DataType::Decimal256(_, s2)) if s1 == s2 => {
+                    typed_dict_non_dict_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), Decimal256Type, $OP_BOOL, $OP)
+                }
                 (DataType::Utf8, DataType::Utf8) => {
                     typed_dict_string_array_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), i32, $OP)
                 }
@@ -6690,12 +6696,87 @@ mod tests {
 
     #[test]
     #[cfg(feature = "dyn_cmp_dict")]
+    fn test_cmp_dict_non_dict_decimal128() {
+        let array1: Decimal128Array =
+            Decimal128Array::from_iter_values([1, 2, 5, 4, 3, 0]);
+
+        let values = Decimal128Array::from_iter_values([7, -3, 4, 3, 5]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(true), Some(true), Some(false)],
+        );
+        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(false), Some(false), Some(true)],
+        );
+        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(true), Some(true), Some(false)],
+        );
+        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+    }
+
+    #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
     fn test_cmp_dict_decimal256() {
         let values = Decimal256Array::from_iter_values(
             [0, 1, 2, 3, 4, 5].into_iter().map(i256::from_i128),
         );
         let keys = Int8Array::from_iter_values([1_i8, 2, 5, 4, 3, 0]);
         let array1 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        let values = Decimal256Array::from_iter_values(
+            [7, -3, 4, 3, 5].into_iter().map(i256::from_i128),
+        );
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(true), Some(true), Some(false)],
+        );
+        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(false), Some(false), Some(true)],
+        );
+        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(true), Some(true), Some(false)],
+        );
+        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+    }
+
+    #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
+    fn test_cmp_dict_non_dict_decimal256() {
+        let array1: Decimal256Array = Decimal256Array::from_iter_values(
+            [1, 2, 5, 4, 3, 0].into_iter().map(i256::from_i128),
+        );
 
         let values = Decimal256Array::from_iter_values(
             [7, -3, 4, 3, 5].into_iter().map(i256::from_i128),
