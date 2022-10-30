@@ -50,19 +50,19 @@ impl ArrowError {
     }
 }
 
-impl From<::std::io::Error> for ArrowError {
+impl From<std::io::Error> for ArrowError {
     fn from(error: std::io::Error) -> Self {
         ArrowError::IoError(error.to_string())
     }
 }
 
-impl From<::std::string::FromUtf8Error> for ArrowError {
+impl From<std::string::FromUtf8Error> for ArrowError {
     fn from(error: std::string::FromUtf8Error) -> Self {
         ArrowError::ParseError(error.to_string())
     }
 }
 
-impl<W: Write> From<::std::io::IntoInnerError<W>> for ArrowError {
+impl<W: Write> From<std::io::IntoInnerError<W>> for ArrowError {
     fn from(error: std::io::IntoInnerError<W>) -> Self {
         ArrowError::IoError(error.to_string())
     }
