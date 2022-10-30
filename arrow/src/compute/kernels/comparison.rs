@@ -26,13 +26,15 @@
 use crate::array::*;
 use crate::buffer::{buffer_unary_not, Buffer, MutableBuffer};
 use crate::compute::util::combine_option_bitmap;
+#[allow(unused_imports)]
 use crate::datatypes::{
-    ArrowNativeTypeOp, ArrowNumericType, DataType, Date32Type, Date64Type, Float32Type,
-    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, Time32MillisecondType,
-    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimeUnit,
-    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowNativeTypeOp, ArrowNumericType, DataType, Date32Type, Date64Type,
+    Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int16Type, Int32Type,
+    Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    IntervalYearMonthType, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
 };
 #[allow(unused_imports)]
 use crate::downcast_dictionary_array;
@@ -2374,6 +2376,12 @@ macro_rules! typed_dict_cmp {
             (DataType::Float64, DataType::Float64) => {
                 cmp_dict::<$KT, Float64Type, _>($LEFT, $RIGHT, $OP_FLOAT)
             }
+            (DataType::Decimal128(_, s1), DataType::Decimal128(_, s2)) if s1 == s2 => {
+                cmp_dict::<$KT, Decimal128Type, _>($LEFT, $RIGHT, $OP)
+            }
+            (DataType::Decimal256(_, s1), DataType::Decimal256(_, s2)) if s1 == s2 => {
+                cmp_dict::<$KT, Decimal256Type, _>($LEFT, $RIGHT, $OP)
+            }
             (DataType::Utf8, DataType::Utf8) => {
                 cmp_dict_utf8::<$KT, i32, _>($LEFT, $RIGHT, $OP)
             }
@@ -3348,6 +3356,7 @@ fn new_all_set_buffer(len: usize) -> Buffer {
 #[rustfmt::skip::macros(vec)]
 #[cfg(test)]
 mod tests {
+    use arrow_buffer::i256;
     use std::sync::Arc;
 
     use super::*;
@@ -6643,5 +6652,83 @@ mod tests {
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(true)])
         );
+    }
+
+    #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
+    fn test_cmp_dict_decimal128() {
+        let values = Decimal128Array::from_iter_values([0, 1, 2, 3, 4, 5]);
+        let keys = Int8Array::from_iter_values([1_i8, 2, 5, 4, 3, 0]);
+        let array1 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        let values = Decimal128Array::from_iter_values([7, -3, 4, 3, 5]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(true), Some(true), Some(false)],
+        );
+        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(false), Some(false), Some(true)],
+        );
+        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(true), Some(true), Some(false)],
+        );
+        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+    }
+
+    #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
+    fn test_cmp_dict_decimal256() {
+        let values = Decimal256Array::from_iter_values(
+            [0, 1, 2, 3, 4, 5].into_iter().map(i256::from_i128),
+        );
+        let keys = Int8Array::from_iter_values([1_i8, 2, 5, 4, 3, 0]);
+        let array1 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        let values = Decimal256Array::from_iter_values(
+            [7, -3, 4, 3, 5].into_iter().map(i256::from_i128),
+        );
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(true), Some(true), Some(false)],
+        );
+        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(false), Some(false), Some(true)],
+        );
+        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(true), Some(true), Some(false)],
+        );
+        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
     }
 }
