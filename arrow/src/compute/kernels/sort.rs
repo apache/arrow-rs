@@ -950,7 +950,7 @@ pub fn lexsort_to_indices(
     });
 
     Ok(UInt32Array::from_iter_values(
-        value_indices.iter().map(|i| *i as u32),
+        value_indices.iter().take(len).map(|i| *i as u32),
     ))
 }
 
@@ -1420,6 +1420,18 @@ mod tests {
         for (result, expected) in sorted.iter().zip(expected_output.iter()) {
             assert_eq!(result, expected);
         }
+    }
+
+    /// slace all arrays in expected_output to offset/length
+    fn slice_arrays(
+        expected_output: Vec<ArrayRef>,
+        offset: usize,
+        length: usize,
+    ) -> Vec<ArrayRef> {
+        expected_output
+            .into_iter()
+            .map(|array| array.slice(offset, length))
+            .collect()
     }
 
     fn test_sort_binary_arrays(
@@ -3439,7 +3451,8 @@ mod tests {
             Some(2),
             Some(17),
         ])) as ArrayRef];
-        test_lex_sort_arrays(input.clone(), expected, None);
+        test_lex_sort_arrays(input.clone(), expected.clone(), None);
+        test_lex_sort_arrays(input.clone(), slice_arrays(expected, 0, 2), Some(2));
 
         let expected = vec![Arc::new(PrimitiveArray::<Int64Type>::from(vec![
             Some(-1),
@@ -3519,7 +3532,8 @@ mod tests {
                 Some(-2),
             ])) as ArrayRef,
         ];
-        test_lex_sort_arrays(input, expected, None);
+        test_lex_sort_arrays(input.clone(), expected.clone(), None);
+        test_lex_sort_arrays(input, slice_arrays(expected, 0, 2), Some(2));
 
         // test mix of string and in64 with option
         let input = vec![
@@ -3562,7 +3576,8 @@ mod tests {
                 Some("7"),
             ])) as ArrayRef,
         ];
-        test_lex_sort_arrays(input, expected, None);
+        test_lex_sort_arrays(input.clone(), expected.clone(), None);
+        test_lex_sort_arrays(input, slice_arrays(expected, 0, 3), Some(3));
 
         // test sort with nulls first
         let input = vec![
@@ -3605,7 +3620,8 @@ mod tests {
                 Some("world"),
             ])) as ArrayRef,
         ];
-        test_lex_sort_arrays(input, expected, None);
+        test_lex_sort_arrays(input.clone(), expected.clone(), None);
+        test_lex_sort_arrays(input, slice_arrays(expected, 0, 1), Some(1));
 
         // test sort with nulls last
         let input = vec![
@@ -3648,7 +3664,8 @@ mod tests {
                 None,
             ])) as ArrayRef,
         ];
-        test_lex_sort_arrays(input, expected, None);
+        test_lex_sort_arrays(input.clone(), expected.clone(), None);
+        test_lex_sort_arrays(input, slice_arrays(expected, 0, 2), Some(2));
 
         // test sort with opposite options
         let input = vec![
@@ -3695,7 +3712,15 @@ mod tests {
                 Some("foo"),
             ])) as ArrayRef,
         ];
-        test_lex_sort_arrays(input, expected, None);
+        test_lex_sort_arrays(input.clone(), expected.clone(), None);
+        test_lex_sort_arrays(
+            input.clone(),
+            slice_arrays(expected.clone(), 0, 5),
+            Some(5),
+        );
+
+        // Limiting by more rows than present should is ok
+        test_lex_sort_arrays(input, slice_arrays(expected, 0, 5), Some(10));
     }
 
     #[test]
