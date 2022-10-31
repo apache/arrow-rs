@@ -471,7 +471,9 @@ pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray> {
     Ok(BooleanArray::from(data))
 }
 
-/// Copies original array, setting null bit to true if a secondary comparison boolean array is set to true.
+/// Copies original array, setting validity bit to false if a secondary comparison
+/// boolean array is set to true or null
+///
 /// Typically used to implement NULLIF.
 pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef> {
     let left_data = left.data();
