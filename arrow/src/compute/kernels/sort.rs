@@ -3454,6 +3454,7 @@ mod tests {
         test_lex_sort_arrays(input.clone(), expected.clone(), None);
         test_lex_sort_arrays(input.clone(), slice_arrays(expected, 0, 2), Some(2));
 
+        // Explicitly test a limit on the sort as a demonstration
         let expected = vec![Arc::new(PrimitiveArray::<Int64Type>::from(vec![
             Some(-1),
             Some(0),
@@ -3719,7 +3720,7 @@ mod tests {
             Some(5),
         );
 
-        // Limiting by more rows than present should is ok
+        // Limiting by more rows than present is ok
         test_lex_sort_arrays(input, slice_arrays(expected, 0, 5), Some(10));
     }
 
