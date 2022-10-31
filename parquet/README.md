@@ -66,7 +66,7 @@ The `parquet` crate provides the following features which may be enabled in your
   - [ ] Row record writer
   - [x] Arrow record writer
   - [ ] Async support
-- [ ] Predicate pushdown
+- [x] Predicate pushdown
 - [x] Parquet format 4.0.0 support
 
 ## Support for `wasm32-unknown-unknown` target
