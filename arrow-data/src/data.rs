@@ -751,7 +751,7 @@ impl ArrayData {
     ) -> Result<&[T], ArrowError> {
         let buffer = &self.buffers[idx];
 
-        let required_len = (len + self.offset) * std::mem::size_of::<T>();
+        let required_len = (len + self.offset) * mem::size_of::<T>();
 
         if buffer.len() < required_len {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -1170,7 +1170,7 @@ impl ArrayData {
 
         // This should have been checked as part of `validate()` prior
         // to calling `validate_full()` but double check to be sure
-        assert!(buffer.len() / std::mem::size_of::<T>() >= required_len);
+        assert!(buffer.len() / mem::size_of::<T>() >= required_len);
 
         // Justification: buffer size was validated above
         let indexes: &[T] =
