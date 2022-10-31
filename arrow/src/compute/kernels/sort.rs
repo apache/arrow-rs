@@ -1422,7 +1422,7 @@ mod tests {
         }
     }
 
-    /// slace all arrays in expected_output to offset/length
+    /// slice all arrays in expected_output to offset/length
     fn slice_arrays(
         expected_output: Vec<ArrayRef>,
         offset: usize,
