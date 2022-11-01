@@ -145,7 +145,9 @@ impl RowSelection {
         }
         add_selector(selected, sum_rows, &mut combined_result);
 
-        Self::from(combined_result)
+        Self {
+            selectors: combined_result,
+        }
     }
 
     /// Given an offset index, return the offset ranges for all data pages selected by `self`
@@ -338,7 +340,7 @@ impl RowSelection {
 
 impl From<Vec<RowSelector>> for RowSelection {
     fn from(selectors: Vec<RowSelector>) -> Self {
-        Self { selectors }
+        Self::from_selectors_and_combine(selectors.as_slice())
     }
 }
 
@@ -547,6 +549,17 @@ mod tests {
         assert_eq!(RowSelection::from_selectors_and_combine(&a), expected);
         assert_eq!(RowSelection::from_selectors_and_combine(&b), expected);
         assert_eq!(RowSelection::from_selectors_and_combine(&c), expected);
+    }
+
+    #[test]
+    fn test_from_one_and_empty() {
+        let a = vec![RowSelector::select(10)];
+        let selection1 = RowSelection::from(a.clone());
+        assert_eq!(selection1.selectors, a);
+
+        let b = vec![];
+        let selection1 = RowSelection::from(b.clone());
+        assert_eq!(selection1.selectors, b)
     }
 
     #[test]
