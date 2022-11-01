@@ -622,7 +622,7 @@ where
     }
 }
 
-/// `filter` implementation for string arrays
+/// `filter` implementation for byte arrays
 ///
 /// Note: NULLs with a non-zero slot length in `array` will have the corresponding
 /// data copied across. This allows handling the null mask separately from the data
