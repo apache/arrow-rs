@@ -505,7 +505,7 @@ mod tests {
                 RowSelector::select(2),
                 RowSelector::skip(1),
                 RowSelector::select(1),
-                RowSelector::skip(4),
+                RowSelector::skip(4)
             ]
         );
     }
