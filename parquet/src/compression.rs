@@ -71,10 +71,55 @@ pub trait Codec: Send {
     ) -> Result<usize>;
 }
 
+/// Struct to hold `Codec` creation options.
+#[derive(Clone, Copy)]
+pub struct CodecOptions {
+    /// Whether or not to fallback to other LZ4 older implementations on error in LZ4_HADOOP.
+    backward_compatible_lz4: bool,
+}
+
+impl Default for CodecOptions {
+    fn default() -> Self {
+        CodecOptionsBuilder::default().build()
+    }
+}
+
+pub struct CodecOptionsBuilder {
+    /// Whether or not to fallback to other LZ4 older implementations on error in LZ4_HADOOP.
+    backward_compatible_lz4: bool,
+}
+
+impl Default for CodecOptionsBuilder {
+    fn default() -> Self {
+        Self {
+            backward_compatible_lz4: true,
+        }
+    }
+}
+
+impl CodecOptionsBuilder {
+    /// Disable backward compatible lz4. This implies that it will return
+    /// error in case of fail decompressing LZ4_HADOOP instead of fallback to
+    /// LZ4_FRAME and LZ4_RAW decompression.
+    pub fn no_backward_compatible_lz4(mut self) -> CodecOptionsBuilder {
+        self.backward_compatible_lz4 = false;
+        self
+    }
+
+    pub fn build(self) -> CodecOptions {
+        CodecOptions {
+            backward_compatible_lz4: self.backward_compatible_lz4,
+        }
+    }
+}
+
 /// Given the compression type `codec`, returns a codec used to compress and decompress
 /// bytes for the compression type.
 /// This returns `None` if the codec type is `UNCOMPRESSED`.
-pub fn create_codec(codec: CodecType) -> Result<Option<Box<dyn Codec>>> {
+pub fn create_codec(
+    codec: CodecType,
+    options: CodecOptions,
+) -> Result<Option<Box<dyn Codec>>> {
     match codec {
         #[cfg(any(feature = "brotli", test))]
         CodecType::BROTLI => Ok(Some(Box::new(BrotliCodec::new()))),
@@ -83,7 +128,9 @@ pub fn create_codec(codec: CodecType) -> Result<Option<Box<dyn Codec>>> {
         #[cfg(any(feature = "snap", test))]
         CodecType::SNAPPY => Ok(Some(Box::new(SnappyCodec::new()))),
         #[cfg(any(feature = "lz4", test))]
-        CodecType::LZ4 => Ok(Some(Box::new(LZ4Codec::new()))),
+        CodecType::LZ4 => Ok(Some(Box::new(LZ4HadoopCodec::new(
+            options.backward_compatible_lz4,
+        )))),
         #[cfg(any(feature = "zstd", test))]
         CodecType::ZSTD => Ok(Some(Box::new(ZSTDCodec::new()))),
         #[cfg(any(feature = "lz4", test))]
@@ -414,6 +461,76 @@ mod lz4_raw_codec {
 #[cfg(any(feature = "lz4", test))]
 pub use lz4_raw_codec::*;
 
+#[cfg(any(feature = "lz4", test))]
+mod lz4_hadoop_codec {
+    use crate::compression::lz4_codec::LZ4Codec;
+    use crate::compression::lz4_raw_codec::LZ4RawCodec;
+    use crate::compression::Codec;
+    use crate::errors::Result;
+
+    /// Codec for LZ4 Hadoop compression algorithm.
+    pub struct LZ4HadoopCodec {
+        /// Whether or not to fallback to other LZ4 implementations on error.
+        /// Fallback is done to be backward compatible with older versions of this
+        /// library and older versions parquet-cpp.
+        backward_compatible_lz4: bool,
+    }
+
+    impl LZ4HadoopCodec {
+        /// Creates new LZ4 Hadoop compression codec.
+        pub(crate) fn new(backward_compatible_lz4: bool) -> Self {
+            Self {
+                backward_compatible_lz4,
+            }
+        }
+    }
+
+    impl Codec for LZ4HadoopCodec {
+        fn decompress(
+            &mut self,
+            input_buf: &[u8],
+            output_buf: &mut Vec<u8>,
+            uncompress_size: Option<usize>,
+        ) -> Result<usize> {
+            let output_len = output_buf.len();
+            match try_decompress_hadoop(input_buf, output_buf) {
+                Ok(n) => Ok(n),
+                Err(e) if !self.backward_compatible_lz4 => Err(e),
+                // Fallback done to be backward compatible with older versions of this
+                // libray and older versions of parquet-cpp.
+                Err(_) => {
+                    output_buf.truncate(output_len);
+                    match LZ4Codec::new().decompress(
+                        input_buf,
+                        output_buf,
+                        uncompress_size,
+                    ) {
+                        Ok(n) => Ok(n),
+                        Err(_) => {
+                            output_buf.truncate(output_len);
+                            LZ4RawCodec::new().decompress(
+                                input_buf,
+                                output_buf,
+                                uncompress_size,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
+            unimplemented!();
+        }
+    }
+
+    fn try_decompress_hadoop(input_buf: &[u8], output_buf: &mut [u8]) -> Result<usize> {
+        unimplemented!();
+    }
+}
+#[cfg(any(feature = "lz4", test))]
+pub use lz4_hadoop_codec::*;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,8 +538,11 @@ mod tests {
     use crate::util::test_common::rand_gen::random_bytes;
 
     fn test_roundtrip(c: CodecType, data: &[u8], uncompress_size: Option<usize>) {
-        let mut c1 = create_codec(c).unwrap().unwrap();
-        let mut c2 = create_codec(c).unwrap().unwrap();
+        let codec_options = CodecOptionsBuilder::default()
+            .no_backward_compatible_lz4()
+            .build();
+        let mut c1 = create_codec(c, codec_options).unwrap().unwrap();
+        let mut c2 = create_codec(c, codec_options).unwrap().unwrap();
 
         // Compress with c1
         let mut compressed = Vec::new();

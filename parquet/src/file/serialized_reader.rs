@@ -28,7 +28,7 @@ use thrift::protocol::TCompactInputProtocol;
 
 use crate::basic::{Encoding, Type};
 use crate::column::page::{Page, PageMetadata, PageReader};
-use crate::compression::{create_codec, Codec};
+use crate::compression::{create_codec, Codec, CodecOptions};
 use crate::errors::{ParquetError, Result};
 use crate::file::page_index::index_reader;
 use crate::file::{footer, metadata::*, reader::*, statistics};
@@ -139,6 +139,7 @@ impl IntoIterator for SerializedFileReader<File> {
 pub struct SerializedFileReader<R: ChunkReader> {
     chunk_reader: Arc<R>,
     metadata: Arc<ParquetMetaData>,
+    codec_options: CodecOptions,
 }
 
 /// A predicate for filtering row groups, invoked with the metadata and index
@@ -153,6 +154,7 @@ pub type ReadGroupPredicate = Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>;
 pub struct ReadOptionsBuilder {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
+    codec_options: Option<CodecOptions>,
 }
 
 impl ReadOptionsBuilder {
@@ -186,11 +188,19 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// Set the `Codec` configuration.
+    pub fn with_codec_options(mut self, codec_options: CodecOptions) -> Self {
+        self.codec_options = Some(codec_options);
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
+        let codec_options = self.codec_options.unwrap_or_default();
         ReadOptions {
             predicates: self.predicates,
             enable_page_index: self.enable_page_index,
+            codec_options,
         }
     }
 }
@@ -202,6 +212,7 @@ impl ReadOptionsBuilder {
 pub struct ReadOptions {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
+    codec_options: CodecOptions,
 }
 
 impl<R: 'static + ChunkReader> SerializedFileReader<R> {
@@ -209,9 +220,11 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     /// Returns error if Parquet file does not exist or is corrupt.
     pub fn new(chunk_reader: R) -> Result<Self> {
         let metadata = footer::parse_metadata(&chunk_reader)?;
+        let codec_options = CodecOptions::default();
         Ok(Self {
             chunk_reader: Arc::new(chunk_reader),
             metadata: Arc::new(metadata),
+            codec_options,
         })
     }
 
@@ -257,6 +270,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
                     Some(columns_indexes),
                     Some(offset_indexes),
                 )),
+                codec_options: options.codec_options,
             })
         } else {
             Ok(Self {
@@ -265,6 +279,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
                     metadata.file_metadata().clone(),
                     filtered_row_groups,
                 )),
+                codec_options: options.codec_options,
             })
         }
     }
@@ -297,11 +312,15 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
 
     fn get_row_group(&self, i: usize) -> Result<Box<dyn RowGroupReader + '_>> {
         let row_group_metadata = self.metadata.row_group(i);
+        let options = SerializedRowGroupReaderOptionsBuilder::default()
+            .with_codec_options(self.codec_options)
+            .build();
         // Row groups should be processed sequentially.
         let f = Arc::clone(&self.chunk_reader);
-        Ok(Box::new(SerializedRowGroupReader::new(
+        Ok(Box::new(SerializedRowGroupReader::new_with_options(
             f,
             row_group_metadata,
+            options,
         )))
     }
 
@@ -310,18 +329,54 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
     }
 }
 
+/// A collection of options for [`SerializedRowGroupReader`].
+pub struct SerializedRowGroupReaderOptions {
+    codec_options: CodecOptions,
+}
+
+impl Default for SerializedRowGroupReaderOptions {
+    fn default() -> Self {
+        SerializedRowGroupReaderOptionsBuilder::default().build()
+    }
+}
+
+/// A builder for [`SerializedRowGroupReaderOptions`].
+#[derive(Default)]
+pub struct SerializedRowGroupReaderOptionsBuilder {
+    codec_options: Option<CodecOptions>,
+}
+
+impl SerializedRowGroupReaderOptionsBuilder {
+    /// Set the `Codec` configuration.
+    pub fn with_codec_options(mut self, codec_options: CodecOptions) -> Self {
+        self.codec_options = Some(codec_options);
+        self
+    }
+
+    pub fn build(self) -> SerializedRowGroupReaderOptions {
+        let codec_options = self.codec_options.unwrap_or_default();
+        SerializedRowGroupReaderOptions { codec_options }
+    }
+}
+
 /// A serialized implementation for Parquet [`RowGroupReader`].
 pub struct SerializedRowGroupReader<'a, R: ChunkReader> {
     chunk_reader: Arc<R>,
     metadata: &'a RowGroupMetaData,
+    options: SerializedRowGroupReaderOptions,
 }
 
 impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
-    /// Creates new row group reader from a file and row group metadata.
-    fn new(chunk_reader: Arc<R>, metadata: &'a RowGroupMetaData) -> Self {
+    /// Creates new row group reader from a file, row group metadata and custom config.
+    fn new_with_options(
+        chunk_reader: Arc<R>,
+        metadata: &'a RowGroupMetaData,
+        options: SerializedRowGroupReaderOptions,
+    ) -> Self {
         Self {
             chunk_reader,
             metadata,
+            options,
         }
     }
 }
@@ -345,11 +400,15 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
             .as_ref()
             .map(|x| x[i].clone());
 
-        Ok(Box::new(SerializedPageReader::new(
+        let options = SerializedPageReaderOptionsBuilder::default()
+            .with_codec_options(self.options.codec_options)
+            .build();
+        Ok(Box::new(SerializedPageReader::new_with_options(
             Arc::clone(&self.chunk_reader),
             col,
             self.metadata.num_rows() as usize,
             page_locations,
+            options,
         )?))
     }
 
@@ -509,6 +568,36 @@ enum SerializedPageReaderState {
     },
 }
 
+/// A collection of options for [`SerializedPageReader`].
+pub struct SerializedPageReaderOptions {
+    codec_options: CodecOptions,
+}
+
+impl Default for SerializedPageReaderOptions {
+    fn default() -> Self {
+        SerializedPageReaderOptionsBuilder::default().build()
+    }
+}
+
+/// A builder for [`SerializedPageReaderOptions`].
+#[derive(Default)]
+pub struct SerializedPageReaderOptionsBuilder {
+    codec_options: Option<CodecOptions>,
+}
+
+impl SerializedPageReaderOptionsBuilder {
+    /// Set the `Codec` configuration.
+    pub fn with_codec_options(mut self, codec_options: CodecOptions) -> Self {
+        self.codec_options = Some(codec_options);
+        self
+    }
+
+    pub fn build(self) -> SerializedPageReaderOptions {
+        let codec_options = self.codec_options.unwrap_or_default();
+        SerializedPageReaderOptions { codec_options }
+    }
+}
+
 /// A serialized implementation for Parquet [`PageReader`].
 pub struct SerializedPageReader<R: ChunkReader> {
     /// The chunk reader
@@ -531,7 +620,25 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         total_rows: usize,
         page_locations: Option<Vec<PageLocation>>,
     ) -> Result<Self> {
-        let decompressor = create_codec(meta.compression())?;
+        let options = SerializedPageReaderOptions::default();
+        SerializedPageReader::new_with_options(
+            reader,
+            meta,
+            total_rows,
+            page_locations,
+            options,
+        )
+    }
+
+    /// Creates a new serialized page with custom options.
+    pub fn new_with_options(
+        reader: Arc<R>,
+        meta: &ColumnChunkMetaData,
+        total_rows: usize,
+        page_locations: Option<Vec<PageLocation>>,
+        options: SerializedPageReaderOptions,
+    ) -> Result<Self> {
+        let decompressor = create_codec(meta.compression(), options.codec_options)?;
         let (start, len) = meta.byte_range();
 
         let state = match page_locations {

@@ -646,8 +646,9 @@ mod tests {
 
     use crate::basic::{Compression, Encoding, LogicalType, Repetition, Type};
     use crate::column::page::PageReader;
-    use crate::compression::{create_codec, Codec};
+    use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
     use crate::data_type::Int32Type;
+    use crate::file::serialized_reader::SerializedPageReaderOptionsBuilder;
     use crate::file::{
         properties::{WriterProperties, WriterVersion},
         reader::{FileReader, SerializedFileReader, SerializedPageReader},
@@ -947,7 +948,10 @@ mod tests {
     fn test_page_roundtrip(pages: &[Page], codec: Compression, physical_type: Type) {
         let mut compressed_pages = vec![];
         let mut total_num_values = 0i64;
-        let mut compressor = create_codec(codec).unwrap();
+        let codec_options = CodecOptionsBuilder::default()
+            .no_backward_compatible_lz4()
+            .build();
+        let mut compressor = create_codec(codec, codec_options).unwrap();
 
         for page in pages {
             let uncompressed_len = page.buffer().len();
@@ -1056,11 +1060,18 @@ mod tests {
                 .build()
                 .unwrap();
 
-            let mut page_reader = SerializedPageReader::new(
+            let codec_options = CodecOptionsBuilder::default()
+                .no_backward_compatible_lz4()
+                .build();
+            let page_reader_options = SerializedPageReaderOptionsBuilder::default()
+                .with_codec_options(codec_options)
+                .build();
+            let mut page_reader = SerializedPageReader::new_with_options(
                 Arc::new(reader),
                 &meta,
                 total_num_values as usize,
                 None,
+                page_reader_options,
             )
             .unwrap();
 
