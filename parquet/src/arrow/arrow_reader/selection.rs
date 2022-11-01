@@ -117,6 +117,37 @@ impl RowSelection {
         Self { selectors }
     }
 
+    /// Creates a [`RowSelection`] from a slice of uncombined `RowSelector`:
+    /// Like [skip(5),skip(5),read(10)].
+    /// After combine will return [skip(10),read(10)]
+    /// # Note
+    /// If directly use uncombined `RowSelection` with offset_index in parquet
+    /// will panic.
+    fn from_selectors_and_combine(selectors: &[RowSelector]) -> Self {
+        if selectors.len() < 2 {
+            return Self {
+                selectors: Vec::from(selectors),
+            };
+        }
+        let first = selectors.first().unwrap();
+        let mut sum_rows = first.row_count;
+        let mut selected = first.skip;
+        let mut combined_result = vec![];
+
+        for s in selectors.iter().skip(1) {
+            if s.skip == selected {
+                sum_rows += s.row_count
+            } else {
+                add_selector(selected, sum_rows, &mut combined_result);
+                sum_rows = s.row_count;
+                selected = s.skip;
+            }
+        }
+        add_selector(selected, sum_rows, &mut combined_result);
+
+        Self::from(combined_result)
+    }
+
     /// Given an offset index, return the offset ranges for all data pages selected by `self`
     #[cfg(any(test, feature = "async"))]
     pub(crate) fn scan_ranges(
@@ -317,6 +348,15 @@ impl From<RowSelection> for VecDeque<RowSelector> {
     }
 }
 
+fn add_selector(selected: bool, sum_row: usize, combined_result: &mut Vec<RowSelector>) {
+    let selector = if selected {
+        RowSelector::skip(sum_row)
+    } else {
+        RowSelector::select(sum_row)
+    };
+    combined_result.push(selector);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,9 +505,48 @@ mod tests {
                 RowSelector::select(2),
                 RowSelector::skip(1),
                 RowSelector::select(1),
-                RowSelector::skip(4)
+                RowSelector::skip(4),
             ]
         );
+    }
+
+    #[test]
+    fn test_combine() {
+        let a = vec![
+            RowSelector::skip(3),
+            RowSelector::skip(3),
+            RowSelector::select(10),
+            RowSelector::skip(4),
+        ];
+
+        let b = vec![
+            RowSelector::skip(3),
+            RowSelector::skip(3),
+            RowSelector::select(10),
+            RowSelector::skip(4),
+            RowSelector::skip(0),
+        ];
+
+        let c = vec![
+            RowSelector::skip(2),
+            RowSelector::skip(4),
+            RowSelector::select(3),
+            RowSelector::select(3),
+            RowSelector::select(4),
+            RowSelector::skip(3),
+            RowSelector::skip(1),
+            RowSelector::skip(0),
+        ];
+
+        let expected = RowSelection::from(vec![
+            RowSelector::skip(6),
+            RowSelector::select(10),
+            RowSelector::skip(4),
+        ]);
+
+        assert_eq!(RowSelection::from_selectors_and_combine(&a), expected);
+        assert_eq!(RowSelection::from_selectors_and_combine(&b), expected);
+        assert_eq!(RowSelection::from_selectors_and_combine(&c), expected);
     }
 
     #[test]
