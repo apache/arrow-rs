@@ -2421,4 +2421,29 @@ mod tests {
         let a: &Float64Array = batch.column(2).as_any().downcast_ref().unwrap();
         assert_eq!(a.values(), &[42.000000, 7.700000, 42.125000, 7.700000]);
     }
+
+    #[test]
+    fn test_read_lz4_hadoop_large() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{}/hadoop_lz4_compressed_larger.parquet", testdata);
+        let file = File::open(&path).unwrap();
+        let expected_rows = 10000;
+
+        let batches = ParquetRecordBatchReader::try_new(file, expected_rows)
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_columns(), 1);
+        assert_eq!(batch.num_rows(), expected_rows);
+
+        let a: &BinaryArray = batch.column(0).as_any().downcast_ref().unwrap();
+        let a: Vec<_> = a.iter().flatten().collect();
+        assert_eq!(a[0], b"c7ce6bef-d5b0-4863-b199-8ea8c7fb117b");
+        assert_eq!(a[1], b"e8fb9197-cb9f-4118-b67f-fbfa65f61843");
+        assert_eq!(a[expected_rows - 2], b"ab52a0cc-c6bb-4d61-8a8f-166dc4b8b13c");
+        assert_eq!(a[expected_rows - 1], b"85440778-460a-41ac-aa2e-ac3ee41696bf");
+    }
 }
