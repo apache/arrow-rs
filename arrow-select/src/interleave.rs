@@ -16,11 +16,9 @@
 // under the License.
 
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
-use arrow_array::{
-    downcast_primitive, make_array, new_empty_array, Array, ArrayRef, ArrowPrimitiveType,
-    GenericStringArray, OffsetSizeTrait, PrimitiveArray,
-};
-use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_array::types::*;
+use arrow_array::*;
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::transform::MutableArrayData;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType};
@@ -85,8 +83,10 @@ pub fn interleave(
 
     downcast_primitive! {
         data_type => (primitive_helper, values, indices, data_type),
-        DataType::Utf8 => interleave_string::<i32>(values, indices, data_type),
-        DataType::LargeUtf8 => interleave_string::<i64>(values, indices, data_type),
+        DataType::Utf8 => interleave_bytes::<Utf8Type>(values, indices),
+        DataType::LargeUtf8 => interleave_bytes::<LargeUtf8Type>(values, indices),
+        DataType::Binary => interleave_bytes::<BinaryType>(values, indices),
+        DataType::LargeBinary => interleave_bytes::<LargeBinaryType>(values, indices),
         _ => interleave_fallback(values, indices)
     }
 }
@@ -156,29 +156,28 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
     Ok(Arc::new(PrimitiveArray::<T>::from(data)))
 }
 
-fn interleave_string<O: OffsetSizeTrait>(
+fn interleave_bytes<T: ByteArrayType>(
     values: &[&dyn Array],
     indices: &[(usize, usize)],
-    data_type: &DataType,
 ) -> Result<ArrayRef, ArrowError> {
-    let interleaved = Interleave::<'_, GenericStringArray<O>>::new(values, indices);
+    let interleaved = Interleave::<'_, GenericByteArray<T>>::new(values, indices);
 
     let mut capacity = 0;
-    let mut offsets = BufferBuilder::<O>::new(indices.len() + 1);
-    offsets.append(O::from_usize(0).unwrap());
+    let mut offsets = BufferBuilder::<T::Offset>::new(indices.len() + 1);
+    offsets.append(T::Offset::from_usize(0).unwrap());
     for (a, b) in indices {
         let o = interleaved.arrays[*a].value_offsets();
         let element_len = o[*b + 1].as_usize() - o[*b].as_usize();
         capacity += element_len;
-        offsets.append(O::from_usize(capacity).expect("overflow"));
+        offsets.append(T::Offset::from_usize(capacity).expect("overflow"));
     }
 
     let mut values = MutableBuffer::new(capacity);
     for (a, b) in indices {
-        values.extend_from_slice(interleaved.arrays[*a].value(*b).as_bytes());
+        values.extend_from_slice(interleaved.arrays[*a].value(*b).as_ref());
     }
 
-    let builder = ArrayDataBuilder::new(data_type.clone())
+    let builder = ArrayDataBuilder::new(T::DATA_TYPE)
         .len(indices.len())
         .add_buffer(offsets.finish())
         .add_buffer(values.into())
@@ -186,7 +185,7 @@ fn interleave_string<O: OffsetSizeTrait>(
         .null_count(interleaved.null_count);
 
     let data = unsafe { builder.build_unchecked() };
-    Ok(Arc::new(GenericStringArray::<O>::from(data)))
+    Ok(Arc::new(GenericByteArray::<T>::from(data)))
 }
 
 /// Fallback implementation of interleave using [`MutableArrayData`]
