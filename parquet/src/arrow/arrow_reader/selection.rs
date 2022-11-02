@@ -130,19 +130,19 @@ impl RowSelection {
         }
         let first = selectors.first().unwrap();
         let mut sum_rows = first.row_count;
-        let mut selected = first.skip;
+        let mut skip = first.skip;
         let mut combined_result = vec![];
 
         for s in selectors.iter().skip(1) {
-            if s.skip == selected {
+            if s.skip == skip {
                 sum_rows += s.row_count
             } else {
-                add_selector(selected, sum_rows, &mut combined_result);
+                add_selector(skip, sum_rows, &mut combined_result);
                 sum_rows = s.row_count;
-                selected = s.skip;
+                skip = s.skip;
             }
         }
-        add_selector(selected, sum_rows, &mut combined_result);
+        add_selector(skip, sum_rows, &mut combined_result);
 
         Self {
             selectors: combined_result,
@@ -349,8 +349,8 @@ impl From<RowSelection> for VecDeque<RowSelector> {
     }
 }
 
-fn add_selector(selected: bool, sum_row: usize, combined_result: &mut Vec<RowSelector>) {
-    let selector = if selected {
+fn add_selector(skip: bool, sum_row: usize, combined_result: &mut Vec<RowSelector>) {
+    let selector = if skip {
         RowSelector::skip(sum_row)
     } else {
         RowSelector::select(sum_row)
@@ -548,6 +548,37 @@ mod tests {
         assert_eq!(RowSelection::from_selectors_and_combine(&a), expected);
         assert_eq!(RowSelection::from_selectors_and_combine(&b), expected);
         assert_eq!(RowSelection::from_selectors_and_combine(&c), expected);
+    }
+
+    #[test]
+    fn test_combine_2elements() {
+        let a = vec![RowSelector::select(10), RowSelector::select(5)];
+        let a_expect = vec![RowSelector::select(15)];
+        assert_eq!(
+            RowSelection::from_selectors_and_combine(&a).selectors,
+            a_expect
+        );
+
+        let b = vec![RowSelector::select(10), RowSelector::skip(5)];
+        let b_expect = vec![RowSelector::select(10), RowSelector::skip(5)];
+        assert_eq!(
+            RowSelection::from_selectors_and_combine(&b).selectors,
+            b_expect
+        );
+
+        let c = vec![RowSelector::skip(10), RowSelector::select(5)];
+        let c_expect = vec![RowSelector::skip(10), RowSelector::select(5)];
+        assert_eq!(
+            RowSelection::from_selectors_and_combine(&c).selectors,
+            c_expect
+        );
+
+        let d = vec![RowSelector::skip(10), RowSelector::skip(5)];
+        let d_expect = vec![RowSelector::skip(15)];
+        assert_eq!(
+            RowSelection::from_selectors_and_combine(&d).selectors,
+            d_expect
+        );
     }
 
     #[test]
