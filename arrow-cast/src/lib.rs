@@ -17,8 +17,7 @@
 
 //! Cast kernel for [Apache Arrow](https://docs.rs/arrow)
 
-
 pub mod cast;
 pub use cast::*;
-pub mod parse;
 pub mod display;
+pub mod parse;
