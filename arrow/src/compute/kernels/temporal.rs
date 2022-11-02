@@ -687,7 +687,7 @@ where
 }
 
 /// Extracts the time fraction of a given temporal array as an array of integers
-pub fn time_fraction_generic<T, A: ArrayAccessor<Item = T::Native>, F>(
+fn time_fraction_generic<T, A: ArrayAccessor<Item = T::Native>, F>(
     array: A,
     name: &str,
     op: F,
@@ -734,6 +734,26 @@ where
             array.data_type()
         ),
     }
+}
+
+pub fn minute_generic<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    time_fraction_generic::<T, _, _>(array, "minute", |t| t.minute() as i32)
+}
+
+pub fn second_generic<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    time_fraction_generic::<T, _, _>(array, "second", |t| t.second() as i32)
 }
 
 #[cfg(test)]
@@ -1192,8 +1212,14 @@ mod tests {
         )
         .unwrap();
 
+        let b_old = second_generic::<TimestampSecondType, _>(
+            dict.downcast_dict::<TimestampSecondArray>().unwrap(),
+        )
+        .unwrap();
+
         let expected = Int32Array::from(vec![1, 1, 2, 3, 2]);
         assert_eq!(expected, b);
+        assert_eq!(expected, b_old);
 
         let b = time_fraction_generic::<TimestampSecondType, _, _>(
             dict.downcast_dict::<TimestampSecondArray>().unwrap(),
@@ -1202,8 +1228,14 @@ mod tests {
         )
         .unwrap();
 
+        let b_old = minute_generic::<TimestampSecondType, _>(
+            dict.downcast_dict::<TimestampSecondArray>().unwrap(),
+        )
+        .unwrap();
+
         let expected = Int32Array::from(vec![1, 1, 2, 3, 2]);
         assert_eq!(expected, b);
+        assert_eq!(expected, b_old);
 
         let b = time_fraction_generic::<TimestampSecondType, _, _>(
             dict.downcast_dict::<TimestampSecondArray>().unwrap(),
