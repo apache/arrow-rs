@@ -6007,13 +6007,39 @@ mod tests {
         // to reproduce https://github.com/apache/arrow-rs/issues/2997
 
         let decimal_type = DataType::Decimal128(18, 2);
-        let array = Float64Array::from(vec![Some(0.0699999999)]);
+        let array = Float64Array::from(vec![
+            Some(0.0699999999),
+            Some(0.0659999999),
+            Some(0.0649999999),
+        ]);
         let array = Arc::new(array) as ArrayRef;
         generate_cast_test_case!(
             &array,
             Decimal128Array,
             &decimal_type,
-            vec![Some(7_i128),]
+            vec![
+                Some(7_i128), // round up
+                Some(7_i128), // round up
+                Some(6_i128), // round down
+            ]
+        );
+
+        let decimal_type = DataType::Decimal128(18, 3);
+        let array = Float64Array::from(vec![
+            Some(0.0699999999),
+            Some(0.0659999999),
+            Some(0.0649999999),
+        ]);
+        let array = Arc::new(array) as ArrayRef;
+        generate_cast_test_case!(
+            &array,
+            Decimal128Array,
+            &decimal_type,
+            vec![
+                Some(70_i128), // round up
+                Some(66_i128), // round up
+                Some(65_i128), // round up
+            ]
         );
     }
 }
