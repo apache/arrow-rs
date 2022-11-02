@@ -621,50 +621,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    minute_generic::<T, _>(array)
-}
-
-/// Extracts the minutes of a given temporal array as an array of integers
-pub fn minute_generic<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    match array.data_type().clone() {
-        DataType::Dictionary(_, value_type) => {
-            minute_internal::<T, A>(array, value_type.as_ref())
-        }
-        dt => minute_internal::<T, A>(array, &dt),
-    }
-}
-
-/// Extracts the minutes of a given temporal array as an array of integers
-fn minute_internal<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-    dt: &DataType,
-) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    let b = Int32Builder::with_capacity(array.len());
-    match dt {
-        DataType::Date64 | DataType::Timestamp(_, None) => {
-            let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
-                t.minute() as i32
-            }))
-        }
-        DataType::Timestamp(_, Some(tz)) => {
-            let iter = ArrayIter::new(array);
-            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
-                t.minute() as i32
-            })
-        }
-        _ => return_compute_error_with!("minute does not support", array.data_type()),
-    }
+    time_fraction_generic::<T, _, _>(array, "minute", |t| t.minute() as i32)
 }
 
 /// Extracts the week of a given temporal primitive array as an array of integers
@@ -717,7 +674,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    second_fraction_generic::<T, _, _>(array, "second", |t| t.second() as i32)
+    time_fraction_generic::<T, _, _>(array, "second", |t| t.second() as i32)
 }
 
 /// Extracts the nanoseconds of a given temporal primitive array as an array of integers
@@ -726,11 +683,11 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    second_fraction_generic::<T, _, _>(array, "nanosecond", |t| t.nanosecond() as i32)
+    time_fraction_generic::<T, _, _>(array, "nanosecond", |t| t.nanosecond() as i32)
 }
 
-/// Extracts the seconds fraction of a given temporal array as an array of integers
-pub fn second_fraction_generic<T, A: ArrayAccessor<Item = T::Native>, F>(
+/// Extracts the time fraction of a given temporal array as an array of integers
+pub fn time_fraction_generic<T, A: ArrayAccessor<Item = T::Native>, F>(
     array: A,
     name: &str,
     op: F,
@@ -742,14 +699,14 @@ where
 {
     match array.data_type().clone() {
         DataType::Dictionary(_, value_type) => {
-            second_fraction_internal::<T, A, _>(array, value_type.as_ref(), name, op)
+            time_fraction_internal::<T, A, _>(array, value_type.as_ref(), name, op)
         }
-        dt => second_fraction_internal::<T, A, _>(array, &dt, name, op),
+        dt => time_fraction_internal::<T, A, _>(array, &dt, name, op),
     }
 }
 
-/// Extracts the seconds fraction of a given temporal array as an array of integers
-fn second_fraction_internal<T, A: ArrayAccessor<Item = T::Native>, F>(
+/// Extracts the time fraction of a given temporal array as an array of integers
+fn time_fraction_internal<T, A: ArrayAccessor<Item = T::Native>, F>(
     array: A,
     dt: &DataType,
     name: &str,
@@ -1228,15 +1185,17 @@ mod tests {
         let expected = Int32Array::from(vec![11, 11, 21, 7, 21]);
         assert_eq!(expected, b);
 
-        let b = minute_generic::<TimestampSecondType, _>(
+        let b = time_fraction_generic::<TimestampSecondType, _, _>(
             dict.downcast_dict::<TimestampSecondArray>().unwrap(),
+            "minute",
+            |t| t.minute() as i32,
         )
         .unwrap();
 
         let expected = Int32Array::from(vec![1, 1, 2, 3, 2]);
         assert_eq!(expected, b);
 
-        let b = second_fraction_generic::<TimestampSecondType, _, _>(
+        let b = time_fraction_generic::<TimestampSecondType, _, _>(
             dict.downcast_dict::<TimestampSecondArray>().unwrap(),
             "second",
             |t| t.second() as i32,
@@ -1244,6 +1203,16 @@ mod tests {
         .unwrap();
 
         let expected = Int32Array::from(vec![1, 1, 2, 3, 2]);
+        assert_eq!(expected, b);
+
+        let b = time_fraction_generic::<TimestampSecondType, _, _>(
+            dict.downcast_dict::<TimestampSecondArray>().unwrap(),
+            "nanosecond",
+            |t| t.nanosecond() as i32,
+        )
+        .unwrap();
+
+        let expected = Int32Array::from(vec![0, 0, 0, 0, 0]);
         assert_eq!(expected, b);
     }
 
