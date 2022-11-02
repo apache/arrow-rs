@@ -1212,7 +1212,7 @@ mod tests {
         )
         .unwrap();
 
-        let b_old = second_generic::<TimestampSecondType, _>(
+        let b_old = minute_generic::<TimestampSecondType, _>(
             dict.downcast_dict::<TimestampSecondArray>().unwrap(),
         )
         .unwrap();
@@ -1228,7 +1228,7 @@ mod tests {
         )
         .unwrap();
 
-        let b_old = minute_generic::<TimestampSecondType, _>(
+        let b_old = second_generic::<TimestampSecondType, _>(
             dict.downcast_dict::<TimestampSecondArray>().unwrap(),
         )
         .unwrap();
