@@ -121,8 +121,7 @@ impl RowSelection {
     /// Like [skip(5),skip(5),read(10)].
     /// After combine will return [skip(10),read(10)]
     /// # Note
-    /// If directly use uncombined `RowSelection` with offset_index in parquet
-    /// will panic.
+    ///  [`RowSelection`] must be combined prior to use within offset_index or else the code will panic.
     fn from_selectors_and_combine(selectors: &[RowSelector]) -> Self {
         if selectors.len() < 2 {
             return Self {
