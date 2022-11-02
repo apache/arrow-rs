@@ -199,9 +199,14 @@ pub fn hour_dyn(array: &dyn Array) -> Result<ArrayRef> {
                 dt => return_compute_error_with!("hour does not support", dt),
             )
         }
-        DataType::Time32(_) => {
+        DataType::Time32(TimeUnit::Second) => {
             let array = as_primitive_array::<Time32SecondType>(array);
             hour_internal::<Time32SecondType, _>(array, array.data_type())
+                .map(|a| Arc::new(a) as ArrayRef)
+        }
+        DataType::Time32(TimeUnit::Microsecond) => {
+            let array = as_primitive_array::<Time32MillisecondType>(array);
+            hour_internal::<Time32MillisecondType, _>(array, array.data_type())
                 .map(|a| Arc::new(a) as ArrayRef)
         }
         DataType::Time64(TimeUnit::Microsecond) => {
