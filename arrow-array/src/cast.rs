@@ -123,16 +123,16 @@ macro_rules! downcast_integer {
 macro_rules! downcast_temporal {
     ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($($p:pat),+ => $fallback:expr $(,)*)*) => {
         match ($($data_type),+) {
-            $crate::repeat_pat!(arrow_schema::DataType::Time32(TimeUnit::Second), $($data_type),+) => {
+            $crate::repeat_pat!(arrow_schema::DataType::Time32(arrow_schema::TimeUnit::Second), $($data_type),+) => {
                 $m!($crate::types::Time32SecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Time32(TimeUnit::Microsecond), $($data_type),+) => {
+            $crate::repeat_pat!(arrow_schema::DataType::Time32(arrow_schema::TimeUnit::Microsecond), $($data_type),+) => {
                 $m!($crate::types::Time32MillisecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Time64(TimeUnit::Microsecond), $($data_type),+) => {
+            $crate::repeat_pat!(arrow_schema::DataType::Time64(arrow_schema::TimeUnit::Microsecond), $($data_type),+) => {
                 $m!($crate::types::Time64MicrosecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Time64(TimeUnit::Nanosecond), $($data_type),+) => {
+            $crate::repeat_pat!(arrow_schema::DataType::Time64(arrow_schema::TimeUnit::Nanosecond), $($data_type),+) => {
                 $m!($crate::types::Time64NanosecondType $(, $args)*)
             }
             $crate::repeat_pat!(arrow_schema::DataType::Date32, $($data_type),+) => {
@@ -141,16 +141,16 @@ macro_rules! downcast_temporal {
             $crate::repeat_pat!(arrow_schema::DataType::Date64, $($data_type),+) => {
                 $m!($crate::types::Date64Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(TimeUnit::Second, _), $($data_type),+) => {
+            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Second, _), $($data_type),+) => {
                 $m!($crate::types::TimestampSecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(TimeUnit::Millisecond, _), $($data_type),+) => {
+            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, _), $($data_type),+) => {
                 $m!($crate::types::TimestampMillisecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(TimeUnit::Microsecond, _), $($data_type),+) => {
+            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _), $($data_type),+) => {
                 $m!($crate::types::TimestampMicrosecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(TimeUnit::Nanosecond, _), $($data_type),+) => {
+            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _), $($data_type),+) => {
                 $m!($crate::types::TimestampNanosecondType $(, $args)*)
             }
             $(($($p),+) => $fallback,)*
