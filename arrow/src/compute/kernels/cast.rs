@@ -6010,6 +6010,7 @@ mod tests {
         let array = Float64Array::from(vec![
             Some(0.0699999999),
             Some(0.0659999999),
+            Some(0.0650000000),
             Some(0.0649999999),
         ]);
         let array = Arc::new(array) as ArrayRef;
@@ -6018,6 +6019,7 @@ mod tests {
             Decimal128Array,
             &decimal_type,
             vec![
+                Some(7_i128), // round up
                 Some(7_i128), // round up
                 Some(7_i128), // round up
                 Some(6_i128), // round down
@@ -6028,6 +6030,7 @@ mod tests {
         let array = Float64Array::from(vec![
             Some(0.0699999999),
             Some(0.0659999999),
+            Some(0.0650000000),
             Some(0.0649999999),
         ]);
         let array = Arc::new(array) as ArrayRef;
@@ -6038,6 +6041,7 @@ mod tests {
             vec![
                 Some(70_i128), // round up
                 Some(66_i128), // round up
+                Some(65_i128), // round down
                 Some(65_i128), // round up
             ]
         );
