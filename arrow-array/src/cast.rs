@@ -98,6 +98,114 @@ macro_rules! downcast_integer {
 /// `m` with the corresponding [`ArrowPrimitiveType`], followed by any additional arguments
 ///
 /// ```
+/// # use arrow_array::{downcast_temporal, ArrowPrimitiveType};
+/// # use arrow_schema::DataType;
+///
+/// macro_rules! temporal_size_helper {
+///   ($t:ty, $o:ty) => {
+///       std::mem::size_of::<<$t as ArrowPrimitiveType>::Native>() as $o
+///   };
+/// }
+///
+/// fn temporal_size(t: &DataType) -> u8 {
+///     downcast_temporal! {
+///         t => (temporal_size_helper, u8),
+///         _ => u8::MAX
+///     }
+/// }
+///
+/// assert_eq!(temporal_size(&DataType::Date32), 4);
+/// assert_eq!(temporal_size(&DataType::Date64), 8);
+/// ```
+///
+/// [`DataType`]: arrow_schema::DataType
+#[macro_export]
+macro_rules! downcast_temporal {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($($p:pat),+ => $fallback:expr $(,)*)*) => {
+        match ($($data_type),+) {
+            $crate::repeat_pat!(arrow_schema::DataType::Time32(TimeUnit::Second), $($data_type),+) => {
+                $m!($crate::types::Time32SecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Time32(TimeUnit::Microsecond), $($data_type),+) => {
+                $m!($crate::types::Time32MillisecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Time64(TimeUnit::Microsecond), $($data_type),+) => {
+                $m!($crate::types::Time64MicrosecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Time64(TimeUnit::Nanosecond), $($data_type),+) => {
+                $m!($crate::types::Time64NanosecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Date32, $($data_type),+) => {
+                $m!($crate::types::Date32Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Date64, $($data_type),+) => {
+                $m!($crate::types::Date64Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(TimeUnit::Second, _), $($data_type),+) => {
+                $m!($crate::types::TimestampSecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(TimeUnit::Millisecond, _), $($data_type),+) => {
+                $m!($crate::types::TimestampMillisecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(TimeUnit::Microsecond, _), $($data_type),+) => {
+                $m!($crate::types::TimestampMicrosecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(TimeUnit::Nanosecond, _), $($data_type),+) => {
+                $m!($crate::types::TimestampNanosecondType $(, $args)*)
+            }
+            $(($($p),+) => $fallback,)*
+        }
+    };
+}
+
+/// Downcast an [`Array`] to a temporal [`PrimitiveArray`] based on its [`DataType`]
+/// accepts a number of subsequent patterns to match the data type
+///
+/// ```
+/// # use arrow_array::{Array, downcast_temporal_array, cast::as_string_array};
+/// # use arrow_schema::DataType;
+///
+/// fn print_temporal(array: &dyn Array) {
+///     downcast_temporal_array!(
+///         array => {
+///             for v in array {
+///                 println!("{:?}", v);
+///             }
+///         }
+///         DataType::Utf8 => {
+///             for v in as_string_array(array) {
+///                 println!("{:?}", v);
+///             }
+///         }
+///         t => println!("Unsupported datatype {}", t)
+///     )
+/// }
+/// ```
+///
+/// [`DataType`]: arrow_schema::DataType
+#[macro_export]
+macro_rules! downcast_temporal_array {
+    ($values:ident => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
+        $crate::downcast_temporal_array!($values => {$e} $($p => $fallback)*)
+    };
+    (($($values:ident),+) => $e:block $($($p:pat),+ => $fallback:expr $(,)*)*) => {
+        $crate::downcast_temporal_array!($($values),+ => $e $($($p),+ => $fallback)*)
+    };
+    (($($values:ident),+) => $e:block $(($($p:pat),+) => $fallback:expr $(,)*)*) => {
+        $crate::downcast_temporal_array!($($values),+ => $e $($($p),+ => $fallback)*)
+    };
+    ($($values:ident),+ => $e:block $($($p:pat),+ => $fallback:expr $(,)*)*) => {
+        $crate::downcast_temporal!{
+            $($values.data_type()),+ => ($crate::downcast_primitive_array_helper, $($values),+, $e),
+            $($($p),+ => $fallback,)*
+        }
+    };
+}
+
+/// Given one or more expressions evaluating to primitive [`DataType`] invokes the provided macro
+/// `m` with the corresponding [`ArrowPrimitiveType`], followed by any additional arguments
+///
+/// ```
 /// # use arrow_array::{downcast_primitive, ArrowPrimitiveType};
 /// # use arrow_schema::DataType;
 ///
