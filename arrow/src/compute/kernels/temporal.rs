@@ -17,7 +17,9 @@
 
 //! Defines temporal kernels for time and date related functions.
 
+use arrow_array::downcast_dictionary_array;
 use chrono::{DateTime, Datelike, NaiveDateTime, NaiveTime, Offset, Timelike};
+use std::sync::Arc;
 
 use crate::array::*;
 use crate::datatypes::*;
@@ -180,21 +182,69 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    hour_generic::<T, _>(array)
+    hour_internal::<T, _>(array, array.data_type())
 }
 
-/// Extracts the hours of a given temporal array as an array of integers within
-/// the range of [0, 23].
-pub fn hour_generic<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
+/// Extracts the hours of a given array as an array of integers within
+/// the range of [0, 23]. If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn hour_dyn(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type().clone() {
-        DataType::Dictionary(_, value_type) => {
-            hour_internal::<T, A>(array, value_type.as_ref())
+        DataType::Dictionary(_, _) => {
+            downcast_dictionary_array!(
+                array => {
+                    let hour_values = hour_dyn(array.values())?;
+                    Ok(Arc::new(array.with_values(&hour_values)))
+                }
+                dt => return_compute_error_with!("hour does not support", dt),
+            )
         }
-        dt => hour_internal::<T, A>(array, &dt),
+        DataType::Time32(_) => {
+            let array = as_primitive_array::<Time32SecondType>(array);
+            hour_internal::<Time32SecondType, _>(array, array.data_type())
+                .map(|a| Arc::new(a) as ArrayRef)
+        }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            let array = as_primitive_array::<Time64MicrosecondType>(array);
+            hour_internal::<Time64MicrosecondType, _>(array, array.data_type())
+                .map(|a| Arc::new(a) as ArrayRef)
+        }
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            let array = as_primitive_array::<Time64NanosecondType>(array);
+            hour_internal::<Time64NanosecondType, _>(array, array.data_type())
+                .map(|a| Arc::new(a) as ArrayRef)
+        }
+        DataType::Date32 => {
+            let array = as_primitive_array::<Date32Type>(array);
+            hour_internal::<Date32Type, _>(array, array.data_type())
+                .map(|a| Arc::new(a) as ArrayRef)
+        }
+        DataType::Date64 => {
+            let array = as_primitive_array::<Date64Type>(array);
+            hour_internal::<Date64Type, _>(array, array.data_type())
+                .map(|a| Arc::new(a) as ArrayRef)
+        }
+        DataType::Timestamp(TimeUnit::Second, _) => {
+            let array = as_primitive_array::<TimestampSecondType>(array);
+            hour_internal::<TimestampSecondType, _>(array, array.data_type())
+                .map(|a| Arc::new(a) as ArrayRef)
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            let array = as_primitive_array::<TimestampMillisecondType>(array);
+            hour_internal::<TimestampMillisecondType, _>(array, array.data_type())
+                .map(|a| Arc::new(a) as ArrayRef)
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            let array = as_primitive_array::<TimestampMicrosecondType>(array);
+            hour_internal::<TimestampMicrosecondType, _>(array, array.data_type())
+                .map(|a| Arc::new(a) as ArrayRef)
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            let array = as_primitive_array::<TimestampNanosecondType>(array);
+            hour_internal::<TimestampNanosecondType, _>(array, array.data_type())
+                .map(|a| Arc::new(a) as ArrayRef)
+        }
+        dt => return_compute_error_with!("hour does not support", dt),
     }
 }
 
@@ -1204,13 +1254,12 @@ mod tests {
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 1]);
         let dict = DictionaryArray::try_new(&keys, &a).unwrap();
 
-        let b = hour_generic::<TimestampSecondType, _>(
-            dict.downcast_dict::<TimestampSecondArray>().unwrap(),
-        )
-        .unwrap();
+        let b = hour_dyn(&dict).unwrap();
 
-        let expected = Int32Array::from(vec![11, 11, 21, 7, 21]);
-        assert_eq!(expected, b);
+        let expected_dict =
+            DictionaryArray::try_new(&keys, &Int32Array::from(vec![11, 21, 7])).unwrap();
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
 
         let b = minute_generic::<TimestampSecondType, _>(
             dict.downcast_dict::<TimestampSecondArray>().unwrap(),
