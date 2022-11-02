@@ -626,24 +626,21 @@ mod lz4_hadoop_codec {
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
-            // Reserve some memory for the LZ4_HADOOP prefix.
+            // Allocate memory to store the LZ4_HADOOP prefix.
             let offset = output_buf.len();
             output_buf.resize(offset + PREFIX_LEN, 0);
 
-            // Compress block after prefix.
+            // Append LZ4_RAW compressed bytes after prefix.
             LZ4RawCodec::new().compress(input_buf, output_buf)?;
 
-            // Set the prefix as:
-            // - bytes 0..3: big-endian uint32_t representing the frame decompressed size
-            // - bytes 4..7: big-endian uint32_t representing the frame compressed size
-            let compress_size = output_buf.len() - (offset + PREFIX_LEN);
-            let compress_size = compress_size as u32;
-            let decompressed_size = input_buf.len() as u32;
-            let prefix_start = offset;
-            let prefix_end = offset + PREFIX_LEN;
-            let prefix = &mut output_buf[prefix_start..prefix_end];
-            prefix[..SIZE_U32].copy_from_slice(&decompressed_size.to_be_bytes());
-            prefix[SIZE_U32..].copy_from_slice(&compress_size.to_be_bytes());
+            // Prepend decompressed size and compressed size in big endian to be compatible
+            // with LZ4_HADOOP.
+            let output_buf = &mut output_buf[offset..];
+            let compressed_size = output_buf.len() - PREFIX_LEN;
+            let compressed_size = compressed_size as u32;
+            let uncompressed_size = input_buf.len() as u32;
+            output_buf[..SIZE_U32].copy_from_slice(&uncompressed_size.to_be_bytes());
+            output_buf[SIZE_U32..PREFIX_LEN].copy_from_slice(&compressed_size.to_be_bytes());
 
             Ok(())
         }
