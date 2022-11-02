@@ -22,8 +22,6 @@ pub mod arithmetic;
 pub mod arity;
 pub mod bitwise;
 pub mod boolean;
-pub mod cast;
-pub mod cast_utils;
 pub mod comparison;
 pub mod concat_elements;
 pub mod length;
@@ -37,3 +35,5 @@ pub mod window;
 pub mod zip;
 
 pub use arrow_select::{concat, filter, interleave, take};
+pub use arrow_cast::cast;
+pub use arrow_cast::parse as cast_utils;
