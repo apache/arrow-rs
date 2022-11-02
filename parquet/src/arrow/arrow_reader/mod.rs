@@ -2439,17 +2439,17 @@ mod tests {
         assert_eq!(batch.num_columns(), 1);
         assert_eq!(batch.num_rows(), expected_rows);
 
-        let a: &BinaryArray = batch.column(0).as_any().downcast_ref().unwrap();
+        let a: &StringArray = batch.column(0).as_any().downcast_ref().unwrap();
         let a: Vec<_> = a.iter().flatten().collect();
-        assert_eq!(a[0], b"c7ce6bef-d5b0-4863-b199-8ea8c7fb117b");
-        assert_eq!(a[1], b"e8fb9197-cb9f-4118-b67f-fbfa65f61843");
+        assert_eq!(a[0], "c7ce6bef-d5b0-4863-b199-8ea8c7fb117b");
+        assert_eq!(a[1], "e8fb9197-cb9f-4118-b67f-fbfa65f61843");
         assert_eq!(
             a[expected_rows - 2],
-            b"ab52a0cc-c6bb-4d61-8a8f-166dc4b8b13c"
+            "ab52a0cc-c6bb-4d61-8a8f-166dc4b8b13c"
         );
         assert_eq!(
             a[expected_rows - 1],
-            b"85440778-460a-41ac-aa2e-ac3ee41696bf"
+            "85440778-460a-41ac-aa2e-ac3ee41696bf"
         );
     }
 }

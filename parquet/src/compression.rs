@@ -395,6 +395,7 @@ pub use zstd_codec::*;
 #[cfg(any(feature = "lz4", test))]
 mod lz4_raw_codec {
     use crate::compression::Codec;
+    use crate::errors::ParquetError;
     use crate::errors::Result;
 
     /// Codec for LZ4 Raw compression algorithm.
@@ -407,12 +408,6 @@ mod lz4_raw_codec {
         }
     }
 
-    // Compute max LZ4 uncompress size.
-    // Check https://stackoverflow.com/questions/25740471/lz4-library-decompressed-data-upper-bound-size-estimation
-    fn max_uncompressed_size(compressed_size: usize) -> usize {
-        (compressed_size << 8) - compressed_size - 2526
-    }
-
     impl Codec for LZ4RawCodec {
         fn decompress(
             &mut self,
@@ -421,8 +416,14 @@ mod lz4_raw_codec {
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
             let offset = output_buf.len();
-            let required_len =
-                uncompress_size.unwrap_or_else(|| max_uncompressed_size(input_buf.len()));
+            let required_len = match uncompress_size {
+                Some(uncompress_size) => uncompress_size,
+                None => {
+                    return Err(ParquetError::General(
+                        "LZ4RawCodec unsupported without uncompress_size".into(),
+                    ))
+                }
+            };
             output_buf.resize(offset + required_len, 0);
             match lz4::block::decompress_to_buffer(
                 input_buf,
@@ -430,8 +431,10 @@ mod lz4_raw_codec {
                 &mut output_buf[offset..],
             ) {
                 Ok(n) => {
-                    if n < required_len {
-                        output_buf.truncate(offset + n);
+                    if n != required_len {
+                        return Err(ParquetError::General(
+                            "LZ4RawCodec uncompress_size is not the expected one".into(),
+                        ));
                     }
                     Ok(n)
                 }
@@ -466,7 +469,14 @@ mod lz4_hadoop_codec {
     use crate::compression::lz4_codec::LZ4Codec;
     use crate::compression::lz4_raw_codec::LZ4RawCodec;
     use crate::compression::Codec;
-    use crate::errors::Result;
+    use crate::errors::{ParquetError, Result};
+    use std::io;
+
+    /// Size of u32 type.
+    const SIZE_U32: usize = std::mem::size_of::<u32>();
+
+    /// Length of the LZ4_HADOOP prefix.
+    const PREFIX_LEN: usize = SIZE_U32 * 2;
 
     /// Codec for LZ4 Hadoop compression algorithm.
     pub struct LZ4HadoopCodec {
@@ -485,6 +495,83 @@ mod lz4_hadoop_codec {
         }
     }
 
+    /// Try to decompress the buffer as if it was compressed with the Hadoop Lz4Codec.
+    /// Adapted from pola-rs [compression.rs:try_decompress_hadoop](https://pola-rs.github.io/polars/src/parquet2/compression.rs.html#225)
+    /// Translated from the apache arrow c++ function [TryDecompressHadoop](https://github.com/apache/arrow/blob/bf18e6e4b5bb6180706b1ba0d597a65a4ce5ca48/cpp/src/arrow/util/compression_lz4.cc#L474).
+    /// Returns error if decompression failed.
+    #[cfg(any(feature = "lz4", feature = "lz4_flex"))]
+    fn try_decompress_hadoop(
+        input_buf: &[u8],
+        output_buf: &mut [u8],
+    ) -> io::Result<usize> {
+        // Parquet files written with the Hadoop Lz4Codec use their own framing.
+        // The input buffer can contain an arbitrary number of "frames", each
+        // with the following structure:
+        // - bytes 0..3: big-endian uint32_t representing the frame decompressed size
+        // - bytes 4..7: big-endian uint32_t representing the frame compressed size
+        // - bytes 8...: frame compressed data
+        //
+        // The Hadoop Lz4Codec source code can be found here:
+        // https://github.com/apache/hadoop/blob/trunk/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/codec/Lz4Codec.cc
+        let mut input_len = input_buf.len();
+        let mut input = input_buf;
+        let mut read_bytes = 0;
+        let mut output_len = output_buf.len();
+        let mut output: &mut [u8] = output_buf;
+        while input_len >= PREFIX_LEN {
+            let mut bytes = [0; SIZE_U32];
+            bytes.copy_from_slice(&input[0..4]);
+            let expected_decompressed_size = u32::from_be_bytes(bytes);
+            let mut bytes = [0; SIZE_U32];
+            bytes.copy_from_slice(&input[4..8]);
+            let expected_compressed_size = u32::from_be_bytes(bytes);
+            input = &input[PREFIX_LEN..];
+            input_len -= PREFIX_LEN;
+
+            if input_len < expected_compressed_size as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Not enough bytes for Hadoop frame",
+                ));
+            }
+
+            if output_len < expected_decompressed_size as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Not enough bytes to hold advertised output",
+                ));
+            }
+            let decompressed_size = lz4::block::decompress_to_buffer(
+                &input[..expected_compressed_size as usize],
+                Some(output_len as i32),
+                output,
+            )?;
+            if decompressed_size != expected_decompressed_size as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Unexpected decompressed size",
+                ));
+            }
+            input_len -= expected_compressed_size as usize;
+            output_len -= expected_decompressed_size as usize;
+            read_bytes += expected_decompressed_size as usize;
+            if input_len > expected_compressed_size as usize {
+                input = &input[expected_compressed_size as usize..];
+                output = &mut output[expected_decompressed_size as usize..];
+            } else {
+                break;
+            }
+        }
+        if input_len == 0 {
+            Ok(read_bytes)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Not all input are consumed",
+            ))
+        }
+    }
+
     impl Codec for LZ4HadoopCodec {
         fn decompress(
             &mut self,
@@ -493,12 +580,30 @@ mod lz4_hadoop_codec {
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
             let output_len = output_buf.len();
-            match try_decompress_hadoop(input_buf, output_buf) {
-                Ok(n) => Ok(n),
-                Err(e) if !self.backward_compatible_lz4 => Err(e),
+            let required_len = match uncompress_size {
+                Some(n) => n,
+                None => {
+                    return Err(ParquetError::General(
+                        "LZ4HadoopCodec unsupported without uncompress_size".into(),
+                    ))
+                }
+            };
+            output_buf.resize(output_len + required_len, 0);
+            match try_decompress_hadoop(input_buf, &mut output_buf[output_len..]) {
+                Ok(n) => {
+                    if n != required_len {
+                        return Err(ParquetError::General(
+                            "LZ4HadoopCodec uncompress_size is not the expected one"
+                                .into(),
+                        ));
+                    }
+                    Ok(n)
+                }
+                Err(e) if !self.backward_compatible_lz4 => Err(e.into()),
                 // Fallback done to be backward compatible with older versions of this
                 // libray and older versions of parquet-cpp.
                 Err(_) => {
+                    // Truncate any inserted element before tryingg next algorithm.
                     output_buf.truncate(output_len);
                     match LZ4Codec::new().decompress(
                         input_buf,
@@ -507,6 +612,7 @@ mod lz4_hadoop_codec {
                     ) {
                         Ok(n) => Ok(n),
                         Err(_) => {
+                            // Truncate any inserted element before tryingg next algorithm.
                             output_buf.truncate(output_len);
                             LZ4RawCodec::new().decompress(
                                 input_buf,
@@ -520,12 +626,27 @@ mod lz4_hadoop_codec {
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
-            unimplemented!();
-        }
-    }
+            // Reserve some memory for the LZ4_HADOOP prefix.
+            let offset = output_buf.len();
+            output_buf.resize(offset + PREFIX_LEN, 0);
 
-    fn try_decompress_hadoop(input_buf: &[u8], output_buf: &mut [u8]) -> Result<usize> {
-        unimplemented!();
+            // Compress block after prefix.
+            LZ4RawCodec::new().compress(input_buf, output_buf)?;
+
+            // Set the prefix as:
+            // - bytes 0..3: big-endian uint32_t representing the frame decompressed size
+            // - bytes 4..7: big-endian uint32_t representing the frame compressed size
+            let compress_size = output_buf.len() - (offset + PREFIX_LEN);
+            let compress_size = compress_size as u32;
+            let decompressed_size = input_buf.len() as u32;
+            let prefix_start = offset;
+            let prefix_end = offset + PREFIX_LEN;
+            let prefix = &mut output_buf[prefix_start..prefix_end];
+            prefix[..SIZE_U32].copy_from_slice(&decompressed_size.to_be_bytes());
+            prefix[SIZE_U32..].copy_from_slice(&compress_size.to_be_bytes());
+
+            Ok(())
+        }
     }
 }
 #[cfg(any(feature = "lz4", test))]
@@ -593,42 +714,53 @@ mod tests {
         assert_eq!(&decompressed[..4], prefix);
     }
 
-    fn test_codec(c: CodecType) {
+    fn test_codec_with_size(c: CodecType) {
+        let sizes = vec![100, 10000, 100000];
+        for size in sizes {
+            let data = random_bytes(size);
+            test_roundtrip(c, &data, Some(data.len()));
+        }
+    }
+
+    fn test_codec_without_size(c: CodecType) {
         let sizes = vec![100, 10000, 100000];
         for size in sizes {
             let data = random_bytes(size);
             test_roundtrip(c, &data, None);
-            test_roundtrip(c, &data, Some(data.len()));
         }
     }
 
     #[test]
     fn test_codec_snappy() {
-        test_codec(CodecType::SNAPPY);
+        test_codec_with_size(CodecType::SNAPPY);
+        test_codec_without_size(CodecType::SNAPPY);
     }
 
     #[test]
     fn test_codec_gzip() {
-        test_codec(CodecType::GZIP);
+        test_codec_with_size(CodecType::GZIP);
+        test_codec_without_size(CodecType::GZIP);
     }
 
     #[test]
     fn test_codec_brotli() {
-        test_codec(CodecType::BROTLI);
+        test_codec_with_size(CodecType::BROTLI);
+        test_codec_without_size(CodecType::BROTLI);
     }
 
     #[test]
     fn test_codec_lz4() {
-        test_codec(CodecType::LZ4);
+        test_codec_with_size(CodecType::LZ4);
     }
 
     #[test]
     fn test_codec_zstd() {
-        test_codec(CodecType::ZSTD);
+        test_codec_with_size(CodecType::ZSTD);
+        test_codec_without_size(CodecType::ZSTD);
     }
 
     #[test]
     fn test_codec_lz4_raw() {
-        test_codec(CodecType::LZ4_RAW);
+        test_codec_with_size(CodecType::LZ4_RAW);
     }
 }
