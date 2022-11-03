@@ -176,13 +176,13 @@ macro_rules! native_type_op {
                 })
             }
 
-            fn pow_checked(self, mut exp: u32) -> Result<Self> {
+            fn pow_checked(self, exp: u32) -> Result<Self> {
                 self.checked_pow(exp).ok_or_else(|| {
                     ArrowError::ComputeError(format!("Overflow happened on: {:?}", self))
                 })
             }
 
-            fn pow_wrapping(self, mut exp: u32) -> Self {
+            fn pow_wrapping(self, exp: u32) -> Self {
                 self.wrapping_pow(exp)
             }
 
@@ -294,11 +294,11 @@ macro_rules! native_type_float_op {
                 -self
             }
 
-            fn pow_checked(self, mut exp: u32) -> Result<Self> {
+            fn pow_checked(self, exp: u32) -> Result<Self> {
                 Ok(self.powi(exp as i32))
             }
 
-            fn pow_wrapping(self, mut exp: u32) -> Self {
+            fn pow_wrapping(self, exp: u32) -> Self {
                 self.powi(exp as i32)
             }
 
