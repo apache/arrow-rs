@@ -113,13 +113,13 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
                     ));
                 }
 
-                if strides != None {
+                if strides.is_some() {
                     return Err(ArrowError::InvalidArgumentError(
                         "expected None strides for tensor with no shape".to_string(),
                     ));
                 }
 
-                if names != None {
+                if names.is_some() {
                     return Err(ArrowError::InvalidArgumentError(
                         "expected None names for tensor with no shape".to_string(),
                     ));

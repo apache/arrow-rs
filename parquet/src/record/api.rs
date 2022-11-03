@@ -835,7 +835,7 @@ fn convert_decimal_to_string(decimal: &Decimal) -> String {
     let num = BigInt::from_signed_bytes_be(decimal.data());
 
     // Offset of the first digit in a string.
-    let negative = if num.sign() == Sign::Minus { 1 } else { 0 };
+    let negative = i32::from(num.sign() == Sign::Minus);
     let mut num_str = num.to_string();
     let mut point = num_str.len() as i32 - decimal.scale() - negative;
 

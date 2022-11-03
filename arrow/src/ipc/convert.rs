@@ -437,7 +437,7 @@ pub(crate) fn build_field<'a>(
     };
 
     let fb_field_name = fbb.create_string(field.name().as_str());
-    let field_type = get_fb_field_type(field.data_type(), field.is_nullable(), fbb);
+    let field_type = get_fb_field_type(field.data_type(), fbb);
 
     let fb_dictionary = if let Dictionary(index_type, _) = field.data_type() {
         Some(get_fb_dictionary(
@@ -477,7 +477,6 @@ pub(crate) fn build_field<'a>(
 /// Get the IPC type of a data type
 pub(crate) fn get_fb_field_type<'a>(
     data_type: &DataType,
-    is_nullable: bool,
     fbb: &mut FlatBufferBuilder<'a>,
 ) -> FBFieldType<'a> {
     // some IPC implementations expect an empty list for child data, instead of a null value.
@@ -717,7 +716,7 @@ pub(crate) fn get_fb_field_type<'a>(
             // In this library, the dictionary "type" is a logical construct. Here we
             // pass through to the value type, as we've already captured the index
             // type in the DictionaryEncoding metadata in the parent field
-            get_fb_field_type(value_type, is_nullable, fbb)
+            get_fb_field_type(value_type, fbb)
         }
         Decimal128(precision, scale) => {
             let mut builder = ipc::DecimalBuilder::new(fbb);
