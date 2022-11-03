@@ -498,6 +498,9 @@ pub trait DecimalType:
     /// Formats the decimal value with the provided precision and scale
     fn format_decimal(value: Self::Native, precision: u8, scale: u8) -> String;
 
+    /// Formats the decimal type with the provided precision and scale
+    fn format_decimal_type(precision: u8, scale: u8) -> String;
+
     /// Validates that `value` contains no more than `precision` decimal digits
     fn validate_decimal_precision(
         value: Self::Native,
@@ -519,6 +522,10 @@ impl DecimalType for Decimal128Type {
 
     fn format_decimal(value: Self::Native, precision: u8, scale: u8) -> String {
         format_decimal_str(&value.to_string(), precision as usize, scale as usize)
+    }
+
+    fn format_decimal_type(precision: u8, scale: u8) -> String {
+        format!("Decimal128({}.{})", precision, scale)
     }
 
     fn validate_decimal_precision(num: i128, precision: u8) -> Result<(), ArrowError> {
@@ -546,6 +553,10 @@ impl DecimalType for Decimal256Type {
 
     fn format_decimal(value: Self::Native, precision: u8, scale: u8) -> String {
         format_decimal_str(&value.to_string(), precision as usize, scale as usize)
+    }
+
+    fn format_decimal_type(precision: u8, scale: u8) -> String {
+        format!("Decimal256({}.{})", precision, scale)
     }
 
     fn validate_decimal_precision(num: i256, precision: u8) -> Result<(), ArrowError> {

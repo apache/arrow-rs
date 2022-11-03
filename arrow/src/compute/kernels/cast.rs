@@ -309,60 +309,38 @@ pub fn cast(array: &ArrayRef, to_type: &DataType) -> Result<ArrayRef> {
     cast_with_options(array, to_type, &DEFAULT_CAST_OPTIONS)
 }
 
-fn cast_integer_to_decimal128<T: ArrowNumericType>(
+fn cast_integer_to_decimal<
+    T: ArrowNumericType,
+    D: DecimalType + ArrowPrimitiveType<Native = M>,
+    M,
+>(
     array: &PrimitiveArray<T>,
     precision: u8,
     scale: u8,
+    base: M,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef>
 where
-    <T as ArrowPrimitiveType>::Native: AsPrimitive<i128>,
+    <T as ArrowPrimitiveType>::Native: AsPrimitive<M>,
+    M: ArrowNativeTypeOp,
 {
-    let mul: i128 = 10_i128.pow(scale as u32);
+    let mul: M = base.pow_checked(scale as u32).map_err(|_| {
+        ArrowError::CastError(format!(
+            "Cannot cast to {:?}. The scale causes overflow.",
+            D::format_decimal_type(precision, scale),
+        ))
+    })?;
 
     if cast_options.safe {
         let iter = array
             .iter()
             .map(|v| v.and_then(|v| v.as_().mul_checked(mul).ok()));
-        let casted_array = unsafe { Decimal128Array::from_trusted_len_iter(iter) };
+        let casted_array = unsafe { PrimitiveArray::<D>::from_trusted_len_iter(iter) };
         casted_array
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
     } else {
-        try_unary::<T, _, Decimal128Type>(array, |v| v.as_().mul_checked(mul))
-            .and_then(|a| a.with_precision_and_scale(precision, scale))
-            .map(|a| Arc::new(a) as ArrayRef)
-    }
-}
-
-fn cast_integer_to_decimal256<T: ArrowNumericType>(
-    array: &PrimitiveArray<T>,
-    precision: u8,
-    scale: u8,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef>
-where
-    <T as ArrowPrimitiveType>::Native: AsPrimitive<i256>,
-{
-    let mul: i256 = i256::from_i128(10_i128)
-        .checked_pow(scale as u32)
-        .ok_or_else(|| {
-            ArrowError::CastError(format!(
-                "Cannot cast to Decimal256({}, {}). The scale causes overflow.",
-                precision, scale
-            ))
-        })?;
-
-    if cast_options.safe {
-        let iter = array
-            .iter()
-            .map(|v| v.and_then(|v| v.as_().mul_checked(mul).ok()));
-        let casted_array = unsafe { Decimal256Array::from_trusted_len_iter(iter) };
-        casted_array
-            .with_precision_and_scale(precision, scale)
-            .map(|a| Arc::new(a) as ArrayRef)
-    } else {
-        try_unary::<T, _, Decimal256Type>(array, |v| v.as_().mul_checked(mul))
+        try_unary::<T, _, D>(array, |v| v.as_().mul_checked(mul))
             .and_then(|a| a.with_precision_and_scale(precision, scale))
             .map(|a| Arc::new(a) as ArrayRef)
     }
@@ -584,28 +562,32 @@ pub fn cast_with_options(
             // cast data to decimal
             match from_type {
                 // TODO now just support signed numeric to decimal, support decimal to numeric later
-                Int8 => cast_integer_to_decimal128(
+                Int8 => cast_integer_to_decimal::<_, Decimal128Type, _>(
                     as_primitive_array::<Int8Type>(array),
                     *precision,
                     *scale,
+                    10_i128,
                     cast_options,
                 ),
-                Int16 => cast_integer_to_decimal128(
+                Int16 => cast_integer_to_decimal::<_, Decimal128Type, _>(
                     as_primitive_array::<Int16Type>(array),
                     *precision,
                     *scale,
+                    10_i128,
                     cast_options,
                 ),
-                Int32 => cast_integer_to_decimal128(
+                Int32 => cast_integer_to_decimal::<_, Decimal128Type, _>(
                     as_primitive_array::<Int32Type>(array),
                     *precision,
                     *scale,
+                    10_i128,
                     cast_options,
                 ),
-                Int64 => cast_integer_to_decimal128(
+                Int64 => cast_integer_to_decimal::<_, Decimal128Type, _>(
                     as_primitive_array::<Int64Type>(array),
                     *precision,
                     *scale,
+                    10_i128,
                     cast_options,
                 ),
                 Float32 => cast_floating_point_to_decimal128(
@@ -629,28 +611,32 @@ pub fn cast_with_options(
             // cast data to decimal
             match from_type {
                 // TODO now just support signed numeric to decimal, support decimal to numeric later
-                Int8 => cast_integer_to_decimal256(
+                Int8 => cast_integer_to_decimal::<_, Decimal256Type, _>(
                     as_primitive_array::<Int8Type>(array),
                     *precision,
                     *scale,
+                    i256::from_i128(10_i128),
                     cast_options,
                 ),
-                Int16 => cast_integer_to_decimal256(
+                Int16 => cast_integer_to_decimal::<_, Decimal256Type, _>(
                     as_primitive_array::<Int16Type>(array),
                     *precision,
                     *scale,
+                    i256::from_i128(10_i128),
                     cast_options,
                 ),
-                Int32 => cast_integer_to_decimal256(
+                Int32 => cast_integer_to_decimal::<_, Decimal256Type, _>(
                     as_primitive_array::<Int32Type>(array),
                     *precision,
                     *scale,
+                    i256::from_i128(10_i128),
                     cast_options,
                 ),
-                Int64 => cast_integer_to_decimal256(
+                Int64 => cast_integer_to_decimal::<_, Decimal256Type, _>(
                     as_primitive_array::<Int64Type>(array),
                     *precision,
                     *scale,
+                    i256::from_i128(10_i128),
                     cast_options,
                 ),
                 Float32 => cast_floating_point_to_decimal256(
