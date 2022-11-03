@@ -264,7 +264,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
     }
 }
 
-const MIN_SKIP_BUFFER_SIZE: usize = 1024;
+const SKIP_BUFFER_SIZE: usize = 1024;
 
 /// An implementation of [`ColumnLevelDecoder`] for `[i16]`
 pub struct ColumnLevelDecoderImpl {
@@ -372,8 +372,10 @@ impl DefinitionLevelDecoder for ColumnLevelDecoderImpl {
             let remaining_levels = num_levels - level_skip;
 
             if self.buffer.is_empty() {
-                self.read_to_buffer(remaining_levels.max(MIN_SKIP_BUFFER_SIZE))?;
+                // Only read number of needed values
+                self.read_to_buffer(remaining_levels.min(SKIP_BUFFER_SIZE))?;
                 if self.buffer.is_empty() {
+                    // Reached end of page
                     break;
                 }
             }
@@ -393,8 +395,45 @@ impl DefinitionLevelDecoder for ColumnLevelDecoderImpl {
 }
 
 impl RepetitionLevelDecoder for ColumnLevelDecoderImpl {
-    fn skip_rep_levels(&mut self, _num_records: usize) -> Result<(usize, usize)> {
-        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
+    fn skip_rep_levels(&mut self, num_records: usize) -> Result<(usize, usize)> {
+        let mut level_skip = 0;
+        let mut record_skip = 0;
+
+        loop {
+            if self.buffer.is_empty() {
+                // Read SKIP_BUFFER_SIZE as we don't know how many to read
+                self.read_to_buffer(SKIP_BUFFER_SIZE)?;
+                if self.buffer.is_empty() {
+                    // Reached end of page
+                    break;
+                }
+            }
+
+            let mut to_skip = 0;
+            while to_skip < self.buffer.len() && record_skip != num_records {
+                if self.buffer[to_skip] == 0 {
+                    record_skip += 1;
+                }
+                to_skip += 1;
+            }
+
+            // Find end of record
+            while to_skip < self.buffer.len() && self.buffer[to_skip] != 0 {
+                to_skip += 1;
+            }
+
+            level_skip += to_skip;
+            if to_skip >= self.buffer.len() {
+                // Need to to read more values
+                self.buffer.clear();
+                continue;
+            }
+
+            self.split_off_buffer(to_skip);
+            break;
+        }
+
+        Ok((record_skip, level_skip))
     }
 }
 
@@ -403,6 +442,35 @@ mod tests {
     use super::*;
     use crate::encodings::rle::RleEncoder;
     use rand::prelude::*;
+
+    fn test_skip_levels<F>(encoded: &[i16], data: ByteBufferPtr, skip: F)
+    where
+        F: Fn(&mut ColumnLevelDecoderImpl, &mut usize, usize),
+    {
+        let mut rng = thread_rng();
+        let mut decoder = ColumnLevelDecoderImpl::new(5);
+        decoder.set_data(Encoding::RLE, data.clone());
+
+        let mut read = 0;
+        let mut decoded = vec![];
+        let mut expected = vec![];
+        while read < encoded.len() {
+            let to_read = rng.gen_range(0..(encoded.len() - read).min(100)) + 1;
+
+            if rng.gen_bool(0.5) {
+                skip(&mut decoder, &mut read, to_read)
+            } else {
+                let start = decoded.len();
+                let end = decoded.len() + to_read;
+                decoded.resize(end, 0);
+                let actual_read = decoder.read(&mut decoded, start..end).unwrap();
+                assert_eq!(actual_read, to_read);
+                expected.extend_from_slice(&encoded[read..read + to_read]);
+                read += to_read;
+            }
+        }
+        assert_eq!(decoded, expected);
+    }
 
     #[test]
     fn test_skip() {
@@ -413,49 +481,40 @@ mod tests {
         for v in &encoded {
             encoder.put(*v as _)
         }
-        let buf = ByteBufferPtr::new(encoder.consume());
-
-        let mut encoder = ColumnLevelDecoderImpl::new(5);
-        encoder.set_data(Encoding::RLE, buf.clone());
-
-        let mut values = vec![0; total_len];
-        let read = encoder.read(&mut values, 0..total_len).unwrap();
-        assert_eq!(read, total_len);
-        assert_eq!(values, encoded);
+        let data = ByteBufferPtr::new(encoder.consume());
 
         for _ in 0..10 {
-            let mut encoder = ColumnLevelDecoderImpl::new(5);
-            encoder.set_data(Encoding::RLE, buf.clone());
+            test_skip_levels(&encoded, data.clone(), |decoder, read, to_read| {
+                let (values_skipped, levels_skipped) =
+                    decoder.skip_def_levels(to_read, 5).unwrap();
+                assert_eq!(levels_skipped, to_read);
 
-            let mut read = 0;
-            let mut decoded = vec![];
-            let mut expected = vec![];
-            while read < total_len {
-                let to_read = rng.gen_range(0..(total_len - read).min(100)) + 1;
+                let expected = &encoded[*read..*read + to_read];
+                let expected_values_skipped =
+                    expected.iter().filter(|x| **x == 5).count();
+                assert_eq!(values_skipped, expected_values_skipped);
+                *read += to_read;
+            });
 
-                let skip = rng.gen_bool(0.5);
-                if skip {
-                    let (values_skipped, levels_skipped) =
-                        encoder.skip_def_levels(to_read, 5).unwrap();
-                    assert_eq!(levels_skipped, to_read);
-                    let expected_values = encoded[read..read + to_read]
-                        .iter()
-                        .filter(|x| **x == 5)
-                        .count();
+            test_skip_levels(&encoded, data.clone(), |decoder, read, to_read| {
+                let (records_skipped, levels_skipped) =
+                    decoder.skip_rep_levels(to_read).unwrap();
 
-                    assert_eq!(values_skipped, expected_values);
-                } else {
-                    let start = decoded.len();
-                    let end = decoded.len() + to_read;
-                    decoded.resize(end, 0);
-                    let actual_read = encoder.read(&mut decoded, start..end).unwrap();
-                    assert_eq!(actual_read, to_read);
-                    expected.extend_from_slice(&encoded[read..read + to_read]);
+                // If not run out of values
+                if levels_skipped + *read != encoded.len() {
+                    // Should have read correct number of records
+                    assert_eq!(records_skipped, to_read);
+                    // Next value should be start of record
+                    assert_eq!(encoded[levels_skipped + *read], 0);
                 }
 
-                read += to_read;
-            }
-            assert_eq!(decoded, expected);
+                let expected = &encoded[*read..*read + levels_skipped];
+                let expected_records_skipped =
+                    expected.iter().filter(|x| **x == 0).count();
+                assert_eq!(records_skipped, expected_records_skipped);
+
+                *read += levels_skipped;
+            });
         }
     }
 }
