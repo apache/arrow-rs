@@ -317,9 +317,9 @@ mod tests {
 
         let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 3);
 
-        builder.append_value(&[1, 2, 3]).unwrap();
+        builder.append_value([1, 2, 3]).unwrap();
         builder.append_null();
-        builder.append_value(&[7, 8, 9]).unwrap();
+        builder.append_value([7, 8, 9]).unwrap();
 
         let array = Arc::new(builder.finish());
 
