@@ -126,7 +126,7 @@ macro_rules! downcast_temporal {
             $crate::repeat_pat!(arrow_schema::DataType::Time32(arrow_schema::TimeUnit::Second), $($data_type),+) => {
                 $m!($crate::types::Time32SecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Time32(arrow_schema::TimeUnit::Microsecond), $($data_type),+) => {
+            $crate::repeat_pat!(arrow_schema::DataType::Time32(arrow_schema::TimeUnit::Millisecond), $($data_type),+) => {
                 $m!($crate::types::Time32MillisecondType $(, $args)*)
             }
             $crate::repeat_pat!(arrow_schema::DataType::Time64(arrow_schema::TimeUnit::Microsecond), $($data_type),+) => {
