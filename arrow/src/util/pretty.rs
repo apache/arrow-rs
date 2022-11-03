@@ -64,7 +64,7 @@ fn create_table(results: &[RecordBatch]) -> Result<Table> {
 
     let mut header = Vec::new();
     for field in schema.fields() {
-        header.push(Cell::new(&field.name()));
+        header.push(Cell::new(field.name()));
     }
     table.set_header(header);
 
