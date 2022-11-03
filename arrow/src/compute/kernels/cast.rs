@@ -313,21 +313,33 @@ fn cast_integer_to_decimal128<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
     precision: u8,
     scale: u8,
+    cast_options: &CastOptions,
 ) -> Result<ArrayRef>
 where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<i128>,
 {
     let mul: i128 = 10_i128.pow(scale as u32);
 
-    unary::<T, _, Decimal128Type>(array, |v| v.as_() * mul)
-        .with_precision_and_scale(precision, scale)
-        .map(|a| Arc::new(a) as ArrayRef)
+    if cast_options.safe {
+        let iter = array
+            .iter()
+            .map(|v| v.and_then(|v| v.as_().mul_checked(mul).ok()));
+        let casted_array = unsafe { Decimal128Array::from_trusted_len_iter(iter) };
+        casted_array
+            .with_precision_and_scale(precision, scale)
+            .map(|a| Arc::new(a) as ArrayRef)
+    } else {
+        try_unary::<T, _, Decimal128Type>(array, |v| v.as_().mul_checked(mul))
+            .and_then(|a| a.with_precision_and_scale(precision, scale))
+            .map(|a| Arc::new(a) as ArrayRef)
+    }
 }
 
 fn cast_integer_to_decimal256<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
     precision: u8,
     scale: u8,
+    cast_options: &CastOptions,
 ) -> Result<ArrayRef>
 where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<i256>,
@@ -341,9 +353,19 @@ where
             ))
         })?;
 
-    unary::<T, _, Decimal256Type>(array, |v| v.as_().wrapping_mul(mul))
-        .with_precision_and_scale(precision, scale)
-        .map(|a| Arc::new(a) as ArrayRef)
+    if cast_options.safe {
+        let iter = array
+            .iter()
+            .map(|v| v.and_then(|v| v.as_().mul_checked(mul).ok()));
+        let casted_array = unsafe { Decimal256Array::from_trusted_len_iter(iter) };
+        casted_array
+            .with_precision_and_scale(precision, scale)
+            .map(|a| Arc::new(a) as ArrayRef)
+    } else {
+        try_unary::<T, _, Decimal256Type>(array, |v| v.as_().mul_checked(mul))
+            .and_then(|a| a.with_precision_and_scale(precision, scale))
+            .map(|a| Arc::new(a) as ArrayRef)
+    }
 }
 
 fn cast_floating_point_to_decimal128<T: ArrowNumericType>(
@@ -566,21 +588,25 @@ pub fn cast_with_options(
                     as_primitive_array::<Int8Type>(array),
                     *precision,
                     *scale,
+                    cast_options,
                 ),
                 Int16 => cast_integer_to_decimal128(
                     as_primitive_array::<Int16Type>(array),
                     *precision,
                     *scale,
+                    cast_options,
                 ),
                 Int32 => cast_integer_to_decimal128(
                     as_primitive_array::<Int32Type>(array),
                     *precision,
                     *scale,
+                    cast_options,
                 ),
                 Int64 => cast_integer_to_decimal128(
                     as_primitive_array::<Int64Type>(array),
                     *precision,
                     *scale,
+                    cast_options,
                 ),
                 Float32 => cast_floating_point_to_decimal128(
                     as_primitive_array::<Float32Type>(array),
@@ -607,21 +633,25 @@ pub fn cast_with_options(
                     as_primitive_array::<Int8Type>(array),
                     *precision,
                     *scale,
+                    cast_options,
                 ),
                 Int16 => cast_integer_to_decimal256(
                     as_primitive_array::<Int16Type>(array),
                     *precision,
                     *scale,
+                    cast_options,
                 ),
                 Int32 => cast_integer_to_decimal256(
                     as_primitive_array::<Int32Type>(array),
                     *precision,
                     *scale,
+                    cast_options,
                 ),
                 Int64 => cast_integer_to_decimal256(
                     as_primitive_array::<Int64Type>(array),
                     *precision,
                     *scale,
+                    cast_options,
                 ),
                 Float32 => cast_floating_point_to_decimal256(
                     as_primitive_array::<Float32Type>(array),
@@ -6048,5 +6078,45 @@ mod tests {
                 Some(65_i128), // round up
             ]
         );
+    }
+
+    #[test]
+    fn test_cast_numeric_to_decimal128_overflow() {
+        let array = Int64Array::from(vec![i64::MAX]);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal128(38, 30),
+            &CastOptions { safe: true },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal128(38, 30),
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
+    }
+
+    #[test]
+    fn test_cast_numeric_to_decimal256_overflow() {
+        let array = Int64Array::from(vec![i64::MAX]);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal256(76, 76),
+            &CastOptions { safe: true },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal256(76, 76),
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
     }
 }
