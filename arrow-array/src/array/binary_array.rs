@@ -655,7 +655,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "LargeBinaryArray expects DataType::LargeBinary")]
     fn test_binary_array_validation() {
-        let array = BinaryArray::from_iter_values(&[&[1, 2]]);
+        let array = BinaryArray::from_iter_values([&[1, 2]]);
         let _ = LargeBinaryArray::from(array.into_data());
     }
 
