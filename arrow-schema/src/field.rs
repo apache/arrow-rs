@@ -200,12 +200,12 @@ impl Field {
     /// within `self` contained within this field (including `self`)
     pub(crate) fn fields(&self) -> Vec<&Field> {
         let mut collected_fields = vec![self];
-        collected_fields.append(&mut self._fields(&self.data_type));
+        collected_fields.append(&mut Field::_fields(&self.data_type));
 
         collected_fields
     }
 
-    fn _fields<'a>(&'a self, dt: &'a DataType) -> Vec<&Field> {
+    fn _fields(dt: &DataType) -> Vec<&Field> {
         match dt {
             DataType::Struct(fields) | DataType::Union(fields, _, _) => {
                 fields.iter().flat_map(|f| f.fields()).collect()
@@ -214,7 +214,7 @@ impl Field {
             | DataType::LargeList(field)
             | DataType::FixedSizeList(field, _)
             | DataType::Map(field, _) => field.fields(),
-            DataType::Dictionary(_, value_field) => self._fields(value_field.as_ref()),
+            DataType::Dictionary(_, value_field) => Field::_fields(value_field.as_ref()),
             _ => vec![],
         }
     }

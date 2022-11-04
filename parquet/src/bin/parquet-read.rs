@@ -78,7 +78,7 @@ fn main() {
         )
     } else {
         let path = Path::new(&filename);
-        let file = File::open(&path).expect("Unable to open file");
+        let file = File::open(path).expect("Unable to open file");
         Box::new(SerializedFileReader::new(file).expect("Failed to create reader"))
     };
 
