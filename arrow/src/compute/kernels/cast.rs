@@ -326,8 +326,10 @@ where
 {
     let mul: M = base.pow_checked(scale as u32).map_err(|_| {
         ArrowError::CastError(format!(
-            "Cannot cast to {:?}. The scale causes overflow.",
-            D::format_decimal_type(precision, scale),
+            "Cannot cast to {:?}({}, {}). The scale causes overflow.",
+            D::PREFIX,
+            precision,
+            scale,
         ))
     })?;
 
