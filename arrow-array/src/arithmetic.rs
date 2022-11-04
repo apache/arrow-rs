@@ -18,6 +18,7 @@
 use arrow_buffer::{i256, ArrowNativeType};
 use arrow_schema::ArrowError;
 use half::f16;
+use num::complex::ComplexFloat;
 
 /// Trait for [`ArrowNativeType`] that adds checked and unchecked arithmetic operations,
 /// and totally ordered comparison operations
@@ -66,6 +67,10 @@ pub trait ArrowNativeTypeOp: ArrowNativeType {
     fn neg_checked(self) -> Result<Self, ArrowError>;
 
     fn neg_wrapping(self) -> Self;
+
+    fn pow_checked(self, exp: u32) -> Result<Self, ArrowError>;
+
+    fn pow_wrapping(self, exp: u32) -> Self;
 
     fn is_zero(self) -> bool;
 
@@ -168,6 +173,16 @@ macro_rules! native_type_op {
                 self.checked_neg().ok_or_else(|| {
                     ArrowError::ComputeError(format!("Overflow happened on: {:?}", self))
                 })
+            }
+
+            fn pow_checked(self, exp: u32) -> Result<Self, ArrowError> {
+                self.checked_pow(exp).ok_or_else(|| {
+                    ArrowError::ComputeError(format!("Overflow happened on: {:?}", self))
+                })
+            }
+
+            fn pow_wrapping(self, exp: u32) -> Self {
+                self.wrapping_pow(exp)
             }
 
             fn neg_wrapping(self) -> Self {
@@ -276,6 +291,14 @@ macro_rules! native_type_float_op {
 
             fn neg_wrapping(self) -> Self {
                 -self
+            }
+
+            fn pow_checked(self, exp: u32) -> Result<Self, ArrowError> {
+                Ok(self.powi(exp as i32))
+            }
+
+            fn pow_wrapping(self, exp: u32) -> Self {
+                self.powi(exp as i32)
             }
 
             fn is_zero(self) -> bool {

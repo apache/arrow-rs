@@ -495,6 +495,9 @@ pub trait DecimalType:
     const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType;
     const DEFAULT_TYPE: DataType;
 
+    /// "Decimal128" or "Decimal256", for use in error messages
+    const PREFIX: &'static str;
+
     /// Formats the decimal value with the provided precision and scale
     fn format_decimal(value: Self::Native, precision: u8, scale: u8) -> String;
 
@@ -516,6 +519,7 @@ impl DecimalType for Decimal128Type {
     const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType = DataType::Decimal128;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
+    const PREFIX: &'static str = "Decimal128";
 
     fn format_decimal(value: Self::Native, precision: u8, scale: u8) -> String {
         format_decimal_str(&value.to_string(), precision as usize, scale as usize)
@@ -543,6 +547,7 @@ impl DecimalType for Decimal256Type {
     const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType = DataType::Decimal256;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
+    const PREFIX: &'static str = "Decimal256";
 
     fn format_decimal(value: Self::Native, precision: u8, scale: u8) -> String {
         format_decimal_str(&value.to_string(), precision as usize, scale as usize)
