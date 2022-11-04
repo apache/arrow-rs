@@ -24,7 +24,6 @@ use crate::datatypes::*;
 use crate::downcast_dictionary_array;
 use crate::error::{ArrowError, Result};
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use TimeUnit::*;
 
 /// Sort the `ArrayRef` using `SortOptions`.
@@ -114,7 +113,7 @@ where
     }
 }
 
-fn cmp<T>(l: T, r: T) -> std::cmp::Ordering
+fn cmp<T>(l: T, r: T) -> Ordering
 where
     T: Ord,
 {
@@ -340,13 +339,13 @@ pub fn sort_to_indices(
                     dt if DataType::is_primitive(dt) => {
                         let dict_values = values.values();
                         let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
+                        let value_indices_map = sorted_rank(&sorted_value_indices);
                         sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
                     },
                     DataType::Utf8 => {
                         let dict_values = values.values();
                         let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = prepare_indices_map(&sorted_value_indices);
+                        let value_indices_map = sorted_rank(&sorted_value_indices);
                         sort_string_dictionary::<_>(values, &value_indices_map, v, n, &options, limit)
                     },
                     t => return Err(ArrowError::ComputeError(format!(
@@ -490,8 +489,8 @@ fn sort_primitive<T, F>(
 ) -> UInt32Array
 where
     T: ArrowPrimitiveType,
-    T::Native: std::cmp::PartialOrd,
-    F: Fn(T::Native, T::Native) -> std::cmp::Ordering,
+    T::Native: PartialOrd,
+    F: Fn(T::Native, T::Native) -> Ordering,
 {
     // create tuples that are used for sorting
     let valids = {
@@ -504,24 +503,22 @@ where
     sort_primitive_inner(values.len(), null_indices, cmp, options, limit, valids)
 }
 
-/// A helper function used to convert sorted value indices to a map that we can look up sorted order
-/// for a value index later.
-fn prepare_indices_map(sorted_value_indices: &UInt32Array) -> HashMap<usize, u32> {
-    sorted_value_indices
-        .into_iter()
-        .enumerate()
-        .map(|(idx, index)| {
-            // Indices don't have None value
-            let index = index.unwrap();
-            (index as usize, idx as u32)
-        })
-        .collect::<HashMap<usize, u32>>()
+/// Given a list of indices that yield a sorted order, returns the ordered
+/// rank of each index
+///
+/// e.g. [2, 4, 3, 1, 0] -> [4, 3, 0, 2, 1]
+fn sorted_rank(sorted_value_indices: &UInt32Array) -> Vec<u32> {
+    assert_eq!(sorted_value_indices.null_count(), 0);
+    let sorted_indices = sorted_value_indices.values();
+    let mut out: Vec<_> = (0..sorted_indices.len() as u32).collect();
+    out.sort_unstable_by_key(|x| sorted_indices[*x as usize]);
+    out
 }
 
 /// Sort dictionary encoded primitive values
 fn sort_primitive_dictionary<K, F>(
     values: &DictionaryArray<K>,
-    value_indices_map: &HashMap<usize, u32>,
+    value_indices_map: &[u32],
     value_indices: Vec<u32>,
     null_indices: Vec<u32>,
     options: SortOptions,
@@ -530,7 +527,7 @@ fn sort_primitive_dictionary<K, F>(
 ) -> UInt32Array
 where
     K: ArrowDictionaryKeyType,
-    F: Fn(u32, u32) -> std::cmp::Ordering,
+    F: Fn(u32, u32) -> Ordering,
 {
     let keys: &PrimitiveArray<K> = values.keys();
 
@@ -539,8 +536,7 @@ where
         .into_iter()
         .map(|index| {
             let key: K::Native = keys.value(index as usize);
-            let value_order = value_indices_map.get(&key.as_usize()).unwrap();
-            (index, *value_order)
+            (index, value_indices_map[key.as_usize()])
         })
         .collect::<Vec<(u32, u32)>>();
 
@@ -558,8 +554,8 @@ fn sort_primitive_inner<T, F>(
 ) -> UInt32Array
 where
     T: ArrowNativeType,
-    T: std::cmp::PartialOrd,
-    F: Fn(T, T) -> std::cmp::Ordering,
+    T: PartialOrd,
+    F: Fn(T, T) -> Ordering,
 {
     let mut nulls = null_indices;
 
@@ -651,7 +647,7 @@ fn sort_string<Offset: OffsetSizeTrait>(
 /// Sort dictionary encoded strings
 fn sort_string_dictionary<T: ArrowDictionaryKeyType>(
     values: &DictionaryArray<T>,
-    value_indices_map: &HashMap<usize, u32>,
+    value_indices_map: &[u32],
     value_indices: Vec<u32>,
     null_indices: Vec<u32>,
     options: &SortOptions,
@@ -664,8 +660,7 @@ fn sort_string_dictionary<T: ArrowDictionaryKeyType>(
         .into_iter()
         .map(|index| {
             let key: T::Native = keys.value(index as usize);
-            let value_order = value_indices_map.get(&key.as_usize()).unwrap();
-            (index, *value_order)
+            (index, value_indices_map[key.as_usize()])
         })
         .collect::<Vec<(u32, u32)>>();
 
@@ -723,7 +718,7 @@ fn sort_list<S, T>(
 where
     S: OffsetSizeTrait,
     T: ArrowPrimitiveType,
-    T::Native: std::cmp::PartialOrd,
+    T::Native: PartialOrd,
 {
     sort_list_inner::<S>(values, value_indices, null_indices, options, limit)
 }
@@ -950,7 +945,7 @@ pub fn lexsort_to_indices(
     });
 
     Ok(UInt32Array::from_iter_values(
-        value_indices.iter().map(|i| *i as u32),
+        value_indices.iter().take(len).map(|i| *i as u32),
     ))
 }
 
@@ -1420,6 +1415,18 @@ mod tests {
         for (result, expected) in sorted.iter().zip(expected_output.iter()) {
             assert_eq!(result, expected);
         }
+    }
+
+    /// slice all arrays in expected_output to offset/length
+    fn slice_arrays(
+        expected_output: Vec<ArrayRef>,
+        offset: usize,
+        length: usize,
+    ) -> Vec<ArrayRef> {
+        expected_output
+            .into_iter()
+            .map(|array| array.slice(offset, length))
+            .collect()
     }
 
     fn test_sort_binary_arrays(
@@ -3439,8 +3446,10 @@ mod tests {
             Some(2),
             Some(17),
         ])) as ArrayRef];
-        test_lex_sort_arrays(input.clone(), expected, None);
+        test_lex_sort_arrays(input.clone(), expected.clone(), None);
+        test_lex_sort_arrays(input.clone(), slice_arrays(expected, 0, 2), Some(2));
 
+        // Explicitly test a limit on the sort as a demonstration
         let expected = vec![Arc::new(PrimitiveArray::<Int64Type>::from(vec![
             Some(-1),
             Some(0),
@@ -3519,7 +3528,8 @@ mod tests {
                 Some(-2),
             ])) as ArrayRef,
         ];
-        test_lex_sort_arrays(input, expected, None);
+        test_lex_sort_arrays(input.clone(), expected.clone(), None);
+        test_lex_sort_arrays(input, slice_arrays(expected, 0, 2), Some(2));
 
         // test mix of string and in64 with option
         let input = vec![
@@ -3562,7 +3572,8 @@ mod tests {
                 Some("7"),
             ])) as ArrayRef,
         ];
-        test_lex_sort_arrays(input, expected, None);
+        test_lex_sort_arrays(input.clone(), expected.clone(), None);
+        test_lex_sort_arrays(input, slice_arrays(expected, 0, 3), Some(3));
 
         // test sort with nulls first
         let input = vec![
@@ -3605,7 +3616,8 @@ mod tests {
                 Some("world"),
             ])) as ArrayRef,
         ];
-        test_lex_sort_arrays(input, expected, None);
+        test_lex_sort_arrays(input.clone(), expected.clone(), None);
+        test_lex_sort_arrays(input, slice_arrays(expected, 0, 1), Some(1));
 
         // test sort with nulls last
         let input = vec![
@@ -3648,7 +3660,8 @@ mod tests {
                 None,
             ])) as ArrayRef,
         ];
-        test_lex_sort_arrays(input, expected, None);
+        test_lex_sort_arrays(input.clone(), expected.clone(), None);
+        test_lex_sort_arrays(input, slice_arrays(expected, 0, 2), Some(2));
 
         // test sort with opposite options
         let input = vec![
@@ -3695,7 +3708,15 @@ mod tests {
                 Some("foo"),
             ])) as ArrayRef,
         ];
-        test_lex_sort_arrays(input, expected, None);
+        test_lex_sort_arrays(input.clone(), expected.clone(), None);
+        test_lex_sort_arrays(
+            input.clone(),
+            slice_arrays(expected.clone(), 0, 5),
+            Some(5),
+        );
+
+        // Limiting by more rows than present is ok
+        test_lex_sort_arrays(input, slice_arrays(expected, 0, 5), Some(10));
     }
 
     #[test]

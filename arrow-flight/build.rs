@@ -64,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let proto_path = Path::new("../format/FlightSql.proto");
 
         tonic_build::configure()
-            // protoc in unbuntu builder needs this option
+            // protoc in ubuntu builder needs this option
             .protoc_arg("--experimental_allow_proto3_optional")
             .out_dir("src/sql")
             .compile(&[proto_path], &[proto_dir])?;

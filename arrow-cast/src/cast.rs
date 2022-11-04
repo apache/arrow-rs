@@ -288,6 +288,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
 /// * Time32 and Time64: precision lost when going to higher interval
 /// * Timestamp and Date{32|64}: precision lost when going to higher interval
 /// * Temporal to/from backing primitive: zero-copy with data type change
+/// * Casting from `float32/float64` to `Decimal(precision, scale)` rounds to the `scale` decimals
+///   (i.e. casting 6.4999 to Decimal(10, 1) becomes 6.5). This is the breaking change from `26.0.0`.
+///   It used to truncate it instead of round (i.e. outputs 6.4 instead)
 ///
 /// Unsupported Casts
 /// * To or from `StructArray`
@@ -297,43 +300,44 @@ pub fn cast(array: &ArrayRef, to_type: &DataType) -> Result<ArrayRef, ArrowError
     cast_with_options(array, to_type, &DEFAULT_CAST_OPTIONS)
 }
 
-fn cast_integer_to_decimal128<T: ArrowPrimitiveType>(
+fn cast_integer_to_decimal<
+    T: ArrowNumericType,
+    D: DecimalType + ArrowPrimitiveType<Native = M>,
+    M,
+>(
     array: &PrimitiveArray<T>,
     precision: u8,
     scale: u8,
+    base: M,
+    cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
-    <T as ArrowPrimitiveType>::Native: AsPrimitive<i128>,
+    <T as ArrowPrimitiveType>::Native: AsPrimitive<M>,
+    M: ArrowNativeTypeOp,
 {
-    let mul: i128 = 10_i128.pow(scale as u32);
+    let mul: M = base.pow_checked(scale as u32).map_err(|_| {
+        ArrowError::CastError(format!(
+            "Cannot cast to {:?}({}, {}). The scale causes overflow.",
+            D::PREFIX,
+            precision,
+            scale,
+        ))
+    })?;
 
-    array
-        .unary::<_, Decimal128Type>(|v| v.as_() * mul)
-        .with_precision_and_scale(precision, scale)
-        .map(|a| Arc::new(a) as ArrayRef)
-}
-
-fn cast_integer_to_decimal256<T: ArrowPrimitiveType>(
-    array: &PrimitiveArray<T>,
-    precision: u8,
-    scale: u8,
-) -> Result<ArrayRef, ArrowError>
-where
-    <T as ArrowPrimitiveType>::Native: AsPrimitive<i256>,
-{
-    let mul: i256 = i256::from_i128(10_i128)
-        .checked_pow(scale as u32)
-        .ok_or_else(|| {
-            ArrowError::CastError(format!(
-                "Cannot cast to Decimal256({}, {}). The scale causes overflow.",
-                precision, scale
-            ))
-        })?;
-
-    array
-        .unary::<_, Decimal256Type>(|v| v.as_().wrapping_mul(mul))
-        .with_precision_and_scale(precision, scale)
-        .map(|a| Arc::new(a) as ArrayRef)
+    if cast_options.safe {
+        let iter = array
+            .iter()
+            .map(|v| v.and_then(|v| v.as_().mul_checked(mul).ok()));
+        let casted_array = unsafe { PrimitiveArray::<D>::from_trusted_len_iter(iter) };
+        casted_array
+            .with_precision_and_scale(precision, scale)
+            .map(|a| Arc::new(a) as ArrayRef)
+    } else {
+        array
+            .try_unary::<_, D, _>(|v| v.as_().mul_checked(mul))
+            .and_then(|a| a.with_precision_and_scale(precision, scale))
+            .map(|a| Arc::new(a) as ArrayRef)
+    }
 }
 
 fn cast_floating_point_to_decimal128<T: ArrowPrimitiveType>(
@@ -347,7 +351,7 @@ where
     let mul = 10_f64.powi(scale as i32);
 
     array
-        .unary::<_, Decimal128Type>(|v| (v.as_() * mul) as i128)
+        .unary::<_, Decimal128Type>(|v| (v.as_() * mul).round() as i128)
         .with_precision_and_scale(precision, scale)
         .map(|a| Arc::new(a) as ArrayRef)
 }
@@ -363,7 +367,7 @@ where
     let mul = 10_f64.powi(scale as i32);
 
     array
-        .unary::<_, Decimal256Type>(|v| i256::from_i128((v.as_() * mul) as i128))
+        .unary::<_, Decimal256Type>(|v| i256::from_i128((v.as_() * mul).round() as i128))
         .with_precision_and_scale(precision, scale)
         .map(|a| Arc::new(a) as ArrayRef)
 }
@@ -552,25 +556,33 @@ pub fn cast_with_options(
             // cast data to decimal
             match from_type {
                 // TODO now just support signed numeric to decimal, support decimal to numeric later
-                Int8 => cast_integer_to_decimal128(
+                Int8 => cast_integer_to_decimal::<_, Decimal128Type, _>(
                     as_primitive_array::<Int8Type>(array),
                     *precision,
                     *scale,
+                    10_i128,
+                    cast_options,
                 ),
-                Int16 => cast_integer_to_decimal128(
+                Int16 => cast_integer_to_decimal::<_, Decimal128Type, _>(
                     as_primitive_array::<Int16Type>(array),
                     *precision,
                     *scale,
+                    10_i128,
+                    cast_options,
                 ),
-                Int32 => cast_integer_to_decimal128(
+                Int32 => cast_integer_to_decimal::<_, Decimal128Type, _>(
                     as_primitive_array::<Int32Type>(array),
                     *precision,
                     *scale,
+                    10_i128,
+                    cast_options,
                 ),
-                Int64 => cast_integer_to_decimal128(
+                Int64 => cast_integer_to_decimal::<_, Decimal128Type, _>(
                     as_primitive_array::<Int64Type>(array),
                     *precision,
                     *scale,
+                    10_i128,
+                    cast_options,
                 ),
                 Float32 => cast_floating_point_to_decimal128(
                     as_primitive_array::<Float32Type>(array),
@@ -593,25 +605,33 @@ pub fn cast_with_options(
             // cast data to decimal
             match from_type {
                 // TODO now just support signed numeric to decimal, support decimal to numeric later
-                Int8 => cast_integer_to_decimal256(
+                Int8 => cast_integer_to_decimal::<_, Decimal256Type, _>(
                     as_primitive_array::<Int8Type>(array),
                     *precision,
                     *scale,
+                    i256::from_i128(10_i128),
+                    cast_options,
                 ),
-                Int16 => cast_integer_to_decimal256(
+                Int16 => cast_integer_to_decimal::<_, Decimal256Type, _>(
                     as_primitive_array::<Int16Type>(array),
                     *precision,
                     *scale,
+                    i256::from_i128(10_i128),
+                    cast_options,
                 ),
-                Int32 => cast_integer_to_decimal256(
+                Int32 => cast_integer_to_decimal::<_, Decimal256Type, _>(
                     as_primitive_array::<Int32Type>(array),
                     *precision,
                     *scale,
+                    i256::from_i128(10_i128),
+                    cast_options,
                 ),
-                Int64 => cast_integer_to_decimal256(
+                Int64 => cast_integer_to_decimal::<_, Decimal256Type, _>(
                     as_primitive_array::<Int64Type>(array),
                     *precision,
                     *scale,
+                    i256::from_i128(10_i128),
+                    cast_options,
                 ),
                 Float32 => cast_floating_point_to_decimal256(
                     as_primitive_array::<Float32Type>(array),
@@ -3198,8 +3218,8 @@ mod tests {
             Some(2.2),
             Some(4.4),
             None,
-            Some(1.123_456_7),
-            Some(1.123_456_7),
+            Some(1.123_456_4), // round down
+            Some(1.123_456_7), // round up
         ]);
         let array = Arc::new(array) as ArrayRef;
         generate_cast_test_case!(
@@ -3211,8 +3231,8 @@ mod tests {
                 Some(2200000_i128),
                 Some(4400000_i128),
                 None,
-                Some(1123456_i128),
-                Some(1123456_i128),
+                Some(1123456_i128), // round down
+                Some(1123457_i128), // round up
             ]
         );
 
@@ -3222,9 +3242,10 @@ mod tests {
             Some(2.2),
             Some(4.4),
             None,
-            Some(1.123_456_789_123_4),
-            Some(1.123_456_789_012_345_6),
-            Some(1.123_456_789_012_345_6),
+            Some(1.123_456_489_123_4),     // round up
+            Some(1.123_456_789_123_4),     // round up
+            Some(1.123_456_489_012_345_6), // round down
+            Some(1.123_456_789_012_345_6), // round up
         ]);
         let array = Arc::new(array) as ArrayRef;
         generate_cast_test_case!(
@@ -3236,9 +3257,10 @@ mod tests {
                 Some(2200000_i128),
                 Some(4400000_i128),
                 None,
-                Some(1123456_i128),
-                Some(1123456_i128),
-                Some(1123456_i128),
+                Some(1123456_i128), // round down
+                Some(1123457_i128), // round up
+                Some(1123456_i128), // round down
+                Some(1123457_i128), // round up
             ]
         );
     }
@@ -3313,8 +3335,8 @@ mod tests {
             Some(2.2),
             Some(4.4),
             None,
-            Some(1.123_456_7),
-            Some(1.123_456_7),
+            Some(1.123_456_4), // round down
+            Some(1.123_456_7), // round up
         ]);
         let array = Arc::new(array) as ArrayRef;
         generate_cast_test_case!(
@@ -3326,8 +3348,8 @@ mod tests {
                 Some(i256::from_i128(2200000_i128)),
                 Some(i256::from_i128(4400000_i128)),
                 None,
-                Some(i256::from_i128(1123456_i128)),
-                Some(i256::from_i128(1123456_i128)),
+                Some(i256::from_i128(1123456_i128)), // round down
+                Some(i256::from_i128(1123457_i128)), // round up
             ]
         );
 
@@ -3337,9 +3359,10 @@ mod tests {
             Some(2.2),
             Some(4.4),
             None,
-            Some(1.123_456_789_123_4),
-            Some(1.123_456_789_012_345_6),
-            Some(1.123_456_789_012_345_6),
+            Some(1.123_456_489_123_4),     // round down
+            Some(1.123_456_789_123_4),     // round up
+            Some(1.123_456_489_012_345_6), // round down
+            Some(1.123_456_789_012_345_6), // round up
         ]);
         let array = Arc::new(array) as ArrayRef;
         generate_cast_test_case!(
@@ -3351,9 +3374,10 @@ mod tests {
                 Some(i256::from_i128(2200000_i128)),
                 Some(i256::from_i128(4400000_i128)),
                 None,
-                Some(i256::from_i128(1123456_i128)),
-                Some(i256::from_i128(1123456_i128)),
-                Some(i256::from_i128(1123456_i128)),
+                Some(i256::from_i128(1123456_i128)), // round down
+                Some(i256::from_i128(1123457_i128)), // round up
+                Some(i256::from_i128(1123456_i128)), // round down
+                Some(i256::from_i128(1123457_i128)), // round up
             ]
         );
     }
@@ -5999,5 +6023,91 @@ mod tests {
             .flatten()
             .collect::<Vec<_>>();
         assert_eq!(&out, &vec!["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
+    fn test_cast_f64_to_decimal128() {
+        // to reproduce https://github.com/apache/arrow-rs/issues/2997
+
+        let decimal_type = DataType::Decimal128(18, 2);
+        let array = Float64Array::from(vec![
+            Some(0.0699999999),
+            Some(0.0659999999),
+            Some(0.0650000000),
+            Some(0.0649999999),
+        ]);
+        let array = Arc::new(array) as ArrayRef;
+        generate_cast_test_case!(
+            &array,
+            Decimal128Array,
+            &decimal_type,
+            vec![
+                Some(7_i128), // round up
+                Some(7_i128), // round up
+                Some(7_i128), // round up
+                Some(6_i128), // round down
+            ]
+        );
+
+        let decimal_type = DataType::Decimal128(18, 3);
+        let array = Float64Array::from(vec![
+            Some(0.0699999999),
+            Some(0.0659999999),
+            Some(0.0650000000),
+            Some(0.0649999999),
+        ]);
+        let array = Arc::new(array) as ArrayRef;
+        generate_cast_test_case!(
+            &array,
+            Decimal128Array,
+            &decimal_type,
+            vec![
+                Some(70_i128), // round up
+                Some(66_i128), // round up
+                Some(65_i128), // round down
+                Some(65_i128), // round up
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cast_numeric_to_decimal128_overflow() {
+        let array = Int64Array::from(vec![i64::MAX]);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal128(38, 30),
+            &CastOptions { safe: true },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal128(38, 30),
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
+    }
+
+    #[test]
+    fn test_cast_numeric_to_decimal256_overflow() {
+        let array = Int64Array::from(vec![i64::MAX]);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal256(76, 76),
+            &CastOptions { safe: true },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal256(76, 76),
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
     }
 }

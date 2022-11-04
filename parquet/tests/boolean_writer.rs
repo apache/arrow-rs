@@ -38,7 +38,7 @@ fn it_writes_data_without_hanging() {
 ";
     let schema = Arc::new(parse_message_type(message_type).expect("parse schema"));
     let props = Arc::new(WriterProperties::builder().build());
-    let file = fs::File::create(&path).expect("create file");
+    let file = fs::File::create(path).expect("create file");
     let mut writer =
         SerializedFileWriter::new(file, schema, props).expect("create parquet writer");
     for _group in 0..1 {
@@ -64,14 +64,14 @@ fn it_writes_data_without_hanging() {
     }
     writer.close().expect("close writer");
 
-    let bytes = fs::read(&path).expect("read file");
+    let bytes = fs::read(path).expect("read file");
     assert_eq!(&bytes[0..4], &[b'P', b'A', b'R', b'1']);
 
     // Now that we have written our data and are happy with it, make
     // sure we can read it back in < 5 seconds...
     let (sender, receiver) = mpsc::channel();
     let _t = thread::spawn(move || {
-        let file = fs::File::open(&Path::new("it_writes_data_without_hanging.parquet"))
+        let file = fs::File::open(Path::new("it_writes_data_without_hanging.parquet"))
             .expect("open file");
         let reader = SerializedFileReader::new(file).expect("get serialized reader");
         let iter = reader.get_row_iter(None).expect("get iterator");
