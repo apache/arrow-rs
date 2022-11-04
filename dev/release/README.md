@@ -256,6 +256,7 @@ Rust Arrow Crates:
 (cd arrow-schema && cargo publish)
 (cd arrow-data && cargo publish)
 (cd arrow-array && cargo publish)
+(cd arrow-select && cargo publish)
 (cd arrow && cargo publish)
 (cd arrow-flight && cargo publish)
 (cd parquet && cargo publish)
