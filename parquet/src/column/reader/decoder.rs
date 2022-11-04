@@ -449,7 +449,7 @@ mod tests {
     {
         let mut rng = thread_rng();
         let mut decoder = ColumnLevelDecoderImpl::new(5);
-        decoder.set_data(Encoding::RLE, data.clone());
+        decoder.set_data(Encoding::RLE, data);
 
         let mut read = 0;
         let mut decoded = vec![];
