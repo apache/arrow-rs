@@ -26,9 +26,12 @@
 # Example
 
 ```no_run
-use parquet::{basic::Compression, compression::create_codec};
+use parquet::{basic::Compression, compression::{create_codec, CodecOptionsBuilder}};
 
-let mut codec = match create_codec(Compression::SNAPPY) {
+let codec_options = CodecOptionsBuilder::default()
+    .no_backward_compatible_lz4()
+    .build();
+let mut codec = match create_codec(Compression::SNAPPY, codec_options) {
  Ok(Some(codec)) => codec,
  _ => panic!(),
 };
