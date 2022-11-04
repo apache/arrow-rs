@@ -162,8 +162,8 @@ fn add_benchmark(c: &mut Criterion) {
     ];
 
     for case in cases {
-        do_bench(c, *case, 4096);
-        do_bench(c, *case, 4096 * 8);
+        do_bench(c, case, 4096);
+        do_bench(c, case, 4096 * 8);
     }
 }
 

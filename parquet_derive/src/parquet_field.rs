@@ -362,21 +362,20 @@ impl Type {
     /// Useful in determining the physical type of a field and the
     /// definition levels.
     fn leaf_type_recursive(&self) -> &Type {
-        self.leaf_type_recursive_helper(self, None)
+        Type::leaf_type_recursive_helper(self, None)
     }
 
     fn leaf_type_recursive_helper<'a>(
-        &'a self,
         ty: &'a Type,
         parent_ty: Option<&'a Type>,
-    ) -> &Type {
+    ) -> &'a Type {
         match ty {
             Type::TypePath(_) => parent_ty.unwrap_or(ty),
             Type::Option(ref first_type)
             | Type::Vec(ref first_type)
             | Type::Array(ref first_type)
             | Type::Reference(_, ref first_type) => {
-                self.leaf_type_recursive_helper(first_type, Some(ty))
+                Type::leaf_type_recursive_helper(first_type, Some(ty))
             }
         }
     }

@@ -41,9 +41,7 @@ static CLOSE_PREPARED_STATEMENT: &str = "ClosePreparedStatement";
 
 /// Implements FlightSqlService to handle the flight sql protocol
 #[tonic::async_trait]
-pub trait FlightSqlService:
-    std::marker::Sync + std::marker::Send + std::marker::Sized + 'static
-{
+pub trait FlightSqlService: Sync + Send + Sized + 'static {
     /// When impl FlightSqlService, you can always set FlightService to Self
     type FlightService: FlightService;
 
@@ -276,7 +274,7 @@ pub trait FlightSqlService:
 #[tonic::async_trait]
 impl<T: 'static> FlightService for T
 where
-    T: FlightSqlService + std::marker::Send,
+    T: FlightSqlService + Send,
 {
     type HandshakeStream =
         Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send + 'static>>;
@@ -413,7 +411,7 @@ where
         &self,
         request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
-        let msg: prost_types::Any = prost::Message::decode(&*request.get_ref().ticket)
+        let msg: prost_types::Any = Message::decode(&*request.get_ref().ticket)
             .map_err(decode_error_to_status)?;
 
         fn unpack<T: ProstMessageExt>(msg: prost_types::Any) -> Result<T, Status> {
@@ -465,7 +463,7 @@ where
     ) -> Result<Response<Self::DoPutStream>, Status> {
         let cmd = request.get_mut().message().await?.unwrap();
         let message: prost_types::Any =
-            prost::Message::decode(&*cmd.flight_descriptor.unwrap().cmd)
+            Message::decode(&*cmd.flight_descriptor.unwrap().cmd)
                 .map_err(decode_error_to_status)?;
         if message.is::<CommandStatementUpdate>() {
             let token = message
@@ -474,7 +472,7 @@ where
                 .expect("unreachable");
             let record_count = self.do_put_statement_update(token, request).await?;
             let result = DoPutUpdateResult { record_count };
-            let output = futures::stream::iter(vec![Ok(super::super::gen::PutResult {
+            let output = futures::stream::iter(vec![Ok(PutResult {
                 app_metadata: result.encode_to_vec(),
             })]);
             return Ok(Response::new(Box::pin(output)));
@@ -495,7 +493,7 @@ where
                 .do_put_prepared_statement_update(handle, request)
                 .await?;
             let result = DoPutUpdateResult { record_count };
-            let output = futures::stream::iter(vec![Ok(super::super::gen::PutResult {
+            let output = futures::stream::iter(vec![Ok(PutResult {
                 app_metadata: result.encode_to_vec(),
             })]);
             return Ok(Response::new(Box::pin(output)));
@@ -587,10 +585,10 @@ where
     }
 }
 
-fn decode_error_to_status(err: prost::DecodeError) -> tonic::Status {
-    tonic::Status::invalid_argument(format!("{:?}", err))
+fn decode_error_to_status(err: prost::DecodeError) -> Status {
+    Status::invalid_argument(format!("{:?}", err))
 }
 
-fn arrow_error_to_status(err: arrow::error::ArrowError) -> tonic::Status {
-    tonic::Status::internal(format!("{:?}", err))
+fn arrow_error_to_status(err: arrow::error::ArrowError) -> Status {
+    Status::internal(format!("{:?}", err))
 }

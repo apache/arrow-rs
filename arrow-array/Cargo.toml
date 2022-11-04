@@ -49,7 +49,7 @@ arrow-buffer = { version = "26.0.0", path = "../arrow-buffer" }
 arrow-schema = { version = "26.0.0", path = "../arrow-schema" }
 arrow-data = { version = "26.0.0", path = "../arrow-data" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-chrono-tz = { version = "0.7", optional = true }
+chrono-tz = { version = "0.8", optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.12", default-features = false }

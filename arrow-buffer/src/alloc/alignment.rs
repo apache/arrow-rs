@@ -18,7 +18,7 @@
 // NOTE: Below code is written for spatial/temporal prefetcher optimizations. Memory allocation
 // should align well with usage pattern of cache access and block sizes on layers of storage levels from
 // registers to non-volatile memory. These alignments are all cache aware alignments incorporated
-// from [cuneiform](https://crates.io/crates/cuneiform) crate. This approach mimicks Intel TBB's
+// from [cuneiform](https://crates.io/crates/cuneiform) crate. This approach mimics Intel TBB's
 // cache_aligned_allocator which exploits cache locality and minimizes prefetch signals
 // resulting in less round trip time between the layers of storage.
 // For further info: https://software.intel.com/en-us/node/506094

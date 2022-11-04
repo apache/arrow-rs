@@ -292,7 +292,7 @@ fn schema_to_ipc_format(schema_ipc: SchemaAsIpc) -> ArrowResult<IpcMessage> {
     let encoded_data = flight_schema_as_encoded_data(pair.0, pair.1);
 
     let mut schema = vec![];
-    arrow::ipc::writer::write_message(&mut schema, encoded_data, pair.1)?;
+    writer::write_message(&mut schema, encoded_data, pair.1)?;
     Ok(IpcMessage(schema))
 }
 

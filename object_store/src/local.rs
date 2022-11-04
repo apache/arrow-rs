@@ -803,16 +803,16 @@ fn open_file(path: &PathBuf) -> Result<File> {
 }
 
 fn open_writable_file(path: &PathBuf) -> Result<File> {
-    match File::create(&path) {
+    match File::create(path) {
         Ok(f) => Ok(f),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             let parent = path
                 .parent()
                 .context(UnableToCreateFileSnafu { path: &path, err })?;
-            std::fs::create_dir_all(&parent)
+            std::fs::create_dir_all(parent)
                 .context(UnableToCreateDirSnafu { path: parent })?;
 
-            match File::create(&path) {
+            match File::create(path) {
                 Ok(f) => Ok(f),
                 Err(err) => Err(Error::UnableToCreateFile {
                     path: path.to_path_buf(),
