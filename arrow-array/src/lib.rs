@@ -164,6 +164,9 @@ pub use array::*;
 mod record_batch;
 pub use record_batch::{RecordBatch, RecordBatchOptions};
 
+mod arithmetic;
+pub use arithmetic::ArrowNativeTypeOp;
+
 pub mod builder;
 pub mod cast;
 mod delta;

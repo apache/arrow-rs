@@ -301,7 +301,7 @@ pub fn cast(array: &ArrayRef, to_type: &DataType) -> Result<ArrayRef, ArrowError
 }
 
 fn cast_integer_to_decimal<
-    T: ArrowNumericType,
+    T: ArrowPrimitiveType,
     D: DecimalType + ArrowPrimitiveType<Native = M>,
     M,
 >(
