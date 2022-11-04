@@ -38,7 +38,7 @@ pub struct CommandGetSqlInfo {
     /// Flight SQL Servers may choose to include additional metadata above and beyond the specified set, however they must
     /// at least return the specified set. IDs ranging from 0 to 10,000 (exclusive) are reserved for future use.
     /// If additional metadata is included, the metadata IDs should start from 10,000.
-    #[prost(uint32, repeated, tag="1")]
+    #[prost(uint32, repeated, tag = "1")]
     pub info: ::prost::alloc::vec::Vec<u32>,
 }
 ///
@@ -102,7 +102,7 @@ pub struct CommandGetSqlInfo {
 pub struct CommandGetXdbcTypeInfo {
     ///
     /// Specifies the data type to search for the info.
-    #[prost(int32, optional, tag="1")]
+    #[prost(int32, optional, tag = "1")]
     pub data_type: ::core::option::Option<i32>,
 }
 ///
@@ -118,8 +118,7 @@ pub struct CommandGetXdbcTypeInfo {
 /// >
 /// The returned data should be ordered by catalog_name.
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CommandGetCatalogs {
-}
+pub struct CommandGetCatalogs {}
 ///
 /// Represents a request to retrieve the list of database schemas on a Flight SQL enabled backend.
 /// The definition of a database schema depends on vendor/implementation. It is usually a collection of tables.
@@ -139,7 +138,7 @@ pub struct CommandGetDbSchemas {
     /// Specifies the Catalog to search for the tables.
     /// An empty string retrieves those without a catalog.
     /// If omitted the catalog name should not be used to narrow the search.
-    #[prost(string, optional, tag="1")]
+    #[prost(string, optional, tag = "1")]
     pub catalog: ::core::option::Option<::prost::alloc::string::String>,
     ///
     /// Specifies a filter pattern for schemas to search for.
@@ -147,7 +146,7 @@ pub struct CommandGetDbSchemas {
     /// In the pattern string, two special characters can be used to denote matching rules:
     ///     - "%" means to match any substring with 0 or more characters.
     ///     - "_" means to match any one character.
-    #[prost(string, optional, tag="2")]
+    #[prost(string, optional, tag = "2")]
     pub db_schema_filter_pattern: ::core::option::Option<::prost::alloc::string::String>,
 }
 ///
@@ -183,7 +182,7 @@ pub struct CommandGetTables {
     /// Specifies the Catalog to search for the tables.
     /// An empty string retrieves those without a catalog.
     /// If omitted the catalog name should not be used to narrow the search.
-    #[prost(string, optional, tag="1")]
+    #[prost(string, optional, tag = "1")]
     pub catalog: ::core::option::Option<::prost::alloc::string::String>,
     ///
     /// Specifies a filter pattern for schemas to search for.
@@ -191,7 +190,7 @@ pub struct CommandGetTables {
     /// In the pattern string, two special characters can be used to denote matching rules:
     ///     - "%" means to match any substring with 0 or more characters.
     ///     - "_" means to match any one character.
-    #[prost(string, optional, tag="2")]
+    #[prost(string, optional, tag = "2")]
     pub db_schema_filter_pattern: ::core::option::Option<::prost::alloc::string::String>,
     ///
     /// Specifies a filter pattern for tables to search for.
@@ -199,16 +198,18 @@ pub struct CommandGetTables {
     /// In the pattern string, two special characters can be used to denote matching rules:
     ///     - "%" means to match any substring with 0 or more characters.
     ///     - "_" means to match any one character.
-    #[prost(string, optional, tag="3")]
-    pub table_name_filter_pattern: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "3")]
+    pub table_name_filter_pattern: ::core::option::Option<
+        ::prost::alloc::string::String,
+    >,
     ///
     /// Specifies a filter of table types which must match.
     /// The table types depend on vendor/implementation. It is usually used to separate tables from views or system tables.
     /// TABLE, VIEW, and SYSTEM TABLE are commonly supported.
-    #[prost(string, repeated, tag="4")]
+    #[prost(string, repeated, tag = "4")]
     pub table_types: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// Specifies if the Arrow schema should be returned for found tables.
-    #[prost(bool, tag="5")]
+    #[prost(bool, tag = "5")]
     pub include_schema: bool,
 }
 ///
@@ -225,8 +226,7 @@ pub struct CommandGetTables {
 /// >
 /// The returned data should be ordered by table_type.
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CommandGetTableTypes {
-}
+pub struct CommandGetTableTypes {}
 ///
 /// Represents a request to retrieve the primary keys of a table on a Flight SQL enabled backend.
 /// Used in the command member of FlightDescriptor for the following RPC calls:
@@ -249,16 +249,16 @@ pub struct CommandGetPrimaryKeys {
     /// Specifies the catalog to search for the table.
     /// An empty string retrieves those without a catalog.
     /// If omitted the catalog name should not be used to narrow the search.
-    #[prost(string, optional, tag="1")]
+    #[prost(string, optional, tag = "1")]
     pub catalog: ::core::option::Option<::prost::alloc::string::String>,
     ///
     /// Specifies the schema to search for the table.
     /// An empty string retrieves those without a schema.
     /// If omitted the schema name should not be used to narrow the search.
-    #[prost(string, optional, tag="2")]
+    #[prost(string, optional, tag = "2")]
     pub db_schema: ::core::option::Option<::prost::alloc::string::String>,
     /// Specifies the table to get the primary keys for.
-    #[prost(string, tag="3")]
+    #[prost(string, tag = "3")]
     pub table: ::prost::alloc::string::String,
 }
 ///
@@ -292,16 +292,16 @@ pub struct CommandGetExportedKeys {
     /// Specifies the catalog to search for the foreign key table.
     /// An empty string retrieves those without a catalog.
     /// If omitted the catalog name should not be used to narrow the search.
-    #[prost(string, optional, tag="1")]
+    #[prost(string, optional, tag = "1")]
     pub catalog: ::core::option::Option<::prost::alloc::string::String>,
     ///
     /// Specifies the schema to search for the foreign key table.
     /// An empty string retrieves those without a schema.
     /// If omitted the schema name should not be used to narrow the search.
-    #[prost(string, optional, tag="2")]
+    #[prost(string, optional, tag = "2")]
     pub db_schema: ::core::option::Option<::prost::alloc::string::String>,
     /// Specifies the foreign key table to get the foreign keys for.
-    #[prost(string, tag="3")]
+    #[prost(string, tag = "3")]
     pub table: ::prost::alloc::string::String,
 }
 ///
@@ -339,16 +339,16 @@ pub struct CommandGetImportedKeys {
     /// Specifies the catalog to search for the primary key table.
     /// An empty string retrieves those without a catalog.
     /// If omitted the catalog name should not be used to narrow the search.
-    #[prost(string, optional, tag="1")]
+    #[prost(string, optional, tag = "1")]
     pub catalog: ::core::option::Option<::prost::alloc::string::String>,
     ///
     /// Specifies the schema to search for the primary key table.
     /// An empty string retrieves those without a schema.
     /// If omitted the schema name should not be used to narrow the search.
-    #[prost(string, optional, tag="2")]
+    #[prost(string, optional, tag = "2")]
     pub db_schema: ::core::option::Option<::prost::alloc::string::String>,
     /// Specifies the primary key table to get the foreign keys for.
-    #[prost(string, tag="3")]
+    #[prost(string, tag = "3")]
     pub table: ::prost::alloc::string::String,
 }
 ///
@@ -388,43 +388,41 @@ pub struct CommandGetCrossReference {
     /// The catalog name where the parent table is.
     /// An empty string retrieves those without a catalog.
     /// If omitted the catalog name should not be used to narrow the search.
-    #[prost(string, optional, tag="1")]
+    #[prost(string, optional, tag = "1")]
     pub pk_catalog: ::core::option::Option<::prost::alloc::string::String>,
     /// *
     /// The Schema name where the parent table is.
     /// An empty string retrieves those without a schema.
     /// If omitted the schema name should not be used to narrow the search.
-    #[prost(string, optional, tag="2")]
+    #[prost(string, optional, tag = "2")]
     pub pk_db_schema: ::core::option::Option<::prost::alloc::string::String>,
     /// *
     /// The parent table name. It cannot be null.
-    #[prost(string, tag="3")]
+    #[prost(string, tag = "3")]
     pub pk_table: ::prost::alloc::string::String,
     /// *
     /// The catalog name where the foreign table is.
     /// An empty string retrieves those without a catalog.
     /// If omitted the catalog name should not be used to narrow the search.
-    #[prost(string, optional, tag="4")]
+    #[prost(string, optional, tag = "4")]
     pub fk_catalog: ::core::option::Option<::prost::alloc::string::String>,
     /// *
     /// The schema name where the foreign table is.
     /// An empty string retrieves those without a schema.
     /// If omitted the schema name should not be used to narrow the search.
-    #[prost(string, optional, tag="5")]
+    #[prost(string, optional, tag = "5")]
     pub fk_db_schema: ::core::option::Option<::prost::alloc::string::String>,
     /// *
     /// The foreign table name. It cannot be null.
-    #[prost(string, tag="6")]
+    #[prost(string, tag = "6")]
     pub fk_table: ::prost::alloc::string::String,
 }
-// SQL Execution Action Messages
-
 ///
 /// Request message for the "CreatePreparedStatement" action on a Flight SQL enabled backend.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionCreatePreparedStatementRequest {
     /// The valid SQL string to create a prepared statement for.
-    #[prost(string, tag="1")]
+    #[prost(string, tag = "1")]
     pub query: ::prost::alloc::string::String,
 }
 ///
@@ -436,15 +434,15 @@ pub struct ActionCreatePreparedStatementRequest {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionCreatePreparedStatementResult {
     /// Opaque handle for the prepared statement on the server.
-    #[prost(bytes="vec", tag="1")]
+    #[prost(bytes = "vec", tag = "1")]
     pub prepared_statement_handle: ::prost::alloc::vec::Vec<u8>,
     /// If a result set generating query was provided, dataset_schema contains the
     /// schema of the dataset as described in Schema.fbs::Schema, it is serialized as an IPC message.
-    #[prost(bytes="vec", tag="2")]
+    #[prost(bytes = "vec", tag = "2")]
     pub dataset_schema: ::prost::alloc::vec::Vec<u8>,
     /// If the query provided contained parameters, parameter_schema contains the
     /// schema of the expected parameters as described in Schema.fbs::Schema, it is serialized as an IPC message.
-    #[prost(bytes="vec", tag="3")]
+    #[prost(bytes = "vec", tag = "3")]
     pub parameter_schema: ::prost::alloc::vec::Vec<u8>,
 }
 ///
@@ -453,11 +451,9 @@ pub struct ActionCreatePreparedStatementResult {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionClosePreparedStatementRequest {
     /// Opaque handle for the prepared statement on the server.
-    #[prost(bytes="vec", tag="1")]
+    #[prost(bytes = "vec", tag = "1")]
     pub prepared_statement_handle: ::prost::alloc::vec::Vec<u8>,
 }
-// SQL Execution Messages.
-
 ///
 /// Represents a SQL query. Used in the command member of FlightDescriptor
 /// for the following RPC calls:
@@ -477,7 +473,7 @@ pub struct ActionClosePreparedStatementRequest {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandStatementQuery {
     /// The SQL syntax.
-    #[prost(string, tag="1")]
+    #[prost(string, tag = "1")]
     pub query: ::prost::alloc::string::String,
 }
 /// *
@@ -486,7 +482,7 @@ pub struct CommandStatementQuery {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TicketStatementQuery {
     /// Unique identifier for the instance of the statement to execute.
-    #[prost(bytes="vec", tag="1")]
+    #[prost(bytes = "vec", tag = "1")]
     pub statement_handle: ::prost::alloc::vec::Vec<u8>,
 }
 ///
@@ -509,7 +505,7 @@ pub struct TicketStatementQuery {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandPreparedStatementQuery {
     /// Opaque handle for the prepared statement on the server.
-    #[prost(bytes="vec", tag="1")]
+    #[prost(bytes = "vec", tag = "1")]
     pub prepared_statement_handle: ::prost::alloc::vec::Vec<u8>,
 }
 ///
@@ -518,7 +514,7 @@ pub struct CommandPreparedStatementQuery {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandStatementUpdate {
     /// The SQL syntax.
-    #[prost(string, tag="1")]
+    #[prost(string, tag = "1")]
     pub query: ::prost::alloc::string::String,
 }
 ///
@@ -528,7 +524,7 @@ pub struct CommandStatementUpdate {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandPreparedStatementUpdate {
     /// Opaque handle for the prepared statement on the server.
-    #[prost(bytes="vec", tag="1")]
+    #[prost(bytes = "vec", tag = "1")]
     pub prepared_statement_handle: ::prost::alloc::vec::Vec<u8>,
 }
 ///
@@ -539,15 +535,13 @@ pub struct CommandPreparedStatementUpdate {
 pub struct DoPutUpdateResult {
     /// The number of records updated. A return value of -1 represents
     /// an unknown updated record count.
-    #[prost(int64, tag="1")]
+    #[prost(int64, tag = "1")]
     pub record_count: i64,
 }
 /// Options for CommandGetSqlInfo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum SqlInfo {
-    // Server Information [0-500): Provides basic information about the Flight SQL Server.
-
     /// Retrieves a UTF-8 string with the name of the Flight SQL Server.
     FlightSqlServerName = 0,
     /// Retrieves a UTF-8 string with the native version of the Flight SQL Server.
@@ -561,8 +555,6 @@ pub enum SqlInfo {
     /// - false: if read-write
     /// - true: if read only
     FlightSqlServerReadOnly = 3,
-    // SQL Syntax Information [500-1000): provides information about SQL syntax supported by the Flight SQL Server.
-
     ///
     /// Retrieves a boolean value indicating whether the Flight SQL Server supports CREATE and DROP of catalogs.
     ///
@@ -1132,16 +1124,24 @@ impl SqlInfo {
             SqlInfo::SqlSupportsColumnAliasing => "SQL_SUPPORTS_COLUMN_ALIASING",
             SqlInfo::SqlNullPlusNullIsNull => "SQL_NULL_PLUS_NULL_IS_NULL",
             SqlInfo::SqlSupportsConvert => "SQL_SUPPORTS_CONVERT",
-            SqlInfo::SqlSupportsTableCorrelationNames => "SQL_SUPPORTS_TABLE_CORRELATION_NAMES",
-            SqlInfo::SqlSupportsDifferentTableCorrelationNames => "SQL_SUPPORTS_DIFFERENT_TABLE_CORRELATION_NAMES",
-            SqlInfo::SqlSupportsExpressionsInOrderBy => "SQL_SUPPORTS_EXPRESSIONS_IN_ORDER_BY",
+            SqlInfo::SqlSupportsTableCorrelationNames => {
+                "SQL_SUPPORTS_TABLE_CORRELATION_NAMES"
+            }
+            SqlInfo::SqlSupportsDifferentTableCorrelationNames => {
+                "SQL_SUPPORTS_DIFFERENT_TABLE_CORRELATION_NAMES"
+            }
+            SqlInfo::SqlSupportsExpressionsInOrderBy => {
+                "SQL_SUPPORTS_EXPRESSIONS_IN_ORDER_BY"
+            }
             SqlInfo::SqlSupportsOrderByUnrelated => "SQL_SUPPORTS_ORDER_BY_UNRELATED",
             SqlInfo::SqlSupportedGroupBy => "SQL_SUPPORTED_GROUP_BY",
             SqlInfo::SqlSupportsLikeEscapeClause => "SQL_SUPPORTS_LIKE_ESCAPE_CLAUSE",
             SqlInfo::SqlSupportsNonNullableColumns => "SQL_SUPPORTS_NON_NULLABLE_COLUMNS",
             SqlInfo::SqlSupportedGrammar => "SQL_SUPPORTED_GRAMMAR",
             SqlInfo::SqlAnsi92SupportedLevel => "SQL_ANSI92_SUPPORTED_LEVEL",
-            SqlInfo::SqlSupportsIntegrityEnhancementFacility => "SQL_SUPPORTS_INTEGRITY_ENHANCEMENT_FACILITY",
+            SqlInfo::SqlSupportsIntegrityEnhancementFacility => {
+                "SQL_SUPPORTS_INTEGRITY_ENHANCEMENT_FACILITY"
+            }
             SqlInfo::SqlOuterJoinsSupportLevel => "SQL_OUTER_JOINS_SUPPORT_LEVEL",
             SqlInfo::SqlSchemaTerm => "SQL_SCHEMA_TERM",
             SqlInfo::SqlProcedureTerm => "SQL_PROCEDURE_TERM",
@@ -1149,11 +1149,15 @@ impl SqlInfo {
             SqlInfo::SqlCatalogAtStart => "SQL_CATALOG_AT_START",
             SqlInfo::SqlSchemasSupportedActions => "SQL_SCHEMAS_SUPPORTED_ACTIONS",
             SqlInfo::SqlCatalogsSupportedActions => "SQL_CATALOGS_SUPPORTED_ACTIONS",
-            SqlInfo::SqlSupportedPositionedCommands => "SQL_SUPPORTED_POSITIONED_COMMANDS",
+            SqlInfo::SqlSupportedPositionedCommands => {
+                "SQL_SUPPORTED_POSITIONED_COMMANDS"
+            }
             SqlInfo::SqlSelectForUpdateSupported => "SQL_SELECT_FOR_UPDATE_SUPPORTED",
             SqlInfo::SqlStoredProceduresSupported => "SQL_STORED_PROCEDURES_SUPPORTED",
             SqlInfo::SqlSupportedSubqueries => "SQL_SUPPORTED_SUBQUERIES",
-            SqlInfo::SqlCorrelatedSubqueriesSupported => "SQL_CORRELATED_SUBQUERIES_SUPPORTED",
+            SqlInfo::SqlCorrelatedSubqueriesSupported => {
+                "SQL_CORRELATED_SUBQUERIES_SUPPORTED"
+            }
             SqlInfo::SqlSupportedUnions => "SQL_SUPPORTED_UNIONS",
             SqlInfo::SqlMaxBinaryLiteralLength => "SQL_MAX_BINARY_LITERAL_LENGTH",
             SqlInfo::SqlMaxCharLiteralLength => "SQL_MAX_CHAR_LITERAL_LENGTH",
@@ -1176,21 +1180,39 @@ impl SqlInfo {
             SqlInfo::SqlMaxTableNameLength => "SQL_MAX_TABLE_NAME_LENGTH",
             SqlInfo::SqlMaxTablesInSelect => "SQL_MAX_TABLES_IN_SELECT",
             SqlInfo::SqlMaxUsernameLength => "SQL_MAX_USERNAME_LENGTH",
-            SqlInfo::SqlDefaultTransactionIsolation => "SQL_DEFAULT_TRANSACTION_ISOLATION",
+            SqlInfo::SqlDefaultTransactionIsolation => {
+                "SQL_DEFAULT_TRANSACTION_ISOLATION"
+            }
             SqlInfo::SqlTransactionsSupported => "SQL_TRANSACTIONS_SUPPORTED",
-            SqlInfo::SqlSupportedTransactionsIsolationLevels => "SQL_SUPPORTED_TRANSACTIONS_ISOLATION_LEVELS",
-            SqlInfo::SqlDataDefinitionCausesTransactionCommit => "SQL_DATA_DEFINITION_CAUSES_TRANSACTION_COMMIT",
-            SqlInfo::SqlDataDefinitionsInTransactionsIgnored => "SQL_DATA_DEFINITIONS_IN_TRANSACTIONS_IGNORED",
+            SqlInfo::SqlSupportedTransactionsIsolationLevels => {
+                "SQL_SUPPORTED_TRANSACTIONS_ISOLATION_LEVELS"
+            }
+            SqlInfo::SqlDataDefinitionCausesTransactionCommit => {
+                "SQL_DATA_DEFINITION_CAUSES_TRANSACTION_COMMIT"
+            }
+            SqlInfo::SqlDataDefinitionsInTransactionsIgnored => {
+                "SQL_DATA_DEFINITIONS_IN_TRANSACTIONS_IGNORED"
+            }
             SqlInfo::SqlSupportedResultSetTypes => "SQL_SUPPORTED_RESULT_SET_TYPES",
-            SqlInfo::SqlSupportedConcurrenciesForResultSetUnspecified => "SQL_SUPPORTED_CONCURRENCIES_FOR_RESULT_SET_UNSPECIFIED",
-            SqlInfo::SqlSupportedConcurrenciesForResultSetForwardOnly => "SQL_SUPPORTED_CONCURRENCIES_FOR_RESULT_SET_FORWARD_ONLY",
-            SqlInfo::SqlSupportedConcurrenciesForResultSetScrollSensitive => "SQL_SUPPORTED_CONCURRENCIES_FOR_RESULT_SET_SCROLL_SENSITIVE",
-            SqlInfo::SqlSupportedConcurrenciesForResultSetScrollInsensitive => "SQL_SUPPORTED_CONCURRENCIES_FOR_RESULT_SET_SCROLL_INSENSITIVE",
+            SqlInfo::SqlSupportedConcurrenciesForResultSetUnspecified => {
+                "SQL_SUPPORTED_CONCURRENCIES_FOR_RESULT_SET_UNSPECIFIED"
+            }
+            SqlInfo::SqlSupportedConcurrenciesForResultSetForwardOnly => {
+                "SQL_SUPPORTED_CONCURRENCIES_FOR_RESULT_SET_FORWARD_ONLY"
+            }
+            SqlInfo::SqlSupportedConcurrenciesForResultSetScrollSensitive => {
+                "SQL_SUPPORTED_CONCURRENCIES_FOR_RESULT_SET_SCROLL_SENSITIVE"
+            }
+            SqlInfo::SqlSupportedConcurrenciesForResultSetScrollInsensitive => {
+                "SQL_SUPPORTED_CONCURRENCIES_FOR_RESULT_SET_SCROLL_INSENSITIVE"
+            }
             SqlInfo::SqlBatchUpdatesSupported => "SQL_BATCH_UPDATES_SUPPORTED",
             SqlInfo::SqlSavepointsSupported => "SQL_SAVEPOINTS_SUPPORTED",
             SqlInfo::SqlNamedParametersSupported => "SQL_NAMED_PARAMETERS_SUPPORTED",
             SqlInfo::SqlLocatorsUpdateCopy => "SQL_LOCATORS_UPDATE_COPY",
-            SqlInfo::SqlStoredFunctionsUsingCallSyntaxSupported => "SQL_STORED_FUNCTIONS_USING_CALL_SYNTAX_SUPPORTED",
+            SqlInfo::SqlStoredFunctionsUsingCallSyntaxSupported => {
+                "SQL_STORED_FUNCTIONS_USING_CALL_SYNTAX_SUPPORTED"
+            }
         }
     }
 }
@@ -1209,10 +1231,18 @@ impl SqlSupportedCaseSensitivity {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            SqlSupportedCaseSensitivity::SqlCaseSensitivityUnknown => "SQL_CASE_SENSITIVITY_UNKNOWN",
-            SqlSupportedCaseSensitivity::SqlCaseSensitivityCaseInsensitive => "SQL_CASE_SENSITIVITY_CASE_INSENSITIVE",
-            SqlSupportedCaseSensitivity::SqlCaseSensitivityUppercase => "SQL_CASE_SENSITIVITY_UPPERCASE",
-            SqlSupportedCaseSensitivity::SqlCaseSensitivityLowercase => "SQL_CASE_SENSITIVITY_LOWERCASE",
+            SqlSupportedCaseSensitivity::SqlCaseSensitivityUnknown => {
+                "SQL_CASE_SENSITIVITY_UNKNOWN"
+            }
+            SqlSupportedCaseSensitivity::SqlCaseSensitivityCaseInsensitive => {
+                "SQL_CASE_SENSITIVITY_CASE_INSENSITIVE"
+            }
+            SqlSupportedCaseSensitivity::SqlCaseSensitivityUppercase => {
+                "SQL_CASE_SENSITIVITY_UPPERCASE"
+            }
+            SqlSupportedCaseSensitivity::SqlCaseSensitivityLowercase => {
+                "SQL_CASE_SENSITIVITY_LOWERCASE"
+            }
         }
     }
 }
@@ -1273,7 +1303,9 @@ impl SupportedAnsi92SqlGrammarLevel {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             SupportedAnsi92SqlGrammarLevel::Ansi92EntrySql => "ANSI92_ENTRY_SQL",
-            SupportedAnsi92SqlGrammarLevel::Ansi92IntermediateSql => "ANSI92_INTERMEDIATE_SQL",
+            SupportedAnsi92SqlGrammarLevel::Ansi92IntermediateSql => {
+                "ANSI92_INTERMEDIATE_SQL"
+            }
             SupportedAnsi92SqlGrammarLevel::Ansi92FullSql => "ANSI92_FULL_SQL",
         }
     }
@@ -1330,9 +1362,15 @@ impl SqlSupportedElementActions {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            SqlSupportedElementActions::SqlElementInProcedureCalls => "SQL_ELEMENT_IN_PROCEDURE_CALLS",
-            SqlSupportedElementActions::SqlElementInIndexDefinitions => "SQL_ELEMENT_IN_INDEX_DEFINITIONS",
-            SqlSupportedElementActions::SqlElementInPrivilegeDefinitions => "SQL_ELEMENT_IN_PRIVILEGE_DEFINITIONS",
+            SqlSupportedElementActions::SqlElementInProcedureCalls => {
+                "SQL_ELEMENT_IN_PROCEDURE_CALLS"
+            }
+            SqlSupportedElementActions::SqlElementInIndexDefinitions => {
+                "SQL_ELEMENT_IN_INDEX_DEFINITIONS"
+            }
+            SqlSupportedElementActions::SqlElementInPrivilegeDefinitions => {
+                "SQL_ELEMENT_IN_PRIVILEGE_DEFINITIONS"
+            }
         }
     }
 }
@@ -1349,8 +1387,12 @@ impl SqlSupportedPositionedCommands {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            SqlSupportedPositionedCommands::SqlPositionedDelete => "SQL_POSITIONED_DELETE",
-            SqlSupportedPositionedCommands::SqlPositionedUpdate => "SQL_POSITIONED_UPDATE",
+            SqlSupportedPositionedCommands::SqlPositionedDelete => {
+                "SQL_POSITIONED_DELETE"
+            }
+            SqlSupportedPositionedCommands::SqlPositionedUpdate => {
+                "SQL_POSITIONED_UPDATE"
+            }
         }
     }
 }
@@ -1369,10 +1411,14 @@ impl SqlSupportedSubqueries {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            SqlSupportedSubqueries::SqlSubqueriesInComparisons => "SQL_SUBQUERIES_IN_COMPARISONS",
+            SqlSupportedSubqueries::SqlSubqueriesInComparisons => {
+                "SQL_SUBQUERIES_IN_COMPARISONS"
+            }
             SqlSupportedSubqueries::SqlSubqueriesInExists => "SQL_SUBQUERIES_IN_EXISTS",
             SqlSupportedSubqueries::SqlSubqueriesInIns => "SQL_SUBQUERIES_IN_INS",
-            SqlSupportedSubqueries::SqlSubqueriesInQuantifieds => "SQL_SUBQUERIES_IN_QUANTIFIEDS",
+            SqlSupportedSubqueries::SqlSubqueriesInQuantifieds => {
+                "SQL_SUBQUERIES_IN_QUANTIFIEDS"
+            }
         }
     }
 }
@@ -1411,10 +1457,18 @@ impl SqlTransactionIsolationLevel {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             SqlTransactionIsolationLevel::SqlTransactionNone => "SQL_TRANSACTION_NONE",
-            SqlTransactionIsolationLevel::SqlTransactionReadUncommitted => "SQL_TRANSACTION_READ_UNCOMMITTED",
-            SqlTransactionIsolationLevel::SqlTransactionReadCommitted => "SQL_TRANSACTION_READ_COMMITTED",
-            SqlTransactionIsolationLevel::SqlTransactionRepeatableRead => "SQL_TRANSACTION_REPEATABLE_READ",
-            SqlTransactionIsolationLevel::SqlTransactionSerializable => "SQL_TRANSACTION_SERIALIZABLE",
+            SqlTransactionIsolationLevel::SqlTransactionReadUncommitted => {
+                "SQL_TRANSACTION_READ_UNCOMMITTED"
+            }
+            SqlTransactionIsolationLevel::SqlTransactionReadCommitted => {
+                "SQL_TRANSACTION_READ_COMMITTED"
+            }
+            SqlTransactionIsolationLevel::SqlTransactionRepeatableRead => {
+                "SQL_TRANSACTION_REPEATABLE_READ"
+            }
+            SqlTransactionIsolationLevel::SqlTransactionSerializable => {
+                "SQL_TRANSACTION_SERIALIZABLE"
+            }
         }
     }
 }
@@ -1432,9 +1486,15 @@ impl SqlSupportedTransactions {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            SqlSupportedTransactions::SqlTransactionUnspecified => "SQL_TRANSACTION_UNSPECIFIED",
-            SqlSupportedTransactions::SqlDataDefinitionTransactions => "SQL_DATA_DEFINITION_TRANSACTIONS",
-            SqlSupportedTransactions::SqlDataManipulationTransactions => "SQL_DATA_MANIPULATION_TRANSACTIONS",
+            SqlSupportedTransactions::SqlTransactionUnspecified => {
+                "SQL_TRANSACTION_UNSPECIFIED"
+            }
+            SqlSupportedTransactions::SqlDataDefinitionTransactions => {
+                "SQL_DATA_DEFINITION_TRANSACTIONS"
+            }
+            SqlSupportedTransactions::SqlDataManipulationTransactions => {
+                "SQL_DATA_MANIPULATION_TRANSACTIONS"
+            }
         }
     }
 }
@@ -1453,10 +1513,18 @@ impl SqlSupportedResultSetType {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            SqlSupportedResultSetType::SqlResultSetTypeUnspecified => "SQL_RESULT_SET_TYPE_UNSPECIFIED",
-            SqlSupportedResultSetType::SqlResultSetTypeForwardOnly => "SQL_RESULT_SET_TYPE_FORWARD_ONLY",
-            SqlSupportedResultSetType::SqlResultSetTypeScrollInsensitive => "SQL_RESULT_SET_TYPE_SCROLL_INSENSITIVE",
-            SqlSupportedResultSetType::SqlResultSetTypeScrollSensitive => "SQL_RESULT_SET_TYPE_SCROLL_SENSITIVE",
+            SqlSupportedResultSetType::SqlResultSetTypeUnspecified => {
+                "SQL_RESULT_SET_TYPE_UNSPECIFIED"
+            }
+            SqlSupportedResultSetType::SqlResultSetTypeForwardOnly => {
+                "SQL_RESULT_SET_TYPE_FORWARD_ONLY"
+            }
+            SqlSupportedResultSetType::SqlResultSetTypeScrollInsensitive => {
+                "SQL_RESULT_SET_TYPE_SCROLL_INSENSITIVE"
+            }
+            SqlSupportedResultSetType::SqlResultSetTypeScrollSensitive => {
+                "SQL_RESULT_SET_TYPE_SCROLL_SENSITIVE"
+            }
         }
     }
 }
@@ -1474,9 +1542,15 @@ impl SqlSupportedResultSetConcurrency {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            SqlSupportedResultSetConcurrency::SqlResultSetConcurrencyUnspecified => "SQL_RESULT_SET_CONCURRENCY_UNSPECIFIED",
-            SqlSupportedResultSetConcurrency::SqlResultSetConcurrencyReadOnly => "SQL_RESULT_SET_CONCURRENCY_READ_ONLY",
-            SqlSupportedResultSetConcurrency::SqlResultSetConcurrencyUpdatable => "SQL_RESULT_SET_CONCURRENCY_UPDATABLE",
+            SqlSupportedResultSetConcurrency::SqlResultSetConcurrencyUnspecified => {
+                "SQL_RESULT_SET_CONCURRENCY_UNSPECIFIED"
+            }
+            SqlSupportedResultSetConcurrency::SqlResultSetConcurrencyReadOnly => {
+                "SQL_RESULT_SET_CONCURRENCY_READ_ONLY"
+            }
+            SqlSupportedResultSetConcurrency::SqlResultSetConcurrencyUpdatable => {
+                "SQL_RESULT_SET_CONCURRENCY_UPDATABLE"
+            }
         }
     }
 }
@@ -1519,8 +1593,12 @@ impl SqlSupportsConvert {
             SqlSupportsConvert::SqlConvertDecimal => "SQL_CONVERT_DECIMAL",
             SqlSupportsConvert::SqlConvertFloat => "SQL_CONVERT_FLOAT",
             SqlSupportsConvert::SqlConvertInteger => "SQL_CONVERT_INTEGER",
-            SqlSupportsConvert::SqlConvertIntervalDayTime => "SQL_CONVERT_INTERVAL_DAY_TIME",
-            SqlSupportsConvert::SqlConvertIntervalYearMonth => "SQL_CONVERT_INTERVAL_YEAR_MONTH",
+            SqlSupportsConvert::SqlConvertIntervalDayTime => {
+                "SQL_CONVERT_INTERVAL_DAY_TIME"
+            }
+            SqlSupportsConvert::SqlConvertIntervalYearMonth => {
+                "SQL_CONVERT_INTERVAL_YEAR_MONTH"
+            }
             SqlSupportsConvert::SqlConvertLongvarbinary => "SQL_CONVERT_LONGVARBINARY",
             SqlSupportsConvert::SqlConvertLongvarchar => "SQL_CONVERT_LONGVARCHAR",
             SqlSupportsConvert::SqlConvertNumeric => "SQL_CONVERT_NUMERIC",
@@ -1643,8 +1721,12 @@ impl XdbcDatetimeSubcode {
             XdbcDatetimeSubcode::XdbcSubcodeYear => "XDBC_SUBCODE_YEAR",
             XdbcDatetimeSubcode::XdbcSubcodeTime => "XDBC_SUBCODE_TIME",
             XdbcDatetimeSubcode::XdbcSubcodeTimestamp => "XDBC_SUBCODE_TIMESTAMP",
-            XdbcDatetimeSubcode::XdbcSubcodeTimeWithTimezone => "XDBC_SUBCODE_TIME_WITH_TIMEZONE",
-            XdbcDatetimeSubcode::XdbcSubcodeTimestampWithTimezone => "XDBC_SUBCODE_TIMESTAMP_WITH_TIMEZONE",
+            XdbcDatetimeSubcode::XdbcSubcodeTimeWithTimezone => {
+                "XDBC_SUBCODE_TIME_WITH_TIMEZONE"
+            }
+            XdbcDatetimeSubcode::XdbcSubcodeTimestampWithTimezone => {
+                "XDBC_SUBCODE_TIMESTAMP_WITH_TIMEZONE"
+            }
             XdbcDatetimeSubcode::XdbcSubcodeSecond => "XDBC_SUBCODE_SECOND",
             XdbcDatetimeSubcode::XdbcSubcodeYearToMonth => "XDBC_SUBCODE_YEAR_TO_MONTH",
             XdbcDatetimeSubcode::XdbcSubcodeDayToHour => "XDBC_SUBCODE_DAY_TO_HOUR",
@@ -1652,20 +1734,42 @@ impl XdbcDatetimeSubcode {
             XdbcDatetimeSubcode::XdbcSubcodeDayToSecond => "XDBC_SUBCODE_DAY_TO_SECOND",
             XdbcDatetimeSubcode::XdbcSubcodeHourToMinute => "XDBC_SUBCODE_HOUR_TO_MINUTE",
             XdbcDatetimeSubcode::XdbcSubcodeHourToSecond => "XDBC_SUBCODE_HOUR_TO_SECOND",
-            XdbcDatetimeSubcode::XdbcSubcodeMinuteToSecond => "XDBC_SUBCODE_MINUTE_TO_SECOND",
+            XdbcDatetimeSubcode::XdbcSubcodeMinuteToSecond => {
+                "XDBC_SUBCODE_MINUTE_TO_SECOND"
+            }
             XdbcDatetimeSubcode::XdbcSubcodeIntervalYear => "XDBC_SUBCODE_INTERVAL_YEAR",
-            XdbcDatetimeSubcode::XdbcSubcodeIntervalMonth => "XDBC_SUBCODE_INTERVAL_MONTH",
+            XdbcDatetimeSubcode::XdbcSubcodeIntervalMonth => {
+                "XDBC_SUBCODE_INTERVAL_MONTH"
+            }
             XdbcDatetimeSubcode::XdbcSubcodeIntervalDay => "XDBC_SUBCODE_INTERVAL_DAY",
             XdbcDatetimeSubcode::XdbcSubcodeIntervalHour => "XDBC_SUBCODE_INTERVAL_HOUR",
-            XdbcDatetimeSubcode::XdbcSubcodeIntervalMinute => "XDBC_SUBCODE_INTERVAL_MINUTE",
-            XdbcDatetimeSubcode::XdbcSubcodeIntervalSecond => "XDBC_SUBCODE_INTERVAL_SECOND",
-            XdbcDatetimeSubcode::XdbcSubcodeIntervalYearToMonth => "XDBC_SUBCODE_INTERVAL_YEAR_TO_MONTH",
-            XdbcDatetimeSubcode::XdbcSubcodeIntervalDayToHour => "XDBC_SUBCODE_INTERVAL_DAY_TO_HOUR",
-            XdbcDatetimeSubcode::XdbcSubcodeIntervalDayToMinute => "XDBC_SUBCODE_INTERVAL_DAY_TO_MINUTE",
-            XdbcDatetimeSubcode::XdbcSubcodeIntervalDayToSecond => "XDBC_SUBCODE_INTERVAL_DAY_TO_SECOND",
-            XdbcDatetimeSubcode::XdbcSubcodeIntervalHourToMinute => "XDBC_SUBCODE_INTERVAL_HOUR_TO_MINUTE",
-            XdbcDatetimeSubcode::XdbcSubcodeIntervalHourToSecond => "XDBC_SUBCODE_INTERVAL_HOUR_TO_SECOND",
-            XdbcDatetimeSubcode::XdbcSubcodeIntervalMinuteToSecond => "XDBC_SUBCODE_INTERVAL_MINUTE_TO_SECOND",
+            XdbcDatetimeSubcode::XdbcSubcodeIntervalMinute => {
+                "XDBC_SUBCODE_INTERVAL_MINUTE"
+            }
+            XdbcDatetimeSubcode::XdbcSubcodeIntervalSecond => {
+                "XDBC_SUBCODE_INTERVAL_SECOND"
+            }
+            XdbcDatetimeSubcode::XdbcSubcodeIntervalYearToMonth => {
+                "XDBC_SUBCODE_INTERVAL_YEAR_TO_MONTH"
+            }
+            XdbcDatetimeSubcode::XdbcSubcodeIntervalDayToHour => {
+                "XDBC_SUBCODE_INTERVAL_DAY_TO_HOUR"
+            }
+            XdbcDatetimeSubcode::XdbcSubcodeIntervalDayToMinute => {
+                "XDBC_SUBCODE_INTERVAL_DAY_TO_MINUTE"
+            }
+            XdbcDatetimeSubcode::XdbcSubcodeIntervalDayToSecond => {
+                "XDBC_SUBCODE_INTERVAL_DAY_TO_SECOND"
+            }
+            XdbcDatetimeSubcode::XdbcSubcodeIntervalHourToMinute => {
+                "XDBC_SUBCODE_INTERVAL_HOUR_TO_MINUTE"
+            }
+            XdbcDatetimeSubcode::XdbcSubcodeIntervalHourToSecond => {
+                "XDBC_SUBCODE_INTERVAL_HOUR_TO_SECOND"
+            }
+            XdbcDatetimeSubcode::XdbcSubcodeIntervalMinuteToSecond => {
+                "XDBC_SUBCODE_INTERVAL_MINUTE_TO_SECOND"
+            }
         }
     }
 }
