@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::{ArrowError, Result};
-pub use arrow_array::ArrowPrimitiveType;
-pub use arrow_buffer::{i256, ArrowNativeType, ToByteSlice};
+use arrow_buffer::{i256, ArrowNativeType};
+use arrow_schema::ArrowError;
 use half::f16;
 
 /// Trait for [`ArrowNativeType`] that adds checked and unchecked arithmetic operations,
@@ -44,27 +43,27 @@ pub trait ArrowNativeTypeOp: ArrowNativeType {
     /// The multiplicative identity
     const ONE: Self;
 
-    fn add_checked(self, rhs: Self) -> Result<Self>;
+    fn add_checked(self, rhs: Self) -> Result<Self, ArrowError>;
 
     fn add_wrapping(self, rhs: Self) -> Self;
 
-    fn sub_checked(self, rhs: Self) -> Result<Self>;
+    fn sub_checked(self, rhs: Self) -> Result<Self, ArrowError>;
 
     fn sub_wrapping(self, rhs: Self) -> Self;
 
-    fn mul_checked(self, rhs: Self) -> Result<Self>;
+    fn mul_checked(self, rhs: Self) -> Result<Self, ArrowError>;
 
     fn mul_wrapping(self, rhs: Self) -> Self;
 
-    fn div_checked(self, rhs: Self) -> Result<Self>;
+    fn div_checked(self, rhs: Self) -> Result<Self, ArrowError>;
 
     fn div_wrapping(self, rhs: Self) -> Self;
 
-    fn mod_checked(self, rhs: Self) -> Result<Self>;
+    fn mod_checked(self, rhs: Self) -> Result<Self, ArrowError>;
 
     fn mod_wrapping(self, rhs: Self) -> Self;
 
-    fn neg_checked(self) -> Result<Self>;
+    fn neg_checked(self) -> Result<Self, ArrowError>;
 
     fn neg_wrapping(self) -> Self;
 
@@ -92,7 +91,7 @@ macro_rules! native_type_op {
             const ZERO: Self = $zero;
             const ONE: Self = $one;
 
-            fn add_checked(self, rhs: Self) -> Result<Self> {
+            fn add_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 self.checked_add(rhs).ok_or_else(|| {
                     ArrowError::ComputeError(format!(
                         "Overflow happened on: {:?} + {:?}",
@@ -105,7 +104,7 @@ macro_rules! native_type_op {
                 self.wrapping_add(rhs)
             }
 
-            fn sub_checked(self, rhs: Self) -> Result<Self> {
+            fn sub_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 self.checked_sub(rhs).ok_or_else(|| {
                     ArrowError::ComputeError(format!(
                         "Overflow happened on: {:?} - {:?}",
@@ -118,7 +117,7 @@ macro_rules! native_type_op {
                 self.wrapping_sub(rhs)
             }
 
-            fn mul_checked(self, rhs: Self) -> Result<Self> {
+            fn mul_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 self.checked_mul(rhs).ok_or_else(|| {
                     ArrowError::ComputeError(format!(
                         "Overflow happened on: {:?} * {:?}",
@@ -131,7 +130,7 @@ macro_rules! native_type_op {
                 self.wrapping_mul(rhs)
             }
 
-            fn div_checked(self, rhs: Self) -> Result<Self> {
+            fn div_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 if rhs.is_zero() {
                     Err(ArrowError::DivideByZero)
                 } else {
@@ -148,7 +147,7 @@ macro_rules! native_type_op {
                 self.wrapping_div(rhs)
             }
 
-            fn mod_checked(self, rhs: Self) -> Result<Self> {
+            fn mod_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 if rhs.is_zero() {
                     Err(ArrowError::DivideByZero)
                 } else {
@@ -165,7 +164,7 @@ macro_rules! native_type_op {
                 self.wrapping_rem(rhs)
             }
 
-            fn neg_checked(self) -> Result<Self> {
+            fn neg_checked(self) -> Result<Self, ArrowError> {
                 self.checked_neg().ok_or_else(|| {
                     ArrowError::ComputeError(format!("Overflow happened on: {:?}", self))
                 })
@@ -223,7 +222,7 @@ macro_rules! native_type_float_op {
             const ZERO: Self = $zero;
             const ONE: Self = $one;
 
-            fn add_checked(self, rhs: Self) -> Result<Self> {
+            fn add_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 Ok(self + rhs)
             }
 
@@ -231,7 +230,7 @@ macro_rules! native_type_float_op {
                 self + rhs
             }
 
-            fn sub_checked(self, rhs: Self) -> Result<Self> {
+            fn sub_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 Ok(self - rhs)
             }
 
@@ -239,7 +238,7 @@ macro_rules! native_type_float_op {
                 self - rhs
             }
 
-            fn mul_checked(self, rhs: Self) -> Result<Self> {
+            fn mul_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 Ok(self * rhs)
             }
 
@@ -247,7 +246,7 @@ macro_rules! native_type_float_op {
                 self * rhs
             }
 
-            fn div_checked(self, rhs: Self) -> Result<Self> {
+            fn div_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 if rhs.is_zero() {
                     Err(ArrowError::DivideByZero)
                 } else {
@@ -259,7 +258,7 @@ macro_rules! native_type_float_op {
                 self / rhs
             }
 
-            fn mod_checked(self, rhs: Self) -> Result<Self> {
+            fn mod_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 if rhs.is_zero() {
                     Err(ArrowError::DivideByZero)
                 } else {
@@ -271,7 +270,7 @@ macro_rules! native_type_float_op {
                 self % rhs
             }
 
-            fn neg_checked(self) -> Result<Self> {
+            fn neg_checked(self) -> Result<Self, ArrowError> {
                 Ok(-self)
             }
 
