@@ -22,18 +22,11 @@
 use std::fmt::Write;
 use std::sync::Arc;
 
-use crate::array::Array;
-use crate::datatypes::{
-    ArrowNativeType, ArrowPrimitiveType, DataType, Field, Int16Type, Int32Type,
-    Int64Type, Int8Type, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-    UnionMode,
-};
-use crate::{array, datatypes::IntervalUnit};
-
-use array::DictionaryArray;
-
-use crate::error::{ArrowError, Result};
 use arrow_array::timezone::Tz;
+use arrow_array::types::*;
+use arrow_array::*;
+use arrow_buffer::ArrowNativeType;
+use arrow_schema::*;
 
 macro_rules! make_string {
     ($array_type:ty, $column: ident, $row: ident) => {{
@@ -254,7 +247,7 @@ macro_rules! make_string_from_list {
             .value($row);
         let string_values = (0..list.len())
             .map(|i| array_value_to_string(&list.clone(), i))
-            .collect::<Result<Vec<String>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(format!("[{}]", string_values.join(", ")))
     }};
 }
@@ -270,7 +263,7 @@ macro_rules! make_string_from_large_list {
             .value($row);
         let string_values = (0..list.len())
             .map(|i| array_value_to_string(&list, i))
-            .collect::<Result<Vec<String>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(format!("[{}]", string_values.join(", ")))
     }};
 }
@@ -286,17 +279,17 @@ macro_rules! make_string_from_fixed_size_list {
             .value($row);
         let string_values = (0..list.len())
             .map(|i| array_value_to_string(&list.clone(), i))
-            .collect::<Result<Vec<String>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(format!("[{}]", string_values.join(", ")))
     }};
 }
 
 #[inline(always)]
-pub fn make_string_from_decimal(column: &Arc<dyn Array>, row: usize) -> Result<String> {
-    let array = column
-        .as_any()
-        .downcast_ref::<array::Decimal128Array>()
-        .unwrap();
+pub fn make_string_from_decimal(
+    column: &Arc<dyn Array>,
+    row: usize,
+) -> Result<String, ArrowError> {
+    let array = column.as_any().downcast_ref::<Decimal128Array>().unwrap();
 
     Ok(array.value_as_string(row))
 }
@@ -306,7 +299,7 @@ fn append_struct_field_string(
     name: &str,
     field_col: &Arc<dyn Array>,
     row: usize,
-) -> Result<()> {
+) -> Result<(), ArrowError> {
     target.push('"');
     target.push_str(name);
     target.push_str("\": ");
@@ -333,7 +326,10 @@ fn append_struct_field_string(
 ///
 /// Note this function is quite inefficient and is unlikely to be
 /// suitable for converting large arrays or record batches.
-pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<String> {
+pub fn array_value_to_string(
+    column: &ArrayRef,
+    row: usize,
+) -> Result<String, ArrowError> {
     if column.is_null(row) {
         return Ok("".to_string());
     }
@@ -487,12 +483,12 @@ pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<Str
 
 /// Converts the value of the union array at `row` to a String
 fn union_to_string(
-    column: &array::ArrayRef,
+    column: &ArrayRef,
     row: usize,
     fields: &[Field],
     type_ids: &[i8],
     mode: &UnionMode,
-) -> Result<String> {
+) -> Result<String, ArrowError> {
     let list = column
         .as_any()
         .downcast_ref::<array::UnionArray>()
@@ -522,9 +518,9 @@ fn union_to_string(
 }
 /// Converts the value of the dictionary array at `row` to a String
 fn dict_array_value_to_string<K: ArrowPrimitiveType>(
-    colum: &array::ArrayRef,
+    colum: &ArrayRef,
     row: usize,
-) -> Result<String> {
+) -> Result<String, ArrowError> {
     let dict_array = colum.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
 
     let keys_array = dict_array.keys();
@@ -533,13 +529,23 @@ fn dict_array_value_to_string<K: ArrowPrimitiveType>(
         return Ok(String::from(""));
     }
 
-    let dict_index = keys_array.value(row).to_usize().ok_or_else(|| {
-        ArrowError::InvalidArgumentError(format!(
-            "Can not convert value {:?} at index {:?} to usize for string conversion.",
-            keys_array.value(row),
-            row
-        ))
-    })?;
-
+    let dict_index = keys_array.value(row).as_usize();
     array_value_to_string(dict_array.values(), dict_index)
+}
+
+/// Converts numeric type to a `String`
+pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
+    let mut buf = Vec::<u8>::with_capacity(N::FORMATTED_SIZE_DECIMAL);
+    unsafe {
+        // JUSTIFICATION
+        //  Benefit
+        //      Allows using the faster serializer lexical core and convert to string
+        //  Soundness
+        //      Length of buf is set as written length afterwards. lexical_core
+        //      creates a valid string, so doesn't need to be checked.
+        let slice = std::slice::from_raw_parts_mut(buf.as_mut_ptr(), buf.capacity());
+        let len = lexical_core::write(n, slice).len();
+        buf.set_len(len);
+        String::from_utf8_unchecked(buf)
+    }
 }

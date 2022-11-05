@@ -28,6 +28,7 @@ on:
       - arrow/**
       - arrow-array/**
       - arrow-buffer/**
+      - arrow-cast/**
       - arrow-data/**
       - arrow-schema/**
       - arrow-select/**
@@ -58,6 +59,8 @@ jobs:
         run: cargo test -p arrow-array --all-features
       - name: Test arrow-select with all features
         run: cargo test -p arrow-select --all-features
+      - name: Test arrow-cast with all features
+        run: cargo test -p arrow-cast --all-features
       - name: Test arrow-integration-test with all features
         run: cargo test -p arrow-integration-test --all-features
       - name: Test arrow with default features
@@ -164,5 +167,7 @@ jobs:
         run: cargo clippy -p arrow-array --all-targets --all-features -- -D warnings
       - name: Clippy arrow-select with all features
         run: cargo clippy -p arrow-select --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-cast with all features
+        run: cargo clippy -p arrow-cast --all-targets --all-features -- -D warnings
       - name: Clippy arrow
         run: cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict,dyn_arith_dict,chrono-tz --all-targets -- -D warnings

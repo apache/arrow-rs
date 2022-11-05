@@ -67,12 +67,12 @@ use arrow_array::timezone::Tz;
 use chrono::{DateTime, Utc};
 use std::io::Write;
 
+use crate::array::*;
 use crate::csv::map_csv_error;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::record_batch::RecordBatch;
-use crate::util::display::make_string_from_decimal;
-use crate::{array::*, util::serialization::lexical_to_string};
+use crate::util::display::{lexical_to_string, make_string_from_decimal};
 
 const DEFAULT_DATE_FORMAT: &str = "%F";
 const DEFAULT_TIME_FORMAT: &str = "%T";

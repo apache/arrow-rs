@@ -22,12 +22,12 @@
 //!  * [`Field`](crate::datatypes::Field) to describe one field within a schema.
 //!  * [`DataType`](crate::datatypes::DataType) to describe the type of a field.
 
-mod native;
-pub use native::*;
 mod numeric;
 pub use numeric::*;
 
 pub use arrow_array::types::*;
+pub use arrow_array::{ArrowNativeTypeOp, ArrowPrimitiveType};
+pub use arrow_buffer::{i256, ArrowNativeType, ToByteSlice};
 pub use arrow_data::decimal::*;
 pub use arrow_schema::{
     DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,

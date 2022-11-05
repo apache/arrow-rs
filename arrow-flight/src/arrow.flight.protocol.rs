@@ -6,44 +6,43 @@
 pub struct HandshakeRequest {
     ///
     /// A defined protocol version
-    #[prost(uint64, tag="1")]
+    #[prost(uint64, tag = "1")]
     pub protocol_version: u64,
     ///
     /// Arbitrary auth/handshake info.
-    #[prost(bytes="vec", tag="2")]
+    #[prost(bytes = "vec", tag = "2")]
     pub payload: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HandshakeResponse {
     ///
     /// A defined protocol version
-    #[prost(uint64, tag="1")]
+    #[prost(uint64, tag = "1")]
     pub protocol_version: u64,
     ///
     /// Arbitrary auth/handshake info.
-    #[prost(bytes="vec", tag="2")]
+    #[prost(bytes = "vec", tag = "2")]
     pub payload: ::prost::alloc::vec::Vec<u8>,
 }
 ///
 /// A message for doing simple auth.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BasicAuth {
-    #[prost(string, tag="2")]
+    #[prost(string, tag = "2")]
     pub username: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
+    #[prost(string, tag = "3")]
     pub password: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Empty {
-}
+pub struct Empty {}
 ///
 /// Describes an available action, including both the name used for execution
 /// along with a short description of the purpose of the action.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionType {
-    #[prost(string, tag="1")]
+    #[prost(string, tag = "1")]
     pub r#type: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
+    #[prost(string, tag = "2")]
     pub description: ::prost::alloc::string::String,
 }
 ///
@@ -51,23 +50,23 @@ pub struct ActionType {
 /// of available Arrow Flight streams.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Criteria {
-    #[prost(bytes="vec", tag="1")]
+    #[prost(bytes = "vec", tag = "1")]
     pub expression: ::prost::alloc::vec::Vec<u8>,
 }
 ///
 /// An opaque action specific for the service.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Action {
-    #[prost(string, tag="1")]
+    #[prost(string, tag = "1")]
     pub r#type: ::prost::alloc::string::String,
-    #[prost(bytes="vec", tag="2")]
+    #[prost(bytes = "vec", tag = "2")]
     pub body: ::prost::alloc::vec::Vec<u8>,
 }
 ///
 /// An opaque result returned after executing an action.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Result {
-    #[prost(bytes="vec", tag="1")]
+    #[prost(bytes = "vec", tag = "1")]
     pub body: ::prost::alloc::vec::Vec<u8>,
 }
 ///
@@ -78,7 +77,7 @@ pub struct SchemaResult {
     ///    4 bytes - an optional IPC_CONTINUATION_TOKEN prefix
     ///    4 bytes - the byte length of the payload
     ///    a flatbuffer Message whose header is the Schema
-    #[prost(bytes="vec", tag="1")]
+    #[prost(bytes = "vec", tag = "1")]
     pub schema: ::prost::alloc::vec::Vec<u8>,
 }
 ///
@@ -86,24 +85,34 @@ pub struct SchemaResult {
 /// a flight or be used to expose a set of previously defined flights.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FlightDescriptor {
-    #[prost(enumeration="flight_descriptor::DescriptorType", tag="1")]
+    #[prost(enumeration = "flight_descriptor::DescriptorType", tag = "1")]
     pub r#type: i32,
     ///
     /// Opaque value used to express a command. Should only be defined when
     /// type = CMD.
-    #[prost(bytes="vec", tag="2")]
+    #[prost(bytes = "vec", tag = "2")]
     pub cmd: ::prost::alloc::vec::Vec<u8>,
     ///
     /// List of strings identifying a particular dataset. Should only be defined
     /// when type = PATH.
-    #[prost(string, repeated, tag="3")]
+    #[prost(string, repeated, tag = "3")]
     pub path: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// Nested message and enum types in `FlightDescriptor`.
 pub mod flight_descriptor {
     ///
     /// Describes what type of descriptor is defined.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
     #[repr(i32)]
     pub enum DescriptorType {
         /// Protobuf pattern, not used.
@@ -140,11 +149,11 @@ pub struct FlightInfo {
     ///    4 bytes - an optional IPC_CONTINUATION_TOKEN prefix
     ///    4 bytes - the byte length of the payload
     ///    a flatbuffer Message whose header is the Schema
-    #[prost(bytes="vec", tag="1")]
+    #[prost(bytes = "vec", tag = "1")]
     pub schema: ::prost::alloc::vec::Vec<u8>,
     ///
     /// The descriptor associated with this info.
-    #[prost(message, optional, tag="2")]
+    #[prost(message, optional, tag = "2")]
     pub flight_descriptor: ::core::option::Option<FlightDescriptor>,
     ///
     /// A list of endpoints associated with the flight. To consume the
@@ -156,12 +165,12 @@ pub struct FlightInfo {
     ///
     /// There is no ordering defined on endpoints. Hence, if the returned
     /// data has an ordering, it should be returned in a single endpoint.
-    #[prost(message, repeated, tag="3")]
+    #[prost(message, repeated, tag = "3")]
     pub endpoint: ::prost::alloc::vec::Vec<FlightEndpoint>,
     /// Set these to -1 if unknown.
-    #[prost(int64, tag="4")]
+    #[prost(int64, tag = "4")]
     pub total_records: i64,
-    #[prost(int64, tag="5")]
+    #[prost(int64, tag = "5")]
     pub total_bytes: i64,
 }
 ///
@@ -170,7 +179,7 @@ pub struct FlightInfo {
 pub struct FlightEndpoint {
     ///
     /// Token used to retrieve this stream.
-    #[prost(message, optional, tag="1")]
+    #[prost(message, optional, tag = "1")]
     pub ticket: ::core::option::Option<Ticket>,
     ///
     /// A list of URIs where this ticket can be redeemed via DoGet().
@@ -187,7 +196,7 @@ pub struct FlightEndpoint {
     ///
     /// In other words, an application can use multiple locations to
     /// represent redundant and/or load balanced services.
-    #[prost(message, repeated, tag="2")]
+    #[prost(message, repeated, tag = "2")]
     pub location: ::prost::alloc::vec::Vec<Location>,
 }
 ///
@@ -195,7 +204,7 @@ pub struct FlightEndpoint {
 /// stream given a ticket.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Location {
-    #[prost(string, tag="1")]
+    #[prost(string, tag = "1")]
     pub uri: ::prost::alloc::string::String,
 }
 ///
@@ -206,7 +215,7 @@ pub struct Location {
 /// behavior to reuse a ticket.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Ticket {
-    #[prost(bytes="vec", tag="1")]
+    #[prost(bytes = "vec", tag = "1")]
     pub ticket: ::prost::alloc::vec::Vec<u8>,
 }
 ///
@@ -216,29 +225,29 @@ pub struct FlightData {
     ///
     /// The descriptor of the data. This is only relevant when a client is
     /// starting a new DoPut stream.
-    #[prost(message, optional, tag="1")]
+    #[prost(message, optional, tag = "1")]
     pub flight_descriptor: ::core::option::Option<FlightDescriptor>,
     ///
     /// Header for message data as described in Message.fbs::Message.
-    #[prost(bytes="vec", tag="2")]
+    #[prost(bytes = "vec", tag = "2")]
     pub data_header: ::prost::alloc::vec::Vec<u8>,
     ///
     /// Application-defined metadata.
-    #[prost(bytes="vec", tag="3")]
+    #[prost(bytes = "vec", tag = "3")]
     pub app_metadata: ::prost::alloc::vec::Vec<u8>,
     ///
     /// The actual batch of Arrow data. Preferably handled with minimal-copies
     /// coming last in the definition to help with sidecar patterns (it is
     /// expected that some implementations will fetch this field off the wire
     /// with specialized code to avoid extra memory copies).
-    #[prost(bytes="vec", tag="1000")]
+    #[prost(bytes = "vec", tag = "1000")]
     pub data_body: ::prost::alloc::vec::Vec<u8>,
 }
 /// *
 /// The response message associated with the submission of a DoPut.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PutResult {
-    #[prost(bytes="vec", tag="1")]
+    #[prost(bytes = "vec", tag = "1")]
     pub app_metadata: ::prost::alloc::vec::Vec<u8>,
 }
 /// Generated client implementations.

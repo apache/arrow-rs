@@ -80,10 +80,11 @@ impl i256 {
 
     /// Create an integer value from its representation as a byte array in little-endian.
     #[inline]
-    pub fn from_le_bytes(b: [u8; 32]) -> Self {
+    pub const fn from_le_bytes(b: [u8; 32]) -> Self {
+        let (low, high) = split_array(b);
         Self {
-            high: i128::from_le_bytes(b[16..32].try_into().unwrap()),
-            low: u128::from_le_bytes(b[0..16].try_into().unwrap()),
+            high: i128::from_le_bytes(high),
+            low: u128::from_le_bytes(low),
         }
     }
 
@@ -98,31 +99,26 @@ impl i256 {
 
     /// Create an integer value from its representation as a byte array in little-endian.
     #[inline]
-    pub fn from_be_bytes(b: [u8; 32]) -> Self {
+    pub const fn from_be_bytes(b: [u8; 32]) -> Self {
+        let (high, low) = split_array(b);
         Self {
-            high: i128::from_be_bytes(b[0..16].try_into().unwrap()),
-            low: u128::from_be_bytes(b[16..32].try_into().unwrap()),
+            high: i128::from_be_bytes(high),
+            low: u128::from_be_bytes(low),
         }
     }
 
-    pub fn from_i128(v: i128) -> Self {
-        let mut bytes = if num::Signed::is_negative(&v) {
-            [255_u8; 32]
-        } else {
-            [0; 32]
-        };
-        bytes[0..16].copy_from_slice(&v.to_le_bytes());
-        Self::from_le_bytes(bytes)
+    pub const fn from_i128(v: i128) -> Self {
+        Self::from_parts(v as u128, v >> 127)
     }
 
     /// Create an i256 from the provided low u128 and high i128
     #[inline]
-    pub fn from_parts(low: u128, high: i128) -> Self {
+    pub const fn from_parts(low: u128, high: i128) -> Self {
         Self { low, high }
     }
 
     /// Returns this `i256` as a low u128 and high i128
-    pub fn to_parts(self) -> (u128, i128) {
+    pub const fn to_parts(self) -> (u128, i128) {
         (self.low, self.high)
     }
 
@@ -140,23 +136,31 @@ impl i256 {
 
     /// Return the memory representation of this integer as a byte array in little-endian byte order.
     #[inline]
-    pub fn to_le_bytes(self) -> [u8; 32] {
+    pub const fn to_le_bytes(self) -> [u8; 32] {
+        let low = self.low.to_le_bytes();
+        let high = self.high.to_le_bytes();
         let mut t = [0; 32];
-        let t_low: &mut [u8; 16] = (&mut t[0..16]).try_into().unwrap();
-        *t_low = self.low.to_le_bytes();
-        let t_high: &mut [u8; 16] = (&mut t[16..32]).try_into().unwrap();
-        *t_high = self.high.to_le_bytes();
+        let mut i = 0;
+        while i != 16 {
+            t[i] = low[i];
+            t[i + 16] = high[i];
+            i += 1;
+        }
         t
     }
 
     /// Return the memory representation of this integer as a byte array in big-endian byte order.
     #[inline]
-    pub fn to_be_bytes(self) -> [u8; 32] {
+    pub const fn to_be_bytes(self) -> [u8; 32] {
+        let low = self.low.to_be_bytes();
+        let high = self.high.to_be_bytes();
         let mut t = [0; 32];
-        let t_low: &mut [u8; 16] = (&mut t[0..16]).try_into().unwrap();
-        *t_low = self.high.to_be_bytes();
-        let t_high: &mut [u8; 16] = (&mut t[16..32]).try_into().unwrap();
-        *t_high = self.low.to_be_bytes();
+        let mut i = 0;
+        while i != 16 {
+            t[i] = high[i];
+            t[i + 16] = low[i];
+            i += 1;
+        }
         t
     }
 
@@ -378,6 +382,20 @@ impl i256 {
     }
 }
 
+/// Temporary workaround due to lack of stable const array slicing
+/// See <https://github.com/rust-lang/rust/issues/90091>
+const fn split_array(vals: [u8; 32]) -> ([u8; 16], [u8; 16]) {
+    let mut a = [0; 16];
+    let mut b = [0; 16];
+    let mut i = 0;
+    while i != 16 {
+        a[i] = vals[i];
+        b[i] = vals[i + 16];
+        i += 1;
+    }
+    (a, b)
+}
+
 /// Performs an unsigned multiplication of `a * b` returning a tuple of
 /// `(low, high)` where `low` contains the lower 128-bits of the result
 /// and `high` the higher 128-bits
@@ -498,6 +516,12 @@ mod tests {
 
         // Comparison
         assert_eq!(il.cmp(&ir), bl.cmp(&br), "{} cmp {}", bl, br);
+
+        // Conversions
+        assert_eq!(i256::from_le_bytes(il.to_le_bytes()), il);
+        assert_eq!(i256::from_be_bytes(il.to_be_bytes()), il);
+        assert_eq!(i256::from_le_bytes(ir.to_le_bytes()), ir);
+        assert_eq!(i256::from_be_bytes(ir.to_be_bytes()), ir);
 
         // To i128
         assert_eq!(il.to_i128(), bl.to_i128(), "{}", bl);
