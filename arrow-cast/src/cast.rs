@@ -45,6 +45,10 @@ use arrow_array::{
     types::*, *,
 };
 use arrow_buffer::{i256, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_data::decimal::{
+    DECIMAL128_MAX_PRECISION, MAX_DECIMAL_FOR_EACH_PRECISION,
+    MIN_DECIMAL_FOR_EACH_PRECISION,
+};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
@@ -344,16 +348,58 @@ fn cast_floating_point_to_decimal128<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
     precision: u8,
     scale: u8,
+    cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<f64>,
 {
     let mul = 10_f64.powi(scale as i32);
 
-    array
-        .unary::<_, Decimal128Type>(|v| (v.as_() * mul).round() as i128)
-        .with_precision_and_scale(precision, scale)
-        .map(|a| Arc::new(a) as ArrayRef)
+    if cast_options.safe {
+        let iter = array.iter().map(|v| {
+            v.and_then(|v| {
+                let mul_v = (mul * v.as_()).round() as i128;
+                if precision <= DECIMAL128_MAX_PRECISION
+                    && (mul_v > MAX_DECIMAL_FOR_EACH_PRECISION[precision as usize - 1]
+                        || mul_v < MIN_DECIMAL_FOR_EACH_PRECISION[precision as usize - 1])
+                {
+                    None
+                } else {
+                    Some(mul_v)
+                }
+            })
+        });
+        let casted_array =
+            unsafe { PrimitiveArray::<Decimal128Type>::from_trusted_len_iter(iter) };
+        casted_array
+            .with_precision_and_scale(precision, scale)
+            .map(|a| Arc::new(a) as ArrayRef)
+    } else {
+        array
+            .try_unary::<_, Decimal128Type, _>(|v| {
+                mul.mul_checked(v.as_())
+                    .map(|f| f.round() as i128)
+                    .and_then(|v| {
+                        if precision <= DECIMAL128_MAX_PRECISION
+                            && (v > MAX_DECIMAL_FOR_EACH_PRECISION
+                                [precision as usize - 1]
+                                || v < MIN_DECIMAL_FOR_EACH_PRECISION
+                                    [precision as usize - 1])
+                        {
+                            Err(ArrowError::CastError(format!(
+                                "Cannot cast to {:?}({}, {}). The scale causes overflow.",
+                                Decimal128Type::PREFIX,
+                                precision,
+                                scale,
+                            )))
+                        } else {
+                            Ok(v)
+                        }
+                    })
+            })
+            .and_then(|a| a.with_precision_and_scale(precision, scale))
+            .map(|a| Arc::new(a) as ArrayRef)
+    }
 }
 
 fn cast_floating_point_to_decimal256<T: ArrowPrimitiveType>(
@@ -588,11 +634,13 @@ pub fn cast_with_options(
                     as_primitive_array::<Float32Type>(array),
                     *precision,
                     *scale,
+                    cast_options,
                 ),
                 Float64 => cast_floating_point_to_decimal128(
                     as_primitive_array::<Float64Type>(array),
                     *precision,
                     *scale,
+                    cast_options,
                 ),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
@@ -6106,6 +6154,26 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal256(76, 76),
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
+    }
+
+    #[test]
+    fn test_cast_floating_point_to_decimal128_overflow() {
+        let array = Float64Array::from(vec![100e10]);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal128(38, 30),
+            &CastOptions { safe: true },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal128(38, 30),
             &CastOptions { safe: false },
         );
         assert!(casted_array.is_err());
