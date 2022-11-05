@@ -274,7 +274,9 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
                 (64, crate::TimeUnit::MICROSECOND) => {
                     DataType::Time64(TimeUnit::Microsecond)
                 }
-                (64, crate::TimeUnit::NANOSECOND) => DataType::Time64(TimeUnit::Nanosecond),
+                (64, crate::TimeUnit::NANOSECOND) => {
+                    DataType::Time64(TimeUnit::Nanosecond)
+                }
                 z => panic!(
                     "Time type with bit width of {} and unit of {:?} not supported",
                     z.0, z.1
@@ -285,7 +287,9 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             let timestamp = field.type_as_timestamp().unwrap();
             let timezone: Option<String> = timestamp.timezone().map(|tz| tz.to_string());
             match timestamp.unit() {
-                crate::TimeUnit::SECOND => DataType::Timestamp(TimeUnit::Second, timezone),
+                crate::TimeUnit::SECOND => {
+                    DataType::Timestamp(TimeUnit::Second, timezone)
+                }
                 crate::TimeUnit::MILLISECOND => {
                     DataType::Timestamp(TimeUnit::Millisecond, timezone)
                 }
@@ -304,7 +308,9 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
                 crate::IntervalUnit::YEAR_MONTH => {
                     DataType::Interval(IntervalUnit::YearMonth)
                 }
-                crate::IntervalUnit::DAY_TIME => DataType::Interval(IntervalUnit::DayTime),
+                crate::IntervalUnit::DAY_TIME => {
+                    DataType::Interval(IntervalUnit::DayTime)
+                }
                 crate::IntervalUnit::MONTH_DAY_NANO => {
                     DataType::Interval(IntervalUnit::MonthDayNano)
                 }
@@ -546,7 +552,9 @@ pub(crate) fn get_fb_field_type<'a>(
         },
         LargeBinary => FBFieldType {
             type_type: crate::Type::LargeBinary,
-            type_: crate::LargeBinaryBuilder::new(fbb).finish().as_union_value(),
+            type_: crate::LargeBinaryBuilder::new(fbb)
+                .finish()
+                .as_union_value(),
             children: Some(fbb.create_vector(&empty_fields[..])),
         },
         Utf8 => FBFieldType {
