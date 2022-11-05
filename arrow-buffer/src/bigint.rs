@@ -87,6 +87,15 @@ impl i256 {
         }
     }
 
+    /// Create an integer value from its representation as high and low byte arrays in little-endian.
+    #[inline]
+    pub const fn from_const_le_bytes(low_bytes: [u8; 16], high_bytes: [u8; 16]) -> Self {
+        Self {
+            high: i128::from_le_bytes(high_bytes),
+            low: u128::from_le_bytes(low_bytes),
+        }
+    }
+
     /// Create an integer value from its representation as a byte array in little-endian.
     #[inline]
     pub fn from_be_bytes(b: [u8; 32]) -> Self {
