@@ -54,19 +54,20 @@ pub struct IpcWriteOptions {
     /// version 2.0.0: V4, with legacy format enabled
     /// version 4.0.0: V5
     metadata_version: crate::MetadataVersion,
-    /// Compression, if desired. Only supported when `ipc_compression`
-    /// feature is enabled
+    /// Compression, if desired. Will result in a runtime error
+    /// if the corresponding feature is not enabled
     batch_compression_type: Option<crate::CompressionType>,
 }
 
 impl IpcWriteOptions {
-    /// Configures compression when writing IPC files. Requires the
-    /// `ipc_compression` feature of the crate to be activated.
-    #[cfg(feature = "ipc_compression")]
+    /// Configures compression when writing IPC files.
+    ///
+    /// Will result in a runtime error if the corresponding feature
+    /// is not enabled
     pub fn try_with_compression(
         mut self,
         batch_compression_type: Option<crate::CompressionType>,
-    ) -> Result<Self> {
+    ) -> Result<Self, ArrowError> {
         self.batch_compression_type = batch_compression_type;
 
         if self.batch_compression_type.is_some()
@@ -1280,7 +1281,7 @@ mod tests {
     use arrow_schema::DataType;
 
     #[test]
-    #[cfg(feature = "ipc_compression")]
+    #[cfg(feature = "lz4")]
     fn test_write_empty_record_batch_lz4_compression() {
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
         let values: Vec<Option<i32>> = vec![];
@@ -1333,7 +1334,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ipc_compression")]
+    #[cfg(feature = "lz4")]
     fn test_write_file_with_lz4_compression() {
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
         let values: Vec<Option<i32>> = vec![Some(12), Some(1)];
@@ -1385,7 +1386,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ipc_compression")]
+    #[cfg(feature = "zstd")]
     fn test_write_file_with_zstd_compression() {
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
         let values: Vec<Option<i32>> = vec![Some(12), Some(1)];
