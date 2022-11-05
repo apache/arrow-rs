@@ -266,4 +266,4 @@ required-features = ["test_utils"]
 
 [[test]]
 name = "ipc_integration"
-required-features = ["test_utils"]
+required-features = ["test_utils", "ipc"]
