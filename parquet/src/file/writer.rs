@@ -648,9 +648,8 @@ mod tests {
     use crate::column::page::PageReader;
     use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
     use crate::data_type::Int32Type;
-    use crate::file::serialized_reader::SerializedPageReaderOptionsBuilder;
     use crate::file::{
-        properties::{WriterProperties, WriterVersion},
+        properties::{ReaderProperties, WriterProperties, WriterVersion},
         reader::{FileReader, SerializedFileReader, SerializedPageReader},
         statistics::{from_thrift, to_thrift, Statistics},
     };
@@ -949,9 +948,9 @@ mod tests {
         let mut compressed_pages = vec![];
         let mut total_num_values = 0i64;
         let codec_options = CodecOptionsBuilder::default()
-            .no_backward_compatible_lz4()
+            .set_backward_compatible_lz4(false)
             .build();
-        let mut compressor = create_codec(codec, codec_options).unwrap();
+        let mut compressor = create_codec(codec, &codec_options).unwrap();
 
         for page in pages {
             let uncompressed_len = page.buffer().len();
@@ -1060,18 +1059,15 @@ mod tests {
                 .build()
                 .unwrap();
 
-            let codec_options = CodecOptionsBuilder::default()
-                .no_backward_compatible_lz4()
+            let props = ReaderProperties::builder()
+                .set_backward_compatible_lz4(false)
                 .build();
-            let page_reader_options = SerializedPageReaderOptionsBuilder::default()
-                .with_codec_options(codec_options)
-                .build();
-            let mut page_reader = SerializedPageReader::new_with_options(
+            let mut page_reader = SerializedPageReader::new_with_properties(
                 Arc::new(reader),
                 &meta,
                 total_num_values as usize,
                 None,
-                page_reader_options,
+                Arc::new(props),
             )
             .unwrap();
 

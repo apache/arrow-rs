@@ -222,7 +222,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     ) -> Self {
         let codec = props.compression(descr.path());
         let codec_options = CodecOptionsBuilder::default().build();
-        let compressor = create_codec(codec, codec_options).unwrap();
+        let compressor = create_codec(codec, &codec_options).unwrap();
         let encoder = E::try_new(&descr, props.as_ref()).unwrap();
 
         let statistics_enabled = props.statistics_enabled(descr.path());
@@ -1101,10 +1101,10 @@ mod tests {
         page::PageReader,
         reader::{get_column_reader, get_typed_column_reader, ColumnReaderImpl},
     };
-    use crate::file::serialized_reader::SerializedPageReaderOptionsBuilder;
     use crate::file::writer::TrackedWrite;
     use crate::file::{
-        properties::WriterProperties, reader::SerializedPageReader,
+        properties::{ReaderProperties, WriterProperties},
+        reader::SerializedPageReader,
         writer::SerializedPageWriter,
     };
     use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
@@ -1671,18 +1671,15 @@ mod tests {
         assert_eq!(stats.null_count(), 0);
         assert!(stats.distinct_count().is_none());
 
-        let codec_options = CodecOptionsBuilder::default()
-            .no_backward_compatible_lz4()
+        let props = ReaderProperties::builder()
+            .set_backward_compatible_lz4(false)
             .build();
-        let page_reader_options = SerializedPageReaderOptionsBuilder::default()
-            .with_codec_options(codec_options)
-            .build();
-        let reader = SerializedPageReader::new_with_options(
+        let reader = SerializedPageReader::new_with_properties(
             Arc::new(Bytes::from(buf)),
             &r.metadata,
             r.rows_written as usize,
             None,
-            page_reader_options,
+            Arc::new(props),
         )
         .unwrap();
 
@@ -1718,18 +1715,15 @@ mod tests {
         let r = writer.close().unwrap();
         assert!(r.metadata.statistics().is_none());
 
-        let codec_options = CodecOptionsBuilder::default()
-            .no_backward_compatible_lz4()
+        let props = ReaderProperties::builder()
+            .set_backward_compatible_lz4(false)
             .build();
-        let page_reader_options = SerializedPageReaderOptionsBuilder::default()
-            .with_codec_options(codec_options)
-            .build();
-        let reader = SerializedPageReader::new_with_options(
+        let reader = SerializedPageReader::new_with_properties(
             Arc::new(Bytes::from(buf)),
             &r.metadata,
             r.rows_written as usize,
             None,
-            page_reader_options,
+            Arc::new(props),
         )
         .unwrap();
 
@@ -1853,19 +1847,16 @@ mod tests {
         let r = writer.close().unwrap();
 
         // Read pages and check the sequence
-        let codec_options = CodecOptionsBuilder::default()
-            .no_backward_compatible_lz4()
-            .build();
-        let page_reader_options = SerializedPageReaderOptionsBuilder::default()
-            .with_codec_options(codec_options)
+        let props = ReaderProperties::builder()
+            .set_backward_compatible_lz4(false)
             .build();
         let mut page_reader = Box::new(
-            SerializedPageReader::new_with_options(
+            SerializedPageReader::new_with_properties(
                 Arc::new(file),
                 &r.metadata,
                 r.rows_written as usize,
                 None,
-                page_reader_options,
+                Arc::new(props),
             )
             .unwrap(),
         );
@@ -2228,19 +2219,16 @@ mod tests {
         assert_eq!(values_written, values.len());
         let result = writer.close().unwrap();
 
-        let codec_options = CodecOptionsBuilder::default()
-            .no_backward_compatible_lz4()
-            .build();
-        let page_reader_options = SerializedPageReaderOptionsBuilder::default()
-            .with_codec_options(codec_options)
+        let props = ReaderProperties::builder()
+            .set_backward_compatible_lz4(false)
             .build();
         let page_reader = Box::new(
-            SerializedPageReader::new_with_options(
+            SerializedPageReader::new_with_properties(
                 Arc::new(file),
                 &result.metadata,
                 result.rows_written as usize,
                 None,
-                page_reader_options,
+                Arc::new(props),
             )
             .unwrap(),
         );

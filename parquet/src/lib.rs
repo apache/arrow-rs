@@ -83,7 +83,6 @@ experimental!(#[macro_use] mod util);
 pub mod arrow;
 pub mod column;
 experimental!(mod compression);
-pub use compression::CodecOptionsBuilder;
 experimental!(mod encodings);
 pub mod file;
 pub mod record;

@@ -24,10 +24,8 @@ use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderB
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Encoding, PageType};
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{ReaderProperties, WriterProperties};
 use parquet::file::reader::SerializedPageReader;
-use parquet::file::serialized_reader::SerializedPageReaderOptionsBuilder;
-use parquet::CodecOptionsBuilder;
 use std::sync::Arc;
 
 struct Layout {
@@ -131,18 +129,15 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
             .enumerate();
 
         for (idx, (column, column_layout)) in iter {
-            let codec_options = CodecOptionsBuilder::default()
-                .no_backward_compatible_lz4()
+            let properties = ReaderProperties::builder()
+                .set_backward_compatible_lz4(false)
                 .build();
-            let page_reader_options = SerializedPageReaderOptionsBuilder::default()
-                .with_codec_options(codec_options)
-                .build();
-            let page_reader = SerializedPageReader::new_with_options(
+            let page_reader = SerializedPageReader::new_with_properties(
                 Arc::new(file_reader.clone()),
                 column,
                 row_group.num_rows() as usize,
                 None,
-                page_reader_options,
+                Arc::new(properties),
             )
             .unwrap();
 
