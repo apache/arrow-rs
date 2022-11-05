@@ -148,6 +148,7 @@ fn compress_lz4(input: &[u8], output: &mut Vec<u8>) -> Result<(), ArrowError> {
 }
 
 #[cfg(not(feature = "lz4"))]
+#[allow(clippy::ptr_arg)]
 fn compress_lz4(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> {
     Err(ArrowError::InvalidArgumentError(
         "lz4 IPC compression requires the lz4 feature".to_string(),
@@ -161,6 +162,7 @@ fn decompress_lz4(input: &[u8], output: &mut Vec<u8>) -> Result<usize, ArrowErro
 }
 
 #[cfg(not(feature = "lz4"))]
+#[allow(clippy::ptr_arg)]
 fn decompress_lz4(_input: &[u8], _output: &mut Vec<u8>) -> Result<usize, ArrowError> {
     Err(ArrowError::InvalidArgumentError(
         "lz4 IPC decompression requires the lz4 feature".to_string(),
@@ -177,6 +179,7 @@ fn compress_zstd(input: &[u8], output: &mut Vec<u8>) -> Result<(), ArrowError> {
 }
 
 #[cfg(not(feature = "zstd"))]
+#[allow(clippy::ptr_arg)]
 fn compress_zstd(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> {
     Err(ArrowError::InvalidArgumentError(
         "zstd IPC compression requires the zstd feature".to_string(),
@@ -190,6 +193,7 @@ fn decompress_zstd(input: &[u8], output: &mut Vec<u8>) -> Result<usize, ArrowErr
 }
 
 #[cfg(not(feature = "zstd"))]
+#[allow(clippy::ptr_arg)]
 fn decompress_zstd(_input: &[u8], _output: &mut Vec<u8>) -> Result<usize, ArrowError> {
     Err(ArrowError::InvalidArgumentError(
         "zstd IPC decompression requires the zstd feature".to_string(),
