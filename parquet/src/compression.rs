@@ -507,7 +507,6 @@ mod lz4_hadoop_codec {
     /// Adapted from pola-rs [compression.rs:try_decompress_hadoop](https://pola-rs.github.io/polars/src/parquet2/compression.rs.html#225)
     /// Translated from the apache arrow c++ function [TryDecompressHadoop](https://github.com/apache/arrow/blob/bf18e6e4b5bb6180706b1ba0d597a65a4ce5ca48/cpp/src/arrow/util/compression_lz4.cc#L474).
     /// Returns error if decompression failed.
-    #[cfg(any(feature = "lz4", feature = "lz4_flex"))]
     fn try_decompress_hadoop(
         input_buf: &[u8],
         output_buf: &mut [u8],

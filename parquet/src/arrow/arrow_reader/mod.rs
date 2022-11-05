@@ -2491,7 +2491,7 @@ mod tests {
         assert_eq!(a[expected_rows - 2], "ab52a0cc-c6bb-4d61-8a8f-166dc4b8b13c");
         assert_eq!(a[expected_rows - 1], "85440778-460a-41ac-aa2e-ac3ee41696bf");
     }
-    
+
     #[test]
     #[cfg(feature = "snap")]
     fn test_read_nested_lists() {
