@@ -45,10 +45,6 @@ use arrow_array::{
     types::*, *,
 };
 use arrow_buffer::{i256, ArrowNativeType, Buffer, MutableBuffer};
-use arrow_data::decimal::{
-    DECIMAL128_MAX_PRECISION, MAX_DECIMAL_FOR_EACH_PRECISION,
-    MIN_DECIMAL_FOR_EACH_PRECISION,
-};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
@@ -358,14 +354,11 @@ where
     if cast_options.safe {
         let iter = array.iter().map(|v| {
             v.and_then(|v| {
-                let mul_v = (mul * v.as_()).round() as i128;
-                if precision <= DECIMAL128_MAX_PRECISION
-                    && (mul_v > MAX_DECIMAL_FOR_EACH_PRECISION[precision as usize - 1]
-                        || mul_v < MIN_DECIMAL_FOR_EACH_PRECISION[precision as usize - 1])
-                {
+                let mul_v = (mul * v.as_()).round();
+                if mul_v == f64::INFINITY || mul_v == f64::NEG_INFINITY {
                     None
                 } else {
-                    Some(mul_v)
+                    Some(mul_v as i128)
                 }
             })
         });
@@ -377,25 +370,20 @@ where
     } else {
         array
             .try_unary::<_, Decimal128Type, _>(|v| {
-                mul.mul_checked(v.as_())
-                    .map(|f| f.round() as i128)
-                    .and_then(|v| {
-                        if precision <= DECIMAL128_MAX_PRECISION
-                            && (v > MAX_DECIMAL_FOR_EACH_PRECISION
-                                [precision as usize - 1]
-                                || v < MIN_DECIMAL_FOR_EACH_PRECISION
-                                    [precision as usize - 1])
-                        {
-                            Err(ArrowError::CastError(format!(
-                                "Cannot cast to {:?}({}, {}). The scale causes overflow.",
-                                Decimal128Type::PREFIX,
-                                precision,
-                                scale,
-                            )))
-                        } else {
-                            Ok(v)
-                        }
-                    })
+                mul.mul_checked(v.as_()).and_then(|value| {
+                    let mul_v = value.round();
+                    if mul_v == f64::INFINITY || mul_v == f64::NEG_INFINITY {
+                        Err(ArrowError::CastError(format!(
+                            "Cannot cast to {}({}, {}). Overflowing on {:?}",
+                            Decimal128Type::PREFIX,
+                            precision,
+                            scale,
+                            v
+                        )))
+                    } else {
+                        Ok(mul_v as i128)
+                    }
+                })
             })
             .and_then(|a| a.with_precision_and_scale(precision, scale))
             .map(|a| Arc::new(a) as ArrayRef)
@@ -6161,7 +6149,7 @@ mod tests {
 
     #[test]
     fn test_cast_floating_point_to_decimal128_overflow() {
-        let array = Float64Array::from(vec![100e10]);
+        let array = Float64Array::from(vec![f64::MAX]);
         let array = Arc::new(array) as ArrayRef;
         let casted_array = cast_with_options(
             &array,
@@ -6176,6 +6164,13 @@ mod tests {
             &DataType::Decimal128(38, 30),
             &CastOptions { safe: false },
         );
-        assert!(casted_array.is_err());
+        let err = casted_array.unwrap_err().to_string();
+        let expected_error = "Cast error: Cannot cast to Decimal128(38, 30)";
+        assert!(
+            err.contains(expected_error),
+            "did not find expected error '{}' in actual error '{}'",
+            expected_error,
+            err
+        );
     }
 }
