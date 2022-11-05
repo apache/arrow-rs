@@ -381,7 +381,18 @@ where
                             v
                         )))
                     } else {
-                        Ok(mul_v as i128)
+                        let integer = mul_v as i128;
+                        if integer == i128::MAX || integer == i128::MIN {
+                            Err(ArrowError::CastError(format!(
+                                "Cannot cast to {}({}, {}). Overflowing on {:?}",
+                                Decimal128Type::PREFIX,
+                                precision,
+                                scale,
+                                v
+                            )))
+                        } else {
+                            Ok(mul_v as i128)
+                        }
                     }
                 })
             })
