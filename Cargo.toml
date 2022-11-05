@@ -25,6 +25,7 @@ members = [
         "arrow-flight",
         "arrow-integration-test",
         "arrow-integration-testing",
+        "arrow-ipc",
         "arrow-schema",
         "arrow-select",
         "parquet",

@@ -31,6 +31,7 @@ on:
       - arrow-data/**
       - arrow-schema/**
       - arrow-select/**
+      - arrow-ipc/**
       - arrow-pyarrow-integration-testing/**
       - arrow-integration-test/**
       - arrow-integration-testing/**

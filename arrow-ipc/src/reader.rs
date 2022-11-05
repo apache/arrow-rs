@@ -26,16 +26,14 @@ use std::fmt;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
-use crate::array::*;
-use crate::buffer::{Buffer, MutableBuffer};
-use crate::compute::cast;
-use crate::datatypes::{DataType, Field, IntervalUnit, Schema, SchemaRef, UnionMode};
-use crate::error::{ArrowError, Result};
-use crate::ipc;
-use crate::record_batch::{RecordBatch, RecordBatchOptions, RecordBatchReader};
+use arrow_array::*;
+use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_cast::cast;
+use arrow_data::ArrayData;
+use arrow_schema::*;
 
-use crate::ipc::compression::CompressionCodec;
-use ipc::CONTINUATION_MARKER;
+use crate::compression::CompressionCodec;
+use crate::CONTINUATION_MARKER;
 use DataType::*;
 
 /// Read a buffer based on offset and length
@@ -48,10 +46,10 @@ use DataType::*;
 /// follows is not compressed, which can be useful for cases where
 /// compression does not yield appreciable savings.
 fn read_buffer(
-    buf: &ipc::Buffer,
+    buf: &crate::Buffer,
     a_data: &Buffer,
     compression_codec: &Option<CompressionCodec>,
-) -> Result<Buffer> {
+) -> Result<Buffer, ArrowError> {
     let start_offset = buf.offset() as usize;
     let buf_data = a_data.slice_with_length(start_offset, buf.length() as usize);
     // corner case: empty buffer
@@ -72,16 +70,16 @@ fn read_buffer(
 ///     - cast the 64-bit array to the appropriate data type
 #[allow(clippy::too_many_arguments)]
 fn create_array(
-    nodes: flatbuffers::Vector<'_, ipc::FieldNode>,
+    nodes: flatbuffers::Vector<'_, crate::FieldNode>,
     field: &Field,
     data: &Buffer,
-    buffers: flatbuffers::Vector<'_, ipc::Buffer>,
+    buffers: flatbuffers::Vector<'_, crate::Buffer>,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     mut node_index: usize,
     mut buffer_index: usize,
     compression_codec: &Option<CompressionCodec>,
-    metadata: &ipc::MetadataVersion,
-) -> Result<(ArrayRef, usize, usize)> {
+    metadata: &crate::MetadataVersion,
+) -> Result<(ArrayRef, usize, usize), ArrowError> {
     let data_type = field.data_type();
     let array = match data_type {
         Utf8 | Binary | LargeBinary | LargeUtf8 => {
@@ -232,7 +230,7 @@ fn create_array(
 
             // In V4, union types has validity bitmap
             // In V5 and later, union types have no validity bitmap
-            if metadata < &ipc::MetadataVersion::V5 {
+            if metadata < &crate::MetadataVersion::V5 {
                 read_buffer(buffers.get(buffer_index), data, compression_codec)?;
                 buffer_index += 1;
             }
@@ -323,7 +321,7 @@ fn skip_field(
     data_type: &DataType,
     mut node_index: usize,
     mut buffer_index: usize,
-) -> Result<(usize, usize)> {
+) -> Result<(usize, usize), ArrowError> {
     match data_type {
         Utf8 | Binary | LargeBinary | LargeUtf8 => {
             node_index += 1;
@@ -396,7 +394,7 @@ fn skip_field(
 /// Reads the correct number of buffers based on data type and null_count, and creates a
 /// primitive array ref
 fn create_primitive_array(
-    field_node: &ipc::FieldNode,
+    field_node: &crate::FieldNode,
     data_type: &DataType,
     buffers: &[Buffer],
 ) -> ArrayRef {
@@ -536,7 +534,7 @@ fn get_aligned_buffer<T>(buffer: &Buffer, length: usize) -> Buffer {
 /// Reads the correct number of buffers based on list type and null_count, and creates a
 /// list array ref
 fn create_list_array(
-    field_node: &ipc::FieldNode,
+    field_node: &crate::FieldNode,
     data_type: &DataType,
     buffers: &[Buffer],
     child_array: ArrayRef,
@@ -564,7 +562,7 @@ fn create_list_array(
 /// Reads the correct number of buffers based on list type and null_count, and creates a
 /// list array ref
 fn create_dictionary_array(
-    field_node: &ipc::FieldNode,
+    field_node: &crate::FieldNode,
     data_type: &DataType,
     buffers: &[Buffer],
     value_array: ArrayRef,
@@ -583,15 +581,15 @@ fn create_dictionary_array(
     }
 }
 
-/// Creates a record batch from binary data using the `ipc::RecordBatch` indexes and the `Schema`
+/// Creates a record batch from binary data using the `crate::RecordBatch` indexes and the `Schema`
 pub fn read_record_batch(
     buf: &Buffer,
-    batch: ipc::RecordBatch,
+    batch: crate::RecordBatch,
     schema: SchemaRef,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     projection: Option<&[usize]>,
-    metadata: &ipc::MetadataVersion,
-) -> Result<RecordBatch> {
+    metadata: &crate::MetadataVersion,
+) -> Result<RecordBatch, ArrowError> {
     let buffers = batch.buffers().ok_or_else(|| {
         ArrowError::IoError("Unable to get buffers from IPC RecordBatch".to_string())
     })?;
@@ -669,11 +667,11 @@ pub fn read_record_batch(
 /// updating the `dictionaries_by_id` with the resulting dictionary
 pub fn read_dictionary(
     buf: &Buffer,
-    batch: ipc::DictionaryBatch,
+    batch: crate::DictionaryBatch,
     schema: &Schema,
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
-    metadata: &ipc::MetadataVersion,
-) -> Result<()> {
+    metadata: &crate::MetadataVersion,
+) -> Result<(), ArrowError> {
     if batch.isDelta() {
         return Err(ArrowError::IoError(
             "delta dictionary batches not supported".to_string(),
@@ -732,7 +730,7 @@ pub struct FileReader<R: Read + Seek> {
     /// The blocks in the file
     ///
     /// A block indicates the regions in the file to read to get data
-    blocks: Vec<ipc::Block>,
+    blocks: Vec<crate::Block>,
 
     /// A counter to keep track of the current block that should be read
     current_block: usize,
@@ -746,7 +744,7 @@ pub struct FileReader<R: Read + Seek> {
     dictionaries_by_id: HashMap<i64, ArrayRef>,
 
     /// Metadata version
-    metadata_version: ipc::MetadataVersion,
+    metadata_version: crate::MetadataVersion,
 
     /// Optional projection and projected_schema
     projection: Option<(Vec<usize>, Schema)>,
@@ -772,7 +770,10 @@ impl<R: Read + Seek> FileReader<R> {
     ///
     /// Returns errors if the file does not meet the Arrow Format header and footer
     /// requirements
-    pub fn try_new(reader: R, projection: Option<Vec<usize>>) -> Result<Self> {
+    pub fn try_new(
+        reader: R,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Self, ArrowError> {
         let mut reader = BufReader::new(reader);
         // check if header and footer contain correct magic bytes
         let mut magic_buffer: [u8; 6] = [0; 6];
@@ -800,7 +801,7 @@ impl<R: Read + Seek> FileReader<R> {
         reader.seek(SeekFrom::End(-10 - footer_len as i64))?;
         reader.read_exact(&mut footer_data)?;
 
-        let footer = ipc::root_as_footer(&footer_data[..]).map_err(|err| {
+        let footer = crate::root_as_footer(&footer_data[..]).map_err(|err| {
             ArrowError::IoError(format!("Unable to get root as footer: {:?}", err))
         })?;
 
@@ -813,7 +814,7 @@ impl<R: Read + Seek> FileReader<R> {
         let total_blocks = blocks.len();
 
         let ipc_schema = footer.schema().unwrap();
-        let schema = ipc::convert::fb_to_schema(ipc_schema);
+        let schema = crate::convert::fb_to_schema(ipc_schema);
 
         // Create an array of optional dictionary value arrays, one per field.
         let mut dictionaries_by_id = HashMap::new();
@@ -831,7 +832,7 @@ impl<R: Read + Seek> FileReader<R> {
 
                 reader.read_exact(&mut block_data)?;
 
-                let message = ipc::root_as_message(&block_data[..]).map_err(|err| {
+                let message = crate::root_as_message(&block_data[..]).map_err(|err| {
                     ArrowError::IoError(format!(
                         "Unable to get root as message: {:?}",
                         err
@@ -839,7 +840,7 @@ impl<R: Read + Seek> FileReader<R> {
                 })?;
 
                 match message.header_type() {
-                    ipc::MessageHeader::DictionaryBatch => {
+                    crate::MessageHeader::DictionaryBatch => {
                         let batch = message.header_as_dictionary_batch().unwrap();
 
                         // read the block that makes up the dictionary batch into a buffer
@@ -900,7 +901,7 @@ impl<R: Read + Seek> FileReader<R> {
     /// Read a specific record batch
     ///
     /// Sets the current block to the index, allowing random reads
-    pub fn set_index(&mut self, index: usize) -> Result<()> {
+    pub fn set_index(&mut self, index: usize) -> Result<(), ArrowError> {
         if index >= self.total_blocks {
             Err(ArrowError::IoError(format!(
                 "Cannot set batch to index {} from {} total batches",
@@ -912,7 +913,7 @@ impl<R: Read + Seek> FileReader<R> {
         }
     }
 
-    fn maybe_next(&mut self) -> Result<Option<RecordBatch>> {
+    fn maybe_next(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
         let block = self.blocks[self.current_block];
         self.current_block += 1;
 
@@ -928,12 +929,12 @@ impl<R: Read + Seek> FileReader<R> {
 
         let mut block_data = vec![0; meta_len as usize];
         self.reader.read_exact(&mut block_data)?;
-        let message = ipc::root_as_message(&block_data[..]).map_err(|err| {
+        let message = crate::root_as_message(&block_data[..]).map_err(|err| {
             ArrowError::IoError(format!("Unable to get root as footer: {:?}", err))
         })?;
 
         // some old test data's footer metadata is not set, so we account for that
-        if self.metadata_version != ipc::MetadataVersion::V1
+        if self.metadata_version != crate::MetadataVersion::V1
             && message.version() != self.metadata_version
         {
             return Err(ArrowError::IoError(
@@ -942,10 +943,10 @@ impl<R: Read + Seek> FileReader<R> {
         }
 
         match message.header_type() {
-            ipc::MessageHeader::Schema => Err(ArrowError::IoError(
+            crate::MessageHeader::Schema => Err(ArrowError::IoError(
                 "Not expecting a schema when messages are read".to_string(),
             )),
-            ipc::MessageHeader::RecordBatch => {
+            crate::MessageHeader::RecordBatch => {
                 let batch = message.header_as_record_batch().ok_or_else(|| {
                     ArrowError::IoError(
                         "Unable to read IPC message as record batch".to_string(),
@@ -968,7 +969,7 @@ impl<R: Read + Seek> FileReader<R> {
 
                 ).map(Some)
             }
-            ipc::MessageHeader::NONE => {
+            crate::MessageHeader::NONE => {
                 Ok(None)
             }
             t => Err(ArrowError::IoError(format!(
@@ -979,7 +980,7 @@ impl<R: Read + Seek> FileReader<R> {
 }
 
 impl<R: Read + Seek> Iterator for FileReader<R> {
-    type Item = Result<RecordBatch>;
+    type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // get current block
@@ -1037,7 +1038,10 @@ impl<R: Read> StreamReader<R> {
     /// The first message in the stream is the schema, the reader will fail if it does not
     /// encounter a schema.
     /// To check if the reader is done, use `is_finished(self)`
-    pub fn try_new(reader: R, projection: Option<Vec<usize>>) -> Result<Self> {
+    pub fn try_new(
+        reader: R,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Self, ArrowError> {
         let mut reader = BufReader::new(reader);
         // determine metadata length
         let mut meta_size: [u8; 4] = [0; 4];
@@ -1054,14 +1058,14 @@ impl<R: Read> StreamReader<R> {
         let mut meta_buffer = vec![0; meta_len as usize];
         reader.read_exact(&mut meta_buffer)?;
 
-        let message = ipc::root_as_message(meta_buffer.as_slice()).map_err(|err| {
+        let message = crate::root_as_message(meta_buffer.as_slice()).map_err(|err| {
             ArrowError::IoError(format!("Unable to get root as message: {:?}", err))
         })?;
         // message header is a Schema, so read it
-        let ipc_schema: ipc::Schema = message.header_as_schema().ok_or_else(|| {
+        let ipc_schema: crate::Schema = message.header_as_schema().ok_or_else(|| {
             ArrowError::IoError("Unable to read IPC message as schema".to_string())
         })?;
-        let schema = ipc::convert::fb_to_schema(ipc_schema);
+        let schema = crate::convert::fb_to_schema(ipc_schema);
 
         // Create an array of optional dictionary value arrays, one per field.
         let dictionaries_by_id = HashMap::new();
@@ -1092,7 +1096,7 @@ impl<R: Read> StreamReader<R> {
         self.finished
     }
 
-    fn maybe_next(&mut self) -> Result<Option<RecordBatch>> {
+    fn maybe_next(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
         if self.finished {
             return Ok(None);
         }
@@ -1133,15 +1137,15 @@ impl<R: Read> StreamReader<R> {
         self.reader.read_exact(&mut meta_buffer)?;
 
         let vecs = &meta_buffer.to_vec();
-        let message = ipc::root_as_message(vecs).map_err(|err| {
+        let message = crate::root_as_message(vecs).map_err(|err| {
             ArrowError::IoError(format!("Unable to get root as message: {:?}", err))
         })?;
 
         match message.header_type() {
-            ipc::MessageHeader::Schema => Err(ArrowError::IoError(
+            crate::MessageHeader::Schema => Err(ArrowError::IoError(
                 "Not expecting a schema when messages are read".to_string(),
             )),
-            ipc::MessageHeader::RecordBatch => {
+            crate::MessageHeader::RecordBatch => {
                 let batch = message.header_as_record_batch().ok_or_else(|| {
                     ArrowError::IoError(
                         "Unable to read IPC message as record batch".to_string(),
@@ -1153,7 +1157,7 @@ impl<R: Read> StreamReader<R> {
 
                 read_record_batch(&buf.into(), batch, self.schema(), &self.dictionaries_by_id, self.projection.as_ref().map(|x| x.0.as_ref()), &message.version()).map(Some)
             }
-            ipc::MessageHeader::DictionaryBatch => {
+            crate::MessageHeader::DictionaryBatch => {
                 let batch = message.header_as_dictionary_batch().ok_or_else(|| {
                     ArrowError::IoError(
                         "Unable to read IPC message as dictionary batch".to_string(),
@@ -1170,7 +1174,7 @@ impl<R: Read> StreamReader<R> {
                 // read the next message until we encounter a RecordBatch
                 self.maybe_next()
             }
-            ipc::MessageHeader::NONE => {
+            crate::MessageHeader::NONE => {
                 Ok(None)
             }
             t => Err(ArrowError::IoError(
@@ -1181,7 +1185,7 @@ impl<R: Read> StreamReader<R> {
 }
 
 impl<R: Read> Iterator for StreamReader<R> {
-    type Item = Result<RecordBatch>;
+    type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.maybe_next().transpose()
@@ -1198,10 +1202,10 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 mod tests {
     use super::*;
 
-    use std::fs::File;
-
-    use crate::datatypes;
-    use crate::datatypes::{ArrowNativeType, Float64Type, Int32Type, Int8Type};
+    use arrow_array::builder::UnionBuilder;
+    use arrow_array::types::*;
+    use arrow_buffer::ArrowNativeType;
+    use arrow_data::ArrayDataBuilder;
 
     fn create_test_projection_schema() -> Schema {
         // define field types
@@ -1347,7 +1351,8 @@ mod tests {
         // write record batch in IPC format
         let mut buf = Vec::new();
         {
-            let mut writer = ipc::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
+            let mut writer =
+                crate::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
             writer.write(&batch).unwrap();
             writer.finish().unwrap();
         }
@@ -1382,15 +1387,18 @@ mod tests {
         ];
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), arrays).unwrap();
         // create stream writer
-        let file = File::create("target/debug/testdata/float.stream").unwrap();
+        let mut file = tempfile::tempfile().unwrap();
         let mut stream_writer =
-            crate::ipc::writer::StreamWriter::try_new(file, &schema).unwrap();
+            crate::writer::StreamWriter::try_new(&mut file, &schema).unwrap();
         stream_writer.write(&batch).unwrap();
         stream_writer.finish().unwrap();
 
+        drop(stream_writer);
+
+        file.rewind().unwrap();
+
         // read stream back
-        let file = File::open("target/debug/testdata/float.stream").unwrap();
-        let reader = StreamReader::try_new(file, None).unwrap();
+        let reader = StreamReader::try_new(&mut file, None).unwrap();
 
         reader.for_each(|batch| {
             let batch = batch.unwrap();
@@ -1414,7 +1422,7 @@ mod tests {
             );
         });
 
-        let file = File::open("target/debug/testdata/float.stream").unwrap();
+        file.rewind().unwrap();
 
         // Read with projection
         let reader = StreamReader::try_new(file, Some(vec![0, 3])).unwrap();
@@ -1430,33 +1438,33 @@ mod tests {
     fn roundtrip_ipc(rb: &RecordBatch) -> RecordBatch {
         let mut buf = Vec::new();
         let mut writer =
-            ipc::writer::FileWriter::try_new(&mut buf, &rb.schema()).unwrap();
+            crate::writer::FileWriter::try_new(&mut buf, &rb.schema()).unwrap();
         writer.write(rb).unwrap();
         writer.finish().unwrap();
         drop(writer);
 
         let mut reader =
-            ipc::reader::FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
+            crate::reader::FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
         reader.next().unwrap().unwrap()
     }
 
     fn roundtrip_ipc_stream(rb: &RecordBatch) -> RecordBatch {
         let mut buf = Vec::new();
         let mut writer =
-            ipc::writer::StreamWriter::try_new(&mut buf, &rb.schema()).unwrap();
+            crate::writer::StreamWriter::try_new(&mut buf, &rb.schema()).unwrap();
         writer.write(rb).unwrap();
         writer.finish().unwrap();
         drop(writer);
 
         let mut reader =
-            ipc::reader::StreamReader::try_new(std::io::Cursor::new(buf), None).unwrap();
+            crate::reader::StreamReader::try_new(std::io::Cursor::new(buf), None)
+                .unwrap();
         reader.next().unwrap().unwrap()
     }
 
     #[test]
     fn test_roundtrip_nested_dict() {
-        let inner: DictionaryArray<datatypes::Int32Type> =
-            vec!["a", "b", "a"].into_iter().collect();
+        let inner: DictionaryArray<Int32Type> = vec!["a", "b", "a"].into_iter().collect();
 
         let array = Arc::new(inner) as ArrayRef;
 
@@ -1477,11 +1485,11 @@ mod tests {
     }
 
     fn check_union_with_builder(mut builder: UnionBuilder) {
-        builder.append::<datatypes::Int32Type>("a", 1).unwrap();
-        builder.append_null::<datatypes::Int32Type>("a").unwrap();
-        builder.append::<datatypes::Float64Type>("c", 3.0).unwrap();
-        builder.append::<datatypes::Int32Type>("a", 4).unwrap();
-        builder.append::<datatypes::Int64Type>("d", 11).unwrap();
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        builder.append::<Float64Type>("c", 3.0).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append::<Int64Type>("d", 11).unwrap();
         let union = builder.build().unwrap();
 
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -1521,7 +1529,7 @@ mod tests {
         let dict = Arc::new(
             xs.clone()
                 .into_iter()
-                .collect::<DictionaryArray<datatypes::Int8Type>>(),
+                .collect::<DictionaryArray<Int8Type>>(),
         );
         let string_array: ArrayRef = Arc::new(StringArray::from(xs.clone()));
         let struct_array = StructArray::from(vec![

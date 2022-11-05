@@ -34,6 +34,7 @@ on:
       - arrow-data/**
       - arrow-schema/**
       - arrow-select/**
+      - arrow-ipc/**
       - parquet/**
       - .github/**
 

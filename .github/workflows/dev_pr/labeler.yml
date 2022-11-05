@@ -23,6 +23,7 @@ arrow:
   - arrow-data/**/*
   - arrow-schema/**/*
   - arrow-select/**/*
+  - arrow-ipc/**/*
 
 arrow-flight:
   - arrow-flight/**/*

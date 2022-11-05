@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Support for the Arrow IPC format
+
 // TODO: (vcq): Protobuf codegen is not generating Debug impls.
 #![allow(missing_debug_implementations)]
 

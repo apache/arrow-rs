@@ -162,7 +162,7 @@ pub mod array;
 pub use array::*;
 
 mod record_batch;
-pub use record_batch::{RecordBatch, RecordBatchOptions};
+pub use record_batch::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 
 mod arithmetic;
 pub use arithmetic::ArrowNativeTypeOp;
