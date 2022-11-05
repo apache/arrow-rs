@@ -428,6 +428,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         self.column_metrics.total_rows_written
     }
 
+    /// Returns a reference to a [`ColumnDescPtr`]
+    pub fn get_descriptor(&self) -> &ColumnDescPtr {
+        &self.descr
+    }
+
     /// Finalises writes and closes the column writer.
     /// Returns total bytes written, total rows written and column chunk metadata.
     pub fn close(mut self) -> Result<ColumnCloseResult> {

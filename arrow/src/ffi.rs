@@ -474,11 +474,7 @@ impl FFI_ArrowArray {
                 // If the layout has a null buffer by Arrow spec.
                 // Note that even the array doesn't have a null buffer because it has
                 // no null value, we still need to count 1 here to follow the spec.
-                if data_layout.can_contain_null_mask {
-                    1
-                } else {
-                    0
-                }
+                usize::from(data_layout.can_contain_null_mask)
             }
         } as i64;
 

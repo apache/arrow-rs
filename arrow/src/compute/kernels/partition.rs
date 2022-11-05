@@ -174,33 +174,24 @@ mod tests {
             let median = input[input.len() / 2];
             assert_eq!(
                 9,
-                partition_point(
-                    0,
-                    input.len(),
-                    &(|i: usize| input[i].cmp(&median) != Ordering::Greater)
-                )
+                partition_point(0, input.len(), |i: usize| input[i].cmp(&median)
+                    != Ordering::Greater)
             );
         }
         {
             let search = input[9];
             assert_eq!(
                 12,
-                partition_point(
-                    9,
-                    input.len(),
-                    &(|i: usize| input[i].cmp(&search) != Ordering::Greater)
-                )
+                partition_point(9, input.len(), |i: usize| input[i].cmp(&search)
+                    != Ordering::Greater)
             );
         }
         {
             let search = input[0];
             assert_eq!(
                 3,
-                partition_point(
-                    0,
-                    9,
-                    &(|i: usize| input[i].cmp(&search) != Ordering::Greater)
-                )
+                partition_point(0, 9, |i: usize| input[i].cmp(&search)
+                    != Ordering::Greater)
             );
         }
         let input = &[1, 2, 2, 2, 2, 2, 2, 2, 9];
@@ -208,11 +199,8 @@ mod tests {
             let search = input[5];
             assert_eq!(
                 8,
-                partition_point(
-                    5,
-                    9,
-                    &(|i: usize| input[i].cmp(&search) != Ordering::Greater)
-                )
+                partition_point(5, 9, |i: usize| input[i].cmp(&search)
+                    != Ordering::Greater)
             );
         }
     }

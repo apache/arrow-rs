@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
-use crate::datatypes::*;
+use arrow_array::types::*;
+use arrow_array::*;
+use arrow_cast::parse::string_to_timestamp_nanos;
 
 /// Specialized parsing implementations
 /// used by csv and json reader

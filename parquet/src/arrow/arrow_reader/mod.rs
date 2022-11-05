@@ -2491,4 +2491,32 @@ mod tests {
         assert_eq!(a[expected_rows - 2], "ab52a0cc-c6bb-4d61-8a8f-166dc4b8b13c");
         assert_eq!(a[expected_rows - 1], "85440778-460a-41ac-aa2e-ac3ee41696bf");
     }
+    
+    #[test]
+    #[cfg(feature = "snap")]
+    fn test_read_nested_lists() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{}/nested_lists.snappy.parquet", testdata);
+        let file = File::open(&path).unwrap();
+
+        let f = file.try_clone().unwrap();
+        let mut reader = ParquetRecordBatchReader::try_new(f, 60).unwrap();
+        let expected = reader.next().unwrap().unwrap();
+        assert_eq!(expected.num_rows(), 3);
+
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(1),
+            RowSelector::select(1),
+            RowSelector::skip(1),
+        ]);
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .with_row_selection(selection)
+            .build()
+            .unwrap();
+
+        let actual = reader.next().unwrap().unwrap();
+        assert_eq!(actual.num_rows(), 1);
+        assert_eq!(actual.column(0), &expected.column(0).slice(1, 1));
+    }
 }

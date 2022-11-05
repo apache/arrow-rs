@@ -962,7 +962,7 @@ impl Decoder {
     fn build_boolean_array(&self, rows: &[Value], col_name: &str) -> Result<ArrayRef> {
         let mut builder = BooleanBuilder::with_capacity(rows.len());
         for row in rows {
-            if let Some(value) = row.get(&col_name) {
+            if let Some(value) = row.get(col_name) {
                 if let Some(boolean) = value.as_bool() {
                     builder.append_value(boolean);
                 } else {
@@ -993,7 +993,7 @@ impl Decoder {
         Ok(Arc::new(
             rows.iter()
                 .map(|row| {
-                    row.get(&col_name).and_then(|value| {
+                    row.get(col_name).and_then(|value| {
                         if value.is_i64() {
                             value.as_i64().and_then(num::cast::cast)
                         } else if value.is_u64() {
@@ -1496,7 +1496,7 @@ impl Decoder {
         let mut builder: StringDictionaryBuilder<T> =
             self.build_string_dictionary_builder(rows.len());
         for row in rows {
-            if let Some(value) = row.get(&col_name) {
+            if let Some(value) = row.get(col_name) {
                 if let Some(str_v) = value.as_str() {
                     builder.append(str_v).map(drop)?
                 } else {

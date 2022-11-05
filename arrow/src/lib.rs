@@ -33,6 +33,7 @@
 //!
 //! * [`arrow-array`][arrow_array] - type-safe arrow array abstractions
 //! * [`arrow-buffer`][arrow_buffer] - buffer abstractions for arrow arrays
+//! * [`arrow-cast`][arrow_cast] - cast kernels for arrow arrays
 //! * [`arrow-data`][arrow_data] - the underlying data of arrow arrays
 //! * [`arrow-schema`][arrow_schema] - the logical types for arrow arrays
 //! * [`arrow-select`][arrow_select] - selection kernels for arrow arrays
@@ -196,6 +197,20 @@
 //! * [`take`](compute::kernels::take::take) and [`limit`](compute::kernels::limit::limit)
 //! * [`sort`](compute::kernels::sort::sort)
 //! * some string operators such as [`substring`](compute::kernels::substring::substring) and [`length`](compute::kernels::length::length)
+//!
+//! ```
+//! # use arrow::compute::gt_scalar;
+//! # use arrow_array::cast::as_primitive_array;
+//! # use arrow_array::Int32Array;
+//! # use arrow_array::types::Int32Type;
+//! # use arrow_select::filter::filter;
+//! let array = Int32Array::from_iter(0..100);
+//! let predicate = gt_scalar(&array, 60).unwrap();
+//! let filtered = filter(&array, &predicate).unwrap();
+//!
+//! let expected = Int32Array::from_iter(61..100);
+//! assert_eq!(&expected, as_primitive_array::<Int32Type>(&filtered));
+//! ```
 //!
 //! As well as some horizontal operations, such as:
 //!

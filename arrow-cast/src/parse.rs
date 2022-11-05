@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::{ArrowError, Result};
+use arrow_schema::ArrowError;
 use chrono::prelude::*;
 
 /// Accepts a string in RFC3339 / ISO8601 standard format and some
@@ -66,7 +66,7 @@ use chrono::prelude::*;
 /// timestamp will be interpreted as though it were
 /// `1997-01-31T09:26:56.123-05:00`
 #[inline]
-pub fn string_to_timestamp_nanos(s: &str) -> Result<i64> {
+pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     // Fast path:  RFC3339 timestamp (with a T)
     // Example: 2020-09-08T13:42:29.190855Z
     if let Ok(ts) = DateTime::parse_from_rfc3339(s) {
@@ -135,52 +135,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn string_to_timestamp_timezone() -> Result<()> {
+    fn string_to_timestamp_timezone() {
         // Explicit timezone
         assert_eq!(
             1599572549190855000,
-            parse_timestamp("2020-09-08T13:42:29.190855+00:00")?
+            parse_timestamp("2020-09-08T13:42:29.190855+00:00").unwrap()
         );
         assert_eq!(
             1599572549190855000,
-            parse_timestamp("2020-09-08T13:42:29.190855Z")?
+            parse_timestamp("2020-09-08T13:42:29.190855Z").unwrap()
         );
         assert_eq!(
             1599572549000000000,
-            parse_timestamp("2020-09-08T13:42:29Z")?
+            parse_timestamp("2020-09-08T13:42:29Z").unwrap()
         ); // no fractional part
         assert_eq!(
             1599590549190855000,
-            parse_timestamp("2020-09-08T13:42:29.190855-05:00")?
+            parse_timestamp("2020-09-08T13:42:29.190855-05:00").unwrap()
         );
-        Ok(())
     }
 
     #[test]
-    fn string_to_timestamp_timezone_space() -> Result<()> {
+    fn string_to_timestamp_timezone_space() {
         // Ensure space rather than T between time and date is accepted
         assert_eq!(
             1599572549190855000,
-            parse_timestamp("2020-09-08 13:42:29.190855+00:00")?
+            parse_timestamp("2020-09-08 13:42:29.190855+00:00").unwrap()
         );
         assert_eq!(
             1599572549190855000,
-            parse_timestamp("2020-09-08 13:42:29.190855Z")?
+            parse_timestamp("2020-09-08 13:42:29.190855Z").unwrap()
         );
         assert_eq!(
             1599572549000000000,
-            parse_timestamp("2020-09-08 13:42:29Z")?
+            parse_timestamp("2020-09-08 13:42:29Z").unwrap()
         ); // no fractional part
         assert_eq!(
             1599590549190855000,
-            parse_timestamp("2020-09-08 13:42:29.190855-05:00")?
+            parse_timestamp("2020-09-08 13:42:29.190855-05:00").unwrap()
         );
-        Ok(())
     }
 
     #[test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function: mktime
-    fn string_to_timestamp_no_timezone() -> Result<()> {
+    fn string_to_timestamp_no_timezone() {
         // This test is designed to succeed in regardless of the local
         // timezone the test machine is running. Thus it is still
         // somewhat susceptible to bugs in the use of chrono
@@ -192,12 +190,12 @@ mod tests {
         // Ensure both T and ' ' variants work
         assert_eq!(
             naive_datetime.timestamp_nanos(),
-            parse_timestamp("2020-09-08T13:42:29.190855")?
+            parse_timestamp("2020-09-08T13:42:29.190855").unwrap()
         );
 
         assert_eq!(
             naive_datetime.timestamp_nanos(),
-            parse_timestamp("2020-09-08 13:42:29.190855")?
+            parse_timestamp("2020-09-08 13:42:29.190855").unwrap()
         );
 
         // Also ensure that parsing timestamps with no fractional
@@ -210,15 +208,13 @@ mod tests {
         // Ensure both T and ' ' variants work
         assert_eq!(
             naive_datetime_whole_secs.timestamp_nanos(),
-            parse_timestamp("2020-09-08T13:42:29")?
+            parse_timestamp("2020-09-08T13:42:29").unwrap()
         );
 
         assert_eq!(
             naive_datetime_whole_secs.timestamp_nanos(),
-            parse_timestamp("2020-09-08 13:42:29")?
+            parse_timestamp("2020-09-08 13:42:29").unwrap()
         );
-
-        Ok(())
     }
 
     #[test]
@@ -235,7 +231,7 @@ mod tests {
     }
 
     // Parse a timestamp to timestamp int with a useful human readable error message
-    fn parse_timestamp(s: &str) -> Result<i64> {
+    fn parse_timestamp(s: &str) -> Result<i64, ArrowError> {
         let result = string_to_timestamp_nanos(s);
         if let Err(e) = &result {
             eprintln!("Error parsing timestamp '{}': {:?}", s, e);
@@ -258,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn string_without_timezone_to_timestamp() -> Result<()> {
+    fn string_without_timezone_to_timestamp() {
         // string without timezone should always output the same regardless the local or session timezone
 
         let naive_datetime = NaiveDateTime::new(
@@ -269,12 +265,12 @@ mod tests {
         // Ensure both T and ' ' variants work
         assert_eq!(
             naive_datetime.timestamp_nanos(),
-            parse_timestamp("2020-09-08T13:42:29.190855")?
+            parse_timestamp("2020-09-08T13:42:29.190855").unwrap()
         );
 
         assert_eq!(
             naive_datetime.timestamp_nanos(),
-            parse_timestamp("2020-09-08 13:42:29.190855")?
+            parse_timestamp("2020-09-08 13:42:29.190855").unwrap()
         );
 
         let naive_datetime = NaiveDateTime::new(
@@ -285,14 +281,12 @@ mod tests {
         // Ensure both T and ' ' variants work
         assert_eq!(
             naive_datetime.timestamp_nanos(),
-            parse_timestamp("2020-09-08T13:42:29")?
+            parse_timestamp("2020-09-08T13:42:29").unwrap()
         );
 
         assert_eq!(
             naive_datetime.timestamp_nanos(),
-            parse_timestamp("2020-09-08 13:42:29")?
+            parse_timestamp("2020-09-08 13:42:29").unwrap()
         );
-
-        Ok(())
     }
 }

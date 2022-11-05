@@ -2075,7 +2075,7 @@ mod tests {
         let mut thrift_schema = to_thrift(&expected_schema).unwrap();
         // Change all of None to Some(0)
         for mut elem in &mut thrift_schema[..] {
-            if elem.num_children == None {
+            if elem.num_children.is_none() {
                 elem.num_children = Some(0);
             }
         }

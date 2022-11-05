@@ -20,6 +20,7 @@ members = [
         "arrow",
         "arrow-array",
         "arrow-buffer",
+        "arrow-cast",
         "arrow-data",
         "arrow-flight",
         "arrow-integration-test",

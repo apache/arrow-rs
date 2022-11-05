@@ -16,9 +16,9 @@
 # under the License.
 
 [package]
-name = "arrow-array"
+name = "arrow-cast"
 version = "26.0.0"
-description = "Array abstractions for Apache Arrow"
+description = "Cast kernel and utilities for Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -33,28 +33,20 @@ edition = "2021"
 rust-version = "1.62"
 
 [lib]
-name = "arrow_array"
+name = "arrow_cast"
 path = "src/lib.rs"
 bench = false
 
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-
 [dependencies]
+arrow-array = { version = "26.0.0", path = "../arrow-array" }
 arrow-buffer = { version = "26.0.0", path = "../arrow-buffer" }
-arrow-schema = { version = "26.0.0", path = "../arrow-schema" }
 arrow-data = { version = "26.0.0", path = "../arrow-data" }
+arrow-schema = { version = "26.0.0", path = "../arrow-schema" }
+arrow-select = { version = "26.0.0", path = "../arrow-select" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-chrono-tz = { version = "0.8", optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
-half = { version = "2.1", default-features = false, features = ["num-traits"] }
-hashbrown = { version = "0.12", default-features = false }
+lexical-core = { version = "^0.8", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 
 [dev-dependencies]
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 
 [build-dependencies]
