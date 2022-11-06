@@ -31,7 +31,13 @@ use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
 use crate::errors::{ParquetError, Result};
 use crate::file::page_index::index_reader;
-use crate::file::{footer, metadata::*, reader::*, statistics};
+use crate::file::{
+    footer,
+    metadata::*,
+    properties::{ReaderProperties, ReaderPropertiesPtr},
+    reader::*,
+    statistics,
+};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
@@ -139,6 +145,7 @@ impl IntoIterator for SerializedFileReader<File> {
 pub struct SerializedFileReader<R: ChunkReader> {
     chunk_reader: Arc<R>,
     metadata: Arc<ParquetMetaData>,
+    props: ReaderPropertiesPtr,
 }
 
 /// A predicate for filtering row groups, invoked with the metadata and index
@@ -153,6 +160,7 @@ pub type ReadGroupPredicate = Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>;
 pub struct ReadOptionsBuilder {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
+    props: Option<ReaderProperties>,
 }
 
 impl ReadOptionsBuilder {
@@ -186,11 +194,21 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// Set the `ReaderProperties` configuration.
+    pub fn with_reader_properties(mut self, properties: ReaderProperties) -> Self {
+        self.props = Some(properties);
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
+        let props = self
+            .props
+            .unwrap_or_else(|| ReaderProperties::builder().build());
         ReadOptions {
             predicates: self.predicates,
             enable_page_index: self.enable_page_index,
+            props,
         }
     }
 }
@@ -202,6 +220,7 @@ impl ReadOptionsBuilder {
 pub struct ReadOptions {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
+    props: ReaderProperties,
 }
 
 impl<R: 'static + ChunkReader> SerializedFileReader<R> {
@@ -209,9 +228,11 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     /// Returns error if Parquet file does not exist or is corrupt.
     pub fn new(chunk_reader: R) -> Result<Self> {
         let metadata = footer::parse_metadata(&chunk_reader)?;
+        let props = Arc::new(ReaderProperties::builder().build());
         Ok(Self {
             chunk_reader: Arc::new(chunk_reader),
             metadata: Arc::new(metadata),
+            props,
         })
     }
 
@@ -257,6 +278,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
                     Some(columns_indexes),
                     Some(offset_indexes),
                 )),
+                props: Arc::new(options.props),
             })
         } else {
             Ok(Self {
@@ -265,6 +287,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
                     metadata.file_metadata().clone(),
                     filtered_row_groups,
                 )),
+                props: Arc::new(options.props),
             })
         }
     }
@@ -298,10 +321,12 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
     fn get_row_group(&self, i: usize) -> Result<Box<dyn RowGroupReader + '_>> {
         let row_group_metadata = self.metadata.row_group(i);
         // Row groups should be processed sequentially.
+        let props = Arc::clone(&self.props);
         let f = Arc::clone(&self.chunk_reader);
-        Ok(Box::new(SerializedRowGroupReader::new(
+        Ok(Box::new(SerializedRowGroupReader::new_with_properties(
             f,
             row_group_metadata,
+            props,
         )))
     }
 
@@ -314,14 +339,20 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
 pub struct SerializedRowGroupReader<'a, R: ChunkReader> {
     chunk_reader: Arc<R>,
     metadata: &'a RowGroupMetaData,
+    props: ReaderPropertiesPtr,
 }
 
 impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
-    /// Creates new row group reader from a file and row group metadata.
-    fn new(chunk_reader: Arc<R>, metadata: &'a RowGroupMetaData) -> Self {
+    /// Creates new row group reader from a file, row group metadata and custom config.
+    fn new_with_properties(
+        chunk_reader: Arc<R>,
+        metadata: &'a RowGroupMetaData,
+        props: ReaderPropertiesPtr,
+    ) -> Self {
         Self {
             chunk_reader,
             metadata,
+            props,
         }
     }
 }
@@ -345,11 +376,13 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
             .as_ref()
             .map(|x| x[i].clone());
 
-        Ok(Box::new(SerializedPageReader::new(
+        let props = Arc::clone(&self.props);
+        Ok(Box::new(SerializedPageReader::new_with_properties(
             Arc::clone(&self.chunk_reader),
             col,
             self.metadata.num_rows() as usize,
             page_locations,
+            props,
         )?))
     }
 
@@ -531,7 +564,25 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         total_rows: usize,
         page_locations: Option<Vec<PageLocation>>,
     ) -> Result<Self> {
-        let decompressor = create_codec(meta.compression())?;
+        let props = Arc::new(ReaderProperties::builder().build());
+        SerializedPageReader::new_with_properties(
+            reader,
+            meta,
+            total_rows,
+            page_locations,
+            props,
+        )
+    }
+
+    /// Creates a new serialized page with custom options.
+    pub fn new_with_properties(
+        reader: Arc<R>,
+        meta: &ColumnChunkMetaData,
+        total_rows: usize,
+        page_locations: Option<Vec<PageLocation>>,
+        props: ReaderPropertiesPtr,
+    ) -> Result<Self> {
+        let decompressor = create_codec(meta.compression(), props.codec_options())?;
         let (start, len) = meta.byte_range();
 
         let state = match page_locations {

@@ -2422,6 +2422,76 @@ mod tests {
         assert_eq!(a.values(), &[42.000000, 7.700000, 42.125000, 7.700000]);
     }
 
+    // This test is to ensure backward compatibility, it test 2 files containing the LZ4 CompressionCodec
+    // but different algorithms: LZ4_HADOOP and LZ4_RAW.
+    // 1. hadoop_lz4_compressed.parquet -> It is a file with LZ4 CompressionCodec which uses
+    //    LZ4_HADOOP algorithm for compression.
+    // 2. non_hadoop_lz4_compressed.parquet -> It is a file with LZ4 CompressionCodec which uses
+    //    LZ4_RAW algorithm for compression. This fallback is done to keep backward compatibility with
+    //    older parquet-cpp versions.
+    //
+    // For more information, check: https://github.com/apache/arrow-rs/issues/2988
+    #[test]
+    fn test_read_lz4_hadoop_fallback() {
+        for file in [
+            "hadoop_lz4_compressed.parquet",
+            "non_hadoop_lz4_compressed.parquet",
+        ] {
+            let testdata = arrow::util::test_util::parquet_test_data();
+            let path = format!("{}/{}", testdata, file);
+            let file = File::open(&path).unwrap();
+            let expected_rows = 4;
+
+            let batches = ParquetRecordBatchReader::try_new(file, expected_rows)
+                .unwrap()
+                .collect::<ArrowResult<Vec<_>>>()
+                .unwrap();
+            assert_eq!(batches.len(), 1);
+            let batch = &batches[0];
+
+            assert_eq!(batch.num_columns(), 3);
+            assert_eq!(batch.num_rows(), expected_rows);
+
+            let a: &Int64Array = batch.column(0).as_any().downcast_ref().unwrap();
+            assert_eq!(
+                a.values(),
+                &[1593604800, 1593604800, 1593604801, 1593604801]
+            );
+
+            let b: &BinaryArray = batch.column(1).as_any().downcast_ref().unwrap();
+            let b: Vec<_> = b.iter().flatten().collect();
+            assert_eq!(b, &[b"abc", b"def", b"abc", b"def"]);
+
+            let c: &Float64Array = batch.column(2).as_any().downcast_ref().unwrap();
+            assert_eq!(c.values(), &[42.0, 7.7, 42.125, 7.7]);
+        }
+    }
+
+    #[test]
+    fn test_read_lz4_hadoop_large() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{}/hadoop_lz4_compressed_larger.parquet", testdata);
+        let file = File::open(&path).unwrap();
+        let expected_rows = 10000;
+
+        let batches = ParquetRecordBatchReader::try_new(file, expected_rows)
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_columns(), 1);
+        assert_eq!(batch.num_rows(), expected_rows);
+
+        let a: &StringArray = batch.column(0).as_any().downcast_ref().unwrap();
+        let a: Vec<_> = a.iter().flatten().collect();
+        assert_eq!(a[0], "c7ce6bef-d5b0-4863-b199-8ea8c7fb117b");
+        assert_eq!(a[1], "e8fb9197-cb9f-4118-b67f-fbfa65f61843");
+        assert_eq!(a[expected_rows - 2], "ab52a0cc-c6bb-4d61-8a8f-166dc4b8b13c");
+        assert_eq!(a[expected_rows - 1], "85440778-460a-41ac-aa2e-ac3ee41696bf");
+    }
+
     #[test]
     #[cfg(feature = "snap")]
     fn test_read_nested_lists() {

@@ -24,7 +24,7 @@ use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderB
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Encoding, PageType};
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{ReaderProperties, WriterProperties};
 use parquet::file::reader::SerializedPageReader;
 use std::sync::Arc;
 
@@ -129,11 +129,15 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
             .enumerate();
 
         for (idx, (column, column_layout)) in iter {
-            let page_reader = SerializedPageReader::new(
+            let properties = ReaderProperties::builder()
+                .set_backward_compatible_lz4(false)
+                .build();
+            let page_reader = SerializedPageReader::new_with_properties(
                 Arc::new(file_reader.clone()),
                 column,
                 row_group.num_rows() as usize,
                 None,
+                Arc::new(properties),
             )
             .unwrap();
 
