@@ -352,11 +352,9 @@ where
     let mul = 10_f64.powi(scale as i32);
 
     if cast_options.safe {
-        let iter = array.iter().map(|v| {
-            v.and_then(|v| {
-                (mul * v.as_()).round().to_i128()
-            })
-        });
+        let iter = array
+            .iter()
+            .map(|v| v.and_then(|v| (mul * v.as_()).round().to_i128()));
         let casted_array =
             unsafe { PrimitiveArray::<Decimal128Type>::from_trusted_len_iter(iter) };
         casted_array
