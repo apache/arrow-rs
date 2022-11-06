@@ -157,7 +157,7 @@ impl i256 {
 
     /// Create an i256 from the provided [`BigInt`] returning a bool indicating
     /// if overflow occurred
-    fn from_bigint_with_overflow(v: BigInt) -> (Self, bool) {
+    pub fn from_bigint_with_overflow(v: BigInt) -> (Self, bool) {
         let v_bytes = v.to_signed_bytes_le();
         match v_bytes.len().cmp(&32) {
             Ordering::Less => {

@@ -49,7 +49,7 @@ use arrow_data::ArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
 use num::cast::AsPrimitive;
-use num::{NumCast, ToPrimitive};
+use num::{BigInt, FromPrimitive, NumCast, ToPrimitive};
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -387,16 +387,64 @@ fn cast_floating_point_to_decimal256<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
     precision: u8,
     scale: u8,
+    cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<f64>,
 {
     let mul = 10_f64.powi(scale as i32);
 
-    array
-        .unary::<_, Decimal256Type>(|v| i256::from_i128((v.as_() * mul).round() as i128))
-        .with_precision_and_scale(precision, scale)
-        .map(|a| Arc::new(a) as ArrayRef)
+    if cast_options.safe {
+        let iter = array.iter().map(|v| {
+            v.and_then(|v| {
+                BigInt::from_f64((v.as_() * mul).round()).and_then(|i| {
+                    let (integer, overflow) = i256::from_bigint_with_overflow(i);
+                    if overflow {
+                        None
+                    } else {
+                        Some(integer)
+                    }
+                })
+            })
+        });
+        let casted_array =
+            unsafe { PrimitiveArray::<Decimal256Type>::from_trusted_len_iter(iter) };
+        casted_array
+            .with_precision_and_scale(precision, scale)
+            .map(|a| Arc::new(a) as ArrayRef)
+    } else {
+        array
+            .try_unary::<_, Decimal256Type, _>(|v| {
+                let big_int = BigInt::from_f64((v.as_() * mul).round());
+
+                if big_int.is_none() {
+                    return Err(ArrowError::CastError(format!(
+                        "Cannot cast to {}({}, {}). Overflowing on {:?}",
+                        Decimal256Type::PREFIX,
+                        precision,
+                        scale,
+                        v
+                    )));
+                }
+
+                let (integer, overflow) =
+                    i256::from_bigint_with_overflow(big_int.unwrap());
+
+                if overflow {
+                    Err(ArrowError::CastError(format!(
+                        "Cannot cast to {}({}, {}). Overflowing on {:?}",
+                        Decimal256Type::PREFIX,
+                        precision,
+                        scale,
+                        v
+                    )))
+                } else {
+                    Ok(integer)
+                }
+            })
+            .and_then(|a| a.with_precision_and_scale(precision, scale))
+            .map(|a| Arc::new(a) as ArrayRef)
+    }
 }
 
 /// Cast the primitive array using [`PrimitiveArray::reinterpret_cast`]
@@ -666,11 +714,13 @@ pub fn cast_with_options(
                     as_primitive_array::<Float32Type>(array),
                     *precision,
                     *scale,
+                    cast_options,
                 ),
                 Float64 => cast_floating_point_to_decimal256(
                     as_primitive_array::<Float64Type>(array),
                     *precision,
                     *scale,
+                    cast_options,
                 ),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
@@ -6159,6 +6209,33 @@ mod tests {
         );
         let err = casted_array.unwrap_err().to_string();
         let expected_error = "Cast error: Cannot cast to Decimal128(38, 30)";
+        assert!(
+            err.contains(expected_error),
+            "did not find expected error '{}' in actual error '{}'",
+            expected_error,
+            err
+        );
+    }
+
+    #[test]
+    fn test_cast_floating_point_to_decimal256_overflow() {
+        let array = Float64Array::from(vec![f64::MAX]);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal256(76, 50),
+            &CastOptions { safe: true },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal256(76, 50),
+            &CastOptions { safe: false },
+        );
+        let err = casted_array.unwrap_err().to_string();
+        let expected_error = "Cast error: Cannot cast to Decimal256(76, 50)";
         assert!(
             err.contains(expected_error),
             "did not find expected error '{}' in actual error '{}'",
