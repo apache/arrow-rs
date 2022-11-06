@@ -472,7 +472,7 @@ pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray> {
 }
 
 /// Copies original array, setting validity bit to false if a secondary comparison
-/// boolean array is set to true or null
+/// boolean array is set to true
 ///
 /// Typically used to implement NULLIF.
 pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef> {
@@ -522,11 +522,19 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef> {
                 t
             })
         }
-        None => bitwise_unary_op_helper(&right, right_offset, len, |b| {
-            let t = !b;
-            valid_count += t.count_ones() as usize;
-            t
-        }),
+        None => {
+            let buffer = bitwise_unary_op_helper(&right, right_offset, len, |b| {
+                let t = !b;
+                valid_count += t.count_ones() as usize;
+                t
+            });
+            // We need to compensate for the additional bits read from the end
+            let remainder_len = len % 64;
+            if remainder_len != 0 {
+                valid_count -= 64 - remainder_len
+            }
+            buffer
+        }
     };
 
     // Need to construct null buffer with offset of left
@@ -1410,5 +1418,17 @@ mod tests {
         ]);
 
         assert_eq!(&expected, res);
+    }
+
+    #[test]
+    fn test_nullif_no_nulls() {
+        let a = Int32Array::from(vec![Some(15), Some(7), Some(8), Some(1), Some(9)]);
+        let comp =
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(false), None]);
+        let res = nullif(&a, &comp).unwrap();
+        let res = as_primitive_array::<Int32Type>(res.as_ref());
+
+        let expected = Int32Array::from(vec![Some(15), Some(7), None, Some(1), Some(9)]);
+        assert_eq!(res, &expected);
     }
 }
