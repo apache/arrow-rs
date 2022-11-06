@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, BooleanArray};
-use arrow::compute::SlicesIterator;
+use arrow_array::{Array, BooleanArray};
+use arrow_select::filter::SlicesIterator;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::Range;

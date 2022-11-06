@@ -41,11 +41,11 @@
 //! \[1\] [parquet-format#nested-encoding](https://github.com/apache/parquet-format#nested-encoding)
 
 use crate::errors::{ParquetError, Result};
-use arrow::array::{
-    make_array, Array, ArrayData, ArrayRef, GenericListArray, MapArray, OffsetSizeTrait,
-    StructArray,
+use arrow_array::{
+    make_array, Array, ArrayRef, GenericListArray, MapArray, OffsetSizeTrait, StructArray,
 };
-use arrow::datatypes::{DataType, Field};
+use arrow_data::ArrayData;
+use arrow_schema::{DataType, Field};
 use std::ops::Range;
 
 /// Performs a depth-first scan of the children of `array`, constructing [`LevelInfo`]
@@ -482,11 +482,13 @@ mod tests {
 
     use std::sync::Arc;
 
-    use arrow::array::*;
-    use arrow::buffer::Buffer;
-    use arrow::datatypes::{Int32Type, Schema, ToByteSlice};
-    use arrow::record_batch::RecordBatch;
-    use arrow::util::pretty::pretty_format_columns;
+    use arrow_array::builder::*;
+    use arrow_array::types::Int32Type;
+    use arrow_array::*;
+    use arrow_buffer::{Buffer, ToByteSlice};
+    use arrow_cast::display::array_value_to_string;
+    use arrow_data::ArrayDataBuilder;
+    use arrow_schema::Schema;
 
     #[test]
     fn test_calculate_array_levels_twitter_example() {
@@ -1355,21 +1357,18 @@ mod tests {
         let list_field = Field::new("col", list_type, true);
 
         let expected = vec![
-            r#"+-------------------------------------+"#,
-            r#"| col                                 |"#,
-            r#"+-------------------------------------+"#,
-            r#"|                                     |"#,
-            r#"|                                     |"#,
-            r#"| []                                  |"#,
-            r#"| [{"list": [3, ], "integers": null}] |"#,
-            r#"| [, {"list": null, "integers": 5}]   |"#,
-            r#"| []                                  |"#,
-            r#"+-------------------------------------+"#,
-        ]
-        .join("\n");
+            r#""#.to_string(),
+            r#""#.to_string(),
+            r#"[]"#.to_string(),
+            r#"[{"list": [3, ], "integers": null}]"#.to_string(),
+            r#"[, {"list": null, "integers": 5}]"#.to_string(),
+            r#"[]"#.to_string(),
+        ];
 
-        let pretty = pretty_format_columns(list_field.name(), &[list.clone()]).unwrap();
-        assert_eq!(pretty.to_string(), expected);
+        let actual: Vec<_> = (0..6)
+            .map(|x| array_value_to_string(&list, x).unwrap())
+            .collect();
+        assert_eq!(actual, expected);
 
         let levels = calculate_array_levels(&list, &list_field).unwrap();
 

@@ -22,7 +22,7 @@
 //! # #[tokio::main(flavor="current_thread")]
 //! # async fn main() {
 //! #
-//! use arrow::record_batch::RecordBatch;
+//! use arrow_array::RecordBatch;
 //! use arrow::util::pretty::pretty_format_batches;
 //! use futures::TryStreamExt;
 //! use tokio::fs::File;
@@ -93,8 +93,8 @@ use thrift::protocol::TCompactInputProtocol;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
+use arrow_array::RecordBatch;
+use arrow_schema::SchemaRef;
 
 use crate::arrow::array_reader::{build_array_reader, RowGroupCollection};
 use crate::arrow::arrow_reader::{
@@ -797,8 +797,8 @@ mod tests {
     use crate::arrow::ArrowWriter;
     use crate::file::footer::parse_metadata;
     use crate::file::page_index::index_reader;
-    use arrow::array::{Array, ArrayRef, Int32Array, StringArray};
     use arrow::error::Result as ArrowResult;
+    use arrow_array::{Array, ArrayRef, Int32Array, StringArray};
     use futures::TryStreamExt;
     use rand::{thread_rng, Rng};
     use std::sync::Mutex;

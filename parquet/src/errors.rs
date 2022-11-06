@@ -20,7 +20,7 @@
 use std::{cell, io, result, str};
 
 #[cfg(any(feature = "arrow", test))]
-use arrow::error::ArrowError;
+use arrow_schema::ArrowError;
 
 #[derive(Debug, PartialEq, Clone, Eq)]
 pub enum ParquetError {
@@ -103,7 +103,7 @@ impl From<ArrowError> for ParquetError {
 }
 
 /// A specialized `Result` for Parquet errors.
-pub type Result<T> = result::Result<T, ParquetError>;
+pub type Result<T, E = ParquetError> = result::Result<T, E>;
 
 // ----------------------------------------------------------------------
 // Conversion from `ParquetError` to other types of `Error`s
