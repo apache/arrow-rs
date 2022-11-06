@@ -81,7 +81,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal128(_, _)) |
         (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal256(_, _)) |
         // decimal to signed numeric
-        (Decimal128(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64)
+        (Decimal128(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64) |
+        (Decimal256(_, _), Null | Int8 | Int16 | Int32 | Int64 )
         | (
             Null,
             Boolean
@@ -411,34 +412,51 @@ fn cast_reinterpret_arrays<
     ))
 }
 
-// cast the decimal array to integer array
-macro_rules! cast_decimal_to_integer {
-    ($ARRAY:expr, $SCALE : ident, $VALUE_BUILDER: ident, $NATIVE_TYPE : ident, $DATA_TYPE : expr) => {{
-        let array = $ARRAY.as_any().downcast_ref::<Decimal128Array>().unwrap();
-        let mut value_builder = $VALUE_BUILDER::with_capacity(array.len());
-        let div: i128 = 10_i128.pow(*$SCALE as u32);
-        let min_bound = ($NATIVE_TYPE::MIN) as i128;
-        let max_bound = ($NATIVE_TYPE::MAX) as i128;
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                value_builder.append_null();
+fn cast_decimal_to_integer<D, T>(
+    array: &ArrayRef,
+    base: D::Native,
+    scale: u8,
+    max_bound: D::Native,
+    min_bound: D::Native,
+) -> Result<ArrayRef, ArrowError>
+where
+    T: ArrowPrimitiveType,
+    D: DecimalType + ArrowPrimitiveType,
+    <D as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
+    <D as ArrowPrimitiveType>::Native: AsPrimitive<<T as ArrowPrimitiveType>::Native>,
+{
+    let array = array.as_any().downcast_ref::<PrimitiveArray<D>>().unwrap();
+
+    let div: D::Native = base.pow_checked(scale as u32).map_err(|_| {
+        ArrowError::CastError(format!(
+            "Cannot cast to {:?}. The scale {} causes overflow.",
+            D::PREFIX,
+            scale,
+        ))
+    })?;
+
+    let mut value_builder = PrimitiveBuilder::<T>::with_capacity(array.len());
+    for i in 0..array.len() {
+        if array.is_null(i) {
+            value_builder.append_null();
+        } else {
+            let v = array.value(i).div_checked(div)?;
+
+            // check the overflow
+            // For example: Decimal(128,10,0) as i8
+            // 128 is out of range i8
+            if v <= max_bound && v >= min_bound {
+                value_builder.append_value(v.as_());
             } else {
-                let v = array.value(i) / div;
-                // check the overflow
-                // For example: Decimal(128,10,0) as i8
-                // 128 is out of range i8
-                if v <= max_bound && v >= min_bound {
-                    value_builder.append_value(v as $NATIVE_TYPE);
-                } else {
-                    return Err(ArrowError::CastError(format!(
-                        "value of {} is out of range {}",
-                        v, $DATA_TYPE
-                    )));
-                }
+                return Err(ArrowError::CastError(format!(
+                    "value of {:?} is out of range {}",
+                    v,
+                    T::DATA_TYPE
+                )));
             }
         }
-        Ok(Arc::new(value_builder.finish()))
-    }};
+    }
+    Ok(Arc::new(value_builder.finish()))
 }
 
 // cast the decimal array to floating-point array
@@ -554,24 +572,78 @@ pub fn cast_with_options(
         (Decimal128(_, scale), _) => {
             // cast decimal to other type
             match to_type {
-                Int8 => {
-                    cast_decimal_to_integer!(array, scale, Int8Builder, i8, Int8)
-                }
-                Int16 => {
-                    cast_decimal_to_integer!(array, scale, Int16Builder, i16, Int16)
-                }
-                Int32 => {
-                    cast_decimal_to_integer!(array, scale, Int32Builder, i32, Int32)
-                }
-                Int64 => {
-                    cast_decimal_to_integer!(array, scale, Int64Builder, i64, Int64)
-                }
+                Int8 => cast_decimal_to_integer::<Decimal128Type, Int8Type>(
+                    array,
+                    10_i128,
+                    *scale,
+                    i8::MAX as i128,
+                    i8::MIN as i128,
+                ),
+                Int16 => cast_decimal_to_integer::<Decimal128Type, Int16Type>(
+                    array,
+                    10_i128,
+                    *scale,
+                    i16::MAX as i128,
+                    i16::MIN as i128,
+                ),
+                Int32 => cast_decimal_to_integer::<Decimal128Type, Int32Type>(
+                    array,
+                    10_i128,
+                    *scale,
+                    i32::MAX as i128,
+                    i32::MIN as i128,
+                ),
+                Int64 => cast_decimal_to_integer::<Decimal128Type, Int64Type>(
+                    array,
+                    10_i128,
+                    *scale,
+                    i64::MAX as i128,
+                    i64::MIN as i128,
+                ),
                 Float32 => {
                     cast_decimal_to_float!(array, scale, Float32Builder, f32)
                 }
                 Float64 => {
                     cast_decimal_to_float!(array, scale, Float64Builder, f64)
                 }
+                Null => Ok(new_null_array(to_type, array.len())),
+                _ => Err(ArrowError::CastError(format!(
+                    "Casting from {:?} to {:?} not supported",
+                    from_type, to_type
+                ))),
+            }
+        }
+        (Decimal256(_, scale), _) => {
+            // cast decimal to other type
+            match to_type {
+                Int8 => cast_decimal_to_integer::<Decimal256Type, Int8Type>(
+                    array,
+                    i256::from_i128(10_i128),
+                    *scale,
+                    i256::from_i128(i8::MAX as i128),
+                    i256::from_i128(i8::MIN as i128),
+                ),
+                Int16 => cast_decimal_to_integer::<Decimal256Type, Int16Type>(
+                    array,
+                    i256::from_i128(10_i128),
+                    *scale,
+                    i256::from_i128(i16::MAX as i128),
+                    i256::from_i128(i16::MIN as i128),
+                ),
+                Int32 => cast_decimal_to_integer::<Decimal256Type, Int32Type>(
+                    array,
+                    i256::from_i128(10_i128),
+                    *scale,
+                    i256::from_i128(i32::MAX as i128),
+                    i256::from_i128(i32::MIN as i128),
+                ),
+                Int64 => cast_decimal_to_integer::<Decimal256Type, Int64Type>(
+                    array,
+                    i256::from_i128(10_i128),
+                    *scale,
+                    i256::from_i128(i64::MAX as i128),
+                    i256::from_i128(i64::MIN as i128),
+                ),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {:?} to {:?} not supported",
@@ -3174,6 +3246,60 @@ mod tests {
                 Some(1_123_456_789_012_345.6_f64),
                 Some(1_123_456_789_012_345.6_f64),
             ]
+        );
+    }
+
+    #[test]
+    fn test_cast_decimal256_to_numeric() {
+        let decimal_type = DataType::Decimal256(38, 2);
+        // negative test
+        assert!(!can_cast_types(&decimal_type, &DataType::UInt8));
+        let value_array: Vec<Option<i256>> = vec![
+            Some(i256::from_i128(125)),
+            Some(i256::from_i128(225)),
+            Some(i256::from_i128(325)),
+            None,
+            Some(i256::from_i128(525)),
+        ];
+        let decimal_array = create_decimal256_array(value_array, 38, 2).unwrap();
+        let array = Arc::new(decimal_array) as ArrayRef;
+        // i8
+        generate_cast_test_case!(
+            &array,
+            Int8Array,
+            &DataType::Int8,
+            vec![Some(1_i8), Some(2_i8), Some(3_i8), None, Some(5_i8)]
+        );
+        // i16
+        generate_cast_test_case!(
+            &array,
+            Int16Array,
+            &DataType::Int16,
+            vec![Some(1_i16), Some(2_i16), Some(3_i16), None, Some(5_i16)]
+        );
+        // i32
+        generate_cast_test_case!(
+            &array,
+            Int32Array,
+            &DataType::Int32,
+            vec![Some(1_i32), Some(2_i32), Some(3_i32), None, Some(5_i32)]
+        );
+        // i64
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![Some(1_i64), Some(2_i64), Some(3_i64), None, Some(5_i64)]
+        );
+
+        // overflow test: out of range of max i8
+        let value_array: Vec<Option<i256>> = vec![Some(i256::from_i128(24400))];
+        let decimal_array = create_decimal256_array(value_array, 38, 2).unwrap();
+        let array = Arc::new(decimal_array) as ArrayRef;
+        let casted_array = cast(&array, &DataType::Int8);
+        assert_eq!(
+            "Cast error: value of 244 is out of range Int8".to_string(),
+            casted_array.unwrap_err().to_string()
         );
     }
 

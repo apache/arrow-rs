@@ -457,6 +457,21 @@ macro_rules! define_as_primitive {
                 i256::from_i128(self as i128)
             }
         }
+
+        impl AsPrimitive<$native_ty> for i256 {
+            fn as_(self) -> $native_ty {
+                let integer = self.to_i128();
+                if integer.is_none() {
+                    if self > i256::from_i128(<$native_ty>::MAX as i128) {
+                        <$native_ty>::MAX
+                    } else {
+                        <$native_ty>::MIN
+                    }
+                } else {
+                    integer.unwrap() as $native_ty
+                }
+            }
+        }
     };
 }
 
