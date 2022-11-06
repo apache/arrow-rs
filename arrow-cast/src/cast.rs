@@ -49,7 +49,7 @@ use arrow_data::ArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
 use num::cast::AsPrimitive;
-use num::{BigInt, FromPrimitive, NumCast, ToPrimitive};
+use num::{NumCast, ToPrimitive};
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -395,18 +395,9 @@ where
     let mul = 10_f64.powi(scale as i32);
 
     if cast_options.safe {
-        let iter = array.iter().map(|v| {
-            v.and_then(|v| {
-                BigInt::from_f64((v.as_() * mul).round()).and_then(|i| {
-                    let (integer, overflow) = i256::from_bigint_with_overflow(i);
-                    if overflow {
-                        None
-                    } else {
-                        Some(integer)
-                    }
-                })
-            })
-        });
+        let iter = array
+            .iter()
+            .map(|v| v.and_then(|v| i256::from_f64((v.as_() * mul).round())));
         let casted_array =
             unsafe { PrimitiveArray::<Decimal256Type>::from_trusted_len_iter(iter) };
         casted_array
@@ -415,32 +406,15 @@ where
     } else {
         array
             .try_unary::<_, Decimal256Type, _>(|v| {
-                let big_int = BigInt::from_f64((v.as_() * mul).round());
-
-                if big_int.is_none() {
-                    return Err(ArrowError::CastError(format!(
+                i256::from_f64((v.as_() * mul).round()).ok_or_else(|| {
+                    ArrowError::CastError(format!(
                         "Cannot cast to {}({}, {}). Overflowing on {:?}",
                         Decimal256Type::PREFIX,
                         precision,
                         scale,
                         v
-                    )));
-                }
-
-                let (integer, overflow) =
-                    i256::from_bigint_with_overflow(big_int.unwrap());
-
-                if overflow {
-                    Err(ArrowError::CastError(format!(
-                        "Cannot cast to {}({}, {}). Overflowing on {:?}",
-                        Decimal256Type::PREFIX,
-                        precision,
-                        scale,
-                        v
-                    )))
-                } else {
-                    Ok(integer)
-                }
+                    ))
+                })
             })
             .and_then(|a| a.with_precision_and_scale(precision, scale))
             .map(|a| Arc::new(a) as ArrayRef)
