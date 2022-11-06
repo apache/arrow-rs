@@ -372,28 +372,17 @@ where
             .try_unary::<_, Decimal128Type, _>(|v| {
                 mul.mul_checked(v.as_()).and_then(|value| {
                     let mul_v = value.round();
-                    if mul_v == f64::INFINITY || mul_v == f64::NEG_INFINITY {
-                        Err(ArrowError::CastError(format!(
+                    let integer: i128 = mul_v.to_i128().ok_or_else(|| {
+                        ArrowError::CastError(format!(
                             "Cannot cast to {}({}, {}). Overflowing on {:?}",
                             Decimal128Type::PREFIX,
                             precision,
                             scale,
                             v
-                        )))
-                    } else {
-                        let integer = mul_v as i128;
-                        if integer == i128::MAX || integer == i128::MIN {
-                            Err(ArrowError::CastError(format!(
-                                "Cannot cast to {}({}, {}). Overflowing on {:?}",
-                                Decimal128Type::PREFIX,
-                                precision,
-                                scale,
-                                v
-                            )))
-                        } else {
-                            Ok(mul_v as i128)
-                        }
-                    }
+                        ))
+                    })?;
+
+                    Ok(integer)
                 })
             })
             .and_then(|a| a.with_precision_and_scale(precision, scale))
