@@ -354,12 +354,7 @@ where
     if cast_options.safe {
         let iter = array.iter().map(|v| {
             v.and_then(|v| {
-                let mul_v = (mul * v.as_()).round();
-                if mul_v == f64::INFINITY || mul_v == f64::NEG_INFINITY {
-                    None
-                } else {
-                    Some(mul_v as i128)
-                }
+                (mul * v.as_()).round().to_i128()
             })
         });
         let casted_array =
