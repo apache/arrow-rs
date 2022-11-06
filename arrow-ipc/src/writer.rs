@@ -26,21 +26,16 @@ use std::io::{BufWriter, Write};
 
 use flatbuffers::FlatBufferBuilder;
 
-use crate::array::{
-    as_large_list_array, as_list_array, as_map_array, as_struct_array, as_union_array,
-    layout, make_array, Array, ArrayData, ArrayRef, BinaryArray, BufferBuilder,
-    BufferSpec, FixedSizeListArray, GenericBinaryArray, GenericStringArray,
-    LargeBinaryArray, LargeStringArray, OffsetSizeTrait, StringArray,
-};
-use crate::buffer::{Buffer, MutableBuffer};
-use crate::datatypes::*;
-use crate::error::{ArrowError, Result};
-use crate::ipc;
-use crate::record_batch::RecordBatch;
-use crate::util::bit_util;
+use arrow_array::builder::BufferBuilder;
+use arrow_array::cast::*;
+use arrow_array::*;
+use arrow_buffer::bit_util;
+use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_data::{layout, ArrayData, BufferSpec};
+use arrow_schema::*;
 
-use crate::ipc::compression::CompressionCodec;
-use ipc::CONTINUATION_MARKER;
+use crate::compression::CompressionCodec;
+use crate::CONTINUATION_MARKER;
 
 /// IPC write options used to control the behaviour of the writer
 #[derive(Debug, Clone)]
@@ -58,24 +53,25 @@ pub struct IpcWriteOptions {
     ///
     /// version 2.0.0: V4, with legacy format enabled
     /// version 4.0.0: V5
-    metadata_version: ipc::MetadataVersion,
-    /// Compression, if desired. Only supported when `ipc_compression`
-    /// feature is enabled
-    batch_compression_type: Option<ipc::CompressionType>,
+    metadata_version: crate::MetadataVersion,
+    /// Compression, if desired. Will result in a runtime error
+    /// if the corresponding feature is not enabled
+    batch_compression_type: Option<crate::CompressionType>,
 }
 
 impl IpcWriteOptions {
-    /// Configures compression when writing IPC files. Requires the
-    /// `ipc_compression` feature of the crate to be activated.
-    #[cfg(feature = "ipc_compression")]
+    /// Configures compression when writing IPC files.
+    ///
+    /// Will result in a runtime error if the corresponding feature
+    /// is not enabled
     pub fn try_with_compression(
         mut self,
-        batch_compression_type: Option<ipc::CompressionType>,
-    ) -> Result<Self> {
+        batch_compression_type: Option<crate::CompressionType>,
+    ) -> Result<Self, ArrowError> {
         self.batch_compression_type = batch_compression_type;
 
         if self.batch_compression_type.is_some()
-            && self.metadata_version < ipc::MetadataVersion::V5
+            && self.metadata_version < crate::MetadataVersion::V5
         {
             return Err(ArrowError::InvalidArgumentError(
                 "Compression only supported in metadata v5 and above".to_string(),
@@ -87,26 +83,26 @@ impl IpcWriteOptions {
     pub fn try_new(
         alignment: usize,
         write_legacy_ipc_format: bool,
-        metadata_version: ipc::MetadataVersion,
-    ) -> Result<Self> {
+        metadata_version: crate::MetadataVersion,
+    ) -> Result<Self, ArrowError> {
         if alignment == 0 || alignment % 8 != 0 {
             return Err(ArrowError::InvalidArgumentError(
                 "Alignment should be greater than 0 and be a multiple of 8".to_string(),
             ));
         }
         match metadata_version {
-            ipc::MetadataVersion::V1
-            | ipc::MetadataVersion::V2
-            | ipc::MetadataVersion::V3 => Err(ArrowError::InvalidArgumentError(
+            crate::MetadataVersion::V1
+            | crate::MetadataVersion::V2
+            | crate::MetadataVersion::V3 => Err(ArrowError::InvalidArgumentError(
                 "Writing IPC metadata version 3 and lower not supported".to_string(),
             )),
-            ipc::MetadataVersion::V4 => Ok(Self {
+            crate::MetadataVersion::V4 => Ok(Self {
                 alignment,
                 write_legacy_ipc_format,
                 metadata_version,
                 batch_compression_type: None,
             }),
-            ipc::MetadataVersion::V5 => {
+            crate::MetadataVersion::V5 => {
                 if write_legacy_ipc_format {
                     Err(ArrowError::InvalidArgumentError(
                         "Legacy IPC format only supported on metadata version 4"
@@ -122,7 +118,7 @@ impl IpcWriteOptions {
                 }
             }
             z => Err(ArrowError::InvalidArgumentError(format!(
-                "Unsupported ipc::MetadataVersion {:?}",
+                "Unsupported crate::MetadataVersion {:?}",
                 z
             ))),
         }
@@ -134,7 +130,7 @@ impl Default for IpcWriteOptions {
         Self {
             alignment: 64,
             write_legacy_ipc_format: false,
-            metadata_version: ipc::MetadataVersion::V5,
+            metadata_version: crate::MetadataVersion::V5,
             batch_compression_type: None,
         }
     }
@@ -151,13 +147,13 @@ impl IpcDataGenerator {
     ) -> EncodedData {
         let mut fbb = FlatBufferBuilder::new();
         let schema = {
-            let fb = ipc::convert::schema_to_fb_offset(&mut fbb, schema);
+            let fb = crate::convert::schema_to_fb_offset(&mut fbb, schema);
             fb.as_union_value()
         };
 
-        let mut message = ipc::MessageBuilder::new(&mut fbb);
+        let mut message = crate::MessageBuilder::new(&mut fbb);
         message.add_version(write_options.metadata_version);
-        message.add_header_type(ipc::MessageHeader::Schema);
+        message.add_header_type(crate::MessageHeader::Schema);
         message.add_bodyLength(0);
         message.add_header(schema);
         // TODO: custom metadata
@@ -177,7 +173,7 @@ impl IpcDataGenerator {
         encoded_dictionaries: &mut Vec<EncodedData>,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
-    ) -> Result<()> {
+    ) -> Result<(), ArrowError> {
         match column.data_type() {
             DataType::Struct(fields) => {
                 let s = as_struct_array(column);
@@ -281,7 +277,7 @@ impl IpcDataGenerator {
         encoded_dictionaries: &mut Vec<EncodedData>,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
-    ) -> Result<()> {
+    ) -> Result<(), ArrowError> {
         match column.data_type() {
             DataType::Dictionary(_key_type, _value_type) => {
                 let dict_id = field
@@ -325,7 +321,7 @@ impl IpcDataGenerator {
         batch: &RecordBatch,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
-    ) -> Result<(Vec<EncodedData>, EncodedData)> {
+    ) -> Result<(Vec<EncodedData>, EncodedData), ArrowError> {
         let schema = batch.schema();
         let mut encoded_dictionaries = Vec::with_capacity(schema.all_fields().len());
 
@@ -344,17 +340,17 @@ impl IpcDataGenerator {
         Ok((encoded_dictionaries, encoded_message))
     }
 
-    /// Write a `RecordBatch` into two sets of bytes, one for the header (ipc::Message) and the
+    /// Write a `RecordBatch` into two sets of bytes, one for the header (crate::Message) and the
     /// other for the batch's data
     fn record_batch_to_bytes(
         &self,
         batch: &RecordBatch,
         write_options: &IpcWriteOptions,
-    ) -> Result<EncodedData> {
+    ) -> Result<EncodedData, ArrowError> {
         let mut fbb = FlatBufferBuilder::new();
 
-        let mut nodes: Vec<ipc::FieldNode> = vec![];
-        let mut buffers: Vec<ipc::Buffer> = vec![];
+        let mut nodes: Vec<crate::FieldNode> = vec![];
+        let mut buffers: Vec<crate::Buffer> = vec![];
         let mut arrow_data: Vec<u8> = vec![];
         let mut offset = 0;
 
@@ -362,8 +358,8 @@ impl IpcDataGenerator {
         let batch_compression_type = write_options.batch_compression_type;
 
         let compression = batch_compression_type.map(|batch_compression_type| {
-            let mut c = ipc::BodyCompressionBuilder::new(&mut fbb);
-            c.add_method(ipc::BodyCompressionMethod::BUFFER);
+            let mut c = crate::BodyCompressionBuilder::new(&mut fbb);
+            c.add_method(crate::BodyCompressionMethod::BUFFER);
             c.add_codec(batch_compression_type);
             c.finish()
         });
@@ -394,7 +390,7 @@ impl IpcDataGenerator {
         let buffers = fbb.create_vector(&buffers);
         let nodes = fbb.create_vector(&nodes);
         let root = {
-            let mut batch_builder = ipc::RecordBatchBuilder::new(&mut fbb);
+            let mut batch_builder = crate::RecordBatchBuilder::new(&mut fbb);
             batch_builder.add_length(batch.num_rows() as i64);
             batch_builder.add_nodes(nodes);
             batch_builder.add_buffers(buffers);
@@ -404,10 +400,10 @@ impl IpcDataGenerator {
             let b = batch_builder.finish();
             b.as_union_value()
         };
-        // create an ipc::Message
-        let mut message = ipc::MessageBuilder::new(&mut fbb);
+        // create an crate::Message
+        let mut message = crate::MessageBuilder::new(&mut fbb);
         message.add_version(write_options.metadata_version);
-        message.add_header_type(ipc::MessageHeader::RecordBatch);
+        message.add_header_type(crate::MessageHeader::RecordBatch);
         message.add_bodyLength(arrow_data.len() as i64);
         message.add_header(root);
         let root = message.finish();
@@ -420,26 +416,26 @@ impl IpcDataGenerator {
         })
     }
 
-    /// Write dictionary values into two sets of bytes, one for the header (ipc::Message) and the
+    /// Write dictionary values into two sets of bytes, one for the header (crate::Message) and the
     /// other for the data
     fn dictionary_batch_to_bytes(
         &self,
         dict_id: i64,
         array_data: &ArrayData,
         write_options: &IpcWriteOptions,
-    ) -> Result<EncodedData> {
+    ) -> Result<EncodedData, ArrowError> {
         let mut fbb = FlatBufferBuilder::new();
 
-        let mut nodes: Vec<ipc::FieldNode> = vec![];
-        let mut buffers: Vec<ipc::Buffer> = vec![];
+        let mut nodes: Vec<crate::FieldNode> = vec![];
+        let mut buffers: Vec<crate::Buffer> = vec![];
         let mut arrow_data: Vec<u8> = vec![];
 
         // get the type of compression
         let batch_compression_type = write_options.batch_compression_type;
 
         let compression = batch_compression_type.map(|batch_compression_type| {
-            let mut c = ipc::BodyCompressionBuilder::new(&mut fbb);
-            c.add_method(ipc::BodyCompressionMethod::BUFFER);
+            let mut c = crate::BodyCompressionBuilder::new(&mut fbb);
+            c.add_method(crate::BodyCompressionMethod::BUFFER);
             c.add_codec(batch_compression_type);
             c.finish()
         });
@@ -470,7 +466,7 @@ impl IpcDataGenerator {
         let nodes = fbb.create_vector(&nodes);
 
         let root = {
-            let mut batch_builder = ipc::RecordBatchBuilder::new(&mut fbb);
+            let mut batch_builder = crate::RecordBatchBuilder::new(&mut fbb);
             batch_builder.add_length(array_data.len() as i64);
             batch_builder.add_nodes(nodes);
             batch_builder.add_buffers(buffers);
@@ -481,16 +477,16 @@ impl IpcDataGenerator {
         };
 
         let root = {
-            let mut batch_builder = ipc::DictionaryBatchBuilder::new(&mut fbb);
+            let mut batch_builder = crate::DictionaryBatchBuilder::new(&mut fbb);
             batch_builder.add_id(dict_id);
             batch_builder.add_data(root);
             batch_builder.finish().as_union_value()
         };
 
         let root = {
-            let mut message_builder = ipc::MessageBuilder::new(&mut fbb);
+            let mut message_builder = crate::MessageBuilder::new(&mut fbb);
             message_builder.add_version(write_options.metadata_version);
-            message_builder.add_header_type(ipc::MessageHeader::DictionaryBatch);
+            message_builder.add_header_type(crate::MessageHeader::DictionaryBatch);
             message_builder.add_bodyLength(arrow_data.len() as i64);
             message_builder.add_header(root);
             message_builder.finish()
@@ -531,7 +527,11 @@ impl DictionaryTracker {
     /// * If the tracker has not been configured to error on replacement or this dictionary
     ///   has never been seen before, return `Ok(true)` to indicate that the dictionary was just
     ///   inserted.
-    pub fn insert(&mut self, dict_id: i64, column: &ArrayRef) -> Result<bool> {
+    pub fn insert(
+        &mut self,
+        dict_id: i64,
+        column: &ArrayRef,
+    ) -> Result<bool, ArrowError> {
         let dict_data = column.data();
         let dict_values = &dict_data.child_data()[0];
 
@@ -565,9 +565,9 @@ pub struct FileWriter<W: Write> {
     /// The number of bytes between each block of bytes, as an offset for random access
     block_offsets: usize,
     /// Dictionary blocks that will be written as part of the IPC footer
-    dictionary_blocks: Vec<ipc::Block>,
+    dictionary_blocks: Vec<crate::Block>,
     /// Record blocks that will be written as part of the IPC footer
-    record_blocks: Vec<ipc::Block>,
+    record_blocks: Vec<crate::Block>,
     /// Whether the writer footer has been written, and the writer is finished
     finished: bool,
     /// Keeps track of dictionaries that have been written
@@ -578,7 +578,7 @@ pub struct FileWriter<W: Write> {
 
 impl<W: Write> FileWriter<W> {
     /// Try create a new writer, with the schema written as part of the header
-    pub fn try_new(writer: W, schema: &Schema) -> Result<Self> {
+    pub fn try_new(writer: W, schema: &Schema) -> Result<Self, ArrowError> {
         let write_options = IpcWriteOptions::default();
         Self::try_new_with_options(writer, schema, write_options)
     }
@@ -588,7 +588,7 @@ impl<W: Write> FileWriter<W> {
         writer: W,
         schema: &Schema,
         write_options: IpcWriteOptions,
-    ) -> Result<Self> {
+    ) -> Result<Self, ArrowError> {
         let data_gen = IpcDataGenerator::default();
         let mut writer = BufWriter::new(writer);
         // write magic to header aligned on 8 byte boundary
@@ -613,7 +613,7 @@ impl<W: Write> FileWriter<W> {
     }
 
     /// Write a record batch to the file
-    pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+    pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         if self.finished {
             return Err(ArrowError::IoError(
                 "Cannot write record batch to file writer as it is closed".to_string(),
@@ -631,7 +631,7 @@ impl<W: Write> FileWriter<W> {
                 write_message(&mut self.writer, encoded_dictionary, &self.write_options)?;
 
             let block =
-                ipc::Block::new(self.block_offsets as i64, meta as i32, data as i64);
+                crate::Block::new(self.block_offsets as i64, meta as i32, data as i64);
             self.dictionary_blocks.push(block);
             self.block_offsets += meta + data;
         }
@@ -639,7 +639,7 @@ impl<W: Write> FileWriter<W> {
         let (meta, data) =
             write_message(&mut self.writer, encoded_message, &self.write_options)?;
         // add a record block for the footer
-        let block = ipc::Block::new(
+        let block = crate::Block::new(
             self.block_offsets as i64,
             meta as i32, // TODO: is this still applicable?
             data as i64,
@@ -650,7 +650,7 @@ impl<W: Write> FileWriter<W> {
     }
 
     /// Write footer and closing tag, then mark the writer as done
-    pub fn finish(&mut self) -> Result<()> {
+    pub fn finish(&mut self) -> Result<(), ArrowError> {
         if self.finished {
             return Err(ArrowError::IoError(
                 "Cannot write footer to file writer as it is closed".to_string(),
@@ -663,10 +663,10 @@ impl<W: Write> FileWriter<W> {
         let mut fbb = FlatBufferBuilder::new();
         let dictionaries = fbb.create_vector(&self.dictionary_blocks);
         let record_batches = fbb.create_vector(&self.record_blocks);
-        let schema = ipc::convert::schema_to_fb_offset(&mut fbb, &self.schema);
+        let schema = crate::convert::schema_to_fb_offset(&mut fbb, &self.schema);
 
         let root = {
-            let mut footer_builder = ipc::FooterBuilder::new(&mut fbb);
+            let mut footer_builder = crate::FooterBuilder::new(&mut fbb);
             footer_builder.add_version(self.write_options.metadata_version);
             footer_builder.add_schema(schema);
             footer_builder.add_dictionaries(dictionaries);
@@ -690,7 +690,7 @@ impl<W: Write> FileWriter<W> {
     ///
     /// The buffer is flushed and the FileWriter is finished before returning the
     /// writer.
-    pub fn into_inner(mut self) -> Result<W> {
+    pub fn into_inner(mut self) -> Result<W, ArrowError> {
         if !self.finished {
             self.finish()?;
         }
@@ -713,7 +713,7 @@ pub struct StreamWriter<W: Write> {
 
 impl<W: Write> StreamWriter<W> {
     /// Try create a new writer, with the schema written as part of the header
-    pub fn try_new(writer: W, schema: &Schema) -> Result<Self> {
+    pub fn try_new(writer: W, schema: &Schema) -> Result<Self, ArrowError> {
         let write_options = IpcWriteOptions::default();
         Self::try_new_with_options(writer, schema, write_options)
     }
@@ -722,7 +722,7 @@ impl<W: Write> StreamWriter<W> {
         writer: W,
         schema: &Schema,
         write_options: IpcWriteOptions,
-    ) -> Result<Self> {
+    ) -> Result<Self, ArrowError> {
         let data_gen = IpcDataGenerator::default();
         let mut writer = BufWriter::new(writer);
         // write the schema, set the written bytes to the schema
@@ -738,7 +738,7 @@ impl<W: Write> StreamWriter<W> {
     }
 
     /// Write a record batch to the stream
-    pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+    pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         if self.finished {
             return Err(ArrowError::IoError(
                 "Cannot write record batch to stream writer as it is closed".to_string(),
@@ -759,7 +759,7 @@ impl<W: Write> StreamWriter<W> {
     }
 
     /// Write continuation bytes, and mark the stream as done
-    pub fn finish(&mut self) -> Result<()> {
+    pub fn finish(&mut self) -> Result<(), ArrowError> {
         if self.finished {
             return Err(ArrowError::IoError(
                 "Cannot write footer to stream writer as it is closed".to_string(),
@@ -787,10 +787,9 @@ impl<W: Write> StreamWriter<W> {
     /// # Example
     ///
     /// ```
-    /// # use arrow::datatypes::Schema;
-    /// # use arrow::ipc::writer::{StreamWriter, IpcWriteOptions};
-    /// # use arrow::ipc::MetadataVersion;
-    /// # use arrow::error::ArrowError;
+    /// # use arrow_ipc::writer::{StreamWriter, IpcWriteOptions};
+    /// # use arrow_ipc::MetadataVersion;
+    /// # use arrow_schema::{ArrowError, Schema};
     /// # fn main() -> Result<(), ArrowError> {
     /// // The result we expect from an empty schema
     /// let expected = vec![
@@ -815,7 +814,7 @@ impl<W: Write> StreamWriter<W> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn into_inner(mut self) -> Result<W> {
+    pub fn into_inner(mut self) -> Result<W, ArrowError> {
         if !self.finished {
             self.finish()?;
         }
@@ -823,9 +822,9 @@ impl<W: Write> StreamWriter<W> {
     }
 }
 
-/// Stores the encoded data, which is an ipc::Message, and optional Arrow data
+/// Stores the encoded data, which is an crate::Message, and optional Arrow data
 pub struct EncodedData {
-    /// An encoded ipc::Message
+    /// An encoded crate::Message
     pub ipc_message: Vec<u8>,
     /// Arrow buffers to be written, should be an empty vec for schema messages
     pub arrow_data: Vec<u8>,
@@ -835,7 +834,7 @@ pub fn write_message<W: Write>(
     mut writer: W,
     encoded: EncodedData,
     write_options: &IpcWriteOptions,
-) -> Result<(usize, usize)> {
+) -> Result<(usize, usize), ArrowError> {
     let arrow_data_len = encoded.arrow_data.len();
     if arrow_data_len % 8 != 0 {
         return Err(ArrowError::MemoryError(
@@ -877,7 +876,7 @@ pub fn write_message<W: Write>(
     Ok((aligned_size, body_len))
 }
 
-fn write_body_buffers<W: Write>(mut writer: W, data: &[u8]) -> Result<usize> {
+fn write_body_buffers<W: Write>(mut writer: W, data: &[u8]) -> Result<usize, ArrowError> {
     let len = data.len() as u32;
     let pad_len = pad_to_8(len) as u32;
     let total_len = len + pad_len;
@@ -898,17 +897,17 @@ fn write_continuation<W: Write>(
     mut writer: W,
     write_options: &IpcWriteOptions,
     total_len: i32,
-) -> Result<usize> {
+) -> Result<usize, ArrowError> {
     let mut written = 8;
 
     // the version of the writer determines whether continuation markers should be added
     match write_options.metadata_version {
-        ipc::MetadataVersion::V1
-        | ipc::MetadataVersion::V2
-        | ipc::MetadataVersion::V3 => {
+        crate::MetadataVersion::V1
+        | crate::MetadataVersion::V2
+        | crate::MetadataVersion::V3 => {
             unreachable!("Options with the metadata version cannot be created")
         }
-        ipc::MetadataVersion::V4 => {
+        crate::MetadataVersion::V4 => {
             if !write_options.write_legacy_ipc_format {
                 // v0.15.0 format
                 writer.write_all(&CONTINUATION_MARKER)?;
@@ -916,12 +915,12 @@ fn write_continuation<W: Write>(
             }
             writer.write_all(&total_len.to_le_bytes()[..])?;
         }
-        ipc::MetadataVersion::V5 => {
+        crate::MetadataVersion::V5 => {
             // write continuation marker and message length
             writer.write_all(&CONTINUATION_MARKER)?;
             writer.write_all(&total_len.to_le_bytes()[..])?;
         }
-        z => panic!("Unsupported ipc::MetadataVersion {:?}", z),
+        z => panic!("Unsupported crate::MetadataVersion {:?}", z),
     };
 
     writer.flush()?;
@@ -932,7 +931,7 @@ fn write_continuation<W: Write>(
 /// In V4, null types have no validity bitmap
 /// In V5 and later, null and union types have no validity bitmap
 fn has_validity_bitmap(data_type: &DataType, write_options: &IpcWriteOptions) -> bool {
-    if write_options.metadata_version < ipc::MetadataVersion::V5 {
+    if write_options.metadata_version < crate::MetadataVersion::V5 {
         !matches!(data_type, DataType::Null)
     } else {
         !matches!(data_type, DataType::Null | DataType::Union(_, _, _))
@@ -1053,22 +1052,22 @@ fn get_buffer_offset<OffsetSize: OffsetSizeTrait>(array_data: &ArrayData) -> Off
 #[allow(clippy::too_many_arguments)]
 fn write_array_data(
     array_data: &ArrayData,
-    buffers: &mut Vec<ipc::Buffer>,
+    buffers: &mut Vec<crate::Buffer>,
     arrow_data: &mut Vec<u8>,
-    nodes: &mut Vec<ipc::FieldNode>,
+    nodes: &mut Vec<crate::FieldNode>,
     offset: i64,
     num_rows: usize,
     null_count: usize,
     compression_codec: &Option<CompressionCodec>,
     write_options: &IpcWriteOptions,
-) -> Result<i64> {
+) -> Result<i64, ArrowError> {
     let mut offset = offset;
     if !matches!(array_data.data_type(), DataType::Null) {
-        nodes.push(ipc::FieldNode::new(num_rows as i64, null_count as i64));
+        nodes.push(crate::FieldNode::new(num_rows as i64, null_count as i64));
     } else {
         // NullArray's null_count equals to len, but the `null_count` passed in is from ArrayData
         // where null_count is always 0.
-        nodes.push(ipc::FieldNode::new(num_rows as i64, num_rows as i64));
+        nodes.push(crate::FieldNode::new(num_rows as i64, num_rows as i64));
     }
     if has_validity_bitmap(array_data.data_type(), write_options) {
         // write null buffer if exists
@@ -1219,7 +1218,7 @@ fn write_array_data(
 }
 
 /// Write a buffer into `arrow_data`, a vector of bytes, and adds its
-/// [`ipc::Buffer`] to `buffers`. Returns the new offset in `arrow_data`
+/// [`crate::Buffer`] to `buffers`. Returns the new offset in `arrow_data`
 ///
 ///
 /// From <https://github.com/apache/arrow/blob/6a936c4ff5007045e86f65f1a6b6c3c955ad5103/format/Message.fbs#L58>
@@ -1231,12 +1230,12 @@ fn write_array_data(
 /// follows is not compressed, which can be useful for cases where
 /// compression does not yield appreciable savings.
 fn write_buffer(
-    buffer: &[u8],                  // input
-    buffers: &mut Vec<ipc::Buffer>, // output buffer descriptors
-    arrow_data: &mut Vec<u8>,       // output stream
-    offset: i64,                    // current output stream offset
+    buffer: &[u8],                    // input
+    buffers: &mut Vec<crate::Buffer>, // output buffer descriptors
+    arrow_data: &mut Vec<u8>,         // output stream
+    offset: i64,                      // current output stream offset
     compression_codec: &Option<CompressionCodec>,
-) -> Result<i64> {
+) -> Result<i64, ArrowError> {
     let len: i64 = match compression_codec {
         Some(compressor) => compressor.compress_to_vec(buffer, arrow_data)?,
         None => {
@@ -1253,7 +1252,7 @@ fn write_buffer(
     })?;
 
     // make new index entry
-    buffers.push(ipc::Buffer::new(offset, len));
+    buffers.push(crate::Buffer::new(offset, len));
     // padding and make offset 8 bytes aligned
     let pad_len = pad_to_8(len as u32) as i64;
     arrow_data.extend_from_slice(&vec![0u8; pad_len as usize][..]);
@@ -1271,18 +1270,18 @@ fn pad_to_8(len: u32) -> usize {
 mod tests {
     use super::*;
 
-    use std::fs::File;
     use std::io::Seek;
     use std::sync::Arc;
 
-    use ipc::MetadataVersion;
+    use crate::MetadataVersion;
 
-    use crate::array::*;
-    use crate::datatypes::Field;
-    use crate::ipc::reader::*;
+    use crate::reader::*;
+    use arrow_array::builder::UnionBuilder;
+    use arrow_array::types::*;
+    use arrow_schema::DataType;
 
     #[test]
-    #[cfg(feature = "ipc_compression")]
+    #[cfg(feature = "lz4")]
     fn test_write_empty_record_batch_lz4_compression() {
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
         let values: Vec<Option<i32>> = vec![];
@@ -1295,9 +1294,9 @@ mod tests {
 
         {
             let write_option =
-                IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
+                IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
                     .unwrap()
-                    .try_with_compression(Some(ipc::CompressionType::LZ4_FRAME))
+                    .try_with_compression(Some(crate::CompressionType::LZ4_FRAME))
                     .unwrap();
 
             let mut writer =
@@ -1335,7 +1334,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ipc_compression")]
+    #[cfg(feature = "lz4")]
     fn test_write_file_with_lz4_compression() {
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
         let values: Vec<Option<i32>> = vec![Some(12), Some(1)];
@@ -1347,9 +1346,9 @@ mod tests {
         let mut file = tempfile::tempfile().unwrap();
         {
             let write_option =
-                IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
+                IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
                     .unwrap()
-                    .try_with_compression(Some(ipc::CompressionType::LZ4_FRAME))
+                    .try_with_compression(Some(crate::CompressionType::LZ4_FRAME))
                     .unwrap();
 
             let mut writer =
@@ -1387,7 +1386,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ipc_compression")]
+    #[cfg(feature = "zstd")]
     fn test_write_file_with_zstd_compression() {
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
         let values: Vec<Option<i32>> = vec![Some(12), Some(1)];
@@ -1398,9 +1397,9 @@ mod tests {
         let mut file = tempfile::tempfile().unwrap();
         {
             let write_option =
-                IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
+                IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
                     .unwrap()
-                    .try_with_compression(Some(ipc::CompressionType::ZSTD))
+                    .try_with_compression(Some(crate::CompressionType::ZSTD))
                     .unwrap();
 
             let mut writer =
@@ -1482,7 +1481,7 @@ mod tests {
         }
     }
 
-    fn write_null_file(options: IpcWriteOptions, suffix: &str) {
+    fn write_null_file(options: IpcWriteOptions) {
         let schema = Schema::new(vec![
             Field::new("nulls", DataType::Null, true),
             Field::new("int32s", DataType::Int32, false),
@@ -1503,18 +1502,18 @@ mod tests {
             ],
         )
         .unwrap();
-        let file_name = format!("target/debug/testdata/nulls_{}.arrow_file", suffix);
+        let mut file = tempfile::tempfile().unwrap();
         {
-            let file = File::create(&file_name).unwrap();
             let mut writer =
-                FileWriter::try_new_with_options(file, &schema, options).unwrap();
+                FileWriter::try_new_with_options(&mut file, &schema, options).unwrap();
 
             writer.write(&batch).unwrap();
             writer.finish().unwrap();
         }
 
+        file.rewind().unwrap();
+
         {
-            let file = File::open(&file_name).unwrap();
             let reader = FileReader::try_new(file, None).unwrap();
             reader.for_each(|maybe_batch| {
                 maybe_batch
@@ -1532,33 +1531,19 @@ mod tests {
     }
     #[test]
     fn test_write_null_file_v4() {
-        write_null_file(
-            IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap(),
-            "v4_a8",
-        );
-        write_null_file(
-            IpcWriteOptions::try_new(8, true, MetadataVersion::V4).unwrap(),
-            "v4_a8l",
-        );
+        write_null_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap());
+        write_null_file(IpcWriteOptions::try_new(8, true, MetadataVersion::V4).unwrap());
         write_null_file(
             IpcWriteOptions::try_new(64, false, MetadataVersion::V4).unwrap(),
-            "v4_a64",
         );
-        write_null_file(
-            IpcWriteOptions::try_new(64, true, MetadataVersion::V4).unwrap(),
-            "v4_a64l",
-        );
+        write_null_file(IpcWriteOptions::try_new(64, true, MetadataVersion::V4).unwrap());
     }
 
     #[test]
     fn test_write_null_file_v5() {
-        write_null_file(
-            IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap(),
-            "v5_a8",
-        );
+        write_null_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap());
         write_null_file(
             IpcWriteOptions::try_new(64, false, MetadataVersion::V5).unwrap(),
-            "v5_a64",
         );
     }
 
@@ -1624,45 +1609,6 @@ mod tests {
 
         // Dictionary with id 2 should have been written to the dict tracker
         assert!(dict_tracker.written.contains_key(&2));
-    }
-
-    #[test]
-    fn read_union_017() {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let data_file = File::open(format!(
-            "{}/arrow-ipc-stream/integration/0.17.1/generated_union.stream",
-            testdata,
-        ))
-        .unwrap();
-
-        let reader = StreamReader::try_new(data_file, None).unwrap();
-
-        let mut file = tempfile::tempfile().unwrap();
-        // read and rewrite the stream to a temp location
-        {
-            let mut writer = StreamWriter::try_new(&mut file, &reader.schema()).unwrap();
-            reader.for_each(|batch| {
-                writer.write(&batch.unwrap()).unwrap();
-            });
-            writer.finish().unwrap();
-        }
-        file.rewind().unwrap();
-
-        // Compare original file and rewrote file
-        let rewrite_reader = StreamReader::try_new(file, None).unwrap();
-
-        let data_file = File::open(format!(
-            "{}/arrow-ipc-stream/integration/0.17.1/generated_union.stream",
-            testdata,
-        ))
-        .unwrap();
-        let reader = StreamReader::try_new(data_file, None).unwrap();
-
-        reader.into_iter().zip(rewrite_reader.into_iter()).for_each(
-            |(batch1, batch2)| {
-                assert_eq!(batch1.unwrap(), batch2.unwrap());
-            },
-        );
     }
 
     fn write_union_file(options: IpcWriteOptions) {
@@ -1739,7 +1685,7 @@ mod tests {
 
     fn deserialize(bytes: Vec<u8>) -> RecordBatch {
         let mut stream_reader =
-            ipc::reader::StreamReader::try_new(std::io::Cursor::new(bytes), None)
+            crate::reader::StreamReader::try_new(std::io::Cursor::new(bytes), None)
                 .unwrap();
         stream_reader.next().unwrap().unwrap()
     }

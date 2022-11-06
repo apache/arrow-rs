@@ -314,35 +314,14 @@ pub mod ffi;
 #[cfg(feature = "ffi")]
 pub mod ffi_stream;
 #[cfg(feature = "ipc")]
-pub mod ipc;
+pub use arrow_ipc as ipc;
 #[cfg(feature = "serde_json")]
 pub mod json;
 #[cfg(feature = "pyarrow")]
 pub mod pyarrow;
 
 pub mod record_batch {
-    pub use arrow_array::{RecordBatch, RecordBatchOptions};
-    use arrow_schema::{ArrowError, SchemaRef};
-
-    /// Trait for types that can read `RecordBatch`'s.
-    pub trait RecordBatchReader:
-        Iterator<Item = Result<RecordBatch, ArrowError>>
-    {
-        /// Returns the schema of this `RecordBatchReader`.
-        ///
-        /// Implementation of this trait should guarantee that all `RecordBatch`'s returned by this
-        /// reader should have the same schema as returned from this method.
-        fn schema(&self) -> SchemaRef;
-
-        /// Reads the next `RecordBatch`.
-        #[deprecated(
-            since = "2.0.0",
-            note = "This method is deprecated in favour of `next` from the trait Iterator."
-        )]
-        fn next_batch(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
-            self.next().transpose()
-        }
-    }
+    pub use arrow_array::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 }
 pub mod row;
 pub use arrow_array::temporal_conversions;

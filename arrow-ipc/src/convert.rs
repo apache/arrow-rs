@@ -17,16 +17,13 @@
 
 //! Utilities for converting between IPC types and native Arrow types
 
-use crate::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode};
-use crate::error::{ArrowError, Result};
-use crate::ipc;
-
+use arrow_schema::*;
 use flatbuffers::{
     FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, WIPOffset,
 };
 use std::collections::{BTreeMap, HashMap};
 
-use crate::ipc::{size_prefixed_root_as_message, CONTINUATION_MARKER};
+use crate::{size_prefixed_root_as_message, CONTINUATION_MARKER};
 use DataType::*;
 
 /// Serialize a schema in IPC format
@@ -43,7 +40,7 @@ pub fn schema_to_fb(schema: &Schema) -> FlatBufferBuilder {
 pub fn schema_to_fb_offset<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
     schema: &Schema,
-) -> WIPOffset<ipc::Schema<'a>> {
+) -> WIPOffset<crate::Schema<'a>> {
     let mut fields = vec![];
     for field in schema.fields() {
         let fb_field = build_field(fbb, field);
@@ -55,7 +52,7 @@ pub fn schema_to_fb_offset<'a>(
         let fb_key_name = fbb.create_string(k.as_str());
         let fb_val_name = fbb.create_string(v.as_str());
 
-        let mut kv_builder = ipc::KeyValueBuilder::new(fbb);
+        let mut kv_builder = crate::KeyValueBuilder::new(fbb);
         kv_builder.add_key(fb_key_name);
         kv_builder.add_value(fb_val_name);
         custom_metadata.push(kv_builder.finish());
@@ -64,15 +61,15 @@ pub fn schema_to_fb_offset<'a>(
     let fb_field_list = fbb.create_vector(&fields);
     let fb_metadata_list = fbb.create_vector(&custom_metadata);
 
-    let mut builder = ipc::SchemaBuilder::new(fbb);
+    let mut builder = crate::SchemaBuilder::new(fbb);
     builder.add_fields(fb_field_list);
     builder.add_custom_metadata(fb_metadata_list);
     builder.finish()
 }
 
 /// Convert an IPC Field to Arrow Field
-impl<'a> From<ipc::Field<'a>> for Field {
-    fn from(field: ipc::Field) -> Field {
+impl<'a> From<crate::Field<'a>> for Field {
+    fn from(field: crate::Field) -> Field {
         let arrow_field = if let Some(dictionary) = field.dictionary() {
             Field::new_dict(
                 field.name().unwrap(),
@@ -105,14 +102,14 @@ impl<'a> From<ipc::Field<'a>> for Field {
 }
 
 /// Deserialize a Schema table from flat buffer format to Schema data type
-pub fn fb_to_schema(fb: ipc::Schema) -> Schema {
+pub fn fb_to_schema(fb: crate::Schema) -> Schema {
     let mut fields: Vec<Field> = vec![];
     let c_fields = fb.fields().unwrap();
     let len = c_fields.len();
     for i in 0..len {
-        let c_field: ipc::Field = c_fields.get(i);
+        let c_field: crate::Field = c_fields.get(i);
         match c_field.type_type() {
-            ipc::Type::Decimal if fb.endianness() == ipc::Endianness::Big => {
+            crate::Type::Decimal if fb.endianness() == crate::Endianness::Big => {
                 unimplemented!("Big Endian is not supported for Decimal!")
             }
             _ => (),
@@ -138,8 +135,8 @@ pub fn fb_to_schema(fb: ipc::Schema) -> Schema {
 }
 
 /// Try deserialize flat buffer format bytes into a schema
-pub fn try_schema_from_flatbuffer_bytes(bytes: &[u8]) -> Result<Schema> {
-    if let Ok(ipc) = ipc::root_as_message(bytes) {
+pub fn try_schema_from_flatbuffer_bytes(bytes: &[u8]) -> Result<Schema, ArrowError> {
+    if let Ok(ipc) = crate::root_as_message(bytes) {
         if let Some(schema) = ipc.header_as_schema().map(fb_to_schema) {
             Ok(schema)
         } else {
@@ -155,7 +152,7 @@ pub fn try_schema_from_flatbuffer_bytes(bytes: &[u8]) -> Result<Schema> {
 }
 
 /// Try deserialize the IPC format bytes into a schema
-pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema> {
+pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema, ArrowError> {
     // There are two protocol types: https://issues.apache.org/jira/browse/ARROW-6313
     // The original protocal is:
     //   4 bytes - the byte length of the payload
@@ -200,7 +197,7 @@ pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema> {
 }
 
 /// Get the Arrow data type from the flatbuffer Field table
-pub(crate) fn get_data_type(field: ipc::Field, may_be_dictionary: bool) -> DataType {
+pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> DataType {
     if let Some(dictionary) = field.dictionary() {
         if may_be_dictionary {
             let int = dictionary.indexType().unwrap();
@@ -223,9 +220,9 @@ pub(crate) fn get_data_type(field: ipc::Field, may_be_dictionary: bool) -> DataT
     }
 
     match field.type_type() {
-        ipc::Type::Null => DataType::Null,
-        ipc::Type::Bool => DataType::Boolean,
-        ipc::Type::Int => {
+        crate::Type::Null => DataType::Null,
+        crate::Type::Bool => DataType::Boolean,
+        crate::Type::Int => {
             let int = field.type_as_int().unwrap();
             match (int.bitWidth(), int.is_signed()) {
                 (8, true) => DataType::Int8,
@@ -242,103 +239,109 @@ pub(crate) fn get_data_type(field: ipc::Field, may_be_dictionary: bool) -> DataT
                 ),
             }
         }
-        ipc::Type::Binary => DataType::Binary,
-        ipc::Type::LargeBinary => DataType::LargeBinary,
-        ipc::Type::Utf8 => DataType::Utf8,
-        ipc::Type::LargeUtf8 => DataType::LargeUtf8,
-        ipc::Type::FixedSizeBinary => {
+        crate::Type::Binary => DataType::Binary,
+        crate::Type::LargeBinary => DataType::LargeBinary,
+        crate::Type::Utf8 => DataType::Utf8,
+        crate::Type::LargeUtf8 => DataType::LargeUtf8,
+        crate::Type::FixedSizeBinary => {
             let fsb = field.type_as_fixed_size_binary().unwrap();
             DataType::FixedSizeBinary(fsb.byteWidth())
         }
-        ipc::Type::FloatingPoint => {
+        crate::Type::FloatingPoint => {
             let float = field.type_as_floating_point().unwrap();
             match float.precision() {
-                ipc::Precision::HALF => DataType::Float16,
-                ipc::Precision::SINGLE => DataType::Float32,
-                ipc::Precision::DOUBLE => DataType::Float64,
+                crate::Precision::HALF => DataType::Float16,
+                crate::Precision::SINGLE => DataType::Float32,
+                crate::Precision::DOUBLE => DataType::Float64,
                 z => panic!("FloatingPoint type with precision of {:?} not supported", z),
             }
         }
-        ipc::Type::Date => {
+        crate::Type::Date => {
             let date = field.type_as_date().unwrap();
             match date.unit() {
-                ipc::DateUnit::DAY => DataType::Date32,
-                ipc::DateUnit::MILLISECOND => DataType::Date64,
+                crate::DateUnit::DAY => DataType::Date32,
+                crate::DateUnit::MILLISECOND => DataType::Date64,
                 z => panic!("Date type with unit of {:?} not supported", z),
             }
         }
-        ipc::Type::Time => {
+        crate::Type::Time => {
             let time = field.type_as_time().unwrap();
             match (time.bitWidth(), time.unit()) {
-                (32, ipc::TimeUnit::SECOND) => DataType::Time32(TimeUnit::Second),
-                (32, ipc::TimeUnit::MILLISECOND) => {
+                (32, crate::TimeUnit::SECOND) => DataType::Time32(TimeUnit::Second),
+                (32, crate::TimeUnit::MILLISECOND) => {
                     DataType::Time32(TimeUnit::Millisecond)
                 }
-                (64, ipc::TimeUnit::MICROSECOND) => {
+                (64, crate::TimeUnit::MICROSECOND) => {
                     DataType::Time64(TimeUnit::Microsecond)
                 }
-                (64, ipc::TimeUnit::NANOSECOND) => DataType::Time64(TimeUnit::Nanosecond),
+                (64, crate::TimeUnit::NANOSECOND) => {
+                    DataType::Time64(TimeUnit::Nanosecond)
+                }
                 z => panic!(
                     "Time type with bit width of {} and unit of {:?} not supported",
                     z.0, z.1
                 ),
             }
         }
-        ipc::Type::Timestamp => {
+        crate::Type::Timestamp => {
             let timestamp = field.type_as_timestamp().unwrap();
             let timezone: Option<String> = timestamp.timezone().map(|tz| tz.to_string());
             match timestamp.unit() {
-                ipc::TimeUnit::SECOND => DataType::Timestamp(TimeUnit::Second, timezone),
-                ipc::TimeUnit::MILLISECOND => {
+                crate::TimeUnit::SECOND => {
+                    DataType::Timestamp(TimeUnit::Second, timezone)
+                }
+                crate::TimeUnit::MILLISECOND => {
                     DataType::Timestamp(TimeUnit::Millisecond, timezone)
                 }
-                ipc::TimeUnit::MICROSECOND => {
+                crate::TimeUnit::MICROSECOND => {
                     DataType::Timestamp(TimeUnit::Microsecond, timezone)
                 }
-                ipc::TimeUnit::NANOSECOND => {
+                crate::TimeUnit::NANOSECOND => {
                     DataType::Timestamp(TimeUnit::Nanosecond, timezone)
                 }
                 z => panic!("Timestamp type with unit of {:?} not supported", z),
             }
         }
-        ipc::Type::Interval => {
+        crate::Type::Interval => {
             let interval = field.type_as_interval().unwrap();
             match interval.unit() {
-                ipc::IntervalUnit::YEAR_MONTH => {
+                crate::IntervalUnit::YEAR_MONTH => {
                     DataType::Interval(IntervalUnit::YearMonth)
                 }
-                ipc::IntervalUnit::DAY_TIME => DataType::Interval(IntervalUnit::DayTime),
-                ipc::IntervalUnit::MONTH_DAY_NANO => {
+                crate::IntervalUnit::DAY_TIME => {
+                    DataType::Interval(IntervalUnit::DayTime)
+                }
+                crate::IntervalUnit::MONTH_DAY_NANO => {
                     DataType::Interval(IntervalUnit::MonthDayNano)
                 }
                 z => panic!("Interval type with unit of {:?} unsupported", z),
             }
         }
-        ipc::Type::Duration => {
+        crate::Type::Duration => {
             let duration = field.type_as_duration().unwrap();
             match duration.unit() {
-                ipc::TimeUnit::SECOND => DataType::Duration(TimeUnit::Second),
-                ipc::TimeUnit::MILLISECOND => DataType::Duration(TimeUnit::Millisecond),
-                ipc::TimeUnit::MICROSECOND => DataType::Duration(TimeUnit::Microsecond),
-                ipc::TimeUnit::NANOSECOND => DataType::Duration(TimeUnit::Nanosecond),
+                crate::TimeUnit::SECOND => DataType::Duration(TimeUnit::Second),
+                crate::TimeUnit::MILLISECOND => DataType::Duration(TimeUnit::Millisecond),
+                crate::TimeUnit::MICROSECOND => DataType::Duration(TimeUnit::Microsecond),
+                crate::TimeUnit::NANOSECOND => DataType::Duration(TimeUnit::Nanosecond),
                 z => panic!("Duration type with unit of {:?} unsupported", z),
             }
         }
-        ipc::Type::List => {
+        crate::Type::List => {
             let children = field.children().unwrap();
             if children.len() != 1 {
                 panic!("expect a list to have one child")
             }
             DataType::List(Box::new(children.get(0).into()))
         }
-        ipc::Type::LargeList => {
+        crate::Type::LargeList => {
             let children = field.children().unwrap();
             if children.len() != 1 {
                 panic!("expect a large list to have one child")
             }
             DataType::LargeList(Box::new(children.get(0).into()))
         }
-        ipc::Type::FixedSizeList => {
+        crate::Type::FixedSizeList => {
             let children = field.children().unwrap();
             if children.len() != 1 {
                 panic!("expect a list to have one child")
@@ -346,7 +349,7 @@ pub(crate) fn get_data_type(field: ipc::Field, may_be_dictionary: bool) -> DataT
             let fsl = field.type_as_fixed_size_list().unwrap();
             DataType::FixedSizeList(Box::new(children.get(0).into()), fsl.listSize())
         }
-        ipc::Type::Struct_ => {
+        crate::Type::Struct_ => {
             let mut fields = vec![];
             if let Some(children) = field.children() {
                 for i in 0..children.len() {
@@ -356,7 +359,7 @@ pub(crate) fn get_data_type(field: ipc::Field, may_be_dictionary: bool) -> DataT
 
             DataType::Struct(fields)
         }
-        ipc::Type::Map => {
+        crate::Type::Map => {
             let map = field.type_as_map().unwrap();
             let children = field.children().unwrap();
             if children.len() != 1 {
@@ -364,7 +367,7 @@ pub(crate) fn get_data_type(field: ipc::Field, may_be_dictionary: bool) -> DataT
             }
             DataType::Map(Box::new(children.get(0).into()), map.keysSorted())
         }
-        ipc::Type::Decimal => {
+        crate::Type::Decimal => {
             let fsb = field.type_as_decimal().unwrap();
             let bit_width = fsb.bitWidth();
             if bit_width == 128 {
@@ -381,12 +384,12 @@ pub(crate) fn get_data_type(field: ipc::Field, may_be_dictionary: bool) -> DataT
                 panic!("Unexpected decimal bit width {}", bit_width)
             }
         }
-        ipc::Type::Union => {
+        crate::Type::Union => {
             let union = field.type_as_union().unwrap();
 
             let union_mode = match union.mode() {
-                ipc::UnionMode::Dense => UnionMode::Dense,
-                ipc::UnionMode::Sparse => UnionMode::Sparse,
+                crate::UnionMode::Dense => UnionMode::Dense,
+                crate::UnionMode::Sparse => UnionMode::Sparse,
                 mode => panic!("Unexpected union mode: {:?}", mode),
             };
 
@@ -409,27 +412,27 @@ pub(crate) fn get_data_type(field: ipc::Field, may_be_dictionary: bool) -> DataT
 }
 
 pub(crate) struct FBFieldType<'b> {
-    pub(crate) type_type: ipc::Type,
+    pub(crate) type_type: crate::Type,
     pub(crate) type_: WIPOffset<UnionWIPOffset>,
-    pub(crate) children: Option<WIPOffset<Vector<'b, ForwardsUOffset<ipc::Field<'b>>>>>,
+    pub(crate) children: Option<WIPOffset<Vector<'b, ForwardsUOffset<crate::Field<'b>>>>>,
 }
 
 /// Create an IPC Field from an Arrow Field
 pub(crate) fn build_field<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
     field: &Field,
-) -> WIPOffset<ipc::Field<'a>> {
+) -> WIPOffset<crate::Field<'a>> {
     // Optional custom metadata.
     let mut fb_metadata = None;
     if let Some(metadata) = field.metadata() {
         if !metadata.is_empty() {
             let mut kv_vec = vec![];
             for (k, v) in metadata {
-                let kv_args = ipc::KeyValueArgs {
+                let kv_args = crate::KeyValueArgs {
                     key: Some(fbb.create_string(k.as_str())),
                     value: Some(fbb.create_string(v.as_str())),
                 };
-                let kv_offset = ipc::KeyValue::create(fbb, &kv_args);
+                let kv_offset = crate::KeyValue::create(fbb, &kv_args);
                 kv_vec.push(kv_offset);
             }
             fb_metadata = Some(fbb.create_vector(&kv_vec));
@@ -454,7 +457,7 @@ pub(crate) fn build_field<'a>(
         None
     };
 
-    let mut field_builder = ipc::FieldBuilder::new(fbb);
+    let mut field_builder = crate::FieldBuilder::new(fbb);
     field_builder.add_name(fb_field_name);
     if let Some(dictionary) = fb_dictionary {
         field_builder.add_dictionary(dictionary)
@@ -481,21 +484,21 @@ pub(crate) fn get_fb_field_type<'a>(
 ) -> FBFieldType<'a> {
     // some IPC implementations expect an empty list for child data, instead of a null value.
     // An empty field list is thus returned for primitive types
-    let empty_fields: Vec<WIPOffset<ipc::Field>> = vec![];
+    let empty_fields: Vec<WIPOffset<crate::Field>> = vec![];
     match data_type {
         Null => FBFieldType {
-            type_type: ipc::Type::Null,
-            type_: ipc::NullBuilder::new(fbb).finish().as_union_value(),
+            type_type: crate::Type::Null,
+            type_: crate::NullBuilder::new(fbb).finish().as_union_value(),
             children: Some(fbb.create_vector(&empty_fields[..])),
         },
         Boolean => FBFieldType {
-            type_type: ipc::Type::Bool,
-            type_: ipc::BoolBuilder::new(fbb).finish().as_union_value(),
+            type_type: crate::Type::Bool,
+            type_: crate::BoolBuilder::new(fbb).finish().as_union_value(),
             children: Some(fbb.create_vector(&empty_fields[..])),
         },
         UInt8 | UInt16 | UInt32 | UInt64 => {
             let children = fbb.create_vector(&empty_fields[..]);
-            let mut builder = ipc::IntBuilder::new(fbb);
+            let mut builder = crate::IntBuilder::new(fbb);
             builder.add_is_signed(false);
             match data_type {
                 UInt8 => builder.add_bitWidth(8),
@@ -505,14 +508,14 @@ pub(crate) fn get_fb_field_type<'a>(
                 _ => {}
             };
             FBFieldType {
-                type_type: ipc::Type::Int,
+                type_type: crate::Type::Int,
                 type_: builder.finish().as_union_value(),
                 children: Some(children),
             }
         }
         Int8 | Int16 | Int32 | Int64 => {
             let children = fbb.create_vector(&empty_fields[..]);
-            let mut builder = ipc::IntBuilder::new(fbb);
+            let mut builder = crate::IntBuilder::new(fbb);
             builder.add_is_signed(true);
             match data_type {
                 Int8 => builder.add_bitWidth(8),
@@ -522,95 +525,97 @@ pub(crate) fn get_fb_field_type<'a>(
                 _ => {}
             };
             FBFieldType {
-                type_type: ipc::Type::Int,
+                type_type: crate::Type::Int,
                 type_: builder.finish().as_union_value(),
                 children: Some(children),
             }
         }
         Float16 | Float32 | Float64 => {
             let children = fbb.create_vector(&empty_fields[..]);
-            let mut builder = ipc::FloatingPointBuilder::new(fbb);
+            let mut builder = crate::FloatingPointBuilder::new(fbb);
             match data_type {
-                Float16 => builder.add_precision(ipc::Precision::HALF),
-                Float32 => builder.add_precision(ipc::Precision::SINGLE),
-                Float64 => builder.add_precision(ipc::Precision::DOUBLE),
+                Float16 => builder.add_precision(crate::Precision::HALF),
+                Float32 => builder.add_precision(crate::Precision::SINGLE),
+                Float64 => builder.add_precision(crate::Precision::DOUBLE),
                 _ => {}
             };
             FBFieldType {
-                type_type: ipc::Type::FloatingPoint,
+                type_type: crate::Type::FloatingPoint,
                 type_: builder.finish().as_union_value(),
                 children: Some(children),
             }
         }
         Binary => FBFieldType {
-            type_type: ipc::Type::Binary,
-            type_: ipc::BinaryBuilder::new(fbb).finish().as_union_value(),
+            type_type: crate::Type::Binary,
+            type_: crate::BinaryBuilder::new(fbb).finish().as_union_value(),
             children: Some(fbb.create_vector(&empty_fields[..])),
         },
         LargeBinary => FBFieldType {
-            type_type: ipc::Type::LargeBinary,
-            type_: ipc::LargeBinaryBuilder::new(fbb).finish().as_union_value(),
+            type_type: crate::Type::LargeBinary,
+            type_: crate::LargeBinaryBuilder::new(fbb)
+                .finish()
+                .as_union_value(),
             children: Some(fbb.create_vector(&empty_fields[..])),
         },
         Utf8 => FBFieldType {
-            type_type: ipc::Type::Utf8,
-            type_: ipc::Utf8Builder::new(fbb).finish().as_union_value(),
+            type_type: crate::Type::Utf8,
+            type_: crate::Utf8Builder::new(fbb).finish().as_union_value(),
             children: Some(fbb.create_vector(&empty_fields[..])),
         },
         LargeUtf8 => FBFieldType {
-            type_type: ipc::Type::LargeUtf8,
-            type_: ipc::LargeUtf8Builder::new(fbb).finish().as_union_value(),
+            type_type: crate::Type::LargeUtf8,
+            type_: crate::LargeUtf8Builder::new(fbb).finish().as_union_value(),
             children: Some(fbb.create_vector(&empty_fields[..])),
         },
         FixedSizeBinary(len) => {
-            let mut builder = ipc::FixedSizeBinaryBuilder::new(fbb);
+            let mut builder = crate::FixedSizeBinaryBuilder::new(fbb);
             builder.add_byteWidth(*len as i32);
             FBFieldType {
-                type_type: ipc::Type::FixedSizeBinary,
+                type_type: crate::Type::FixedSizeBinary,
                 type_: builder.finish().as_union_value(),
                 children: Some(fbb.create_vector(&empty_fields[..])),
             }
         }
         Date32 => {
-            let mut builder = ipc::DateBuilder::new(fbb);
-            builder.add_unit(ipc::DateUnit::DAY);
+            let mut builder = crate::DateBuilder::new(fbb);
+            builder.add_unit(crate::DateUnit::DAY);
             FBFieldType {
-                type_type: ipc::Type::Date,
+                type_type: crate::Type::Date,
                 type_: builder.finish().as_union_value(),
                 children: Some(fbb.create_vector(&empty_fields[..])),
             }
         }
         Date64 => {
-            let mut builder = ipc::DateBuilder::new(fbb);
-            builder.add_unit(ipc::DateUnit::MILLISECOND);
+            let mut builder = crate::DateBuilder::new(fbb);
+            builder.add_unit(crate::DateUnit::MILLISECOND);
             FBFieldType {
-                type_type: ipc::Type::Date,
+                type_type: crate::Type::Date,
                 type_: builder.finish().as_union_value(),
                 children: Some(fbb.create_vector(&empty_fields[..])),
             }
         }
         Time32(unit) | Time64(unit) => {
-            let mut builder = ipc::TimeBuilder::new(fbb);
+            let mut builder = crate::TimeBuilder::new(fbb);
             match unit {
                 TimeUnit::Second => {
                     builder.add_bitWidth(32);
-                    builder.add_unit(ipc::TimeUnit::SECOND);
+                    builder.add_unit(crate::TimeUnit::SECOND);
                 }
                 TimeUnit::Millisecond => {
                     builder.add_bitWidth(32);
-                    builder.add_unit(ipc::TimeUnit::MILLISECOND);
+                    builder.add_unit(crate::TimeUnit::MILLISECOND);
                 }
                 TimeUnit::Microsecond => {
                     builder.add_bitWidth(64);
-                    builder.add_unit(ipc::TimeUnit::MICROSECOND);
+                    builder.add_unit(crate::TimeUnit::MICROSECOND);
                 }
                 TimeUnit::Nanosecond => {
                     builder.add_bitWidth(64);
-                    builder.add_unit(ipc::TimeUnit::NANOSECOND);
+                    builder.add_unit(crate::TimeUnit::NANOSECOND);
                 }
             }
             FBFieldType {
-                type_type: ipc::Type::Time,
+                type_type: crate::Type::Time,
                 type_: builder.finish().as_union_value(),
                 children: Some(fbb.create_vector(&empty_fields[..])),
             }
@@ -618,48 +623,48 @@ pub(crate) fn get_fb_field_type<'a>(
         Timestamp(unit, tz) => {
             let tz = tz.clone().unwrap_or_default();
             let tz_str = fbb.create_string(tz.as_str());
-            let mut builder = ipc::TimestampBuilder::new(fbb);
+            let mut builder = crate::TimestampBuilder::new(fbb);
             let time_unit = match unit {
-                TimeUnit::Second => ipc::TimeUnit::SECOND,
-                TimeUnit::Millisecond => ipc::TimeUnit::MILLISECOND,
-                TimeUnit::Microsecond => ipc::TimeUnit::MICROSECOND,
-                TimeUnit::Nanosecond => ipc::TimeUnit::NANOSECOND,
+                TimeUnit::Second => crate::TimeUnit::SECOND,
+                TimeUnit::Millisecond => crate::TimeUnit::MILLISECOND,
+                TimeUnit::Microsecond => crate::TimeUnit::MICROSECOND,
+                TimeUnit::Nanosecond => crate::TimeUnit::NANOSECOND,
             };
             builder.add_unit(time_unit);
             if !tz.is_empty() {
                 builder.add_timezone(tz_str);
             }
             FBFieldType {
-                type_type: ipc::Type::Timestamp,
+                type_type: crate::Type::Timestamp,
                 type_: builder.finish().as_union_value(),
                 children: Some(fbb.create_vector(&empty_fields[..])),
             }
         }
         Interval(unit) => {
-            let mut builder = ipc::IntervalBuilder::new(fbb);
+            let mut builder = crate::IntervalBuilder::new(fbb);
             let interval_unit = match unit {
-                IntervalUnit::YearMonth => ipc::IntervalUnit::YEAR_MONTH,
-                IntervalUnit::DayTime => ipc::IntervalUnit::DAY_TIME,
-                IntervalUnit::MonthDayNano => ipc::IntervalUnit::MONTH_DAY_NANO,
+                IntervalUnit::YearMonth => crate::IntervalUnit::YEAR_MONTH,
+                IntervalUnit::DayTime => crate::IntervalUnit::DAY_TIME,
+                IntervalUnit::MonthDayNano => crate::IntervalUnit::MONTH_DAY_NANO,
             };
             builder.add_unit(interval_unit);
             FBFieldType {
-                type_type: ipc::Type::Interval,
+                type_type: crate::Type::Interval,
                 type_: builder.finish().as_union_value(),
                 children: Some(fbb.create_vector(&empty_fields[..])),
             }
         }
         Duration(unit) => {
-            let mut builder = ipc::DurationBuilder::new(fbb);
+            let mut builder = crate::DurationBuilder::new(fbb);
             let time_unit = match unit {
-                TimeUnit::Second => ipc::TimeUnit::SECOND,
-                TimeUnit::Millisecond => ipc::TimeUnit::MILLISECOND,
-                TimeUnit::Microsecond => ipc::TimeUnit::MICROSECOND,
-                TimeUnit::Nanosecond => ipc::TimeUnit::NANOSECOND,
+                TimeUnit::Second => crate::TimeUnit::SECOND,
+                TimeUnit::Millisecond => crate::TimeUnit::MILLISECOND,
+                TimeUnit::Microsecond => crate::TimeUnit::MICROSECOND,
+                TimeUnit::Nanosecond => crate::TimeUnit::NANOSECOND,
             };
             builder.add_unit(time_unit);
             FBFieldType {
-                type_type: ipc::Type::Duration,
+                type_type: crate::Type::Duration,
                 type_: builder.finish().as_union_value(),
                 children: Some(fbb.create_vector(&empty_fields[..])),
             }
@@ -667,25 +672,25 @@ pub(crate) fn get_fb_field_type<'a>(
         List(ref list_type) => {
             let child = build_field(fbb, list_type);
             FBFieldType {
-                type_type: ipc::Type::List,
-                type_: ipc::ListBuilder::new(fbb).finish().as_union_value(),
+                type_type: crate::Type::List,
+                type_: crate::ListBuilder::new(fbb).finish().as_union_value(),
                 children: Some(fbb.create_vector(&[child])),
             }
         }
         LargeList(ref list_type) => {
             let child = build_field(fbb, list_type);
             FBFieldType {
-                type_type: ipc::Type::LargeList,
-                type_: ipc::LargeListBuilder::new(fbb).finish().as_union_value(),
+                type_type: crate::Type::LargeList,
+                type_: crate::LargeListBuilder::new(fbb).finish().as_union_value(),
                 children: Some(fbb.create_vector(&[child])),
             }
         }
         FixedSizeList(ref list_type, len) => {
             let child = build_field(fbb, list_type);
-            let mut builder = ipc::FixedSizeListBuilder::new(fbb);
+            let mut builder = crate::FixedSizeListBuilder::new(fbb);
             builder.add_listSize(*len as i32);
             FBFieldType {
-                type_type: ipc::Type::FixedSizeList,
+                type_type: crate::Type::FixedSizeList,
                 type_: builder.finish().as_union_value(),
                 children: Some(fbb.create_vector(&[child])),
             }
@@ -697,17 +702,17 @@ pub(crate) fn get_fb_field_type<'a>(
                 children.push(build_field(fbb, field));
             }
             FBFieldType {
-                type_type: ipc::Type::Struct_,
-                type_: ipc::Struct_Builder::new(fbb).finish().as_union_value(),
+                type_type: crate::Type::Struct_,
+                type_: crate::Struct_Builder::new(fbb).finish().as_union_value(),
                 children: Some(fbb.create_vector(&children[..])),
             }
         }
         Map(map_field, keys_sorted) => {
             let child = build_field(fbb, map_field);
-            let mut field_type = ipc::MapBuilder::new(fbb);
+            let mut field_type = crate::MapBuilder::new(fbb);
             field_type.add_keysSorted(*keys_sorted);
             FBFieldType {
-                type_type: ipc::Type::Map,
+                type_type: crate::Type::Map,
                 type_: field_type.finish().as_union_value(),
                 children: Some(fbb.create_vector(&[child])),
             }
@@ -719,23 +724,23 @@ pub(crate) fn get_fb_field_type<'a>(
             get_fb_field_type(value_type, fbb)
         }
         Decimal128(precision, scale) => {
-            let mut builder = ipc::DecimalBuilder::new(fbb);
+            let mut builder = crate::DecimalBuilder::new(fbb);
             builder.add_precision(*precision as i32);
             builder.add_scale(*scale as i32);
             builder.add_bitWidth(128);
             FBFieldType {
-                type_type: ipc::Type::Decimal,
+                type_type: crate::Type::Decimal,
                 type_: builder.finish().as_union_value(),
                 children: Some(fbb.create_vector(&empty_fields[..])),
             }
         }
         Decimal256(precision, scale) => {
-            let mut builder = ipc::DecimalBuilder::new(fbb);
+            let mut builder = crate::DecimalBuilder::new(fbb);
             builder.add_precision(*precision as i32);
             builder.add_scale(*scale as i32);
             builder.add_bitWidth(256);
             FBFieldType {
-                type_type: ipc::Type::Decimal,
+                type_type: crate::Type::Decimal,
                 type_: builder.finish().as_union_value(),
                 children: Some(fbb.create_vector(&empty_fields[..])),
             }
@@ -747,18 +752,18 @@ pub(crate) fn get_fb_field_type<'a>(
             }
 
             let union_mode = match mode {
-                UnionMode::Sparse => ipc::UnionMode::Sparse,
-                UnionMode::Dense => ipc::UnionMode::Dense,
+                UnionMode::Sparse => crate::UnionMode::Sparse,
+                UnionMode::Dense => crate::UnionMode::Dense,
             };
 
             let fbb_type_ids = fbb
                 .create_vector(&type_ids.iter().map(|t| *t as i32).collect::<Vec<_>>());
-            let mut builder = ipc::UnionBuilder::new(fbb);
+            let mut builder = crate::UnionBuilder::new(fbb);
             builder.add_mode(union_mode);
             builder.add_typeIds(fbb_type_ids);
 
             FBFieldType {
-                type_type: ipc::Type::Union,
+                type_type: crate::Type::Union,
                 type_: builder.finish().as_union_value(),
                 children: Some(fbb.create_vector(&children[..])),
             }
@@ -772,10 +777,10 @@ pub(crate) fn get_fb_dictionary<'a>(
     dict_id: i64,
     dict_is_ordered: bool,
     fbb: &mut FlatBufferBuilder<'a>,
-) -> WIPOffset<ipc::DictionaryEncoding<'a>> {
+) -> WIPOffset<crate::DictionaryEncoding<'a>> {
     // We assume that the dictionary index type (as an integer) has already been
     // validated elsewhere, and can safely assume we are dealing with integers
-    let mut index_builder = ipc::IntBuilder::new(fbb);
+    let mut index_builder = crate::IntBuilder::new(fbb);
 
     match *index_type {
         Int8 | Int16 | Int32 | Int64 => index_builder.add_is_signed(true),
@@ -793,7 +798,7 @@ pub(crate) fn get_fb_dictionary<'a>(
 
     let index_builder = index_builder.finish();
 
-    let mut builder = ipc::DictionaryEncodingBuilder::new(fbb);
+    let mut builder = crate::DictionaryEncodingBuilder::new(fbb);
     builder.add_id(dict_id);
     builder.add_indexType(index_builder);
     builder.add_isOrdered(dict_is_ordered);
@@ -804,7 +809,6 @@ pub(crate) fn get_fb_dictionary<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datatypes::{DataType, Field, Schema, UnionMode};
 
     #[test]
     fn convert_schema_round_trip() {
@@ -1024,14 +1028,14 @@ mod tests {
         let fb = schema_to_fb(&schema);
 
         // read back fields
-        let ipc = ipc::root_as_schema(fb.finished_data()).unwrap();
+        let ipc = crate::root_as_schema(fb.finished_data()).unwrap();
         let schema2 = fb_to_schema(ipc);
         assert_eq!(schema, schema2);
     }
 
     #[test]
     fn schema_from_bytes() {
-        // bytes of a schema generated from python (0.14.0), saved as an `ipc::Message`.
+        // bytes of a schema generated from python (0.14.0), saved as an `crate::Message`.
         // the schema is: Field("field1", DataType::UInt32, false)
         let bytes: Vec<u8> = vec![
             16, 0, 0, 0, 0, 0, 10, 0, 12, 0, 6, 0, 5, 0, 8, 0, 10, 0, 0, 0, 0, 1, 3, 0,
@@ -1041,7 +1045,7 @@ mod tests {
             4, 0, 6, 0, 0, 0, 32, 0, 0, 0, 6, 0, 0, 0, 102, 105, 101, 108, 100, 49, 0, 0,
             0, 0, 0, 0,
         ];
-        let ipc = ipc::root_as_message(&bytes[..]).unwrap();
+        let ipc = crate::root_as_message(&bytes[..]).unwrap();
         let schema = ipc.header_as_schema().unwrap();
 
         // a message generated from Rust, same as the Python one
@@ -1053,7 +1057,7 @@ mod tests {
             8, 0, 4, 0, 6, 0, 0, 0, 32, 0, 0, 0, 6, 0, 0, 0, 102, 105, 101, 108, 100, 49,
             0, 0,
         ];
-        let ipc2 = ipc::root_as_message(&bytes[..]).unwrap();
+        let ipc2 = crate::root_as_message(&bytes[..]).unwrap();
         let schema2 = ipc.header_as_schema().unwrap();
 
         assert_eq!(schema, schema2);

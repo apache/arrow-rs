@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::buffer::Buffer;
-use crate::error::{ArrowError, Result};
-use crate::ipc::CompressionType;
-use std::io::{Read, Write};
+use crate::CompressionType;
+use arrow_buffer::Buffer;
+use arrow_schema::ArrowError;
 
 const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 const LENGTH_OF_PREFIX_DATA: i64 = 8;
@@ -33,7 +32,7 @@ pub enum CompressionCodec {
 impl TryFrom<CompressionType> for CompressionCodec {
     type Error = ArrowError;
 
-    fn try_from(compression_type: CompressionType) -> Result<Self> {
+    fn try_from(compression_type: CompressionType) -> Result<Self, ArrowError> {
         match compression_type {
             CompressionType::ZSTD => Ok(CompressionCodec::Zstd),
             CompressionType::LZ4_FRAME => Ok(CompressionCodec::Lz4Frame),
@@ -60,7 +59,7 @@ impl CompressionCodec {
         &self,
         input: &[u8],
         output: &mut Vec<u8>,
-    ) -> Result<usize> {
+    ) -> Result<usize, ArrowError> {
         let uncompressed_data_len = input.len();
         let original_output_len = output.len();
 
@@ -92,7 +91,10 @@ impl CompressionCodec {
     /// [8 bytes]:         uncompressed length
     /// [remaining bytes]: compressed data stream
     /// ```
-    pub(crate) fn decompress_to_buffer(&self, input: &Buffer) -> Result<Buffer> {
+    pub(crate) fn decompress_to_buffer(
+        &self,
+        input: &Buffer,
+    ) -> Result<Buffer, ArrowError> {
         // read the first 8 bytes to determine if the data is
         // compressed
         let decompressed_length = read_uncompressed_size(input);
@@ -115,48 +117,87 @@ impl CompressionCodec {
 
     /// Compress the data in input buffer and write to output buffer
     /// using the specified compression
-    fn compress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<()> {
+    fn compress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<(), ArrowError> {
         match self {
-            CompressionCodec::Lz4Frame => {
-                let mut encoder = lz4::EncoderBuilder::new().build(output)?;
-                encoder.write_all(input)?;
-                match encoder.finish().1 {
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(e.into()),
-                }
-            }
-            CompressionCodec::Zstd => {
-                let mut encoder = zstd::Encoder::new(output, 0)?;
-                encoder.write_all(input)?;
-                match encoder.finish() {
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(e.into()),
-                }
-            }
+            CompressionCodec::Lz4Frame => compress_lz4(input, output),
+            CompressionCodec::Zstd => compress_zstd(input, output),
         }
     }
 
     /// Decompress the data in input buffer and write to output buffer
     /// using the specified compression
-    fn decompress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<usize> {
-        let result: Result<usize> = match self {
-            CompressionCodec::Lz4Frame => {
-                let mut decoder = lz4::Decoder::new(input)?;
-                match decoder.read_to_end(output) {
-                    Ok(size) => Ok(size),
-                    Err(e) => Err(e.into()),
-                }
-            }
-            CompressionCodec::Zstd => {
-                let mut decoder = zstd::Decoder::new(input)?;
-                match decoder.read_to_end(output) {
-                    Ok(size) => Ok(size),
-                    Err(e) => Err(e.into()),
-                }
-            }
-        };
-        result
+    fn decompress(
+        &self,
+        input: &[u8],
+        output: &mut Vec<u8>,
+    ) -> Result<usize, ArrowError> {
+        match self {
+            CompressionCodec::Lz4Frame => decompress_lz4(input, output),
+            CompressionCodec::Zstd => decompress_zstd(input, output),
+        }
     }
+}
+
+#[cfg(feature = "lz4")]
+fn compress_lz4(input: &[u8], output: &mut Vec<u8>) -> Result<(), ArrowError> {
+    use std::io::Write;
+    let mut encoder = lz4::EncoderBuilder::new().build(output)?;
+    encoder.write_all(input)?;
+    encoder.finish().1?;
+    Ok(())
+}
+
+#[cfg(not(feature = "lz4"))]
+#[allow(clippy::ptr_arg)]
+fn compress_lz4(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> {
+    Err(ArrowError::InvalidArgumentError(
+        "lz4 IPC compression requires the lz4 feature".to_string(),
+    ))
+}
+
+#[cfg(feature = "lz4")]
+fn decompress_lz4(input: &[u8], output: &mut Vec<u8>) -> Result<usize, ArrowError> {
+    use std::io::Read;
+    Ok(lz4::Decoder::new(input)?.read_to_end(output)?)
+}
+
+#[cfg(not(feature = "lz4"))]
+#[allow(clippy::ptr_arg)]
+fn decompress_lz4(_input: &[u8], _output: &mut Vec<u8>) -> Result<usize, ArrowError> {
+    Err(ArrowError::InvalidArgumentError(
+        "lz4 IPC decompression requires the lz4 feature".to_string(),
+    ))
+}
+
+#[cfg(feature = "zstd")]
+fn compress_zstd(input: &[u8], output: &mut Vec<u8>) -> Result<(), ArrowError> {
+    use std::io::Write;
+    let mut encoder = zstd::Encoder::new(output, 0)?;
+    encoder.write_all(input)?;
+    encoder.finish()?;
+    Ok(())
+}
+
+#[cfg(not(feature = "zstd"))]
+#[allow(clippy::ptr_arg)]
+fn compress_zstd(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> {
+    Err(ArrowError::InvalidArgumentError(
+        "zstd IPC compression requires the zstd feature".to_string(),
+    ))
+}
+
+#[cfg(feature = "zstd")]
+fn decompress_zstd(input: &[u8], output: &mut Vec<u8>) -> Result<usize, ArrowError> {
+    use std::io::Read;
+    Ok(zstd::Decoder::new(input)?.read_to_end(output)?)
+}
+
+#[cfg(not(feature = "zstd"))]
+#[allow(clippy::ptr_arg)]
+fn decompress_zstd(_input: &[u8], _output: &mut Vec<u8>) -> Result<usize, ArrowError> {
+    Err(ArrowError::InvalidArgumentError(
+        "zstd IPC decompression requires the zstd feature".to_string(),
+    ))
 }
 
 /// Get the uncompressed length
@@ -173,12 +214,11 @@ fn read_uncompressed_size(buffer: &[u8]) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
+    #[cfg(feature = "lz4")]
     fn test_lz4_compression() {
         let input_bytes = "hello lz4".as_bytes();
-        let codec: CompressionCodec = CompressionCodec::Lz4Frame;
+        let codec = super::CompressionCodec::Lz4Frame;
         let mut output_bytes: Vec<u8> = Vec::new();
         codec.compress(input_bytes, &mut output_bytes).unwrap();
         let mut result_output_bytes: Vec<u8> = Vec::new();
@@ -189,9 +229,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "zstd")]
     fn test_zstd_compression() {
         let input_bytes = "hello zstd".as_bytes();
-        let codec: CompressionCodec = CompressionCodec::Zstd;
+        let codec = super::CompressionCodec::Zstd;
         let mut output_bytes: Vec<u8> = Vec::new();
         codec.compress(input_bytes, &mut output_bytes).unwrap();
         let mut result_output_bytes: Vec<u8> = Vec::new();
