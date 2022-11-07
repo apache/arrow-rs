@@ -24,6 +24,7 @@ arrow:
   - arrow-schema/**/*
   - arrow-select/**/*
   - arrow-ipc/**/*
+  - arrow-csv/**/*
 
 arrow-flight:
   - arrow-flight/**/*

@@ -306,7 +306,7 @@ pub mod bitmap {
 pub mod array;
 pub mod compute;
 #[cfg(feature = "csv")]
-pub mod csv;
+pub use arrow_csv as csv;
 pub mod datatypes;
 pub mod error;
 #[cfg(feature = "ffi")]

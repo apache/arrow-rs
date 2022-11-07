@@ -21,6 +21,7 @@ members = [
         "arrow-array",
         "arrow-buffer",
         "arrow-cast",
+        "arrow-csv",
         "arrow-data",
         "arrow-flight",
         "arrow-integration-test",

@@ -46,6 +46,7 @@ ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] 
 [dependencies]
 arrow-buffer = { version = "26.0.0", path = "../arrow-buffer" }
 arrow-cast = { version = "26.0.0", path = "../arrow-cast" }
+arrow-csv = { version = "26.0.0", path = "../arrow-csv", optional = true }
 arrow-data = { version = "26.0.0", path = "../arrow-data" }
 arrow-schema = { version = "26.0.0", path = "../arrow-schema" }
 arrow-array = { version = "26.0.0", path = "../arrow-array" }
@@ -57,10 +58,8 @@ rand = { version = "0.8", default-features = false, features = ["std", "std_rng"
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 hashbrown = { version = "0.12", default-features = false }
-csv_crate = { version = "1.1", default-features = false, optional = true, package = "csv" }
 regex = { version = "1.5.6", default-features = false, features = ["std", "unicode"] }
 regex-syntax = { version = "0.6.27", default-features = false, features = ["unicode"] }
-lazy_static = { version = "1.4", default-features = false }
 packed_simd = { version = "0.3", default-features = false, optional = true, package = "packed_simd_2" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 comfy-table = { version = "6.0", optional = true, default-features = false }
@@ -75,7 +74,7 @@ features = ["prettyprint", "ipc_compression", "dyn_cmp_dict", "ffi", "pyarrow"]
 [features]
 default = ["csv", "ipc", "json"]
 ipc_compression = ["ipc", "arrow-ipc/lz4", "arrow-ipc/zstd"]
-csv = ["csv_crate"]
+csv = ["arrow-csv"]
 ipc = ["arrow-ipc"]
 json = ["serde_json"]
 simd = ["packed_simd"]
@@ -265,5 +264,9 @@ harness = false
 required-features = ["test_utils"]
 
 [[test]]
-name = "ipc_integration"
+name = "ipc"
 required-features = ["test_utils", "ipc"]
+
+[[test]]
+name = "csv"
+required-features = ["csv"]
