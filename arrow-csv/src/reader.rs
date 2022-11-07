@@ -22,7 +22,7 @@
 //!
 //! Example:
 //!
-//! ```norun
+//! ```no_run
 //! # use arrow_schema::*;
 //! # use arrow_csv::Reader;
 //! # use std::fs::File;
@@ -521,7 +521,7 @@ impl<R: Read> Iterator for Reader<R> {
 }
 
 /// parses a slice of [csv::StringRecord] into a
-/// [RecordBatch](crate::record_batch::RecordBatch).
+/// [RecordBatch]
 fn parse(
     rows: &[StringRecord],
     fields: &[Field],
