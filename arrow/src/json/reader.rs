@@ -60,8 +60,8 @@ use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::record_batch::{RecordBatch, RecordBatchOptions};
 use crate::util::bit_util;
-use crate::util::reader_parser::Parser;
 use crate::{array::*, buffer::Buffer};
+use arrow_cast::parse::Parser;
 
 #[derive(Debug, Clone)]
 enum InferredType {
