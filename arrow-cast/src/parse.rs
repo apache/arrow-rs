@@ -16,9 +16,9 @@
 // under the License.
 
 use arrow_array::types::*;
+use arrow_array::ArrowPrimitiveType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;
-use arrow_array::ArrowPrimitiveType;
 
 /// Accepts a string in RFC3339 / ISO8601 standard format and some
 /// variants and converts it to a nanosecond precision timestamp.
