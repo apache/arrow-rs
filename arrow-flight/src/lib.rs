@@ -17,16 +17,17 @@
 
 #![allow(rustdoc::invalid_html_tags)]
 
-use arrow::datatypes::Schema;
-use arrow::error::{ArrowError, Result as ArrowResult};
-use arrow::ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
+use arrow_ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
+use arrow_schema::{ArrowError, Schema};
 
-use arrow::ipc::convert::try_schema_from_ipc_buffer;
+use arrow_ipc::convert::try_schema_from_ipc_buffer;
 use std::{
     convert::{TryFrom, TryInto},
     fmt,
     ops::Deref,
 };
+
+type ArrowResult<T> = std::result::Result<T, ArrowError>;
 
 #[allow(clippy::derive_partial_eq_without_eq)]
 
@@ -399,8 +400,8 @@ impl<'a> SchemaAsIpc<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, Field, TimeUnit};
-    use arrow::ipc::MetadataVersion;
+    use arrow_ipc::MetadataVersion;
+    use arrow_schema::{DataType, Field, TimeUnit};
 
     struct TestVector(Vec<u8>, usize);
 

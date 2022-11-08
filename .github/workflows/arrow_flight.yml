@@ -27,7 +27,6 @@ on:
       - master
   pull_request:
     paths:
-      - arrow/**
       - arrow-array/**
       - arrow-buffer/**
       - arrow-cast/**
@@ -36,7 +35,6 @@ on:
       - arrow-select/**
       - arrow-flight/**
       - arrow-ipc/**
-      - arrow-csv/**
       - .github/**
 
 jobs:
