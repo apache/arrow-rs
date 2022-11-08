@@ -36,7 +36,6 @@
 //! ```
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Timelike};
-use std::str;
 use std::sync::Arc;
 
 use crate::display::{array_value_to_string, lexical_to_string};
@@ -49,17 +48,6 @@ use arrow_buffer::{i256, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
-use crate::{array::*, compute::take};
-use crate::{
-    buffer::Buffer, util::display::array_value_to_string,
-    util::serialization::lexical_to_string,
-};
-use arrow_array::temporal_conversions::{
-    as_datetime_with_timezone, as_time, time_to_time32ms, time_to_time32s,
-    time_to_time64ns, time_to_time64us,
-};
-use arrow_array::timezone::Tz;
-use arrow_buffer::i256;
 use num::cast::AsPrimitive;
 use num::{NumCast, ToPrimitive};
 
@@ -264,7 +252,6 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Time32(TimeUnit::Millisecond)
             | Time64(TimeUnit::Microsecond)
             | Time64(TimeUnit::Nanosecond)) => true,
-        // date64 to timestamp might not make sense,
         (Int64, Duration(_)) => true,
         (Duration(_), Int64) => true,
         (Interval(from_type), Int64) => {
@@ -547,7 +534,7 @@ fn make_timestamp_array(
     }
 }
 
-fn as_time_res<T: ArrowPrimitiveType>(v: i64) -> Result<NaiveTime> {
+fn as_time_res<T: ArrowPrimitiveType>(v: i64) -> Result<NaiveTime, ArrowError> {
     match as_time::<T>(v) {
         Some(time) => Ok(time),
         None => Err(ArrowError::CastError(format!(
