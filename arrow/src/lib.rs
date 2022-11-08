@@ -317,7 +317,7 @@ pub mod ffi;
 pub mod ffi_stream;
 #[cfg(feature = "ipc")]
 pub use arrow_ipc as ipc;
-#[cfg(feature = "serde_json")]
+#[cfg(feature = "json")]
 pub use arrow_json as json;
 #[cfg(feature = "pyarrow")]
 pub mod pyarrow;
