@@ -438,8 +438,7 @@ fn cast_decimal_to_integer<D, T>(
     array: &ArrayRef,
     base: D::Native,
     scale: u8,
-    max_bound: D::Native,
-    min_bound: D::Native,
+    cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowPrimitiveType,
@@ -458,24 +457,38 @@ where
     })?;
 
     let mut value_builder = PrimitiveBuilder::<T>::with_capacity(array.len());
-    for i in 0..array.len() {
-        if array.is_null(i) {
-            value_builder.append_null();
-        } else {
-            let v = array.value(i).div_checked(div)?;
 
-            // check the overflow
-            // For example: Decimal(128,10,0) as i8
-            // 128 is out of range i8
-            if v <= max_bound && v >= min_bound {
-                value_builder
-                    .append_value(<T::Native as NumCast>::from::<D::Native>(v).unwrap());
+    if cast_options.safe {
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                value_builder.append_null();
             } else {
-                return Err(ArrowError::CastError(format!(
-                    "value of {:?} is out of range {}",
-                    v,
-                    T::DATA_TYPE
-                )));
+                let v = array
+                    .value(i)
+                    .div_checked(div)
+                    .ok()
+                    .and_then(<T::Native as NumCast>::from::<D::Native>);
+
+                value_builder.append_option(v);
+            }
+        }
+    } else {
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                value_builder.append_null();
+            } else {
+                let v = array.value(i).div_checked(div)?;
+
+                let value =
+                    <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
+                        ArrowError::CastError(format!(
+                            "value of {:?} is out of range {}",
+                            v,
+                            T::DATA_TYPE
+                        ))
+                    })?;
+
+                value_builder.append_value(value);
             }
         }
     }
@@ -599,29 +612,25 @@ pub fn cast_with_options(
                     array,
                     10_i128,
                     *scale,
-                    i8::MAX as i128,
-                    i8::MIN as i128,
+                    cast_options,
                 ),
                 Int16 => cast_decimal_to_integer::<Decimal128Type, Int16Type>(
                     array,
                     10_i128,
                     *scale,
-                    i16::MAX as i128,
-                    i16::MIN as i128,
+                    cast_options,
                 ),
                 Int32 => cast_decimal_to_integer::<Decimal128Type, Int32Type>(
                     array,
                     10_i128,
                     *scale,
-                    i32::MAX as i128,
-                    i32::MIN as i128,
+                    cast_options,
                 ),
                 Int64 => cast_decimal_to_integer::<Decimal128Type, Int64Type>(
                     array,
                     10_i128,
                     *scale,
-                    i64::MAX as i128,
-                    i64::MIN as i128,
+                    cast_options,
                 ),
                 Float32 => {
                     cast_decimal_to_float!(array, scale, Float32Builder, f32)
@@ -643,29 +652,25 @@ pub fn cast_with_options(
                     array,
                     i256::from_i128(10_i128),
                     *scale,
-                    i256::from_i128(i8::MAX as i128),
-                    i256::from_i128(i8::MIN as i128),
+                    cast_options,
                 ),
                 Int16 => cast_decimal_to_integer::<Decimal256Type, Int16Type>(
                     array,
                     i256::from_i128(10_i128),
                     *scale,
-                    i256::from_i128(i16::MAX as i128),
-                    i256::from_i128(i16::MIN as i128),
+                    cast_options,
                 ),
                 Int32 => cast_decimal_to_integer::<Decimal256Type, Int32Type>(
                     array,
                     i256::from_i128(10_i128),
                     *scale,
-                    i256::from_i128(i32::MAX as i128),
-                    i256::from_i128(i32::MIN as i128),
+                    cast_options,
                 ),
                 Int64 => cast_decimal_to_integer::<Decimal256Type, Int64Type>(
                     array,
                     i256::from_i128(10_i128),
                     *scale,
-                    i256::from_i128(i64::MAX as i128),
-                    i256::from_i128(i64::MIN as i128),
+                    cast_options,
                 ),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
@@ -3227,11 +3232,17 @@ mod tests {
         let value_array: Vec<Option<i128>> = vec![Some(24400)];
         let decimal_array = create_decimal_array(value_array, 38, 2).unwrap();
         let array = Arc::new(decimal_array) as ArrayRef;
-        let casted_array = cast(&array, &DataType::Int8);
+        let casted_array =
+            cast_with_options(&array, &DataType::Int8, &CastOptions { safe: false });
         assert_eq!(
             "Cast error: value of 244 is out of range Int8".to_string(),
             casted_array.unwrap_err().to_string()
         );
+
+        let casted_array =
+            cast_with_options(&array, &DataType::Int8, &CastOptions { safe: true });
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
 
         // loss the precision: convert decimal to f32、f64
         // f32
@@ -3338,11 +3349,17 @@ mod tests {
         let value_array: Vec<Option<i256>> = vec![Some(i256::from_i128(24400))];
         let decimal_array = create_decimal256_array(value_array, 38, 2).unwrap();
         let array = Arc::new(decimal_array) as ArrayRef;
-        let casted_array = cast(&array, &DataType::Int8);
+        let casted_array =
+            cast_with_options(&array, &DataType::Int8, &CastOptions { safe: false });
         assert_eq!(
             "Cast error: value of 244 is out of range Int8".to_string(),
             casted_array.unwrap_err().to_string()
         );
+
+        let casted_array =
+            cast_with_options(&array, &DataType::Int8, &CastOptions { safe: true });
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
     }
 
     #[test]
