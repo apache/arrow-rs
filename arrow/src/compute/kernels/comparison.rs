@@ -2246,6 +2246,18 @@ macro_rules! typed_compares {
                 as_largestring_array($RIGHT),
                 $OP,
             ),
+            (DataType::FixedSizeBinary(_), DataType::FixedSizeBinary(_)) => {
+                let lhs = $LEFT
+                    .as_any()
+                    .downcast_ref::<FixedSizeBinaryArray>()
+                    .unwrap();
+                let rhs = $RIGHT
+                    .as_any()
+                    .downcast_ref::<FixedSizeBinaryArray>()
+                    .unwrap();
+
+                compare_op(lhs, rhs, $OP)
+            }
             (DataType::Binary, DataType::Binary) => compare_op(
                 as_generic_binary_array::<i32>($LEFT),
                 as_generic_binary_array::<i32>($RIGHT),
