@@ -16,7 +16,7 @@
 // under the License.
 
 use num::cast::AsPrimitive;
-use num::{BigInt, ToPrimitive};
+use num::{BigInt, FromPrimitive, ToPrimitive};
 use std::cmp::Ordering;
 
 /// A signed 256-bit integer
@@ -100,6 +100,19 @@ impl i256 {
 
     pub const fn from_i128(v: i128) -> Self {
         Self::from_parts(v as u128, v >> 127)
+    }
+
+    /// Create an optional i256 from the provided `f64`. Returning `None`
+    /// if overflow occurred
+    pub fn from_f64(v: f64) -> Option<Self> {
+        BigInt::from_f64(v).and_then(|i| {
+            let (integer, overflow) = i256::from_bigint_with_overflow(i);
+            if overflow {
+                None
+            } else {
+                Some(integer)
+            }
+        })
     }
 
     /// Create an i256 from the provided low u128 and high i128

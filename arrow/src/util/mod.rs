@@ -31,4 +31,3 @@ pub mod string_writer;
 pub mod test_util;
 
 pub use arrow_cast::display;
-pub(crate) mod reader_parser;

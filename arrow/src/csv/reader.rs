@@ -56,7 +56,7 @@ use crate::array::{
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::record_batch::{RecordBatch, RecordBatchOptions};
-use crate::util::reader_parser::Parser;
+use arrow_cast::parse::Parser;
 
 use crate::csv::map_csv_error;
 use csv_crate::{ByteRecord, StringRecord};

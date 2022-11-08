@@ -473,13 +473,18 @@ impl RleDecoder {
                 let bit_reader =
                     self.bit_reader.as_mut().expect("bit_reader should be set");
 
-                let mut num_values =
-                    cmp::min(max_values - values_read, self.bit_packed_left as usize);
-
-                num_values = cmp::min(num_values, index_buf.len());
                 loop {
-                    num_values = bit_reader.get_batch::<i32>(
-                        &mut index_buf[..num_values],
+                    let to_read = index_buf
+                        .len()
+                        .min(max_values - values_read)
+                        .min(self.bit_packed_left as usize);
+
+                    if to_read == 0 {
+                        break;
+                    }
+
+                    let num_values = bit_reader.get_batch::<i32>(
+                        &mut index_buf[..to_read],
                         self.bit_width as usize,
                     );
                     if num_values == 0 {
@@ -492,7 +497,7 @@ impl RleDecoder {
                     }
                     self.bit_packed_left -= num_values as u32;
                     values_read += num_values;
-                    if num_values < index_buf.len() {
+                    if num_values < to_read {
                         break;
                     }
                 }
@@ -509,6 +514,12 @@ impl RleDecoder {
         let bit_reader = self.bit_reader.as_mut().expect("bit_reader should be set");
 
         if let Some(indicator_value) = bit_reader.get_vlq_int() {
+            // fastparquet adds padding to the end of pages. This is not spec-compliant
+            // but is handled by the C++ implementation
+            // <https://github.com/apache/arrow/blob/8074496cb41bc8ec8fe9fc814ca5576d89a6eb94/cpp/src/arrow/util/rle_encoding.h#L653>
+            if indicator_value == 0 {
+                return false;
+            }
             if indicator_value & 1 == 1 {
                 self.bit_packed_left = ((indicator_value >> 1) * 8) as u32;
             } else {
@@ -528,6 +539,7 @@ impl RleDecoder {
 mod tests {
     use super::*;
 
+    use crate::util::bit_util::ceil;
     use rand::{self, distributions::Standard, thread_rng, Rng, SeedableRng};
 
     use crate::util::memory::ByteBufferPtr;
@@ -897,6 +909,75 @@ mod tests {
 
         assert_eq!(read, 20);
         assert!(output.iter().take(20).all(|x| *x == 255));
+    }
+
+    #[test]
+    fn test_rle_padded() {
+        let values: Vec<i16> = vec![0, 1, 1, 3, 1, 0];
+        let bit_width = 2;
+        let buffer_len = RleEncoder::max_buffer_size(bit_width, values.len());
+        let mut encoder = RleEncoder::new(bit_width, buffer_len + 1);
+        for v in &values {
+            encoder.put(*v as u64)
+        }
+
+        let mut buffer = encoder.consume();
+        buffer.push(0);
+
+        let mut decoder = RleDecoder::new(bit_width);
+        decoder.set_data(ByteBufferPtr::new(buffer));
+
+        // We don't always reliably know how many non-null values are contained in a page
+        // and so the decoder must work correctly without a precise value count
+        let mut actual_values: Vec<i16> = vec![0; 12];
+        let r = decoder
+            .get_batch(&mut actual_values)
+            .expect("get_batch() should be OK");
+
+        // Should decode 8 values despite only encoding 6 as length of
+        // bit packed run is always multiple of 8
+        assert_eq!(r, 8);
+        assert_eq!(actual_values[..6], values);
+        assert_eq!(actual_values[6], 0);
+        assert_eq!(actual_values[7], 0);
+    }
+
+    #[test]
+    fn test_long_run() {
+        // This writer does not write runs longer than 504 values as this allows
+        // encoding the run header as a single byte
+        //
+        // This tests that the decoder correctly handles longer runs
+
+        let mut writer = BitWriter::new(1024);
+        let bit_width = 1;
+
+        // Choose a non-multiple of 8 larger than 1024 so that the length
+        // of the run is ambiguous, as the encoding only stores `num_values / 8`
+        let num_values = 2002;
+
+        // bit-packed header
+        let run_bytes = ceil(num_values * bit_width, 8) as u64;
+        writer.put_vlq_int(run_bytes << 1 | 1);
+        for _ in 0..run_bytes {
+            writer.put_aligned(0xFF_u8, 1);
+        }
+        let buffer = ByteBufferPtr::new(writer.consume());
+
+        let mut decoder = RleDecoder::new(1);
+        decoder.set_data(buffer.clone());
+
+        let mut decoded: Vec<i16> = vec![0; num_values];
+        let r = decoder.get_batch(&mut decoded).unwrap();
+        assert_eq!(r, num_values);
+        assert_eq!(vec![1; num_values], decoded);
+
+        decoder.set_data(buffer);
+        let r = decoder
+            .get_batch_with_dict(&[0, 23], &mut decoded, num_values)
+            .unwrap();
+        assert_eq!(r, num_values);
+        assert_eq!(vec![23; num_values], decoded);
     }
 
     #[test]

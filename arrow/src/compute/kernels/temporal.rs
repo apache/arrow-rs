@@ -17,7 +17,7 @@
 
 //! Defines temporal kernels for time and date related functions.
 
-use arrow_array::downcast_dictionary_array;
+use arrow_array::{downcast_dictionary_array, downcast_temporal_array};
 use chrono::{DateTime, Datelike, NaiveDateTime, NaiveTime, Offset, Timelike};
 use std::sync::Arc;
 
@@ -182,7 +182,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    hour_internal::<T, _>(array, array.data_type())
+    hour_internal(array)
 }
 
 /// Extracts the hours of a given array as an array of integers within
@@ -199,84 +199,48 @@ pub fn hour_dyn(array: &dyn Array) -> Result<ArrayRef> {
                 dt => return_compute_error_with!("hour does not support", dt),
             )
         }
-        DataType::Time32(TimeUnit::Second) => {
-            let array = as_primitive_array::<Time32SecondType>(array);
-            hour_internal::<Time32SecondType, _>(array, array.data_type())
-                .map(|a| Arc::new(a) as ArrayRef)
+        _ => {
+            downcast_temporal_array!(
+                array => {
+                   hour_internal(array)
+                    .map(|a| Arc::new(a) as ArrayRef)
+                }
+                dt => return_compute_error_with!("hour does not support", dt),
+            )
         }
-        DataType::Time32(TimeUnit::Microsecond) => {
-            let array = as_primitive_array::<Time32MillisecondType>(array);
-            hour_internal::<Time32MillisecondType, _>(array, array.data_type())
-                .map(|a| Arc::new(a) as ArrayRef)
-        }
-        DataType::Time64(TimeUnit::Microsecond) => {
-            let array = as_primitive_array::<Time64MicrosecondType>(array);
-            hour_internal::<Time64MicrosecondType, _>(array, array.data_type())
-                .map(|a| Arc::new(a) as ArrayRef)
-        }
-        DataType::Time64(TimeUnit::Nanosecond) => {
-            let array = as_primitive_array::<Time64NanosecondType>(array);
-            hour_internal::<Time64NanosecondType, _>(array, array.data_type())
-                .map(|a| Arc::new(a) as ArrayRef)
-        }
-        DataType::Date32 => {
-            let array = as_primitive_array::<Date32Type>(array);
-            hour_internal::<Date32Type, _>(array, array.data_type())
-                .map(|a| Arc::new(a) as ArrayRef)
-        }
-        DataType::Date64 => {
-            let array = as_primitive_array::<Date64Type>(array);
-            hour_internal::<Date64Type, _>(array, array.data_type())
-                .map(|a| Arc::new(a) as ArrayRef)
-        }
-        DataType::Timestamp(TimeUnit::Second, _) => {
-            let array = as_primitive_array::<TimestampSecondType>(array);
-            hour_internal::<TimestampSecondType, _>(array, array.data_type())
-                .map(|a| Arc::new(a) as ArrayRef)
-        }
-        DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            let array = as_primitive_array::<TimestampMillisecondType>(array);
-            hour_internal::<TimestampMillisecondType, _>(array, array.data_type())
-                .map(|a| Arc::new(a) as ArrayRef)
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            let array = as_primitive_array::<TimestampMicrosecondType>(array);
-            hour_internal::<TimestampMicrosecondType, _>(array, array.data_type())
-                .map(|a| Arc::new(a) as ArrayRef)
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            let array = as_primitive_array::<TimestampNanosecondType>(array);
-            hour_internal::<TimestampNanosecondType, _>(array, array.data_type())
-                .map(|a| Arc::new(a) as ArrayRef)
-        }
-        dt => return_compute_error_with!("hour does not support", dt),
     }
 }
 
 /// Extracts the hours of a given temporal array as an array of integers
-fn hour_internal<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-    dt: &DataType,
-) -> Result<Int32Array>
+fn hour_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
-    match dt {
+    match array.data_type() {
         DataType::Time32(_) | DataType::Time64(_) => {
             let iter = ArrayIter::new(array);
-            Ok(as_time_with_op::<A, T, _>(iter, b, |t| t.hour() as i32))
+            Ok(as_time_with_op::<&PrimitiveArray<T>, T, _>(iter, b, |t| {
+                t.hour() as i32
+            }))
         }
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| t.hour() as i32))
+            Ok(as_datetime_with_op::<&PrimitiveArray<T>, T, _>(
+                iter,
+                b,
+                |t| t.hour() as i32,
+            ))
         }
         DataType::Timestamp(_, Some(tz)) => {
             let iter = ArrayIter::new(array);
-            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
-                t.hour() as i32
-            })
+            extract_component_from_datetime_array::<&PrimitiveArray<T>, T, _>(
+                iter,
+                b,
+                tz,
+                |t| t.hour() as i32,
+            )
         }
         _ => return_compute_error_with!("hour does not support", array.data_type()),
     }
@@ -288,37 +252,50 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    year_generic::<T, _>(array)
+    year_internal(array)
 }
 
-/// Extracts the years of a given temporal array as an array of integers
-pub fn year_generic<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
+/// Extracts the years of a given temporal array as an array of integers.
+/// If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn year_dyn(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type().clone() {
-        DataType::Dictionary(_, value_type) => {
-            year_internal::<T, A>(array, value_type.as_ref())
+        DataType::Dictionary(_, _) => {
+            downcast_dictionary_array!(
+                array => {
+                    let year_values = year_dyn(array.values())?;
+                    Ok(Arc::new(array.with_values(&year_values)))
+                }
+                dt => return_compute_error_with!("year does not support", dt),
+            )
         }
-        dt => year_internal::<T, A>(array, &dt),
+        _ => {
+            downcast_temporal_array!(
+                array => {
+                   year_internal(array)
+                    .map(|a| Arc::new(a) as ArrayRef)
+                }
+                dt => return_compute_error_with!("year does not support", dt),
+            )
+        }
     }
 }
 
 /// Extracts the years of a given temporal array as an array of integers
-fn year_internal<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-    dt: &DataType,
-) -> Result<Int32Array>
+fn year_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    match dt {
+    match array.data_type() {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
             let b = Int32Builder::with_capacity(array.len());
             let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| t.year()))
+            Ok(as_datetime_with_op::<&PrimitiveArray<T>, T, _>(
+                iter,
+                b,
+                |t| t.year(),
+            ))
         }
         _t => return_compute_error_with!("year does not support", array.data_type()),
     }
@@ -1310,12 +1287,15 @@ mod tests {
         let keys = Int8Array::from_iter_values([0_i8, 1, 1, 0]);
         let dict = DictionaryArray::try_new(&keys, &a).unwrap();
 
-        let b =
-            year_generic::<Date64Type, _>(dict.downcast_dict::<Date64Array>().unwrap())
-                .unwrap();
+        let b = year_dyn(&dict).unwrap();
 
-        let expected = Int32Array::from(vec![2018, 2019, 2019, 2018]);
-        assert_eq!(expected, b);
+        let expected_dict = DictionaryArray::try_new(
+            &keys,
+            &Int32Array::from(vec![2018, 2019, 2019, 2018]),
+        )
+        .unwrap();
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
     }
 
     #[test]

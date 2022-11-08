@@ -245,7 +245,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Timestamp(_, _), Int64) => true,
         (Int64, Timestamp(_, _)) => true,
         (Timestamp(_, _), Timestamp(_, _) | Date32 | Date64) => true,
-        // date64 to timestamp might not make sense,
+        (Date64, Timestamp(_, None)) => true,
         (Int64, Duration(_)) => true,
         (Duration(_), Int64) => true,
         (Interval(from_type), Int64) => {
@@ -388,16 +388,38 @@ fn cast_floating_point_to_decimal256<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
     precision: u8,
     scale: u8,
+    cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<f64>,
 {
     let mul = 10_f64.powi(scale as i32);
 
-    array
-        .unary::<_, Decimal256Type>(|v| i256::from_i128((v.as_() * mul).round() as i128))
-        .with_precision_and_scale(precision, scale)
-        .map(|a| Arc::new(a) as ArrayRef)
+    if cast_options.safe {
+        let iter = array
+            .iter()
+            .map(|v| v.and_then(|v| i256::from_f64((v.as_() * mul).round())));
+        let casted_array =
+            unsafe { PrimitiveArray::<Decimal256Type>::from_trusted_len_iter(iter) };
+        casted_array
+            .with_precision_and_scale(precision, scale)
+            .map(|a| Arc::new(a) as ArrayRef)
+    } else {
+        array
+            .try_unary::<_, Decimal256Type, _>(|v| {
+                i256::from_f64((v.as_() * mul).round()).ok_or_else(|| {
+                    ArrowError::CastError(format!(
+                        "Cannot cast to {}({}, {}). Overflowing on {:?}",
+                        Decimal256Type::PREFIX,
+                        precision,
+                        scale,
+                        v
+                    ))
+                })
+            })
+            .and_then(|a| a.with_precision_and_scale(precision, scale))
+            .map(|a| Arc::new(a) as ArrayRef)
+    }
 }
 
 /// Cast the primitive array using [`PrimitiveArray::reinterpret_cast`]
@@ -739,11 +761,13 @@ pub fn cast_with_options(
                     as_primitive_array::<Float32Type>(array),
                     *precision,
                     *scale,
+                    cast_options,
                 ),
                 Float64 => cast_floating_point_to_decimal256(
                     as_primitive_array::<Float64Type>(array),
                     *precision,
                     *scale,
+                    cast_options,
                 ),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
@@ -1533,7 +1557,24 @@ pub fn cast_with_options(
                 .unary::<_, Date64Type>(|x| x / (NANOSECONDS / MILLISECONDS)),
         )),
 
-        // date64 to timestamp might not make sense,
+        (Date64, Timestamp(TimeUnit::Second, None)) => Ok(Arc::new(
+            as_primitive_array::<Date64Type>(array)
+                .unary::<_, TimestampSecondType>(|x| x / MILLISECONDS),
+        )),
+        (Date64, Timestamp(TimeUnit::Millisecond, None)) => {
+            cast_reinterpret_arrays::<Date64Type, TimestampMillisecondType>(array)
+        }
+        (Date64, Timestamp(TimeUnit::Microsecond, None)) => Ok(Arc::new(
+            as_primitive_array::<Date64Type>(array).unary::<_, TimestampMicrosecondType>(
+                |x| x * (MICROSECONDS / MILLISECONDS),
+            ),
+        )),
+        (Date64, Timestamp(TimeUnit::Nanosecond, None)) => Ok(Arc::new(
+            as_primitive_array::<Date64Type>(array).unary::<_, TimestampNanosecondType>(
+                |x| x * (NANOSECONDS / MILLISECONDS),
+            ),
+        )),
+
         (Int64, Duration(TimeUnit::Second)) => {
             cast_reinterpret_arrays::<Int64Type, DurationSecondType>(array)
         }
@@ -4177,6 +4218,59 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_date64_to_timestamp() {
+        let a = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Second, None)).unwrap();
+        let c = b.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+        assert_eq!(864000000, c.value(0));
+        assert_eq!(1545696000, c.value(1));
+        assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_date64_to_timestamp_ms() {
+        let a = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Millisecond, None)).unwrap();
+        let c = b
+            .as_any()
+            .downcast_ref::<TimestampMillisecondArray>()
+            .unwrap();
+        assert_eq!(864000000005, c.value(0));
+        assert_eq!(1545696000001, c.value(1));
+        assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_date64_to_timestamp_us() {
+        let a = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+        let c = b
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .unwrap();
+        assert_eq!(864000000005000, c.value(0));
+        assert_eq!(1545696000001000, c.value(1));
+        assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_date64_to_timestamp_ns() {
+        let a = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Nanosecond, None)).unwrap();
+        let c = b
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .unwrap();
+        assert_eq!(864000000005000000, c.value(0));
+        assert_eq!(1545696000001000000, c.value(1));
+        assert!(c.is_null(2));
+    }
+
+    #[test]
     fn test_cast_timestamp_to_i64() {
         let a = TimestampMillisecondArray::from(vec![
             Some(864000000005),
@@ -6286,6 +6380,33 @@ mod tests {
         );
         let err = casted_array.unwrap_err().to_string();
         let expected_error = "Cast error: Cannot cast to Decimal128(38, 30)";
+        assert!(
+            err.contains(expected_error),
+            "did not find expected error '{}' in actual error '{}'",
+            expected_error,
+            err
+        );
+    }
+
+    #[test]
+    fn test_cast_floating_point_to_decimal256_overflow() {
+        let array = Float64Array::from(vec![f64::MAX]);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal256(76, 50),
+            &CastOptions { safe: true },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal256(76, 50),
+            &CastOptions { safe: false },
+        );
+        let err = casted_array.unwrap_err().to_string();
+        let expected_error = "Cast error: Cannot cast to Decimal256(76, 50)";
         assert!(
             err.contains(expected_error),
             "did not find expected error '{}' in actual error '{}'",
