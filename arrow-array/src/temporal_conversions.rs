@@ -126,8 +126,7 @@ pub fn time_to_time64us(v: NaiveTime) -> i64 {
 /// converts [`NaiveTime`] to a `i64` representing a `time64(ns)`
 #[inline]
 pub fn time_to_time64ns(v: NaiveTime) -> i64 {
-    v.num_seconds_from_midnight() as i64 * NANOSECONDS
-        + v.nanosecond() as i64
+    v.num_seconds_from_midnight() as i64 * NANOSECONDS + v.nanosecond() as i64
 }
 
 /// converts a `i64` representing a `timestamp(s)` to [`NaiveDateTime`]
