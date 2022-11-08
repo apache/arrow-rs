@@ -40,7 +40,7 @@ use crate::file::serialized_reader::ReadOptionsBuilder;
 use crate::schema::types::SchemaDescriptor;
 
 mod filter;
-mod selection;
+pub mod selection;
 
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
