@@ -16,7 +16,7 @@
 // under the License.
 
 use num::cast::AsPrimitive;
-use num::BigInt;
+use num::{BigInt, ToPrimitive};
 use std::cmp::Ordering;
 
 /// A signed 256-bit integer
@@ -375,13 +375,15 @@ impl i256 {
 
 /// Temporary workaround due to lack of stable const array slicing
 /// See <https://github.com/rust-lang/rust/issues/90091>
-const fn split_array(vals: [u8; 32]) -> ([u8; 16], [u8; 16]) {
-    let mut a = [0; 16];
-    let mut b = [0; 16];
+const fn split_array<const N: usize, const M: usize>(
+    vals: [u8; N],
+) -> ([u8; M], [u8; M]) {
+    let mut a = [0; M];
+    let mut b = [0; M];
     let mut i = 0;
-    while i != 16 {
+    while i != M {
         a[i] = vals[i];
-        b[i] = vals[i + 16];
+        b[i] = vals[i + M];
         i += 1;
     }
     (a, b)
@@ -457,21 +459,6 @@ macro_rules! define_as_primitive {
                 i256::from_i128(self as i128)
             }
         }
-
-        impl AsPrimitive<$native_ty> for i256 {
-            fn as_(self) -> $native_ty {
-                let integer = self.to_i128();
-                if integer.is_none() {
-                    if self > i256::from_i128(<$native_ty>::MAX as i128) {
-                        <$native_ty>::MAX
-                    } else {
-                        <$native_ty>::MIN
-                    }
-                } else {
-                    integer.unwrap() as $native_ty
-                }
-            }
-        }
     };
 }
 
@@ -479,6 +466,44 @@ define_as_primitive!(i8);
 define_as_primitive!(i16);
 define_as_primitive!(i32);
 define_as_primitive!(i64);
+
+impl ToPrimitive for i256 {
+    fn to_i64(&self) -> Option<i64> {
+        let as_i128 = self.low as i128;
+
+        let high_negative = self.high < 0;
+        let low_negative = as_i128 < 0;
+        let high_valid = self.high == -1 || self.high == 0;
+
+        if high_negative == low_negative && high_valid {
+            let (low_bytes, high_bytes) = split_array(u128::to_le_bytes(self.low));
+            let high = i64::from_le_bytes(high_bytes);
+            let low = i64::from_le_bytes(low_bytes);
+
+            let high_negative = high < 0;
+            let low_negative = low < 0;
+            let high_valid = self.high == -1 || self.high == 0;
+
+            (high_negative == low_negative && high_valid).then_some(low)
+        } else {
+            None
+        }
+    }
+
+    fn to_u64(&self) -> Option<u64> {
+        let as_i128 = self.low as i128;
+
+        let high_negative = self.high < 0;
+        let low_negative = as_i128 < 0;
+        let high_valid = self.high == -1 || self.high == 0;
+
+        if high_negative == low_negative && high_valid {
+            self.low.to_u64()
+        } else {
+            None
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -677,5 +702,40 @@ mod tests {
 
             test_ops(i256::from_le_bytes(l), i256::from_le_bytes(r))
         }
+    }
+
+    #[test]
+    fn test_i256_to_primitive() {
+        let a = i256::MAX;
+        assert!(a.to_i64().is_none());
+        assert!(a.to_u64().is_none());
+
+        let a = i256::from_i128(i128::MAX);
+        assert!(a.to_i64().is_none());
+        assert!(a.to_u64().is_none());
+
+        let a = i256::from_i128(i64::MAX as i128);
+        assert_eq!(a.to_i64().unwrap(), i64::MAX);
+        assert_eq!(a.to_u64().unwrap(), i64::MAX as u64);
+
+        let a = i256::from_i128(i64::MAX as i128 + 1);
+        assert!(a.to_i64().is_none());
+        assert_eq!(a.to_u64().unwrap(), i64::MAX as u64 + 1);
+
+        let a = i256::MIN;
+        assert!(a.to_i64().is_none());
+        assert!(a.to_u64().is_none());
+
+        let a = i256::from_i128(i128::MIN);
+        assert!(a.to_i64().is_none());
+        assert!(a.to_u64().is_none());
+
+        let a = i256::from_i128(i64::MIN as i128);
+        assert_eq!(a.to_i64().unwrap(), i64::MIN);
+        assert!(a.to_u64().is_none());
+
+        let a = i256::from_i128(i64::MIN as i128 - 1);
+        assert!(a.to_i64().is_none());
+        assert!(a.to_u64().is_none());
     }
 }

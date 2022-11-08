@@ -421,9 +421,9 @@ fn cast_decimal_to_integer<D, T>(
 ) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowPrimitiveType,
+    <T as ArrowPrimitiveType>::Native: NumCast,
     D: DecimalType + ArrowPrimitiveType,
-    <D as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
-    <D as ArrowPrimitiveType>::Native: AsPrimitive<<T as ArrowPrimitiveType>::Native>,
+    <D as ArrowPrimitiveType>::Native: ArrowNativeTypeOp + ToPrimitive,
 {
     let array = array.as_any().downcast_ref::<PrimitiveArray<D>>().unwrap();
 
@@ -446,7 +446,8 @@ where
             // For example: Decimal(128,10,0) as i8
             // 128 is out of range i8
             if v <= max_bound && v >= min_bound {
-                value_builder.append_value(v.as_());
+                value_builder
+                    .append_value(<T::Native as NumCast>::from::<D::Native>(v).unwrap());
             } else {
                 return Err(ArrowError::CastError(format!(
                     "value of {:?} is out of range {}",
