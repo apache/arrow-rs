@@ -15,13 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate arrow;
-extern crate criterion;
-
 use criterion::*;
 
 use arrow::datatypes::*;
-use arrow::json::ReaderBuilder;
+use arrow_json::ReaderBuilder;
 use std::io::Cursor;
 use std::sync::Arc;
 

@@ -34,7 +34,9 @@
 //! * [`arrow-array`][arrow_array] - type-safe arrow array abstractions
 //! * [`arrow-buffer`][arrow_buffer] - buffer abstractions for arrow arrays
 //! * [`arrow-cast`][arrow_cast] - cast kernels for arrow arrays
+//! * [`arrow-csv`][arrow_csv] - read/write CSV to arrow format
 //! * [`arrow-data`][arrow_data] - the underlying data of arrow arrays
+//! * [`arrow-json`][arrow_json] - read/write JSON to arrow format
 //! * [`arrow-schema`][arrow_schema] - the logical types for arrow arrays
 //! * [`arrow-select`][arrow_select] - selection kernels for arrow arrays
 //!
@@ -316,7 +318,7 @@ pub mod ffi_stream;
 #[cfg(feature = "ipc")]
 pub use arrow_ipc as ipc;
 #[cfg(feature = "serde_json")]
-pub mod json;
+pub use arrow_json as json;
 #[cfg(feature = "pyarrow")]
 pub mod pyarrow;
 
