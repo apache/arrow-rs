@@ -20,7 +20,9 @@
 use crate::timezone::Tz;
 use crate::ArrowPrimitiveType;
 use arrow_schema::{DataType, TimeUnit};
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{
+    DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc,
+};
 
 /// Number of seconds in a day
 pub const SECONDS_IN_DAY: i64 = 86_400;
@@ -99,6 +101,33 @@ pub fn time64ns_to_time(v: i64) -> Option<NaiveTime> {
         // discard extracted seconds
         (v % NANOSECONDS) as u32,
     )
+}
+
+/// converts [`NaiveTime`] to a `i32` representing a `time32(s)`
+#[inline]
+pub fn time_to_time32s(v: NaiveTime) -> i32 {
+    v.num_seconds_from_midnight() as i32
+}
+
+/// converts [`NaiveTime`] to a `i32` representing a `time32(ms)`
+#[inline]
+pub fn time_to_time32ms(v: NaiveTime) -> i32 {
+    (v.num_seconds_from_midnight() as i64 * MILLISECONDS
+        + v.nanosecond() as i64 * MILLISECONDS / NANOSECONDS) as i32
+}
+
+/// converts [`NaiveTime`] to a `i64` representing a `time64(us)`
+#[inline]
+pub fn time_to_time64us(v: NaiveTime) -> i64 {
+    v.num_seconds_from_midnight() as i64 * MICROSECONDS
+        + v.nanosecond() as i64 * MICROSECONDS / NANOSECONDS
+}
+
+/// converts [`NaiveTime`] to a `i64` representing a `time64(ns)`
+#[inline]
+pub fn time_to_time64ns(v: NaiveTime) -> i64 {
+    v.num_seconds_from_midnight() as i64 * NANOSECONDS
+        + v.nanosecond() as i64
 }
 
 /// converts a `i64` representing a `timestamp(s)` to [`NaiveDateTime`]
