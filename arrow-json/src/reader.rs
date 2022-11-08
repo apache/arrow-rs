@@ -23,7 +23,7 @@
 //!
 //! Example:
 //!
-//! ```no_run
+//! ```
 //! # use arrow_schema::*;
 //! # use std::fs::File;
 //! # use std::io::BufReader;
@@ -176,7 +176,7 @@ fn generate_schema(spec: HashMap<String, InferredType>) -> Result<Schema, ArrowE
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```
 /// use std::fs::File;
 /// use std::io::BufReader;
 /// use arrow_json::reader::ValueIter;
@@ -257,7 +257,7 @@ impl<'a, R: Read> Iterator for ValueIter<'a, R> {
 /// That way, the `reader` can be used immediately afterwards to create a [`Reader`].
 ///
 /// # Examples
-/// ```no_run
+/// ```
 /// use std::fs::File;
 /// use std::io::BufReader;
 /// use arrow_json::reader::infer_json_schema_from_seekable;
@@ -289,7 +289,7 @@ pub fn infer_json_schema_from_seekable<R: Read + Seek>(
 /// (does not implement [`Seek`]), such is the case for compressed streams decoders.
 ///
 /// # Examples
-/// ```no_run
+/// ```
 /// use std::fs::File;
 /// use std::io::{BufReader, SeekFrom, Seek};
 /// use flate2::read::GzDecoder;
@@ -563,7 +563,7 @@ where
 /// see [`Reader`].
 ///
 /// # Examples
-/// ```no_run
+/// ```
 /// use arrow_json::reader::{Decoder, DecoderOptions, ValueIter, infer_json_schema};
 /// use std::fs::File;
 /// use std::io::{BufReader, Seek, SeekFrom};
