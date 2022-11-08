@@ -4235,6 +4235,7 @@ mod tests {
 
     #[test]
     fn test_cast_timestamp_to_time64() {
+        // test timestamp secs
         let a = TimestampSecondArray::from(vec![Some(86405), Some(1), None])
             .with_timezone("UTC".to_string());
         let array = Arc::new(a) as ArrayRef;
@@ -4249,6 +4250,7 @@ mod tests {
         assert_eq!(1000000000, c.value(1));
         assert!(c.is_null(2));
 
+        // test timestamp milliseconds
         let a = TimestampMillisecondArray::from(vec![Some(86405000), Some(1000), None])
             .with_timezone("UTC".to_string());
         let array = Arc::new(a) as ArrayRef;
@@ -4263,6 +4265,7 @@ mod tests {
         assert_eq!(1000000000, c.value(1));
         assert!(c.is_null(2));
 
+        // test timestamp microseconds
         let a =
             TimestampMicrosecondArray::from(vec![Some(86405000000), Some(1000000), None])
                 .with_timezone("UTC".to_string());
@@ -4278,6 +4281,7 @@ mod tests {
         assert_eq!(1000000000, c.value(1));
         assert!(c.is_null(2));
 
+        // test timestamp nanoseconds
         let a = TimestampNanosecondArray::from(vec![
             Some(86405000000000),
             Some(1000000000),
@@ -4296,7 +4300,7 @@ mod tests {
         assert_eq!(1000000000, c.value(1));
         assert!(c.is_null(2));
 
-        // overflow
+        // test overflow
         let a = TimestampSecondArray::from(vec![Some(i64::MAX)])
             .with_timezone("UTC".to_string());
         let array = Arc::new(a) as ArrayRef;
@@ -4308,6 +4312,7 @@ mod tests {
 
     #[test]
     fn test_cast_timestamp_to_time32() {
+        // test timestamp secs
         let a = TimestampSecondArray::from(vec![Some(86405), Some(1), None])
             .with_timezone("UTC".to_string());
         let array = Arc::new(a) as ArrayRef;
@@ -4322,6 +4327,7 @@ mod tests {
         assert_eq!(1000, c.value(1));
         assert!(c.is_null(2));
 
+        // test timestamp milliseconds
         let a = TimestampMillisecondArray::from(vec![Some(86405000), Some(1000), None])
             .with_timezone("UTC".to_string());
         let array = Arc::new(a) as ArrayRef;
@@ -4336,6 +4342,7 @@ mod tests {
         assert_eq!(1000, c.value(1));
         assert!(c.is_null(2));
 
+        // test timestamp microseconds
         let a =
             TimestampMicrosecondArray::from(vec![Some(86405000000), Some(1000000), None])
                 .with_timezone("UTC".to_string());
@@ -4351,6 +4358,7 @@ mod tests {
         assert_eq!(1000, c.value(1));
         assert!(c.is_null(2));
 
+        // test timestamp nanoseconds
         let a = TimestampNanosecondArray::from(vec![
             Some(86405000000000),
             Some(1000000000),
@@ -4369,7 +4377,7 @@ mod tests {
         assert_eq!(1000, c.value(1));
         assert!(c.is_null(2));
 
-        // overflow
+        // test overflow
         let a = TimestampSecondArray::from(vec![Some(i64::MAX)])
             .with_timezone("UTC".to_string());
         let array = Arc::new(a) as ArrayRef;
