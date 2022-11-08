@@ -23,11 +23,11 @@
 //! Example:
 //!
 //! ```
-//! use arrow::array::*;
-//! use arrow::csv;
-//! use arrow::datatypes::*;
-//! use arrow::record_batch::RecordBatch;
-//! use std::sync::Arc;
+//! # use arrow_array::*;
+//! # use arrow_array::types::*;
+//! # use arrow_csv::Writer;
+//! # use arrow_schema::*;
+//! # use std::sync::Arc;
 //!
 //! let schema = Schema::new(vec![
 //!     Field::new("c1", DataType::Utf8, false),
@@ -56,7 +56,7 @@
 //!
 //! let mut output = Vec::with_capacity(1024);
 //!
-//! let mut writer = csv::Writer::new(&mut output);
+//! let mut writer = Writer::new(&mut output);
 //! let batches = vec![&batch, &batch];
 //! for batch in batches {
 //!     writer.write(batch).unwrap();
@@ -64,15 +64,14 @@
 //! ```
 
 use arrow_array::timezone::Tz;
+use arrow_array::types::*;
+use arrow_array::*;
+use arrow_cast::display::{lexical_to_string, make_string_from_decimal};
+use arrow_schema::*;
 use chrono::{DateTime, Utc};
 use std::io::Write;
 
-use crate::array::*;
-use crate::csv::map_csv_error;
-use crate::datatypes::*;
-use crate::error::{ArrowError, Result};
-use crate::record_batch::RecordBatch;
-use crate::util::display::{lexical_to_string, make_string_from_decimal};
+use crate::map_csv_error;
 
 const DEFAULT_DATE_FORMAT: &str = "%F";
 const DEFAULT_TIME_FORMAT: &str = "%T";
@@ -81,7 +80,7 @@ const DEFAULT_TIMESTAMP_TZ_FORMAT: &str = "%FT%H:%M:%S.%9f%:z";
 
 fn write_primitive_value<T>(array: &ArrayRef, i: usize) -> String
 where
-    T: ArrowNumericType,
+    T: ArrowPrimitiveType,
     T::Native: lexical_core::ToLexical,
 {
     let c = array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
@@ -92,7 +91,7 @@ where
 #[derive(Debug)]
 pub struct Writer<W: Write> {
     /// The object to write to
-    writer: csv_crate::Writer<W>,
+    writer: csv::Writer<W>,
     /// Whether file should be written with headers. Defaults to `true`
     has_headers: bool,
     /// The date format for date arrays
@@ -115,7 +114,7 @@ impl<W: Write> Writer<W> {
     /// Create a new CsvWriter from a writable object, with default options
     pub fn new(writer: W) -> Self {
         let delimiter = b',';
-        let mut builder = csv_crate::WriterBuilder::new();
+        let mut builder = csv::WriterBuilder::new();
         let writer = builder.delimiter(delimiter).from_writer(writer);
         Writer {
             writer,
@@ -135,7 +134,7 @@ impl<W: Write> Writer<W> {
         batch: &[ArrayRef],
         row_index: usize,
         buffer: &mut [String],
-    ) -> Result<()> {
+    ) -> Result<(), ArrowError> {
         // TODO: it'd be more efficient if we could create `record: Vec<&[u8]>
         for (col_index, item) in buffer.iter_mut().enumerate() {
             let col = &batch[col_index];
@@ -242,7 +241,7 @@ impl<W: Write> Writer<W> {
         time_zone: Option<&String>,
         row_index: usize,
         col: &ArrayRef,
-    ) -> Result<String> {
+    ) -> Result<String, ArrowError> {
         use TimeUnit::*;
         let datetime = match time_unit {
             Second => col
@@ -283,7 +282,7 @@ impl<W: Write> Writer<W> {
     }
 
     /// Write a vector of record batches to a writable object
-    pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+    pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         let num_columns = batch.num_columns();
         if self.beginning {
             if self.has_headers {
@@ -305,7 +304,7 @@ impl<W: Write> Writer<W> {
             .iter()
             .map(|array| match array.data_type() {
                 DataType::Dictionary(_, value_type) => {
-                    crate::compute::kernels::cast::cast(array, value_type)
+                    arrow_cast::cast(array, value_type)
                         .expect("cannot cast dictionary to underlying values")
                 }
                 _ => array.clone(),
@@ -365,16 +364,14 @@ impl WriterBuilder {
     /// # Example
     ///
     /// ```
-    /// extern crate arrow;
+    /// # use arrow_csv::{Writer, WriterBuilder};
+    /// # use std::fs::File;
     ///
-    /// use arrow::csv;
-    /// use std::fs::File;
-    ///
-    /// fn example() -> csv::Writer<File> {
+    /// fn example() -> Writer<File> {
     ///     let file = File::create("target/out.csv").unwrap();
     ///
     ///     // create a builder that doesn't write headers
-    ///     let builder = csv::WriterBuilder::new().has_headers(false);
+    ///     let builder = WriterBuilder::new().has_headers(false);
     ///     let writer = builder.build(file);
     ///
     ///     writer
@@ -423,7 +420,7 @@ impl WriterBuilder {
     /// Create a new `Writer`
     pub fn build<W: Write>(self, writer: W) -> Writer<W> {
         let delimiter = self.delimiter.unwrap_or(b',');
-        let mut builder = csv_crate::WriterBuilder::new();
+        let mut builder = csv::WriterBuilder::new();
         let writer = builder.delimiter(delimiter).from_writer(writer);
         Writer {
             writer,
@@ -452,13 +449,8 @@ impl WriterBuilder {
 mod tests {
     use super::*;
 
-    use crate::csv::Reader;
-    use crate::datatypes::{Field, Schema};
-    #[cfg(feature = "chrono-tz")]
-    use crate::util::string_writer::StringWriter;
-    use crate::util::test_util::get_temp_file;
-    use std::fs::File;
-    use std::io::{Cursor, Read};
+    use crate::Reader;
+    use std::io::{Cursor, Read, Seek};
     use std::sync::Arc;
 
     #[test]
@@ -512,15 +504,17 @@ mod tests {
         )
         .unwrap();
 
-        let file = get_temp_file("columns.csv", &[]);
+        let mut file = tempfile::tempfile().unwrap();
 
-        let mut writer = Writer::new(file);
+        let mut writer = Writer::new(&mut file);
         let batches = vec![&batch, &batch];
         for batch in batches {
             writer.write(batch).unwrap();
         }
+        drop(writer);
+
         // check that file was written successfully
-        let mut file = File::open("target/debug/testdata/columns.csv").unwrap();
+        file.rewind().unwrap();
         let mut buffer: Vec<u8> = vec![];
         file.read_to_end(&mut buffer).unwrap();
 
@@ -571,20 +565,21 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         )
         .unwrap();
 
-        let file = get_temp_file("custom_options.csv", &[]);
+        let mut file = tempfile::tempfile().unwrap();
 
         let builder = WriterBuilder::new()
             .has_headers(false)
             .with_delimiter(b'|')
             .with_time_format("%r".to_string());
-        let mut writer = builder.build(file);
+        let mut writer = builder.build(&mut file);
         let batches = vec![&batch];
         for batch in batches {
             writer.write(batch).unwrap();
         }
+        drop(writer);
 
         // check that file was written successfully
-        let mut file = File::open("target/debug/testdata/custom_options.csv").unwrap();
+        file.rewind().unwrap();
         let mut buffer: Vec<u8> = vec![];
         file.read_to_end(&mut buffer).unwrap();
 
@@ -595,105 +590,6 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         );
     }
 
-    #[cfg(feature = "chrono-tz")]
-    #[test]
-    fn test_export_csv_timestamps() {
-        let schema = Schema::new(vec![
-            Field::new(
-                "c1",
-                DataType::Timestamp(
-                    TimeUnit::Millisecond,
-                    Some("Australia/Sydney".to_string()),
-                ),
-                true,
-            ),
-            Field::new("c2", DataType::Timestamp(TimeUnit::Millisecond, None), true),
-        ]);
-
-        let c1 = TimestampMillisecondArray::from(
-            // 1555584887 converts to 2019-04-18, 20:54:47 in time zone Australia/Sydney (AEST).
-            // The offset (difference to UTC) is +10:00.
-            // 1635577147 converts to 2021-10-30 17:59:07 in time zone Australia/Sydney (AEDT)
-            // The offset (difference to UTC) is +11:00. Note that daylight savings is in effect on 2021-10-30.
-            //
-            vec![Some(1555584887378), Some(1635577147000)],
-        )
-        .with_timezone("Australia/Sydney".to_string());
-        let c2 = TimestampMillisecondArray::from(vec![
-            Some(1555584887378),
-            Some(1635577147000),
-        ]);
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)])
-                .unwrap();
-
-        let sw = StringWriter::new();
-        let mut writer = Writer::new(sw);
-        let batches = vec![&batch];
-        for batch in batches {
-            writer.write(batch).unwrap();
-        }
-
-        let left = "c1,c2
-2019-04-18T20:54:47.378000000+10:00,2019-04-18T10:54:47.378000000
-2021-10-30T17:59:07.000000000+11:00,2021-10-30T06:59:07.000000000\n";
-        let right = writer.writer.into_inner().map(|s| s.to_string());
-        assert_eq!(Some(left.to_string()), right.ok());
-    }
-
-    #[cfg(not(feature = "chrono-tz"))]
-    #[test]
-    fn test_conversion_consistency() {
-        // test if we can serialize and deserialize whilst retaining the same type information/ precision
-
-        let schema = Schema::new(vec![
-            Field::new("c1", DataType::Date32, false),
-            Field::new("c2", DataType::Date64, false),
-        ]);
-
-        let c1 = Date32Array::from(vec![3, 2, 1]);
-        let c2 = Date64Array::from(vec![3, 2, 1]);
-
-        let batch = RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![Arc::new(c1), Arc::new(c2)],
-        )
-        .unwrap();
-
-        let builder = WriterBuilder::new().has_headers(false);
-
-        let mut buf: Cursor<Vec<u8>> = Default::default();
-        // drop the writer early to release the borrow.
-        {
-            let mut writer = builder.build(&mut buf);
-            writer.write(&batch).unwrap();
-        }
-        buf.set_position(0);
-
-        let mut reader = Reader::new(
-            buf,
-            Arc::new(schema),
-            false,
-            None,
-            3,
-            // starting at row 2 and up to row 6.
-            None,
-            None,
-            None,
-        );
-        let rb = reader.next().unwrap().unwrap();
-        let c1 = rb.column(0).as_any().downcast_ref::<Date32Array>().unwrap();
-        let c2 = rb.column(1).as_any().downcast_ref::<Date64Array>().unwrap();
-
-        let actual = c1.into_iter().collect::<Vec<_>>();
-        let expected = vec![Some(3), Some(2), Some(1)];
-        assert_eq!(actual, expected);
-        let actual = c2.into_iter().collect::<Vec<_>>();
-        let expected = vec![Some(3), Some(2), Some(1)];
-        assert_eq!(actual, expected);
-    }
-
-    #[cfg(feature = "chrono-tz")]
     #[test]
     fn test_conversion_consistency() {
         // test if we can serialize and deserialize whilst retaining the same type information/ precision
