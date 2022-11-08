@@ -18,7 +18,7 @@
 [package]
 name = "arrow-csv"
 version = "26.0.0"
-description = "Support for the Arrow CSV format"
+description = "Support for parsing CSV format into the Arrow format"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
