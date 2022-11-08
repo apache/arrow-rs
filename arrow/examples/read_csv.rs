@@ -31,7 +31,7 @@ fn main() {
         Field::new("lng", DataType::Float64, false),
     ]);
 
-    let path = format!("{}/test/data/uk_cities.csv", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/../arrow-csv/test/data/uk_cities.csv", env!("CARGO_MANIFEST_DIR"));
     let file = File::open(path).unwrap();
 
     let mut csv =
