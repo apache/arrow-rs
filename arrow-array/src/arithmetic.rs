@@ -306,7 +306,10 @@ macro_rules! native_type_float_op {
             }
 
             fn is_eq(self, rhs: Self) -> bool {
-                self.total_cmp(&rhs).is_eq()
+                // Equivalent to `self.total_cmp(&rhs).is_eq()`
+                // but LLVM isn't able to realise this is bitwise equality
+                // https://rust.godbolt.org/z/347nWGxoW
+                self.to_bits() == rhs.to_bits()
             }
 
             fn is_ne(self, rhs: Self) -> bool {
