@@ -790,7 +790,7 @@ where
         .collect::<Result<Vec<_>, ArrowError>>()?
         .into_iter();
 
-    FixedSizeBinaryArray::try_from_sparse_iter_with_size(array_iter, size)
+    FixedSizeBinaryArray::try_from_sparse_iter_with_size(array_iter, Some(size))
 }
 
 /// `take` implementation for dictionary arrays
