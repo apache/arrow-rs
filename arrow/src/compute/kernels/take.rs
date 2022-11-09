@@ -217,12 +217,12 @@ where
                 .unwrap();
             Ok(Arc::new(take_binary(values, indices)?))
         }
-        DataType::FixedSizeBinary(_) => {
+        DataType::FixedSizeBinary(size) => {
             let values = values
                 .as_any()
                 .downcast_ref::<FixedSizeBinaryArray>()
                 .unwrap();
-            Ok(Arc::new(take_fixed_size_binary(values, indices)?))
+            Ok(Arc::new(take_fixed_size_binary(values, indices, *size)?))
         }
         DataType::Null => {
             // Take applied to a null array produces a null array.
@@ -843,6 +843,7 @@ where
 fn take_fixed_size_binary<IndexType>(
     values: &FixedSizeBinaryArray,
     indices: &PrimitiveArray<IndexType>,
+    size: i32,
 ) -> Result<FixedSizeBinaryArray>
 where
     IndexType: ArrowNumericType,
@@ -863,7 +864,7 @@ where
         .collect::<Result<Vec<_>>>()?
         .into_iter();
 
-    FixedSizeBinaryArray::try_from_sparse_iter(array_iter)
+    FixedSizeBinaryArray::try_from_sparse_iter_with_size(array_iter, size)
 }
 
 /// `take` implementation for dictionary arrays
