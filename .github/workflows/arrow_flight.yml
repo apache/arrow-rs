@@ -36,6 +36,8 @@ on:
       - arrow-select/**
       - arrow-flight/**
       - arrow-ipc/**
+      - arrow-csv/**
+      - arrow-json/**
       - .github/**
 
 jobs:

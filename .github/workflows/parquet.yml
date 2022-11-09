@@ -35,6 +35,8 @@ on:
       - arrow-schema/**
       - arrow-select/**
       - arrow-ipc/**
+      - arrow-csv/**
+      - arrow-json/**
       - parquet/**
       - .github/**
 

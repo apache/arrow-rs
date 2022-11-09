@@ -610,8 +610,8 @@ fn encode_column(
 }
 
 macro_rules! decode_primitive_helper {
-    ($t:ty, $rows: ident, $options:ident, $data_type: ident) => {
-        Arc::new(decode_primitive::<$t>($rows, $options, $data_type))
+    ($t:ty, $rows: ident, $data_type:ident, $options:ident) => {
+        Arc::new(decode_primitive::<$t>($rows, $data_type, $options))
     };
 }
 
@@ -626,9 +626,9 @@ unsafe fn decode_column(
     interner: Option<&OrderPreservingInterner>,
 ) -> Result<ArrayRef> {
     let options = field.options;
-    let data_type = &field.data_type;
+    let data_type = field.data_type.clone();
     let array: ArrayRef = downcast_primitive! {
-        &field.data_type => (decode_primitive_helper, rows, options, data_type),
+        data_type => (decode_primitive_helper, rows, data_type, options),
         DataType::Null => Arc::new(NullArray::new(rows.len())),
         DataType::Boolean => Arc::new(decode_bool(rows, options)),
         DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)),
@@ -870,6 +870,48 @@ mod tests {
         assert!(rows.row(1) < rows.row(0));
         let cols = converter.convert_rows(&rows).unwrap();
         assert_eq!(&cols[0], &col);
+    }
+
+    #[test]
+    fn test_timezone() {
+        let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5])
+            .with_timezone("+01:00".to_string());
+        let d = a.data_type().clone();
+
+        let mut converter =
+            RowConverter::new(vec![SortField::new(a.data_type().clone())]);
+        let rows = converter.convert_columns(&[Arc::new(a) as _]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].data_type(), &d);
+
+        // Test dictionary
+        let mut a =
+            PrimitiveDictionaryBuilder::<Int32Type, TimestampNanosecondType>::new();
+        a.append(34).unwrap();
+        a.append_null();
+        a.append(345).unwrap();
+
+        // Construct dictionary with a timezone
+        let dict = a.finish();
+        let values = TimestampNanosecondArray::from(dict.values().data().clone());
+        let dict_with_tz = dict.with_values(&values.with_timezone("+02:00".to_string()));
+        let d = DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                Some("+02:00".to_string()),
+            )),
+        );
+
+        assert_eq!(dict_with_tz.data_type(), &d);
+        let mut converter = RowConverter::new(vec![SortField::new(d.clone())]);
+        let rows = converter
+            .convert_columns(&[Arc::new(dict_with_tz) as _])
+            .unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].data_type(), &d);
     }
 
     #[test]

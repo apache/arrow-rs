@@ -32,6 +32,8 @@ on:
       - arrow-schema/**
       - arrow-select/**
       - arrow-ipc/**
+      - arrow-csv/**
+      - arrow-json/**
       - arrow-pyarrow-integration-testing/**
       - arrow-integration-test/**
       - arrow-integration-testing/**

@@ -34,6 +34,8 @@ on:
       - arrow-select/**
       - arrow-integration-test/**
       - arrow-ipc/**
+      - arrow-csv/**
+      - arrow-json/**
       - .github/**
 
 jobs:
@@ -64,6 +66,10 @@ jobs:
         run: cargo test -p arrow-cast --all-features
       - name: Test arrow-ipc with all features
         run: cargo test -p arrow-ipc --all-features
+      - name: Test arrow-csv with all features
+        run: cargo test -p arrow-csv --all-features
+      - name: Test arrow-json with all features
+        run: cargo test -p arrow-json --all-features
       - name: Test arrow-integration-test with all features
         run: cargo test -p arrow-integration-test --all-features
       - name: Test arrow with default features
@@ -174,5 +180,9 @@ jobs:
         run: cargo clippy -p arrow-cast --all-targets --all-features -- -D warnings
       - name: Clippy arrow-ipc with all features
         run: cargo clippy -p arrow-ipc --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-csv with all features
+        run: cargo clippy -p arrow-csv --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-json with all features
+        run: cargo clippy -p arrow-json --all-targets --all-features -- -D warnings
       - name: Clippy arrow
         run: cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict,dyn_arith_dict,chrono-tz --all-targets -- -D warnings
