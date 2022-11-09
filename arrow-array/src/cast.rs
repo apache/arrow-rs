@@ -242,6 +242,12 @@ macro_rules! downcast_primitive {
             $crate::repeat_pat!(arrow_schema::DataType::Float64, $($data_type),+) => {
                 $m!($crate::types::Float64Type $(, $args)*)
             }
+            $crate::repeat_pat!(arrow_schema::DataType::Decimal128(_, _), $($data_type),+) => {
+                $m!($crate::types::Decimal128Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Decimal256(_, _), $($data_type),+) => {
+                $m!($crate::types::Decimal256Type $(, $args)*)
+            }
             $crate::repeat_pat!(arrow_schema::DataType::Interval(arrow_schema::IntervalUnit::YearMonth), $($data_type),+) => {
                 $m!($crate::types::IntervalYearMonthType $(, $args)*)
             }
