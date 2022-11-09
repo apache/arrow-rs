@@ -313,7 +313,7 @@ macro_rules! native_type_float_op {
             }
 
             fn is_ne(self, rhs: Self) -> bool {
-                self.total_cmp(&rhs).is_ne()
+                !self.is_eq(rhs)
             }
 
             fn is_lt(self, rhs: Self) -> bool {
