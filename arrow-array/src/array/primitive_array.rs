@@ -832,7 +832,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// 2. `scale` is larger than `T::MAX_SCALE`
     /// 3. `scale` is > `precision`
     pub fn with_precision_and_scale(
-        self,
+        &self,
         precision: u8,
         scale: u8,
     ) -> Result<Self, ArrowError>
