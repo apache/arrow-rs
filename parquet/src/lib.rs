@@ -84,7 +84,8 @@ pub mod arrow;
 pub mod column;
 experimental!(mod compression);
 experimental!(mod encodings);
-experimental!(mod bloom_filter);
+#[cfg(feature = "bloom")]
+mod bloom_filter;
 pub mod file;
 pub mod record;
 pub mod schema;
