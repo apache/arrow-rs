@@ -536,25 +536,20 @@ fn make_timestamp_array(
 
 fn as_time_res_with_timezone<T: ArrowPrimitiveType>(
     v: i64,
-    tz: Tz,
+    tz: Option<Tz>,
 ) -> Result<NaiveTime, ArrowError> {
-    match as_datetime_with_timezone::<T>(v, tz) {
-        Some(dt) => Ok(dt.time()),
-        None => Err(ArrowError::CastError(format!(
+    let time = match tz {
+        Some(tz) => as_datetime_with_timezone::<T>(v, tz).map(|d| d.time()),
+        None => as_datetime::<T>(v).map(|d| d.time()),
+    };
+
+    time.ok_or_else(|| {
+        ArrowError::CastError(format!(
             "Failed to create naive time with {} {}",
             std::any::type_name::<T>(),
             v
-        ))),
-    }
-}
-
-fn as_timezone_res(tz: &Option<String>) -> Result<Tz, ArrowError> {
-    match tz {
-        Some(s) => s.parse(),
-        None => Err(ArrowError::ParseError(
-            "Timezone must not be none".to_string(),
-        )),
-    }
+        ))
+    })
 }
 
 /// Cast `array` to the provided data type and return a new Array with
@@ -1514,7 +1509,7 @@ pub fn cast_with_options(
                 .unary::<_, Date64Type>(|x| x / (NANOSECONDS / MILLISECONDS)),
         )),
         (Timestamp(TimeUnit::Second, tz), Time64(TimeUnit::Microsecond)) => {
-            let tz: Tz = as_timezone_res(tz)?;
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
                 as_primitive_array::<TimestampSecondType>(array)
                     .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
@@ -1525,7 +1520,7 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(TimeUnit::Second, tz), Time64(TimeUnit::Nanosecond)) => {
-            let tz: Tz = as_timezone_res(tz)?;
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
                 as_primitive_array::<TimestampSecondType>(array)
                     .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
@@ -1536,7 +1531,7 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(TimeUnit::Millisecond, tz), Time64(TimeUnit::Microsecond)) => {
-            let tz: Tz = as_timezone_res(tz)?;
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
                 as_primitive_array::<TimestampMillisecondType>(array)
                     .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
@@ -1547,7 +1542,7 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(TimeUnit::Millisecond, tz), Time64(TimeUnit::Nanosecond)) => {
-            let tz: Tz = as_timezone_res(tz)?;
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
                 as_primitive_array::<TimestampMillisecondType>(array)
                     .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
@@ -1558,7 +1553,7 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(TimeUnit::Microsecond, tz), Time64(TimeUnit::Microsecond)) => {
-            let tz: Tz = as_timezone_res(tz)?;
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
                 as_primitive_array::<TimestampMicrosecondType>(array)
                     .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
@@ -1569,7 +1564,7 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(TimeUnit::Microsecond, tz), Time64(TimeUnit::Nanosecond)) => {
-            let tz: Tz = as_timezone_res(tz)?;
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
                 as_primitive_array::<TimestampMicrosecondType>(array)
                     .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
@@ -1580,7 +1575,7 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(TimeUnit::Nanosecond, tz), Time64(TimeUnit::Microsecond)) => {
-            let tz: Tz = as_timezone_res(tz)?;
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
                 as_primitive_array::<TimestampNanosecondType>(array)
                     .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
@@ -1591,7 +1586,7 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(TimeUnit::Nanosecond, tz), Time64(TimeUnit::Nanosecond)) => {
-            let tz: Tz = as_timezone_res(tz)?;
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
                 as_primitive_array::<TimestampNanosecondType>(array)
                     .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
@@ -1602,7 +1597,7 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(TimeUnit::Second, tz), Time32(TimeUnit::Second)) => {
-            let tz: Tz = as_timezone_res(tz)?;
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
                 as_primitive_array::<TimestampSecondType>(array)
                     .try_unary::<_, Time32SecondType, ArrowError>(|x| {
@@ -1613,7 +1608,7 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(TimeUnit::Second, tz), Time32(TimeUnit::Millisecond)) => {
-            let tz: Tz = as_timezone_res(tz)?;
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
                 as_primitive_array::<TimestampSecondType>(array)
                     .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
@@ -1624,7 +1619,7 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(TimeUnit::Millisecond, tz), Time32(TimeUnit::Second)) => {
-            let tz: Tz = as_timezone_res(tz)?;
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
                 as_primitive_array::<TimestampMillisecondType>(array)
                     .try_unary::<_, Time32SecondType, ArrowError>(|x| {
@@ -1635,7 +1630,7 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(TimeUnit::Millisecond, tz), Time32(TimeUnit::Millisecond)) => {
-            let tz: Tz = as_timezone_res(tz)?;
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
                 as_primitive_array::<TimestampMillisecondType>(array)
                     .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
@@ -1646,7 +1641,7 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(TimeUnit::Microsecond, tz), Time32(TimeUnit::Second)) => {
-            let tz: Tz = as_timezone_res(tz)?;
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
                 as_primitive_array::<TimestampMicrosecondType>(array)
                     .try_unary::<_, Time32SecondType, ArrowError>(|x| {
@@ -1657,7 +1652,7 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(TimeUnit::Microsecond, tz), Time32(TimeUnit::Millisecond)) => {
-            let tz: Tz = as_timezone_res(tz)?;
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
                 as_primitive_array::<TimestampMicrosecondType>(array)
                     .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
@@ -1668,7 +1663,7 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(TimeUnit::Nanosecond, tz), Time32(TimeUnit::Second)) => {
-            let tz: Tz = as_timezone_res(tz)?;
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
                 as_primitive_array::<TimestampNanosecondType>(array)
                     .try_unary::<_, Time32SecondType, ArrowError>(|x| {
@@ -1679,7 +1674,7 @@ pub fn cast_with_options(
             ))
         }
         (Timestamp(TimeUnit::Nanosecond, tz), Time32(TimeUnit::Millisecond)) => {
-            let tz: Tz = as_timezone_res(tz)?;
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
                 as_primitive_array::<TimestampNanosecondType>(array)
                     .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
