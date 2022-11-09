@@ -551,7 +551,9 @@ fn as_time_res_with_timezone<T: ArrowPrimitiveType>(
 fn as_timezone_res(tz: &Option<String>) -> Result<Tz, ArrowError> {
     match tz {
         Some(s) => s.parse(),
-        None => Err(ArrowError::ParseError("Timezone must not be none".to_string())),
+        None => Err(ArrowError::ParseError(
+            "Timezone must not be none".to_string(),
+        )),
     }
 }
 
