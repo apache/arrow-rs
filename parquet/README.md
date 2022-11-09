@@ -47,6 +47,7 @@ The `parquet` crate provides the following features which may be enabled in your
 - `flate2` (default) - support for parquet using `gzip` compression
 - `lz4` (default) - support for parquet using `lz4` compression
 - `zstd` (default) - support for parquet using `zstd` compression
+- `snap` (default) - support for parquet using `snappy` compression
 - `cli` - parquet [CLI tools](https://github.com/apache/arrow-rs/tree/master/parquet/src/bin)
 - `experimental` - Experimental APIs which may change, even between minor releases
 
@@ -65,8 +66,16 @@ The `parquet` crate provides the following features which may be enabled in your
   - [ ] Row record writer
   - [x] Arrow record writer
   - [ ] Async support
-- [ ] Predicate pushdown
+- [x] Predicate pushdown
 - [x] Parquet format 4.0.0 support
+
+## Support for `wasm32-unknown-unknown` target
+
+It's possible to build `parquet` for the `wasm32-unknown-unknown` target, however not all the compression features are currently unsupported due to issues with the upstream crates. In particular, the `zstd` and `lz4` features may have compilation issues. See issue [#180](https://github.com/apache/arrow-rs/issues/180).
+
+```
+cargo build -p parquet --target wasm32-unknown-unknown --no-default-features --features cli,snap,flate2,brotli
+```
 
 ## License
 

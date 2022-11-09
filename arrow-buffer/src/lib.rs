@@ -21,8 +21,10 @@ pub mod alloc;
 pub mod buffer;
 pub use buffer::{Buffer, MutableBuffer};
 
+mod bigint;
 mod bytes;
 mod native;
+pub use bigint::i256;
 
 pub use native::*;
 mod util;

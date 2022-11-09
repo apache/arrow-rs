@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow"
-version = "24.0.0"
+version = "26.0.0"
 description = "Rust implementation of Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -44,40 +44,38 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
-arrow-buffer = { version = "24.0.0", path = "../arrow-buffer" }
-arrow-data = { version = "24.0.0", path = "../arrow-data" }
-arrow-schema = { version = "24.0.0", path = "../arrow-schema" }
-arrow-array = { version = "24.0.0", path = "../arrow-array" }
+arrow-buffer = { version = "26.0.0", path = "../arrow-buffer" }
+arrow-cast = { version = "26.0.0", path = "../arrow-cast" }
+arrow-csv = { version = "26.0.0", path = "../arrow-csv", optional = true }
+arrow-data = { version = "26.0.0", path = "../arrow-data" }
+arrow-schema = { version = "26.0.0", path = "../arrow-schema" }
+arrow-array = { version = "26.0.0", path = "../arrow-array" }
+arrow-select = { version = "26.0.0", path = "../arrow-select" }
+arrow-ipc = { version = "26.0.0", path = "../arrow-ipc", optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 indexmap = { version = "1.9", default-features = false, features = ["std"] }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
-half = { version = "2.0", default-features = false, features = ["num-traits"]}
+half = { version = "2.1", default-features = false, features = ["num-traits"] }
 hashbrown = { version = "0.12", default-features = false }
-csv_crate = { version = "1.1", default-features = false, optional = true, package = "csv" }
 regex = { version = "1.5.6", default-features = false, features = ["std", "unicode"] }
 regex-syntax = { version = "0.6.27", default-features = false, features = ["unicode"] }
-lazy_static = { version = "1.4", default-features = false }
-lz4 = { version = "1.23", default-features = false, optional = true }
 packed_simd = { version = "0.3", default-features = false, optional = true, package = "packed_simd_2" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-chrono-tz = { version = "0.6", default-features = false, optional = true }
-flatbuffers = { version = "2.1.2", default-features = false, features = ["thiserror"], optional = true }
 comfy-table = { version = "6.0", optional = true, default-features = false }
 pyo3 = { version = "0.17", default-features = false, optional = true }
 lexical-core = { version = "^0.8", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 multiversion = { version = "0.6.1", default-features = false }
 bitflags = { version = "1.2.1", default-features = false }
-zstd = { version = "0.11.1", default-features = false, optional = true }
 
 [package.metadata.docs.rs]
 features = ["prettyprint", "ipc_compression", "dyn_cmp_dict", "ffi", "pyarrow"]
 
 [features]
 default = ["csv", "ipc", "json"]
-ipc_compression = ["ipc", "zstd", "lz4"]
-csv = ["csv_crate"]
-ipc = ["flatbuffers"]
+ipc_compression = ["ipc", "arrow-ipc/lz4", "arrow-ipc/zstd"]
+csv = ["arrow-csv"]
+ipc = ["arrow-ipc"]
 json = ["serde_json"]
 simd = ["packed_simd"]
 prettyprint = ["comfy-table"]
@@ -99,6 +97,7 @@ dyn_cmp_dict = []
 # Enable dyn-arithmetic kernels for dictionary arrays
 # Note: this does not impact arithmetic with scalars
 dyn_arith_dict = []
+chrono-tz = ["arrow-array/chrono-tz"]
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
@@ -172,6 +171,11 @@ required-features = ["test_utils"]
 
 [[bench]]
 name = "take_kernels"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "interleave_kernels"
 harness = false
 required-features = ["test_utils"]
 
@@ -253,3 +257,16 @@ required-features = ["test_utils"]
 name = "bitwise_kernel"
 harness = false
 required-features = ["test_utils"]
+
+[[bench]]
+name = "lexsort"
+harness = false
+required-features = ["test_utils"]
+
+[[test]]
+name = "ipc"
+required-features = ["test_utils", "ipc"]
+
+[[test]]
+name = "csv"
+required-features = ["csv"]

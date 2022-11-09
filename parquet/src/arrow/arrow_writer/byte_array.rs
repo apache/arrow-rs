@@ -379,8 +379,7 @@ impl DictEncoder {
 
     fn estimated_data_page_size(&self) -> usize {
         let bit_width = self.bit_width();
-        1 + RleEncoder::min_buffer_size(bit_width)
-            + RleEncoder::max_buffer_size(bit_width, self.indices.len())
+        1 + RleEncoder::max_buffer_size(bit_width, self.indices.len())
     }
 
     fn estimated_dict_page_size(&self) -> usize {
@@ -427,7 +426,6 @@ impl DictEncoder {
 struct ByteArrayEncoder {
     fallback: FallbackEncoder,
     dict_encoder: Option<DictEncoder>,
-    num_values: usize,
     min_value: Option<ByteArray>,
     max_value: Option<ByteArray>,
 }
@@ -466,7 +464,6 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         Ok(Self {
             fallback,
             dict_encoder: dictionary,
-            num_values: 0,
             min_value: None,
             max_value: None,
         })
@@ -487,7 +484,10 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     }
 
     fn num_values(&self) -> usize {
-        self.num_values
+        match &self.dict_encoder {
+            Some(encoder) => encoder.indices.len(),
+            None => self.fallback.num_values,
+        }
     }
 
     fn has_dictionary(&self) -> bool {
@@ -508,7 +508,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     fn flush_dict_page(&mut self) -> Result<Option<DictionaryPage>> {
         match self.dict_encoder.take() {
             Some(encoder) => {
-                if self.num_values != 0 {
+                if !encoder.indices.is_empty() {
                     return Err(general_err!(
                         "Must flush data pages before flushing dictionary"
                     ));

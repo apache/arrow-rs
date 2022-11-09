@@ -16,12 +16,12 @@
 // under the License.
 
 use crate::array::make_array;
+use crate::builder::{GenericListBuilder, PrimitiveBuilder};
 use crate::{
-    builder::BooleanBufferBuilder, iterator::GenericListArrayIter, print_long_array,
-    raw_pointer::RawPtrBox, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType,
-    PrimitiveArray,
+    iterator::GenericListArrayIter, print_long_array, raw_pointer::RawPtrBox, Array,
+    ArrayAccessor, ArrayRef, ArrowPrimitiveType,
 };
-use arrow_buffer::{ArrowNativeType, MutableBuffer};
+use arrow_buffer::ArrowNativeType;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
 use num::Integer;
@@ -41,6 +41,17 @@ impl OffsetSizeTrait for i32 {
 impl OffsetSizeTrait for i64 {
     const IS_LARGE: bool = true;
     const PREFIX: &'static str = "Large";
+}
+
+/// Returns a slice of `OffsetSize` consisting of a single zero value
+#[inline]
+pub(crate) fn empty_offsets<OffsetSize: OffsetSizeTrait>() -> &'static [OffsetSize] {
+    static OFFSET: &[i64] = &[0];
+    // SAFETY:
+    // OffsetSize is ArrowNativeType and is therefore trivially transmutable
+    let (prefix, val, suffix) = unsafe { OFFSET.align_to::<OffsetSize>() };
+    assert!(prefix.is_empty() && suffix.is_empty());
+    val
 }
 
 /// Generic struct for a variable-size list array.
@@ -146,47 +157,26 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     pub fn from_iter_primitive<T, P, I>(iter: I) -> Self
     where
         T: ArrowPrimitiveType,
-        P: AsRef<[Option<<T as ArrowPrimitiveType>::Native>]>
-            + IntoIterator<Item = Option<<T as ArrowPrimitiveType>::Native>>,
+        P: IntoIterator<Item = Option<<T as ArrowPrimitiveType>::Native>>,
         I: IntoIterator<Item = Option<P>>,
     {
-        let iterator = iter.into_iter();
-        let (lower, _) = iterator.size_hint();
+        let iter = iter.into_iter();
+        let size_hint = iter.size_hint().0;
+        let mut builder =
+            GenericListBuilder::with_capacity(PrimitiveBuilder::<T>::new(), size_hint);
 
-        let mut offsets =
-            MutableBuffer::new((lower + 1) * std::mem::size_of::<OffsetSize>());
-        let mut length_so_far = OffsetSize::zero();
-        offsets.push(length_so_far);
-
-        let mut null_buf = BooleanBufferBuilder::new(lower);
-
-        let values: PrimitiveArray<T> = iterator
-            .filter_map(|maybe_slice| {
-                // regardless of whether the item is Some, the offsets and null buffers must be updated.
-                match &maybe_slice {
-                    Some(x) => {
-                        length_so_far +=
-                            OffsetSize::from_usize(x.as_ref().len()).unwrap();
-                        null_buf.append(true);
+        for i in iter {
+            match i {
+                Some(p) => {
+                    for t in p {
+                        builder.values().append_option(t);
                     }
-                    None => null_buf.append(false),
-                };
-                offsets.push(length_so_far);
-                maybe_slice
-            })
-            .flatten()
-            .collect();
-
-        let field = Box::new(Field::new("item", T::DATA_TYPE, true));
-        let data_type = Self::DATA_TYPE_CONSTRUCTOR(field);
-        let array_data = ArrayData::builder(data_type)
-            .len(null_buf.len())
-            .add_buffer(offsets.into())
-            .add_child_data(values.into_data())
-            .null_bit_buffer(Some(null_buf.into()));
-        let array_data = unsafe { array_data.build_unchecked() };
-
-        Self::from(array_data)
+                    builder.append(true);
+                }
+                None => builder.append(false),
+            }
+        }
+        builder.finish()
     }
 }
 
@@ -211,7 +201,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         if data.buffers().len() != 1 {
             return Err(ArrowError::InvalidArgumentError(
                 format!("ListArray data should contain a single buffer only (value offsets), had {}",
-                        data.len())));
+                        data.buffers().len())));
         }
 
         if data.child_data().len() != 1 {
@@ -240,8 +230,15 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         }
 
         let values = make_array(values);
-        let value_offsets = data.buffers()[0].as_ptr();
-        let value_offsets = unsafe { RawPtrBox::<OffsetSize>::new(value_offsets) };
+        // Handle case of empty offsets
+        let offsets = match data.is_empty() && data.buffers()[0].is_empty() {
+            true => empty_offsets::<OffsetSize>().as_ptr() as *const _,
+            false => data.buffers()[0].as_ptr(),
+        };
+
+        // SAFETY:
+        // Verified list type in call to `Self::get_type`
+        let value_offsets = unsafe { RawPtrBox::new(offsets) };
         Ok(Self {
             data,
             values,
@@ -346,6 +343,7 @@ pub type LargeListArray = GenericListArray<i64>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::builder::{Int32Builder, ListBuilder};
     use crate::types::Int32Type;
     use crate::Int32Array;
     use arrow_buffer::{bit_util, Buffer, ToByteSlice};
@@ -805,6 +803,18 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(
+        expected = "[Large]ListArray's datatype must be [Large]ListArray(). It is List"
+    )]
+    fn test_from_array_data_validation() {
+        let mut builder = ListBuilder::new(Int32Builder::new());
+        builder.values().append_value(1);
+        builder.append(true);
+        let array = builder.finish();
+        let _ = LargeListArray::from(array.into_data());
+    }
+
+    #[test]
     fn test_list_array_offsets_need_not_start_at_zero() {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
@@ -940,5 +950,27 @@ mod tests {
             vec![None, None, Some(vec![Some(2)])],
             false,
         );
+    }
+
+    #[test]
+    fn test_empty_offsets() {
+        let f = Box::new(Field::new("element", DataType::Int32, true));
+        let string = ListArray::from(
+            ArrayData::builder(DataType::List(f.clone()))
+                .buffers(vec![Buffer::from(&[])])
+                .add_child_data(ArrayData::new_empty(&DataType::Int32))
+                .build()
+                .unwrap(),
+        );
+        assert_eq!(string.value_offsets(), &[0]);
+        let string = LargeListArray::from(
+            ArrayData::builder(DataType::LargeList(f))
+                .buffers(vec![Buffer::from(&[])])
+                .add_child_data(ArrayData::new_empty(&DataType::Int32))
+                .build()
+                .unwrap(),
+        );
+        assert_eq!(string.len(), 0);
+        assert_eq!(string.value_offsets(), &[0]);
     }
 }

@@ -19,13 +19,17 @@
 
 use crate::array::ArrowPrimitiveType;
 use crate::delta::shift_months;
+use crate::OffsetSizeTrait;
+use arrow_buffer::i256;
 use arrow_data::decimal::{
-    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
-    DECIMAL256_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
+    validate_decimal256_precision, validate_decimal_precision, DECIMAL128_MAX_PRECISION,
+    DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
+    DECIMAL_DEFAULT_SCALE,
 };
-use arrow_schema::{DataType, IntervalUnit, TimeUnit};
+use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use chrono::{Duration, NaiveDate};
 use half::f16;
+use std::marker::PhantomData;
 use std::ops::{Add, Sub};
 
 // BooleanType is special: its bit-width is not the size of the primitive type, and its `index`
@@ -462,23 +466,15 @@ impl Date64Type {
     }
 }
 
-mod private {
+/// Crate private types for Decimal Arrays
+///
+/// Not intended to be used outside this crate
+mod decimal {
     use super::*;
 
     pub trait DecimalTypeSealed {}
     impl DecimalTypeSealed for Decimal128Type {}
     impl DecimalTypeSealed for Decimal256Type {}
-}
-
-/// Trait representing the in-memory layout of a decimal type
-pub trait NativeDecimalType: Send + Sync + Copy + AsRef<[u8]> {
-    fn from_slice(slice: &[u8]) -> Self;
-}
-
-impl<const N: usize> NativeDecimalType for [u8; N] {
-    fn from_slice(slice: &[u8]) -> Self {
-        slice.try_into().unwrap()
-    }
 }
 
 /// A trait over the decimal types, used by [`DecimalArray`] to provide a generic
@@ -490,14 +486,26 @@ impl<const N: usize> NativeDecimalType for [u8; N] {
 /// [`DecimalArray`]: [crate::array::DecimalArray]
 /// [`Decimal128Array`]: [crate::array::Decimal128Array]
 /// [`Decimal256Array`]: [crate::array::Decimal256Array]
-pub trait DecimalType: 'static + Send + Sync + private::DecimalTypeSealed {
-    type Native: NativeDecimalType;
-
+pub trait DecimalType:
+    'static + Send + Sync + ArrowPrimitiveType + decimal::DecimalTypeSealed
+{
     const BYTE_LENGTH: usize;
     const MAX_PRECISION: u8;
     const MAX_SCALE: u8;
     const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType;
     const DEFAULT_TYPE: DataType;
+
+    /// "Decimal128" or "Decimal256", for use in error messages
+    const PREFIX: &'static str;
+
+    /// Formats the decimal value with the provided precision and scale
+    fn format_decimal(value: Self::Native, precision: u8, scale: u8) -> String;
+
+    /// Validates that `value` contains no more than `precision` decimal digits
+    fn validate_decimal_precision(
+        value: Self::Native,
+        precision: u8,
+    ) -> Result<(), ArrowError>;
 }
 
 /// The decimal type for a Decimal128Array
@@ -505,14 +513,27 @@ pub trait DecimalType: 'static + Send + Sync + private::DecimalTypeSealed {
 pub struct Decimal128Type {}
 
 impl DecimalType for Decimal128Type {
-    type Native = [u8; 16];
-
     const BYTE_LENGTH: usize = 16;
     const MAX_PRECISION: u8 = DECIMAL128_MAX_PRECISION;
     const MAX_SCALE: u8 = DECIMAL128_MAX_SCALE;
     const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType = DataType::Decimal128;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
+    const PREFIX: &'static str = "Decimal128";
+
+    fn format_decimal(value: Self::Native, precision: u8, scale: u8) -> String {
+        format_decimal_str(&value.to_string(), precision as usize, scale as usize)
+    }
+
+    fn validate_decimal_precision(num: i128, precision: u8) -> Result<(), ArrowError> {
+        validate_decimal_precision(num, precision)
+    }
+}
+
+impl ArrowPrimitiveType for Decimal128Type {
+    type Native = i128;
+
+    const DATA_TYPE: DataType = <Self as DecimalType>::DEFAULT_TYPE;
 }
 
 /// The decimal type for a Decimal256Array
@@ -520,15 +541,129 @@ impl DecimalType for Decimal128Type {
 pub struct Decimal256Type {}
 
 impl DecimalType for Decimal256Type {
-    type Native = [u8; 32];
-
     const BYTE_LENGTH: usize = 32;
     const MAX_PRECISION: u8 = DECIMAL256_MAX_PRECISION;
     const MAX_SCALE: u8 = DECIMAL256_MAX_SCALE;
     const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType = DataType::Decimal256;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
+    const PREFIX: &'static str = "Decimal256";
+
+    fn format_decimal(value: Self::Native, precision: u8, scale: u8) -> String {
+        format_decimal_str(&value.to_string(), precision as usize, scale as usize)
+    }
+
+    fn validate_decimal_precision(num: i256, precision: u8) -> Result<(), ArrowError> {
+        validate_decimal256_precision(num, precision)
+    }
 }
+
+impl ArrowPrimitiveType for Decimal256Type {
+    type Native = i256;
+
+    const DATA_TYPE: DataType = <Self as DecimalType>::DEFAULT_TYPE;
+}
+
+fn format_decimal_str(value_str: &str, precision: usize, scale: usize) -> String {
+    let (sign, rest) = match value_str.strip_prefix('-') {
+        Some(stripped) => ("-", stripped),
+        None => ("", value_str),
+    };
+    let bound = precision.min(rest.len()) + sign.len();
+    let value_str = &value_str[0..bound];
+
+    if scale == 0 {
+        value_str.to_string()
+    } else if rest.len() > scale {
+        // Decimal separator is in the middle of the string
+        let (whole, decimal) = value_str.split_at(value_str.len() - scale);
+        format!("{}.{}", whole, decimal)
+    } else {
+        // String has to be padded
+        format!("{}0.{:0>width$}", sign, rest, width = scale)
+    }
+}
+
+/// Crate private types for Byte Arrays
+///
+/// Not intended to be used outside this crate
+pub(crate) mod bytes {
+    use super::*;
+
+    pub trait ByteArrayTypeSealed {}
+    impl<O: OffsetSizeTrait> ByteArrayTypeSealed for GenericStringType<O> {}
+    impl<O: OffsetSizeTrait> ByteArrayTypeSealed for GenericBinaryType<O> {}
+
+    pub trait ByteArrayNativeType: std::fmt::Debug + Send + Sync {
+        /// # Safety
+        ///
+        /// `b` must be a valid byte sequence for `Self`
+        unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self;
+    }
+
+    impl ByteArrayNativeType for [u8] {
+        unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
+            b
+        }
+    }
+
+    impl ByteArrayNativeType for str {
+        unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
+            std::str::from_utf8_unchecked(b)
+        }
+    }
+}
+
+/// A trait over the variable-size byte array types
+///
+/// See [Variable Size Binary Layout](https://arrow.apache.org/docs/format/Columnar.html#variable-size-binary-layout)
+pub trait ByteArrayType: 'static + Send + Sync + bytes::ByteArrayTypeSealed {
+    type Offset: OffsetSizeTrait;
+    type Native: bytes::ByteArrayNativeType + AsRef<[u8]> + ?Sized;
+    /// "Binary" or "String", for use in error messages
+    const PREFIX: &'static str;
+    const DATA_TYPE: DataType;
+}
+
+/// [`ByteArrayType`] for string arrays
+pub struct GenericStringType<O: OffsetSizeTrait> {
+    phantom: PhantomData<O>,
+}
+
+impl<O: OffsetSizeTrait> ByteArrayType for GenericStringType<O> {
+    type Offset = O;
+    type Native = str;
+    const PREFIX: &'static str = "String";
+
+    const DATA_TYPE: DataType = if O::IS_LARGE {
+        DataType::LargeUtf8
+    } else {
+        DataType::Utf8
+    };
+}
+
+pub type Utf8Type = GenericStringType<i32>;
+pub type LargeUtf8Type = GenericStringType<i64>;
+
+/// [`ByteArrayType`] for binary arrays
+pub struct GenericBinaryType<O: OffsetSizeTrait> {
+    phantom: PhantomData<O>,
+}
+
+impl<O: OffsetSizeTrait> ByteArrayType for GenericBinaryType<O> {
+    type Offset = O;
+    type Native = [u8];
+    const PREFIX: &'static str = "Binary";
+
+    const DATA_TYPE: DataType = if O::IS_LARGE {
+        DataType::LargeBinary
+    } else {
+        DataType::Binary
+    };
+}
+
+pub type BinaryType = GenericBinaryType<i32>;
+pub type LargeBinaryType = GenericBinaryType<i64>;
 
 #[cfg(test)]
 mod tests {

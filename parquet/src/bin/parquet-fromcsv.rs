@@ -72,7 +72,7 @@ use std::{
 };
 
 use arrow::{csv::ReaderBuilder, datatypes::Schema, error::ArrowError};
-use clap::{ArgEnum, Parser};
+use clap::{Parser, ValueEnum};
 use parquet::{
     arrow::{parquet_to_arrow_schema, ArrowWriter},
     basic::Compression,
@@ -140,7 +140,7 @@ impl Display for ParquetFromCsvError {
 }
 
 #[derive(Debug, Parser)]
-#[clap(author, version, about("Binary to convert csv to Parquet"), long_about=None)]
+#[clap(author, version, disable_help_flag=true, about("Binary to convert csv to Parquet"), long_about=None)]
 struct Args {
     /// Path to a text file containing a parquet schema definition
     #[clap(short, long, help("message schema for output Parquet"))]
@@ -153,7 +153,7 @@ struct Args {
     output_file: PathBuf,
     /// input file format
     #[clap(
-        arg_enum,
+        value_enum,
         short('f'),
         long,
         help("input file format"),
@@ -179,7 +179,7 @@ struct Args {
     ///  when input_format==TSV: 'TAB'
     #[clap(short, long, help("field delimiter"))]
     delimiter: Option<char>,
-    #[clap(arg_enum, short, long, help("record terminator"))]
+    #[clap(value_enum, short, long, help("record terminator"))]
     record_terminator: Option<RecordTerminator>,
     #[clap(short, long, help("escape charactor"))]
     escape_char: Option<char>,
@@ -188,14 +188,17 @@ struct Args {
     #[clap(short('D'), long, help("double quote"))]
     double_quote: Option<bool>,
     #[clap(short('c'), long, help("compression mode"), default_value_t=Compression::SNAPPY)]
-    #[clap(parse(try_from_str =compression_from_str))]
+    #[clap(value_parser=compression_from_str)]
     parquet_compression: Compression,
 
     #[clap(short, long, help("writer version"))]
-    #[clap(parse(try_from_str =writer_version_from_str))]
+    #[clap(value_parser=writer_version_from_str)]
     writer_version: Option<WriterVersion>,
     #[clap(short, long, help("max row group size"))]
     max_row_group_size: Option<usize>,
+
+    #[clap(long, action=clap::ArgAction::Help, help("display usage help"))]
+    help: Option<bool>,
 }
 
 fn compression_from_str(cmp: &str) -> Result<Compression, String> {
@@ -208,7 +211,7 @@ fn compression_from_str(cmp: &str) -> Result<Compression, String> {
         "LZ4" => Ok(Compression::LZ4),
         "ZSTD" => Ok(Compression::ZSTD),
         v => Err(
-            format!("Unknown compression {0} : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD ",v)
+            format!("Unknown compression {0} : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help",v)
         )
     }
 }
@@ -263,13 +266,13 @@ impl Args {
     }
 }
 
-#[derive(Debug, Clone, Copy, ArgEnum, PartialEq)]
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
 enum CsvDialect {
     Csv,
     Tsv,
 }
 
-#[derive(Debug, Clone, Copy, ArgEnum, PartialEq)]
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
 enum RecordTerminator {
     LF,
     Crlf,
@@ -513,7 +516,7 @@ mod tests {
             Ok(_) => panic!("unexpected success"),
             Err(e) => assert_eq!(
                 format!("{}", e),
-                "error: Invalid value \"zip\" for '--parquet-compression <PARQUET_COMPRESSION>': Unknown compression ZIP : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help\n"),
+                "error: Invalid value 'zip' for '--parquet-compression <PARQUET_COMPRESSION>': Unknown compression ZIP : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help\n"),
         }
     }
 
@@ -544,6 +547,7 @@ mod tests {
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
             max_row_group_size: None,
+            help: None,
         };
         let arrow_schema = Arc::new(Schema::new(vec![
             Field::new("field1", DataType::Utf8, false),
@@ -577,6 +581,7 @@ mod tests {
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
             max_row_group_size: None,
+            help: None,
         };
         let arrow_schema = Arc::new(Schema::new(vec![
             Field::new("field1", DataType::Utf8, false),
@@ -630,6 +635,7 @@ mod tests {
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
             max_row_group_size: None,
+            help: None,
         };
         convert_csv_to_parquet(&args).unwrap();
     }

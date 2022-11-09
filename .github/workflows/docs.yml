@@ -51,5 +51,4 @@ jobs:
         with:
           rust-version: ${{ matrix.rust }}
       - name: Run cargo doc
-        run: |
-          cargo doc --document-private-items --no-deps --workspace --all-features
+        run: cargo doc --document-private-items --no-deps --workspace --all-features

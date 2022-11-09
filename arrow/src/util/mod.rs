@@ -24,13 +24,10 @@ pub use arrow_data::bit_mask;
 pub mod bench_util;
 #[cfg(feature = "test_utils")]
 pub mod data_gen;
-pub mod display;
 #[cfg(feature = "prettyprint")]
 pub mod pretty;
-pub(crate) mod serialization;
 pub mod string_writer;
 #[cfg(any(test, feature = "test_utils"))]
 pub mod test_util;
 
-pub use arrow_array::decimal;
-pub(crate) mod reader_parser;
+pub use arrow_cast::display;

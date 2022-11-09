@@ -800,12 +800,20 @@ fn convert_date_to_string(value: u32) -> String {
 }
 
 /// Helper method to convert Parquet timestamp into a string.
+/// Input `value` is a number of seconds since the epoch in UTC.
+/// Datetime is displayed in local timezone.
+#[inline]
+fn convert_timestamp_secs_to_string(value: i64) -> String {
+    let dt = Utc.timestamp(value, 0);
+    format!("{}", dt.format("%Y-%m-%d %H:%M:%S %:z"))
+}
+
+/// Helper method to convert Parquet timestamp into a string.
 /// Input `value` is a number of milliseconds since the epoch in UTC.
 /// Datetime is displayed in local timezone.
 #[inline]
 fn convert_timestamp_millis_to_string(value: u64) -> String {
-    let dt = Utc.timestamp((value / 1000) as i64, 0);
-    format!("{}", dt.format("%Y-%m-%d %H:%M:%S %:z"))
+    convert_timestamp_secs_to_string(value as i64 / 1000)
 }
 
 /// Helper method to convert Parquet timestamp into a string.
@@ -813,7 +821,7 @@ fn convert_timestamp_millis_to_string(value: u64) -> String {
 /// Datetime is displayed in local timezone.
 #[inline]
 fn convert_timestamp_micros_to_string(value: u64) -> String {
-    convert_timestamp_millis_to_string(value / 1000)
+    convert_timestamp_secs_to_string(value as i64 / 1000000)
 }
 
 /// Helper method to convert Parquet decimal into a string.
@@ -827,7 +835,7 @@ fn convert_decimal_to_string(decimal: &Decimal) -> String {
     let num = BigInt::from_signed_bytes_be(decimal.data());
 
     // Offset of the first digit in a string.
-    let negative = if num.sign() == Sign::Minus { 1 } else { 0 };
+    let negative = i32::from(num.sign() == Sign::Minus);
     let mut num_str = num.to_string();
     let mut point = num_str.len() as i32 - decimal.scale() - negative;
 
@@ -1082,7 +1090,7 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_timestamp_to_string() {
+    fn test_convert_timestamp_millis_to_string() {
         fn check_datetime_conversion(y: u32, m: u32, d: u32, h: u32, mi: u32, s: u32) {
             let datetime = chrono::NaiveDate::from_ymd(y as i32, m, d).and_hms(h, mi, s);
             let dt = Utc.from_utc_datetime(&datetime);
@@ -1091,6 +1099,25 @@ mod tests {
             assert_eq!(res, exp);
         }
 
+        check_datetime_conversion(1969, 9, 10, 1, 2, 3);
+        check_datetime_conversion(2010, 1, 2, 13, 12, 54);
+        check_datetime_conversion(2011, 1, 3, 8, 23, 1);
+        check_datetime_conversion(2012, 4, 5, 11, 6, 32);
+        check_datetime_conversion(2013, 5, 12, 16, 38, 0);
+        check_datetime_conversion(2014, 11, 28, 21, 15, 12);
+    }
+
+    #[test]
+    fn test_convert_timestamp_micros_to_string() {
+        fn check_datetime_conversion(y: u32, m: u32, d: u32, h: u32, mi: u32, s: u32) {
+            let datetime = chrono::NaiveDate::from_ymd(y as i32, m, d).and_hms(h, mi, s);
+            let dt = Utc.from_utc_datetime(&datetime);
+            let res = convert_timestamp_micros_to_string(dt.timestamp_micros() as u64);
+            let exp = format!("{}", dt.format("%Y-%m-%d %H:%M:%S %:z"));
+            assert_eq!(res, exp);
+        }
+
+        check_datetime_conversion(1969, 9, 10, 1, 2, 3);
         check_datetime_conversion(2010, 1, 2, 13, 12, 54);
         check_datetime_conversion(2011, 1, 3, 8, 23, 1);
         check_datetime_conversion(2012, 4, 5, 11, 6, 32);

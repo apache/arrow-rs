@@ -20,6 +20,8 @@
 use crate::array::*;
 use crate::datatypes::*;
 use crate::util::test_util::seedable_rng;
+use arrow_buffer::Buffer;
+use rand::distributions::uniform::SampleUniform;
 use rand::Rng;
 use rand::SeedableRng;
 use rand::{
@@ -186,4 +188,40 @@ pub fn create_fsb_array(
         }
     }))
     .unwrap()
+}
+
+/// Creates a random (but fixed-seeded) dictionary array of a given size and null density
+/// with the provided values array
+pub fn create_dict_from_values<K>(
+    size: usize,
+    null_density: f32,
+    values: &dyn Array,
+) -> DictionaryArray<K>
+where
+    K: ArrowDictionaryKeyType,
+    Standard: Distribution<K::Native>,
+    K::Native: SampleUniform,
+{
+    let mut rng = seedable_rng();
+    let data_type = DataType::Dictionary(
+        Box::new(K::DATA_TYPE),
+        Box::new(values.data_type().clone()),
+    );
+
+    let min_key = K::Native::from_usize(0).unwrap();
+    let max_key = K::Native::from_usize(values.len()).unwrap();
+    let keys: Buffer = (0..size).map(|_| rng.gen_range(min_key..max_key)).collect();
+
+    let nulls: Option<Buffer> = (null_density != 0.)
+        .then(|| (0..size).map(|_| rng.gen_bool(null_density as _)).collect());
+
+    let data = ArrayDataBuilder::new(data_type)
+        .len(size)
+        .null_bit_buffer(nulls)
+        .add_buffer(keys)
+        .add_child_data(values.data().clone())
+        .build()
+        .unwrap();
+
+    DictionaryArray::from(data)
 }

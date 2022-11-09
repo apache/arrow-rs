@@ -22,6 +22,24 @@ use crate::{new_empty_array, Array, ArrayRef, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
 use std::sync::Arc;
 
+/// Trait for types that can read `RecordBatch`'s.
+pub trait RecordBatchReader: Iterator<Item = Result<RecordBatch, ArrowError>> {
+    /// Returns the schema of this `RecordBatchReader`.
+    ///
+    /// Implementation of this trait should guarantee that all `RecordBatch`'s returned by this
+    /// reader should have the same schema as returned from this method.
+    fn schema(&self) -> SchemaRef;
+
+    /// Reads the next `RecordBatch`.
+    #[deprecated(
+        since = "2.0.0",
+        note = "This method is deprecated in favour of `next` from the trait Iterator."
+    )]
+    fn next_batch(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+        self.next().transpose()
+    }
+}
+
 /// A two-dimensional batch of column-oriented data with a defined
 /// [schema](arrow_schema::Schema).
 ///
@@ -377,6 +395,14 @@ impl RecordBatch {
         let schema = Arc::new(Schema::new(fields));
         RecordBatch::try_new(schema, columns)
     }
+
+    /// Returns the total number of bytes of memory occupied physically by this batch.
+    pub fn get_array_memory_size(&self) -> usize {
+        self.columns()
+            .iter()
+            .map(|array| array.get_array_memory_size())
+            .sum()
+    }
 }
 
 /// Options that control the behaviour used when creating a [`RecordBatch`].
@@ -469,6 +495,22 @@ mod tests {
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
                 .unwrap();
         check_batch(record_batch, 5)
+    }
+
+    #[test]
+    fn byte_size_should_not_regress() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let b = StringArray::from(vec!["a", "b", "c", "d", "e"]);
+
+        let record_batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
+                .unwrap();
+        assert_eq!(record_batch.get_array_memory_size(), 592);
     }
 
     fn check_batch(record_batch: RecordBatch, num_rows: usize) {

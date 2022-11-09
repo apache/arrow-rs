@@ -47,10 +47,27 @@
 //!     Some(Encoding::PLAIN)
 //! );
 //! ```
+//!
+//! Reader properties.
+//!
+//! # Usage
+//!
+//! ```rust
+//! use parquet::file::properties::ReaderProperties;
+//!
+//! // Create properties with default configuration.
+//! let props = ReaderProperties::builder().build();
+//!
+//! // Use properties builder to set certain options and assemble the configuration.
+//! let props = ReaderProperties::builder()
+//!     .set_backward_compatible_lz4(false)
+//!     .build();
+//! ```
 
 use std::{collections::HashMap, sync::Arc};
 
 use crate::basic::{Compression, Encoding};
+use crate::compression::{CodecOptions, CodecOptionsBuilder};
 use crate::file::metadata::KeyValue;
 use crate::schema::types::ColumnPath;
 
@@ -96,6 +113,7 @@ pub type WriterPropertiesPtr = Arc<WriterProperties>;
 pub struct WriterProperties {
     data_pagesize_limit: usize,
     dictionary_pagesize_limit: usize,
+    data_page_row_count_limit: usize,
     write_batch_size: usize,
     max_row_group_size: usize,
     writer_version: WriterVersion,
@@ -112,13 +130,27 @@ impl WriterProperties {
     }
 
     /// Returns data page size limit.
+    ///
+    /// Note: this is a best effort limit based on the write batch size
     pub fn data_pagesize_limit(&self) -> usize {
         self.data_pagesize_limit
     }
 
     /// Returns dictionary page size limit.
+    ///
+    /// Note: this is a best effort limit based on the write batch size
     pub fn dictionary_pagesize_limit(&self) -> usize {
         self.dictionary_pagesize_limit
+    }
+
+    /// Returns the maximum page row count
+    ///
+    /// This can be used to limit the number of rows within a page to
+    /// yield better page pruning
+    ///
+    /// Note: this is a best effort limit based on the write batch size
+    pub fn data_page_row_count_limit(&self) -> usize {
+        self.data_page_row_count_limit
     }
 
     /// Returns configured batch size for writes.
@@ -222,6 +254,7 @@ impl WriterProperties {
 pub struct WriterPropertiesBuilder {
     data_pagesize_limit: usize,
     dictionary_pagesize_limit: usize,
+    data_page_row_count_limit: usize,
     write_batch_size: usize,
     max_row_group_size: usize,
     writer_version: WriterVersion,
@@ -237,6 +270,7 @@ impl WriterPropertiesBuilder {
         Self {
             data_pagesize_limit: DEFAULT_PAGE_SIZE,
             dictionary_pagesize_limit: DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT,
+            data_page_row_count_limit: usize::MAX,
             write_batch_size: DEFAULT_WRITE_BATCH_SIZE,
             max_row_group_size: DEFAULT_MAX_ROW_GROUP_SIZE,
             writer_version: DEFAULT_WRITER_VERSION,
@@ -252,6 +286,7 @@ impl WriterPropertiesBuilder {
         WriterProperties {
             data_pagesize_limit: self.data_pagesize_limit,
             dictionary_pagesize_limit: self.dictionary_pagesize_limit,
+            data_page_row_count_limit: self.data_page_row_count_limit,
             write_batch_size: self.write_batch_size,
             max_row_group_size: self.max_row_group_size,
             writer_version: self.writer_version,
@@ -271,19 +306,38 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets data page size limit.
+    /// Sets best effort maximum size of a data page in bytes
+    ///
+    /// Note: this is a best effort limit based on the write batch size
     pub fn set_data_pagesize_limit(mut self, value: usize) -> Self {
         self.data_pagesize_limit = value;
         self
     }
 
-    /// Sets dictionary page size limit.
+    /// Sets best effort maximum number of rows in a data page
+    ///
+    ///
+    /// This can be used to limit the number of rows within a page to
+    /// yield better page pruning
+    ///
+    /// Note: this is a best effort limit based on the write batch size
+    pub fn set_data_page_row_count_limit(mut self, value: usize) -> Self {
+        self.data_page_row_count_limit = value;
+        self
+    }
+
+    /// Sets best effort maximum dictionary page size, in bytes
+    ///
+    /// Note: this is a best effort limit based on the write batch size
     pub fn set_dictionary_pagesize_limit(mut self, value: usize) -> Self {
         self.dictionary_pagesize_limit = value;
         self
     }
 
-    /// Sets write batch size.
+    /// Sets write batch size
+    ///
+    /// Data is written in batches of this size, acting as an upper-bound on
+    /// the enforcement granularity of page limits
     pub fn set_write_batch_size(mut self, value: usize) -> Self {
         self.write_batch_size = value;
         self
@@ -523,6 +577,66 @@ impl ColumnProperties {
     }
 }
 
+/// Reference counted reader properties.
+pub type ReaderPropertiesPtr = Arc<ReaderProperties>;
+
+/// Reader properties.
+///
+/// All properties are immutable and `Send` + `Sync`.
+/// Use [`ReaderPropertiesBuilder`] to assemble these properties.
+pub struct ReaderProperties {
+    codec_options: CodecOptions,
+}
+
+impl ReaderProperties {
+    /// Returns builder for reader properties with default values.
+    pub fn builder() -> ReaderPropertiesBuilder {
+        ReaderPropertiesBuilder::with_defaults()
+    }
+
+    /// Returns codec options.
+    pub(crate) fn codec_options(&self) -> &CodecOptions {
+        &self.codec_options
+    }
+}
+
+/// Reader properties builder.
+pub struct ReaderPropertiesBuilder {
+    codec_options_builder: CodecOptionsBuilder,
+}
+
+/// Reader properties builder.
+impl ReaderPropertiesBuilder {
+    /// Returns default state of the builder.
+    fn with_defaults() -> Self {
+        Self {
+            codec_options_builder: CodecOptionsBuilder::default(),
+        }
+    }
+
+    /// Finalizes the configuration and returns immutable reader properties struct.
+    pub fn build(self) -> ReaderProperties {
+        ReaderProperties {
+            codec_options: self.codec_options_builder.build(),
+        }
+    }
+
+    /// Enable/disable backward compatible LZ4.
+    ///
+    /// If backward compatible LZ4 is enable, on LZ4_HADOOP error it will fallback
+    /// to the older versions LZ4 algorithms. That is LZ4_FRAME, for backward compatibility
+    /// with files generated by older versions of this library, and LZ4_RAW, for backward
+    /// compatibility with files generated by older versions of parquet-cpp.
+    ///
+    /// If backward compatible LZ4 is disabled, on LZ4_HADOOP error it will return the error.
+    pub fn set_backward_compatible_lz4(mut self, value: bool) -> Self {
+        self.codec_options_builder = self
+            .codec_options_builder
+            .set_backward_compatible_lz4(value);
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -709,5 +823,29 @@ mod tests {
             props.dictionary_enabled(&ColumnPath::from("col")),
             DEFAULT_DICTIONARY_ENABLED
         );
+    }
+
+    #[test]
+    fn test_reader_properties_default_settings() {
+        let props = ReaderProperties::builder().build();
+
+        let codec_options = CodecOptionsBuilder::default()
+            .set_backward_compatible_lz4(true)
+            .build();
+
+        assert_eq!(props.codec_options(), &codec_options);
+    }
+
+    #[test]
+    fn test_reader_properties_builder() {
+        let props = ReaderProperties::builder()
+            .set_backward_compatible_lz4(false)
+            .build();
+
+        let codec_options = CodecOptionsBuilder::default()
+            .set_backward_compatible_lz4(false)
+            .build();
+
+        assert_eq!(props.codec_options(), &codec_options);
     }
 }

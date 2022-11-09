@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::i256;
 use half::f16;
 
 mod private {
@@ -169,6 +170,29 @@ native_float!(f16, self, self.to_f32() as _);
 native_float!(f32, self, self as _);
 native_float!(f64, self, self as _);
 
+impl private::Sealed for i256 {}
+impl ArrowNativeType for i256 {
+    fn from_usize(u: usize) -> Option<Self> {
+        Some(Self::from_parts(u as u128, 0))
+    }
+
+    fn as_usize(self) -> usize {
+        self.to_parts().0 as usize
+    }
+
+    fn to_usize(self) -> Option<usize> {
+        let (low, high) = self.to_parts();
+        if high != 0 {
+            return None;
+        }
+        low.try_into().ok()
+    }
+
+    fn to_isize(self) -> Option<isize> {
+        self.to_i128()?.try_into().ok()
+    }
+}
+
 /// Allows conversion from supported Arrow types to a byte slice.
 pub trait ToByteSlice {
     /// Converts this instance into a byte slice
@@ -190,5 +214,28 @@ impl<T: ArrowNativeType> ToByteSlice for T {
     fn to_byte_slice(&self) -> &[u8] {
         let raw_ptr = self as *const T as *const u8;
         unsafe { std::slice::from_raw_parts(raw_ptr, std::mem::size_of::<T>()) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_i256() {
+        let a = i256::from_parts(0, 0);
+        assert_eq!(a.as_usize(), 0);
+        assert_eq!(a.to_usize().unwrap(), 0);
+        assert_eq!(a.to_isize().unwrap(), 0);
+
+        let a = i256::from_parts(0, -1);
+        assert_eq!(a.as_usize(), 0);
+        assert!(a.to_usize().is_none());
+        assert!(a.to_usize().is_none());
+
+        let a = i256::from_parts(u128::MAX, -1);
+        assert_eq!(a.as_usize(), usize::MAX);
+        assert!(a.to_usize().is_none());
+        assert_eq!(a.to_isize().unwrap(), -1);
     }
 }

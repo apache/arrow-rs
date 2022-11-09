@@ -153,6 +153,12 @@
 //! ```
 //!
 
+#[cfg(all(
+    target_arch = "wasm32",
+    any(feature = "gcp", feature = "aws", feature = "azure",)
+))]
+compile_error!("Features 'gcp', 'aws', 'azure' are not supported on wasm.");
+
 #[cfg(feature = "aws")]
 pub mod aws;
 #[cfg(feature = "azure")]
@@ -160,6 +166,7 @@ pub mod azure;
 #[cfg(feature = "gcp")]
 pub mod gcp;
 pub mod limit;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod local;
 pub mod memory;
 pub mod path;
@@ -176,15 +183,16 @@ mod multipart;
 mod util;
 
 use crate::path::Path;
-use crate::util::{
-    coalesce_ranges, collect_bytes, maybe_spawn_blocking, OBJECT_STORE_COALESCE_DEFAULT,
-};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::util::maybe_spawn_blocking;
+use crate::util::{coalesce_ranges, collect_bytes, OBJECT_STORE_COALESCE_DEFAULT};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt};
 use snafu::Snafu;
 use std::fmt::{Debug, Formatter};
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use tokio::io::AsyncWrite;
@@ -351,6 +359,7 @@ impl GetResult {
     /// Collects the data into a [`Bytes`]
     pub async fn bytes(self) -> Result<Bytes> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::File(mut file, path) => {
                 maybe_spawn_blocking(move || {
                     let len = file.seek(SeekFrom::End(0)).map_err(|source| {
@@ -377,6 +386,8 @@ impl GetResult {
                 .await
             }
             Self::Stream(s) => collect_bytes(s, None).await,
+            #[cfg(target_arch = "wasm32")]
+            _ => unimplemented!("File IO not implemented on wasm32."),
         }
     }
 
@@ -396,6 +407,7 @@ impl GetResult {
     /// no additional complexity or overheads
     pub fn into_stream(self) -> BoxStream<'static, Result<Bytes>> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::File(file, path) => {
                 const CHUNK_SIZE: usize = 8 * 1024;
 
@@ -424,6 +436,8 @@ impl GetResult {
                 .boxed()
             }
             Self::Stream(s) => s,
+            #[cfg(target_arch = "wasm32")]
+            _ => unimplemented!("File IO not implemented on wasm32."),
         }
     }
 }

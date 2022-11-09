@@ -585,7 +585,7 @@ fn get_decimal_array_slice(
     let mut values = Vec::with_capacity(indices.len());
     let size = decimal_length_from_precision(array.precision());
     for i in indices {
-        let as_be_bytes = array.value(*i).as_i128().to_be_bytes();
+        let as_be_bytes = array.value(*i).to_be_bytes();
         let resized_value = as_be_bytes[(16 - size)..].to_vec();
         values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
     }
@@ -624,6 +624,7 @@ mod tests {
 
     use crate::basic::Encoding;
     use crate::file::metadata::ParquetMetaData;
+    use crate::file::page_index::index_reader::read_pages_locations;
     use crate::file::properties::WriterVersion;
     use crate::file::{
         reader::{FileReader, SerializedFileReader},
@@ -1108,6 +1109,71 @@ mod tests {
         roundtrip(batch, Some(SMALL_SIZE / 2));
     }
 
+    #[test]
+    fn arrow_writer_page_size() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+
+        let mut builder = StringBuilder::with_capacity(100, 329 * 10_000);
+
+        // Generate an array of 10 unique 10 character string
+        for i in 0..10 {
+            let value = i
+                .to_string()
+                .repeat(10)
+                .chars()
+                .take(10)
+                .collect::<String>();
+
+            builder.append_value(value);
+        }
+
+        let array = Arc::new(builder.finish());
+
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let file = tempfile::tempfile().unwrap();
+
+        // Set everything very low so we fallback to PLAIN encoding after the first row
+        let props = WriterProperties::builder()
+            .set_data_pagesize_limit(1)
+            .set_dictionary_pagesize_limit(1)
+            .set_write_batch_size(1)
+            .build();
+
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), Some(props))
+                .expect("Unable to write file");
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let reader = SerializedFileReader::new(file.try_clone().unwrap()).unwrap();
+
+        let column = reader.metadata().row_group(0).columns();
+
+        assert_eq!(column.len(), 1);
+
+        // We should write one row before falling back to PLAIN encoding so there should still be a
+        // dictionary page.
+        assert!(
+            column[0].dictionary_page_offset().is_some(),
+            "Expected a dictionary page"
+        );
+
+        let page_locations = read_pages_locations(&file, column).unwrap();
+
+        let offset_index = page_locations[0].clone();
+
+        // We should fallback to PLAIN encoding after the first row and our max page size is 1 bytes
+        // so we expect one dictionary encoded page and then a page per row thereafter.
+        assert_eq!(
+            offset_index.len(),
+            10,
+            "Expected 9 pages but got {:#?}",
+            offset_index
+        );
+    }
+
     const SMALL_SIZE: usize = 7;
 
     fn roundtrip(
@@ -1351,7 +1417,7 @@ mod tests {
     #[test]
     fn timestamp_second_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
-        let values = Arc::new(TimestampSecondArray::from_vec(raw_values, None));
+        let values = Arc::new(TimestampSecondArray::from(raw_values));
 
         one_column_roundtrip(values, false);
     }
@@ -1359,7 +1425,7 @@ mod tests {
     #[test]
     fn timestamp_millisecond_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
-        let values = Arc::new(TimestampMillisecondArray::from_vec(raw_values, None));
+        let values = Arc::new(TimestampMillisecondArray::from(raw_values));
 
         one_column_roundtrip(values, false);
     }
@@ -1367,7 +1433,7 @@ mod tests {
     #[test]
     fn timestamp_microsecond_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
-        let values = Arc::new(TimestampMicrosecondArray::from_vec(raw_values, None));
+        let values = Arc::new(TimestampMicrosecondArray::from(raw_values));
 
         one_column_roundtrip(values, false);
     }
@@ -1375,7 +1441,7 @@ mod tests {
     #[test]
     fn timestamp_nanosecond_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
-        let values = Arc::new(TimestampNanosecondArray::from_vec(raw_values, None));
+        let values = Arc::new(TimestampNanosecondArray::from(raw_values));
 
         one_column_roundtrip(values, false);
     }

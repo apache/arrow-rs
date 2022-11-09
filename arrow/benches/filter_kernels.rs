@@ -26,6 +26,7 @@ use arrow::array::*;
 use arrow::compute::filter;
 use arrow::datatypes::{Field, Float32Type, Int32Type, Schema, UInt8Type};
 
+use arrow_array::types::Decimal128Type;
 use criterion::{criterion_group, criterion_main, Criterion};
 
 fn bench_filter(data_array: &dyn Array, filter_array: &BooleanArray) {
@@ -142,6 +143,29 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("filter context f32 low selectivity (kept 1/1024)", |b| {
         b.iter(|| bench_built_filter(&sparse_filter, &data_array))
     });
+
+    let data_array = create_primitive_array::<Decimal128Type>(size, 0.0);
+    c.bench_function("filter decimal128 (kept 1/2)", |b| {
+        b.iter(|| bench_filter(&data_array, &filter_array))
+    });
+    c.bench_function("filter decimal128 high selectivity (kept 1023/1024)", |b| {
+        b.iter(|| bench_filter(&data_array, &dense_filter_array))
+    });
+    c.bench_function("filter decimal128 low selectivity (kept 1/1024)", |b| {
+        b.iter(|| bench_filter(&data_array, &sparse_filter_array))
+    });
+
+    c.bench_function("filter context decimal128 (kept 1/2)", |b| {
+        b.iter(|| bench_built_filter(&filter, &data_array))
+    });
+    c.bench_function(
+        "filter context decimal128 high selectivity (kept 1023/1024)",
+        |b| b.iter(|| bench_built_filter(&dense_filter, &data_array)),
+    );
+    c.bench_function(
+        "filter context decimal128 low selectivity (kept 1/1024)",
+        |b| b.iter(|| bench_built_filter(&sparse_filter, &data_array)),
+    );
 
     let data_array = create_string_array::<i32>(size, 0.5);
     c.bench_function("filter context string (kept 1/2)", |b| {

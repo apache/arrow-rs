@@ -213,7 +213,7 @@ impl LevelInfoBuilder {
 
     /// Write `range` elements from ListArray `array`
     ///
-    /// Note: MapArrays are ListArray<i32> under the hood and so are dispatched to this method
+    /// Note: MapArrays are `ListArray<i32>` under the hood and so are dispatched to this method
     fn write_list<O: OffsetSizeTrait>(
         &mut self,
         offsets: &[O],

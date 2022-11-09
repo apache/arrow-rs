@@ -31,7 +31,13 @@ use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
 use crate::errors::{ParquetError, Result};
 use crate::file::page_index::index_reader;
-use crate::file::{footer, metadata::*, reader::*, statistics};
+use crate::file::{
+    footer,
+    metadata::*,
+    properties::{ReaderProperties, ReaderPropertiesPtr},
+    reader::*,
+    statistics,
+};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
@@ -139,6 +145,7 @@ impl IntoIterator for SerializedFileReader<File> {
 pub struct SerializedFileReader<R: ChunkReader> {
     chunk_reader: Arc<R>,
     metadata: Arc<ParquetMetaData>,
+    props: ReaderPropertiesPtr,
 }
 
 /// A predicate for filtering row groups, invoked with the metadata and index
@@ -153,6 +160,7 @@ pub type ReadGroupPredicate = Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>;
 pub struct ReadOptionsBuilder {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
+    props: Option<ReaderProperties>,
 }
 
 impl ReadOptionsBuilder {
@@ -186,11 +194,21 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// Set the `ReaderProperties` configuration.
+    pub fn with_reader_properties(mut self, properties: ReaderProperties) -> Self {
+        self.props = Some(properties);
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
+        let props = self
+            .props
+            .unwrap_or_else(|| ReaderProperties::builder().build());
         ReadOptions {
             predicates: self.predicates,
             enable_page_index: self.enable_page_index,
+            props,
         }
     }
 }
@@ -202,6 +220,7 @@ impl ReadOptionsBuilder {
 pub struct ReadOptions {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
+    props: ReaderProperties,
 }
 
 impl<R: 'static + ChunkReader> SerializedFileReader<R> {
@@ -209,9 +228,11 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     /// Returns error if Parquet file does not exist or is corrupt.
     pub fn new(chunk_reader: R) -> Result<Self> {
         let metadata = footer::parse_metadata(&chunk_reader)?;
+        let props = Arc::new(ReaderProperties::builder().build());
         Ok(Self {
             chunk_reader: Arc::new(chunk_reader),
             metadata: Arc::new(metadata),
+            props,
         })
     }
 
@@ -257,6 +278,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
                     Some(columns_indexes),
                     Some(offset_indexes),
                 )),
+                props: Arc::new(options.props),
             })
         } else {
             Ok(Self {
@@ -265,6 +287,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
                     metadata.file_metadata().clone(),
                     filtered_row_groups,
                 )),
+                props: Arc::new(options.props),
             })
         }
     }
@@ -298,10 +321,12 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
     fn get_row_group(&self, i: usize) -> Result<Box<dyn RowGroupReader + '_>> {
         let row_group_metadata = self.metadata.row_group(i);
         // Row groups should be processed sequentially.
+        let props = Arc::clone(&self.props);
         let f = Arc::clone(&self.chunk_reader);
-        Ok(Box::new(SerializedRowGroupReader::new(
+        Ok(Box::new(SerializedRowGroupReader::new_with_properties(
             f,
             row_group_metadata,
+            props,
         )))
     }
 
@@ -314,14 +339,20 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
 pub struct SerializedRowGroupReader<'a, R: ChunkReader> {
     chunk_reader: Arc<R>,
     metadata: &'a RowGroupMetaData,
+    props: ReaderPropertiesPtr,
 }
 
 impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
-    /// Creates new row group reader from a file and row group metadata.
-    fn new(chunk_reader: Arc<R>, metadata: &'a RowGroupMetaData) -> Self {
+    /// Creates new row group reader from a file, row group metadata and custom config.
+    fn new_with_properties(
+        chunk_reader: Arc<R>,
+        metadata: &'a RowGroupMetaData,
+        props: ReaderPropertiesPtr,
+    ) -> Self {
         Self {
             chunk_reader,
             metadata,
+            props,
         }
     }
 }
@@ -345,11 +376,13 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
             .as_ref()
             .map(|x| x[i].clone());
 
-        Ok(Box::new(SerializedPageReader::new(
+        let props = Arc::clone(&self.props);
+        Ok(Box::new(SerializedPageReader::new_with_properties(
             Arc::clone(&self.chunk_reader),
             col,
             self.metadata.num_rows() as usize,
             page_locations,
+            props,
         )?))
     }
 
@@ -420,7 +453,11 @@ pub(crate) fn decode_page(
             let mut decompressed = Vec::with_capacity(uncompressed_size);
             let compressed = &buffer.as_ref()[offset..];
             decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
-            decompressor.decompress(compressed, &mut decompressed)?;
+            decompressor.decompress(
+                compressed,
+                &mut decompressed,
+                Some(uncompressed_size - offset),
+            )?;
 
             if decompressed.len() != uncompressed_size {
                 return Err(general_err!(
@@ -527,7 +564,25 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         total_rows: usize,
         page_locations: Option<Vec<PageLocation>>,
     ) -> Result<Self> {
-        let decompressor = create_codec(meta.compression())?;
+        let props = Arc::new(ReaderProperties::builder().build());
+        SerializedPageReader::new_with_properties(
+            reader,
+            meta,
+            total_rows,
+            page_locations,
+            props,
+        )
+    }
+
+    /// Creates a new serialized page with custom options.
+    pub fn new_with_properties(
+        reader: Arc<R>,
+        meta: &ColumnChunkMetaData,
+        total_rows: usize,
+        page_locations: Option<Vec<PageLocation>>,
+        props: ReaderPropertiesPtr,
+    ) -> Result<Self> {
+        let decompressor = create_codec(meta.compression(), props.codec_options())?;
         let (start, len) = meta.byte_range();
 
         let state = match page_locations {
@@ -1325,6 +1380,10 @@ mod tests {
         let row_group_metadata = metadata.row_group(0);
 
         //col0->id: INT32 UNCOMPRESSED DO:0 FPO:4 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 7299, num_nulls: 0]
+        assert!(!&page_indexes[0][0].is_sorted());
+        let boundary_order = &page_indexes[0][0].get_boundary_order();
+        assert!(boundary_order.is_some());
+        matches!(boundary_order.unwrap(), BoundaryOrder::UNORDERED);
         if let Index::INT32(index) = &page_indexes[0][0] {
             check_native_page_index(
                 index,
@@ -1337,6 +1396,7 @@ mod tests {
             unreachable!()
         };
         //col1->bool_col:BOOLEAN UNCOMPRESSED DO:0 FPO:37329 SZ:3022/3022/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: false, max: true, num_nulls: 0]
+        assert!(&page_indexes[0][1].is_sorted());
         if let Index::BOOLEAN(index) = &page_indexes[0][1] {
             assert_eq!(index.indexes.len(), 82);
             assert_eq!(row_group_offset_indexes[1].len(), 82);
@@ -1344,6 +1404,7 @@ mod tests {
             unreachable!()
         };
         //col2->tinyint_col: INT32 UNCOMPRESSED DO:0 FPO:40351 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
+        assert!(&page_indexes[0][2].is_sorted());
         if let Index::INT32(index) = &page_indexes[0][2] {
             check_native_page_index(
                 index,
@@ -1356,6 +1417,7 @@ mod tests {
             unreachable!()
         };
         //col4->smallint_col: INT32 UNCOMPRESSED DO:0 FPO:77676 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
+        assert!(&page_indexes[0][3].is_sorted());
         if let Index::INT32(index) = &page_indexes[0][3] {
             check_native_page_index(
                 index,
@@ -1368,6 +1430,7 @@ mod tests {
             unreachable!()
         };
         //col5->smallint_col: INT32 UNCOMPRESSED DO:0 FPO:77676 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
+        assert!(&page_indexes[0][4].is_sorted());
         if let Index::INT32(index) = &page_indexes[0][4] {
             check_native_page_index(
                 index,
@@ -1380,6 +1443,7 @@ mod tests {
             unreachable!()
         };
         //col6->bigint_col: INT64 UNCOMPRESSED DO:0 FPO:152326 SZ:71598/71598/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 90, num_nulls: 0]
+        assert!(!&page_indexes[0][5].is_sorted());
         if let Index::INT64(index) = &page_indexes[0][5] {
             check_native_page_index(
                 index,
@@ -1392,6 +1456,7 @@ mod tests {
             unreachable!()
         };
         //col7->float_col: FLOAT UNCOMPRESSED DO:0 FPO:223924 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: -0.0, max: 9.9, num_nulls: 0]
+        assert!(&page_indexes[0][6].is_sorted());
         if let Index::FLOAT(index) = &page_indexes[0][6] {
             check_native_page_index(
                 index,
@@ -1404,6 +1469,7 @@ mod tests {
             unreachable!()
         };
         //col8->double_col: DOUBLE UNCOMPRESSED DO:0 FPO:261249 SZ:71598/71598/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: -0.0, max: 90.89999999999999, num_nulls: 0]
+        assert!(!&page_indexes[0][7].is_sorted());
         if let Index::DOUBLE(index) = &page_indexes[0][7] {
             check_native_page_index(
                 index,
@@ -1416,6 +1482,7 @@ mod tests {
             unreachable!()
         };
         //col9->date_string_col: BINARY UNCOMPRESSED DO:0 FPO:332847 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 01/01/09, max: 12/31/10, num_nulls: 0]
+        assert!(!&page_indexes[0][8].is_sorted());
         if let Index::BYTE_ARRAY(index) = &page_indexes[0][8] {
             check_bytes_page_index(
                 index,
@@ -1428,6 +1495,7 @@ mod tests {
             unreachable!()
         };
         //col10->string_col: BINARY UNCOMPRESSED DO:0 FPO:444795 SZ:45298/45298/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
+        assert!(&page_indexes[0][9].is_sorted());
         if let Index::BYTE_ARRAY(index) = &page_indexes[0][9] {
             check_bytes_page_index(
                 index,
@@ -1441,12 +1509,14 @@ mod tests {
         };
         //col11->timestamp_col: INT96 UNCOMPRESSED DO:0 FPO:490093 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[num_nulls: 0, min/max not defined]
         //Notice: min_max values for each page for this col not exits.
+        assert!(!&page_indexes[0][10].is_sorted());
         if let Index::NONE = &page_indexes[0][10] {
             assert_eq!(row_group_offset_indexes[10].len(), 974);
         } else {
             unreachable!()
         };
         //col12->year: INT32 UNCOMPRESSED DO:0 FPO:602041 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 2009, max: 2010, num_nulls: 0]
+        assert!(&page_indexes[0][11].is_sorted());
         if let Index::INT32(index) = &page_indexes[0][11] {
             check_native_page_index(
                 index,
@@ -1459,6 +1529,7 @@ mod tests {
             unreachable!()
         };
         //col13->month: INT32 UNCOMPRESSED DO:0 FPO:639366 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 1, max: 12, num_nulls: 0]
+        assert!(!&page_indexes[0][12].is_sorted());
         if let Index::INT32(index) = &page_indexes[0][12] {
             check_native_page_index(
                 index,

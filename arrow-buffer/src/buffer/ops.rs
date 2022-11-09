@@ -66,10 +66,10 @@ pub fn bitwise_bin_op_helper<F>(
     right: &Buffer,
     right_offset_in_bits: usize,
     len_in_bits: usize,
-    op: F,
+    mut op: F,
 ) -> Buffer
 where
-    F: Fn(u64, u64) -> u64,
+    F: FnMut(u64, u64) -> u64,
 {
     let left_chunks = left.bit_chunks(left_offset_in_bits, len_in_bits);
     let right_chunks = right.bit_chunks(right_offset_in_bits, len_in_bits);
@@ -97,10 +97,10 @@ pub fn bitwise_unary_op_helper<F>(
     left: &Buffer,
     offset_in_bits: usize,
     len_in_bits: usize,
-    op: F,
+    mut op: F,
 ) -> Buffer
 where
-    F: Fn(u64) -> u64,
+    F: FnMut(u64) -> u64,
 {
     // reserve capacity and set length so we can get a typed view of u64 chunks
     let mut result =

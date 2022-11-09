@@ -57,7 +57,7 @@ fn main() {
     let args = Args::parse();
     let filename = args.file_path;
     let path = Path::new(&filename);
-    let file = File::open(&path).expect("Unable to open file");
+    let file = File::open(path).expect("Unable to open file");
     let verbose = args.verbose;
 
     match SerializedFileReader::new(file) {

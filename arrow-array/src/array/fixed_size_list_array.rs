@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{make_array, print_long_array, Array, ArrayAccessor, ArrayRef};
+use crate::builder::{FixedSizeListBuilder, PrimitiveBuilder};
+use crate::{
+    make_array, print_long_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType,
+};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 use std::any::Any;
@@ -99,6 +102,53 @@ impl FixedSizeListArray {
     #[inline]
     const fn value_offset_at(&self, i: usize) -> i32 {
         i as i32 * self.length
+    }
+
+    /// Creates a [`FixedSizeListArray`] from an iterator of primitive values
+    /// # Example
+    /// ```
+    /// # use arrow_array::FixedSizeListArray;
+    /// # use arrow_array::types::Int32Type;
+    ///
+    /// let data = vec![
+    ///    Some(vec![Some(0), Some(1), Some(2)]),
+    ///    None,
+    ///    Some(vec![Some(3), None, Some(5)]),
+    ///    Some(vec![Some(6), Some(7), Some(45)]),
+    /// ];
+    /// let list_array = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(data, 3);
+    /// println!("{:?}", list_array);
+    /// ```
+    pub fn from_iter_primitive<T, P, I>(iter: I, length: i32) -> Self
+    where
+        T: ArrowPrimitiveType,
+        P: IntoIterator<Item = Option<<T as ArrowPrimitiveType>::Native>>,
+        I: IntoIterator<Item = Option<P>>,
+    {
+        let l = length as usize;
+        let iter = iter.into_iter();
+        let size_hint = iter.size_hint().0;
+        let mut builder = FixedSizeListBuilder::with_capacity(
+            PrimitiveBuilder::<T>::with_capacity(size_hint * l),
+            length,
+            size_hint,
+        );
+
+        for i in iter {
+            match i {
+                Some(p) => {
+                    for t in p {
+                        builder.values().append_option(t);
+                    }
+                    builder.append(true);
+                }
+                None => {
+                    builder.values().append_nulls(l);
+                    builder.append(false)
+                }
+            }
+        }
+        builder.finish()
     }
 }
 

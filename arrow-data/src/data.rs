@@ -18,9 +18,6 @@
 //! Contains `ArrayData`, a generic representation of Arrow array data which encapsulates
 //! common attributes and operations for Arrow array.
 
-use crate::decimal::{
-    validate_decimal256_precision_with_lt_bytes, validate_decimal_precision,
-};
 use crate::{bit_iterator::BitSliceIterator, bitmap::Bitmap};
 use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
@@ -754,7 +751,7 @@ impl ArrayData {
     ) -> Result<&[T], ArrowError> {
         let buffer = &self.buffers[idx];
 
-        let required_len = (len + self.offset) * std::mem::size_of::<T>();
+        let required_len = (len + self.offset) * mem::size_of::<T>();
 
         if buffer.len() < required_len {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -1004,22 +1001,6 @@ impl ArrayData {
 
     pub fn validate_values(&self) -> Result<(), ArrowError> {
         match &self.data_type {
-            DataType::Decimal128(p, _) => {
-                let values_buffer: &[i128] = self.typed_buffer(0, self.len)?;
-                for value in values_buffer {
-                    validate_decimal_precision(*value, *p)?;
-                }
-                Ok(())
-            }
-            DataType::Decimal256(p, _) => {
-                let values = self.buffers()[0].as_slice();
-                for pos in 0..self.len() {
-                    let offset = pos * 32;
-                    let raw_bytes = &values[offset..offset + 32];
-                    validate_decimal256_precision_with_lt_bytes(raw_bytes, *p)?;
-                }
-                Ok(())
-            }
             DataType::Utf8 => self.validate_utf8::<i32>(),
             DataType::LargeUtf8 => self.validate_utf8::<i64>(),
             DataType::Binary => self.validate_offsets_full::<i32>(self.buffers[1].len()),
@@ -1189,7 +1170,7 @@ impl ArrayData {
 
         // This should have been checked as part of `validate()` prior
         // to calling `validate_full()` but double check to be sure
-        assert!(buffer.len() / std::mem::size_of::<T>() >= required_len);
+        assert!(buffer.len() / mem::size_of::<T>() >= required_len);
 
         // Justification: buffer size was validated above
         let indexes: &[T] =

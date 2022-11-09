@@ -16,16 +16,12 @@
 // under the License.
 
 use std::{
-    env,
     fs::OpenOptions,
     io::{Read, Write},
     path::Path,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // override the build location, in order to check in the changes to proto files
-    env::set_var("OUT_DIR", "src");
-
     // The current working directory can vary depending on how the project is being
     // built or released so we build an absolute path to the proto file
     let path = Path::new("../format/Flight.proto");
@@ -39,6 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tonic_build::configure()
             // protoc in unbuntu builder needs this option
             .protoc_arg("--experimental_allow_proto3_optional")
+            .out_dir("src")
             .compile(&[proto_path], &[proto_dir])?;
 
         // read file contents to string
@@ -56,8 +53,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         file.write_all(buffer.as_bytes())?;
     }
 
-    // override the build location, in order to check in the changes to proto files
-    env::set_var("OUT_DIR", "src/sql");
     // The current working directory can vary depending on how the project is being
     // built or released so we build an absolute path to the proto file
     let path = Path::new("../format/FlightSql.proto");
@@ -69,8 +64,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let proto_path = Path::new("../format/FlightSql.proto");
 
         tonic_build::configure()
-            // protoc in unbuntu builder needs this option
+            // protoc in ubuntu builder needs this option
             .protoc_arg("--experimental_allow_proto3_optional")
+            .out_dir("src/sql")
             .compile(&[proto_path], &[proto_dir])?;
 
         // read file contents to string

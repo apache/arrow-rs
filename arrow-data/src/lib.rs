@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Buffer abstractions for [Apache Arrow](https://docs.rs/arrow)
+//! Array data abstractions for [Apache Arrow](https://docs.rs/arrow)
 
 mod bitmap;
 pub use bitmap::Bitmap;

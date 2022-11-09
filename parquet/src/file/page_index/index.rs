@@ -63,6 +63,33 @@ pub enum Index {
     FIXED_LEN_BYTE_ARRAY(ByteArrayIndex),
 }
 
+impl Index {
+    /// Return min/max elements inside ColumnIndex are ordered or not.
+    pub fn is_sorted(&self) -> bool {
+        // 0:UNORDERED, 1:ASCENDING ,2:DESCENDING,
+        if let Some(order) = self.get_boundary_order() {
+            order.0 > (BoundaryOrder::UNORDERED.0)
+        } else {
+            false
+        }
+    }
+
+    /// Get boundary_order of this page index.
+    pub fn get_boundary_order(&self) -> Option<BoundaryOrder> {
+        match self {
+            Index::NONE => None,
+            Index::BOOLEAN(index) => Some(index.boundary_order),
+            Index::INT32(index) => Some(index.boundary_order),
+            Index::INT64(index) => Some(index.boundary_order),
+            Index::INT96(index) => Some(index.boundary_order),
+            Index::FLOAT(index) => Some(index.boundary_order),
+            Index::DOUBLE(index) => Some(index.boundary_order),
+            Index::BYTE_ARRAY(index) => Some(index.boundary_order),
+            Index::FIXED_LEN_BYTE_ARRAY(index) => Some(index.boundary_order),
+        }
+    }
+}
+
 /// An index of a column of [`Type`] physical representation
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NativeIndex<T: ParquetValueType> {

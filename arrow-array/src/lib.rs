@@ -16,7 +16,7 @@
 // under the License.
 
 //! The central type in Apache Arrow are arrays, which are a known-length sequence of values
-//! all having the same type. This module provides concrete implementations of each type, as
+//! all having the same type. This crate provides concrete implementations of each type, as
 //! well as an [`Array`] trait that can be used for type-erasure.
 //!
 //! # Downcasting an Array
@@ -162,15 +162,18 @@ pub mod array;
 pub use array::*;
 
 mod record_batch;
-pub use record_batch::{RecordBatch, RecordBatchOptions};
+pub use record_batch::{RecordBatch, RecordBatchOptions, RecordBatchReader};
+
+mod arithmetic;
+pub use arithmetic::ArrowNativeTypeOp;
 
 pub mod builder;
 pub mod cast;
-pub mod decimal;
 mod delta;
 pub mod iterator;
 mod raw_pointer;
 pub mod temporal_conversions;
+pub mod timezone;
 mod trusted_len;
 pub mod types;
 

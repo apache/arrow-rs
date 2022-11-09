@@ -18,10 +18,9 @@
 //! Idiomatic iterators for [`Array`](crate::Array)
 
 use crate::array::{
-    ArrayAccessor, BooleanArray, DecimalArray, FixedSizeBinaryArray, GenericBinaryArray,
+    ArrayAccessor, BooleanArray, FixedSizeBinaryArray, GenericBinaryArray,
     GenericListArray, GenericStringArray, PrimitiveArray,
 };
-use crate::types::{Decimal128Type, Decimal256Type};
 
 /// An iterator that returns Some(T) or None, that can be used on any [`ArrayAccessor`]
 ///
@@ -122,15 +121,6 @@ pub type GenericStringIter<'a, T> = ArrayIter<&'a GenericStringArray<T>>;
 pub type GenericBinaryIter<'a, T> = ArrayIter<&'a GenericBinaryArray<T>>;
 pub type FixedSizeBinaryIter<'a> = ArrayIter<&'a FixedSizeBinaryArray>;
 pub type GenericListArrayIter<'a, O> = ArrayIter<&'a GenericListArray<O>>;
-
-pub type DecimalIter<'a, T> = ArrayIter<&'a DecimalArray<T>>;
-/// an iterator that returns `Some(Decimal128)` or `None`, that can be used on a
-/// [`super::Decimal128Array`]
-pub type Decimal128Iter<'a> = DecimalIter<'a, Decimal128Type>;
-
-/// an iterator that returns `Some(Decimal256)` or `None`, that can be used on a
-/// [`super::Decimal256Array`]
-pub type Decimal256Iter<'a> = DecimalIter<'a, Decimal256Type>;
 
 #[cfg(test)]
 mod tests {

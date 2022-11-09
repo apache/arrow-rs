@@ -219,7 +219,7 @@ impl PyArrowConvert for ArrowArrayStreamReader {
             unsafe { ArrowArrayStreamReader::from_raw(stream_ptr).unwrap() };
 
         unsafe {
-            Box::from_raw(stream_ptr);
+            drop(Box::from_raw(stream_ptr));
         }
 
         Ok(stream_reader)
