@@ -610,8 +610,8 @@ fn encode_column(
 }
 
 macro_rules! decode_primitive_helper {
-    ($t:ty, $rows: ident, $options:ident) => {
-        Arc::new(decode_primitive::<$t>($rows, $options))
+    ($t:ty, $rows: ident, $options:ident, $data_type: ident) => {
+        Arc::new(decode_primitive::<$t>($rows, $options, $data_type))
     };
 }
 
@@ -626,8 +626,9 @@ unsafe fn decode_column(
     interner: Option<&OrderPreservingInterner>,
 ) -> Result<ArrayRef> {
     let options = field.options;
+    let data_type = &field.data_type;
     let array: ArrayRef = downcast_primitive! {
-        &field.data_type => (decode_primitive_helper, rows, options),
+        &field.data_type => (decode_primitive_helper, rows, options, data_type),
         DataType::Null => Arc::new(NullArray::new(rows.len())),
         DataType::Boolean => Arc::new(decode_bool(rows, options)),
         DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)),
@@ -696,21 +697,6 @@ unsafe fn decode_column(
                 field.data_type
             )))
         }
-    };
-    let array: ArrayRef = match &field.data_type {
-        DataType::Decimal128(p, s) => {
-            let d = as_primitive_array::<Decimal128Type>(&array)
-                .with_precision_and_scale(*p, *s)
-                .unwrap();
-            Arc::new(d)
-        }
-        DataType::Decimal256(p, s) => {
-            let d = as_primitive_array::<Decimal256Type>(&array)
-                .with_precision_and_scale(*p, *s)
-                .unwrap();
-            Arc::new(d)
-        }
-        _ => array,
     };
     Ok(array)
 }

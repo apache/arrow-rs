@@ -326,9 +326,20 @@ fn decode_fixed<T: FixedLengthEncoding + ToByteSlice>(
 pub fn decode_primitive<T: ArrowPrimitiveType>(
     rows: &mut [&[u8]],
     options: SortOptions,
+    data_type: &DataType,
 ) -> PrimitiveArray<T>
 where
     T::Native: FixedLengthEncoding + ToByteSlice,
 {
-    decode_fixed::<T::Native>(rows, T::DATA_TYPE, options).into()
+    let array_data: ArrayData = decode_fixed::<T::Native>(rows, T::DATA_TYPE, options);
+    match data_type {
+        DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _)
+        | DataType::Timestamp(_, _) => {
+            let data = array_data.into_builder().data_type(data_type.clone());
+
+            unsafe { data.build_unchecked().into() }
+        }
+        _ => array_data.into(),
+    }
 }
