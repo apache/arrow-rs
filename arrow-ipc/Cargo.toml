@@ -40,7 +40,6 @@ bench = false
 [dependencies]
 arrow-array = { version = "26.0.0", path = "../arrow-array" }
 arrow-buffer = { version = "26.0.0", path = "../arrow-buffer" }
-arrow-cast = { version = "26.0.0", path = "../arrow-cast" }
 arrow-data = { version = "26.0.0", path = "../arrow-data" }
 arrow-schema = { version = "26.0.0", path = "../arrow-schema" }
 flatbuffers = { version = "22.9.2", default-features = false, features = ["thiserror"] }

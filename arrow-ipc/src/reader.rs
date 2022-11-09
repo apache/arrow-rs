@@ -26,9 +26,9 @@ use std::fmt;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
+use arrow_array::types::{Float32Type, Int32Type};
 use arrow_array::*;
 use arrow_buffer::{Buffer, MutableBuffer};
-use arrow_cast::cast;
 use arrow_data::ArrayData;
 use arrow_schema::*;
 
@@ -436,10 +436,10 @@ fn create_primitive_array(
                     .null_bit_buffer(null_buffer)
                     .build()
                     .unwrap();
-                let values = Arc::new(Int64Array::from(data)) as ArrayRef;
-                // this cast is infallible, the unwrap is safe
-                let casted = cast(&values, data_type).unwrap();
-                casted.into_data()
+
+                Int64Array::from(data)
+                    .unary::<_, Int32Type>(|x| x as _)
+                    .into_data()
             } else {
                 ArrayData::builder(data_type.clone())
                     .len(length)
@@ -458,10 +458,10 @@ fn create_primitive_array(
                     .null_bit_buffer(null_buffer)
                     .build()
                     .unwrap();
-                let values = Arc::new(Float64Array::from(data)) as ArrayRef;
-                // this cast is infallible, the unwrap is safe
-                let casted = cast(&values, data_type).unwrap();
-                casted.into_data()
+
+                Float64Array::from(data)
+                    .unary::<_, Float32Type>(|x| x as _)
+                    .into_data()
             } else {
                 ArrayData::builder(data_type.clone())
                     .len(length)
