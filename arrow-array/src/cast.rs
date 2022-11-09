@@ -225,6 +225,8 @@ macro_rules! downcast_temporal_array {
 /// assert_eq!(primitive_size(&DataType::Int32), 4);
 /// assert_eq!(primitive_size(&DataType::Int64), 8);
 /// assert_eq!(primitive_size(&DataType::Float16), 2);
+/// assert_eq!(primitive_size(&DataType::Decimal128(38, 10)), 16);
+/// assert_eq!(primitive_size(&DataType::Decimal256(76, 20)), 32);
 /// ```
 ///
 /// [`DataType`]: arrow_schema::DataType
