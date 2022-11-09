@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::Ordering;
 use arrow_buffer::{i256, ArrowNativeType};
 use arrow_schema::ArrowError;
 use half::f16;
@@ -74,17 +75,29 @@ pub trait ArrowNativeTypeOp: ArrowNativeType {
 
     fn is_zero(self) -> bool;
 
+    fn compare(self, rhs: Self) -> Ordering;
+
     fn is_eq(self, rhs: Self) -> bool;
 
-    fn is_ne(self, rhs: Self) -> bool;
+    fn is_ne(self, rhs: Self) -> bool {
+        !self.is_eq(rhs)
+    }
 
-    fn is_lt(self, rhs: Self) -> bool;
+    fn is_lt(self, rhs: Self) -> bool {
+        self.compare(rhs).is_lt()
+    }
 
-    fn is_le(self, rhs: Self) -> bool;
+    fn is_le(self, rhs: Self) -> bool {
+        self.compare(rhs).is_le()
+    }
 
-    fn is_gt(self, rhs: Self) -> bool;
+    fn is_gt(self, rhs: Self) -> bool {
+        self.compare(rhs).is_gt()
+    }
 
-    fn is_ge(self, rhs: Self) -> bool;
+    fn is_ge(self, rhs: Self) -> bool {
+        self.compare(rhs).is_ge()
+    }
 }
 
 macro_rules! native_type_op {
@@ -193,28 +206,12 @@ macro_rules! native_type_op {
                 self == Self::ZERO
             }
 
+            fn compare(self, rhs: Self) -> Ordering {
+                self.cmp(&rhs)
+            }
+
             fn is_eq(self, rhs: Self) -> bool {
                 self == rhs
-            }
-
-            fn is_ne(self, rhs: Self) -> bool {
-                self != rhs
-            }
-
-            fn is_lt(self, rhs: Self) -> bool {
-                self < rhs
-            }
-
-            fn is_le(self, rhs: Self) -> bool {
-                self <= rhs
-            }
-
-            fn is_gt(self, rhs: Self) -> bool {
-                self > rhs
-            }
-
-            fn is_ge(self, rhs: Self) -> bool {
-                self >= rhs
             }
         }
     };
@@ -305,31 +302,15 @@ macro_rules! native_type_float_op {
                 self == $zero
             }
 
+            fn compare(self, rhs: Self) -> Ordering {
+                <$t>::total_cmp(&self, &rhs)
+            }
+
             fn is_eq(self, rhs: Self) -> bool {
                 // Equivalent to `self.total_cmp(&rhs).is_eq()`
                 // but LLVM isn't able to realise this is bitwise equality
                 // https://rust.godbolt.org/z/347nWGxoW
                 self.to_bits() == rhs.to_bits()
-            }
-
-            fn is_ne(self, rhs: Self) -> bool {
-                !self.is_eq(rhs)
-            }
-
-            fn is_lt(self, rhs: Self) -> bool {
-                self.total_cmp(&rhs).is_lt()
-            }
-
-            fn is_le(self, rhs: Self) -> bool {
-                self.total_cmp(&rhs).is_le()
-            }
-
-            fn is_gt(self, rhs: Self) -> bool {
-                self.total_cmp(&rhs).is_gt()
-            }
-
-            fn is_ge(self, rhs: Self) -> bool {
-                self.total_cmp(&rhs).is_ge()
             }
         }
     };
