@@ -44,16 +44,15 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
+arrow-array = { version = "26.0.0", path = "../arrow-array" }
 arrow-buffer = { version = "26.0.0", path = "../arrow-buffer" }
 arrow-cast = { version = "26.0.0", path = "../arrow-cast" }
 arrow-csv = { version = "26.0.0", path = "../arrow-csv", optional = true }
 arrow-data = { version = "26.0.0", path = "../arrow-data" }
-arrow-schema = { version = "26.0.0", path = "../arrow-schema" }
-arrow-array = { version = "26.0.0", path = "../arrow-array" }
-arrow-select = { version = "26.0.0", path = "../arrow-select" }
 arrow-ipc = { version = "26.0.0", path = "../arrow-ipc", optional = true }
-serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
-indexmap = { version = "1.9", default-features = false, features = ["std"] }
+arrow-json = { version = "26.0.0", path = "../arrow-json", optional = true }
+arrow-schema = { version = "26.0.0", path = "../arrow-schema" }
+arrow-select = { version = "26.0.0", path = "../arrow-select" }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
@@ -64,9 +63,8 @@ packed_simd = { version = "0.3", default-features = false, optional = true, pack
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 comfy-table = { version = "6.0", optional = true, default-features = false }
 pyo3 = { version = "0.17", default-features = false, optional = true }
-lexical-core = { version = "^0.8", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 multiversion = { version = "0.6.1", default-features = false }
-bitflags = { version = "1.2.1", default-features = false }
+bitflags = { version = "1.2.1", default-features = false, optional = true }
 
 [package.metadata.docs.rs]
 features = ["prettyprint", "ipc_compression", "dyn_cmp_dict", "ffi", "pyarrow"]
@@ -76,7 +74,7 @@ default = ["csv", "ipc", "json"]
 ipc_compression = ["ipc", "arrow-ipc/lz4", "arrow-ipc/zstd"]
 csv = ["arrow-csv"]
 ipc = ["arrow-ipc"]
-json = ["serde_json"]
+json = ["arrow-json"]
 simd = ["packed_simd"]
 prettyprint = ["comfy-table"]
 # The test utils feature enables code used in benchmarks and tests but
@@ -90,7 +88,7 @@ pyarrow = ["pyo3", "ffi"]
 # but is run as part of our CI checks
 force_validate = ["arrow-data/force_validate"]
 # Enable ffi support
-ffi = []
+ffi = ["bitflags"]
 # Enable dyn-comparison of dictionary arrays with other arrays
 # Note: this does not impact comparison against scalars
 dyn_cmp_dict = []
@@ -100,9 +98,9 @@ dyn_arith_dict = []
 chrono-tz = ["arrow-array/chrono-tz"]
 
 [dev-dependencies]
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 criterion = { version = "0.4", default-features = false }
-flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 tempfile = { version = "3", default-features = false }
 
 [build-dependencies]
