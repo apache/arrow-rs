@@ -85,6 +85,20 @@ fn block_check(block: &Block, hash: u32) -> bool {
 pub(crate) struct Sbbf(Vec<Block>);
 
 impl Sbbf {
+    fn new(bitset: &[u8]) -> Self {
+        let data = bitset
+            .chunks_exact(4 * 8)
+            .map(|chunk| {
+                let mut block = [0_u32; 8];
+                for (i, word) in chunk.chunks_exact(4).enumerate() {
+                    block[i] = u32::from_le_bytes(word.try_into().unwrap());
+                }
+                block
+            })
+            .collect::<Vec<Block>>();
+        Self(data)
+    }
+
     pub fn read_from_column_chunk<R: Read + Seek>(
         column_metadata: &ColumnChunkMetaData,
         mut reader: &mut R,
@@ -119,17 +133,7 @@ impl Sbbf {
         reader.read_exact(&mut buffer).map_err(|e| {
             ParquetError::General(format!("Could not read bloom filter: {}", e))
         })?;
-        let data = buffer
-            .chunks_exact(4 * 8)
-            .map(|chunk| {
-                let mut block = [0_u32; 8];
-                for (i, word) in chunk.chunks_exact(4).enumerate() {
-                    block[i] = u32::from_le_bytes(word.try_into().unwrap());
-                }
-                block
-            })
-            .collect::<Vec<Block>>();
-        Ok(Self(data))
+        Ok(Self::new(&buffer))
     }
 
     #[inline]
@@ -195,6 +199,20 @@ mod tests {
         for i in 0..1_000_000 {
             sbbf.insert(i);
             assert!(sbbf.check(i));
+        }
+    }
+
+    #[test]
+    fn test_with_fixture() {
+        let bitset: &[u8] = &[
+            200, 1, 80, 20, 64, 68, 8, 109, 6, 37, 4, 67, 144, 80, 96, 32, 8, 132, 43,
+            33, 0, 5, 99, 65, 2, 0, 224, 44, 64, 78, 96, 4,
+        ];
+        let sbbf = Sbbf::new(bitset);
+        for a in 0..10i64 {
+            let value = format!("a{}", a);
+            let hash = hash_bytes(value);
+            assert!(sbbf.check(hash));
         }
     }
 }
