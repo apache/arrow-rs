@@ -866,7 +866,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
 
         // safety: self.data is valid DataType::Decimal as checked above
         let new_data_type = T::TYPE_CONSTRUCTOR(precision, scale);
-        let data = self.data().clone().into_builder().data_type(new_data_type);
+        let data = self.data.into_builder().data_type(new_data_type);
 
         // SAFETY
         // Validated data above
