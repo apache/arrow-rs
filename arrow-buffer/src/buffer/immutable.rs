@@ -215,6 +215,7 @@ impl Buffer {
     }
 
     /// Returns the number of 1-bits in this buffer.
+    #[deprecated(note = "use count_set_bits_offset instead")]
     pub fn count_set_bits(&self) -> usize {
         let len_in_bits = self.len() * 8;
         // self.offset is already taken into consideration by the bit_chunks implementation
@@ -466,11 +467,17 @@ mod tests {
 
     #[test]
     fn test_count_bits() {
-        assert_eq!(0, Buffer::from(&[0b00000000]).count_set_bits());
-        assert_eq!(8, Buffer::from(&[0b11111111]).count_set_bits());
-        assert_eq!(3, Buffer::from(&[0b00001101]).count_set_bits());
-        assert_eq!(6, Buffer::from(&[0b01001001, 0b01010010]).count_set_bits());
-        assert_eq!(16, Buffer::from(&[0b11111111, 0b11111111]).count_set_bits());
+        assert_eq!(0, Buffer::from(&[0b00000000]).count_set_bits_offset(0, 8));
+        assert_eq!(8, Buffer::from(&[0b11111111]).count_set_bits_offset(0, 8));
+        assert_eq!(3, Buffer::from(&[0b00001101]).count_set_bits_offset(0, 8));
+        assert_eq!(
+            6,
+            Buffer::from(&[0b01001001, 0b01010010]).count_set_bits_offset(0, 16)
+        );
+        assert_eq!(
+            16,
+            Buffer::from(&[0b11111111, 0b11111111]).count_set_bits_offset(0, 16)
+        );
     }
 
     #[test]
@@ -479,31 +486,31 @@ mod tests {
             0,
             Buffer::from(&[0b11111111, 0b00000000])
                 .slice(1)
-                .count_set_bits()
+                .count_set_bits_offset(0, 8)
         );
         assert_eq!(
             8,
             Buffer::from(&[0b11111111, 0b11111111])
                 .slice_with_length(1, 1)
-                .count_set_bits()
+                .count_set_bits_offset(0, 8)
         );
         assert_eq!(
             3,
             Buffer::from(&[0b11111111, 0b11111111, 0b00001101])
                 .slice(2)
-                .count_set_bits()
+                .count_set_bits_offset(0, 8)
         );
         assert_eq!(
             6,
             Buffer::from(&[0b11111111, 0b01001001, 0b01010010])
                 .slice_with_length(1, 2)
-                .count_set_bits()
+                .count_set_bits_offset(0, 16)
         );
         assert_eq!(
             16,
             Buffer::from(&[0b11111111, 0b11111111, 0b11111111, 0b11111111])
                 .slice(2)
-                .count_set_bits()
+                .count_set_bits_offset(0, 16)
         );
     }
 
