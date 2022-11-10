@@ -108,7 +108,7 @@ required-features = ["cli"]
 
 [[bin]]
 name = "parquet-fromcsv"
-required-features = ["cli"]
+required-features = ["arrow", "cli"]
 
 [[bench]]
 name = "arrow_writer"
