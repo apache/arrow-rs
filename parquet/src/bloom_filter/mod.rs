@@ -20,17 +20,11 @@
 
 use crate::errors::ParquetError;
 use crate::file::metadata::ColumnChunkMetaData;
-use crate::file::reader::ChunkReader;
 use crate::format::{
     BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash, BloomFilterHeader,
-    BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation,
-    RowGroup,
 };
 use std::hash::Hasher;
-use std::io::Cursor;
-use std::io::IoSliceMut;
 use std::io::{Read, Seek, SeekFrom};
-use std::iter;
 use thrift::protocol::TCompactInputProtocol;
 use twox_hash::XxHash64;
 
@@ -82,7 +76,7 @@ fn block_check(block: &Block, hash: u32) -> bool {
 }
 
 /// A split block Bloom filter
-pub(crate) struct Sbbf(Vec<Block>);
+pub struct Sbbf(Vec<Block>);
 
 impl Sbbf {
     fn new(bitset: &[u8]) -> Self {
@@ -144,14 +138,14 @@ impl Sbbf {
     }
 
     /// Insert a hash into the filter
-    pub(crate) fn insert(&mut self, hash: u64) {
+    pub fn insert(&mut self, hash: u64) {
         let block_index = self.hash_to_block_index(hash);
         let block = &mut self.0[block_index];
         block_insert(block, hash as u32);
     }
 
     /// Check if a hash is in the filter
-    pub(crate) fn check(&self, hash: u64) -> bool {
+    pub fn check(&self, hash: u64) -> bool {
         let block_index = self.hash_to_block_index(hash);
         let block = &self.0[block_index];
         block_check(block, hash as u32)
@@ -161,7 +155,7 @@ impl Sbbf {
 // per spec we use xxHash with seed=0
 const SEED: u64 = 0;
 
-fn hash_bytes<A: AsRef<[u8]>>(value: A) -> u64 {
+pub fn hash_bytes<A: AsRef<[u8]>>(value: A) -> u64 {
     let mut hasher = XxHash64::with_seed(SEED);
     hasher.write(value.as_ref());
     hasher.finish()
