@@ -96,6 +96,7 @@ macro_rules! native_type_op {
             const ZERO: Self = $zero;
             const ONE: Self = $one;
 
+            #[inline]
             fn add_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 self.checked_add(rhs).ok_or_else(|| {
                     ArrowError::ComputeError(format!(
@@ -105,10 +106,12 @@ macro_rules! native_type_op {
                 })
             }
 
+            #[inline]
             fn add_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_add(rhs)
             }
 
+            #[inline]
             fn sub_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 self.checked_sub(rhs).ok_or_else(|| {
                     ArrowError::ComputeError(format!(
@@ -118,10 +121,12 @@ macro_rules! native_type_op {
                 })
             }
 
+            #[inline]
             fn sub_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_sub(rhs)
             }
 
+            #[inline]
             fn mul_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 self.checked_mul(rhs).ok_or_else(|| {
                     ArrowError::ComputeError(format!(
@@ -131,10 +136,12 @@ macro_rules! native_type_op {
                 })
             }
 
+            #[inline]
             fn mul_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_mul(rhs)
             }
 
+            #[inline]
             fn div_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 if rhs.is_zero() {
                     Err(ArrowError::DivideByZero)
@@ -148,10 +155,12 @@ macro_rules! native_type_op {
                 }
             }
 
+            #[inline]
             fn div_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_div(rhs)
             }
 
+            #[inline]
             fn mod_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 if rhs.is_zero() {
                     Err(ArrowError::DivideByZero)
@@ -165,54 +174,66 @@ macro_rules! native_type_op {
                 }
             }
 
+            #[inline]
             fn mod_wrapping(self, rhs: Self) -> Self {
                 self.wrapping_rem(rhs)
             }
 
+            #[inline]
             fn neg_checked(self) -> Result<Self, ArrowError> {
                 self.checked_neg().ok_or_else(|| {
                     ArrowError::ComputeError(format!("Overflow happened on: {:?}", self))
                 })
             }
 
+            #[inline]
             fn pow_checked(self, exp: u32) -> Result<Self, ArrowError> {
                 self.checked_pow(exp).ok_or_else(|| {
                     ArrowError::ComputeError(format!("Overflow happened on: {:?}", self))
                 })
             }
 
+            #[inline]
             fn pow_wrapping(self, exp: u32) -> Self {
                 self.wrapping_pow(exp)
             }
 
+            #[inline]
             fn neg_wrapping(self) -> Self {
                 self.wrapping_neg()
             }
 
+            #[inline]
             fn is_zero(self) -> bool {
                 self == Self::ZERO
             }
 
+            #[inline]
             fn is_eq(self, rhs: Self) -> bool {
                 self == rhs
             }
 
+            #[inline]
             fn is_ne(self, rhs: Self) -> bool {
                 self != rhs
             }
 
+            #[inline]
             fn is_lt(self, rhs: Self) -> bool {
                 self < rhs
             }
 
+            #[inline]
             fn is_le(self, rhs: Self) -> bool {
                 self <= rhs
             }
 
+            #[inline]
             fn is_gt(self, rhs: Self) -> bool {
                 self > rhs
             }
 
+            #[inline]
             fn is_ge(self, rhs: Self) -> bool {
                 self >= rhs
             }
@@ -237,30 +258,37 @@ macro_rules! native_type_float_op {
             const ZERO: Self = $zero;
             const ONE: Self = $one;
 
+            #[inline]
             fn add_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 Ok(self + rhs)
             }
 
+            #[inline]
             fn add_wrapping(self, rhs: Self) -> Self {
                 self + rhs
             }
 
+            #[inline]
             fn sub_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 Ok(self - rhs)
             }
 
+            #[inline]
             fn sub_wrapping(self, rhs: Self) -> Self {
                 self - rhs
             }
 
+            #[inline]
             fn mul_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 Ok(self * rhs)
             }
 
+            #[inline]
             fn mul_wrapping(self, rhs: Self) -> Self {
                 self * rhs
             }
 
+            #[inline]
             fn div_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 if rhs.is_zero() {
                     Err(ArrowError::DivideByZero)
@@ -269,10 +297,12 @@ macro_rules! native_type_float_op {
                 }
             }
 
+            #[inline]
             fn div_wrapping(self, rhs: Self) -> Self {
                 self / rhs
             }
 
+            #[inline]
             fn mod_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 if rhs.is_zero() {
                     Err(ArrowError::DivideByZero)
@@ -281,30 +311,37 @@ macro_rules! native_type_float_op {
                 }
             }
 
+            #[inline]
             fn mod_wrapping(self, rhs: Self) -> Self {
                 self % rhs
             }
 
+            #[inline]
             fn neg_checked(self) -> Result<Self, ArrowError> {
                 Ok(-self)
             }
 
+            #[inline]
             fn neg_wrapping(self) -> Self {
                 -self
             }
 
+            #[inline]
             fn pow_checked(self, exp: u32) -> Result<Self, ArrowError> {
                 Ok(self.powi(exp as i32))
             }
 
+            #[inline]
             fn pow_wrapping(self, exp: u32) -> Self {
                 self.powi(exp as i32)
             }
 
+            #[inline]
             fn is_zero(self) -> bool {
                 self == $zero
             }
 
+            #[inline]
             fn is_eq(self, rhs: Self) -> bool {
                 // Equivalent to `self.total_cmp(&rhs).is_eq()`
                 // but LLVM isn't able to realise this is bitwise equality
@@ -312,22 +349,27 @@ macro_rules! native_type_float_op {
                 self.to_bits() == rhs.to_bits()
             }
 
+            #[inline]
             fn is_ne(self, rhs: Self) -> bool {
                 !self.is_eq(rhs)
             }
 
+            #[inline]
             fn is_lt(self, rhs: Self) -> bool {
                 self.total_cmp(&rhs).is_lt()
             }
 
+            #[inline]
             fn is_le(self, rhs: Self) -> bool {
                 self.total_cmp(&rhs).is_le()
             }
 
+            #[inline]
             fn is_gt(self, rhs: Self) -> bool {
                 self.total_cmp(&rhs).is_gt()
             }
 
+            #[inline]
             fn is_ge(self, rhs: Self) -> bool {
                 self.total_cmp(&rhs).is_ge()
             }
