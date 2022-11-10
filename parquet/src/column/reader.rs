@@ -515,6 +515,7 @@ where
     /// If the current page is fully decoded, this will NOT load the next page
     /// into the buffer
     #[inline]
+    #[cfg(feature = "arrow")]
     pub(crate) fn peek_next(&mut self) -> Result<bool> {
         if self.num_buffered_values == 0
             || self.num_buffered_values == self.num_decoded_values
