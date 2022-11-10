@@ -19,6 +19,7 @@ use arrow_buffer::{i256, ArrowNativeType};
 use arrow_schema::ArrowError;
 use half::f16;
 use num::complex::ComplexFloat;
+use std::cmp::Ordering;
 
 /// Trait for [`ArrowNativeType`] that adds checked and unchecked arithmetic operations,
 /// and totally ordered comparison operations
@@ -74,17 +75,34 @@ pub trait ArrowNativeTypeOp: ArrowNativeType {
 
     fn is_zero(self) -> bool;
 
+    fn compare(self, rhs: Self) -> Ordering;
+
     fn is_eq(self, rhs: Self) -> bool;
 
-    fn is_ne(self, rhs: Self) -> bool;
+    #[inline]
+    fn is_ne(self, rhs: Self) -> bool {
+        !self.is_eq(rhs)
+    }
 
-    fn is_lt(self, rhs: Self) -> bool;
+    #[inline]
+    fn is_lt(self, rhs: Self) -> bool {
+        self.compare(rhs).is_lt()
+    }
 
-    fn is_le(self, rhs: Self) -> bool;
+    #[inline]
+    fn is_le(self, rhs: Self) -> bool {
+        self.compare(rhs).is_le()
+    }
 
-    fn is_gt(self, rhs: Self) -> bool;
+    #[inline]
+    fn is_gt(self, rhs: Self) -> bool {
+        self.compare(rhs).is_gt()
+    }
 
-    fn is_ge(self, rhs: Self) -> bool;
+    #[inline]
+    fn is_ge(self, rhs: Self) -> bool {
+        self.compare(rhs).is_ge()
+    }
 }
 
 macro_rules! native_type_op {
@@ -209,33 +227,13 @@ macro_rules! native_type_op {
             }
 
             #[inline]
+            fn compare(self, rhs: Self) -> Ordering {
+                self.cmp(&rhs)
+            }
+
+            #[inline]
             fn is_eq(self, rhs: Self) -> bool {
                 self == rhs
-            }
-
-            #[inline]
-            fn is_ne(self, rhs: Self) -> bool {
-                self != rhs
-            }
-
-            #[inline]
-            fn is_lt(self, rhs: Self) -> bool {
-                self < rhs
-            }
-
-            #[inline]
-            fn is_le(self, rhs: Self) -> bool {
-                self <= rhs
-            }
-
-            #[inline]
-            fn is_gt(self, rhs: Self) -> bool {
-                self > rhs
-            }
-
-            #[inline]
-            fn is_ge(self, rhs: Self) -> bool {
-                self >= rhs
             }
         }
     };
@@ -342,36 +340,16 @@ macro_rules! native_type_float_op {
             }
 
             #[inline]
+            fn compare(self, rhs: Self) -> Ordering {
+                <$t>::total_cmp(&self, &rhs)
+            }
+
+            #[inline]
             fn is_eq(self, rhs: Self) -> bool {
                 // Equivalent to `self.total_cmp(&rhs).is_eq()`
                 // but LLVM isn't able to realise this is bitwise equality
                 // https://rust.godbolt.org/z/347nWGxoW
                 self.to_bits() == rhs.to_bits()
-            }
-
-            #[inline]
-            fn is_ne(self, rhs: Self) -> bool {
-                !self.is_eq(rhs)
-            }
-
-            #[inline]
-            fn is_lt(self, rhs: Self) -> bool {
-                self.total_cmp(&rhs).is_lt()
-            }
-
-            #[inline]
-            fn is_le(self, rhs: Self) -> bool {
-                self.total_cmp(&rhs).is_le()
-            }
-
-            #[inline]
-            fn is_gt(self, rhs: Self) -> bool {
-                self.total_cmp(&rhs).is_gt()
-            }
-
-            #[inline]
-            fn is_ge(self, rhs: Self) -> bool {
-                self.total_cmp(&rhs).is_ge()
             }
         }
     };
