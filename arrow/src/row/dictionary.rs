@@ -173,8 +173,6 @@ pub unsafe fn decode_dictionary<K: ArrowDictionaryKeyType>(
         value_type => (decode_primitive_helper, values, value_type),
         DataType::Null => NullArray::new(values.len()).into_data(),
         DataType::Boolean => decode_bool(&values),
-        DataType::Decimal128(_, _) => decode_primitive_helper!(Decimal128Type, values, value_type),
-        DataType::Decimal256(_, _) => decode_primitive_helper!(Decimal256Type, values, value_type),
         DataType::Utf8 => decode_string::<i32>(&values),
         DataType::LargeUtf8 => decode_string::<i64>(&values),
         DataType::Binary => decode_binary::<i32>(&values),
