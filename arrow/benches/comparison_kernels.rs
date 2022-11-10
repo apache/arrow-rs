@@ -22,13 +22,14 @@ use criterion::Criterion;
 extern crate arrow;
 
 use arrow::compute::*;
-use arrow::datatypes::{ArrowNumericType, IntervalMonthDayNanoType};
+use arrow::datatypes::{ArrowNativeTypeOp, ArrowNumericType, IntervalMonthDayNanoType};
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type, datatypes::Int32Type};
 
 fn bench_eq<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
 where
     T: ArrowNumericType,
+    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
 {
     eq(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
 }
@@ -36,6 +37,7 @@ where
 fn bench_neq<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
 where
     T: ArrowNumericType,
+    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
 {
     neq(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
 }
@@ -43,6 +45,7 @@ where
 fn bench_lt<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
 where
     T: ArrowNumericType,
+    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
 {
     lt(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
 }
@@ -50,6 +53,7 @@ where
 fn bench_lt_eq<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
 where
     T: ArrowNumericType,
+    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
 {
     lt_eq(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
 }
@@ -57,6 +61,7 @@ where
 fn bench_gt<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
 where
     T: ArrowNumericType,
+    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
 {
     gt(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
 }
@@ -64,6 +69,7 @@ where
 fn bench_gt_eq<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
 where
     T: ArrowNumericType,
+    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
 {
     gt_eq(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
 }

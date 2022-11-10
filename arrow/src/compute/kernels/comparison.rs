@@ -3038,14 +3038,20 @@ pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 }
 
 /// Perform `left == right` operation on two [`PrimitiveArray`]s.
+///
+/// If `simd` feature flag is not enabled:
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn eq<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::eq, |a, b| a == b);
     #[cfg(not(feature = "simd"))]
-    return compare_op(left, right, |a, b| a == b);
+    return compare_op(left, right, |a, b| a.is_eq(b));
 }
 
 /// Perform `left == right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -3075,14 +3081,20 @@ where
 }
 
 /// Perform `left != right` operation on two [`PrimitiveArray`]s.
+///
+/// If `simd` feature flag is not enabled:
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn neq<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::ne, |a, b| a != b);
     #[cfg(not(feature = "simd"))]
-    return compare_op(left, right, |a, b| a != b);
+    return compare_op(left, right, |a, b| a.is_ne(b));
 }
 
 /// Perform `left != right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -3104,14 +3116,20 @@ where
 
 /// Perform `left < right` operation on two [`PrimitiveArray`]s. Null values are less than non-null
 /// values.
+///
+/// If `simd` feature flag is not enabled:
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn lt<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::lt, |a, b| a < b);
     #[cfg(not(feature = "simd"))]
-    return compare_op(left, right, |a, b| a < b);
+    return compare_op(left, right, |a, b| a.is_lt(b));
 }
 
 /// Perform `left < right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -3134,17 +3152,23 @@ where
 
 /// Perform `left <= right` operation on two [`PrimitiveArray`]s. Null values are less than non-null
 /// values.
+///
+/// If `simd` feature flag is not enabled:
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn lt_eq<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::le, |a, b| a <= b);
     #[cfg(not(feature = "simd"))]
-    return compare_op(left, right, |a, b| a <= b);
+    return compare_op(left, right, |a, b| a.is_le(b));
 }
 
 /// Perform `left <= right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -3167,14 +3191,20 @@ where
 
 /// Perform `left > right` operation on two [`PrimitiveArray`]s. Non-null values are greater than null
 /// values.
+///
+/// If `simd` feature flag is not enabled:
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn gt<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::gt, |a, b| a > b);
     #[cfg(not(feature = "simd"))]
-    return compare_op(left, right, |a, b| a > b);
+    return compare_op(left, right, |a, b| a.is_gt(b));
 }
 
 /// Perform `left > right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -3197,17 +3227,23 @@ where
 
 /// Perform `left >= right` operation on two [`PrimitiveArray`]s. Non-null values are greater than null
 /// values.
+///
+/// If `simd` feature flag is not enabled:
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn gt_eq<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::ge, |a, b| a >= b);
     #[cfg(not(feature = "simd"))]
-    return compare_op(left, right, |a, b| a >= b);
+    return compare_op(left, right, |a, b| a.is_ge(b));
 }
 
 /// Perform `left >= right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -5805,10 +5841,16 @@ mod tests {
         );
         assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
 
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(eq(&array1, &array2).unwrap(), expected);
+
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
         );
         assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(neq(&array1, &array2).unwrap(), expected);
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]
             .into_iter()
@@ -5824,10 +5866,16 @@ mod tests {
         );
         assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
 
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(eq(&array1, &array2).unwrap(), expected);
+
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
         );
         assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(neq(&array1, &array2).unwrap(), expected);
     }
 
     #[test]
@@ -5846,10 +5894,16 @@ mod tests {
             );
         assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(lt(&array1, &array2).unwrap(), expected);
+
         let expected = BooleanArray::from(
                 vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
             );
         assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(lt_eq(&array1, &array2).unwrap(), expected);
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
             .into_iter()
@@ -5865,10 +5919,16 @@ mod tests {
             );
         assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(lt(&array1, &array2).unwrap(), expected);
+
         let expected = BooleanArray::from(
                 vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
             );
         assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(lt_eq(&array1, &array2).unwrap(), expected);
     }
 
     #[test]
@@ -5887,10 +5947,16 @@ mod tests {
             );
         assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
 
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(gt(&array1, &array2).unwrap(), expected);
+
         let expected = BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
             );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(gt_eq(&array1, &array2).unwrap(), expected);
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
             .into_iter()
@@ -5906,10 +5972,16 @@ mod tests {
             );
         assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
 
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(gt(&array1, &array2).unwrap(), expected);
+
         let expected = BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
             );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(gt_eq(&array1, &array2).unwrap(), expected);
     }
 
     #[test]

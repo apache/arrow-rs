@@ -52,7 +52,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = { version = "0.8", optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
-hashbrown = { version = "0.12", default-features = false }
+hashbrown = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }

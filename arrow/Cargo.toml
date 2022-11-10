@@ -56,7 +56,7 @@ arrow-select = { version = "26.0.0", path = "../arrow-select" }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
-hashbrown = { version = "0.12", default-features = false }
+hashbrown = { version = "0.13", default-features = false }
 regex = { version = "1.5.6", default-features = false, features = ["std", "unicode"] }
 regex-syntax = { version = "0.6.27", default-features = false, features = ["unicode"] }
 packed_simd = { version = "0.3", default-features = false, optional = true, package = "packed_simd_2" }
