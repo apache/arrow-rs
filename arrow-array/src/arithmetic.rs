@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::cmp::Ordering;
 use arrow_buffer::{i256, ArrowNativeType};
 use arrow_schema::ArrowError;
 use half::f16;
 use num::complex::ComplexFloat;
+use std::cmp::Ordering;
 
 /// Trait for [`ArrowNativeType`] that adds checked and unchecked arithmetic operations,
 /// and totally ordered comparison operations
