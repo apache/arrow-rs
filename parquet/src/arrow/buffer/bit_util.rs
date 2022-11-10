@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::util::bit_chunk_iterator::UnalignedBitChunk;
+use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use std::ops::Range;
 
 /// Counts the number of set bits in the provided range
@@ -65,7 +65,7 @@ pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::BooleanBufferBuilder;
+    use arrow_array::builder::BooleanBufferBuilder;
     use rand::prelude::*;
 
     #[test]

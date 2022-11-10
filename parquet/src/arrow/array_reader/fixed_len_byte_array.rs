@@ -27,12 +27,13 @@ use crate::column::reader::decoder::{ColumnValueDecoder, ValuesBufferSlice};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::memory::ByteBufferPtr;
-use arrow::array::{
-    ArrayDataBuilder, ArrayRef, Decimal128Array, FixedSizeBinaryArray,
-    IntervalDayTimeArray, IntervalYearMonthArray,
+use arrow_array::{
+    ArrayRef, Decimal128Array, FixedSizeBinaryArray, IntervalDayTimeArray,
+    IntervalYearMonthArray,
 };
-use arrow::buffer::Buffer;
-use arrow::datatypes::{DataType as ArrowType, IntervalUnit};
+use arrow_buffer::Buffer;
+use arrow_data::ArrayDataBuilder;
+use arrow_schema::{DataType as ArrowType, IntervalUnit};
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
@@ -427,10 +428,10 @@ mod tests {
     use super::*;
     use crate::arrow::arrow_reader::ParquetRecordBatchReader;
     use crate::arrow::ArrowWriter;
-    use arrow::array::{Array, Decimal128Array, ListArray};
+    use arrow_array::{Array, Decimal128Array, ListArray};
     use arrow::datatypes::Field;
     use arrow::error::Result as ArrowResult;
-    use arrow::record_batch::RecordBatch;
+    use arrow_array::RecordBatch;
     use bytes::Bytes;
     use std::sync::Arc;
 

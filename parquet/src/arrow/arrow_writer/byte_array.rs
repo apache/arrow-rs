@@ -31,17 +31,17 @@ use crate::file::writer::OnCloseColumnChunk;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
-use arrow::array::{
+use arrow_array::{
     Array, ArrayAccessor, ArrayRef, BinaryArray, DictionaryArray, LargeBinaryArray,
     LargeStringArray, StringArray,
 };
-use arrow::datatypes::DataType;
+use arrow_schema::DataType;
 
 macro_rules! downcast_dict_impl {
     ($array:ident, $key:ident, $val:ident, $op:expr $(, $arg:expr)*) => {{
         $op($array
             .as_any()
-            .downcast_ref::<DictionaryArray<arrow::datatypes::$key>>()
+            .downcast_ref::<DictionaryArray<arrow_array::types::$key>>()
             .unwrap()
             .downcast_dict::<$val>()
             .unwrap()$(, $arg)*)

@@ -26,8 +26,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use arrow::ipc::writer;
+use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use arrow_ipc::writer;
 
 use crate::basic::{
     ConvertedType, LogicalType, Repetition, TimeUnit as ParquetTimeUnit,
@@ -108,10 +108,10 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
             } else {
                 bytes.as_slice()
             };
-            match arrow::ipc::root_as_message(slice) {
+            match arrow_ipc::root_as_message(slice) {
                 Ok(message) => message
                     .header_as_schema()
-                    .map(arrow::ipc::convert::fb_to_schema)
+                    .map(arrow_ipc::convert::fb_to_schema)
                     .ok_or_else(|| arrow_err!("the message is not Arrow Schema")),
                 Err(err) => {
                     // The flatbuffers implementation returns an error on verification error.
@@ -137,7 +137,7 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
 /// Encodes the Arrow schema into the IPC format, and base64 encodes it
 fn encode_arrow_schema(schema: &Schema) -> String {
     let options = writer::IpcWriteOptions::default();
-    let data_gen = arrow::ipc::writer::IpcDataGenerator::default();
+    let data_gen = writer::IpcDataGenerator::default();
     let mut serialized_schema = data_gen.schema_to_bytes(schema, &options);
 
     // manually prepending the length to the schema as arrow uses the legacy IPC format

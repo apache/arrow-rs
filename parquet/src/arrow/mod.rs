@@ -16,8 +16,8 @@
 // under the License.
 
 //! Provides API for reading/writing Arrow
-//! [RecordBatch](arrow::record_batch::RecordBatch)es and
-//! [Array](arrow::array::Array)s to/from Parquet Files.
+//! [RecordBatch](arrow_array::RecordBatch)es and
+//! [Array](arrow_array::Array)s to/from Parquet Files.
 //!
 //! [Apache Arrow](http://arrow.apache.org/) is a cross-language development platform for
 //! in-memory data.
@@ -25,8 +25,8 @@
 //!# Example of writing Arrow record batch to Parquet file
 //!
 //!```rust
-//! use arrow::array::{Int32Array, ArrayRef};
-//! use arrow::record_batch::RecordBatch;
+//! use arrow_array::{Int32Array, ArrayRef};
+//! use arrow_array::RecordBatch;
 //! use parquet::arrow::arrow_writer::ArrowWriter;
 //! use parquet::file::properties::WriterProperties;
 //! use std::fs::File;
@@ -70,9 +70,9 @@
 //! use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 //!
 //! # use std::sync::Arc;
-//! # use arrow::array::Int32Array;
+//! # use arrow_array::Int32Array;
 //! # use arrow::datatypes::{DataType, Field, Schema};
-//! # use arrow::record_batch::RecordBatch;
+//! # use arrow_array::RecordBatch;
 //! # use parquet::arrow::arrow_writer::ArrowWriter;
 //! #
 //! # let ids = Int32Array::from(vec![1, 2, 3, 4]);

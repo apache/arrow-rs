@@ -17,10 +17,10 @@
 
 use std::ops::Range;
 
-use arrow::array::BooleanBufferBuilder;
-use arrow::bitmap::Bitmap;
-use arrow::buffer::Buffer;
-use arrow::util::bit_chunk_iterator::UnalignedBitChunk;
+use arrow_array::builder::BooleanBufferBuilder;
+use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
+use arrow_buffer::Buffer;
+use arrow_data::Bitmap;
 
 use crate::arrow::buffer::bit_util::count_set_bits;
 use crate::arrow::record_reader::buffer::BufferQueue;

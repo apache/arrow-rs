@@ -21,9 +21,10 @@ use crate::arrow::record_reader::buffer::{
 };
 use crate::column::reader::decoder::ValuesBufferSlice;
 use crate::errors::{ParquetError, Result};
-use arrow::array::{make_array, Array, ArrayDataBuilder, ArrayRef, OffsetSizeTrait};
-use arrow::buffer::Buffer;
-use arrow::datatypes::{ArrowNativeType, DataType as ArrowType};
+use arrow_array::{make_array, Array, ArrayRef, OffsetSizeTrait};
+use arrow_buffer::{ArrowNativeType, Buffer};
+use arrow_data::ArrayDataBuilder;
+use arrow_schema::DataType as ArrowType;
 use std::sync::Arc;
 
 /// An array of variable length byte arrays that are potentially dictionary encoded
@@ -179,7 +180,7 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
                 };
 
                 // This will compute a new dictionary
-                let array = arrow::compute::cast(
+                let array = arrow_cast::cast(
                     &values.into_array(null_buffer, value_type),
                     data_type,
                 )
@@ -252,8 +253,8 @@ impl<K: ScalarValue, V: ScalarValue + OffsetSizeTrait> BufferQueue
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Array, StringArray};
     use arrow::compute::cast;
+    use arrow_array::{Array, StringArray};
 
     #[test]
     fn test_dictionary_buffer() {

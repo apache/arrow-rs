@@ -126,7 +126,7 @@ impl CodecOptionsBuilder {
 /// This returns `None` if the codec type is `UNCOMPRESSED`.
 pub fn create_codec(
     codec: CodecType,
-    options: &CodecOptions,
+    _options: &CodecOptions,
 ) -> Result<Option<Box<dyn Codec>>> {
     match codec {
         #[cfg(any(feature = "brotli", test))]
@@ -137,7 +137,7 @@ pub fn create_codec(
         CodecType::SNAPPY => Ok(Some(Box::new(SnappyCodec::new()))),
         #[cfg(any(feature = "lz4", test))]
         CodecType::LZ4 => Ok(Some(Box::new(LZ4HadoopCodec::new(
-            options.backward_compatible_lz4,
+            _options.backward_compatible_lz4,
         )))),
         #[cfg(any(feature = "zstd", test))]
         CodecType::ZSTD => Ok(Some(Box::new(ZSTDCodec::new()))),

@@ -21,7 +21,7 @@ use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::schema::types::{SchemaDescriptor, Type, TypePtr};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, Schema};
 
 fn get_repetition(t: &Type) -> Repetition {
     let info = t.get_basic_info();
