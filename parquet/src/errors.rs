@@ -19,7 +19,7 @@
 
 use std::{cell, io, result, str};
 
-#[cfg(any(feature = "arrow", test))]
+#[cfg(feature = "arrow")]
 use arrow_schema::ArrowError;
 
 #[derive(Debug, PartialEq, Clone, Eq)]
@@ -34,7 +34,7 @@ pub enum ParquetError {
     /// Returned when IO related failures occur, e.g. when there are not enough bytes to
     /// decode.
     EOF(String),
-    #[cfg(any(feature = "arrow", test))]
+    #[cfg(feature = "arrow")]
     /// Arrow error.
     /// Returned when reading into arrow or writing from arrow.
     ArrowError(String),
@@ -49,7 +49,7 @@ impl std::fmt::Display for ParquetError {
             }
             ParquetError::NYI(ref message) => write!(fmt, "NYI: {}", message),
             ParquetError::EOF(ref message) => write!(fmt, "EOF: {}", message),
-            #[cfg(any(feature = "arrow", test))]
+            #[cfg(feature = "arrow")]
             ParquetError::ArrowError(ref message) => write!(fmt, "Arrow: {}", message),
             ParquetError::IndexOutOfBound(ref index, ref bound) => {
                 write!(fmt, "Index {} out of bound: {}", index, bound)
@@ -95,7 +95,7 @@ impl From<str::Utf8Error> for ParquetError {
     }
 }
 
-#[cfg(any(feature = "arrow", test))]
+#[cfg(feature = "arrow")]
 impl From<ArrowError> for ParquetError {
     fn from(e: ArrowError) -> ParquetError {
         ParquetError::ArrowError(format!("underlying Arrow error: {}", e))
@@ -135,7 +135,7 @@ macro_rules! eof_err {
     ($fmt:expr, $($args:expr),*) => (ParquetError::EOF(format!($fmt, $($args),*)));
 }
 
-#[cfg(any(feature = "arrow", test))]
+#[cfg(feature = "arrow")]
 macro_rules! arrow_err {
     ($fmt:expr) => (ParquetError::ArrowError($fmt.to_owned()));
     ($fmt:expr, $($args:expr),*) => (ParquetError::ArrowError(format!($fmt, $($args),*)));
@@ -147,7 +147,7 @@ macro_rules! arrow_err {
 // ----------------------------------------------------------------------
 // Convert parquet error into other errors
 
-#[cfg(any(feature = "arrow", test))]
+#[cfg(feature = "arrow")]
 impl From<ParquetError> for ArrowError {
     fn from(p: ParquetError) -> Self {
         Self::ParquetError(format!("{}", p))
