@@ -3059,9 +3059,6 @@ mod tests {
 
         let null_buffer = null_buffer_builder.finish();
 
-        // `count_set_bits` counts 1-bits in entire buffer. Because above `resize` doesn't
-        // actually truncate the buffer, `count_set_bits` still return 3.
-        assert_eq!(null_buffer.count_set_bits(), 3);
         // `count_set_bits_offset` takes len in bits as parameter.
         assert_eq!(null_buffer.count_set_bits_offset(0, 13), 0);
 
