@@ -451,6 +451,16 @@ pub struct Row<'a> {
     fields: &'a Arc<[SortField]>,
 }
 
+impl<'a> Row<'a> {
+    /// Create owned version of the row to detach it from the shared [`Rows`].
+    pub fn owned(&self) -> OwnedRow {
+        OwnedRow {
+            data: self.data.to_vec(),
+            fields: Arc::clone(self.fields),
+        }
+    }
+}
+
 // Manually derive these as don't wish to include `fields`
 
 impl<'a> PartialEq for Row<'a> {
@@ -487,6 +497,66 @@ impl<'a> AsRef<[u8]> for Row<'a> {
     #[inline]
     fn as_ref(&self) -> &[u8] {
         self.data
+    }
+}
+
+/// Owned version of a [`Row`] that can be moved/cloned freely.
+///
+/// This contains the data for the one specific row (not the entire buffer of all rows).
+#[derive(Debug, Clone)]
+pub struct OwnedRow {
+    data: Vec<u8>,
+    fields: Arc<[SortField]>,
+}
+
+impl OwnedRow {
+    /// Get borrowed [`Row`] from owned version.
+    ///
+    /// This is helpful if you want to compare an [`OwnedRow`] with a [`Row`].
+    pub fn row(&self) -> Row<'_> {
+        Row {
+            data: &self.data,
+            fields: &self.fields,
+        }
+    }
+}
+
+// Manually derive these as don't wish to include `fields`. Also we just want to use the same `Row` implementations here.
+
+impl PartialEq for OwnedRow {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.row().eq(&other.row())
+    }
+}
+
+impl Eq for OwnedRow {}
+
+impl PartialOrd for OwnedRow {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.row().partial_cmp(&other.row())
+    }
+}
+
+impl Ord for OwnedRow {
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.row().cmp(&other.row())
+    }
+}
+
+impl Hash for OwnedRow {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.row().hash(state)
+    }
+}
+
+impl AsRef<[u8]> for OwnedRow {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        &self.data
     }
 }
 
