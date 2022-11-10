@@ -90,8 +90,8 @@ pub fn encode_dictionary<K: ArrowDictionaryKeyType>(
 }
 
 macro_rules! decode_primitive_helper {
-    ($t:ty, $values: ident) => {
-        decode_primitive::<$t>(&$values)
+    ($t:ty, $values: ident, $data_type:ident) => {
+        decode_primitive::<$t>(&$values, $data_type.clone())
     };
 }
 
@@ -170,11 +170,11 @@ pub unsafe fn decode_dictionary<K: ArrowDictionaryKeyType>(
     }
 
     let child = downcast_primitive! {
-        &value_type => (decode_primitive_helper, values),
+        value_type => (decode_primitive_helper, values, value_type),
         DataType::Null => NullArray::new(values.len()).into_data(),
         DataType::Boolean => decode_bool(&values),
-        DataType::Decimal128(p, s) => decode_decimal::<Decimal128Type>(&values, *p, *s),
-        DataType::Decimal256(p, s) => decode_decimal::<Decimal256Type>(&values, *p, *s),
+        DataType::Decimal128(_, _) => decode_primitive_helper!(Decimal128Type, values, value_type),
+        DataType::Decimal256(_, _) => decode_primitive_helper!(Decimal256Type, values, value_type),
         DataType::Utf8 => decode_string::<i32>(&values),
         DataType::LargeUtf8 => decode_string::<i64>(&values),
         DataType::Binary => decode_binary::<i32>(&values),
@@ -247,7 +247,11 @@ fn decode_bool(values: &[&[u8]]) -> ArrayData {
 }
 
 /// Decodes a fixed length type array from dictionary values
-fn decode_fixed<T: FixedLengthEncoding + ToByteSlice>(
+///
+/// # Safety
+///
+/// `data_type` must be appropriate native type for `T`
+unsafe fn decode_fixed<T: FixedLengthEncoding + ToByteSlice>(
     values: &[&[u8]],
     data_type: DataType,
 ) -> ArrayData {
@@ -267,17 +271,19 @@ fn decode_fixed<T: FixedLengthEncoding + ToByteSlice>(
 }
 
 /// Decodes a `PrimitiveArray` from dictionary values
-fn decode_primitive<T: ArrowPrimitiveType>(values: &[&[u8]]) -> ArrayData
+fn decode_primitive<T: ArrowPrimitiveType>(
+    values: &[&[u8]],
+    data_type: DataType,
+) -> ArrayData
 where
     T::Native: FixedLengthEncoding,
 {
-    decode_fixed::<T::Native>(values, T::DATA_TYPE)
-}
+    assert_eq!(
+        std::mem::discriminant(&T::DATA_TYPE),
+        std::mem::discriminant(&data_type),
+    );
 
-/// Decodes a `DecimalArray` from dictionary values
-fn decode_decimal<T: DecimalType>(values: &[&[u8]], precision: u8, scale: u8) -> ArrayData
-where
-    T::Native: FixedLengthEncoding,
-{
-    decode_fixed::<T::Native>(values, T::TYPE_CONSTRUCTOR(precision, scale))
+    // SAFETY:
+    // Validated data type above
+    unsafe { decode_fixed::<T::Native>(values, data_type) }
 }

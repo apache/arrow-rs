@@ -24,11 +24,10 @@
 //! Example:
 //!
 //! ```
-//! use arrow::datatypes::{DataType, Field, Schema};
-//! use arrow::json;
-//! use std::fs::File;
-//! use std::io::BufReader;
-//! use std::sync::Arc;
+//! # use arrow_schema::*;
+//! # use std::fs::File;
+//! # use std::io::BufReader;
+//! # use std::sync::Arc;
 //!
 //! let schema = Schema::new(vec![
 //!     Field::new("a", DataType::Float64, false),
@@ -38,10 +37,10 @@
 //!
 //! let file = File::open("test/data/basic.json").unwrap();
 //!
-//! let mut json = json::Reader::new(
+//! let mut json = arrow_json::Reader::new(
 //!    BufReader::new(file),
 //!    Arc::new(schema),
-//!    json::reader::DecoderOptions::new(),
+//!    arrow_json::reader::DecoderOptions::new(),
 //! );
 //!
 //! let batch = json.next().unwrap().unwrap();
@@ -55,13 +54,13 @@ use indexmap::set::IndexSet as HashSet;
 use serde_json::json;
 use serde_json::{map::Map as JsonMap, Value};
 
-use crate::buffer::MutableBuffer;
-use crate::datatypes::*;
-use crate::error::{ArrowError, Result};
-use crate::record_batch::{RecordBatch, RecordBatchOptions};
-use crate::util::bit_util;
-use crate::{array::*, buffer::Buffer};
+use arrow_array::builder::*;
+use arrow_array::types::*;
+use arrow_array::*;
+use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_cast::parse::Parser;
+use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_schema::*;
 
 #[derive(Debug, Clone)]
 enum InferredType {
@@ -72,7 +71,7 @@ enum InferredType {
 }
 
 impl InferredType {
-    fn merge(&mut self, other: InferredType) -> Result<()> {
+    fn merge(&mut self, other: InferredType) -> Result<(), ArrowError> {
         match (self, other) {
             (InferredType::Array(s), InferredType::Array(o)) => {
                 s.merge(*o)?;
@@ -147,7 +146,7 @@ fn coerce_data_type(dt: Vec<&DataType>) -> DataType {
     })
 }
 
-fn generate_datatype(t: &InferredType) -> Result<DataType> {
+fn generate_datatype(t: &InferredType) -> Result<DataType, ArrowError> {
     Ok(match t {
         InferredType::Scalar(hs) => coerce_data_type(hs.iter().collect()),
         InferredType::Object(spec) => DataType::Struct(generate_fields(spec)?),
@@ -160,14 +159,16 @@ fn generate_datatype(t: &InferredType) -> Result<DataType> {
     })
 }
 
-fn generate_fields(spec: &HashMap<String, InferredType>) -> Result<Vec<Field>> {
+fn generate_fields(
+    spec: &HashMap<String, InferredType>,
+) -> Result<Vec<Field>, ArrowError> {
     spec.iter()
         .map(|(k, types)| Ok(Field::new(k, generate_datatype(types)?, true)))
         .collect()
 }
 
 /// Generate schema from JSON field names and inferred data types
-fn generate_schema(spec: HashMap<String, InferredType>) -> Result<Schema> {
+fn generate_schema(spec: HashMap<String, InferredType>) -> Result<Schema, ArrowError> {
     Ok(Schema::new(generate_fields(&spec)?))
 }
 
@@ -178,7 +179,7 @@ fn generate_schema(spec: HashMap<String, InferredType>) -> Result<Schema> {
 /// ```
 /// use std::fs::File;
 /// use std::io::BufReader;
-/// use arrow::json::reader::ValueIter;
+/// use arrow_json::reader::ValueIter;
 ///
 /// let mut reader =
 ///     BufReader::new(File::open("test/data/mixed_arrays.json").unwrap());
@@ -208,7 +209,7 @@ impl<'a, R: Read> ValueIter<'a, R> {
 }
 
 impl<'a, R: Read> Iterator for ValueIter<'a, R> {
-    type Item = Result<Value>;
+    type Item = Result<Value, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(max) = self.max_read_records {
@@ -259,7 +260,7 @@ impl<'a, R: Read> Iterator for ValueIter<'a, R> {
 /// ```
 /// use std::fs::File;
 /// use std::io::BufReader;
-/// use arrow::json::reader::infer_json_schema_from_seekable;
+/// use arrow_json::reader::infer_json_schema_from_seekable;
 ///
 /// let file = File::open("test/data/mixed_arrays.json").unwrap();
 /// // file's cursor's offset at 0
@@ -270,7 +271,7 @@ impl<'a, R: Read> Iterator for ValueIter<'a, R> {
 pub fn infer_json_schema_from_seekable<R: Read + Seek>(
     reader: &mut BufReader<R>,
     max_read_records: Option<usize>,
-) -> Result<Schema> {
+) -> Result<Schema, ArrowError> {
     let schema = infer_json_schema(reader, max_read_records);
     // return the reader seek back to the start
     reader.seek(SeekFrom::Start(0))?;
@@ -292,7 +293,7 @@ pub fn infer_json_schema_from_seekable<R: Read + Seek>(
 /// use std::fs::File;
 /// use std::io::{BufReader, SeekFrom, Seek};
 /// use flate2::read::GzDecoder;
-/// use arrow::json::reader::infer_json_schema;
+/// use arrow_json::reader::infer_json_schema;
 ///
 /// let mut file = File::open("test/data/mixed_arrays.json.gz").unwrap();
 ///
@@ -307,7 +308,7 @@ pub fn infer_json_schema_from_seekable<R: Read + Seek>(
 pub fn infer_json_schema<R: Read>(
     reader: &mut BufReader<R>,
     max_read_records: Option<usize>,
-) -> Result<Schema> {
+) -> Result<Schema, ArrowError> {
     infer_json_schema_from_iterator(ValueIter::new(reader, max_read_records))
 }
 
@@ -315,7 +316,7 @@ fn set_object_scalar_field_type(
     field_types: &mut HashMap<String, InferredType>,
     key: &str,
     ftype: DataType,
-) -> Result<()> {
+) -> Result<(), ArrowError> {
     if !field_types.contains_key(key) {
         field_types.insert(key.to_string(), InferredType::Scalar(HashSet::new()));
     }
@@ -340,7 +341,7 @@ fn set_object_scalar_field_type(
     }
 }
 
-fn infer_scalar_array_type(array: &[Value]) -> Result<InferredType> {
+fn infer_scalar_array_type(array: &[Value]) -> Result<InferredType, ArrowError> {
     let mut hs = HashSet::new();
 
     for v in array {
@@ -371,7 +372,7 @@ fn infer_scalar_array_type(array: &[Value]) -> Result<InferredType> {
     Ok(InferredType::Scalar(hs))
 }
 
-fn infer_nested_array_type(array: &[Value]) -> Result<InferredType> {
+fn infer_nested_array_type(array: &[Value]) -> Result<InferredType, ArrowError> {
     let mut inner_ele_type = InferredType::Any;
 
     for v in array {
@@ -391,7 +392,7 @@ fn infer_nested_array_type(array: &[Value]) -> Result<InferredType> {
     Ok(InferredType::Array(Box::new(inner_ele_type)))
 }
 
-fn infer_struct_array_type(array: &[Value]) -> Result<InferredType> {
+fn infer_struct_array_type(array: &[Value]) -> Result<InferredType, ArrowError> {
     let mut field_types = HashMap::new();
 
     for v in array {
@@ -411,7 +412,7 @@ fn infer_struct_array_type(array: &[Value]) -> Result<InferredType> {
     Ok(InferredType::Object(field_types))
 }
 
-fn infer_array_element_type(array: &[Value]) -> Result<InferredType> {
+fn infer_array_element_type(array: &[Value]) -> Result<InferredType, ArrowError> {
     match array.iter().take(1).next() {
         None => Ok(InferredType::Any), // empty array, return any type that can be updated later
         Some(a) => match a {
@@ -425,7 +426,7 @@ fn infer_array_element_type(array: &[Value]) -> Result<InferredType> {
 fn collect_field_types_from_object(
     field_types: &mut HashMap<String, InferredType>,
     map: &JsonMap<String, Value>,
-) -> Result<()> {
+) -> Result<(), ArrowError> {
     for (k, v) in map {
         match v {
             Value::Array(array) => {
@@ -532,9 +533,9 @@ fn collect_field_types_from_object(
 /// The reason we diverge here is because we don't have utilities to deal with JSON data once it's
 /// interpreted as Strings. We should match Spark's behavior once we added more JSON parsing
 /// kernels in the future.
-pub fn infer_json_schema_from_iterator<I>(value_iter: I) -> Result<Schema>
+pub fn infer_json_schema_from_iterator<I>(value_iter: I) -> Result<Schema, ArrowError>
 where
-    I: Iterator<Item = Result<Value>>,
+    I: Iterator<Item = Result<Value, ArrowError>>,
 {
     let mut field_types: HashMap<String, InferredType> = HashMap::new();
 
@@ -563,7 +564,7 @@ where
 ///
 /// # Examples
 /// ```
-/// use arrow::json::reader::{Decoder, DecoderOptions, ValueIter, infer_json_schema};
+/// use arrow_json::reader::{Decoder, DecoderOptions, ValueIter, infer_json_schema};
 /// use std::fs::File;
 /// use std::io::{BufReader, Seek, SeekFrom};
 /// use std::sync::Arc;
@@ -673,9 +674,12 @@ impl Decoder {
     /// interator into a [`RecordBatch`].
     ///
     /// Returns `None` if the input iterator is exhausted.
-    pub fn next_batch<I>(&self, value_iter: &mut I) -> Result<Option<RecordBatch>>
+    pub fn next_batch<I>(
+        &self,
+        value_iter: &mut I,
+    ) -> Result<Option<RecordBatch>, ArrowError>
     where
-        I: Iterator<Item = Result<Value>>,
+        I: Iterator<Item = Result<Value, ArrowError>>,
     {
         let batch_size = self.options.batch_size;
         let mut rows: Vec<Value> = Vec::with_capacity(batch_size);
@@ -732,7 +736,7 @@ impl Decoder {
         rows: &[Value],
         col_name: &str,
         key_type: &DataType,
-    ) -> Result<ArrayRef> {
+    ) -> Result<ArrayRef, ArrowError> {
         match *key_type {
             DataType::Int8 => {
                 let dtype = DataType::Dictionary(
@@ -803,7 +807,7 @@ impl Decoder {
         data_type: &DataType,
         col_name: &str,
         rows: &[Value],
-    ) -> Result<ArrayRef>
+    ) -> Result<ArrayRef, ArrowError>
     where
         DT: ArrowPrimitiveType + ArrowDictionaryKeyType,
     {
@@ -923,7 +927,7 @@ impl Decoder {
         col_name: &str,
         key_type: &DataType,
         value_type: &DataType,
-    ) -> Result<ArrayRef> {
+    ) -> Result<ArrayRef, ArrowError> {
         if let DataType::Utf8 = *value_type {
             match *key_type {
                 DataType::Int8 => self.build_dictionary_array::<Int8Type>(rows, col_name),
@@ -959,7 +963,11 @@ impl Decoder {
         }
     }
 
-    fn build_boolean_array(&self, rows: &[Value], col_name: &str) -> Result<ArrayRef> {
+    fn build_boolean_array(
+        &self,
+        rows: &[Value],
+        col_name: &str,
+    ) -> Result<ArrayRef, ArrowError> {
         let mut builder = BooleanBuilder::with_capacity(rows.len());
         for row in rows {
             if let Some(value) = row.get(col_name) {
@@ -980,9 +988,9 @@ impl Decoder {
         &self,
         rows: &[Value],
         col_name: &str,
-    ) -> Result<ArrayRef>
+    ) -> Result<ArrayRef, ArrowError>
     where
-        T: ArrowNumericType,
+        T: ArrowPrimitiveType,
         T::Native: num::NumCast,
     {
         let format_string = self
@@ -1019,7 +1027,7 @@ impl Decoder {
         &self,
         rows: &[Value],
         list_field: &Field,
-    ) -> Result<ArrayRef> {
+    ) -> Result<ArrayRef, ArrowError> {
         // build list offsets
         let mut cur_offset = OffsetSize::zero();
         let list_len = rows.len();
@@ -1188,8 +1196,8 @@ impl Decoder {
         rows: &[Value],
         struct_fields: &[Field],
         projection: &Option<Vec<String>>,
-    ) -> Result<Vec<ArrayRef>> {
-        let arrays: Result<Vec<ArrayRef>> = struct_fields
+    ) -> Result<Vec<ArrayRef>, ArrowError> {
+        let arrays: Result<Vec<ArrayRef>, ArrowError> = struct_fields
             .iter()
             .filter(|field| {
                 projection
@@ -1393,7 +1401,7 @@ impl Decoder {
         field_name: &str,
         map_type: &DataType,
         struct_field: &Field,
-    ) -> Result<ArrayRef> {
+    ) -> Result<ArrayRef, ArrowError> {
         // A map has the format {"key": "value"} where key is most commonly a string,
         // but could be a string, number or boolean (🤷🏾‍♂️) (e.g. {1: "value"}).
         // A map is also represented as a flattened contiguous array, with the number
@@ -1488,7 +1496,7 @@ impl Decoder {
         &self,
         rows: &[Value],
         col_name: &str,
-    ) -> Result<ArrayRef>
+    ) -> Result<ArrayRef, ArrowError>
     where
         T::Native: num::NumCast,
         T: ArrowPrimitiveType + ArrowDictionaryKeyType,
@@ -1512,7 +1520,7 @@ impl Decoder {
     /// Read the primitive list's values into ArrayData
     fn read_primitive_list_values<T>(&self, rows: &[Value]) -> ArrayData
     where
-        T: ArrowPrimitiveType + ArrowNumericType,
+        T: ArrowPrimitiveType,
         T::Native: num::NumCast,
     {
         let values = rows
@@ -1637,7 +1645,7 @@ impl<R: Read> Reader<R> {
 
     /// Read the next batch of records
     #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Result<Option<RecordBatch>> {
+    pub fn next(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
         self.decoder
             .next_batch(&mut ValueIter::new(&mut self.reader, None))
     }
@@ -1667,16 +1675,13 @@ impl ReaderBuilder {
     /// # Example
     ///
     /// ```
-    /// extern crate arrow;
+    /// # use std::fs::File;
     ///
-    /// use arrow::json;
-    /// use std::fs::File;
-    ///
-    /// fn example() -> json::Reader<File> {
+    /// fn example() -> arrow_json::Reader<File> {
     ///     let file = File::open("test/data/basic.json").unwrap();
     ///
     ///     // create a builder, inferring the schema with the first 100 records
-    ///     let builder = json::ReaderBuilder::new().infer_schema(Some(100));
+    ///     let builder = arrow_json::ReaderBuilder::new().infer_schema(Some(100));
     ///
     ///     let reader = builder.build::<File>(file).unwrap();
     ///
@@ -1723,7 +1728,7 @@ impl ReaderBuilder {
     }
 
     /// Create a new `Reader` from the `ReaderBuilder`
-    pub fn build<R>(self, source: R) -> Result<Reader<R>>
+    pub fn build<R>(self, source: R) -> Result<Reader<R>, ArrowError>
     where
         R: Read + Seek,
     {
@@ -1743,7 +1748,7 @@ impl ReaderBuilder {
 }
 
 impl<R: Read> Iterator for Reader<R> {
-    type Item = Result<RecordBatch>;
+    type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.next().transpose()
@@ -1752,12 +1757,9 @@ impl<R: Read> Iterator for Reader<R> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        buffer::Buffer,
-        datatypes::DataType::{Dictionary, List},
-    };
-
     use super::*;
+    use arrow_buffer::ToByteSlice;
+    use arrow_schema::DataType::{Dictionary, List};
     use flate2::read::GzDecoder;
     use std::fs::File;
     use std::io::Cursor;
@@ -2076,12 +2078,8 @@ mod tests {
 
     #[test]
     fn test_invalid_json_infer_schema() {
-        let re = infer_json_schema_from_seekable(
-            &mut BufReader::new(
-                File::open("test/data/uk_cities_with_headers.csv").unwrap(),
-            ),
-            None,
-        );
+        let re =
+            infer_json_schema_from_seekable(&mut BufReader::new(Cursor::new(b"}")), None);
         assert_eq!(
             re.err().unwrap().to_string(),
             "Json error: Not valid JSON: expected value at line 1 column 1",
@@ -2096,9 +2094,7 @@ mod tests {
             true,
         )]));
         let builder = ReaderBuilder::new().with_schema(schema).with_batch_size(64);
-        let mut reader: Reader<File> = builder
-            .build::<File>(File::open("test/data/uk_cities_with_headers.csv").unwrap())
-            .unwrap();
+        let mut reader = builder.build(Cursor::new(b"}")).unwrap();
         assert_eq!(
             reader.next().err().unwrap().to_string(),
             "Json error: Not valid JSON: expected value at line 1 column 1",
@@ -2107,7 +2103,7 @@ mod tests {
 
     #[test]
     fn test_coersion_scalar_and_list() {
-        use crate::datatypes::DataType::*;
+        use arrow_schema::DataType::*;
 
         assert_eq!(
             List(Box::new(Field::new("item", Float64, true))),

@@ -27,12 +27,13 @@ members = [
         "arrow-integration-test",
         "arrow-integration-testing",
         "arrow-ipc",
+        "arrow-json",
         "arrow-schema",
         "arrow-select",
+        "object_store",
         "parquet",
         "parquet_derive",
         "parquet_derive_test",
-        "object_store",
 ]
 # Enable the version 2 feature resolver, which avoids unifying features for targets that are not being built
 #
