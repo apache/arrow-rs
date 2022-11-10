@@ -551,11 +551,33 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
                     None => write!(f, "null"),
                 }
             }
-            DataType::Timestamp(_, _) => {
+            DataType::Timestamp(_, tz_string_opt) => {
                 let v = self.value(index).to_isize().unwrap() as i64;
-                match as_datetime::<T>(v) {
-                    Some(datetime) => write!(f, "{:?}", datetime),
-                    None => write!(f, "null"),
+                match tz_string_opt {
+                    // for Timestamp with TimeZone
+                    Some(tz_string) => {
+                        match tz_string.parse::<Tz>() {
+                            // if the time zone is valid, construct a DateTime<Tz> and format it as rfc3339
+                            Ok(tz) => match as_datetime_with_timezone::<T>(v, tz) {
+                                Some(datetime) => write!(f, "{}", datetime.to_rfc3339()),
+                                None => write!(f, "null"),
+                            },
+                            // if the time zone is invalid, shows NaiveDateTime with an error message
+                            Err(_) => match as_datetime::<T>(v) {
+                                Some(datetime) => write!(
+                                    f,
+                                    "{:?} (Unknown Time Zone '{}')",
+                                    datetime, tz_string
+                                ),
+                                None => write!(f, "null"),
+                            },
+                        }
+                    }
+                    // for Timestamp without TimeZone
+                    None => match as_datetime::<T>(v) {
+                        Some(datetime) => write!(f, "{:?}", datetime),
+                        None => write!(f, "null"),
+                    },
                 }
             }
             _ => std::fmt::Debug::fmt(&array.value(index), f),
@@ -1323,7 +1345,8 @@ mod tests {
     }
 
     #[test]
-    fn test_timestamp_with_tz_fmt_debug() {
+    #[cfg(feature = "chrono-tz")]
+    fn test_timestamp_with_named_tz_fmt_debug() {
         let arr: PrimitiveArray<TimestampMillisecondType> =
             TimestampMillisecondArray::from(vec![
                 1546214400000,
@@ -1332,7 +1355,26 @@ mod tests {
             ])
             .with_timezone("Asia/Taipei".to_string());
         assert_eq!(
-            "PrimitiveArray<Timestamp(Millisecond, Some(\"Asia/Taipei\"))>\n[\n  2018-12-31T00:00:00,\n  2018-12-31T00:00:00,\n  1921-01-02T00:00:00,\n]",
+            "PrimitiveArray<Timestamp(Millisecond, Some(\"Asia/Taipei\"))>\n[\n  2018-12-31T08:00:00+08:00,\n  2018-12-31T08:00:00+08:00,\n  1921-01-02T08:00:00+08:00,\n]",
+            format!("{:?}", arr)
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "chrono-tz"))]
+    fn test_timestamp_with_named_tz_fmt_debug() {
+        let arr: PrimitiveArray<TimestampMillisecondType> =
+            TimestampMillisecondArray::from(vec![
+                1546214400000,
+                1546214400000,
+                -1546214400000,
+            ])
+            .with_timezone("Asia/Taipei".to_string());
+
+        println!("{:?}", arr);
+
+        assert_eq!(
+            "PrimitiveArray<Timestamp(Millisecond, Some(\"Asia/Taipei\"))>\n[\n  2018-12-31T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n  2018-12-31T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n  1921-01-02T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n]",
             format!("{:?}", arr)
         );
     }
@@ -1347,7 +1389,39 @@ mod tests {
             ])
             .with_timezone("+08:00".to_string());
         assert_eq!(
-            "PrimitiveArray<Timestamp(Millisecond, Some(\"+08:00\"))>\n[\n  2018-12-31T00:00:00,\n  2018-12-31T00:00:00,\n  1921-01-02T00:00:00,\n]",
+            "PrimitiveArray<Timestamp(Millisecond, Some(\"+08:00\"))>\n[\n  2018-12-31T08:00:00+08:00,\n  2018-12-31T08:00:00+08:00,\n  1921-01-02T08:00:00+08:00,\n]",
+            format!("{:?}", arr)
+        );
+    }
+
+    #[test]
+    fn test_timestamp_with_incorrect_tz_fmt_debug() {
+        let arr: PrimitiveArray<TimestampMillisecondType> =
+            TimestampMillisecondArray::from(vec![
+                1546214400000,
+                1546214400000,
+                -1546214400000,
+            ])
+            .with_timezone("xxx".to_string());
+        assert_eq!(
+            "PrimitiveArray<Timestamp(Millisecond, Some(\"xxx\"))>\n[\n  2018-12-31T00:00:00 (Unknown Time Zone 'xxx'),\n  2018-12-31T00:00:00 (Unknown Time Zone 'xxx'),\n  1921-01-02T00:00:00 (Unknown Time Zone 'xxx'),\n]",
+            format!("{:?}", arr)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "chrono-tz")]
+    fn test_timestamp_with_tz_with_daylight_saving_fmt_debug() {
+        let arr: PrimitiveArray<TimestampMillisecondType> =
+            TimestampMillisecondArray::from(vec![
+                1647161999000,
+                1647162000000,
+                1667717999000,
+                1667718000000,
+            ])
+            .with_timezone("America/Denver".to_string());
+        assert_eq!(
+            "PrimitiveArray<Timestamp(Millisecond, Some(\"America/Denver\"))>\n[\n  2022-03-13T01:59:59-07:00,\n  2022-03-13T03:00:00-06:00,\n  2022-11-06T00:59:59-06:00,\n  2022-11-06T01:00:00-06:00,\n]",
             format!("{:?}", arr)
         );
     }
