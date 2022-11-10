@@ -33,8 +33,8 @@ use std::collections::HashMap;
 pub fn compute_dictionary_mapping(
     interner: &mut OrderPreservingInterner,
     values: &ArrayRef,
-) -> Result<Vec<Option<Interned>>, ArrowError> {
-    Ok(downcast_primitive_array! {
+) -> Vec<Option<Interned>> {
+    downcast_primitive_array! {
         values => interner
             .intern(values.iter().map(|x| x.map(|x| x.encode()))),
         DataType::Binary => {
@@ -53,8 +53,8 @@ pub fn compute_dictionary_mapping(
             let iter = as_largestring_array(values).iter().map(|x| x.map(|x| x.as_bytes()));
             interner.intern(iter)
         }
-        t => return Err(ArrowError::NotYetImplemented(format!("dictionary value {} is not supported", t))),
-    })
+        _ => unreachable!(),
+    }
 }
 
 /// Dictionary types are encoded as
@@ -177,12 +177,7 @@ pub unsafe fn decode_dictionary<K: ArrowDictionaryKeyType>(
         DataType::LargeUtf8 => decode_string::<i64>(&values),
         DataType::Binary => decode_binary::<i32>(&values),
         DataType::LargeBinary => decode_binary::<i64>(&values),
-        _ => {
-            return Err(ArrowError::NotYetImplemented(format!(
-                "decoding dictionary values of {}",
-                value_type
-            )))
-        }
+        _ => unreachable!(),
     };
 
     let data_type =

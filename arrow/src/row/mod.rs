@@ -40,7 +40,7 @@
 //! let mut converter = RowConverter::new(vec![
 //!     SortField::new(DataType::Int32),
 //!     SortField::new(DataType::Utf8),
-//! ]);
+//! ]).unwrap();
 //! let rows = converter.convert_columns(&arrays).unwrap();
 //!
 //! // Compare rows
@@ -83,7 +83,7 @@
 //!         .iter()
 //!         .map(|a| SortField::new(a.data_type().clone()))
 //!         .collect();
-//!     let mut converter = RowConverter::new(fields);
+//!     let mut converter = RowConverter::new(fields).unwrap();
 //!     let rows = converter.convert_columns(&arrays).unwrap();
 //!     let mut sort: Vec<_> = rows.iter().enumerate().collect();
 //!     sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
@@ -229,14 +229,70 @@ impl SortField {
     }
 }
 
+/// Helper that is used for [`downcast_primitive`] and just returns `true`.
+macro_rules! always_true {
+    ($t:ty) => {
+        true
+    };
+}
+
 impl RowConverter {
     /// Create a new [`RowConverter`] with the provided schema
-    pub fn new(fields: Vec<SortField>) -> Self {
+    pub fn new(fields: Vec<SortField>) -> Result<Self> {
+        if !Self::supports_fields(&fields) {
+            return Err(ArrowError::NotYetImplemented(format!(
+                "not yet implemented: {:?}",
+                fields
+            )));
+        }
+
         let interners = (0..fields.len()).map(|_| None).collect();
-        Self {
+        Ok(Self {
             fields: fields.into(),
             interners,
+        })
+    }
+
+    /// Check if the given fields are supported by the row format.
+    pub fn supports_fields(fields: &[SortField]) -> bool {
+        for f in fields {
+            let data_type = &f.data_type;
+            let supported = downcast_primitive! {
+                data_type => (always_true),
+                DataType::Null => true,
+                DataType::Boolean => true,
+                DataType::Binary => true,
+                DataType::LargeBinary => true,
+                DataType::Utf8 => true,
+                DataType::LargeUtf8 => true,
+                DataType::Dictionary(k, v) => {
+                    let k_supported = matches!(
+                        k.as_ref(),
+                        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 | DataType::UInt8 |
+                        DataType::UInt16 | DataType::UInt32 | DataType::UInt64,
+                    );
+
+                    let v_supported = downcast_primitive! {
+                        v.as_ref() => (always_true),
+                        DataType::Null => true,
+                        DataType::Boolean => true,
+                        DataType::Utf8 => true,
+                        DataType::LargeUtf8 => true,
+                        DataType::Binary => true,
+                        DataType::LargeBinary => true,
+                        _ => false,
+                    };
+
+                    k_supported & v_supported
+                }
+                _ => false,
+            };
+            if !supported {
+                return false;
+            }
         }
+
+        true
     }
 
     /// Convert [`ArrayRef`] columns into [`Rows`]
@@ -275,7 +331,7 @@ impl RowConverter {
 
                 let interner = interner.get_or_insert_with(Default::default);
 
-                let mapping: Vec<_> = compute_dictionary_mapping(interner, values)?
+                let mapping: Vec<_> = compute_dictionary_mapping(interner, values)
                     .into_iter()
                     .map(|maybe_interned| {
                         maybe_interned.map(|interned| interner.normalized_key(interned))
@@ -286,7 +342,7 @@ impl RowConverter {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let mut rows = new_empty_rows(columns, &dictionaries, Arc::clone(&self.fields))?;
+        let mut rows = new_empty_rows(columns, &dictionaries, Arc::clone(&self.fields));
 
         for ((column, field), dictionary) in
             columns.iter().zip(self.fields.iter()).zip(dictionaries)
@@ -492,7 +548,7 @@ fn new_empty_rows(
     cols: &[ArrayRef],
     dictionaries: &[Option<Vec<Option<&[u8]>>>],
     fields: Arc<[SortField]>,
-) -> Result<Rows> {
+) -> Rows {
     use fixed::FixedLengthEncoding;
 
     let num_rows = cols.first().map(|x| x.len()).unwrap_or(0);
@@ -535,7 +591,7 @@ fn new_empty_rows(
                 }
                 _ => unreachable!(),
             }
-            t => return Err(ArrowError::NotYetImplemented(format!("not yet implemented: {}", t)))
+            _ => unreachable!(),
         }
     }
 
@@ -565,11 +621,11 @@ fn new_empty_rows(
 
     let buffer = vec![0_u8; cur_offset];
 
-    Ok(Rows {
+    Rows {
         buffer: buffer.into(),
         offsets: offsets.into(),
         fields,
-    })
+    }
 }
 
 /// Encodes a column to the provided [`Rows`] incrementing the offsets as it progresses
@@ -605,7 +661,7 @@ fn encode_column(
             column => encode_dictionary(out, column, dictionary.unwrap(), opts),
             _ => unreachable!()
         }
-        t => unimplemented!("not yet implemented: {}", t)
+        _ => unreachable!(),
     }
 }
 
@@ -747,7 +803,8 @@ mod tests {
         let mut converter = RowConverter::new(vec![
             SortField::new(DataType::Int16),
             SortField::new(DataType::Float32),
-        ]);
+        ])
+        .unwrap();
         let rows = converter.convert_columns(&cols).unwrap();
 
         assert_eq!(rows.offsets.as_ref(), &[0, 8, 16, 24, 32, 40, 48, 56]);
@@ -787,7 +844,8 @@ mod tests {
     fn test_decimal128() {
         let mut converter = RowConverter::new(vec![SortField::new(
             DataType::Decimal128(DECIMAL128_MAX_PRECISION, 7),
-        )]);
+        )])
+        .unwrap();
         let col = Arc::new(
             Decimal128Array::from_iter([
                 None,
@@ -815,7 +873,8 @@ mod tests {
     fn test_decimal256() {
         let mut converter = RowConverter::new(vec![SortField::new(
             DataType::Decimal256(DECIMAL256_MAX_PRECISION, 7),
-        )]);
+        )])
+        .unwrap();
         let col = Arc::new(
             Decimal256Array::from_iter([
                 None,
@@ -843,7 +902,8 @@ mod tests {
 
     #[test]
     fn test_bool() {
-        let mut converter = RowConverter::new(vec![SortField::new(DataType::Boolean)]);
+        let mut converter =
+            RowConverter::new(vec![SortField::new(DataType::Boolean)]).unwrap();
 
         let col = Arc::new(BooleanArray::from_iter([None, Some(false), Some(true)]))
             as ArrayRef;
@@ -862,7 +922,8 @@ mod tests {
                 descending: true,
                 nulls_first: false,
             },
-        )]);
+        )])
+        .unwrap();
 
         let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
         assert!(rows.row(2) < rows.row(1));
@@ -879,7 +940,7 @@ mod tests {
         let d = a.data_type().clone();
 
         let mut converter =
-            RowConverter::new(vec![SortField::new(a.data_type().clone())]);
+            RowConverter::new(vec![SortField::new(a.data_type().clone())]).unwrap();
         let rows = converter.convert_columns(&[Arc::new(a) as _]).unwrap();
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -905,7 +966,7 @@ mod tests {
         );
 
         assert_eq!(dict_with_tz.data_type(), &d);
-        let mut converter = RowConverter::new(vec![SortField::new(d.clone())]);
+        let mut converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
         let rows = converter
             .convert_columns(&[Arc::new(dict_with_tz) as _])
             .unwrap();
@@ -917,7 +978,8 @@ mod tests {
     #[test]
     fn test_null_encoding() {
         let col = Arc::new(NullArray::new(10));
-        let mut converter = RowConverter::new(vec![SortField::new(DataType::Null)]);
+        let mut converter =
+            RowConverter::new(vec![SortField::new(DataType::Null)]).unwrap();
         let rows = converter.convert_columns(&[col]).unwrap();
         assert_eq!(rows.num_rows(), 10);
         assert_eq!(rows.row(1).data.len(), 0);
@@ -933,7 +995,8 @@ mod tests {
             Some(""),
         ])) as ArrayRef;
 
-        let mut converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]);
+        let mut converter =
+            RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
 
         assert!(rows.row(1) < rows.row(0));
@@ -958,7 +1021,8 @@ mod tests {
             Some(vec![0xFF_u8; variable::BLOCK_SIZE + 1]),
         ])) as ArrayRef;
 
-        let mut converter = RowConverter::new(vec![SortField::new(DataType::Binary)]);
+        let mut converter =
+            RowConverter::new(vec![SortField::new(DataType::Binary)]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
 
         for i in 0..rows.num_rows() {
@@ -983,7 +1047,8 @@ mod tests {
                 descending: true,
                 nulls_first: false,
             },
-        )]);
+        )])
+        .unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
 
         for i in 0..rows.num_rows() {
@@ -1017,7 +1082,7 @@ mod tests {
         ])) as ArrayRef;
 
         let mut converter =
-            RowConverter::new(vec![SortField::new(a.data_type().clone())]);
+            RowConverter::new(vec![SortField::new(a.data_type().clone())]).unwrap();
         let rows_a = converter.convert_columns(&[Arc::clone(&a)]).unwrap();
 
         assert!(rows_a.row(3) < rows_a.row(5));
@@ -1052,7 +1117,8 @@ mod tests {
                 descending: true,
                 nulls_first: false,
             },
-        )]);
+        )])
+        .unwrap();
 
         let rows_c = converter.convert_columns(&[Arc::clone(&a)]).unwrap();
         assert!(rows_c.row(3) > rows_c.row(5));
@@ -1078,7 +1144,7 @@ mod tests {
         let a = builder.finish();
 
         let mut converter =
-            RowConverter::new(vec![SortField::new(a.data_type().clone())]);
+            RowConverter::new(vec![SortField::new(a.data_type().clone())]).unwrap();
         let rows = converter.convert_columns(&[Arc::new(a)]).unwrap();
         assert!(rows.row(0) < rows.row(1));
         assert!(rows.row(2) < rows.row(0));
@@ -1104,7 +1170,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let mut converter = RowConverter::new(vec![SortField::new(data_type)]);
+        let mut converter = RowConverter::new(vec![SortField::new(data_type)]).unwrap();
         let rows = converter
             .convert_columns(&[Arc::new(DictionaryArray::<Int32Type>::from(data))])
             .unwrap();
@@ -1119,10 +1185,11 @@ mod tests {
     #[should_panic(expected = "rows were not produced by this RowConverter")]
     fn test_different_converter() {
         let values = Arc::new(Int32Array::from_iter([Some(1), Some(-1)]));
-        let mut converter = RowConverter::new(vec![SortField::new(DataType::Int32)]);
+        let mut converter =
+            RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
         let rows = converter.convert_columns(&[values]).unwrap();
 
-        let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]);
+        let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
         let _ = converter.convert_rows(&rows);
     }
 
@@ -1266,7 +1333,7 @@ mod tests {
                 .map(|(o, a)| SortField::new_with_options(a.data_type().clone(), o))
                 .collect();
 
-            let mut converter = RowConverter::new(columns);
+            let mut converter = RowConverter::new(columns).unwrap();
             let rows = converter.convert_columns(&arrays).unwrap();
 
             for i in 0..len {
