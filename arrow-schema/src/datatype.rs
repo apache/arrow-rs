@@ -328,18 +328,20 @@ impl DataType {
         )
     }
 
-    /// Returns true if this type is nested (List, FixedSizeList, LargeList, Struct, Union, or Map)
+    /// Returns true if this type is nested (List, FixedSizeList, LargeList, Struct, Union,
+    /// or Map), or a dictionary of a nested type
     pub fn is_nested(t: &DataType) -> bool {
         use DataType::*;
-        matches!(
-            t,
+        match t {
+            Dictionary(_, v) => DataType::is_nested(v.as_ref()),
             List(_)
-                | FixedSizeList(_, _)
-                | LargeList(_)
-                | Struct(_)
-                | Union(_, _, _)
-                | Map(_, _)
-        )
+            | FixedSizeList(_, _)
+            | LargeList(_)
+            | Struct(_)
+            | Union(_, _, _)
+            | Map(_, _) => true,
+            _ => false,
+        }
     }
 
     /// Compares the datatype with another, ignoring nested field names
@@ -488,5 +490,32 @@ mod tests {
                 false,
             ),
         ]);
+    }
+
+    #[test]
+    fn test_nested() {
+        let list = DataType::List(Box::new(Field::new("foo", DataType::Utf8, true)));
+
+        assert!(!DataType::is_nested(&DataType::Boolean));
+        assert!(!DataType::is_nested(&DataType::Int32));
+        assert!(!DataType::is_nested(&DataType::Utf8));
+        assert!(DataType::is_nested(&list));
+
+        assert!(!DataType::is_nested(&DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Boolean)
+        )));
+        assert!(!DataType::is_nested(&DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Int64)
+        )));
+        assert!(!DataType::is_nested(&DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::LargeUtf8)
+        )));
+        assert!(DataType::is_nested(&DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(list)
+        )));
     }
 }
