@@ -20,13 +20,10 @@
 use crate::{FlightData, IpcMessage, SchemaAsIpc, SchemaResult};
 use std::collections::HashMap;
 
-use arrow::array::ArrayRef;
-use arrow::buffer::Buffer;
-use arrow::datatypes::{Schema, SchemaRef};
-use arrow::error::{ArrowError, Result};
-use arrow::ipc::{reader, writer, writer::IpcWriteOptions};
-use arrow::record_batch::RecordBatch;
-use std::convert::TryInto;
+use arrow_array::{ArrayRef, RecordBatch};
+use arrow_buffer::Buffer;
+use arrow_ipc::{reader, writer, writer::IpcWriteOptions};
+use arrow_schema::{ArrowError, Schema, SchemaRef};
 
 /// Convert a `RecordBatch` to a vector of `FlightData` representing the bytes of the dictionaries
 /// and a `FlightData` representing the bytes of the batch's values
@@ -52,9 +49,9 @@ pub fn flight_data_to_arrow_batch(
     data: &FlightData,
     schema: SchemaRef,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
-) -> Result<RecordBatch> {
+) -> Result<RecordBatch, ArrowError> {
     // check that the data_header is a record batch message
-    let message = arrow::ipc::root_as_message(&data.data_header[..]).map_err(|err| {
+    let message = arrow_ipc::root_as_message(&data.data_header[..]).map_err(|err| {
         ArrowError::ParseError(format!("Unable to get root as message: {:?}", err))
     })?;
 
@@ -85,7 +82,7 @@ pub fn flight_data_to_arrow_batch(
 pub fn flight_schema_from_arrow_schema(
     schema: &Schema,
     options: &IpcWriteOptions,
-) -> Result<SchemaResult> {
+) -> Result<SchemaResult, ArrowError> {
     SchemaAsIpc::new(schema, options).try_into()
 }
 
@@ -109,7 +106,7 @@ pub fn flight_data_from_arrow_schema(
 pub fn ipc_message_from_arrow_schema(
     schema: &Schema,
     options: &IpcWriteOptions,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<u8>, ArrowError> {
     let message = SchemaAsIpc::new(schema, options).try_into()?;
     let IpcMessage(vals) = message;
     Ok(vals)

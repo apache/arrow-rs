@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::error::{ArrowError, Result as ArrowResult};
+use arrow_schema::ArrowError;
 use prost::Message;
 
 mod gen {
@@ -122,10 +122,10 @@ pub trait ProstAnyExt {
     ///
     /// * `Ok(None)` when message type mismatch
     /// * `Err` when parse failed
-    fn unpack<M: ProstMessageExt>(&self) -> ArrowResult<Option<M>>;
+    fn unpack<M: ProstMessageExt>(&self) -> Result<Option<M>, ArrowError>;
 
     /// Pack any message into `prost_types::Any` value.
-    fn pack<M: ProstMessageExt>(message: &M) -> ArrowResult<prost_types::Any>;
+    fn pack<M: ProstMessageExt>(message: &M) -> Result<prost_types::Any, ArrowError>;
 }
 
 impl ProstAnyExt for prost_types::Any {
@@ -133,7 +133,7 @@ impl ProstAnyExt for prost_types::Any {
         M::type_url() == self.type_url
     }
 
-    fn unpack<M: ProstMessageExt>(&self) -> ArrowResult<Option<M>> {
+    fn unpack<M: ProstMessageExt>(&self) -> Result<Option<M>, ArrowError> {
         if !self.is::<M>() {
             return Ok(None);
         }
@@ -143,7 +143,7 @@ impl ProstAnyExt for prost_types::Any {
         Ok(Some(m))
     }
 
-    fn pack<M: ProstMessageExt>(message: &M) -> ArrowResult<prost_types::Any> {
+    fn pack<M: ProstMessageExt>(message: &M) -> Result<prost_types::Any, ArrowError> {
         Ok(message.as_any())
     }
 }
@@ -165,14 +165,13 @@ mod tests {
     }
 
     #[test]
-    fn test_prost_any_pack_unpack() -> ArrowResult<()> {
+    fn test_prost_any_pack_unpack() {
         let query = CommandStatementQuery {
             query: "select 1".to_string(),
         };
-        let any = prost_types::Any::pack(&query)?;
+        let any = prost_types::Any::pack(&query).unwrap();
         assert!(any.is::<CommandStatementQuery>());
-        let unpack_query: CommandStatementQuery = any.unpack()?.unwrap();
+        let unpack_query: CommandStatementQuery = any.unpack().unwrap().unwrap();
         assert_eq!(query, unpack_query);
-        Ok(())
     }
 }
