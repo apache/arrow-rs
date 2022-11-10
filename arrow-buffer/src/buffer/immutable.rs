@@ -470,8 +470,14 @@ mod tests {
         assert_eq!(0, Buffer::from(&[0b00000000]).count_set_bits_offset(0, 8));
         assert_eq!(8, Buffer::from(&[0b11111111]).count_set_bits_offset(0, 8));
         assert_eq!(3, Buffer::from(&[0b00001101]).count_set_bits_offset(0, 8));
-        assert_eq!(6, Buffer::from(&[0b01001001, 0b01010010]).count_set_bits_offset(0, 16));
-        assert_eq!(16, Buffer::from(&[0b11111111, 0b11111111]).count_set_bits_offset(0, 16));
+        assert_eq!(
+            6,
+            Buffer::from(&[0b01001001, 0b01010010]).count_set_bits_offset(0, 16)
+        );
+        assert_eq!(
+            16,
+            Buffer::from(&[0b11111111, 0b11111111]).count_set_bits_offset(0, 16)
+        );
     }
 
     #[test]
