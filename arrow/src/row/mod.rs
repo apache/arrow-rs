@@ -229,13 +229,6 @@ impl SortField {
     }
 }
 
-/// Helper that is used for [`downcast_primitive`] and just returns `true`.
-macro_rules! always_true {
-    ($t:ty) => {
-        true
-    };
-}
-
 impl RowConverter {
     /// Create a new [`RowConverter`] with the provided schema
     pub fn new(fields: Vec<SortField>) -> Result<Self> {
@@ -255,44 +248,7 @@ impl RowConverter {
 
     /// Check if the given fields are supported by the row format.
     pub fn supports_fields(fields: &[SortField]) -> bool {
-        for f in fields {
-            let data_type = &f.data_type;
-            let supported = downcast_primitive! {
-                data_type => (always_true),
-                DataType::Null => true,
-                DataType::Boolean => true,
-                DataType::Binary => true,
-                DataType::LargeBinary => true,
-                DataType::Utf8 => true,
-                DataType::LargeUtf8 => true,
-                DataType::Dictionary(k, v) => {
-                    let k_supported = matches!(
-                        k.as_ref(),
-                        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 | DataType::UInt8 |
-                        DataType::UInt16 | DataType::UInt32 | DataType::UInt64,
-                    );
-
-                    let v_supported = downcast_primitive! {
-                        v.as_ref() => (always_true),
-                        DataType::Null => true,
-                        DataType::Boolean => true,
-                        DataType::Utf8 => true,
-                        DataType::LargeUtf8 => true,
-                        DataType::Binary => true,
-                        DataType::LargeBinary => true,
-                        _ => false,
-                    };
-
-                    k_supported & v_supported
-                }
-                _ => false,
-            };
-            if !supported {
-                return false;
-            }
-        }
-
-        true
+        fields.iter().all(|x| !DataType::is_nested(&x.data_type))
     }
 
     /// Convert [`ArrayRef`] columns into [`Rows`]
