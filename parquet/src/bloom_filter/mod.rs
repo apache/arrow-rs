@@ -28,6 +28,7 @@ use std::io::{Read, Seek, SeekFrom};
 use thrift::protocol::TCompactInputProtocol;
 use twox_hash::XxHash64;
 
+/// Salt as defined in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md#technical-approach)
 const SALT: [u32; 8] = [
     0x47b6137b_u32,
     0x44974d91_u32,
