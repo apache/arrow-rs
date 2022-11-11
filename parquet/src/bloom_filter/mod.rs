@@ -148,7 +148,7 @@ impl Sbbf {
 
     /// Check if a hash is in the filter. May return
     /// true ("false positive") for values that was never inserted
-    /// but will always return false if a hash has not been inserted. 
+    /// but will always return false if a hash has not been inserted.
     pub fn check(&self, hash: u64) -> bool {
         let block_index = self.hash_to_block_index(hash);
         let block = &self.0[block_index];
@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     fn test_with_fixture() {
-            // bloom filter produced by parquet-mr/spark for a column of i64 f"a{i}" for i in 0..10
+        // bloom filter produced by parquet-mr/spark for a column of i64 f"a{i}" for i in 0..10
         let bitset: &[u8] = &[
             200, 1, 80, 20, 64, 68, 8, 109, 6, 37, 4, 67, 144, 80, 96, 32, 8, 132, 43,
             33, 0, 5, 99, 65, 2, 0, 224, 44, 64, 78, 96, 4,
