@@ -33,6 +33,7 @@ on:
       - arrow-select/**
       - arrow-ipc/**
       - arrow-csv/**
+      - arrow-json/**
       - .github/**
 
 jobs:

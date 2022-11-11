@@ -413,7 +413,7 @@ fn filter_null_mask(
     let nulls = filter_bits(data.null_buffer()?, data.offset(), predicate);
     // The filtered `nulls` has a length of `predicate.count` bits and
     // therefore the null count is this minus the number of valid bits
-    let null_count = predicate.count - nulls.count_set_bits();
+    let null_count = predicate.count - nulls.count_set_bits_offset(0, predicate.count);
 
     if null_count == 0 {
         return None;

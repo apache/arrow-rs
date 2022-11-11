@@ -17,8 +17,9 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::Result;
-use arrow::array::{ArrayDataBuilder, ArrayRef, StructArray};
-use arrow::datatypes::DataType as ArrowType;
+use arrow_schema::DataType as ArrowType;
+use arrow_array::{ArrayRef, StructArray};
+use arrow_data::ArrayDataBuilder;
 use std::any::Any;
 use std::sync::Arc;
 

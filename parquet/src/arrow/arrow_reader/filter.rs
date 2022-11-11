@@ -16,9 +16,8 @@
 // under the License.
 
 use crate::arrow::ProjectionMask;
-use arrow::array::BooleanArray;
-use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
+use arrow_array::{BooleanArray, RecordBatch};
+use arrow_schema::ArrowError;
 
 /// A predicate operating on [`RecordBatch`]
 pub trait ArrowPredicate: Send + 'static {
@@ -32,7 +31,7 @@ pub trait ArrowPredicate: Send + 'static {
     ///
     /// Rows that are `true` in the returned [`BooleanArray`] will be returned by the
     /// parquet reader, whereas rows that are `false` or `Null` will not be
-    fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray>;
+    fn evaluate(&mut self, batch: RecordBatch) -> Result<BooleanArray, ArrowError>;
 }
 
 /// An [`ArrowPredicate`] created from an [`FnMut`]
@@ -43,7 +42,7 @@ pub struct ArrowPredicateFn<F> {
 
 impl<F> ArrowPredicateFn<F>
 where
-    F: FnMut(RecordBatch) -> ArrowResult<BooleanArray> + Send + 'static,
+    F: FnMut(RecordBatch) -> Result<BooleanArray, ArrowError> + Send + 'static,
 {
     /// Create a new [`ArrowPredicateFn`]. `f` will be passed batches
     /// that contains the columns specified in `projection`
@@ -56,13 +55,13 @@ where
 
 impl<F> ArrowPredicate for ArrowPredicateFn<F>
 where
-    F: FnMut(RecordBatch) -> ArrowResult<BooleanArray> + Send + 'static,
+    F: FnMut(RecordBatch) -> Result<BooleanArray, ArrowError> + Send + 'static,
 {
     fn projection(&self) -> &ProjectionMask {
         &self.projection
     }
 
-    fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
+    fn evaluate(&mut self, batch: RecordBatch) -> Result<BooleanArray, ArrowError> {
         (self.f)(batch)
     }
 }

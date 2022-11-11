@@ -21,11 +21,8 @@ use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow::array as arrow_array;
-use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType as ArrowDataType, IntervalUnit, SchemaRef};
-use arrow::record_batch::RecordBatch;
-use arrow_array::Array;
+use arrow_array::{Array, ArrayRef, RecordBatch};
+use arrow_schema::{DataType as ArrowDataType, IntervalUnit, SchemaRef};
 
 use super::schema::{
     add_encoded_arrow_schema_to_metadata, arrow_to_parquet_schema,
@@ -54,8 +51,8 @@ mod levels;
 /// ```
 /// # use std::sync::Arc;
 /// # use bytes::Bytes;
-/// # use arrow::array::{ArrayRef, Int64Array};
-/// # use arrow::record_batch::RecordBatch;
+/// # use arrow_array::{ArrayRef, Int64Array};
+/// # use arrow_array::RecordBatch;
 /// # use parquet::arrow::{ArrowReader, ArrowWriter, ParquetFileArrowReader};
 /// let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
 /// let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
@@ -376,8 +373,8 @@ fn write_leaf(
             match column.data_type() {
                 ArrowDataType::Date64 => {
                     // If the column is a Date64, we cast it to a Date32, and then interpret that as Int32
-                    let array = arrow::compute::cast(column, &ArrowDataType::Date32)?;
-                    let array = arrow::compute::cast(&array, &ArrowDataType::Int32)?;
+                    let array = arrow_cast::cast(column, &ArrowDataType::Date32)?;
+                    let array = arrow_cast::cast(&array, &ArrowDataType::Int32)?;
 
                     let array = array
                         .as_any()
@@ -394,7 +391,7 @@ fn write_leaf(
                     write_primitive(typed, &array[offset..offset + data.len()], levels)?
                 }
                 _ => {
-                    let array = arrow::compute::cast(column, &ArrowDataType::Int32)?;
+                    let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
                     let array = array
                         .as_any()
                         .downcast_ref::<arrow_array::Int32Array>()
@@ -432,7 +429,7 @@ fn write_leaf(
                     write_primitive(typed, &array[offset..offset + data.len()], levels)?
                 }
                 _ => {
-                    let array = arrow::compute::cast(column, &ArrowDataType::Int64)?;
+                    let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
                     let array = array
                         .as_any()
                         .downcast_ref::<arrow_array::Int64Array>()
@@ -618,9 +615,9 @@ mod tests {
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Field, Schema, UInt32Type, UInt8Type};
     use arrow::error::Result as ArrowResult;
-    use arrow::record_batch::RecordBatch;
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
+    use arrow_array::RecordBatch;
 
     use crate::basic::Encoding;
     use crate::file::metadata::ParquetMetaData;

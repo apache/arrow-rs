@@ -21,9 +21,10 @@ use crate::arrow::record_reader::buffer::{
 };
 use crate::column::reader::decoder::ValuesBufferSlice;
 use crate::errors::{ParquetError, Result};
-use arrow::array::{make_array, ArrayDataBuilder, ArrayRef, OffsetSizeTrait};
-use arrow::buffer::Buffer;
-use arrow::datatypes::{ArrowNativeType, DataType as ArrowType};
+use arrow_array::{make_array, ArrayRef, OffsetSizeTrait};
+use arrow_buffer::{ArrowNativeType, Buffer};
+use arrow_data::ArrayDataBuilder;
+use arrow_schema::DataType as ArrowType;
 
 /// A buffer of variable-sized byte arrays that can be converted into
 /// a corresponding [`ArrayRef`]
@@ -238,7 +239,7 @@ impl<I: ScalarValue> ValuesBufferSlice for OffsetBuffer<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Array, LargeStringArray, StringArray};
+    use arrow_array::{Array, LargeStringArray, StringArray};
 
     #[test]
     fn test_offset_buffer_empty() {

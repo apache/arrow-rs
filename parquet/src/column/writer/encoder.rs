@@ -34,10 +34,10 @@ pub trait ColumnValues {
     fn len(&self) -> usize;
 }
 
-#[cfg(any(feature = "arrow", test))]
-impl<T: arrow::array::Array> ColumnValues for T {
+#[cfg(feature = "arrow")]
+impl<T: arrow_array::Array> ColumnValues for T {
     fn len(&self) -> usize {
-        arrow::array::Array::len(self)
+        arrow_array::Array::len(self)
     }
 }
 

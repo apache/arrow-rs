@@ -20,9 +20,9 @@ use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
-use arrow::buffer::Buffer;
-use arrow::datatypes::{ArrowNativeType, DataType as ArrowType};
+use arrow_array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow_buffer::{ArrowNativeType, Buffer};
+use arrow_schema::DataType as ArrowType;
 
 use crate::arrow::array_reader::byte_array::{ByteArrayDecoder, ByteArrayDecoderPlain};
 use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
@@ -188,15 +188,11 @@ where
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {
-        self.def_levels_buffer
-            .as_ref()
-            .map(|buf| buf.typed_data())
+        self.def_levels_buffer.as_ref().map(|buf| buf.typed_data())
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
-        self.rep_levels_buffer
-            .as_ref()
-            .map(|buf| buf.typed_data())
+        self.rep_levels_buffer.as_ref().map(|buf| buf.typed_data())
     }
 }
 
@@ -395,7 +391,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, StringArray};
+    use arrow_array::{Array, StringArray};
     use arrow::compute::cast;
 
     use crate::arrow::array_reader::test_util::{
@@ -528,13 +524,7 @@ mod tests {
 
         assert_eq!(
             strings.iter().collect::<Vec<_>>(),
-            vec![
-                Some("0"),
-                Some("1"),
-                Some("1"),
-                Some("2"),
-                Some("2"),
-            ]
+            vec![Some("0"), Some("1"), Some("1"), Some("2"), Some("2"),]
         )
     }
 
@@ -624,7 +614,6 @@ mod tests {
             )
         }
     }
-
 
     #[test]
     fn test_too_large_dictionary() {
