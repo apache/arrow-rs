@@ -16,9 +16,9 @@
 # under the License.
 
 [package]
-name = "arrow-array"
+name = "arrow-json"
 version = "26.0.0"
-description = "Array abstractions for Apache Arrow"
+description = "Support for parsing JSON format into the Arrow format"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -33,28 +33,22 @@ edition = "2021"
 rust-version = "1.62"
 
 [lib]
-name = "arrow_array"
+name = "arrow_json"
 path = "src/lib.rs"
 bench = false
 
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-
 [dependencies]
+arrow-array = { version = "26.0.0", path = "../arrow-array" }
 arrow-buffer = { version = "26.0.0", path = "../arrow-buffer" }
-arrow-schema = { version = "26.0.0", path = "../arrow-schema" }
+arrow-cast = { version = "26.0.0", path = "../arrow-cast" }
 arrow-data = { version = "26.0.0", path = "../arrow-data" }
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
-chrono-tz = { version = "0.8", optional = true }
+arrow-schema = { version = "26.0.0", path = "../arrow-schema" }
+half = { version = "2.1", default-features = false }
+indexmap = { version = "1.9", default-features = false, features = ["std"] }
 num = { version = "0.4", default-features = false, features = ["std"] }
-half = { version = "2.1", default-features = false, features = ["num-traits"] }
-hashbrown = { version = "0.13", default-features = false }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
-
-[build-dependencies]
+tempfile = "3.3"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

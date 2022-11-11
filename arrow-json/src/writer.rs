@@ -27,18 +27,15 @@
 //! [`record_batches_to_json_rows`]:
 //!
 //! ```
-//! use std::sync::Arc;
-//!
-//! use arrow::array::Int32Array;
-//! use arrow::datatypes::{DataType, Field, Schema};
-//! use arrow::json;
-//! use arrow::record_batch::RecordBatch;
+//! # use std::sync::Arc;
+//! # use arrow_array::{Int32Array, RecordBatch};
+//! # use arrow_schema::{DataType, Field, Schema};
 //!
 //! let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 //! let a = Int32Array::from(vec![1, 2, 3]);
 //! let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 //!
-//! let json_rows = json::writer::record_batches_to_json_rows(&[batch]).unwrap();
+//! let json_rows = arrow_json::writer::record_batches_to_json_rows(&[batch]).unwrap();
 //! assert_eq!(
 //!     serde_json::Value::Object(json_rows[1].clone()),
 //!     serde_json::json!({"a": 2}),
@@ -51,12 +48,9 @@
 //! [`LineDelimitedWriter`]:
 //!
 //! ```
-//! use std::sync::Arc;
-//!
-//! use arrow::array::Int32Array;
-//! use arrow::datatypes::{DataType, Field, Schema};
-//! use arrow::json;
-//! use arrow::record_batch::RecordBatch;
+//! # use std::sync::Arc;
+//! # use arrow_array::{Int32Array, RecordBatch};
+//! # use arrow_schema::{DataType, Field, Schema};
 //!
 //! let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 //! let a = Int32Array::from(vec![1, 2, 3]);
@@ -64,7 +58,7 @@
 //!
 //! // Write the record batch out as JSON
 //! let buf = Vec::new();
-//! let mut writer = json::LineDelimitedWriter::new(buf);
+//! let mut writer = arrow_json::LineDelimitedWriter::new(buf);
 //! writer.write_batches(&vec![batch]).unwrap();
 //! writer.finish().unwrap();
 //!
@@ -80,12 +74,9 @@
 //! [`ArrayWriter`]:
 //!
 //! ```
-//! use std::sync::Arc;
-//!
-//! use arrow::array::Int32Array;
-//! use arrow::datatypes::{DataType, Field, Schema};
-//! use arrow::json;
-//! use arrow::record_batch::RecordBatch;
+//! # use std::sync::Arc;
+//! # use arrow_array::{Int32Array, RecordBatch};
+//! use arrow_schema::{DataType, Field, Schema};
 //!
 //! let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 //! let a = Int32Array::from(vec![1, 2, 3]);
@@ -93,7 +84,7 @@
 //!
 //! // Write the record batch out as a JSON array
 //! let buf = Vec::new();
-//! let mut writer = json::ArrayWriter::new(buf);
+//! let mut writer = arrow_json::ArrayWriter::new(buf);
 //! writer.write_batches(&vec![batch]).unwrap();
 //! writer.finish().unwrap();
 //!
@@ -108,13 +99,13 @@ use std::{fmt::Debug, io::Write};
 use serde_json::map::Map as JsonMap;
 use serde_json::Value;
 
-use crate::array::*;
-use crate::datatypes::*;
-use crate::error::{ArrowError, Result};
-use crate::json::JsonSerializable;
-use crate::record_batch::RecordBatch;
+use crate::JsonSerializable;
+use arrow_array::cast::*;
+use arrow_array::types::*;
+use arrow_array::*;
+use arrow_schema::*;
 
-fn primitive_array_to_json<T>(array: &ArrayRef) -> Result<Vec<Value>>
+fn primitive_array_to_json<T>(array: &ArrayRef) -> Result<Vec<Value>, ArrowError>
 where
     T: ArrowPrimitiveType,
     T::Native: JsonSerializable,
@@ -131,7 +122,7 @@ where
 fn struct_array_to_jsonmap_array(
     array: &StructArray,
     row_count: usize,
-) -> Result<Vec<JsonMap<String, Value>>> {
+) -> Result<Vec<JsonMap<String, Value>>, ArrowError> {
     let inner_col_names = array.column_names();
 
     let mut inner_objs = iter::repeat(JsonMap::new())
@@ -150,7 +141,7 @@ fn struct_array_to_jsonmap_array(
 }
 
 /// Converts an arrow [`ArrayRef`] into a `Vec` of Serde JSON [`serde_json::Value`]'s
-pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>> {
+pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>, ArrowError> {
     match array.data_type() {
         DataType::Null => Ok(iter::repeat(Value::Null).take(array.len()).collect()),
         DataType::Boolean => Ok(as_boolean_array(array)
@@ -269,7 +260,7 @@ fn set_column_for_json_rows(
     row_count: usize,
     array: &ArrayRef,
     col_name: &str,
-) -> Result<()> {
+) -> Result<(), ArrowError> {
     match array.data_type() {
         DataType::Int8 => {
             set_column_by_primitive_type::<Int8Type>(rows, row_count, array, col_name);
@@ -474,7 +465,7 @@ fn set_column_for_json_rows(
             rows.iter_mut()
                 .zip(listarr.iter())
                 .take(row_count)
-                .try_for_each(|(row, maybe_value)| -> Result<()> {
+                .try_for_each(|(row, maybe_value)| -> Result<(), ArrowError> {
                     if let Some(v) = maybe_value {
                         row.insert(
                             col_name.to_string(),
@@ -489,7 +480,7 @@ fn set_column_for_json_rows(
             rows.iter_mut()
                 .zip(listarr.iter())
                 .take(row_count)
-                .try_for_each(|(row, maybe_value)| -> Result<()> {
+                .try_for_each(|(row, maybe_value)| -> Result<(), ArrowError> {
                     if let Some(v) = maybe_value {
                         let val = array_to_json_array(&v)?;
                         row.insert(col_name.to_string(), Value::Array(val));
@@ -499,7 +490,7 @@ fn set_column_for_json_rows(
         }
         DataType::Dictionary(_, value_type) => {
             let slice = array.slice(0, row_count);
-            let hydrated = crate::compute::kernels::cast::cast(&slice, value_type)
+            let hydrated = arrow_cast::cast::cast(&slice, value_type)
                 .expect("cannot cast dictionary to underlying values");
             set_column_for_json_rows(rows, row_count, &hydrated, col_name)?;
         }
@@ -555,7 +546,7 @@ fn set_column_for_json_rows(
 /// [`JsonMap`]s (objects)
 pub fn record_batches_to_json_rows(
     batches: &[RecordBatch],
-) -> Result<Vec<JsonMap<String, Value>>> {
+) -> Result<Vec<JsonMap<String, Value>>, ArrowError> {
     let mut rows: Vec<JsonMap<String, Value>> = iter::repeat(JsonMap::new())
         .take(batches.iter().map(|b| b.num_rows()).sum())
         .collect();
@@ -581,24 +572,28 @@ pub fn record_batches_to_json_rows(
 pub trait JsonFormat: Debug + Default {
     #[inline]
     /// write any bytes needed at the start of the file to the writer
-    fn start_stream<W: Write>(&self, _writer: &mut W) -> Result<()> {
+    fn start_stream<W: Write>(&self, _writer: &mut W) -> Result<(), ArrowError> {
         Ok(())
     }
 
     #[inline]
     /// write any bytes needed for the start of each row
-    fn start_row<W: Write>(&self, _writer: &mut W, _is_first_row: bool) -> Result<()> {
+    fn start_row<W: Write>(
+        &self,
+        _writer: &mut W,
+        _is_first_row: bool,
+    ) -> Result<(), ArrowError> {
         Ok(())
     }
 
     #[inline]
     /// write any bytes needed for the end of each row
-    fn end_row<W: Write>(&self, _writer: &mut W) -> Result<()> {
+    fn end_row<W: Write>(&self, _writer: &mut W) -> Result<(), ArrowError> {
         Ok(())
     }
 
     /// write any bytes needed for the start of each row
-    fn end_stream<W: Write>(&self, _writer: &mut W) -> Result<()> {
+    fn end_stream<W: Write>(&self, _writer: &mut W) -> Result<(), ArrowError> {
         Ok(())
     }
 }
@@ -614,7 +609,7 @@ pub trait JsonFormat: Debug + Default {
 pub struct LineDelimited {}
 
 impl JsonFormat for LineDelimited {
-    fn end_row<W: Write>(&self, writer: &mut W) -> Result<()> {
+    fn end_row<W: Write>(&self, writer: &mut W) -> Result<(), ArrowError> {
         writer.write_all(b"\n")?;
         Ok(())
     }
@@ -629,19 +624,23 @@ impl JsonFormat for LineDelimited {
 pub struct JsonArray {}
 
 impl JsonFormat for JsonArray {
-    fn start_stream<W: Write>(&self, writer: &mut W) -> Result<()> {
+    fn start_stream<W: Write>(&self, writer: &mut W) -> Result<(), ArrowError> {
         writer.write_all(b"[")?;
         Ok(())
     }
 
-    fn start_row<W: Write>(&self, writer: &mut W, is_first_row: bool) -> Result<()> {
+    fn start_row<W: Write>(
+        &self,
+        writer: &mut W,
+        is_first_row: bool,
+    ) -> Result<(), ArrowError> {
         if !is_first_row {
             writer.write_all(b",")?;
         }
         Ok(())
     }
 
-    fn end_stream<W: Write>(&self, writer: &mut W) -> Result<()> {
+    fn end_stream<W: Write>(&self, writer: &mut W) -> Result<(), ArrowError> {
         writer.write_all(b"]")?;
         Ok(())
     }
@@ -692,7 +691,7 @@ where
     }
 
     /// Write a single JSON row to the output writer
-    pub fn write_row(&mut self, row: &Value) -> Result<()> {
+    pub fn write_row(&mut self, row: &Value) -> Result<(), ArrowError> {
         let is_first_row = !self.started;
         if !self.started {
             self.format.start_stream(&mut self.writer)?;
@@ -709,7 +708,7 @@ where
     }
 
     /// Convert the `RecordBatch` into JSON rows, and write them to the output
-    pub fn write(&mut self, batch: RecordBatch) -> Result<()> {
+    pub fn write(&mut self, batch: RecordBatch) -> Result<(), ArrowError> {
         for row in record_batches_to_json_rows(&[batch])? {
             self.write_row(&Value::Object(row))?;
         }
@@ -717,7 +716,7 @@ where
     }
 
     /// Convert the [`RecordBatch`] into JSON rows, and write them to the output
-    pub fn write_batches(&mut self, batches: &[RecordBatch]) -> Result<()> {
+    pub fn write_batches(&mut self, batches: &[RecordBatch]) -> Result<(), ArrowError> {
         for row in record_batches_to_json_rows(batches)? {
             self.write_row(&Value::Object(row))?;
         }
@@ -727,7 +726,7 @@ where
     /// Finishes the output stream. This function must be called after
     /// all record batches have been produced. (e.g. producing the final `']'` if writing
     /// arrays.
-    pub fn finish(&mut self) -> Result<()> {
+    pub fn finish(&mut self) -> Result<(), ArrowError> {
         if self.started && !self.finished {
             self.format.end_stream(&mut self.writer)?;
             self.finished = true;
@@ -743,14 +742,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::convert::TryFrom;
     use std::fs::{read_to_string, File};
     use std::sync::Arc;
 
+    use crate::reader::*;
+    use arrow_buffer::{Buffer, ToByteSlice};
+    use arrow_data::ArrayData;
     use serde_json::json;
-
-    use crate::buffer::*;
-    use crate::json::reader::*;
 
     use super::*;
 

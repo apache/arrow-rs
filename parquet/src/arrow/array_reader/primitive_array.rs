@@ -24,13 +24,14 @@ use crate::column::page::PageIterator;
 use crate::data_type::{DataType, Int96};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use arrow::array::{
-    ArrayDataBuilder, ArrayRef, BooleanArray, BooleanBufferBuilder, Decimal128Array,
-    Float32Array, Float64Array, Int32Array, Int64Array, TimestampNanosecondArray,
-    TimestampNanosecondBufferBuilder, UInt32Array, UInt64Array,
+use arrow_array::{
+    builder::{BooleanBufferBuilder, TimestampNanosecondBufferBuilder},
+    ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int32Array,
+    Int64Array, TimestampNanosecondArray, UInt32Array, UInt64Array,
 };
-use arrow::buffer::Buffer;
-use arrow::datatypes::{DataType as ArrowType, TimeUnit};
+use arrow_buffer::Buffer;
+use arrow_data::ArrayDataBuilder;
+use arrow_schema::{DataType as ArrowType, TimeUnit};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -205,8 +206,8 @@ where
         let array = match target_type {
             ArrowType::Date64 => {
                 // this is cheap as it internally reinterprets the data
-                let a = arrow::compute::cast(&array, &ArrowType::Date32)?;
-                arrow::compute::cast(&a, target_type)?
+                let a = arrow_cast::cast(&array, &ArrowType::Date32)?;
+                arrow_cast::cast(&a, target_type)?
             }
             ArrowType::Decimal128(p, s) => {
                 let array = match array.data_type() {
@@ -236,7 +237,7 @@ where
 
                 Arc::new(array) as ArrayRef
             }
-            _ => arrow::compute::cast(&array, target_type)?,
+            _ => arrow_cast::cast(&array, target_type)?,
         };
 
         // save definition and repetition buffers
@@ -270,8 +271,8 @@ mod tests {
     use crate::schema::types::SchemaDescriptor;
     use crate::util::test_common::rand_gen::make_pages;
     use crate::util::InMemoryPageIterator;
-    use arrow::array::{Array, PrimitiveArray};
     use arrow::datatypes::ArrowPrimitiveType;
+    use arrow_array::{Array, PrimitiveArray};
 
     use arrow::datatypes::DataType::Decimal128;
     use rand::distributions::uniform::SampleUniform;

@@ -20,12 +20,10 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use arrow::array::Array;
-use arrow::compute::prep_null_mask_filter;
-use arrow::datatypes::{DataType as ArrowType, Schema, SchemaRef};
-use arrow::error::Result as ArrowResult;
-use arrow::record_batch::{RecordBatch, RecordBatchReader};
-use arrow::{array::StructArray, error::ArrowError};
+use arrow_array::{Array, StructArray};
+use arrow_array::{RecordBatch, RecordBatchReader};
+use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
+use arrow_select::filter::prep_null_mask_filter;
 
 use crate::arrow::array_reader::{
     build_array_reader, ArrayReader, FileReaderRowGroupCollection, RowGroupCollection,
@@ -43,7 +41,7 @@ mod filter;
 mod selection;
 
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
-pub use selection::{RowSelection, RowSelector};
+pub use selection::{intersect_row_selections, RowSelection, RowSelector};
 
 /// A generic builder for constructing sync or async arrow parquet readers. This is not intended
 /// to be used directly, instead you should use the specialization for the type of reader
@@ -473,7 +471,7 @@ pub struct ParquetRecordBatchReader {
 }
 
 impl Iterator for ParquetRecordBatchReader {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut read_records = 0;
@@ -638,11 +636,12 @@ mod tests {
     use rand::{thread_rng, Rng, RngCore};
     use tempfile::tempfile;
 
-    use arrow::array::*;
-    use arrow::buffer::Buffer;
-    use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
-    use arrow::error::Result as ArrowResult;
-    use arrow::record_batch::{RecordBatch, RecordBatchReader};
+    use arrow_array::builder::*;
+    use arrow_array::*;
+    use arrow_array::{RecordBatch, RecordBatchReader};
+    use arrow_buffer::Buffer;
+    use arrow_data::ArrayDataBuilder;
+    use arrow_schema::{DataType as ArrowDataType, Field, Schema};
 
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReader,
@@ -714,7 +713,7 @@ mod tests {
         file.rewind().unwrap();
 
         let record_reader = ParquetRecordBatchReader::try_new(file, 2).unwrap();
-        let batches = record_reader.collect::<ArrowResult<Vec<_>>>().unwrap();
+        let batches = record_reader.collect::<Result<Vec<_>, _>>().unwrap();
 
         assert_eq!(batches.len(), 4);
         for batch in &batches[0..3] {
@@ -1067,7 +1066,7 @@ mod tests {
 
         let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 3)
             .unwrap()
-            .collect::<ArrowResult<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap();
 
         assert_eq!(&written.slice(0, 3), &read[0]);
@@ -1103,7 +1102,7 @@ mod tests {
 
         let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 3)
             .unwrap()
-            .collect::<ArrowResult<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap();
 
         assert_eq!(&written.slice(0, 3), &read[0]);
@@ -1143,7 +1142,7 @@ mod tests {
 
         let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 3)
             .unwrap()
-            .collect::<ArrowResult<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap();
 
         assert_eq!(&written.slice(0, 3), &read[0]);
@@ -1153,7 +1152,7 @@ mod tests {
 
     #[test]
     fn test_read_decimal_file() {
-        use arrow::array::Decimal128Array;
+        use arrow_array::Decimal128Array;
         let testdata = arrow::util::test_util::parquet_test_data();
         let file_variants = vec![
             ("byte_array", 4),
@@ -1936,7 +1935,7 @@ mod tests {
         let record_reader = ParquetRecordBatchReader::try_new(file, 3).unwrap();
 
         let batches = record_reader
-            .collect::<ArrowResult<Vec<RecordBatch>>>()
+            .collect::<Result<Vec<RecordBatch>, _>>()
             .unwrap();
 
         assert_eq!(batches.len(), 6);
@@ -2271,7 +2270,7 @@ mod tests {
                 let expected = get_expected_batches(&data, &selections, batch_size);
                 let skip_reader = create_skip_reader(&test_file, batch_size, selections);
                 assert_eq!(
-                    skip_reader.collect::<ArrowResult<Vec<_>>>().unwrap(),
+                    skip_reader.collect::<Result<Vec<_>, _>>().unwrap(),
                     expected,
                     "batch_size: {}, selection_len: {}, skip_first: {}",
                     batch_size,
@@ -2399,7 +2398,7 @@ mod tests {
 
         let batches = ParquetRecordBatchReader::try_new(file, 1024)
             .unwrap()
-            .collect::<ArrowResult<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(batches.len(), 1);
         let batch = &batches[0];
@@ -2444,7 +2443,7 @@ mod tests {
 
             let batches = ParquetRecordBatchReader::try_new(file, expected_rows)
                 .unwrap()
-                .collect::<ArrowResult<Vec<_>>>()
+                .collect::<Result<Vec<_>, _>>()
                 .unwrap();
             assert_eq!(batches.len(), 1);
             let batch = &batches[0];
@@ -2476,7 +2475,7 @@ mod tests {
 
         let batches = ParquetRecordBatchReader::try_new(file, expected_rows)
             .unwrap()
-            .collect::<ArrowResult<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(batches.len(), 1);
         let batch = &batches[0];

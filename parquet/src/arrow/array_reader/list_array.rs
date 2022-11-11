@@ -18,13 +18,14 @@
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::ParquetError;
 use crate::errors::Result;
-use arrow::array::{
-    new_empty_array, Array, ArrayData, ArrayRef, BooleanBufferBuilder, GenericListArray,
-    MutableArrayData, OffsetSizeTrait,
+use arrow_array::{
+    builder::BooleanBufferBuilder, new_empty_array, Array, ArrayRef, GenericListArray,
+    OffsetSizeTrait,
 };
-use arrow::buffer::Buffer;
-use arrow::datatypes::DataType as ArrowType;
-use arrow::datatypes::ToByteSlice;
+use arrow_buffer::Buffer;
+use arrow_buffer::ToByteSlice;
+use arrow_data::{transform::MutableArrayData, ArrayData};
+use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::marker::PhantomData;
@@ -257,8 +258,9 @@ mod tests {
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
-    use arrow::array::{Array, ArrayDataBuilder, PrimitiveArray};
     use arrow::datatypes::{Field, Int32Type as ArrowInt32, Int32Type};
+    use arrow_array::{Array, PrimitiveArray};
+    use arrow_data::ArrayDataBuilder;
     use std::sync::Arc;
 
     fn list_type<OffsetSize: OffsetSizeTrait>(

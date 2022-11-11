@@ -19,8 +19,7 @@ use std::marker::PhantomData;
 
 use crate::arrow::buffer::bit_util::iter_set_bits_rev;
 use crate::data_type::Int96;
-use arrow::buffer::{Buffer, MutableBuffer};
-use arrow::datatypes::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 
 /// A buffer that supports writing new data to the end, and removing data from the front
 ///

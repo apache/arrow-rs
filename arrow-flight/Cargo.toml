@@ -27,7 +27,10 @@ repository = "https://github.com/apache/arrow-rs"
 license = "Apache-2.0"
 
 [dependencies]
-arrow = { path = "../arrow", version = "26.0.0", default-features = false, features = ["ipc"] }
+arrow-array = { version = "26.0.0", path = "../arrow-array" }
+arrow-buffer = { version = "26.0.0", path = "../arrow-buffer" }
+arrow-ipc = { version = "26.0.0", path = "../arrow-ipc" }
+arrow-schema = { version = "26.0.0", path = "../arrow-schema" }
 base64 = { version = "0.13", default-features = false }
 tonic = { version = "0.8", default-features = false, features = ["transport", "codegen", "prost"] }
 bytes = { version = "1", default-features = false }

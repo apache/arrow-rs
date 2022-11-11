@@ -79,7 +79,7 @@ pub use self::encodings::{decoding, encoding};
 pub use self::util::memory;
 
 experimental!(#[macro_use] mod util);
-#[cfg(any(feature = "arrow", test))]
+#[cfg(feature = "arrow")]
 pub mod arrow;
 pub mod column;
 experimental!(mod compression);

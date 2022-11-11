@@ -308,46 +308,52 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    quarter_generic::<T, _>(array)
+    quarter_internal(array)
 }
 
 /// Extracts the quarter of a given temporal array as an array of integersa within
-/// the range of [1, 4].
-pub fn quarter_generic<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
+/// the range of [1, 4]. If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn quarter_dyn(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type().clone() {
-        DataType::Dictionary(_, value_type) => {
-            quarter_internal::<T, A>(array, value_type.as_ref())
+        DataType::Dictionary(_, _) => {
+            downcast_dictionary_array!(
+                array => {
+                    let quarter_values = quarter_dyn(array.values())?;
+                    Ok(Arc::new(array.with_values(&quarter_values)))
+                }
+                dt => return_compute_error_with!("quarter does not support", dt),
+            )
         }
-        dt => quarter_internal::<T, A>(array, &dt),
+        _ => {
+            downcast_temporal_array!(
+                array => {
+                   quarter_internal(array)
+                    .map(|a| Arc::new(a) as ArrayRef)
+                }
+                dt => return_compute_error_with!("quarter does not support", dt),
+            )
+        }
     }
 }
 
 /// Extracts the quarter of a given temporal array as an array of integers
-fn quarter_internal<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-    dt: &DataType,
-) -> Result<Int32Array>
+fn quarter_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
-    match dt {
+    match array.data_type() {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
+            Ok(as_datetime_with_op::<_, T, _>(iter, b, |t| {
                 t.quarter() as i32
             }))
         }
         DataType::Timestamp(_, Some(tz)) => {
             let iter = ArrayIter::new(array);
-            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
+            extract_component_from_datetime_array::<_, T, _>(iter, b, tz, |t| {
                 t.quarter() as i32
             })
         }
@@ -362,45 +368,52 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    month_generic::<T, _>(array)
+    month_internal(array)
 }
 
-/// Extracts the month of a given temporal array as an array of integers
-pub fn month_generic<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
+/// Extracts the month of a given temporal array as an array of integers.
+/// If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn month_dyn(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type().clone() {
-        DataType::Dictionary(_, value_type) => {
-            month_internal::<T, A>(array, value_type.as_ref())
+        DataType::Dictionary(_, _) => {
+            downcast_dictionary_array!(
+                array => {
+                    let month_values = month_dyn(array.values())?;
+                    Ok(Arc::new(array.with_values(&month_values)))
+                }
+                dt => return_compute_error_with!("month does not support", dt),
+            )
         }
-        dt => month_internal::<T, A>(array, &dt),
+        _ => {
+            downcast_temporal_array!(
+                array => {
+                   month_internal(array)
+                    .map(|a| Arc::new(a) as ArrayRef)
+                }
+                dt => return_compute_error_with!("month does not support", dt),
+            )
+        }
     }
 }
 
 /// Extracts the month of a given temporal array as an array of integers
-fn month_internal<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-    dt: &DataType,
-) -> Result<Int32Array>
+fn month_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
-    match dt {
+    match array.data_type() {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
+            Ok(as_datetime_with_op::<_, T, _>(iter, b, |t| {
                 t.month() as i32
             }))
         }
         DataType::Timestamp(_, Some(tz)) => {
             let iter = ArrayIter::new(array);
-            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
+            extract_component_from_datetime_array::<_, T, _>(iter, b, tz, |t| {
                 t.month() as i32
             })
         }
@@ -419,7 +432,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    num_days_from_monday_generic::<T, _>(array)
+    num_days_from_monday_internal(array)
 }
 
 /// Extracts the day of week of a given temporal array as an array of
@@ -428,18 +441,29 @@ where
 /// Monday is encoded as `0`, Tuesday as `1`, etc.
 ///
 /// See also [`num_days_from_sunday`] which starts at Sunday.
-pub fn num_days_from_monday_generic<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
+///
+/// If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn num_days_from_monday_dyn(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type().clone() {
-        DataType::Dictionary(_, value_type) => {
-            num_days_from_monday_internal::<T, A>(array, value_type.as_ref())
+        DataType::Dictionary(_, _) => {
+            downcast_dictionary_array!(
+                array => {
+                    let values = num_days_from_monday_dyn(array.values())?;
+                    Ok(Arc::new(array.with_values(&values)))
+                }
+                dt => return_compute_error_with!("num_days_from_monday does not support", dt),
+            )
         }
-        dt => num_days_from_monday_internal::<T, A>(array, &dt),
+        _ => {
+            downcast_temporal_array!(
+                array => {
+                   num_days_from_monday_internal(array)
+                    .map(|a| Arc::new(a) as ArrayRef)
+                }
+                dt => return_compute_error_with!("num_days_from_monday does not support", dt),
+            )
+        }
     }
 }
 
@@ -449,25 +473,22 @@ where
 /// Monday is encoded as `0`, Tuesday as `1`, etc.
 ///
 /// See also [`num_days_from_sunday`] which starts at Sunday.
-fn num_days_from_monday_internal<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-    dt: &DataType,
-) -> Result<Int32Array>
+fn num_days_from_monday_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
-    match dt {
+    match array.data_type() {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
+            Ok(as_datetime_with_op::<_, T, _>(iter, b, |t| {
                 t.num_days_from_monday()
             }))
         }
         DataType::Timestamp(_, Some(tz)) => {
             let iter = ArrayIter::new(array);
-            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
+            extract_component_from_datetime_array::<_, T, _>(iter, b, tz, |t| {
                 t.num_days_from_monday()
             })
         }
@@ -486,7 +507,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    num_days_from_sunday_generic::<T, _>(array)
+    num_days_from_sunday_internal(array)
 }
 
 /// Extracts the day of week of a given temporal array as an array of
@@ -495,18 +516,29 @@ where
 /// Sunday is encoded as `0`, Monday as `1`, etc.
 ///
 /// See also [`num_days_from_monday`] which starts at Monday.
-pub fn num_days_from_sunday_generic<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
+///
+/// If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn num_days_from_sunday_dyn(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type().clone() {
-        DataType::Dictionary(_, value_type) => {
-            num_days_from_sunday_internal::<T, A>(array, value_type.as_ref())
+        DataType::Dictionary(_, _) => {
+            downcast_dictionary_array!(
+                array => {
+                    let values = num_days_from_sunday_dyn(array.values())?;
+                    Ok(Arc::new(array.with_values(&values)))
+                }
+                dt => return_compute_error_with!("num_days_from_sunday does not support", dt),
+            )
         }
-        dt => num_days_from_sunday_internal::<T, A>(array, &dt),
+        _ => {
+            downcast_temporal_array!(
+                array => {
+                   num_days_from_sunday_internal(array)
+                    .map(|a| Arc::new(a) as ArrayRef)
+                }
+                dt => return_compute_error_with!("num_days_from_sunday does not support", dt),
+            )
+        }
     }
 }
 
@@ -516,25 +548,22 @@ where
 /// Sunday is encoded as `0`, Monday as `1`, etc.
 ///
 /// See also [`num_days_from_monday`] which starts at Monday.
-fn num_days_from_sunday_internal<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-    dt: &DataType,
-) -> Result<Int32Array>
+fn num_days_from_sunday_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
-    match dt {
+    match array.data_type() {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
+            Ok(as_datetime_with_op::<_, T, _>(iter, b, |t| {
                 t.num_days_from_sunday()
             }))
         }
         DataType::Timestamp(_, Some(tz)) => {
             let iter = ArrayIter::new(array);
-            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
+            extract_component_from_datetime_array::<_, T, _>(iter, b, tz, |t| {
                 t.num_days_from_sunday()
             })
         }
@@ -551,41 +580,50 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    day_generic::<T, _>(array)
+    day_internal(array)
 }
 
-/// Extracts the day of a given temporal array as an array of integers
-pub fn day_generic<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
+/// Extracts the day of a given temporal array as an array of integers.
+/// If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn day_dyn(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type().clone() {
-        DataType::Dictionary(_, value_type) => {
-            day_internal::<T, A>(array, value_type.as_ref())
+        DataType::Dictionary(_, _) => {
+            downcast_dictionary_array!(
+                array => {
+                    let values = day_dyn(array.values())?;
+                    Ok(Arc::new(array.with_values(&values)))
+                }
+                dt => return_compute_error_with!("day does not support", dt),
+            )
         }
-        dt => day_internal::<T, A>(array, &dt),
+        _ => {
+            downcast_temporal_array!(
+                array => {
+                   day_internal(array)
+                    .map(|a| Arc::new(a) as ArrayRef)
+                }
+                dt => return_compute_error_with!("day does not support", dt),
+            )
+        }
     }
 }
 
 /// Extracts the day of a given temporal array as an array of integers
-fn day_internal<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-    dt: &DataType,
-) -> Result<Int32Array>
+fn day_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
-    match dt {
+    match array.data_type() {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| t.day() as i32))
+            Ok(as_datetime_with_op::<_, T, _>(iter, b, |t| t.day() as i32))
         }
         DataType::Timestamp(_, Some(ref tz)) => {
             let iter = ArrayIter::new(array);
-            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
+            extract_component_from_datetime_array::<_, T, _>(iter, b, tz, |t| {
                 t.day() as i32
             })
         }
@@ -600,46 +638,55 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    doy_generic::<T, _>(array)
+    doy_internal(array)
 }
 
 /// Extracts the day of year of a given temporal array as an array of integers
-/// The day of year that ranges from 1 to 366
-pub fn doy_generic<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
+/// The day of year that ranges from 1 to 366.
+/// If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn doy_dyn(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type().clone() {
-        DataType::Dictionary(_, value_type) => {
-            doy_internal::<T, A>(array, value_type.as_ref())
+        DataType::Dictionary(_, _) => {
+            downcast_dictionary_array!(
+                array => {
+                    let values = doy_dyn(array.values())?;
+                    Ok(Arc::new(array.with_values(&values)))
+                }
+                dt => return_compute_error_with!("doy does not support", dt),
+            )
         }
-        dt => doy_internal::<T, A>(array, &dt),
+        _ => {
+            downcast_temporal_array!(
+                array => {
+                   doy_internal(array)
+                    .map(|a| Arc::new(a) as ArrayRef)
+                }
+                dt => return_compute_error_with!("doy does not support", dt),
+            )
+        }
     }
 }
 
 /// Extracts the day of year of a given temporal array as an array of integers
 /// The day of year that ranges from 1 to 366
-fn doy_internal<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-    dt: &DataType,
-) -> Result<Int32Array>
+fn doy_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     T::Native: ArrowNativeType,
     i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
-    match dt {
+    match array.data_type() {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
+            Ok(as_datetime_with_op::<_, T, _>(iter, b, |t| {
                 t.ordinal() as i32
             }))
         }
         DataType::Timestamp(_, Some(ref tz)) => {
             let iter = ArrayIter::new(array);
-            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
+            extract_component_from_datetime_array::<_, T, _>(iter, b, tz, |t| {
                 t.ordinal() as i32
             })
         }
@@ -653,7 +700,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    time_fraction_generic::<T, _, _>(array, "minute", |t| t.minute() as i32)
+    time_fraction_internal(array, "minute", |t| t.minute() as i32)
 }
 
 /// Extracts the week of a given temporal primitive array as an array of integers
@@ -662,37 +709,46 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    week_generic::<T, _>(array)
+    week_internal(array)
 }
 
-/// Extracts the week of a given temporal array as an array of integers
-pub fn week_generic<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
+/// Extracts the week of a given temporal array as an array of integers.
+/// If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn week_dyn(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type().clone() {
-        DataType::Dictionary(_, value_type) => {
-            week_internal::<T, A>(array, value_type.as_ref())
+        DataType::Dictionary(_, _) => {
+            downcast_dictionary_array!(
+                array => {
+                    let values = week_dyn(array.values())?;
+                    Ok(Arc::new(array.with_values(&values)))
+                }
+                dt => return_compute_error_with!("week does not support", dt),
+            )
         }
-        dt => week_internal::<T, A>(array, &dt),
+        _ => {
+            downcast_temporal_array!(
+                array => {
+                   week_internal(array)
+                    .map(|a| Arc::new(a) as ArrayRef)
+                }
+                dt => return_compute_error_with!("week does not support", dt),
+            )
+        }
     }
 }
 
 /// Extracts the week of a given temporal array as an array of integers
-fn week_internal<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-    dt: &DataType,
-) -> Result<Int32Array>
+fn week_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    match dt {
+    match array.data_type() {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let b = Int32Builder::with_capacity(array.len());
             let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<A, T, _>(iter, b, |t| {
+            Ok(as_datetime_with_op::<_, T, _>(iter, b, |t| {
                 t.iso_week().week() as i32
             }))
         }
@@ -706,7 +762,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    time_fraction_generic::<T, _, _>(array, "second", |t| t.second() as i32)
+    time_fraction_internal(array, "second", |t| t.second() as i32)
 }
 
 /// Extracts the nanoseconds of a given temporal primitive array as an array of integers
@@ -715,32 +771,46 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    time_fraction_generic::<T, _, _>(array, "nanosecond", |t| t.nanosecond() as i32)
+    time_fraction_internal(array, "nanosecond", |t| t.nanosecond() as i32)
+}
+
+/// Extracts the nanoseconds of a given temporal primitive array as an array of integers.
+/// If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn nanosecond_dyn(array: &dyn Array) -> Result<ArrayRef> {
+    time_fraction_dyn(array, "nanosecond", |t| t.nanosecond() as i32)
 }
 
 /// Extracts the time fraction of a given temporal array as an array of integers
-fn time_fraction_generic<T, A: ArrayAccessor<Item = T::Native>, F>(
-    array: A,
-    name: &str,
-    op: F,
-) -> Result<Int32Array>
+fn time_fraction_dyn<F>(array: &dyn Array, name: &str, op: F) -> Result<ArrayRef>
 where
     F: Fn(NaiveDateTime) -> i32,
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
 {
     match array.data_type().clone() {
-        DataType::Dictionary(_, value_type) => {
-            time_fraction_internal::<T, A, _>(array, value_type.as_ref(), name, op)
+        DataType::Dictionary(_, _) => {
+            downcast_dictionary_array!(
+                array => {
+                    let values = time_fraction_dyn(array.values(), name, op)?;
+                    Ok(Arc::new(array.with_values(&values)))
+                }
+                dt => return_compute_error_with!(format!("{} does not support", name), dt),
+            )
         }
-        dt => time_fraction_internal::<T, A, _>(array, &dt, name, op),
+        _ => {
+            downcast_temporal_array!(
+                array => {
+                   time_fraction_internal(array, name, op)
+                    .map(|a| Arc::new(a) as ArrayRef)
+                }
+                dt => return_compute_error_with!(format!("{} does not support", name), dt),
+            )
+        }
     }
 }
 
 /// Extracts the time fraction of a given temporal array as an array of integers
-fn time_fraction_internal<T, A: ArrayAccessor<Item = T::Native>, F>(
-    array: A,
-    dt: &DataType,
+fn time_fraction_internal<T, F>(
+    array: &PrimitiveArray<T>,
     name: &str,
     op: F,
 ) -> Result<Int32Array>
@@ -750,14 +820,14 @@ where
     i64: From<T::Native>,
 {
     let b = Int32Builder::with_capacity(array.len());
-    match dt {
+    match array.data_type() {
         DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<A, T, _>(iter, b, op))
+            Ok(as_datetime_with_op::<_, T, _>(iter, b, op))
         }
         DataType::Timestamp(_, Some(tz)) => {
             let iter = ArrayIter::new(array);
-            extract_component_from_datetime_array::<A, T, _>(iter, b, tz, |t| {
+            extract_component_from_datetime_array::<_, T, _>(iter, b, tz, |t| {
                 op(t.naive_local())
             })
         }
@@ -768,24 +838,18 @@ where
     }
 }
 
-pub fn minute_generic<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    time_fraction_generic::<T, _, _>(array, "minute", |t| t.minute() as i32)
+/// Extracts the minutes of a given temporal array as an array of integers.
+/// If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn minute_dyn(array: &dyn Array) -> Result<ArrayRef> {
+    time_fraction_dyn(array, "minute", |t| t.minute() as i32)
 }
 
-pub fn second_generic<T, A: ArrayAccessor<Item = T::Native>>(
-    array: A,
-) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    time_fraction_generic::<T, _, _>(array, "second", |t| t.second() as i32)
+/// Extracts the seconds of a given temporal array as an array of integers.
+/// If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn second_dyn(array: &dyn Array) -> Result<ArrayRef> {
+    time_fraction_dyn(array, "second", |t| t.second() as i32)
 }
 
 #[cfg(test)]
@@ -1236,47 +1300,34 @@ mod tests {
         let expected = Arc::new(expected_dict) as ArrayRef;
         assert_eq!(&expected, &b);
 
-        let b = time_fraction_generic::<TimestampSecondType, _, _>(
-            dict.downcast_dict::<TimestampSecondArray>().unwrap(),
-            "minute",
-            |t| t.minute() as i32,
-        )
-        .unwrap();
+        let b = time_fraction_dyn(&dict, "minute", |t| t.minute() as i32).unwrap();
 
-        let b_old = minute_generic::<TimestampSecondType, _>(
-            dict.downcast_dict::<TimestampSecondArray>().unwrap(),
-        )
-        .unwrap();
+        let b_old = minute_dyn(&dict).unwrap();
 
-        let expected = Int32Array::from(vec![1, 1, 2, 3, 2]);
-        assert_eq!(expected, b);
-        assert_eq!(expected, b_old);
+        let expected_dict =
+            DictionaryArray::try_new(&keys, &Int32Array::from(vec![1, 2, 3])).unwrap();
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
+        assert_eq!(&expected, &b_old);
 
-        let b = time_fraction_generic::<TimestampSecondType, _, _>(
-            dict.downcast_dict::<TimestampSecondArray>().unwrap(),
-            "second",
-            |t| t.second() as i32,
-        )
-        .unwrap();
+        let b = time_fraction_dyn(&dict, "second", |t| t.second() as i32).unwrap();
 
-        let b_old = second_generic::<TimestampSecondType, _>(
-            dict.downcast_dict::<TimestampSecondArray>().unwrap(),
-        )
-        .unwrap();
+        let b_old = second_dyn(&dict).unwrap();
 
-        let expected = Int32Array::from(vec![1, 1, 2, 3, 2]);
-        assert_eq!(expected, b);
-        assert_eq!(expected, b_old);
+        let expected_dict =
+            DictionaryArray::try_new(&keys, &Int32Array::from(vec![1, 2, 3])).unwrap();
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
+        assert_eq!(&expected, &b_old);
 
-        let b = time_fraction_generic::<TimestampSecondType, _, _>(
-            dict.downcast_dict::<TimestampSecondArray>().unwrap(),
-            "nanosecond",
-            |t| t.nanosecond() as i32,
-        )
-        .unwrap();
+        let b =
+            time_fraction_dyn(&dict, "nanosecond", |t| t.nanosecond() as i32).unwrap();
 
-        let expected = Int32Array::from(vec![0, 0, 0, 0, 0]);
-        assert_eq!(expected, b);
+        let expected_dict =
+            DictionaryArray::try_new(&keys, &Int32Array::from(vec![0, 0, 0, 0, 0]))
+                .unwrap();
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
     }
 
     #[test]
@@ -1308,20 +1359,19 @@ mod tests {
         let keys = Int8Array::from_iter_values([0_i8, 1, 1, 0]);
         let dict = DictionaryArray::try_new(&keys, &a).unwrap();
 
-        let b = quarter_generic::<Date64Type, _>(
-            dict.downcast_dict::<Date64Array>().unwrap(),
-        )
-        .unwrap();
+        let b = quarter_dyn(&dict).unwrap();
 
-        let expected = Int32Array::from(vec![1, 3, 3, 1]);
-        assert_eq!(expected, b);
+        let expected_dict =
+            DictionaryArray::try_new(&keys, &Int32Array::from(vec![1, 3, 3, 1])).unwrap();
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
 
-        let b =
-            month_generic::<Date64Type, _>(dict.downcast_dict::<Date64Array>().unwrap())
-                .unwrap();
+        let b = month_dyn(&dict).unwrap();
 
-        let expected = Int32Array::from(vec![1, 8, 8, 1]);
-        assert_eq!(expected, b);
+        let expected_dict =
+            DictionaryArray::try_new(&keys, &Int32Array::from(vec![1, 8, 8, 1])).unwrap();
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
     }
 
     #[test]
@@ -1334,37 +1384,55 @@ mod tests {
         let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1), Some(0), None]);
         let dict = DictionaryArray::try_new(&keys, &a).unwrap();
 
-        let b = num_days_from_monday_generic::<Date64Type, _>(
-            dict.downcast_dict::<Date64Array>().unwrap(),
+        let b = num_days_from_monday_dyn(&dict).unwrap();
+
+        let expected_dict = DictionaryArray::try_new(
+            &keys,
+            &Int32Array::from(vec![Some(0), Some(2), Some(2), Some(0), None]),
         )
         .unwrap();
-        let expected = Int32Array::from(vec![Some(0), Some(2), Some(2), Some(0), None]);
-        assert_eq!(expected, b);
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
 
-        let b = num_days_from_sunday_generic::<Date64Type, _>(
-            dict.downcast_dict::<Date64Array>().unwrap(),
+        let b = num_days_from_sunday_dyn(&dict).unwrap();
+
+        let expected_dict = DictionaryArray::try_new(
+            &keys,
+            &Int32Array::from(vec![Some(1), Some(3), Some(3), Some(1), None]),
         )
         .unwrap();
-        let expected = Int32Array::from(vec![Some(1), Some(3), Some(3), Some(1), None]);
-        assert_eq!(expected, b);
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
 
-        let b =
-            day_generic::<Date64Type, _>(dict.downcast_dict::<Date64Array>().unwrap())
-                .unwrap();
-        let expected = Int32Array::from(vec![Some(1), Some(20), Some(20), Some(1), None]);
-        assert_eq!(expected, b);
+        let b = day_dyn(&dict).unwrap();
 
-        let b =
-            doy_generic::<Date64Type, _>(dict.downcast_dict::<Date64Array>().unwrap())
-                .unwrap();
-        let expected = Int32Array::from(vec![Some(1), Some(51), Some(51), Some(1), None]);
-        assert_eq!(expected, b);
+        let expected_dict = DictionaryArray::try_new(
+            &keys,
+            &Int32Array::from(vec![Some(1), Some(20), Some(20), Some(1), None]),
+        )
+        .unwrap();
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
 
-        let b =
-            week_generic::<Date64Type, _>(dict.downcast_dict::<Date64Array>().unwrap())
-                .unwrap();
-        let expected = Int32Array::from(vec![Some(1), Some(8), Some(8), Some(1), None]);
-        assert_eq!(expected, b);
+        let b = doy_dyn(&dict).unwrap();
+
+        let expected_dict = DictionaryArray::try_new(
+            &keys,
+            &Int32Array::from(vec![Some(1), Some(51), Some(51), Some(1), None]),
+        )
+        .unwrap();
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
+
+        let b = week_dyn(&dict).unwrap();
+
+        let expected_dict = DictionaryArray::try_new(
+            &keys,
+            &Int32Array::from(vec![Some(1), Some(8), Some(8), Some(1), None]),
+        )
+        .unwrap();
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
     }
 
     #[test]
@@ -1380,5 +1448,17 @@ mod tests {
         let b = nanosecond(&a).unwrap();
         assert!(!b.is_valid(0));
         assert_eq!(453_000_000, b.value(1));
+
+        let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1)]);
+        let dict = DictionaryArray::try_new(&keys, &a).unwrap();
+        let b = nanosecond_dyn(&dict).unwrap();
+
+        let expected_dict = DictionaryArray::try_new(
+            &keys,
+            &Int32Array::from(vec![None, Some(453_000_000)]),
+        )
+        .unwrap();
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
     }
 }
