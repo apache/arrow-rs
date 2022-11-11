@@ -911,8 +911,9 @@ fn test_fixed_size_binary_append() {
         Some(vec![9, 10]),
         // b[4..4]
     ];
-    let expected = FixedSizeBinaryArray::try_from_sparse_iter_with_size(expected.into_iter(), 2)
-        .expect("Failed to create FixedSizeBinaryArray from iterable");
+    let expected =
+        FixedSizeBinaryArray::try_from_sparse_iter_with_size(expected.into_iter(), 2)
+            .expect("Failed to create FixedSizeBinaryArray from iterable");
     assert_eq!(&result, expected.data());
 }
 

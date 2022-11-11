@@ -1439,15 +1439,22 @@ mod tests {
         // Fixed size binary array
         if let Some(length) = fixed_length {
             let input = Arc::new(
-                FixedSizeBinaryArray::try_from_sparse_iter_with_size(data.iter().cloned(), length).unwrap(),
+                FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                    data.iter().cloned(),
+                    length,
+                )
+                .unwrap(),
             );
             let sorted = match limit {
                 Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
                 None => sort(&(input as ArrayRef), options).unwrap(),
             };
             let expected = Arc::new(
-                FixedSizeBinaryArray::try_from_sparse_iter_with_size(expected_data.iter().cloned(), length)
-                    .unwrap(),
+                FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                    expected_data.iter().cloned(),
+                    length,
+                )
+                .unwrap(),
             ) as ArrayRef;
 
             assert_eq!(&sorted, &expected);

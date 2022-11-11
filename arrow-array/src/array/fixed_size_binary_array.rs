@@ -662,13 +662,16 @@ mod tests {
             Some(vec![13, 14]),
         ];
         #[allow(deprecated)]
-        let arr =
-            FixedSizeBinaryArray::try_from_sparse_iter(input_arg.iter().cloned()).unwrap();
+        let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.iter().cloned())
+            .unwrap();
         assert_eq!(2, arr.value_length());
         assert_eq!(5, arr.len());
 
-        let arr =
-            FixedSizeBinaryArray::try_from_sparse_iter_with_size(input_arg.into_iter(), 2).unwrap();
+        let arr = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            input_arg.into_iter(),
+            2,
+        )
+        .unwrap();
         assert_eq!(2, arr.value_length());
         assert_eq!(5, arr.len());
     }
@@ -747,7 +750,9 @@ mod tests {
     #[test]
     fn fixed_size_binary_array_all_null() {
         let data = vec![None] as Vec<Option<String>>;
-        let array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(data.into_iter(), 0).unwrap();
+        let array =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(data.into_iter(), 0)
+                .unwrap();
         array
             .data()
             .validate_full()
@@ -756,16 +761,14 @@ mod tests {
 
     #[test]
     // Test for https://github.com/apache/arrow-rs/issues/1390
-    #[should_panic(
-        expected = "column types must match schema types, expected FixedSizeBinary(2) but found FixedSizeBinary(0) at column index 0"
-    )]
     fn fixed_size_binary_array_all_null_in_batch_with_schema() {
         let schema =
             Schema::new(vec![Field::new("a", DataType::FixedSizeBinary(2), true)]);
 
         let none_option: Option<[u8; 2]> = None;
         let item = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-            vec![none_option, none_option, none_option].into_iter(), 2,
+            vec![none_option, none_option, none_option].into_iter(),
+            2,
         )
         .unwrap();
 
