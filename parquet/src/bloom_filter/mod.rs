@@ -121,6 +121,7 @@ impl Sbbf {
                 // this match exists to future proof the singleton hash enum
             }
         }
+        // length in bytes
         let length: usize = header.num_bytes.try_into().map_err(|_| {
             ParquetError::General("Bloom filter length is invalid".to_string())
         })?;
