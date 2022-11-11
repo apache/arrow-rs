@@ -87,7 +87,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                             }
                         }
                     }
-                    Some(res)
+                    res
                 }
                 // We also support map format, because Schema's metadata supports this.
                 // See https://github.com/apache/arrow/pull/5907
@@ -103,14 +103,14 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                             )));
                         }
                     }
-                    Some(res)
+                    res
                 }
                 Some(_) => {
                     return Err(ArrowError::ParseError(
                         "Field `metadata` is not json array".to_string(),
                     ));
                 }
-                _ => None,
+                _ => BTreeMap::default(),
             };
 
             // if data_type is a struct or list, get its children

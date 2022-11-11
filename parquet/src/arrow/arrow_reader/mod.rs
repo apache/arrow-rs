@@ -2021,7 +2021,7 @@ mod tests {
             .collect();
 
         let schema_with_metadata =
-            Arc::new(Schema::new(vec![field.with_metadata(Some(metadata))]));
+            Arc::new(Schema::new(vec![field.with_metadata(metadata)]));
 
         assert_ne!(schema_with_metadata, schema_without_metadata);
 

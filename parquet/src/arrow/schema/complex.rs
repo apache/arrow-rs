@@ -349,7 +349,7 @@ impl Visitor {
                     DataType::Struct(vec![key_field, value_field]),
                     false, // The inner map field is always non-nullable (#1697)
                 )
-                .with_metadata(arrow_map.and_then(|f| f.metadata().cloned()));
+                .with_metadata(arrow_map.and_then(|f| Some(f.metadata().clone())).unwrap());
 
                 Ok(Some(ParquetField {
                     rep_level,
@@ -539,7 +539,7 @@ fn convert_field(
                 _ => Field::new(name, data_type, nullable),
             };
 
-            field.with_metadata(hint.metadata().cloned())
+            field.with_metadata(hint.metadata().clone())
         }
         None => Field::new(name, data_type, nullable),
     }

@@ -419,12 +419,12 @@ mod tests {
         assert_ne!(schema2, schema4);
         assert_ne!(schema3, schema4);
 
-        let f = Field::new("c1", DataType::Utf8, false).with_metadata(Some(
+        let f = Field::new("c1", DataType::Utf8, false).with_metadata(
             [("foo".to_string(), "bar".to_string())]
                 .iter()
                 .cloned()
                 .collect(),
-        ));
+        );
         let schema5 = Schema::new(vec![
             f,
             Field::new("c2", DataType::Float64, true),
@@ -437,13 +437,13 @@ mod tests {
     fn create_schema_string() {
         let schema = person_schema();
         assert_eq!(schema.to_string(),
-                   "Field { name: \"first_name\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: Some({\"k\": \"v\"}) }, \
-        Field { name: \"last_name\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None }, \
+                   "Field { name: \"first_name\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {\"k\": \"v\"} }, \
+        Field { name: \"last_name\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
         Field { name: \"address\", data_type: Struct([\
-            Field { name: \"street\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None }, \
-            Field { name: \"zip\", data_type: UInt16, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None }\
-        ]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None }, \
-        Field { name: \"interests\", data_type: Dictionary(Int32, Utf8), nullable: true, dict_id: 123, dict_is_ordered: true, metadata: None }")
+            Field { name: \"street\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
+            Field { name: \"zip\", data_type: UInt16, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }\
+        ]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
+        Field { name: \"interests\", data_type: Dictionary(Int32, Utf8), nullable: true, dict_id: 123, dict_is_ordered: true, metadata: {} }")
     }
 
     #[test]
@@ -462,8 +462,8 @@ mod tests {
         assert_eq!(first_name.dict_is_ordered(), None);
 
         let metadata = first_name.metadata();
-        assert!(metadata.is_some());
-        let md = metadata.as_ref().unwrap();
+        assert!(!metadata.is_empty());
+        let md = &metadata;
         assert_eq!(md.len(), 1);
         let key = md.get("k");
         assert!(key.is_some());
@@ -525,7 +525,7 @@ mod tests {
         let kv_array = [("k".to_string(), "v".to_string())];
         let field_metadata: BTreeMap<String, String> = kv_array.iter().cloned().collect();
         let first_name = Field::new("first_name", DataType::Utf8, false)
-            .with_metadata(Some(field_metadata));
+            .with_metadata(field_metadata);
 
         Schema::new(vec![
             first_name,
@@ -557,7 +557,7 @@ mod tests {
                 .cloned()
                 .collect();
         let f1 = Field::new("first_name", DataType::Utf8, false)
-            .with_metadata(Some(metadata1));
+            .with_metadata(metadata1);
 
         let metadata2: BTreeMap<String, String> =
             [("foo".to_string(), "baz".to_string())]
@@ -565,7 +565,7 @@ mod tests {
                 .cloned()
                 .collect();
         let f2 = Field::new("first_name", DataType::Utf8, false)
-            .with_metadata(Some(metadata2));
+            .with_metadata(metadata2);
 
         assert!(
             Schema::try_merge(vec![Schema::new(vec![f1]), Schema::new(vec![f2])])
@@ -580,33 +580,33 @@ mod tests {
                 .cloned()
                 .collect();
         let f2 = Field::new("first_name", DataType::Utf8, false)
-            .with_metadata(Some(metadata2));
+            .with_metadata(metadata2);
 
         assert!(f1.try_merge(&f2).is_ok());
-        assert!(f1.metadata().is_some());
+        assert!(!f1.metadata().is_empty());
         assert_eq!(
-            f1.metadata().as_ref().unwrap(),
-            f2.metadata().as_ref().unwrap()
+            f1.metadata(),
+            f2.metadata()
         );
 
         // 3. Some + Some
-        let mut f1 = Field::new("first_name", DataType::Utf8, false).with_metadata(Some(
+        let mut f1 = Field::new("first_name", DataType::Utf8, false).with_metadata(
             [("foo".to_string(), "bar".to_string())]
                 .iter()
                 .cloned()
                 .collect(),
-        ));
-        let f2 = Field::new("first_name", DataType::Utf8, false).with_metadata(Some(
+        );
+        let f2 = Field::new("first_name", DataType::Utf8, false).with_metadata(
             [("foo2".to_string(), "bar2".to_string())]
                 .iter()
                 .cloned()
                 .collect(),
-        ));
+        );
 
         assert!(f1.try_merge(&f2).is_ok());
-        assert!(f1.metadata().is_some());
+        assert!(!f1.metadata().is_empty());
         assert_eq!(
-            f1.metadata().cloned().unwrap(),
+            f1.metadata().clone(),
             [
                 ("foo".to_string(), "bar".to_string()),
                 ("foo2".to_string(), "bar2".to_string())
@@ -617,17 +617,17 @@ mod tests {
         );
 
         // 4. Some + None.
-        let mut f1 = Field::new("first_name", DataType::Utf8, false).with_metadata(Some(
+        let mut f1 = Field::new("first_name", DataType::Utf8, false).with_metadata(
             [("foo".to_string(), "bar".to_string())]
                 .iter()
                 .cloned()
                 .collect(),
-        ));
+        );
         let f2 = Field::new("first_name", DataType::Utf8, false);
         assert!(f1.try_merge(&f2).is_ok());
-        assert!(f1.metadata().is_some());
+        assert!(!f1.metadata().is_empty());
         assert_eq!(
-            f1.metadata().cloned().unwrap(),
+            f1.metadata().clone(),
             [("foo".to_string(), "bar".to_string())]
                 .iter()
                 .cloned()
@@ -638,7 +638,7 @@ mod tests {
         let mut f1 = Field::new("first_name", DataType::Utf8, false);
         let f2 = Field::new("first_name", DataType::Utf8, false);
         assert!(f1.try_merge(&f2).is_ok());
-        assert!(f1.metadata().is_none());
+        assert!(f1.metadata().is_empty());
     }
 
     #[test]

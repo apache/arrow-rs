@@ -86,18 +86,16 @@ impl<'a> From<crate::Field<'a>> for Field {
             )
         };
 
-        let mut metadata = None;
+        let mut metadata_map = BTreeMap::default();
         if let Some(list) = field.custom_metadata() {
-            let mut metadata_map = BTreeMap::default();
             for kv in list {
                 if let (Some(k), Some(v)) = (kv.key(), kv.value()) {
                     metadata_map.insert(k.to_string(), v.to_string());
                 }
             }
-            metadata = Some(metadata_map);
         }
 
-        arrow_field.with_metadata(metadata)
+        arrow_field.with_metadata(metadata_map)
     }
 }
 
@@ -424,10 +422,9 @@ pub(crate) fn build_field<'a>(
 ) -> WIPOffset<crate::Field<'a>> {
     // Optional custom metadata.
     let mut fb_metadata = None;
-    if let Some(metadata) = field.metadata() {
-        if !metadata.is_empty() {
+        if !field.metadata().is_empty() {
             let mut kv_vec = vec![];
-            for (k, v) in metadata {
+            for (k, v) in field.metadata() {
                 let kv_args = crate::KeyValueArgs {
                     key: Some(fbb.create_string(k.as_str())),
                     value: Some(fbb.create_string(v.as_str())),
@@ -436,8 +433,7 @@ pub(crate) fn build_field<'a>(
                 kv_vec.push(kv_offset);
             }
             fb_metadata = Some(fbb.create_vector(&kv_vec));
-        }
-    };
+        };
 
     let fb_field_name = fbb.create_string(field.name().as_str());
     let field_type = get_fb_field_type(field.data_type(), fbb);
@@ -822,7 +818,7 @@ mod tests {
             .collect();
         let schema = Schema::new_with_metadata(
             vec![
-                Field::new("uint8", DataType::UInt8, false).with_metadata(Some(field_md)),
+                Field::new("uint8", DataType::UInt8, false).with_metadata(field_md),
                 Field::new("uint16", DataType::UInt16, true),
                 Field::new("uint32", DataType::UInt32, false),
                 Field::new("uint64", DataType::UInt64, true),

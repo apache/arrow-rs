@@ -83,10 +83,10 @@ pub struct ArrowJsonField {
 
 impl From<&Field> for ArrowJsonField {
     fn from(field: &Field) -> Self {
-        let metadata_value = match field.metadata() {
-            Some(kv_list) => {
+        let metadata_value = match field.metadata().is_empty() {
+            false => {
                 let mut array = Vec::new();
-                for (k, v) in kv_list {
+                for (k, v) in field.metadata() {
                     let mut kv_map = SJMap::new();
                     kv_map.insert(k.clone(), Value::String(v.clone()));
                     array.push(Value::Object(kv_map));
@@ -1123,19 +1123,19 @@ mod tests {
         let schema =
             Schema::new(vec![
                 Field::new("bools-with-metadata-map", DataType::Boolean, true)
-                    .with_metadata(Some(
+                    .with_metadata(
                         [("k".to_string(), "v".to_string())]
                             .iter()
                             .cloned()
                             .collect(),
-                    )),
+                    ),
                 Field::new("bools-with-metadata-vec", DataType::Boolean, true)
-                    .with_metadata(Some(
+                    .with_metadata(
                         [("k2".to_string(), "v2".to_string())]
                             .iter()
                             .cloned()
                             .collect(),
-                    )),
+                    ),
                 Field::new("bools", DataType::Boolean, true),
                 Field::new("int8s", DataType::Int8, true),
                 Field::new("int16s", DataType::Int16, true),
