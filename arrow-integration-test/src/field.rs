@@ -53,7 +53,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
             // Referenced example file: testing/data/arrow-ipc-stream/integration/1.0.0-littleendian/generated_custom_metadata.json.gz
             let metadata = match map.get("metadata") {
                 Some(&Value::Array(ref values)) => {
-                    let mut res: BTreeMap<String, String> = BTreeMap::new();
+                    let mut res: BTreeMap<String, String> = BTreeMap::default();
                     for value in values {
                         match value.as_object() {
                             Some(map) => {
@@ -92,7 +92,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                 // We also support map format, because Schema's metadata supports this.
                 // See https://github.com/apache/arrow/pull/5907
                 Some(&Value::Object(ref values)) => {
-                    let mut res: BTreeMap<String, String> = BTreeMap::new();
+                    let mut res: BTreeMap<String, String> = BTreeMap::default();
                     for (k, v) in values {
                         if let Some(str_value) = v.as_str() {
                             res.insert(k.clone(), str_value.to_string().clone());

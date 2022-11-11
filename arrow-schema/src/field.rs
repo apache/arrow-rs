@@ -92,7 +92,7 @@ impl Field {
             nullable,
             dict_id: 0,
             dict_is_ordered: false,
-            metadata: BTreeMap::new(),
+            metadata: BTreeMap::default(),
         }
     }
 
@@ -110,7 +110,7 @@ impl Field {
             nullable,
             dict_id,
             dict_is_ordered,
-            metadata: BTreeMap::new(),
+            metadata: BTreeMap::default(),
         }
     }
 
@@ -118,7 +118,7 @@ impl Field {
     /// The metadata is set as `None` for empty map.
     #[inline]
     pub fn set_metadata(&mut self, metadata: BTreeMap<String, String>) {
-        self.metadata = BTreeMap::new();
+        self.metadata = BTreeMap::default();
         if !metadata.is_empty() {
             self.metadata = metadata;
         }
