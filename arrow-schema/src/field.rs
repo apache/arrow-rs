@@ -546,23 +546,14 @@ mod test {
         let child_field = Field::new("child1", DataType::Float16, false);
 
         let mut field1 = Field::new("field1", DataType::Struct(vec![child_field]), false);
-        field1.set_metadata(BTreeMap::from([(
-            String::from("k1"),
-            String::from("v1"),
-        )]));
+        field1.set_metadata(BTreeMap::from([(String::from("k1"), String::from("v1"))]));
 
         let mut field2 = Field::new("field1", DataType::Struct(vec![]), true);
-        field2.set_metadata(BTreeMap::from([(
-            String::from("k2"),
-            String::from("v2"),
-        )]));
+        field2.set_metadata(BTreeMap::from([(String::from("k2"), String::from("v2"))]));
         field2.try_merge(&field1).unwrap();
 
         let mut field3 = Field::new("field1", DataType::Struct(vec![]), false);
-        field3.set_metadata(BTreeMap::from([(
-            String::from("k3"),
-            String::from("v3"),
-        )]));
+        field3.set_metadata(BTreeMap::from([(String::from("k3"), String::from("v3"))]));
         field3.try_merge(&field2).unwrap();
 
         assert!(field2.contains(&field1));

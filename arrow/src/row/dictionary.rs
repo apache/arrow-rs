@@ -260,7 +260,7 @@ unsafe fn decode_fixed<T: FixedLengthEncoding + ToByteSlice>(
         .add_buffer(buffer.into());
 
     // SAFETY: Buffers correct length
-     builder.build_unchecked()
+    builder.build_unchecked()
 }
 
 /// Decodes a `PrimitiveArray` from dictionary values

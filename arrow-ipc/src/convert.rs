@@ -422,18 +422,18 @@ pub(crate) fn build_field<'a>(
 ) -> WIPOffset<crate::Field<'a>> {
     // Optional custom metadata.
     let mut fb_metadata = None;
-        if !field.metadata().is_empty() {
-            let mut kv_vec = vec![];
-            for (k, v) in field.metadata() {
-                let kv_args = crate::KeyValueArgs {
-                    key: Some(fbb.create_string(k.as_str())),
-                    value: Some(fbb.create_string(v.as_str())),
-                };
-                let kv_offset = crate::KeyValue::create(fbb, &kv_args);
-                kv_vec.push(kv_offset);
-            }
-            fb_metadata = Some(fbb.create_vector(&kv_vec));
-        };
+    if !field.metadata().is_empty() {
+        let mut kv_vec = vec![];
+        for (k, v) in field.metadata() {
+            let kv_args = crate::KeyValueArgs {
+                key: Some(fbb.create_string(k.as_str())),
+                value: Some(fbb.create_string(v.as_str())),
+            };
+            let kv_offset = crate::KeyValue::create(fbb, &kv_args);
+            kv_vec.push(kv_offset);
+        }
+        fb_metadata = Some(fbb.create_vector(&kv_vec));
+    };
 
     let fb_field_name = fbb.create_string(field.name().as_str());
     let field_type = get_fb_field_type(field.data_type(), fbb);
