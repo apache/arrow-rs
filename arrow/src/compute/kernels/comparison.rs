@@ -5474,6 +5474,35 @@ mod tests {
     }
 
     #[test]
+    fn test_eq_dyn_neq_dyn_fixed_size_binary() {
+        use crate::array::FixedSizeBinaryArray;
+
+        let values1: Vec<Option<&[u8]>> =
+            vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36, 0x01])];
+        let values2: Vec<Option<&[u8]>> =
+            vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36, 0x00])];
+
+        let array1 =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values1.into_iter(), 2)
+                .unwrap();
+        let array2 =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values2.into_iter(), 2)
+                .unwrap();
+
+        let result = eq_dyn(&array1, &array2).unwrap();
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(false)]),
+            result
+        );
+
+        let result = neq_dyn(&array1, &array2).unwrap();
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(true)]),
+            result
+        );
+    }
+
+    #[test]
     #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_i8_array() {
         // Construct a value array
