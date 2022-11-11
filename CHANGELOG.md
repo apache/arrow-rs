@@ -37,38 +37,37 @@
 
 **Implemented enhancements:**
 
-- Row Format: Option to detach/own a row [\#3078](https://github.com/apache/arrow-rs/issues/3078)
-- Row Format: API to check if datatypes are supported [\#3077](https://github.com/apache/arrow-rs/issues/3077)
-- Deprecate Buffer::count\_set\_bits [\#3067](https://github.com/apache/arrow-rs/issues/3067)
-- Add Decimal128 and Decimal256 to downcast\_primitive [\#3055](https://github.com/apache/arrow-rs/issues/3055)
+- Row Format: Option to detach/own a row [\#3078](https://github.com/apache/arrow-rs/issues/3078) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Row Format: API to check if datatypes are supported [\#3077](https://github.com/apache/arrow-rs/issues/3077) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Deprecate Buffer::count\_set\_bits [\#3067](https://github.com/apache/arrow-rs/issues/3067) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add Decimal128 and Decimal256 to downcast\_primitive [\#3055](https://github.com/apache/arrow-rs/issues/3055) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Improved UX of  creating `TimestampNanosecondArray` with timezones [\#3042](https://github.com/apache/arrow-rs/issues/3042) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Cast decimal256 to signed integer [\#3039](https://github.com/apache/arrow-rs/issues/3039)
-- Support casting Date64 to Timestamp [\#3037](https://github.com/apache/arrow-rs/issues/3037)
-- Check overflow when casting floating point value to decimal256 [\#3032](https://github.com/apache/arrow-rs/issues/3032)
-- Compare i256 in validate\_decimal256\_precision [\#3024](https://github.com/apache/arrow-rs/issues/3024)
-- Check overflow when casting floating point value to decimal128 [\#3020](https://github.com/apache/arrow-rs/issues/3020)
-- Some clippy errors after updating rust toolchain [\#3011](https://github.com/apache/arrow-rs/issues/3011)
-- Add macro downcast\_temporal\_array [\#3008](https://github.com/apache/arrow-rs/issues/3008)
-- Replace hour\_generic with hour\_dyn [\#3005](https://github.com/apache/arrow-rs/issues/3005)
-- Replace temporal \_generic kernels with dyn [\#3004](https://github.com/apache/arrow-rs/issues/3004)
+- Cast decimal256 to signed integer [\#3039](https://github.com/apache/arrow-rs/issues/3039) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Support casting Date64 to Timestamp [\#3037](https://github.com/apache/arrow-rs/issues/3037) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Check overflow when casting floating point value to decimal256 [\#3032](https://github.com/apache/arrow-rs/issues/3032) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Compare i256 in validate\_decimal256\_precision [\#3024](https://github.com/apache/arrow-rs/issues/3024) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Check overflow when casting floating point value to decimal128 [\#3020](https://github.com/apache/arrow-rs/issues/3020) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add macro downcast\_temporal\_array [\#3008](https://github.com/apache/arrow-rs/issues/3008) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Replace hour\_generic with hour\_dyn [\#3005](https://github.com/apache/arrow-rs/issues/3005) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Replace temporal \_generic kernels with dyn [\#3004](https://github.com/apache/arrow-rs/issues/3004) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Add `RowSelection::intersection` [\#3003](https://github.com/apache/arrow-rs/issues/3003) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- I would like to round rather than truncate when casting f64 to decimal [\#2997](https://github.com/apache/arrow-rs/issues/2997)
-- arrow::compute::kernels::temporal should support nanoseconds [\#2995](https://github.com/apache/arrow-rs/issues/2995)
-- Release Arrow `26.0.0` \(next release after `25.0.0`\) [\#2953](https://github.com/apache/arrow-rs/issues/2953)
-- Add timezone offset for debug format of Timestamp with Timezone [\#2917](https://github.com/apache/arrow-rs/issues/2917)
-- Support merge RowSelectors when creating RowSelection [\#2858](https://github.com/apache/arrow-rs/issues/2858)
+- I would like to round rather than truncate when casting f64 to decimal [\#2997](https://github.com/apache/arrow-rs/issues/2997) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- arrow::compute::kernels::temporal should support nanoseconds [\#2995](https://github.com/apache/arrow-rs/issues/2995) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Release Arrow `26.0.0` \(next release after `25.0.0`\) [\#2953](https://github.com/apache/arrow-rs/issues/2953) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+- Add timezone offset for debug format of Timestamp with Timezone [\#2917](https://github.com/apache/arrow-rs/issues/2917) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Support merge RowSelectors when creating RowSelection [\#2858](https://github.com/apache/arrow-rs/issues/2858) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Fixed bugs:**
 
-- Inconsistent Nan Handling Between Scalar and Non-Scalar Comparison Kernels [\#3074](https://github.com/apache/arrow-rs/issues/3074)
-- Debug format for timestamp ignores timezone [\#3069](https://github.com/apache/arrow-rs/issues/3069)
-- Row format decode loses timezone [\#3063](https://github.com/apache/arrow-rs/issues/3063)
-- binary operator produces incorrect result on arrays with resized null buffer [\#3061](https://github.com/apache/arrow-rs/issues/3061)
+- Inconsistent Nan Handling Between Scalar and Non-Scalar Comparison Kernels [\#3074](https://github.com/apache/arrow-rs/issues/3074) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Debug format for timestamp ignores timezone [\#3069](https://github.com/apache/arrow-rs/issues/3069) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Row format decode loses timezone [\#3063](https://github.com/apache/arrow-rs/issues/3063) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- binary operator produces incorrect result on arrays with resized null buffer [\#3061](https://github.com/apache/arrow-rs/issues/3061) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - RLEDecoder Panics on Null Padded Pages [\#3035](https://github.com/apache/arrow-rs/issues/3035) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Nullif with incorrect valid\_count [\#3031](https://github.com/apache/arrow-rs/issues/3031)
-- RLEDecoder::get\_batch\_with\_dict may panic on bit-packed runs longer than 1024 [\#3029](https://github.com/apache/arrow-rs/issues/3029)
+- Nullif with incorrect valid\_count [\#3031](https://github.com/apache/arrow-rs/issues/3031) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- RLEDecoder::get\_batch\_with\_dict may panic on bit-packed runs longer than 1024 [\#3029](https://github.com/apache/arrow-rs/issues/3029) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Converted type is None according to Parquet Tools then utilizing logical types [\#3017](https://github.com/apache/arrow-rs/issues/3017)
-- CompressionCodec LZ4 incompatible with C++ implementation [\#2988](https://github.com/apache/arrow-rs/issues/2988)
+- CompressionCodec LZ4 incompatible with C++ implementation [\#2988](https://github.com/apache/arrow-rs/issues/2988) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Documentation updates:**
 
