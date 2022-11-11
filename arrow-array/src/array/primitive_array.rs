@@ -801,8 +801,13 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
     }
 
     /// Construct a timestamp array with new timezone
-    pub fn with_timezone(&self, timezone: String) -> Self {
-        self.with_timezone_opt(Some(timezone))
+    pub fn with_timezone(&self, timezone: impl Into<String>) -> Self {
+        self.with_timezone_opt(Some(timezone.into()))
+    }
+
+    /// Construct a timestamp array with UTC
+    pub fn with_timezone_utc(&self) -> Self {
+        self.with_timezone("+00:00")
     }
 
     /// Construct a timestamp array with an optional timezone
@@ -1340,6 +1345,21 @@ mod tests {
             ]);
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, None)>\n[\n  2018-12-31T00:00:00,\n  2018-12-31T00:00:00,\n  1921-01-02T00:00:00,\n]",
+            format!("{:?}", arr)
+        );
+    }
+
+    #[test]
+    fn test_timestamp_utc_fmt_debug() {
+        let arr: PrimitiveArray<TimestampMillisecondType> =
+            TimestampMillisecondArray::from(vec![
+                1546214400000,
+                1546214400000,
+                -1546214400000,
+            ])
+            .with_timezone_utc();
+        assert_eq!(
+            "PrimitiveArray<Timestamp(Millisecond, Some(\"+00:00\"))>\n[\n  2018-12-31T00:00:00+00:00,\n  2018-12-31T00:00:00+00:00,\n  1921-01-02T00:00:00+00:00,\n]",
             format!("{:?}", arr)
         );
     }
