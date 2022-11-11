@@ -199,6 +199,30 @@ impl FixedSizeBinaryArray {
         Ok(FixedSizeBinaryArray::from(array_data))
     }
 
+    /// Create an array from an iterable argument of sparse byte slices.
+    /// Sparsity means that items returned by the iterator are optional, i.e input argument can
+    /// contain `None` items. In cases where the iterator returns only `None` values, this
+    /// also takes a size parameter to ensure that the a valid FixedSizeBinaryArray is still
+    /// created.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use arrow_array::FixedSizeBinaryArray;
+    /// let input_arg = vec![
+    ///     None,
+    ///     Some(vec![7, 8]),
+    ///     Some(vec![9, 10]),
+    ///     None,
+    ///     Some(vec![13, 14]),
+    ///     None,
+    /// ];
+    /// let array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(input_arg.into_iter(), 2).unwrap();
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns error if argument has length zero, or sizes of nested slices don't match.
     pub fn try_from_sparse_iter_with_size<T, U>(
         mut iter: T,
         size: i32,
@@ -621,6 +645,7 @@ mod tests {
     fn test_all_none_fixed_size_binary_array_from_sparse_iter() {
         let none_option: Option<[u8; 32]> = None;
         let input_arg = vec![none_option, none_option, none_option];
+        #[allow(deprecated)]
         let arr =
             FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
         assert_eq!(0, arr.value_length());
@@ -636,10 +661,16 @@ mod tests {
             None,
             Some(vec![13, 14]),
         ];
+        #[allow(deprecated)]
         let arr =
-            FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
+            FixedSizeBinaryArray::try_from_sparse_iter(input_arg.iter().cloned()).unwrap();
         assert_eq!(2, arr.value_length());
-        assert_eq!(5, arr.len())
+        assert_eq!(5, arr.len());
+
+        let arr =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(input_arg.into_iter(), 2).unwrap();
+        assert_eq!(2, arr.value_length());
+        assert_eq!(5, arr.len());
     }
 
     #[test]
@@ -716,7 +747,7 @@ mod tests {
     #[test]
     fn fixed_size_binary_array_all_null() {
         let data = vec![None] as Vec<Option<String>>;
-        let array = FixedSizeBinaryArray::try_from_sparse_iter(data.into_iter()).unwrap();
+        let array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(data.into_iter(), 0).unwrap();
         array
             .data()
             .validate_full()
@@ -733,8 +764,8 @@ mod tests {
             Schema::new(vec![Field::new("a", DataType::FixedSizeBinary(2), true)]);
 
         let none_option: Option<[u8; 2]> = None;
-        let item = FixedSizeBinaryArray::try_from_sparse_iter(
-            vec![none_option, none_option, none_option].into_iter(),
+        let item = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            vec![none_option, none_option, none_option].into_iter(), 2,
         )
         .unwrap();
 

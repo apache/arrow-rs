@@ -868,7 +868,7 @@ fn test_list_of_strings_append() {
 #[test]
 fn test_fixed_size_binary_append() {
     let a = vec![Some(vec![1, 2]), Some(vec![3, 4]), Some(vec![5, 6])];
-    let a = FixedSizeBinaryArray::try_from_sparse_iter(a.into_iter())
+    let a = FixedSizeBinaryArray::try_from_sparse_iter_with_size(a.into_iter(), 2)
         .expect("Failed to create FixedSizeBinaryArray from iterable");
 
     let b = vec![
@@ -879,7 +879,7 @@ fn test_fixed_size_binary_append() {
         Some(vec![13, 14]),
         None,
     ];
-    let b = FixedSizeBinaryArray::try_from_sparse_iter(b.into_iter())
+    let b = FixedSizeBinaryArray::try_from_sparse_iter_with_size(b.into_iter(), 2)
         .expect("Failed to create FixedSizeBinaryArray from iterable");
 
     let mut mutable = MutableArrayData::new(vec![a.data(), b.data()], false, 10);
@@ -911,7 +911,7 @@ fn test_fixed_size_binary_append() {
         Some(vec![9, 10]),
         // b[4..4]
     ];
-    let expected = FixedSizeBinaryArray::try_from_sparse_iter(expected.into_iter())
+    let expected = FixedSizeBinaryArray::try_from_sparse_iter_with_size(expected.into_iter(), 2)
         .expect("Failed to create FixedSizeBinaryArray from iterable");
     assert_eq!(&result, expected.data());
 }
