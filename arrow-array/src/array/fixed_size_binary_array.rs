@@ -129,28 +129,88 @@ impl FixedSizeBinaryArray {
     /// # Errors
     ///
     /// Returns error if argument has length zero, or sizes of nested slices don't match.
-    pub fn try_from_sparse_iter<T, U>(iter: T) -> Result<Self, ArrowError>
+    #[deprecated(
+        note = "This function will fail if the iterator produces only None values; prefer `try_from_sparse_iter_with_size`"
+    )]
+    pub fn try_from_sparse_iter<T, U>(mut iter: T) -> Result<Self, ArrowError>
     where
         T: Iterator<Item = Option<U>>,
         U: AsRef<[u8]>,
     {
-        Self::try_from_sparse_iter_with_size(iter, None)
+        let mut len = 0;
+        let mut size = None;
+        let mut byte = 0;
+        let mut null_buf = MutableBuffer::from_len_zeroed(0);
+        let mut buffer = MutableBuffer::from_len_zeroed(0);
+        let mut prepend = 0;
+        iter.try_for_each(|item| -> Result<(), ArrowError> {
+            // extend null bitmask by one byte per each 8 items
+            if byte == 0 {
+                null_buf.push(0u8);
+                byte = 8;
+            }
+            byte -= 1;
+
+            if let Some(slice) = item {
+                let slice = slice.as_ref();
+                if let Some(size) = size {
+                    if size != slice.len() {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Nested array size mismatch: one is {}, and the other is {}",
+                            size,
+                            slice.len()
+                        )));
+                    }
+                } else {
+                    size = Some(slice.len());
+                    buffer.extend_zeros(slice.len() * prepend);
+                }
+                bit_util::set_bit(null_buf.as_slice_mut(), len);
+                buffer.extend_from_slice(slice);
+            } else if let Some(size) = size {
+                buffer.extend_zeros(size);
+            } else {
+                prepend += 1;
+            }
+
+            len += 1;
+
+            Ok(())
+        })?;
+
+        if len == 0 {
+            return Err(ArrowError::InvalidArgumentError(
+                "Input iterable argument has no data".to_owned(),
+            ));
+        }
+
+        let size = size.unwrap_or(0);
+        let array_data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::FixedSizeBinary(size as i32),
+                len,
+                None,
+                Some(null_buf.into()),
+                0,
+                vec![buffer.into()],
+                vec![],
+            )
+        };
+        Ok(FixedSizeBinaryArray::from(array_data))
     }
 
     pub fn try_from_sparse_iter_with_size<T, U>(
         mut iter: T,
-        asserted_size: Option<i32>,
+        size: i32,
     ) -> Result<Self, ArrowError>
     where
         T: Iterator<Item = Option<U>>,
         U: AsRef<[u8]>,
     {
         let mut len = 0;
-        let mut detected_size = None;
         let mut byte = 0;
         let mut null_buf = MutableBuffer::from_len_zeroed(0);
         let mut buffer = MutableBuffer::from_len_zeroed(0);
-        let mut prepend = 0;
 
         iter.try_for_each(|item| -> Result<(), ArrowError> {
             // extend null bitmask by one byte per each 8 items
@@ -162,64 +222,24 @@ impl FixedSizeBinaryArray {
 
             if let Some(slice) = item {
                 let slice = slice.as_ref();
-                if let Some(detected_size) = detected_size {
-                    if detected_size != slice.len() {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "Nested array size mismatch: one is {}, and the other is {}",
-                            detected_size,
-                            slice.len()
-                        )));
-                    }
-                } else {
-                    detected_size = Some(slice.len());
-                    buffer.extend_zeros(slice.len() * prepend);
+                if size as usize != slice.len() {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Nested array size mismatch: one is {}, and the other is {}",
+                        size,
+                        slice.len()
+                    )));
                 }
+
                 bit_util::set_bit(null_buf.as_slice_mut(), len);
                 buffer.extend_from_slice(slice);
-            } else if let Some(size) = detected_size {
-                buffer.extend_zeros(size);
             } else {
-                prepend += 1;
+                buffer.extend_zeros(size as usize);
             }
 
             len += 1;
 
             Ok(())
         })?;
-
-        if len == 0 && asserted_size.is_none() {
-            return Err(ArrowError::InvalidArgumentError(
-                "Input iterable argument has no data".to_owned(),
-            ));
-        }
-
-        let size = if let Some(detected_size) = detected_size {
-            // Either asserted size is zero (because we are entering this
-            // function by way of FixedSizeBinaryArray::try_from_sparse_iter), or
-            // the detected size has to be equal to the asserted size. If neither
-            // of these conditions hold then we need to report an error.
-            if let Some(asserted_size) = asserted_size {
-                if detected_size as i32 != asserted_size {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Nested array size mismatch: detected size is {}, and the asserted size is {}",
-                        detected_size,
-                        asserted_size
-                    )));
-                }
-                asserted_size
-            } else {
-                detected_size as i32
-            }
-        } else {
-            if let Some(asserted_size) = asserted_size {
-                // If we _haven't_ detected a size, then our provided iterator has
-                // only produced `None` values. We need to extend the buffer to the
-                // expected size else we'll segfault if we attempt to use this array.
-                buffer.extend_zeros(len * (asserted_size as usize));
-            }
-
-            asserted_size.unwrap_or(0)
-        };
 
         let array_data = unsafe {
             ArrayData::new_unchecked(
@@ -372,6 +392,7 @@ impl From<FixedSizeListArray> for FixedSizeBinaryArray {
 
 impl From<Vec<Option<&[u8]>>> for FixedSizeBinaryArray {
     fn from(v: Vec<Option<&[u8]>>) -> Self {
+        #[allow(deprecated)]
         Self::try_from_sparse_iter(v.into_iter()).unwrap()
     }
 }
@@ -627,7 +648,7 @@ mod tests {
 
         let arr = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
             input_arg.into_iter(),
-            Some(16),
+            16,
         )
         .unwrap();
         assert_eq!(16, arr.value_length());

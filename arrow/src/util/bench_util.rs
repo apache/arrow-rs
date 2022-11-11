@@ -176,17 +176,20 @@ pub fn create_fsb_array(
 ) -> FixedSizeBinaryArray {
     let rng = &mut seedable_rng();
 
-    FixedSizeBinaryArray::try_from_sparse_iter((0..size).map(|_| {
-        if rng.gen::<f32>() < null_density {
-            None
-        } else {
-            let value = rng
-                .sample_iter::<u8, _>(Standard)
-                .take(value_len)
-                .collect::<Vec<u8>>();
-            Some(value)
-        }
-    }))
+    FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+        (0..size).map(|_| {
+            if rng.gen::<f32>() < null_density {
+                None
+            } else {
+                let value = rng
+                    .sample_iter::<u8, _>(Standard)
+                    .take(value_len)
+                    .collect::<Vec<u8>>();
+                Some(value)
+            }
+        }),
+        value_len as i32,
+    )
     .unwrap()
 }
 
