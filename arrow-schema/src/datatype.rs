@@ -388,11 +388,11 @@ mod tests {
 
         // Non-empty map: should be converted as JSON obj { ... }
         let first_name = Field::new("first_name", DataType::Utf8, false)
-            .with_metadata(Some(field_metadata));
+            .with_metadata(field_metadata);
 
         // Empty map: should be omitted.
         let last_name = Field::new("last_name", DataType::Utf8, false)
-            .with_metadata(Some(BTreeMap::default()));
+            .with_metadata(BTreeMap::default());
 
         let person = DataType::Struct(vec![
             first_name,
