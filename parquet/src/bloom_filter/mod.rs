@@ -198,6 +198,7 @@ mod tests {
 
     #[test]
     fn test_with_fixture() {
+            // bloom filter produced by parquet-mr/spark for a column of i64 f"a{i}" for i in 0..10
         let bitset: &[u8] = &[
             200, 1, 80, 20, 64, 68, 8, 109, 6, 37, 4, 67, 144, 80, 96, 32, 8, 132, 43,
             33, 0, 5, 99, 65, 2, 0, 224, 44, 64, 78, 96, 4,
