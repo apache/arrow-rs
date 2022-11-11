@@ -779,8 +779,8 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
     }
 
     /// Construct a timestamp array with new timezone
-    pub fn with_timezone(&self, timezone: String) -> Self {
-        self.with_timezone_opt(Some(timezone))
+    pub fn with_timezone(&self, timezone: impl Into<String>) -> Self {
+        self.with_timezone_opt(Some(timezone.into()))
     }
 
     /// Construct a timestamp array with an optional timezone
