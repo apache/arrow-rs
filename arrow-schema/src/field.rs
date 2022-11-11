@@ -35,7 +35,10 @@ pub struct Field {
     dict_id: i64,
     dict_is_ordered: bool,
     /// A map of key-value pairs containing additional custom meta data.
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "BTreeMap::is_empty", default))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "BTreeMap::is_empty", default)
+    )]
     metadata: BTreeMap<String, String>,
 }
 
