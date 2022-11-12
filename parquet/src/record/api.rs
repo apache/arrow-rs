@@ -797,8 +797,7 @@ fn convert_date_to_string(value: u32) -> String {
     static NUM_SECONDS_IN_DAY: i64 = 60 * 60 * 24;
     let dt = Utc
         .timestamp_opt(value as i64 * NUM_SECONDS_IN_DAY, 0)
-        .unwrap()
-        .date_naive();
+        .unwrap();
     format!("{}", dt.format("%Y-%m-%d %:z"))
 }
 
