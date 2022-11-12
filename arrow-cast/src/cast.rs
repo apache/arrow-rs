@@ -6120,7 +6120,7 @@ mod tests {
     #[test]
     fn test_cast_utf8_to_date32() {
         use chrono::NaiveDate;
-        let from_ymd = chrono::NaiveDate::from_ymd;
+        let from_ymd = chrono::NaiveDate::from_ymd_opt;
         let since = chrono::NaiveDate::signed_duration_since;
 
         let a = StringArray::from(vec![
@@ -6135,13 +6135,19 @@ mod tests {
         let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
 
         // test valid inputs
-        let date_value = since(NaiveDate::from_ymd(2000, 1, 1), from_ymd(1970, 1, 1))
-            .num_days() as i32;
+        let date_value = since(
+            NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+            from_ymd(1970, 1, 1).unwrap(),
+        )
+        .num_days() as i32;
         assert!(c.is_valid(0)); // "2000-01-01"
         assert_eq!(date_value, c.value(0));
 
-        let date_value = since(NaiveDate::from_ymd(2000, 2, 2), from_ymd(1970, 1, 1))
-            .num_days() as i32;
+        let date_value = since(
+            NaiveDate::from_ymd_opt(2000, 2, 2).unwrap(),
+            from_ymd(1970, 1, 1).unwrap(),
+        )
+        .num_days() as i32;
         assert!(c.is_valid(1)); // "2000-2-2"
         assert_eq!(date_value, c.value(1));
 
