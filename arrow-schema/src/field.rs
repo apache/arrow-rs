@@ -334,7 +334,7 @@ impl Field {
                                 // type id.
                                 if self_type_id != field_type_id {
                                     return Err(ArrowError::SchemaError(
-                                        format!("Fail to merge schema field because the self_type_id = {} does not equals field_type_id = {}",
+                                        format!("Fail to merge schema field because the self_type_id = {} does not equal field_type_id = {}",
                                             self_type_id, field_type_id)
                                     ));
                                 }
@@ -391,7 +391,7 @@ impl Field {
             | DataType::Decimal256(_, _) => {
                 if self.data_type != from.data_type {
                     return Err(ArrowError::SchemaError(
-                        format!("Fail to merge schema field because the from data_type = {} does not equals {}",
+                        format!("Fail to merge schema field because the from data_type = {} does not equal {}",
                             from.data_type, self.data_type)
                     ));
                 }
