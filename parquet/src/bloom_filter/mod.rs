@@ -147,7 +147,7 @@ impl Sbbf {
     }
 
     /// Check if a hash is in the filter. May return
-    /// true for values that was never inserted ("false positive") 
+    /// true for values that was never inserted ("false positive")
     /// but will always return false if a hash has not been inserted.
     pub fn check(&self, hash: u64) -> bool {
         let block_index = self.hash_to_block_index(hash);
