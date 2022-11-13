@@ -212,7 +212,8 @@ mod tests {
             Some(vec![30, 30, 30]),
             None,
         ];
-        let array = FixedSizeBinaryArray::try_from_sparse_iter(values.into_iter())?;
+        let array =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), 3)?;
 
         let data = array.data();
         test_round_trip(data)
