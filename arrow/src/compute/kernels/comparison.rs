@@ -2270,6 +2270,18 @@ macro_rules! typed_compares {
                 as_largestring_array($RIGHT),
                 $OP,
             ),
+            (DataType::FixedSizeBinary(_), DataType::FixedSizeBinary(_)) => {
+                let lhs = $LEFT
+                    .as_any()
+                    .downcast_ref::<FixedSizeBinaryArray>()
+                    .unwrap();
+                let rhs = $RIGHT
+                    .as_any()
+                    .downcast_ref::<FixedSizeBinaryArray>()
+                    .unwrap();
+
+                compare_op(lhs, rhs, $OP)
+            }
             (DataType::Binary, DataType::Binary) => compare_op(
                 as_generic_binary_array::<i32>($LEFT),
                 as_generic_binary_array::<i32>($RIGHT),
@@ -5446,6 +5458,35 @@ mod tests {
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+        );
+    }
+
+    #[test]
+    fn test_eq_dyn_neq_dyn_fixed_size_binary() {
+        use crate::array::FixedSizeBinaryArray;
+
+        let values1: Vec<Option<&[u8]>> =
+            vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36, 0x01])];
+        let values2: Vec<Option<&[u8]>> =
+            vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36, 0x00])];
+
+        let array1 =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values1.into_iter(), 2)
+                .unwrap();
+        let array2 =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values2.into_iter(), 2)
+                .unwrap();
+
+        let result = eq_dyn(&array1, &array2).unwrap();
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(false)]),
+            result
+        );
+
+        let result = neq_dyn(&array1, &array2).unwrap();
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(true)]),
+            result
         );
     }
 
