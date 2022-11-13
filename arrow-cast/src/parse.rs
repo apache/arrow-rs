@@ -305,8 +305,8 @@ mod tests {
         // timezone the test machine is running. Thus it is still
         // somewhat susceptible to bugs in the use of chrono
         let naive_datetime = NaiveDateTime::new(
-            NaiveDate::from_ymd(2020, 9, 8),
-            NaiveTime::from_hms_nano(13, 42, 29, 190855000),
+            NaiveDate::from_ymd_opt(2020, 9, 8).unwrap(),
+            NaiveTime::from_hms_nano_opt(13, 42, 29, 190855000).unwrap(),
         );
 
         // Ensure both T and ' ' variants work
@@ -323,8 +323,8 @@ mod tests {
         // Also ensure that parsing timestamps with no fractional
         // second part works as well
         let naive_datetime_whole_secs = NaiveDateTime::new(
-            NaiveDate::from_ymd(2020, 9, 8),
-            NaiveTime::from_hms(13, 42, 29),
+            NaiveDate::from_ymd_opt(2020, 9, 8).unwrap(),
+            NaiveTime::from_hms_opt(13, 42, 29).unwrap(),
         );
 
         // Ensure both T and ' ' variants work
@@ -380,8 +380,8 @@ mod tests {
         // string without timezone should always output the same regardless the local or session timezone
 
         let naive_datetime = NaiveDateTime::new(
-            NaiveDate::from_ymd(2020, 9, 8),
-            NaiveTime::from_hms_nano(13, 42, 29, 190855000),
+            NaiveDate::from_ymd_opt(2020, 9, 8).unwrap(),
+            NaiveTime::from_hms_nano_opt(13, 42, 29, 190855000).unwrap(),
         );
 
         // Ensure both T and ' ' variants work
@@ -396,8 +396,8 @@ mod tests {
         );
 
         let naive_datetime = NaiveDateTime::new(
-            NaiveDate::from_ymd(2020, 9, 8),
-            NaiveTime::from_hms_nano(13, 42, 29, 0),
+            NaiveDate::from_ymd_opt(2020, 9, 8).unwrap(),
+            NaiveTime::from_hms_nano_opt(13, 42, 29, 0).unwrap(),
         );
 
         // Ensure both T and ' ' variants work

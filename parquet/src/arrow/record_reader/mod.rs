@@ -17,8 +17,8 @@
 
 use std::cmp::{max, min};
 
-use arrow::bitmap::Bitmap;
-use arrow::buffer::Buffer;
+use arrow_buffer::Buffer;
+use arrow_data::Bitmap;
 
 use crate::arrow::record_reader::{
     buffer::{BufferQueue, ScalarBuffer, ValuesBuffer},
@@ -409,9 +409,9 @@ fn packed_null_mask(descr: &ColumnDescPtr) -> bool {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{Int16BufferBuilder, Int32BufferBuilder};
     use arrow::bitmap::Bitmap;
     use arrow::buffer::Buffer;
+    use arrow_array::builder::{Int16BufferBuilder, Int32BufferBuilder};
 
     use crate::basic::Encoding;
     use crate::data_type::Int32Type;

@@ -1644,7 +1644,7 @@ mod tests {
     #[test]
     fn test_date32_month_add() {
         let a = Date32Array::from(vec![Date32Type::from_naive_date(
-            NaiveDate::from_ymd(2000, 1, 1),
+            NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
         )]);
         let b =
             IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(1, 2)]);
@@ -1652,28 +1652,28 @@ mod tests {
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
             c.value(0),
-            Date32Type::from_naive_date(NaiveDate::from_ymd(2001, 3, 1))
+            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2001, 3, 1).unwrap())
         );
     }
 
     #[test]
     fn test_date32_day_time_add() {
         let a = Date32Array::from(vec![Date32Type::from_naive_date(
-            NaiveDate::from_ymd(2000, 1, 1),
+            NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
         )]);
         let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
             c.value(0),
-            Date32Type::from_naive_date(NaiveDate::from_ymd(2000, 1, 2))
+            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 1, 2).unwrap())
         );
     }
 
     #[test]
     fn test_date32_month_day_nano_add() {
         let a = Date32Array::from(vec![Date32Type::from_naive_date(
-            NaiveDate::from_ymd(2000, 1, 1),
+            NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
         )]);
         let b =
             IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(
@@ -1683,14 +1683,14 @@ mod tests {
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
             c.value(0),
-            Date32Type::from_naive_date(NaiveDate::from_ymd(2000, 2, 3))
+            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 2, 3).unwrap())
         );
     }
 
     #[test]
     fn test_date64_month_add() {
         let a = Date64Array::from(vec![Date64Type::from_naive_date(
-            NaiveDate::from_ymd(2000, 1, 1),
+            NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
         )]);
         let b =
             IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(1, 2)]);
@@ -1698,28 +1698,28 @@ mod tests {
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
             c.value(0),
-            Date64Type::from_naive_date(NaiveDate::from_ymd(2001, 3, 1))
+            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2001, 3, 1).unwrap())
         );
     }
 
     #[test]
     fn test_date64_day_time_add() {
         let a = Date64Array::from(vec![Date64Type::from_naive_date(
-            NaiveDate::from_ymd(2000, 1, 1),
+            NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
         )]);
         let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
             c.value(0),
-            Date64Type::from_naive_date(NaiveDate::from_ymd(2000, 1, 2))
+            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 1, 2).unwrap())
         );
     }
 
     #[test]
     fn test_date64_month_day_nano_add() {
         let a = Date64Array::from(vec![Date64Type::from_naive_date(
-            NaiveDate::from_ymd(2000, 1, 1),
+            NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
         )]);
         let b =
             IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(
@@ -1729,7 +1729,7 @@ mod tests {
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
             c.value(0),
-            Date64Type::from_naive_date(NaiveDate::from_ymd(2000, 2, 3))
+            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 2, 3).unwrap())
         );
     }
 
@@ -3043,5 +3043,59 @@ mod tests {
 
         let c = add(&a, &b).unwrap();
         assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn test_resize_builder() {
+        let mut null_buffer_builder = BooleanBufferBuilder::new(16);
+        null_buffer_builder.append_slice(&[
+            false, false, false, false, false, false, false, false, false, false, false,
+            false, false, true, true, true,
+        ]);
+        // `resize` resizes the buffer length to the ceil of byte numbers.
+        // So the underlying buffer is not changed.
+        null_buffer_builder.resize(13);
+        assert_eq!(null_buffer_builder.len(), 13);
+
+        let null_buffer = null_buffer_builder.finish();
+
+        // `count_set_bits_offset` takes len in bits as parameter.
+        assert_eq!(null_buffer.count_set_bits_offset(0, 13), 0);
+
+        let mut data_buffer_builder = BufferBuilder::<i32>::new(13);
+        data_buffer_builder.append_slice(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+        let data_buffer = data_buffer_builder.finish();
+
+        let arg1: Int32Array = ArrayDataBuilder::new(DataType::Int32)
+            .len(13)
+            .null_count(13)
+            .buffers(vec![data_buffer])
+            .null_bit_buffer(Some(null_buffer))
+            .build()
+            .unwrap()
+            .into();
+
+        assert_eq!(arg1.null_count(), 13);
+
+        let mut data_buffer_builder = BufferBuilder::<i32>::new(13);
+        data_buffer_builder.append_slice(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+        let data_buffer = data_buffer_builder.finish();
+
+        let arg2: Int32Array = ArrayDataBuilder::new(DataType::Int32)
+            .len(13)
+            .null_count(0)
+            .buffers(vec![data_buffer])
+            .null_bit_buffer(None)
+            .build()
+            .unwrap()
+            .into();
+
+        assert_eq!(arg2.null_count(), 0);
+
+        let result_dyn = add_dyn(&arg1, &arg2).unwrap();
+        let result = result_dyn.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        assert_eq!(result.len(), 13);
+        assert_eq!(result.null_count(), 13);
     }
 }

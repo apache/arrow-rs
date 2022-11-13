@@ -17,10 +17,9 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::{ParquetError, Result};
-use arrow::array::{
-    ArrayData, ArrayDataBuilder, ArrayRef, BooleanBufferBuilder, StructArray,
-};
-use arrow::datatypes::DataType as ArrowType;
+use arrow_array::{builder::BooleanBufferBuilder, ArrayRef, StructArray};
+use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -216,9 +215,9 @@ mod tests {
     use super::*;
     use crate::arrow::array_reader::test_util::InMemoryArrayReader;
     use crate::arrow::array_reader::ListArrayReader;
-    use arrow::array::{Array, Int32Array, ListArray};
     use arrow::buffer::Buffer;
     use arrow::datatypes::Field;
+    use arrow_array::{Array, Int32Array, ListArray};
 
     #[test]
     fn test_struct_array_reader() {

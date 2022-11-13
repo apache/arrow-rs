@@ -3,6 +3,8 @@ testing/*
 target/*
 dev/release/rat_exclude_files.txt
 arrow/test/data/*
+arrow-csv/test/data/*
+arrow-json/test/data/*
 arrow/test/dependency/*
 arrow-integration-test/data/*
 parquet_derive/test/dependency/*

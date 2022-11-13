@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
+use arrow_schema::DataType;
 
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;

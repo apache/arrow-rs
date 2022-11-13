@@ -18,8 +18,8 @@
 //! Logic for reading into arrow arrays
 
 use crate::errors::Result;
-use arrow::array::ArrayRef;
-use arrow::datatypes::DataType as ArrowType;
+use arrow_array::ArrayRef;
+use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::sync::Arc;
 

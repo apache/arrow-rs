@@ -25,6 +25,7 @@ arrow:
   - arrow-select/**/*
   - arrow-ipc/**/*
   - arrow-csv/**/*
+  - arrow-json/**/*
 
 arrow-flight:
   - arrow-flight/**/*

@@ -16,9 +16,9 @@
 # under the License.
 
 [package]
-name = "arrow-select"
+name = "arrow-json"
 version = "27.0.0"
-description = "Selection kernels for arrow arrays"
+description = "Support for parsing JSON format into the Arrow format"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -33,19 +33,22 @@ edition = "2021"
 rust-version = "1.62"
 
 [lib]
-name = "arrow_select"
+name = "arrow_json"
 path = "src/lib.rs"
 bench = false
 
 [dependencies]
+arrow-array = { version = "27.0.0", path = "../arrow-array" }
 arrow-buffer = { version = "27.0.0", path = "../arrow-buffer" }
+arrow-cast = { version = "27.0.0", path = "../arrow-cast" }
 arrow-data = { version = "27.0.0", path = "../arrow-data" }
 arrow-schema = { version = "27.0.0", path = "../arrow-schema" }
-arrow-array = { version = "27.0.0", path = "../arrow-array" }
+half = { version = "2.1", default-features = false }
+indexmap = { version = "1.9", default-features = false, features = ["std"] }
 num = { version = "0.4", default-features = false, features = ["std"] }
-
-[features]
-default = []
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+tempfile = "3.3"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

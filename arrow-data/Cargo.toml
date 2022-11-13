@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-data"
-version = "26.0.0"
+version = "27.0.0"
 description = "Array data abstractions for Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -45,8 +45,8 @@ force_validate = []
 
 [dependencies]
 
-arrow-buffer = { version = "26.0.0", path = "../arrow-buffer" }
-arrow-schema = { version = "26.0.0", path = "../arrow-schema" }
+arrow-buffer = { version = "27.0.0", path = "../arrow-buffer" }
+arrow-schema = { version = "27.0.0", path = "../arrow-schema" }
 
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false }

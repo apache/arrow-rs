@@ -35,7 +35,7 @@
 //! assert_eq!(7.0, c.value(2));
 //! ```
 
-use chrono::{DateTime, NaiveDateTime, Timelike};
+use chrono::{DateTime, NaiveDateTime, NaiveTime, Timelike};
 use std::sync::Arc;
 
 use crate::display::{array_value_to_string, lexical_to_string};
@@ -244,8 +244,15 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         }
         (Timestamp(_, _), Int64) => true,
         (Int64, Timestamp(_, _)) => true,
-        (Timestamp(_, _), Timestamp(_, _) | Date32 | Date64) => true,
         (Date64, Timestamp(_, None)) => true,
+        (Timestamp(_, _),
+            Timestamp(_, _)
+            | Date32
+            | Date64
+            | Time32(TimeUnit::Second)
+            | Time32(TimeUnit::Millisecond)
+            | Time64(TimeUnit::Microsecond)
+            | Time64(TimeUnit::Nanosecond)) => true,
         (Int64, Duration(_)) => true,
         (Duration(_), Int64) => true,
         (Interval(from_type), Int64) => {
@@ -557,6 +564,24 @@ fn make_timestamp_array(
                 .with_timezone_opt(tz),
         ),
     }
+}
+
+fn as_time_res_with_timezone<T: ArrowPrimitiveType>(
+    v: i64,
+    tz: Option<Tz>,
+) -> Result<NaiveTime, ArrowError> {
+    let time = match tz {
+        Some(tz) => as_datetime_with_timezone::<T>(v, tz).map(|d| d.time()),
+        None => as_datetime::<T>(v).map(|d| d.time()),
+    };
+
+    time.ok_or_else(|| {
+        ArrowError::CastError(format!(
+            "Failed to create naive time with {} {}",
+            std::any::type_name::<T>(),
+            v
+        ))
+    })
 }
 
 /// Cast `array` to the provided data type and return a new Array with
@@ -1561,6 +1586,182 @@ pub fn cast_with_options(
             as_primitive_array::<TimestampNanosecondType>(array)
                 .unary::<_, Date64Type>(|x| x / (NANOSECONDS / MILLISECONDS)),
         )),
+        (Timestamp(TimeUnit::Second, tz), Time64(TimeUnit::Microsecond)) => {
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            Ok(Arc::new(
+                as_primitive_array::<TimestampSecondType>(array)
+                    .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
+                        Ok(time_to_time64us(as_time_res_with_timezone::<
+                            TimestampSecondType,
+                        >(x, tz)?))
+                    })?,
+            ))
+        }
+        (Timestamp(TimeUnit::Second, tz), Time64(TimeUnit::Nanosecond)) => {
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            Ok(Arc::new(
+                as_primitive_array::<TimestampSecondType>(array)
+                    .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
+                        Ok(time_to_time64ns(as_time_res_with_timezone::<
+                            TimestampSecondType,
+                        >(x, tz)?))
+                    })?,
+            ))
+        }
+        (Timestamp(TimeUnit::Millisecond, tz), Time64(TimeUnit::Microsecond)) => {
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            Ok(Arc::new(
+                as_primitive_array::<TimestampMillisecondType>(array)
+                    .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
+                    Ok(time_to_time64us(as_time_res_with_timezone::<
+                        TimestampMillisecondType,
+                    >(x, tz)?))
+                })?,
+            ))
+        }
+        (Timestamp(TimeUnit::Millisecond, tz), Time64(TimeUnit::Nanosecond)) => {
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            Ok(Arc::new(
+                as_primitive_array::<TimestampMillisecondType>(array)
+                    .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
+                    Ok(time_to_time64ns(as_time_res_with_timezone::<
+                        TimestampMillisecondType,
+                    >(x, tz)?))
+                })?,
+            ))
+        }
+        (Timestamp(TimeUnit::Microsecond, tz), Time64(TimeUnit::Microsecond)) => {
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            Ok(Arc::new(
+                as_primitive_array::<TimestampMicrosecondType>(array)
+                    .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
+                    Ok(time_to_time64us(as_time_res_with_timezone::<
+                        TimestampMicrosecondType,
+                    >(x, tz)?))
+                })?,
+            ))
+        }
+        (Timestamp(TimeUnit::Microsecond, tz), Time64(TimeUnit::Nanosecond)) => {
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            Ok(Arc::new(
+                as_primitive_array::<TimestampMicrosecondType>(array)
+                    .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
+                    Ok(time_to_time64ns(as_time_res_with_timezone::<
+                        TimestampMicrosecondType,
+                    >(x, tz)?))
+                })?,
+            ))
+        }
+        (Timestamp(TimeUnit::Nanosecond, tz), Time64(TimeUnit::Microsecond)) => {
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            Ok(Arc::new(
+                as_primitive_array::<TimestampNanosecondType>(array)
+                    .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
+                    Ok(time_to_time64us(as_time_res_with_timezone::<
+                        TimestampNanosecondType,
+                    >(x, tz)?))
+                })?,
+            ))
+        }
+        (Timestamp(TimeUnit::Nanosecond, tz), Time64(TimeUnit::Nanosecond)) => {
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            Ok(Arc::new(
+                as_primitive_array::<TimestampNanosecondType>(array)
+                    .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
+                    Ok(time_to_time64ns(as_time_res_with_timezone::<
+                        TimestampNanosecondType,
+                    >(x, tz)?))
+                })?,
+            ))
+        }
+        (Timestamp(TimeUnit::Second, tz), Time32(TimeUnit::Second)) => {
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            Ok(Arc::new(
+                as_primitive_array::<TimestampSecondType>(array)
+                    .try_unary::<_, Time32SecondType, ArrowError>(|x| {
+                        Ok(time_to_time32s(as_time_res_with_timezone::<
+                            TimestampSecondType,
+                        >(x, tz)?))
+                    })?,
+            ))
+        }
+        (Timestamp(TimeUnit::Second, tz), Time32(TimeUnit::Millisecond)) => {
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            Ok(Arc::new(
+                as_primitive_array::<TimestampSecondType>(array)
+                    .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
+                        Ok(time_to_time32ms(as_time_res_with_timezone::<
+                            TimestampSecondType,
+                        >(x, tz)?))
+                    })?,
+            ))
+        }
+        (Timestamp(TimeUnit::Millisecond, tz), Time32(TimeUnit::Second)) => {
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            Ok(Arc::new(
+                as_primitive_array::<TimestampMillisecondType>(array)
+                    .try_unary::<_, Time32SecondType, ArrowError>(|x| {
+                        Ok(time_to_time32s(as_time_res_with_timezone::<
+                            TimestampMillisecondType,
+                        >(x, tz)?))
+                    })?,
+            ))
+        }
+        (Timestamp(TimeUnit::Millisecond, tz), Time32(TimeUnit::Millisecond)) => {
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            Ok(Arc::new(
+                as_primitive_array::<TimestampMillisecondType>(array)
+                    .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
+                    Ok(time_to_time32ms(as_time_res_with_timezone::<
+                        TimestampMillisecondType,
+                    >(x, tz)?))
+                })?,
+            ))
+        }
+        (Timestamp(TimeUnit::Microsecond, tz), Time32(TimeUnit::Second)) => {
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            Ok(Arc::new(
+                as_primitive_array::<TimestampMicrosecondType>(array)
+                    .try_unary::<_, Time32SecondType, ArrowError>(|x| {
+                        Ok(time_to_time32s(as_time_res_with_timezone::<
+                            TimestampMicrosecondType,
+                        >(x, tz)?))
+                    })?,
+            ))
+        }
+        (Timestamp(TimeUnit::Microsecond, tz), Time32(TimeUnit::Millisecond)) => {
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            Ok(Arc::new(
+                as_primitive_array::<TimestampMicrosecondType>(array)
+                    .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
+                    Ok(time_to_time32ms(as_time_res_with_timezone::<
+                        TimestampMicrosecondType,
+                    >(x, tz)?))
+                })?,
+            ))
+        }
+        (Timestamp(TimeUnit::Nanosecond, tz), Time32(TimeUnit::Second)) => {
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            Ok(Arc::new(
+                as_primitive_array::<TimestampNanosecondType>(array)
+                    .try_unary::<_, Time32SecondType, ArrowError>(|x| {
+                        Ok(time_to_time32s(as_time_res_with_timezone::<
+                            TimestampNanosecondType,
+                        >(x, tz)?))
+                    })?,
+            ))
+        }
+        (Timestamp(TimeUnit::Nanosecond, tz), Time32(TimeUnit::Millisecond)) => {
+            let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            Ok(Arc::new(
+                as_primitive_array::<TimestampNanosecondType>(array)
+                    .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
+                    Ok(time_to_time32ms(as_time_res_with_timezone::<
+                        TimestampNanosecondType,
+                    >(x, tz)?))
+                })?,
+            ))
+        }
 
         (Date64, Timestamp(TimeUnit::Second, None)) => Ok(Arc::new(
             as_primitive_array::<Date64Type>(array)
@@ -4235,6 +4436,160 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_timestamp_to_time64() {
+        // test timestamp secs
+        let a = TimestampSecondArray::from(vec![Some(86405), Some(1), None])
+            .with_timezone("+01:00".to_string());
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
+        let c = b.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+        assert_eq!(3605000000, c.value(0));
+        assert_eq!(3601000000, c.value(1));
+        assert!(c.is_null(2));
+        let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
+        let c = b.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
+        assert_eq!(3605000000000, c.value(0));
+        assert_eq!(3601000000000, c.value(1));
+        assert!(c.is_null(2));
+
+        // test timestamp milliseconds
+        let a = TimestampMillisecondArray::from(vec![Some(86405000), Some(1000), None])
+            .with_timezone("+01:00".to_string());
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
+        let c = b.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+        assert_eq!(3605000000, c.value(0));
+        assert_eq!(3601000000, c.value(1));
+        assert!(c.is_null(2));
+        let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
+        let c = b.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
+        assert_eq!(3605000000000, c.value(0));
+        assert_eq!(3601000000000, c.value(1));
+        assert!(c.is_null(2));
+
+        // test timestamp microseconds
+        let a =
+            TimestampMicrosecondArray::from(vec![Some(86405000000), Some(1000000), None])
+                .with_timezone("+01:00".to_string());
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
+        let c = b.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+        assert_eq!(3605000000, c.value(0));
+        assert_eq!(3601000000, c.value(1));
+        assert!(c.is_null(2));
+        let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
+        let c = b.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
+        assert_eq!(3605000000000, c.value(0));
+        assert_eq!(3601000000000, c.value(1));
+        assert!(c.is_null(2));
+
+        // test timestamp nanoseconds
+        let a = TimestampNanosecondArray::from(vec![
+            Some(86405000000000),
+            Some(1000000000),
+            None,
+        ])
+        .with_timezone("+01:00".to_string());
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
+        let c = b.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+        assert_eq!(3605000000, c.value(0));
+        assert_eq!(3601000000, c.value(1));
+        assert!(c.is_null(2));
+        let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
+        let c = b.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
+        assert_eq!(3605000000000, c.value(0));
+        assert_eq!(3601000000000, c.value(1));
+        assert!(c.is_null(2));
+
+        // test overflow
+        let a = TimestampSecondArray::from(vec![Some(i64::MAX)])
+            .with_timezone("+01:00".to_string());
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond));
+        assert!(b.is_err());
+        let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond));
+        assert!(b.is_err());
+    }
+
+    #[test]
+    fn test_cast_timestamp_to_time32() {
+        // test timestamp secs
+        let a = TimestampSecondArray::from(vec![Some(86405), Some(1), None])
+            .with_timezone("+01:00".to_string());
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
+        let c = b.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+        assert_eq!(3605, c.value(0));
+        assert_eq!(3601, c.value(1));
+        assert!(c.is_null(2));
+        let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
+        let c = b.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
+        assert_eq!(3605000, c.value(0));
+        assert_eq!(3601000, c.value(1));
+        assert!(c.is_null(2));
+
+        // test timestamp milliseconds
+        let a = TimestampMillisecondArray::from(vec![Some(86405000), Some(1000), None])
+            .with_timezone("+01:00".to_string());
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
+        let c = b.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+        assert_eq!(3605, c.value(0));
+        assert_eq!(3601, c.value(1));
+        assert!(c.is_null(2));
+        let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
+        let c = b.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
+        assert_eq!(3605000, c.value(0));
+        assert_eq!(3601000, c.value(1));
+        assert!(c.is_null(2));
+
+        // test timestamp microseconds
+        let a =
+            TimestampMicrosecondArray::from(vec![Some(86405000000), Some(1000000), None])
+                .with_timezone("+01:00".to_string());
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
+        let c = b.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+        assert_eq!(3605, c.value(0));
+        assert_eq!(3601, c.value(1));
+        assert!(c.is_null(2));
+        let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
+        let c = b.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
+        assert_eq!(3605000, c.value(0));
+        assert_eq!(3601000, c.value(1));
+        assert!(c.is_null(2));
+
+        // test timestamp nanoseconds
+        let a = TimestampNanosecondArray::from(vec![
+            Some(86405000000000),
+            Some(1000000000),
+            None,
+        ])
+        .with_timezone("+01:00".to_string());
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
+        let c = b.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+        assert_eq!(3605, c.value(0));
+        assert_eq!(3601, c.value(1));
+        assert!(c.is_null(2));
+        let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
+        let c = b.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
+        assert_eq!(3605000, c.value(0));
+        assert_eq!(3601000, c.value(1));
+        assert!(c.is_null(2));
+
+        // test overflow
+        let a = TimestampSecondArray::from(vec![Some(i64::MAX)])
+            .with_timezone("+01:00".to_string());
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Time32(TimeUnit::Second));
+        assert!(b.is_err());
+        let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond));
+        assert!(b.is_err());
+    }
+
+    #[test]
     fn test_cast_date64_to_timestamp() {
         let a = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
         let array = Arc::new(a) as ArrayRef;
@@ -5765,7 +6120,7 @@ mod tests {
     #[test]
     fn test_cast_utf8_to_date32() {
         use chrono::NaiveDate;
-        let from_ymd = chrono::NaiveDate::from_ymd;
+        let from_ymd = chrono::NaiveDate::from_ymd_opt;
         let since = chrono::NaiveDate::signed_duration_since;
 
         let a = StringArray::from(vec![
@@ -5780,13 +6135,19 @@ mod tests {
         let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
 
         // test valid inputs
-        let date_value = since(NaiveDate::from_ymd(2000, 1, 1), from_ymd(1970, 1, 1))
-            .num_days() as i32;
+        let date_value = since(
+            NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+            from_ymd(1970, 1, 1).unwrap(),
+        )
+        .num_days() as i32;
         assert!(c.is_valid(0)); // "2000-01-01"
         assert_eq!(date_value, c.value(0));
 
-        let date_value = since(NaiveDate::from_ymd(2000, 2, 2), from_ymd(1970, 1, 1))
-            .num_days() as i32;
+        let date_value = since(
+            NaiveDate::from_ymd_opt(2000, 2, 2).unwrap(),
+            from_ymd(1970, 1, 1).unwrap(),
+        )
+        .num_days() as i32;
         assert!(c.is_valid(1)); // "2000-2-2"
         assert_eq!(date_value, c.value(1));
 

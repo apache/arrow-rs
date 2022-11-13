@@ -306,38 +306,46 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets best effort maximum size of a data page in bytes
+    /// Sets best effort maximum size of a data page in bytes.
     ///
-    /// Note: this is a best effort limit based on the write batch size
+    /// Note: this is a best effort limit based on value of
+    /// [`set_write_batch_size`](Self::set_write_batch_size).
     pub fn set_data_pagesize_limit(mut self, value: usize) -> Self {
         self.data_pagesize_limit = value;
         self
     }
 
-    /// Sets best effort maximum number of rows in a data page
+    /// Sets best effort maximum number of rows in a data page.
     ///
     ///
     /// This can be used to limit the number of rows within a page to
-    /// yield better page pruning
+    /// yield better page pruning.
     ///
-    /// Note: this is a best effort limit based on the write batch size
+    /// Note: this is a best effort limit based on value of
+    /// [`set_write_batch_size`](Self::set_write_batch_size).
     pub fn set_data_page_row_count_limit(mut self, value: usize) -> Self {
         self.data_page_row_count_limit = value;
         self
     }
 
-    /// Sets best effort maximum dictionary page size, in bytes
+    /// Sets best effort maximum dictionary page size, in bytes.
     ///
-    /// Note: this is a best effort limit based on the write batch size
+    /// Note: this is a best effort limit based on value of
+    /// [`set_write_batch_size`](Self::set_write_batch_size).
     pub fn set_dictionary_pagesize_limit(mut self, value: usize) -> Self {
         self.dictionary_pagesize_limit = value;
         self
     }
 
-    /// Sets write batch size
+    /// Sets write batch size.
     ///
-    /// Data is written in batches of this size, acting as an upper-bound on
-    /// the enforcement granularity of page limits
+    /// For performance reasons, data for each column is written in
+    /// batches of this size.
+    ///
+    /// Additional limits such as such as
+    /// [`set_data_page_row_count_limit`](Self::set_data_page_row_count_limit)
+    /// are checked between batches, and thus the write batch size value acts as an
+    /// upper-bound on the enforcement granularity of other limits.
     pub fn set_write_batch_size(mut self, value: usize) -> Self {
         self.write_batch_size = value;
         self

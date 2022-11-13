@@ -2760,30 +2760,22 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(
-                left,
-                right,
-                |a, b| a == b,
-                |a, b| a.total_cmp(&b).is_eq(),
-                |a, b| a == b
-            )
+            typed_dict_compares!(left, right, |a, b| a == b, |a, b| a.is_eq(b), |a, b| a
+                == b)
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
             typed_cmp_dict_non_dict!(left, right, |a, b| a == b, |a, b| a == b, |a, b| a
-                .total_cmp(&b)
-                .is_eq())
+                .is_eq(b))
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
-            typed_cmp_dict_non_dict!(right, left, |a, b| a == b, |a, b| a == b, |a, b| a
-                .total_cmp(&b)
-                .is_eq())
+            typed_cmp_dict_non_dict!(right, left, |a, b| a == b, |a, b| a == b, |a, b| b
+                .is_eq(a))
         }
         _ => {
             typed_compares!(left, right, |a, b| !(a ^ b), |a, b| a == b, |a, b| a
-                .total_cmp(&b)
-                .is_eq())
+                .is_eq(b))
         }
     }
 }
@@ -2813,30 +2805,22 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(
-                left,
-                right,
-                |a, b| a != b,
-                |a, b| a.total_cmp(&b).is_ne(),
-                |a, b| a != b
-            )
+            typed_dict_compares!(left, right, |a, b| a != b, |a, b| a.is_ne(b), |a, b| a
+                != b)
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
             typed_cmp_dict_non_dict!(left, right, |a, b| a != b, |a, b| a != b, |a, b| a
-                .total_cmp(&b)
-                .is_ne())
+                .is_ne(b))
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
-            typed_cmp_dict_non_dict!(right, left, |a, b| a != b, |a, b| a != b, |a, b| a
-                .total_cmp(&b)
-                .is_ne())
+            typed_cmp_dict_non_dict!(right, left, |a, b| a != b, |a, b| a != b, |a, b| b
+                .is_ne(a))
         }
         _ => {
             typed_compares!(left, right, |a, b| (a ^ b), |a, b| a != b, |a, b| a
-                .total_cmp(&b)
-                .is_ne())
+                .is_ne(b))
         }
     }
 }
@@ -2866,30 +2850,22 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(
-                left,
-                right,
-                |a, b| a < b,
-                |a, b| a.total_cmp(&b).is_lt(),
-                |a, b| a < b
-            )
+            typed_dict_compares!(left, right, |a, b| a < b, |a, b| a.is_lt(b), |a, b| a
+                < b)
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
             typed_cmp_dict_non_dict!(left, right, |a, b| a < b, |a, b| a < b, |a, b| a
-                .total_cmp(&b)
-                .is_lt())
+                .is_lt(b))
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
             typed_cmp_dict_non_dict!(right, left, |a, b| a > b, |a, b| a > b, |a, b| b
-                .total_cmp(&a)
-                .is_lt())
+                .is_lt(a))
         }
         _ => {
             typed_compares!(left, right, |a, b| ((!a) & b), |a, b| a < b, |a, b| a
-                .total_cmp(&b)
-                .is_lt())
+                .is_lt(b))
         }
     }
 }
@@ -2918,30 +2894,22 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(
-                left,
-                right,
-                |a, b| a <= b,
-                |a, b| a.total_cmp(&b).is_le(),
-                |a, b| a <= b
-            )
+            typed_dict_compares!(left, right, |a, b| a <= b, |a, b| a.is_le(b), |a, b| a
+                <= b)
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
             typed_cmp_dict_non_dict!(left, right, |a, b| a <= b, |a, b| a <= b, |a, b| a
-                .total_cmp(&b)
-                .is_le())
+                .is_le(b))
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
             typed_cmp_dict_non_dict!(right, left, |a, b| a >= b, |a, b| a >= b, |a, b| b
-                .total_cmp(&a)
-                .is_le())
+                .is_le(a))
         }
         _ => {
             typed_compares!(left, right, |a, b| !(a & (!b)), |a, b| a <= b, |a, b| a
-                .total_cmp(&b)
-                .is_le())
+                .is_le(b))
         }
     }
 }
@@ -2970,30 +2938,22 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(
-                left,
-                right,
-                |a, b| a > b,
-                |a, b| a.total_cmp(&b).is_gt(),
-                |a, b| a > b
-            )
+            typed_dict_compares!(left, right, |a, b| a > b, |a, b| a.is_gt(b), |a, b| a
+                > b)
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
             typed_cmp_dict_non_dict!(left, right, |a, b| a > b, |a, b| a > b, |a, b| a
-                .total_cmp(&b)
-                .is_gt())
+                .is_gt(b))
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
             typed_cmp_dict_non_dict!(right, left, |a, b| a < b, |a, b| a < b, |a, b| b
-                .total_cmp(&a)
-                .is_gt())
+                .is_gt(a))
         }
         _ => {
             typed_compares!(left, right, |a, b| (a & (!b)), |a, b| a > b, |a, b| a
-                .total_cmp(&b)
-                .is_gt())
+                .is_gt(b))
         }
     }
 }
@@ -3021,43 +2981,41 @@ pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(
-                left,
-                right,
-                |a, b| a >= b,
-                |a, b| a.total_cmp(&b).is_ge(),
-                |a, b| a >= b
-            )
+            typed_dict_compares!(left, right, |a, b| a >= b, |a, b| a.is_ge(b), |a, b| a
+                >= b)
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
             typed_cmp_dict_non_dict!(left, right, |a, b| a >= b, |a, b| a >= b, |a, b| a
-                .total_cmp(&b)
-                .is_ge())
+                .is_ge(b))
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
             typed_cmp_dict_non_dict!(right, left, |a, b| a <= b, |a, b| a <= b, |a, b| b
-                .total_cmp(&a)
-                .is_ge())
+                .is_ge(a))
         }
         _ => {
             typed_compares!(left, right, |a, b| !((!a) & b), |a, b| a >= b, |a, b| a
-                .total_cmp(&b)
-                .is_ge())
+                .is_ge(b))
         }
     }
 }
 
 /// Perform `left == right` operation on two [`PrimitiveArray`]s.
+///
+/// If `simd` feature flag is not enabled:
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn eq<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::eq, |a, b| a == b);
     #[cfg(not(feature = "simd"))]
-    return compare_op(left, right, |a, b| a == b);
+    return compare_op(left, right, |a, b| a.is_eq(b));
 }
 
 /// Perform `left == right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -3087,14 +3045,20 @@ where
 }
 
 /// Perform `left != right` operation on two [`PrimitiveArray`]s.
+///
+/// If `simd` feature flag is not enabled:
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn neq<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::ne, |a, b| a != b);
     #[cfg(not(feature = "simd"))]
-    return compare_op(left, right, |a, b| a != b);
+    return compare_op(left, right, |a, b| a.is_ne(b));
 }
 
 /// Perform `left != right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -3116,14 +3080,20 @@ where
 
 /// Perform `left < right` operation on two [`PrimitiveArray`]s. Null values are less than non-null
 /// values.
+///
+/// If `simd` feature flag is not enabled:
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn lt<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::lt, |a, b| a < b);
     #[cfg(not(feature = "simd"))]
-    return compare_op(left, right, |a, b| a < b);
+    return compare_op(left, right, |a, b| a.is_lt(b));
 }
 
 /// Perform `left < right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -3146,17 +3116,23 @@ where
 
 /// Perform `left <= right` operation on two [`PrimitiveArray`]s. Null values are less than non-null
 /// values.
+///
+/// If `simd` feature flag is not enabled:
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn lt_eq<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::le, |a, b| a <= b);
     #[cfg(not(feature = "simd"))]
-    return compare_op(left, right, |a, b| a <= b);
+    return compare_op(left, right, |a, b| a.is_le(b));
 }
 
 /// Perform `left <= right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -3179,14 +3155,20 @@ where
 
 /// Perform `left > right` operation on two [`PrimitiveArray`]s. Non-null values are greater than null
 /// values.
+///
+/// If `simd` feature flag is not enabled:
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn gt<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::gt, |a, b| a > b);
     #[cfg(not(feature = "simd"))]
-    return compare_op(left, right, |a, b| a > b);
+    return compare_op(left, right, |a, b| a.is_gt(b));
 }
 
 /// Perform `left > right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -3209,17 +3191,23 @@ where
 
 /// Perform `left >= right` operation on two [`PrimitiveArray`]s. Non-null values are greater than null
 /// values.
+///
+/// If `simd` feature flag is not enabled:
+/// For floating values like f32 and f64, this comparison produces an ordering in accordance to
+/// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn gt_eq<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
 {
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::ge, |a, b| a >= b);
     #[cfg(not(feature = "simd"))]
-    return compare_op(left, right, |a, b| a >= b);
+    return compare_op(left, right, |a, b| a.is_ge(b));
 }
 
 /// Perform `left >= right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -5846,10 +5834,16 @@ mod tests {
         );
         assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
 
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(eq(&array1, &array2).unwrap(), expected);
+
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
         );
         assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(neq(&array1, &array2).unwrap(), expected);
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]
             .into_iter()
@@ -5865,10 +5859,16 @@ mod tests {
         );
         assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
 
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(eq(&array1, &array2).unwrap(), expected);
+
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
         );
         assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(neq(&array1, &array2).unwrap(), expected);
     }
 
     #[test]
@@ -5887,10 +5887,16 @@ mod tests {
             );
         assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(lt(&array1, &array2).unwrap(), expected);
+
         let expected = BooleanArray::from(
                 vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
             );
         assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(lt_eq(&array1, &array2).unwrap(), expected);
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
             .into_iter()
@@ -5906,10 +5912,16 @@ mod tests {
             );
         assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(lt(&array1, &array2).unwrap(), expected);
+
         let expected = BooleanArray::from(
                 vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
             );
         assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(lt_eq(&array1, &array2).unwrap(), expected);
     }
 
     #[test]
@@ -5928,10 +5940,16 @@ mod tests {
             );
         assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
 
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(gt(&array1, &array2).unwrap(), expected);
+
         let expected = BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
             );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(gt_eq(&array1, &array2).unwrap(), expected);
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
             .into_iter()
@@ -5947,10 +5965,16 @@ mod tests {
             );
         assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
 
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(gt(&array1, &array2).unwrap(), expected);
+
         let expected = BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
             );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(gt_eq(&array1, &array2).unwrap(), expected);
     }
 
     #[test]

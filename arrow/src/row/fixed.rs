@@ -267,7 +267,11 @@ pub fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
 }
 
 /// Decodes a `ArrayData` from rows based on the provided `FixedLengthEncoding` `T`
-fn decode_fixed<T: FixedLengthEncoding + ToByteSlice>(
+///
+/// # Safety
+///
+/// `data_type` must be appropriate native type for `T`
+unsafe fn decode_fixed<T: FixedLengthEncoding + ToByteSlice>(
     rows: &mut [&[u8]],
     data_type: DataType,
     options: SortOptions,
@@ -319,16 +323,23 @@ fn decode_fixed<T: FixedLengthEncoding + ToByteSlice>(
         .null_bit_buffer(Some(nulls.into()));
 
     // SAFETY: Buffers correct length
-    unsafe { builder.build_unchecked() }
+    builder.build_unchecked()
 }
 
 /// Decodes a `PrimitiveArray` from rows
 pub fn decode_primitive<T: ArrowPrimitiveType>(
     rows: &mut [&[u8]],
+    data_type: DataType,
     options: SortOptions,
 ) -> PrimitiveArray<T>
 where
     T::Native: FixedLengthEncoding + ToByteSlice,
 {
-    decode_fixed::<T::Native>(rows, T::DATA_TYPE, options).into()
+    assert_eq!(
+        std::mem::discriminant(&T::DATA_TYPE),
+        std::mem::discriminant(&data_type),
+    );
+    // SAFETY:
+    // Validated data type above
+    unsafe { decode_fixed::<T::Native>(rows, data_type, options).into() }
 }

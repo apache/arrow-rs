@@ -20,7 +20,9 @@
 use crate::timezone::Tz;
 use crate::ArrowPrimitiveType;
 use arrow_schema::{DataType, TimeUnit};
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{
+    DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc,
+};
 
 /// Number of seconds in a day
 pub const SECONDS_IN_DAY: i64 = 86_400;
@@ -33,6 +35,10 @@ pub const NANOSECONDS: i64 = 1_000_000_000;
 
 /// Number of milliseconds in a day
 pub const MILLISECONDS_IN_DAY: i64 = SECONDS_IN_DAY * MILLISECONDS;
+/// Number of microseconds in a day
+pub const MICROSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * MICROSECONDS;
+/// Number of nanoseconds in a day
+pub const NANOSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * NANOSECONDS;
 /// Number of days between 0001-01-01 and 1970-01-01
 pub const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 
@@ -95,6 +101,32 @@ pub fn time64ns_to_time(v: i64) -> Option<NaiveTime> {
         // discard extracted seconds
         (v % NANOSECONDS) as u32,
     )
+}
+
+/// converts [`NaiveTime`] to a `i32` representing a `time32(s)`
+#[inline]
+pub fn time_to_time32s(v: NaiveTime) -> i32 {
+    v.num_seconds_from_midnight() as i32
+}
+
+/// converts [`NaiveTime`] to a `i32` representing a `time32(ms)`
+#[inline]
+pub fn time_to_time32ms(v: NaiveTime) -> i32 {
+    (v.num_seconds_from_midnight() as i64 * MILLISECONDS
+        + v.nanosecond() as i64 * MILLISECONDS / NANOSECONDS) as i32
+}
+
+/// converts [`NaiveTime`] to a `i64` representing a `time64(us)`
+#[inline]
+pub fn time_to_time64us(v: NaiveTime) -> i64 {
+    v.num_seconds_from_midnight() as i64 * MICROSECONDS
+        + v.nanosecond() as i64 * MICROSECONDS / NANOSECONDS
+}
+
+/// converts [`NaiveTime`] to a `i64` representing a `time64(ns)`
+#[inline]
+pub fn time_to_time64ns(v: NaiveTime) -> i64 {
+    v.num_seconds_from_midnight() as i64 * NANOSECONDS + v.nanosecond() as i64
 }
 
 /// converts a `i64` representing a `timestamp(s)` to [`NaiveDateTime`]
@@ -220,7 +252,7 @@ pub fn as_time<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveTime> {
             _ => None,
         },
         DataType::Timestamp(_, _) => as_datetime::<T>(v).map(|datetime| datetime.time()),
-        DataType::Date32 | DataType::Date64 => Some(NaiveTime::from_hms(0, 0, 0)),
+        DataType::Date32 | DataType::Date64 => NaiveTime::from_hms_opt(0, 0, 0),
         DataType::Interval(_) => None,
         _ => None,
     }

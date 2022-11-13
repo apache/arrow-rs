@@ -30,9 +30,9 @@ use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::memory::ByteBufferPtr;
-use arrow::array::{Array, ArrayRef, BinaryArray, Decimal128Array, OffsetSizeTrait};
-use arrow::buffer::Buffer;
-use arrow::datatypes::DataType as ArrowType;
+use arrow_array::{Array, ArrayRef, BinaryArray, Decimal128Array, OffsetSizeTrait};
+use arrow_buffer::Buffer;
+use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
@@ -587,7 +587,7 @@ mod tests {
     use super::*;
     use crate::arrow::array_reader::test_util::{byte_array_all_encodings, utf8_column};
     use crate::arrow::record_reader::buffer::ValuesBuffer;
-    use arrow::array::{Array, StringArray};
+    use arrow_array::{Array, StringArray};
 
     #[test]
     fn test_byte_array_decoder() {

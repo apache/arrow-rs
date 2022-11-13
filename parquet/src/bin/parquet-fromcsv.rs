@@ -71,7 +71,8 @@ use std::{
     sync::Arc,
 };
 
-use arrow::{csv::ReaderBuilder, datatypes::Schema, error::ArrowError};
+use arrow_csv::ReaderBuilder;
+use arrow_schema::{ArrowError, Schema};
 use clap::{Parser, ValueEnum};
 use parquet::{
     arrow::{parquet_to_arrow_schema, ArrowWriter},

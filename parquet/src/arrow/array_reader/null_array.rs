@@ -22,9 +22,9 @@ use crate::column::page::PageIterator;
 use crate::data_type::DataType;
 use crate::errors::Result;
 use crate::schema::types::ColumnDescPtr;
-use arrow::array::ArrayRef;
-use arrow::buffer::Buffer;
-use arrow::datatypes::DataType as ArrowType;
+use arrow_array::ArrayRef;
+use arrow_buffer::Buffer;
+use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -82,7 +82,7 @@ where
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         // convert to arrays
-        let array = arrow::array::NullArray::new(self.record_reader.num_values());
+        let array = arrow_array::NullArray::new(self.record_reader.num_values());
 
         // save definition and repetition buffers
         self.def_levels_buffer = self.record_reader.consume_def_levels();
