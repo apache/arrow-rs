@@ -273,8 +273,7 @@ impl Field {
         }
         if from.dict_is_ordered != self.dict_is_ordered {
             return Err(ArrowError::SchemaError(format!(
-                "Fail to merge schema field because from dict_is_ordered = {} does not 
-                    match {}",
+                "Fail to merge schema field because from dict_is_ordered = {} does not match {}",
                 from.dict_is_ordered, self.dict_is_ordered
             )));
         }
