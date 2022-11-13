@@ -266,15 +266,16 @@ impl Field {
     /// ```
     pub fn try_merge(&mut self, from: &Field) -> Result<(), ArrowError> {
         if from.dict_id != self.dict_id {
-            return Err(ArrowError::SchemaError(
-                "Fail to merge schema Field due to conflicting dict_id".to_string(),
-            ));
+            return Err(ArrowError::SchemaError(format!(
+                "Fail to merge schema field because from dict_id = {} does not match {}",
+                    from.dict_id, self.dict_id
+            )));
         }
         if from.dict_is_ordered != self.dict_is_ordered {
-            return Err(ArrowError::SchemaError(
-                "Fail to merge schema Field due to conflicting dict_is_ordered"
-                    .to_string(),
-            ));
+            return Err(ArrowError::SchemaError(format!(
+                "Fail to merge schema field because from dict_is_ordered = {} does not 
+                    match {}", from.dict_is_ordered, self.dict_is_ordered
+            )));
         }
         // merge metadata
         match (self.metadata(), from.metadata()) {
@@ -284,7 +285,8 @@ impl Field {
                     if let Some(self_value) = self_metadata.get(key) {
                         if self_value != from_value {
                             return Err(ArrowError::SchemaError(format!(
-                                "Fail to merge field due to conflicting metadata data value for key {}", key),
+                                "Fail to merge field due to conflicting metadata data value for key {}. 
+                                    From value = {} does not match {}", key, from_value, self_value),
                             ));
                         }
                     } else {
@@ -313,10 +315,9 @@ impl Field {
                 }
                 _ => {
                     return Err(ArrowError::SchemaError(
-                        "Fail to merge schema Field due to conflicting datatype"
-                            .to_string(),
-                    ));
-                }
+                        format!("Fail to merge schema field because the from data_type = {} is not DataType::Struct",
+                            from.data_type)
+                ))}
             },
             DataType::Union(nested_fields, type_ids, _) => match &from.data_type {
                 DataType::Union(from_nested_fields, from_type_ids, _) => {
@@ -333,8 +334,8 @@ impl Field {
                                 // type id.
                                 if self_type_id != field_type_id {
                                     return Err(ArrowError::SchemaError(
-                                        "Fail to merge schema Field due to conflicting type ids in union datatype"
-                                            .to_string(),
+                                        format!("Fail to merge schema field because the self_type_id = {} does not equals field_type_id = {}",
+                                            self_type_id, field_type_id)
                                     ));
                                 }
 
@@ -351,8 +352,8 @@ impl Field {
                 }
                 _ => {
                     return Err(ArrowError::SchemaError(
-                        "Fail to merge schema Field due to conflicting datatype"
-                            .to_string(),
+                        format!("Fail to merge schema field because the from data_type = {} is not DataType::Union",
+                            from.data_type)
                     ));
                 }
             },
@@ -390,8 +391,8 @@ impl Field {
             | DataType::Decimal256(_, _) => {
                 if self.data_type != from.data_type {
                     return Err(ArrowError::SchemaError(
-                        "Fail to merge schema Field due to conflicting datatype"
-                            .to_string(),
+                        format!("Fail to merge schema field because the from data_type = {} does not equals {}",
+                            from.data_type, self.data_type)
                     ));
                 }
             }
