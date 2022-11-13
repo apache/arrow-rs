@@ -175,16 +175,6 @@ pub fn using_chrono_tz_and_utc_naive_date_time(
     Some(tz.offset_from_utc_datetime(&utc).fix())
 }
 
-/// Extracts the hours of a given temporal primitive array as an array of integers within
-/// the range of [0, 23].
-pub fn hour<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    hour_internal(array)
-}
-
 /// Extracts the hours of a given array as an array of integers within
 /// the range of [0, 23]. If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
@@ -202,7 +192,7 @@ pub fn hour_dyn(array: &dyn Array) -> Result<ArrayRef> {
         _ => {
             downcast_temporal_array!(
                 array => {
-                   hour_internal(array)
+                   hour(array)
                     .map(|a| Arc::new(a) as ArrayRef)
                 }
                 dt => return_compute_error_with!("hour does not support", dt),
@@ -211,8 +201,9 @@ pub fn hour_dyn(array: &dyn Array) -> Result<ArrayRef> {
     }
 }
 
-/// Extracts the hours of a given temporal array as an array of integers
-fn hour_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+/// Extracts the hours of a given temporal primitive array as an array of integers within
+/// the range of [0, 23].
+pub fn hour<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
@@ -246,15 +237,6 @@ where
     }
 }
 
-/// Extracts the years of a given temporal primitive array as an array of integers
-pub fn year<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    year_internal(array)
-}
-
 /// Extracts the years of a given temporal array as an array of integers.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
@@ -272,7 +254,7 @@ pub fn year_dyn(array: &dyn Array) -> Result<ArrayRef> {
         _ => {
             downcast_temporal_array!(
                 array => {
-                   year_internal(array)
+                   year(array)
                     .map(|a| Arc::new(a) as ArrayRef)
                 }
                 dt => return_compute_error_with!("year does not support", dt),
@@ -281,8 +263,8 @@ pub fn year_dyn(array: &dyn Array) -> Result<ArrayRef> {
     }
 }
 
-/// Extracts the years of a given temporal array as an array of integers
-fn year_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+/// Extracts the years of a given temporal primitive array as an array of integers
+pub fn year<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
@@ -299,16 +281,6 @@ where
         }
         _t => return_compute_error_with!("year does not support", array.data_type()),
     }
-}
-
-/// Extracts the quarter of a given temporal primitive array as an array of integers within
-/// the range of [1, 4].
-pub fn quarter<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    quarter_internal(array)
 }
 
 /// Extracts the quarter of a given temporal array as an array of integersa within
@@ -328,7 +300,7 @@ pub fn quarter_dyn(array: &dyn Array) -> Result<ArrayRef> {
         _ => {
             downcast_temporal_array!(
                 array => {
-                   quarter_internal(array)
+                   quarter(array)
                     .map(|a| Arc::new(a) as ArrayRef)
                 }
                 dt => return_compute_error_with!("quarter does not support", dt),
@@ -337,8 +309,9 @@ pub fn quarter_dyn(array: &dyn Array) -> Result<ArrayRef> {
     }
 }
 
-/// Extracts the quarter of a given temporal array as an array of integers
-fn quarter_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+/// Extracts the quarter of a given temporal primitive array as an array of integers within
+/// the range of [1, 4].
+pub fn quarter<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
@@ -361,16 +334,6 @@ where
     }
 }
 
-/// Extracts the month of a given temporal primitive array as an array of integers within
-/// the range of [1, 12].
-pub fn month<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    month_internal(array)
-}
-
 /// Extracts the month of a given temporal array as an array of integers.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
@@ -388,7 +351,7 @@ pub fn month_dyn(array: &dyn Array) -> Result<ArrayRef> {
         _ => {
             downcast_temporal_array!(
                 array => {
-                   month_internal(array)
+                   month(array)
                     .map(|a| Arc::new(a) as ArrayRef)
                 }
                 dt => return_compute_error_with!("month does not support", dt),
@@ -397,8 +360,9 @@ pub fn month_dyn(array: &dyn Array) -> Result<ArrayRef> {
     }
 }
 
-/// Extracts the month of a given temporal array as an array of integers
-fn month_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+/// Extracts the month of a given temporal primitive array as an array of integers within
+/// the range of [1, 12].
+pub fn month<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
@@ -419,20 +383,6 @@ where
         }
         _ => return_compute_error_with!("month does not support", array.data_type()),
     }
-}
-
-/// Extracts the day of week of a given temporal primitive array as an array of
-/// integers.
-///
-/// Monday is encoded as `0`, Tuesday as `1`, etc.
-///
-/// See also [`num_days_from_sunday`] which starts at Sunday.
-pub fn num_days_from_monday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    num_days_from_monday_internal(array)
 }
 
 /// Extracts the day of week of a given temporal array as an array of
@@ -458,7 +408,7 @@ pub fn num_days_from_monday_dyn(array: &dyn Array) -> Result<ArrayRef> {
         _ => {
             downcast_temporal_array!(
                 array => {
-                   num_days_from_monday_internal(array)
+                   num_days_from_monday(array)
                     .map(|a| Arc::new(a) as ArrayRef)
                 }
                 dt => return_compute_error_with!("num_days_from_monday does not support", dt),
@@ -467,13 +417,13 @@ pub fn num_days_from_monday_dyn(array: &dyn Array) -> Result<ArrayRef> {
     }
 }
 
-/// Extracts the day of week of a given temporal array as an array of
+/// Extracts the day of week of a given temporal primitive array as an array of
 /// integers.
 ///
 /// Monday is encoded as `0`, Tuesday as `1`, etc.
 ///
 /// See also [`num_days_from_sunday`] which starts at Sunday.
-fn num_days_from_monday_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+pub fn num_days_from_monday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
@@ -494,20 +444,6 @@ where
         }
         _ => return_compute_error_with!("weekday does not support", array.data_type()),
     }
-}
-
-/// Extracts the day of week of a given temporal primitive array as an array of
-/// integers, starting at Sunday.
-///
-/// Sunday is encoded as `0`, Monday as `1`, etc.
-///
-/// See also [`num_days_from_monday`] which starts at Monday.
-pub fn num_days_from_sunday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    num_days_from_sunday_internal(array)
 }
 
 /// Extracts the day of week of a given temporal array as an array of
@@ -533,7 +469,7 @@ pub fn num_days_from_sunday_dyn(array: &dyn Array) -> Result<ArrayRef> {
         _ => {
             downcast_temporal_array!(
                 array => {
-                   num_days_from_sunday_internal(array)
+                   num_days_from_sunday(array)
                     .map(|a| Arc::new(a) as ArrayRef)
                 }
                 dt => return_compute_error_with!("num_days_from_sunday does not support", dt),
@@ -542,13 +478,13 @@ pub fn num_days_from_sunday_dyn(array: &dyn Array) -> Result<ArrayRef> {
     }
 }
 
-/// Extracts the day of week of a given temporal array as an array of
+/// Extracts the day of week of a given temporal primitive array as an array of
 /// integers, starting at Sunday.
 ///
 /// Sunday is encoded as `0`, Monday as `1`, etc.
 ///
 /// See also [`num_days_from_monday`] which starts at Monday.
-fn num_days_from_sunday_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+pub fn num_days_from_sunday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
@@ -574,15 +510,6 @@ where
     }
 }
 
-/// Extracts the day of a given temporal primitive array as an array of integers
-pub fn day<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    day_internal(array)
-}
-
 /// Extracts the day of a given temporal array as an array of integers.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
@@ -600,7 +527,7 @@ pub fn day_dyn(array: &dyn Array) -> Result<ArrayRef> {
         _ => {
             downcast_temporal_array!(
                 array => {
-                   day_internal(array)
+                   day(array)
                     .map(|a| Arc::new(a) as ArrayRef)
                 }
                 dt => return_compute_error_with!("day does not support", dt),
@@ -609,8 +536,8 @@ pub fn day_dyn(array: &dyn Array) -> Result<ArrayRef> {
     }
 }
 
-/// Extracts the day of a given temporal array as an array of integers
-fn day_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+/// Extracts the day of a given temporal primitive array as an array of integers
+pub fn day<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
@@ -631,16 +558,6 @@ where
     }
 }
 
-/// Extracts the day of year of a given temporal primitive array as an array of integers
-/// The day of year that ranges from 1 to 366
-pub fn doy<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    doy_internal(array)
-}
-
 /// Extracts the day of year of a given temporal array as an array of integers
 /// The day of year that ranges from 1 to 366.
 /// If the given array isn't temporal primitive or dictionary array,
@@ -659,7 +576,7 @@ pub fn doy_dyn(array: &dyn Array) -> Result<ArrayRef> {
         _ => {
             downcast_temporal_array!(
                 array => {
-                   doy_internal(array)
+                   doy(array)
                     .map(|a| Arc::new(a) as ArrayRef)
                 }
                 dt => return_compute_error_with!("doy does not support", dt),
@@ -668,9 +585,9 @@ pub fn doy_dyn(array: &dyn Array) -> Result<ArrayRef> {
     }
 }
 
-/// Extracts the day of year of a given temporal array as an array of integers
+/// Extracts the day of year of a given temporal primitive array as an array of integers
 /// The day of year that ranges from 1 to 366
-fn doy_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+pub fn doy<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     T::Native: ArrowNativeType,
@@ -703,15 +620,6 @@ where
     time_fraction_internal(array, "minute", |t| t.minute() as i32)
 }
 
-/// Extracts the week of a given temporal primitive array as an array of integers
-pub fn week<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    week_internal(array)
-}
-
 /// Extracts the week of a given temporal array as an array of integers.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
@@ -729,7 +637,7 @@ pub fn week_dyn(array: &dyn Array) -> Result<ArrayRef> {
         _ => {
             downcast_temporal_array!(
                 array => {
-                   week_internal(array)
+                   week(array)
                     .map(|a| Arc::new(a) as ArrayRef)
                 }
                 dt => return_compute_error_with!("week does not support", dt),
@@ -738,8 +646,8 @@ pub fn week_dyn(array: &dyn Array) -> Result<ArrayRef> {
     }
 }
 
-/// Extracts the week of a given temporal array as an array of integers
-fn week_internal<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+/// Extracts the week of a given temporal primitive array as an array of integers
+pub fn week<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
