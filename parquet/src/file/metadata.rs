@@ -308,14 +308,13 @@ impl RowGroupMetaData {
             let cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
             columns.push(cc);
         }
-        let sorting_columns: Option<Vec<SortingColumnMetaData>> =  match rg.sorting_columns {
+        let sorting_columns: Option<Vec<SortingColumnMetaData>> = match rg.sorting_columns
+        {
             Some(sorting_columns) => {
-                let result: Vec<SortingColumnMetaData> = sorting_columns
-                    .iter()
-                    .map(|f| f.into())
-                    .collect();
-                Some(result)    
-            },
+                let result: Vec<SortingColumnMetaData> =
+                    sorting_columns.iter().map(|f| f.into()).collect();
+                Some(result)
+            }
             _ => None,
         };
         Ok(RowGroupMetaData {
@@ -336,13 +335,11 @@ impl RowGroupMetaData {
             num_rows: self.num_rows,
             sorting_columns: match self.sorting_columns() {
                 Some(sorting_columns) => {
-                    let result: Vec<SortingColumn> = sorting_columns
-                        .iter()
-                        .map(|f| f.into())
-                        .collect();
-                    Some(result)    
-                },
-                _=> None,
+                    let result: Vec<SortingColumn> =
+                        sorting_columns.iter().map(|f| f.into()).collect();
+                    Some(result)
+                }
+                _ => None,
             },
             file_offset: None,
             total_compressed_size: None,
@@ -381,7 +378,10 @@ impl RowGroupMetaDataBuilder {
     }
 
     /// Sets the sorting order for columns
-    pub fn set_sorting_columns(mut self, value: Option<Vec<SortingColumnMetaData>>) -> Self {
+    pub fn set_sorting_columns(
+        mut self,
+        value: Option<Vec<SortingColumnMetaData>>,
+    ) -> Self {
         self.sorting_columns = value;
         self
     }
@@ -975,7 +975,7 @@ impl OffsetIndexBuilder {
 }
 
 /// Metadata for sorting order for columns
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SortingColumnMetaData {
     /// The column index (in this row group) *
     pub column_index: i32,
