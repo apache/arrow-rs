@@ -158,8 +158,8 @@ mod private {
         #[test]
         fn test_with_timezone() {
             let vals = [
-                Utc.timestamp_millis(37800000),
-                Utc.timestamp_millis(86339000),
+                Utc.timestamp_millis_opt(37800000).unwrap(),
+                Utc.timestamp_millis_opt(86339000).unwrap(),
             ];
 
             assert_eq!(10, vals[0].hour());
@@ -175,8 +175,8 @@ mod private {
         fn test_using_chrono_tz_and_utc_naive_date_time() {
             let sydney_tz = "Australia/Sydney".to_string();
             let tz: Tz = sydney_tz.parse().unwrap();
-            let sydney_offset_without_dst = FixedOffset::east(10 * 60 * 60);
-            let sydney_offset_with_dst = FixedOffset::east(11 * 60 * 60);
+            let sydney_offset_without_dst = FixedOffset::east_opt(10 * 60 * 60).unwrap();
+            let sydney_offset_with_dst = FixedOffset::east_opt(11 * 60 * 60).unwrap();
             // Daylight savings ends
             // When local daylight time was about to reach
             // Sunday, 4 April 2021, 3:00:00 am clocks were turned backward 1 hour to
@@ -188,32 +188,40 @@ mod private {
             // Sunday, 3 October 2021, 3:00:00 am local daylight time instead.
 
             // Sydney 2021-04-04T02:30:00+11:00 is 2021-04-03T15:30:00Z
-            let utc_just_before_sydney_dst_ends =
-                NaiveDate::from_ymd(2021, 4, 3).and_hms_nano(15, 30, 0, 0);
+            let utc_just_before_sydney_dst_ends = NaiveDate::from_ymd_opt(2021, 4, 3)
+                .unwrap()
+                .and_hms_nano_opt(15, 30, 0, 0)
+                .unwrap();
             assert_eq!(
                 tz.offset_from_utc_datetime(&utc_just_before_sydney_dst_ends)
                     .fix(),
                 sydney_offset_with_dst
             );
             // Sydney 2021-04-04T02:30:00+10:00 is 2021-04-03T16:30:00Z
-            let utc_just_after_sydney_dst_ends =
-                NaiveDate::from_ymd(2021, 4, 3).and_hms_nano(16, 30, 0, 0);
+            let utc_just_after_sydney_dst_ends = NaiveDate::from_ymd_opt(2021, 4, 3)
+                .unwrap()
+                .and_hms_nano_opt(16, 30, 0, 0)
+                .unwrap();
             assert_eq!(
                 tz.offset_from_utc_datetime(&utc_just_after_sydney_dst_ends)
                     .fix(),
                 sydney_offset_without_dst
             );
             // Sydney 2021-10-03T01:30:00+10:00 is 2021-10-02T15:30:00Z
-            let utc_just_before_sydney_dst_starts =
-                NaiveDate::from_ymd(2021, 10, 2).and_hms_nano(15, 30, 0, 0);
+            let utc_just_before_sydney_dst_starts = NaiveDate::from_ymd_opt(2021, 10, 2)
+                .unwrap()
+                .and_hms_nano_opt(15, 30, 0, 0)
+                .unwrap();
             assert_eq!(
                 tz.offset_from_utc_datetime(&utc_just_before_sydney_dst_starts)
                     .fix(),
                 sydney_offset_without_dst
             );
             // Sydney 2021-04-04T03:30:00+11:00 is 2021-10-02T16:30:00Z
-            let utc_just_after_sydney_dst_starts =
-                NaiveDate::from_ymd(2022, 10, 2).and_hms_nano(16, 30, 0, 0);
+            let utc_just_after_sydney_dst_starts = NaiveDate::from_ymd_opt(2022, 10, 2)
+                .unwrap()
+                .and_hms_nano_opt(16, 30, 0, 0)
+                .unwrap();
             assert_eq!(
                 tz.offset_from_utc_datetime(&utc_just_after_sydney_dst_starts)
                     .fix(),
@@ -300,7 +308,7 @@ mod tests {
 
     #[test]
     fn test_with_offset() {
-        let t = NaiveDate::from_ymd(2000, 1, 1);
+        let t = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
 
         let tz: Tz = "-00:00".parse().unwrap();
         assert_eq!(tz.offset_from_utc_date(&t).fix().local_minus_utc(), 0);
