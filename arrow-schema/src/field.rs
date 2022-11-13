@@ -268,13 +268,14 @@ impl Field {
         if from.dict_id != self.dict_id {
             return Err(ArrowError::SchemaError(format!(
                 "Fail to merge schema field because from dict_id = {} does not match {}",
-                    from.dict_id, self.dict_id
+                from.dict_id, self.dict_id
             )));
         }
         if from.dict_is_ordered != self.dict_is_ordered {
             return Err(ArrowError::SchemaError(format!(
                 "Fail to merge schema field because from dict_is_ordered = {} does not 
-                    match {}", from.dict_is_ordered, self.dict_is_ordered
+                    match {}",
+                from.dict_is_ordered, self.dict_is_ordered
             )));
         }
         // merge metadata
