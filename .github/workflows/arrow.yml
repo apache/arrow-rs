@@ -39,7 +39,6 @@ on:
       - .github/**
 
 jobs:
-
   # test the crate
   linux-test:
     name: Test
@@ -133,7 +132,6 @@ jobs:
         run: cargo check -p arrow --features simd
       - name: Check compilation --features simd --all-targets
         run: cargo check -p arrow --features simd --all-targets
-
 
   # test the arrow crate builds against wasm32 in nightly rust
   wasm32-build:
