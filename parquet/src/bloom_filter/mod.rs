@@ -24,9 +24,11 @@ use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::reader::ChunkReader;
 use crate::format::{
     BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash, BloomFilterHeader,
+    SplitBlockAlgorithm, Uncompressed, XxHash,
 };
 use bytes::{Buf, Bytes};
 use std::hash::Hasher;
+use std::io::Write;
 use std::sync::Arc;
 use thrift::protocol::{TCompactInputProtocol, TSerializable};
 use twox_hash::XxHash64;
@@ -80,6 +82,7 @@ fn block_check(block: &Block, hash: u32) -> bool {
 }
 
 /// A split block Bloom filter
+#[derive(Debug, Clone)]
 pub struct Sbbf(Vec<Block>);
 
 const SBBF_HEADER_SIZE_ESTIMATE: usize = 20;
@@ -128,6 +131,33 @@ impl Sbbf {
         Self(data)
     }
 
+    /// Write the bitset in serialized form to the writer.
+    pub fn write_bitset<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
+        for block in &self.0 {
+            for word in block {
+                writer.write_all(&word.to_le_bytes()).map_err(|e| {
+                    ParquetError::General(format!(
+                        "Could not write bloom filter bit set: {}",
+                        e
+                    ))
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Create and populate [`BloomFilterHeader`] from this bitset for writing to serialized form
+    pub fn header(&self) -> BloomFilterHeader {
+        BloomFilterHeader {
+            // 8 i32 per block, 4 bytes per i32
+            num_bytes: self.0.len() as i32 * 4 * 8,
+            algorithm: BloomFilterAlgorithm::BLOCK(SplitBlockAlgorithm {}),
+            hash: BloomFilterHash::XXHASH(XxHash {}),
+            compression: BloomFilterCompression::UNCOMPRESSED(Uncompressed {}),
+        }
+    }
+
+    /// Read a new bloom filter from the given offset in the given reader.
     pub fn read_from_column_chunk<R: ChunkReader>(
         column_metadata: &ColumnChunkMetaData,
         reader: Arc<R>,
