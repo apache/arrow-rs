@@ -389,9 +389,10 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
     }
 
     #[cfg(feature = "bloom")]
-    /// get bloom filter for the ith column
+    /// get bloom filter for the `i`th column
     fn get_column_bloom_filter(&self, i: usize) -> Result<Option<Sbbf>> {
-        todo!()
+        let col = self.metadata.column(i);
+        Sbbf::read_from_column_chunk(col, self.chunk_reader.clone())
     }
 
     fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter> {

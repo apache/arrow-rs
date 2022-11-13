@@ -20,11 +20,14 @@
 
 use crate::errors::ParquetError;
 use crate::file::metadata::ColumnChunkMetaData;
+use crate::file::reader::ChunkReader;
 use crate::format::{
     BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash, BloomFilterHeader,
 };
+use bytes::{Buf, BufMut, BytesMut};
 use std::hash::Hasher;
 use std::io::{Read, Seek, SeekFrom};
+use std::sync::Arc;
 use thrift::protocol::{TCompactInputProtocol, TSerializable};
 use twox_hash::XxHash64;
 
@@ -94,17 +97,45 @@ impl Sbbf {
         Self(data)
     }
 
-    pub fn read_from_column_chunk<R: Read + Seek>(
+    pub fn read_from_column_chunk<R: ChunkReader>(
         column_metadata: &ColumnChunkMetaData,
-        mut reader: &mut R,
-    ) -> Result<Self, ParquetError> {
-        let offset = column_metadata.bloom_filter_offset().ok_or_else(|| {
-            ParquetError::General("Bloom filter offset is not set".to_string())
-        })? as u64;
-        reader.seek(SeekFrom::Start(offset))?;
-        // deserialize header
-        let mut prot = TCompactInputProtocol::new(&mut reader);
-        let header = BloomFilterHeader::read_from_in_protocol(&mut prot)?;
+        reader: Arc<R>,
+    ) -> Result<Option<Self>, ParquetError> {
+        let offset: usize = if let Some(offset) = column_metadata.bloom_filter_offset() {
+            offset.try_into().map_err(|_| {
+                ParquetError::General("Bloom filter offset is invalid".to_string())
+            })?
+        } else {
+            return Ok(None);
+        };
+
+        // because we do not know in advance what the TCompactInputProtocol will read, we have to
+        // loop read until we can parse the header. Allocate at least 128 bytes to start with
+        let mut buffer = BytesMut::with_capacity(128);
+        let mut start = offset;
+        let header: BloomFilterHeader;
+        let bitset_offset: usize;
+        // this size should not be too large to not to hit short read too early (although unlikely)
+        // but also not to small to ensure cache efficiency
+        let step_size = 32_usize;
+        loop {
+            let batch = reader.get_bytes(offset as u64, step_size)?;
+            buffer.put(batch);
+            // need to clone as we read from the very beginning of the buffer each time
+            let buffer = buffer.clone();
+            let mut buf_reader = buffer.reader();
+            // try to deserialize header
+            let mut prot = TCompactInputProtocol::new(&mut buf_reader);
+            if let Ok(h) = BloomFilterHeader::read_from_in_protocol(&mut prot) {
+                header = h;
+                let buffer = buf_reader.into_inner();
+                bitset_offset = start + step_size - buffer.remaining();
+                break;
+            } else {
+                // continue to try by reading another batch
+                start += step_size;
+            }
+        }
 
         match header.algorithm {
             BloomFilterAlgorithm::BLOCK(_) => {
@@ -125,11 +156,8 @@ impl Sbbf {
         let length: usize = header.num_bytes.try_into().map_err(|_| {
             ParquetError::General("Bloom filter length is invalid".to_string())
         })?;
-        let mut buffer = vec![0_u8; length];
-        reader.read_exact(&mut buffer).map_err(|e| {
-            ParquetError::General(format!("Could not read bloom filter: {}", e))
-        })?;
-        Ok(Self::new(&buffer))
+        let bitset = reader.get_bytes(bitset_offset as u64, length)?;
+        Ok(Some(Self::new(&bitset)))
     }
 
     #[inline]
