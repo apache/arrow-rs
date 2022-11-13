@@ -199,10 +199,123 @@ impl Parser for TimestampSecondType {
     }
 }
 
-parser_primitive!(Time64NanosecondType);
-parser_primitive!(Time64MicrosecondType);
-parser_primitive!(Time32MillisecondType);
-parser_primitive!(Time32SecondType);
+impl Parser for Time64NanosecondType {
+    fn parse(string: &str) -> Option<Self::Native> {
+        [
+            "%I:%M:%S%.9f %P",
+            "%I:%M:%S%.9f %p",
+            "%l:%M:%S%.9f %P",
+            "%l:%M:%S%.9f %p",
+            "%H:%M:%S%.9f",
+            "%k:%M:%S%.9f",
+            "%I:%M:%S %P",
+            "%I:%M:%S %p",
+            "%l:%M:%S %P",
+            "%l:%M:%S %p",
+            "%H:%M:%S",
+            "%k:%M:%S",
+            "%I:%M %P",
+            "%I:%M %p",
+            "%l:%M %P",
+            "%l:%M %p",
+            "%H:%M",
+            "%k:%M",
+        ]
+        .iter()
+        .find_map(|f| NaiveTime::parse_from_str(string, f).ok())
+        .map(|nt| {
+            nt.num_seconds_from_midnight() as i64 * 1_000_000_000 + nt.nanosecond() as i64
+        })
+        .or_else(|| string.parse::<Self::Native>().ok())
+    }
+}
+
+impl Parser for Time64MicrosecondType {
+    fn parse(string: &str) -> Option<Self::Native> {
+        [
+            "%I:%M:%S%.6f %P",
+            "%I:%M:%S%.6f %p",
+            "%l:%M:%S%.6f %P",
+            "%l:%M:%S%.6f %p",
+            "%H:%M:%S%.6f",
+            "%k:%M:%S%.6f",
+            "%I:%M:%S %P",
+            "%I:%M:%S %p",
+            "%l:%M:%S %P",
+            "%l:%M:%S %p",
+            "%H:%M:%S",
+            "%k:%M:%S",
+            "%I:%M %P",
+            "%I:%M %p",
+            "%l:%M %P",
+            "%l:%M %p",
+            "%H:%M",
+            "%k:%M",
+        ]
+        .iter()
+        .find_map(|f| NaiveTime::parse_from_str(string, f).ok())
+        .map(|nt| {
+            nt.num_seconds_from_midnight() as i64 * 1_000_000
+                + (nt.nanosecond() as i64) / 1_000
+        })
+        .or_else(|| string.parse::<Self::Native>().ok())
+    }
+}
+
+impl Parser for Time32MillisecondType {
+    fn parse(string: &str) -> Option<Self::Native> {
+        [
+            "%I:%M:%S%.3f %P",
+            "%I:%M:%S%.3f %p",
+            "%l:%M:%S%.3f %P",
+            "%l:%M:%S%.3f %p",
+            "%H:%M:%S%.3f",
+            "%k:%M:%S%.3f",
+            "%I:%M:%S %P",
+            "%I:%M:%S %p",
+            "%l:%M:%S %P",
+            "%l:%M:%S %p",
+            "%H:%M:%S",
+            "%k:%M:%S",
+            "%I:%M %P",
+            "%I:%M %p",
+            "%l:%M %P",
+            "%l:%M %p",
+            "%H:%M",
+            "%k:%M",
+        ]
+        .iter()
+        .find_map(|f| NaiveTime::parse_from_str(string, f).ok())
+        .map(|nt| {
+            nt.num_seconds_from_midnight() as i32 * 1_000
+                + nt.nanosecond() as i32 / 1_000_000
+        })
+        .or_else(|| string.parse::<Self::Native>().ok())
+    }
+}
+
+impl Parser for Time32SecondType {
+    fn parse(string: &str) -> Option<Self::Native> {
+        [
+            "%I:%M:%S %P",
+            "%I:%M:%S %p",
+            "%l:%M:%S %P",
+            "%l:%M:%S %p",
+            "%H:%M:%S",
+            "%k:%M:%S",
+            "%I:%M %P",
+            "%I:%M %p",
+            "%l:%M %P",
+            "%l:%M %p",
+            "%H:%M",
+            "%k:%M",
+        ]
+        .iter()
+        .find_map(|f| NaiveTime::parse_from_str(string, f).ok())
+        .map(|nt| nt.num_seconds_from_midnight() as i32)
+        .or_else(|| string.parse::<Self::Native>().ok())
+    }
+}
 
 /// Number of days between 0001-01-01 and 1970-01-01
 const EPOCH_DAYS_FROM_CE: i32 = 719_163;
@@ -410,5 +523,193 @@ mod tests {
             naive_datetime.timestamp_nanos(),
             parse_timestamp("2020-09-08 13:42:29").unwrap()
         );
+    }
+
+    #[test]
+    fn parse_time64_nanos() {
+        assert_eq!(
+            Time64NanosecondType::parse("12:10:01.123456789 AM"),
+            Some(601_123_456_789)
+        );
+        assert_eq!(
+            Time64NanosecondType::parse("12:10:01.123456789 am"),
+            Some(601_123_456_789)
+        );
+        assert_eq!(
+            Time64NanosecondType::parse("2:10:01.12345678 PM"),
+            Some(51_001_123_456_780)
+        );
+        assert_eq!(
+            Time64NanosecondType::parse("2:10:01.12345678 pm"),
+            Some(51_001_123_456_780)
+        );
+        assert_eq!(
+            Time64NanosecondType::parse("02:10:01.1234567"),
+            Some(7_801_123_456_700)
+        );
+        assert_eq!(
+            Time64NanosecondType::parse("2:10:01.1234567"),
+            Some(7_801_123_456_700)
+        );
+        assert_eq!(
+            Time64NanosecondType::parse("12:10:01 AM"),
+            Some(601_000_000_000)
+        );
+        assert_eq!(
+            Time64NanosecondType::parse("12:10:01 am"),
+            Some(601_000_000_000)
+        );
+        assert_eq!(
+            Time64NanosecondType::parse("2:10:01 PM"),
+            Some(51_001_000_000_000)
+        );
+        assert_eq!(
+            Time64NanosecondType::parse("2:10:01 pm"),
+            Some(51_001_000_000_000)
+        );
+        assert_eq!(
+            Time64NanosecondType::parse("02:10:01"),
+            Some(7_801_000_000_000)
+        );
+        assert_eq!(
+            Time64NanosecondType::parse("2:10:01"),
+            Some(7_801_000_000_000)
+        );
+        assert_eq!(
+            Time64NanosecondType::parse("12:10 AM"),
+            Some(600_000_000_000)
+        );
+        assert_eq!(
+            Time64NanosecondType::parse("12:10 am"),
+            Some(600_000_000_000)
+        );
+        assert_eq!(
+            Time64NanosecondType::parse("2:10 PM"),
+            Some(51_000_000_000_000)
+        );
+        assert_eq!(
+            Time64NanosecondType::parse("2:10 pm"),
+            Some(51_000_000_000_000)
+        );
+        assert_eq!(
+            Time64NanosecondType::parse("02:10"),
+            Some(7_800_000_000_000)
+        );
+        assert_eq!(Time64NanosecondType::parse("2:10"), Some(7_800_000_000_000));
+        assert_eq!(Time64NanosecondType::parse("1"), Some(1));
+    }
+
+    #[test]
+    fn parse_time64_micros() {
+        assert_eq!(
+            Time64MicrosecondType::parse("12:10:01.123456 AM"),
+            Some(601_123_456)
+        );
+        assert_eq!(
+            Time64MicrosecondType::parse("12:10:01.123456 am"),
+            Some(601_123_456)
+        );
+        assert_eq!(
+            Time64MicrosecondType::parse("2:10:01.12345 PM"),
+            Some(51_001_123_450)
+        );
+        assert_eq!(
+            Time64MicrosecondType::parse("2:10:01.12345 pm"),
+            Some(51_001_123_450)
+        );
+        assert_eq!(
+            Time64MicrosecondType::parse("02:10:01.1234"),
+            Some(7_801_123_400)
+        );
+        assert_eq!(
+            Time64MicrosecondType::parse("2:10:01.1234"),
+            Some(7_801_123_400)
+        );
+        assert_eq!(
+            Time64MicrosecondType::parse("12:10:01 AM"),
+            Some(601_000_000)
+        );
+        assert_eq!(
+            Time64MicrosecondType::parse("12:10:01 am"),
+            Some(601_000_000)
+        );
+        assert_eq!(
+            Time64MicrosecondType::parse("2:10:01 PM"),
+            Some(51_001_000_000)
+        );
+        assert_eq!(
+            Time64MicrosecondType::parse("2:10:01 pm"),
+            Some(51_001_000_000)
+        );
+        assert_eq!(
+            Time64MicrosecondType::parse("02:10:01"),
+            Some(7_801_000_000)
+        );
+        assert_eq!(Time64MicrosecondType::parse("2:10:01"), Some(7_801_000_000));
+        assert_eq!(Time64MicrosecondType::parse("12:10 AM"), Some(600_000_000));
+        assert_eq!(Time64MicrosecondType::parse("12:10 am"), Some(600_000_000));
+        assert_eq!(
+            Time64MicrosecondType::parse("2:10 PM"),
+            Some(51_000_000_000)
+        );
+        assert_eq!(
+            Time64MicrosecondType::parse("2:10 pm"),
+            Some(51_000_000_000)
+        );
+        assert_eq!(Time64MicrosecondType::parse("02:10"), Some(7_800_000_000));
+        assert_eq!(Time64MicrosecondType::parse("2:10"), Some(7_800_000_000));
+        assert_eq!(Time64MicrosecondType::parse("1"), Some(1));
+    }
+
+    #[test]
+    fn parse_time32_millis() {
+        assert_eq!(
+            Time32MillisecondType::parse("12:10:01.123 AM"),
+            Some(601_123)
+        );
+        assert_eq!(
+            Time32MillisecondType::parse("12:10:01.123 am"),
+            Some(601_123)
+        );
+        assert_eq!(
+            Time32MillisecondType::parse("2:10:01.12 PM"),
+            Some(51_001_120)
+        );
+        assert_eq!(
+            Time32MillisecondType::parse("2:10:01.12 pm"),
+            Some(51_001_120)
+        );
+        assert_eq!(Time32MillisecondType::parse("02:10:01.1"), Some(7_801_100));
+        assert_eq!(Time32MillisecondType::parse("2:10:01.1"), Some(7_801_100));
+        assert_eq!(Time32MillisecondType::parse("12:10:01 AM"), Some(601_000));
+        assert_eq!(Time32MillisecondType::parse("12:10:01 am"), Some(601_000));
+        assert_eq!(Time32MillisecondType::parse("2:10:01 PM"), Some(51_001_000));
+        assert_eq!(Time32MillisecondType::parse("2:10:01 pm"), Some(51_001_000));
+        assert_eq!(Time32MillisecondType::parse("02:10:01"), Some(7_801_000));
+        assert_eq!(Time32MillisecondType::parse("2:10:01"), Some(7_801_000));
+        assert_eq!(Time32MillisecondType::parse("12:10 AM"), Some(600_000));
+        assert_eq!(Time32MillisecondType::parse("12:10 am"), Some(600_000));
+        assert_eq!(Time32MillisecondType::parse("2:10 PM"), Some(51_000_000));
+        assert_eq!(Time32MillisecondType::parse("2:10 pm"), Some(51_000_000));
+        assert_eq!(Time32MillisecondType::parse("02:10"), Some(7_800_000));
+        assert_eq!(Time32MillisecondType::parse("2:10"), Some(7_800_000));
+        assert_eq!(Time32MillisecondType::parse("1"), Some(1));
+    }
+
+    #[test]
+    fn parse_time32_secs() {
+        assert_eq!(Time32SecondType::parse("12:10:01 AM"), Some(601));
+        assert_eq!(Time32SecondType::parse("12:10:01 am"), Some(601));
+        assert_eq!(Time32SecondType::parse("2:10:01 PM"), Some(51_001));
+        assert_eq!(Time32SecondType::parse("2:10:01 pm"), Some(51_001));
+        assert_eq!(Time32SecondType::parse("02:10:01"), Some(7_801));
+        assert_eq!(Time32SecondType::parse("2:10:01"), Some(7_801));
+        assert_eq!(Time32SecondType::parse("12:10 AM"), Some(600));
+        assert_eq!(Time32SecondType::parse("12:10 am"), Some(600));
+        assert_eq!(Time32SecondType::parse("2:10 PM"), Some(51_000));
+        assert_eq!(Time32SecondType::parse("2:10 pm"), Some(51_000));
+        assert_eq!(Time32SecondType::parse("02:10"), Some(7_800));
+        assert_eq!(Time32SecondType::parse("2:10"), Some(7_800));
+        assert_eq!(Time32SecondType::parse("1"), Some(1));
     }
 }

@@ -584,6 +584,24 @@ fn parse(
                     i,
                     datetime_format,
                 ),
+                DataType::Time32(TimeUnit::Second) => {
+                    build_primitive_array::<Time32SecondType>(line_number, rows, i, None)
+                }
+                DataType::Time32(TimeUnit::Millisecond) => build_primitive_array::<
+                    Time32MillisecondType,
+                >(
+                    line_number, rows, i, None
+                ),
+                DataType::Time64(TimeUnit::Microsecond) => build_primitive_array::<
+                    Time64MicrosecondType,
+                >(
+                    line_number, rows, i, None
+                ),
+                DataType::Time64(TimeUnit::Nanosecond) => build_primitive_array::<
+                    Time64NanosecondType,
+                >(
+                    line_number, rows, i, None
+                ),
                 DataType::Timestamp(TimeUnit::Microsecond, _) => {
                     build_primitive_array::<TimestampMicrosecondType>(
                         line_number,
@@ -1591,6 +1609,23 @@ mod tests {
         assert_eq!(parse_item::<Date32Type>("1970-01-01").unwrap(), 0);
         assert_eq!(parse_item::<Date32Type>("2020-03-15").unwrap(), 18336);
         assert_eq!(parse_item::<Date32Type>("1945-05-08").unwrap(), -9004);
+    }
+
+    #[test]
+    fn parse_time() {
+        assert_eq!(
+            parse_item::<Time64NanosecondType>("12:10:01.123456789 AM"),
+            Some(601_123_456_789)
+        );
+        assert_eq!(
+            parse_item::<Time64MicrosecondType>("12:10:01.123456 am"),
+            Some(601_123_456)
+        );
+        assert_eq!(
+            parse_item::<Time32MillisecondType>("2:10:01.12 PM"),
+            Some(51_001_120)
+        );
+        assert_eq!(parse_item::<Time32SecondType>("2:10:01 pm"), Some(51_001));
     }
 
     #[test]
