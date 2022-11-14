@@ -261,8 +261,9 @@ impl RowGroupMetaData {
         self.num_rows
     }
 
-    pub fn sorting_columns(&self) -> &Option<Vec<SortingColumnMetaData>> {
-        &self.sorting_columns
+    /// Returns the sort ordering of the rows in this RowGroup if any
+    pub fn sorting_columns(&self) -> Option<&[SortingColumnMetaData]> {
+        self.sorting_columns.as_deref()
     }
 
     /// Total byte size of all uncompressed column data in this row group.
@@ -311,8 +312,8 @@ impl RowGroupMetaData {
         let sorting_columns: Option<Vec<SortingColumnMetaData>> = match rg.sorting_columns
         {
             Some(sorting_columns) => {
-                let result: Vec<SortingColumnMetaData> =
-                    sorting_columns.iter().map(|f| f.into()).collect();
+                let result =
+                    sorting_columns.iter().map(Into::into).collect();
                 Some(result)
             }
             _ => None,
@@ -975,7 +976,7 @@ impl OffsetIndexBuilder {
 }
 
 /// Metadata for sorting order for columns
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SortingColumnMetaData {
     /// The column index (in this row group) *
     pub column_index: i32,
@@ -986,15 +987,6 @@ pub struct SortingColumnMetaData {
     pub nulls_first: bool,
 }
 
-impl SortingColumnMetaData {
-    pub fn new(column_index: i32, descending: bool, nulls_first: bool) -> Self {
-        Self {
-            column_index,
-            descending,
-            nulls_first,
-        }
-    }
-}
 
 impl From<&SortingColumn> for SortingColumnMetaData {
     fn from(sorting_column: &SortingColumn) -> Self {
