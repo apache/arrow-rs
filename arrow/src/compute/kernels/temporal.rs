@@ -241,26 +241,7 @@ where
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
 pub fn year_dyn(array: &dyn Array) -> Result<ArrayRef> {
-    match array.data_type().clone() {
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                array => {
-                    let year_values = year_dyn(array.values())?;
-                    Ok(Arc::new(array.with_values(&year_values)))
-                }
-                dt => return_compute_error_with!("year does not support", dt),
-            )
-        }
-        _ => {
-            downcast_temporal_array!(
-                array => {
-                   year(array)
-                    .map(|a| Arc::new(a) as ArrayRef)
-                }
-                dt => return_compute_error_with!("year does not support", dt),
-            )
-        }
-    }
+    time_fraction_dyn(array, "year", |t| t.year() as i32)
 }
 
 /// Extracts the years of a given temporal primitive array as an array of integers
@@ -269,44 +250,14 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    match array.data_type() {
-        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
-            let b = Int32Builder::with_capacity(array.len());
-            let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<&PrimitiveArray<T>, T, _>(
-                iter,
-                b,
-                |t| t.year(),
-            ))
-        }
-        _t => return_compute_error_with!("year does not support", array.data_type()),
-    }
+    time_fraction_internal(array, "year", |t| t.year() as i32)
 }
 
 /// Extracts the quarter of a given temporal array as an array of integersa within
 /// the range of [1, 4]. If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
 pub fn quarter_dyn(array: &dyn Array) -> Result<ArrayRef> {
-    match array.data_type().clone() {
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                array => {
-                    let quarter_values = quarter_dyn(array.values())?;
-                    Ok(Arc::new(array.with_values(&quarter_values)))
-                }
-                dt => return_compute_error_with!("quarter does not support", dt),
-            )
-        }
-        _ => {
-            downcast_temporal_array!(
-                array => {
-                   quarter(array)
-                    .map(|a| Arc::new(a) as ArrayRef)
-                }
-                dt => return_compute_error_with!("quarter does not support", dt),
-            )
-        }
-    }
+    time_fraction_dyn(array, "quarter", |t| t.quarter() as i32)
 }
 
 /// Extracts the quarter of a given temporal primitive array as an array of integers within
@@ -316,48 +267,14 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    let b = Int32Builder::with_capacity(array.len());
-    match array.data_type() {
-        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
-            let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<_, T, _>(iter, b, |t| {
-                t.quarter() as i32
-            }))
-        }
-        DataType::Timestamp(_, Some(tz)) => {
-            let iter = ArrayIter::new(array);
-            extract_component_from_datetime_array::<_, T, _>(iter, b, tz, |t| {
-                t.quarter() as i32
-            })
-        }
-        _ => return_compute_error_with!("quarter does not support", array.data_type()),
-    }
+    time_fraction_internal(array, "quarter", |t| t.quarter() as i32)
 }
 
 /// Extracts the month of a given temporal array as an array of integers.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
 pub fn month_dyn(array: &dyn Array) -> Result<ArrayRef> {
-    match array.data_type().clone() {
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                array => {
-                    let month_values = month_dyn(array.values())?;
-                    Ok(Arc::new(array.with_values(&month_values)))
-                }
-                dt => return_compute_error_with!("month does not support", dt),
-            )
-        }
-        _ => {
-            downcast_temporal_array!(
-                array => {
-                   month(array)
-                    .map(|a| Arc::new(a) as ArrayRef)
-                }
-                dt => return_compute_error_with!("month does not support", dt),
-            )
-        }
-    }
+    time_fraction_dyn(array, "month", |t| t.month() as i32)
 }
 
 /// Extracts the month of a given temporal primitive array as an array of integers within
@@ -367,22 +284,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    let b = Int32Builder::with_capacity(array.len());
-    match array.data_type() {
-        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
-            let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<_, T, _>(iter, b, |t| {
-                t.month() as i32
-            }))
-        }
-        DataType::Timestamp(_, Some(tz)) => {
-            let iter = ArrayIter::new(array);
-            extract_component_from_datetime_array::<_, T, _>(iter, b, tz, |t| {
-                t.month() as i32
-            })
-        }
-        _ => return_compute_error_with!("month does not support", array.data_type()),
-    }
+    time_fraction_internal(array, "month", |t| t.month() as i32)
 }
 
 /// Extracts the day of week of a given temporal array as an array of
@@ -395,26 +297,9 @@ where
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
 pub fn num_days_from_monday_dyn(array: &dyn Array) -> Result<ArrayRef> {
-    match array.data_type().clone() {
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                array => {
-                    let values = num_days_from_monday_dyn(array.values())?;
-                    Ok(Arc::new(array.with_values(&values)))
-                }
-                dt => return_compute_error_with!("num_days_from_monday does not support", dt),
-            )
-        }
-        _ => {
-            downcast_temporal_array!(
-                array => {
-                   num_days_from_monday(array)
-                    .map(|a| Arc::new(a) as ArrayRef)
-                }
-                dt => return_compute_error_with!("num_days_from_monday does not support", dt),
-            )
-        }
-    }
+    time_fraction_dyn(array, "num_days_from_monday", |t| {
+        t.num_days_from_monday() as i32
+    })
 }
 
 /// Extracts the day of week of a given temporal primitive array as an array of
@@ -428,22 +313,9 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    let b = Int32Builder::with_capacity(array.len());
-    match array.data_type() {
-        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
-            let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<_, T, _>(iter, b, |t| {
-                t.num_days_from_monday()
-            }))
-        }
-        DataType::Timestamp(_, Some(tz)) => {
-            let iter = ArrayIter::new(array);
-            extract_component_from_datetime_array::<_, T, _>(iter, b, tz, |t| {
-                t.num_days_from_monday()
-            })
-        }
-        _ => return_compute_error_with!("weekday does not support", array.data_type()),
-    }
+    time_fraction_internal(array, "num_days_from_monday", |t| {
+        t.num_days_from_monday() as i32
+    })
 }
 
 /// Extracts the day of week of a given temporal array as an array of
@@ -456,26 +328,9 @@ where
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
 pub fn num_days_from_sunday_dyn(array: &dyn Array) -> Result<ArrayRef> {
-    match array.data_type().clone() {
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                array => {
-                    let values = num_days_from_sunday_dyn(array.values())?;
-                    Ok(Arc::new(array.with_values(&values)))
-                }
-                dt => return_compute_error_with!("num_days_from_sunday does not support", dt),
-            )
-        }
-        _ => {
-            downcast_temporal_array!(
-                array => {
-                   num_days_from_sunday(array)
-                    .map(|a| Arc::new(a) as ArrayRef)
-                }
-                dt => return_compute_error_with!("num_days_from_sunday does not support", dt),
-            )
-        }
-    }
+    time_fraction_dyn(array, "num_days_from_sunday", |t| {
+        t.num_days_from_sunday() as i32
+    })
 }
 
 /// Extracts the day of week of a given temporal primitive array as an array of
@@ -489,51 +344,16 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    let b = Int32Builder::with_capacity(array.len());
-    match array.data_type() {
-        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
-            let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<_, T, _>(iter, b, |t| {
-                t.num_days_from_sunday()
-            }))
-        }
-        DataType::Timestamp(_, Some(tz)) => {
-            let iter = ArrayIter::new(array);
-            extract_component_from_datetime_array::<_, T, _>(iter, b, tz, |t| {
-                t.num_days_from_sunday()
-            })
-        }
-        _ => return_compute_error_with!(
-            "num_days_from_sunday does not support",
-            array.data_type()
-        ),
-    }
+    time_fraction_internal(array, "num_days_from_sunday", |t| {
+        t.num_days_from_sunday() as i32
+    })
 }
 
 /// Extracts the day of a given temporal array as an array of integers.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
 pub fn day_dyn(array: &dyn Array) -> Result<ArrayRef> {
-    match array.data_type().clone() {
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                array => {
-                    let values = day_dyn(array.values())?;
-                    Ok(Arc::new(array.with_values(&values)))
-                }
-                dt => return_compute_error_with!("day does not support", dt),
-            )
-        }
-        _ => {
-            downcast_temporal_array!(
-                array => {
-                   day(array)
-                    .map(|a| Arc::new(a) as ArrayRef)
-                }
-                dt => return_compute_error_with!("day does not support", dt),
-            )
-        }
-    }
+    time_fraction_dyn(array, "day", |t| t.day() as i32)
 }
 
 /// Extracts the day of a given temporal primitive array as an array of integers
@@ -542,20 +362,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    let b = Int32Builder::with_capacity(array.len());
-    match array.data_type() {
-        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
-            let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<_, T, _>(iter, b, |t| t.day() as i32))
-        }
-        DataType::Timestamp(_, Some(ref tz)) => {
-            let iter = ArrayIter::new(array);
-            extract_component_from_datetime_array::<_, T, _>(iter, b, tz, |t| {
-                t.day() as i32
-            })
-        }
-        _ => return_compute_error_with!("day does not support", array.data_type()),
-    }
+    time_fraction_internal(array, "day", |t| t.day() as i32)
 }
 
 /// Extracts the day of year of a given temporal array as an array of integers
@@ -563,26 +370,7 @@ where
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
 pub fn doy_dyn(array: &dyn Array) -> Result<ArrayRef> {
-    match array.data_type().clone() {
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                array => {
-                    let values = doy_dyn(array.values())?;
-                    Ok(Arc::new(array.with_values(&values)))
-                }
-                dt => return_compute_error_with!("doy does not support", dt),
-            )
-        }
-        _ => {
-            downcast_temporal_array!(
-                array => {
-                   doy(array)
-                    .map(|a| Arc::new(a) as ArrayRef)
-                }
-                dt => return_compute_error_with!("doy does not support", dt),
-            )
-        }
-    }
+    time_fraction_dyn(array, "doy", |t| t.ordinal() as i32)
 }
 
 /// Extracts the day of year of a given temporal primitive array as an array of integers
@@ -593,22 +381,7 @@ where
     T::Native: ArrowNativeType,
     i64: From<T::Native>,
 {
-    let b = Int32Builder::with_capacity(array.len());
-    match array.data_type() {
-        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
-            let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<_, T, _>(iter, b, |t| {
-                t.ordinal() as i32
-            }))
-        }
-        DataType::Timestamp(_, Some(ref tz)) => {
-            let iter = ArrayIter::new(array);
-            extract_component_from_datetime_array::<_, T, _>(iter, b, tz, |t| {
-                t.ordinal() as i32
-            })
-        }
-        _ => return_compute_error_with!("doy does not support", array.data_type()),
-    }
+    time_fraction_internal(array, "doy", |t| t.ordinal() as i32)
 }
 
 /// Extracts the minutes of a given temporal primitive array as an array of integers
@@ -624,26 +397,7 @@ where
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
 pub fn week_dyn(array: &dyn Array) -> Result<ArrayRef> {
-    match array.data_type().clone() {
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                array => {
-                    let values = week_dyn(array.values())?;
-                    Ok(Arc::new(array.with_values(&values)))
-                }
-                dt => return_compute_error_with!("week does not support", dt),
-            )
-        }
-        _ => {
-            downcast_temporal_array!(
-                array => {
-                   week(array)
-                    .map(|a| Arc::new(a) as ArrayRef)
-                }
-                dt => return_compute_error_with!("week does not support", dt),
-            )
-        }
-    }
+    time_fraction_dyn(array, "week", |t| t.iso_week().week() as i32)
 }
 
 /// Extracts the week of a given temporal primitive array as an array of integers
@@ -652,16 +406,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    match array.data_type() {
-        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
-            let b = Int32Builder::with_capacity(array.len());
-            let iter = ArrayIter::new(array);
-            Ok(as_datetime_with_op::<_, T, _>(iter, b, |t| {
-                t.iso_week().week() as i32
-            }))
-        }
-        _ => return_compute_error_with!("week does not support", array.data_type()),
-    }
+    time_fraction_internal(array, "week", |t| t.iso_week().week() as i32)
 }
 
 /// Extracts the seconds of a given temporal primitive array as an array of integers
@@ -729,7 +474,7 @@ where
 {
     let b = Int32Builder::with_capacity(array.len());
     match array.data_type() {
-        DataType::Date64 | DataType::Timestamp(_, None) => {
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None) => {
             let iter = ArrayIter::new(array);
             Ok(as_datetime_with_op::<_, T, _>(iter, b, op))
         }
