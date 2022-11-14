@@ -24,7 +24,7 @@ use std::{convert::TryFrom, fs::File, io::Read, path::Path, sync::Arc};
 
 use crate::format::{PageHeader, PageLocation, PageType};
 use bytes::{Buf, Bytes};
-use thrift::protocol::TCompactInputProtocol;
+use thrift::protocol::{TCompactInputProtocol, TSerializable};
 
 use crate::basic::{Encoding, Type};
 use crate::column::page::{Page, PageMetadata, PageReader};

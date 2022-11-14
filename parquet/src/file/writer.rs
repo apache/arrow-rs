@@ -22,7 +22,7 @@ use std::{io::Write, sync::Arc};
 
 use crate::format as parquet;
 use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
-use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol};
+use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol, TSerializable};
 
 use crate::basic::PageType;
 use crate::column::writer::{
