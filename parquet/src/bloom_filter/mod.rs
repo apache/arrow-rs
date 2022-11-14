@@ -24,7 +24,7 @@ use crate::file::reader::ChunkReader;
 use crate::format::{
     BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash, BloomFilterHeader,
 };
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::Buf;
 use std::hash::Hasher;
 use std::sync::Arc;
 use thrift::protocol::{TCompactInputProtocol, TSerializable};
@@ -92,31 +92,18 @@ fn chunk_read_bloom_filter_header_and_offset<R: ChunkReader>(
     offset: usize,
     reader: Arc<R>,
 ) -> Result<(BloomFilterHeader, usize), ParquetError> {
-    // because we do not know in advance what the TCompactInputProtocol will read, we have to
-    // loop read until we can parse the header. Allocate at least 128 bytes to start with
-    let mut buffer = BytesMut::with_capacity(128);
-    let mut start = offset;
+    let mut length = STEP_SIZE;
     loop {
-        let batch = reader.get_bytes(offset as u64, STEP_SIZE)?;
-        buffer.put(batch);
-        // need to clone as we read from the very beginning of the buffer each time
-        let buffer = buffer.clone();
+        let buffer = reader.get_bytes(offset as u64, length)?;
         let mut buf_reader = buffer.reader();
-        // try to deserialize header
         let mut prot = TCompactInputProtocol::new(&mut buf_reader);
         if let Ok(h) = BloomFilterHeader::read_from_in_protocol(&mut prot) {
             let buffer = buf_reader.into_inner();
-            let bitset_offset = start + STEP_SIZE - buffer.remaining();
-            println!(
-                "offset: {}, bitset_offset: {}, size: {}",
-                offset,
-                bitset_offset,
-                bitset_offset - offset
-            );
+            let bitset_offset = offset + length - buffer.remaining();
             return Ok((h, bitset_offset));
         } else {
             // continue to try by reading another batch
-            start += STEP_SIZE;
+            length += STEP_SIZE;
         }
     }
 }
