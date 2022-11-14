@@ -70,7 +70,7 @@ fn main() {
     let metadata = file_reader.metadata();
     for (ri, row_group) in metadata.row_groups().iter().enumerate() {
         println!("Row group #{}", ri);
-        println!("=".repeat(80));
+        println!("{}", "=".repeat(80));
         if let Some((column_index, _)) = row_group
             .columns()
             .iter()

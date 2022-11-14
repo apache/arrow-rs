@@ -83,8 +83,8 @@ pub struct Sbbf(Vec<Block>);
 
 // this size should not be too large to not to hit short read too early (although unlikely)
 // but also not to small to ensure cache efficiency, this is essential a "guess" of the header
-// size
-const STEP_SIZE: usize = 32;
+// size. In the demo test the size is 15 bytes.
+const STEP_SIZE: usize = 16;
 
 /// given an initial offset, and a chunk reader, try to read out a bloom filter header by trying
 /// one or more iterations, returns both the header and the offset after it (for bitset).
@@ -107,6 +107,12 @@ fn chunk_read_bloom_filter_header_and_offset<R: ChunkReader>(
         if let Ok(h) = BloomFilterHeader::read_from_in_protocol(&mut prot) {
             let buffer = buf_reader.into_inner();
             let bitset_offset = start + STEP_SIZE - buffer.remaining();
+            println!(
+                "offset: {}, bitset_offset: {}, size: {}",
+                offset,
+                bitset_offset,
+                bitset_offset - offset
+            );
             return Ok((h, bitset_offset));
         } else {
             // continue to try by reading another batch
