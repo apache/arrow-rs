@@ -26,7 +26,6 @@ use crate::format::{
 };
 use bytes::{Buf, BufMut, BytesMut};
 use std::hash::Hasher;
-use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 use thrift::protocol::{TCompactInputProtocol, TSerializable};
 use twox_hash::XxHash64;
