@@ -4587,7 +4587,7 @@ impl TSerializable for OffsetIndex {
 //
 
 /// Description for ColumnIndex.
-/// Each <array-field>\[i\] refers to the page at OffsetIndex.page_locations\[i\]
+/// Each `<array-field>`\[i\] refers to the page at OffsetIndex.page_locations\[i\]
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ColumnIndex {
   /// A list of Boolean values to determine the validity of the corresponding
@@ -4605,7 +4605,7 @@ pub struct ColumnIndex {
   /// that list entries are populated before using them by inspecting null_pages.
   pub min_values: Vec<Vec<u8>>,
   pub max_values: Vec<Vec<u8>>,
-  /// Stores whether both min_values and max_values are orderd and if so, in
+  /// Stores whether both min_values and max_values are ordered and if so, in
   /// which direction. This allows readers to perform binary searches in both
   /// lists. Readers cannot assume that max_values\[i\] <= min_values\[i+1\], even
   /// if the lists are ordered.
@@ -5049,7 +5049,7 @@ pub struct FileMetaData {
   /// Optional key/value metadata *
   pub key_value_metadata: Option<Vec<KeyValue>>,
   /// String for application that wrote this file.  This should be in the format
-  /// <Application> version <App Version> (build <App Build Hash>).
+  /// `<Application>` version `<App Version>` (build `<App Build Hash>`).
   /// e.g. impala version 1.0 (build 6cf94d29b2b7115df4de2c06e2ab4326d721eb55)
   ///
   pub created_by: Option<String>,
