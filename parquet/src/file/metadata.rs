@@ -312,8 +312,7 @@ impl RowGroupMetaData {
         let sorting_columns: Option<Vec<SortingColumnMetaData>> = match rg.sorting_columns
         {
             Some(sorting_columns) => {
-                let result =
-                    sorting_columns.iter().map(Into::into).collect();
+                let result = sorting_columns.iter().map(Into::into).collect();
                 Some(result)
             }
             _ => None,
@@ -986,7 +985,6 @@ pub struct SortingColumnMetaData {
     /// nulls go at the end.
     pub nulls_first: bool,
 }
-
 
 impl From<&SortingColumn> for SortingColumnMetaData {
     fn from(sorting_column: &SortingColumn) -> Self {
