@@ -333,11 +333,8 @@ where
     })?;
 
     if cast_options.safe {
-        let iter = array
-            .iter()
-            .map(|v| v.and_then(|v| v.as_().mul_checked(mul).ok()));
-        let casted_array = unsafe { PrimitiveArray::<D>::from_trusted_len_iter(iter) };
-        casted_array
+        array
+            .unary_opt::<_, D>(|v| v.as_().mul_checked(mul).ok())
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
     } else {
@@ -360,12 +357,8 @@ where
     let mul = 10_f64.powi(scale as i32);
 
     if cast_options.safe {
-        let iter = array
-            .iter()
-            .map(|v| v.and_then(|v| (mul * v.as_()).round().to_i128()));
-        let casted_array =
-            unsafe { PrimitiveArray::<Decimal128Type>::from_trusted_len_iter(iter) };
-        casted_array
+        array
+            .unary_opt::<_, Decimal128Type>(|v| (mul * v.as_()).round().to_i128())
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
     } else {
@@ -403,12 +396,8 @@ where
     let mul = 10_f64.powi(scale as i32);
 
     if cast_options.safe {
-        let iter = array
-            .iter()
-            .map(|v| v.and_then(|v| i256::from_f64((v.as_() * mul).round())));
-        let casted_array =
-            unsafe { PrimitiveArray::<Decimal256Type>::from_trusted_len_iter(iter) };
-        casted_array
+        array
+            .unary_opt::<_, Decimal256Type>(|v| i256::from_f64((v.as_() * mul).round()))
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
     } else {
@@ -2052,12 +2041,7 @@ where
     T::Native: NumCast,
     R::Native: NumCast,
 {
-    let iter = from
-        .iter()
-        .map(|v| v.and_then(num::cast::cast::<T::Native, R::Native>));
-    // Soundness:
-    //  The iterator is trustedLen because it comes from an `PrimitiveArray`.
-    unsafe { PrimitiveArray::<R>::from_trusted_len_iter(iter) }
+    from.unary_opt::<_, R>(num::cast::cast::<T::Native, R::Native>)
 }
 
 fn as_time_with_string_op<
