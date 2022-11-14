@@ -71,18 +71,22 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
     }
 
     match (from_type, to_type) {
-        // TODO UTF8/unsigned numeric to decimal
+        // TODO UTF8 to decimal
         // cast one decimal type to another decimal type
         (Decimal128(_, _), Decimal128(_, _)) => true,
         (Decimal256(_, _), Decimal256(_, _)) => true,
         (Decimal128(_, _), Decimal256(_, _)) => true,
         (Decimal256(_, _), Decimal128(_, _)) => true,
+        // unsigned integer to decimal
+        (UInt8 | UInt16 | UInt32 | UInt64, Decimal128(_, _)) |
         // signed numeric to decimal
         (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal128(_, _)) |
         (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal256(_, _)) |
+        // decimal to unsigned numeric
+        (Decimal128(_, _), UInt8 | UInt16 | UInt32 | UInt64) |
         // decimal to signed numeric
         (Decimal128(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64) |
-        (Decimal256(_, _), Null | Int8 | Int16 | Int32 | Int64 )
+        (Decimal256(_, _), Null | Int8 | Int16 | Int32 | Int64)
         | (
             Null,
             Boolean
@@ -633,6 +637,30 @@ pub fn cast_with_options(
         (Decimal128(_, scale), _) => {
             // cast decimal to other type
             match to_type {
+                UInt8 => cast_decimal_to_integer::<Decimal128Type, UInt8Type>(
+                    array,
+                    10_i128,
+                    *scale,
+                    cast_options,
+                ),
+                UInt16 => cast_decimal_to_integer::<Decimal128Type, UInt16Type>(
+                    array,
+                    10_i128,
+                    *scale,
+                    cast_options,
+                ),
+                UInt32 => cast_decimal_to_integer::<Decimal128Type, UInt32Type>(
+                    array,
+                    10_i128,
+                    *scale,
+                    cast_options,
+                ),
+                UInt64 => cast_decimal_to_integer::<Decimal128Type, UInt64Type>(
+                    array,
+                    10_i128,
+                    *scale,
+                    cast_options,
+                ),
                 Int8 => cast_decimal_to_integer::<Decimal128Type, Int8Type>(
                     array,
                     10_i128,
@@ -707,7 +735,34 @@ pub fn cast_with_options(
         (_, Decimal128(precision, scale)) => {
             // cast data to decimal
             match from_type {
-                // TODO now just support signed numeric to decimal, support decimal to numeric later
+                UInt8 => cast_integer_to_decimal::<_, Decimal128Type, _>(
+                    as_primitive_array::<UInt8Type>(array),
+                    *precision,
+                    *scale,
+                    10_i128,
+                    cast_options,
+                ),
+                UInt16 => cast_integer_to_decimal::<_, Decimal128Type, _>(
+                    as_primitive_array::<UInt16Type>(array),
+                    *precision,
+                    *scale,
+                    10_i128,
+                    cast_options,
+                ),
+                UInt32 => cast_integer_to_decimal::<_, Decimal128Type, _>(
+                    as_primitive_array::<UInt32Type>(array),
+                    *precision,
+                    *scale,
+                    10_i128,
+                    cast_options,
+                ),
+                UInt64 => cast_integer_to_decimal::<_, Decimal128Type, _>(
+                    as_primitive_array::<UInt64Type>(array),
+                    *precision,
+                    *scale,
+                    10_i128,
+                    cast_options,
+                ),
                 Int8 => cast_integer_to_decimal::<_, Decimal128Type, _>(
                     as_primitive_array::<Int8Type>(array),
                     *precision,
@@ -2113,7 +2168,7 @@ where
                 _ => {
                     return Err(ArrowError::ComputeError(
                         "Unable to read value as datetime".to_string(),
-                    ))
+                    ));
                 }
             },
             None => builder.append_null(),
@@ -3379,13 +3434,38 @@ mod tests {
 
     #[test]
     fn test_cast_decimal_to_numeric() {
-        let decimal_type = DataType::Decimal128(38, 2);
-        // negative test
-        assert!(!can_cast_types(&decimal_type, &DataType::UInt8));
         let value_array: Vec<Option<i128>> =
             vec![Some(125), Some(225), Some(325), None, Some(525)];
         let decimal_array = create_decimal_array(value_array, 38, 2).unwrap();
         let array = Arc::new(decimal_array) as ArrayRef;
+        // u8
+        generate_cast_test_case!(
+            &array,
+            UInt8Array,
+            &DataType::UInt8,
+            vec![Some(1_u8), Some(2_u8), Some(3_u8), None, Some(5_u8)]
+        );
+        // u16
+        generate_cast_test_case!(
+            &array,
+            UInt16Array,
+            &DataType::UInt16,
+            vec![Some(1_u16), Some(2_u16), Some(3_u16), None, Some(5_u16)]
+        );
+        // u32
+        generate_cast_test_case!(
+            &array,
+            UInt32Array,
+            &DataType::UInt32,
+            vec![Some(1_u32), Some(2_u32), Some(3_u32), None, Some(5_u32)]
+        );
+        // u64
+        generate_cast_test_case!(
+            &array,
+            UInt64Array,
+            &DataType::UInt64,
+            vec![Some(1_u64), Some(2_u64), Some(3_u64), None, Some(5_u64)]
+        );
         // i8
         generate_cast_test_case!(
             &array,
@@ -3428,6 +3508,22 @@ mod tests {
             &DataType::Int64,
             vec![Some(1_i64), Some(2_i64), Some(3_i64), None, Some(5_i64)]
         );
+
+        // overflow test: out of range of max u8
+        let value_array: Vec<Option<i128>> = vec![Some(51300)];
+        let decimal_array = create_decimal_array(value_array, 38, 2).unwrap();
+        let array = Arc::new(decimal_array) as ArrayRef;
+        let casted_array =
+            cast_with_options(&array, &DataType::UInt8, &CastOptions { safe: false });
+        assert_eq!(
+            "Cast error: value of 513 is out of range UInt8".to_string(),
+            casted_array.unwrap_err().to_string()
+        );
+
+        let casted_array =
+            cast_with_options(&array, &DataType::UInt8, &CastOptions { safe: true });
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
 
         // overflow test: out of range of max i8
         let value_array: Vec<Option<i128>> = vec![Some(24400)];
@@ -3566,9 +3662,53 @@ mod tests {
     #[test]
     #[cfg(not(feature = "force_validate"))]
     fn test_cast_numeric_to_decimal128() {
-        // test negative cast type
         let decimal_type = DataType::Decimal128(38, 6);
-        assert!(!can_cast_types(&DataType::UInt64, &decimal_type));
+        // u8, u16, u32, u64
+        let input_datas = vec![
+            Arc::new(UInt8Array::from(vec![
+                Some(1),
+                Some(2),
+                Some(3),
+                None,
+                Some(5),
+            ])) as ArrayRef, // u8
+            Arc::new(UInt16Array::from(vec![
+                Some(1),
+                Some(2),
+                Some(3),
+                None,
+                Some(5),
+            ])) as ArrayRef, // u16
+            Arc::new(UInt32Array::from(vec![
+                Some(1),
+                Some(2),
+                Some(3),
+                None,
+                Some(5),
+            ])) as ArrayRef, // u32
+            Arc::new(UInt64Array::from(vec![
+                Some(1),
+                Some(2),
+                Some(3),
+                None,
+                Some(5),
+            ])) as ArrayRef, // u64
+        ];
+
+        for array in input_datas {
+            generate_cast_test_case!(
+                &array,
+                Decimal128Array,
+                &decimal_type,
+                vec![
+                    Some(1000000_i128),
+                    Some(2000000_i128),
+                    Some(3000000_i128),
+                    None,
+                    Some(5000000_i128)
+                ]
+            );
+        }
 
         // i8, i16, i32, i64
         let input_datas = vec![
@@ -3615,6 +3755,17 @@ mod tests {
                 ]
             );
         }
+
+        // test u8 to decimal type with overflow the result type
+        // the 100 will be converted to 1000_i128, but it is out of range for max value in the precision 3.
+        let array = UInt8Array::from(vec![1, 2, 3, 4, 100]);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast(&array, &DataType::Decimal128(3, 1));
+        assert!(casted_array.is_ok());
+        let array = casted_array.unwrap();
+        let array: &Decimal128Array = as_primitive_array(&array);
+        let err = array.validate_decimal_precision(3);
+        assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal128 of precision 3. Max is 999", err.unwrap_err().to_string());
 
         // test i8 to decimal type with overflow the result type
         // the 100 will be converted to 1000_i128, but it is out of range for max value in the precision 3.
