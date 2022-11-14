@@ -113,6 +113,10 @@ required-features = ["cli"]
 name = "parquet-fromcsv"
 required-features = ["arrow", "cli"]
 
+[[bin]]
+name = "parquet-show-bloom-filter"
+required-features = ["cli"]
+
 [[bench]]
 name = "arrow_writer"
 required-features = ["arrow"]
