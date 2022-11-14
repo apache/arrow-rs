@@ -23,7 +23,7 @@ use crate::file::page_index::index::{BooleanIndex, ByteArrayIndex, Index, Native
 use crate::file::reader::ChunkReader;
 use crate::format::{ColumnIndex, OffsetIndex, PageLocation};
 use std::io::{Cursor, Read};
-use thrift::protocol::TCompactInputProtocol;
+use thrift::protocol::{TCompactInputProtocol, TSerializable};
 
 /// Read on row group's all columns indexes and change into  [`Index`]
 /// If not the format not available return an empty vector.

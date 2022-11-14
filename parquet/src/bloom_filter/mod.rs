@@ -25,7 +25,7 @@ use crate::format::{
 };
 use std::hash::Hasher;
 use std::io::{Read, Seek, SeekFrom};
-use thrift::protocol::TCompactInputProtocol;
+use thrift::protocol::{TCompactInputProtocol, TSerializable};
 use twox_hash::XxHash64;
 
 /// Salt as defined in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md#technical-approach)

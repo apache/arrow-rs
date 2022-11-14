@@ -41,7 +41,7 @@ arrow-ipc = { version = "27.0.0", path = "../arrow-ipc", default-features = fals
 
 ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
 bytes = { version = "1.1", default-features = false, features = ["std"] }
-thrift = { version = "0.16", default-features = false }
+thrift = { version = "0.17", default-features = false }
 snap = { version = "1.0", default-features = false, optional = true }
 brotli = { version = "3.3", default-features = false, features = ["std"], optional = true }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"], optional = true }
