@@ -115,7 +115,7 @@ required-features = ["arrow", "cli"]
 
 [[bin]]
 name = "parquet-show-bloom-filter"
-required-features = ["cli"]
+required-features = ["cli", "bloom"]
 
 [[bench]]
 name = "arrow_writer"
