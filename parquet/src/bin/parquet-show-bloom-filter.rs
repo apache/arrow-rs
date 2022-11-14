@@ -37,7 +37,6 @@ extern crate parquet;
 use clap::Parser;
 use parquet::bloom_filter::hash_bytes;
 use parquet::file::reader::{FileReader, SerializedFileReader};
-use std::iter;
 use std::{fs::File, path::Path};
 
 #[derive(Debug, Parser)]
@@ -71,7 +70,7 @@ fn main() {
     let metadata = file_reader.metadata();
     for (ri, row_group) in metadata.row_groups().iter().enumerate() {
         println!("Row group #{}", ri);
-        println!("{}", iter::repeat("=").take(80).collect::<String>());
+        println!("=".repeat(80));
         if let Some((column_index, _)) = row_group
             .columns()
             .iter()
