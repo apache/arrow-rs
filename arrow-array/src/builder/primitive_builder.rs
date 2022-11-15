@@ -121,12 +121,13 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     ) -> Self {
         let capacity = values_buffer.capacity();
 
+        let null_buffer_builder = null_buffer
+            .map(|buffer| NullBufferBuilder::new_from_buffer(buffer, capacity))
+            .unwrap_or_else(|| NullBufferBuilder::new(capacity));
+
         Self {
             values_builder: BufferBuilder::<T::Native>::new_from_buffer(values_buffer),
-            null_buffer_builder: NullBufferBuilder::new_from_buffer(
-                null_buffer,
-                capacity,
-            ),
+            null_buffer_builder,
         }
     }
 

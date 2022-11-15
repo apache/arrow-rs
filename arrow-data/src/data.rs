@@ -387,10 +387,6 @@ impl ArrayData {
         &self.buffers[..]
     }
 
-    pub fn get_buffers(self) -> Vec<Buffer> {
-        self.buffers
-    }
-
     /// Returns a slice of children data arrays
     pub fn child_data(&self) -> &[ArrayData] {
         &self.child_data[..]

@@ -19,7 +19,7 @@ use std::fmt::Debug;
 use std::iter::FromIterator;
 use std::ptr::NonNull;
 use std::sync::Arc;
-use std::{convert::AsRef, mem, usize};
+use std::{convert::AsRef, usize};
 
 use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
@@ -229,19 +229,16 @@ impl Buffer {
     }
 
     /// Returns `MutableBuffer` for mutating the buffer if this buffer is not shared.
+    /// Returns `Err` if this is shared or its allocation is from an external source.
     pub fn into_mutable(self, len: usize) -> Result<MutableBuffer, Self> {
         let offset_ptr = self.as_ptr();
         let offset = self.offset;
         let length = self.length;
         Arc::try_unwrap(self.data)
-            .map(|bytes| {
+            .and_then(|bytes| {
                 // The pointer of underlying buffer should not be offset.
                 assert_eq!(offset_ptr, bytes.ptr().as_ptr());
-
-                let mutable_buffer =
-                    MutableBuffer::from_ptr(bytes.ptr(), len, bytes.capacity());
-                mem::forget(bytes);
-                mutable_buffer
+                MutableBuffer::from_bytes(bytes, len).map_err(Arc::new)
             })
             .map_err(|bytes| Buffer {
                 data: bytes,

@@ -42,8 +42,9 @@ impl NullBufferBuilder {
         }
     }
 
-    pub fn new_from_buffer(buffer: Option<MutableBuffer>, capacity: usize) -> Self {
-        let bitmap_builder = buffer.map(BooleanBufferBuilder::new_from_buffer);
+    /// Creates a new builder from a `MutableBuffer`.
+    pub fn new_from_buffer(buffer: MutableBuffer, capacity: usize) -> Self {
+        let bitmap_builder = Some(BooleanBufferBuilder::new_from_buffer(buffer));
         Self {
             bitmap_builder,
             len: 0,

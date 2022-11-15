@@ -415,7 +415,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// assert_eq!(c, Int32Array::from(vec![Some(11), Some(15), None]));
     /// # }
     /// ```
-    pub fn unary_mut<F>(self, op: F) -> Result<PrimitiveArray<T>, ArrowError>
+    pub fn unary_mut<F>(self, op: F) -> Result<PrimitiveArray<T>, PrimitiveArray<T>>
     where
         F: Fn(T::Native) -> T::Native,
     {
@@ -424,25 +424,32 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         let null_count = self.null_count();
         let null_buffer = data.null_buffer().map(|b| b.bit_slice(data.offset(), len));
 
-        let mut buffers = self.data.get_buffers();
-        let buffer = buffers.remove(0);
+        let buffer = self.data.buffers()[0].clone();
         let buffer_len = buffer.len();
+
+        drop(self.data);
 
         let mutable_buffer = buffer.into_mutable(buffer_len);
 
-        let buffer = match mutable_buffer {
+        match mutable_buffer {
             Ok(mut mutable_buffer) => {
                 mutable_buffer
                     .typed_data_mut()
                     .iter_mut()
                     .for_each(|l| *l = op(*l));
-                Ok(mutable_buffer.into())
+                Ok(unsafe {
+                    build_primitive_array(
+                        len,
+                        mutable_buffer.into(),
+                        null_count,
+                        null_buffer,
+                    )
+                })
             }
-            Err(_) => Err(ArrowError::InvalidArgumentError(
-                "Not a mutable array because its buffer is shared.".to_string(),
-            )),
-        }?;
-        Ok(unsafe { build_primitive_array(len, buffer, null_count, null_buffer) })
+            Err(buffer) => Err(unsafe {
+                build_primitive_array(len, buffer, null_count, null_buffer)
+            }),
+        }
     }
 
     /// Applies a unary and fallible function to all valid values in a primitive array
@@ -550,8 +557,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         let len = self.len();
         let null_bit_buffer = self.data.null_buffer().cloned();
 
-        let mut buffers = self.data.get_buffers();
-        let buffer = buffers.remove(0);
+        let buffer = self.data.buffers()[0].clone();
+
+        drop(self.data);
 
         let builder = buffer
             .into_mutable(0)
