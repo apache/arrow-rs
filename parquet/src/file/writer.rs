@@ -647,13 +647,14 @@ mod tests {
     use crate::basic::{Compression, Encoding, LogicalType, Repetition, Type};
     use crate::column::page::PageReader;
     use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
-    use crate::data_type::Int32Type;
+    use crate::data_type::{BoolType, Int32Type};
+    use crate::file::reader::ChunkReader;
     use crate::file::{
         properties::{ReaderProperties, WriterProperties, WriterVersion},
         reader::{FileReader, SerializedFileReader, SerializedPageReader},
         statistics::{from_thrift, to_thrift, Statistics},
     };
-    use crate::record::RowAccessor;
+    use crate::record::{Row, RowAccessor};
     use crate::schema::types::{ColumnDescriptor, ColumnPath};
     use crate::util::memory::ByteBufferPtr;
 
@@ -1102,16 +1103,35 @@ mod tests {
         assert_eq!(to_thrift(left.statistics()), to_thrift(right.statistics()));
     }
 
-    /// File write-read roundtrip.
-    /// `data` consists of arrays of values for each row group.
-    fn test_file_roundtrip(
-        file: File,
+    /// Tests roundtrip of i32 data written using `W` and read using `R`
+    fn test_roundtrip_i32<W, R>(
+        file: W,
         data: Vec<Vec<i32>>,
-    ) -> crate::format::FileMetaData {
+    ) -> crate::format::FileMetaData
+    where
+        W: Write,
+        R: ChunkReader + From<W> + 'static,
+    {
+        test_roundtrip::<W, R, Int32Type, _>(file, data, |r| r.get_int(0).unwrap())
+    }
+
+    /// Tests roundtrip of data of type `D` written using `W` and read using `R`
+    /// and the provided `values` function
+    fn test_roundtrip<W, R, D, F>(
+        mut file: W,
+        data: Vec<Vec<D::T>>,
+        value: F,
+    ) -> crate::format::FileMetaData
+    where
+        W: Write,
+        R: ChunkReader + From<W> + 'static,
+        D: DataType,
+        F: Fn(Row) -> D::T,
+    {
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
                 .with_fields(&mut vec![Arc::new(
-                    types::Type::primitive_type_builder("col1", Type::INT32)
+                    types::Type::primitive_type_builder("col1", D::get_physical_type())
                         .with_repetition(Repetition::REQUIRED)
                         .build()
                         .unwrap(),
@@ -1120,16 +1140,15 @@ mod tests {
                 .unwrap(),
         );
         let props = Arc::new(WriterProperties::builder().build());
-        let mut file_writer = assert_send(
-            SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap(),
-        );
+        let mut file_writer =
+            SerializedFileWriter::new(&mut file, schema, props).unwrap();
         let mut rows: i64 = 0;
 
         for (idx, subset) in data.iter().enumerate() {
             let mut row_group_writer = file_writer.next_row_group().unwrap();
             if let Some(mut writer) = row_group_writer.next_column().unwrap() {
                 rows += writer
-                    .typed::<Int32Type>()
+                    .typed::<D>()
                     .write_batch(&subset[..], None, None)
                     .unwrap() as i64;
                 writer.close().unwrap();
@@ -1141,7 +1160,7 @@ mod tests {
         }
         let file_metadata = file_writer.close().unwrap();
 
-        let reader = assert_send(SerializedFileReader::new(file).unwrap());
+        let reader = SerializedFileReader::new(R::from(file)).unwrap();
         assert_eq!(reader.num_row_groups(), data.len());
         assert_eq!(
             reader.metadata().file_metadata().num_rows(),
@@ -1151,16 +1170,19 @@ mod tests {
         for (i, item) in data.iter().enumerate().take(reader.num_row_groups()) {
             let row_group_reader = reader.get_row_group(i).unwrap();
             let iter = row_group_reader.get_row_iter(None).unwrap();
-            let res = iter
-                .map(|elem| elem.get_int(0).unwrap())
-                .collect::<Vec<i32>>();
+            let res: Vec<_> = iter.map(&value).collect();
             assert_eq!(res, *item);
         }
         file_metadata
     }
 
-    fn assert_send<T: Send>(t: T) -> T {
-        t
+    /// File write-read roundtrip.
+    /// `data` consists of arrays of values for each row group.
+    fn test_file_roundtrip(
+        file: File,
+        data: Vec<Vec<i32>>,
+    ) -> crate::format::FileMetaData {
+        test_roundtrip_i32::<File, File>(file, data)
     }
 
     #[test]
@@ -1184,58 +1206,17 @@ mod tests {
     }
 
     fn test_bytes_roundtrip(data: Vec<Vec<i32>>) {
-        let mut buffer = vec![];
+        test_roundtrip_i32::<Vec<u8>, Bytes>(Vec::with_capacity(1024), data);
+    }
 
-        let schema = Arc::new(
-            types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![Arc::new(
-                    types::Type::primitive_type_builder("col1", Type::INT32)
-                        .with_repetition(Repetition::REQUIRED)
-                        .build()
-                        .unwrap(),
-                )])
-                .build()
-                .unwrap(),
+    #[test]
+    fn test_boolean_roundtrip() {
+        let my_bool_values: Vec<_> = (0..2049).map(|idx| idx % 2 == 0).collect();
+        test_roundtrip::<Vec<u8>, Bytes, BoolType, _>(
+            Vec::with_capacity(1024),
+            vec![my_bool_values],
+            |r| r.get_bool(0).unwrap(),
         );
-
-        let mut rows: i64 = 0;
-        {
-            let props = Arc::new(WriterProperties::builder().build());
-            let mut writer =
-                SerializedFileWriter::new(&mut buffer, schema, props).unwrap();
-
-            for subset in &data {
-                let mut row_group_writer = writer.next_row_group().unwrap();
-                if let Some(mut writer) = row_group_writer.next_column().unwrap() {
-                    rows += writer
-                        .typed::<Int32Type>()
-                        .write_batch(&subset[..], None, None)
-                        .unwrap() as i64;
-
-                    writer.close().unwrap();
-                }
-                row_group_writer.close().unwrap();
-            }
-            writer.close().unwrap();
-        }
-
-        let reading_cursor = Bytes::from(buffer);
-        let reader = SerializedFileReader::new(reading_cursor).unwrap();
-
-        assert_eq!(reader.num_row_groups(), data.len());
-        assert_eq!(
-            reader.metadata().file_metadata().num_rows(),
-            rows,
-            "row count in metadata not equal to number of rows written"
-        );
-        for (i, item) in data.iter().enumerate().take(reader.num_row_groups()) {
-            let row_group_reader = reader.get_row_group(i).unwrap();
-            let iter = row_group_reader.get_row_iter(None).unwrap();
-            let res = iter
-                .map(|elem| elem.get_int(0).unwrap())
-                .collect::<Vec<i32>>();
-            assert_eq!(res, *item);
-        }
     }
 
     #[test]
