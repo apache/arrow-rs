@@ -229,7 +229,7 @@ pub type RowGroupMetaDataPtr = Arc<RowGroupMetaData>;
 pub struct RowGroupMetaData {
     columns: Vec<ColumnChunkMetaData>,
     num_rows: i64,
-    sorting_columns: Option<Vec<SortingColumnMetaData>>,
+    sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
     page_offset_index: Option<Vec<Vec<PageLocation>>>,
@@ -262,8 +262,8 @@ impl RowGroupMetaData {
     }
 
     /// Returns the sort ordering of the rows in this RowGroup if any
-    pub fn sorting_columns(&self) -> Option<&[SortingColumnMetaData]> {
-        self.sorting_columns.as_deref()
+    pub fn sorting_columns(&self) -> Option<&Vec<SortingColumn>> {
+        self.sorting_columns.as_ref()
     }
 
     /// Total byte size of all uncompressed column data in this row group.
@@ -309,14 +309,7 @@ impl RowGroupMetaData {
             let cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
             columns.push(cc);
         }
-        let sorting_columns: Option<Vec<SortingColumnMetaData>> = match rg.sorting_columns
-        {
-            Some(sorting_columns) => {
-                let result = sorting_columns.iter().map(Into::into).collect();
-                Some(result)
-            }
-            _ => None,
-        };
+        let sorting_columns = rg.sorting_columns;
         Ok(RowGroupMetaData {
             columns,
             num_rows,
@@ -333,14 +326,7 @@ impl RowGroupMetaData {
             columns: self.columns().iter().map(|v| v.to_thrift()).collect(),
             total_byte_size: self.total_byte_size,
             num_rows: self.num_rows,
-            sorting_columns: match self.sorting_columns() {
-                Some(sorting_columns) => {
-                    let result: Vec<SortingColumn> =
-                        sorting_columns.iter().map(|f| f.into()).collect();
-                    Some(result)
-                }
-                _ => None,
-            },
+            sorting_columns: self.sorting_columns().cloned(),
             file_offset: None,
             total_compressed_size: None,
             ordinal: None,
@@ -353,7 +339,7 @@ pub struct RowGroupMetaDataBuilder {
     columns: Vec<ColumnChunkMetaData>,
     schema_descr: SchemaDescPtr,
     num_rows: i64,
-    sorting_columns: Option<Vec<SortingColumnMetaData>>,
+    sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     page_offset_index: Option<Vec<Vec<PageLocation>>>,
 }
@@ -378,11 +364,8 @@ impl RowGroupMetaDataBuilder {
     }
 
     /// Sets the sorting order for columns
-    pub fn set_sorting_columns(
-        mut self,
-        value: Option<&Vec<SortingColumnMetaData>>,
-    ) -> Self {
-        self.sorting_columns = value.cloned();
+    pub fn set_sorting_columns(mut self, value: Option<Vec<SortingColumn>>) -> Self {
+        self.sorting_columns = value;
         self
     }
 
@@ -971,38 +954,6 @@ impl OffsetIndexBuilder {
             })
             .collect::<Vec<_>>();
         OffsetIndex::new(locations)
-    }
-}
-
-/// Metadata for sorting order for columns
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SortingColumnMetaData {
-    /// The column index (in this row group) *
-    pub column_index: i32,
-    /// If true, indicates this column is sorted in descending order. *
-    pub descending: bool,
-    /// If true, nulls will come before non-null values, otherwise,
-    /// nulls go at the end.
-    pub nulls_first: bool,
-}
-
-impl From<&SortingColumn> for SortingColumnMetaData {
-    fn from(sorting_column: &SortingColumn) -> Self {
-        SortingColumnMetaData {
-            column_index: sorting_column.column_idx,
-            descending: sorting_column.descending,
-            nulls_first: sorting_column.nulls_first,
-        }
-    }
-}
-
-impl From<&SortingColumnMetaData> for SortingColumn {
-    fn from(sorting_column: &SortingColumnMetaData) -> SortingColumn {
-        SortingColumn {
-            column_idx: sorting_column.column_index,
-            descending: sorting_column.descending,
-            nulls_first: sorting_column.nulls_first,
-        }
     }
 }
 
