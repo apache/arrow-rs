@@ -93,10 +93,10 @@ impl MutableBuffer {
     }
 
     /// Allocates a new [MutableBuffer] from given pointer `ptr`, `capacity`.
-    pub(crate) fn from_ptr(ptr: NonNull<u8>, capacity: usize) -> Self {
+    pub(crate) fn from_ptr(ptr: NonNull<u8>, len: usize, capacity: usize) -> Self {
         Self {
             data: ptr,
-            len: 0,
+            len,
             capacity,
         }
     }

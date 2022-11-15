@@ -397,6 +397,54 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         unsafe { build_primitive_array(len, buffer, null_count, null_buffer) }
     }
 
+    /// Applies an unary and infallible function to a mutable primitive array.
+    /// Mutable primitive array means that the buffer is not shared with other arrays.
+    /// As a result, this mutates the buffer directly without allocating new buffer.
+    ///
+    /// # Implementation
+    ///
+    /// This will apply the function for all values, including those on null slots.
+    /// This implies that the operation must be infallible for any value of the corresponding type
+    /// or this function may panic.
+    /// # Example
+    /// ```rust
+    /// # use arrow_array::{Int32Array, types::Int32Type};
+    /// # fn main() {
+    /// let array = Int32Array::from(vec![Some(5), Some(7), None]);
+    /// let c = array.unary_mut(|x| x * 2 + 1).unwrap();
+    /// assert_eq!(c, Int32Array::from(vec![Some(11), Some(15), None]));
+    /// # }
+    /// ```
+    pub fn unary_mut<F>(self, op: F) -> Result<PrimitiveArray<T>, ArrowError>
+    where
+        F: Fn(T::Native) -> T::Native,
+    {
+        let data = self.data();
+        let len = self.len();
+        let null_count = self.null_count();
+        let null_buffer = data.null_buffer().map(|b| b.bit_slice(data.offset(), len));
+
+        let mut buffers = self.data.get_buffers();
+        let buffer = buffers.remove(0);
+        let buffer_len = buffer.len();
+
+        let mutable_buffer = buffer.into_mutable(buffer_len);
+
+        let buffer = match mutable_buffer {
+            Ok(mut mutable_buffer) => {
+                mutable_buffer
+                    .typed_data_mut()
+                    .iter_mut()
+                    .for_each(|l| *l = op(*l));
+                Ok(mutable_buffer.into())
+            }
+            Err(_) => Err(ArrowError::InvalidArgumentError(
+                "Not a mutable array because its buffer is shared.".to_string(),
+            )),
+        }?;
+        Ok(unsafe { build_primitive_array(len, buffer, null_count, null_buffer) })
+    }
+
     /// Applies a unary and fallible function to all valid values in a primitive array
     ///
     /// This is unlike [`Self::unary`] which will apply an infallible function to all rows
@@ -497,7 +545,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             .data
             .null_buffer()
             .cloned()
-            .and_then(|b| b.into_mutable().ok());
+            .and_then(|b| b.into_mutable(0).ok());
 
         let len = self.len();
         let null_bit_buffer = self.data.null_buffer().cloned();
@@ -506,7 +554,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         let buffer = buffers.remove(0);
 
         let builder = buffer
-            .into_mutable()
+            .into_mutable(0)
             .map(|buffer| PrimitiveBuilder::<T>::new_from_buffer(buffer, null_buffer));
 
         match builder {
@@ -2013,5 +2061,15 @@ mod tests {
                 assert_eq!(expected, returned)
             }
         }
+    }
+
+    #[test]
+    fn test_unary_mut() {
+        let array: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+
+        let c = array.unary_mut(|x| x * 2 + 1).unwrap();
+        let expected: Int32Array = vec![3, 5, 7].into_iter().map(Some).collect();
+
+        assert_eq!(expected, c);
     }
 }

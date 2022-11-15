@@ -229,7 +229,7 @@ impl Buffer {
     }
 
     /// Returns `MutableBuffer` for mutating the buffer if this buffer is not shared.
-    pub fn into_mutable(self) -> Result<MutableBuffer, Self> {
+    pub fn into_mutable(self, len: usize) -> Result<MutableBuffer, Self> {
         let offset_ptr = self.as_ptr();
         let offset = self.offset;
         let length = self.length;
@@ -239,7 +239,7 @@ impl Buffer {
                 assert_eq!(offset_ptr, bytes.ptr().as_ptr());
 
                 let mutable_buffer =
-                    MutableBuffer::from_ptr(bytes.ptr(), bytes.capacity());
+                    MutableBuffer::from_ptr(bytes.ptr(), len, bytes.capacity());
                 mem::forget(bytes);
                 mutable_buffer
             })
