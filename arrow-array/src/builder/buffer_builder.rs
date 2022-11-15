@@ -124,6 +124,14 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
         }
     }
 
+    pub fn new_from_buffer(buffer: MutableBuffer) -> Self {
+        Self {
+            buffer,
+            len: 0,
+            _marker: PhantomData,
+        }
+    }
+
     /// Returns the current number of array elements in the internal buffer.
     ///
     /// # Example:

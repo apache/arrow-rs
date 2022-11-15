@@ -372,6 +372,28 @@ impl<'a, T: Array> Array for &'a T {
     }
 }
 
+/// A kind of `Array` which can be downcasted by `downcast_array`.
+pub(crate) trait SizedArray: AsDynAny + Array {}
+
+/// A trait used to help conversion from `Arc<Self>` to `Arc<Any>`.
+pub(crate) trait AsDynAny: Any {
+    fn as_dyn_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static>;
+}
+
+impl<T: Sized + Send + Sync + 'static> AsDynAny for T {
+    fn as_dyn_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
+        self
+    }
+}
+
+/// Downcasts an Arc-ed sized `Array` to Arc-ed underlying arrow type.
+#[allow(dead_code)]
+pub(crate) fn downcast_array<T: Send + Sync + 'static>(
+    array: Arc<dyn SizedArray>,
+) -> Option<Arc<T>> {
+    AsDynAny::as_dyn_any(array).downcast().ok()
+}
+
 /// A generic trait for accessing the values of an [`Array`]
 ///
 /// # Validity
@@ -1112,5 +1134,16 @@ mod tests {
         let arr: ArrayRef = Arc::new(arr);
         assert!(compute_my_thing(&arr));
         assert!(compute_my_thing(arr.as_ref()));
+    }
+
+    #[test]
+    fn test_downcast_array() {
+        let array: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+
+        let boxed: Arc<dyn SizedArray> = Arc::new(array);
+        let array: Arc<Int32Array> = downcast_array(boxed).unwrap();
+
+        let expected: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+        assert_eq!(&array, &Arc::new(expected));
     }
 }

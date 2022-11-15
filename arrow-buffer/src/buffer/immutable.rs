@@ -19,7 +19,7 @@ use std::fmt::Debug;
 use std::iter::FromIterator;
 use std::ptr::NonNull;
 use std::sync::Arc;
-use std::{convert::AsRef, usize};
+use std::{convert::AsRef, mem, usize};
 
 use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
@@ -226,6 +226,28 @@ impl Buffer {
     /// inspected. Note that both `offset` and `length` are measured in bits.
     pub fn count_set_bits_offset(&self, offset: usize, len: usize) -> usize {
         UnalignedBitChunk::new(self.as_slice(), offset, len).count_ones()
+    }
+
+    /// Returns `MutableBuffer` for mutating the buffer if this buffer is not shared.
+    pub fn into_mutable(self) -> Result<MutableBuffer, Self> {
+        let offset_ptr = self.as_ptr();
+        let offset = self.offset;
+        let length = self.length;
+        Arc::try_unwrap(self.data)
+            .map(|bytes| {
+                // The pointer of underlying buffer should not be offset.
+                assert_eq!(offset_ptr, bytes.ptr().as_ptr());
+
+                let mutable_buffer =
+                    MutableBuffer::from_ptr(bytes.ptr(), bytes.capacity());
+                mem::forget(bytes);
+                mutable_buffer
+            })
+            .map_err(|bytes| Buffer {
+                data: bytes,
+                offset,
+                length,
+            })
     }
 }
 

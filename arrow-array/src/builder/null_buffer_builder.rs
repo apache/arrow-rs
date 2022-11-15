@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::builder::BooleanBufferBuilder;
-use arrow_buffer::Buffer;
+use arrow_buffer::{Buffer, MutableBuffer};
 
 /// Builder for creating the null bit buffer.
 /// This builder only materializes the buffer when we append `false`.
@@ -37,6 +37,15 @@ impl NullBufferBuilder {
     pub fn new(capacity: usize) -> Self {
         Self {
             bitmap_builder: None,
+            len: 0,
+            capacity,
+        }
+    }
+
+    pub fn new_from_buffer(buffer: Option<MutableBuffer>, capacity: usize) -> Self {
+        let bitmap_builder = buffer.map(BooleanBufferBuilder::new_from_buffer);
+        Self {
+            bitmap_builder,
             len: 0,
             capacity,
         }

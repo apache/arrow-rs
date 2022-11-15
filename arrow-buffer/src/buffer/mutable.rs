@@ -92,6 +92,15 @@ impl MutableBuffer {
         }
     }
 
+    /// Allocates a new [MutableBuffer] from given pointer `ptr`, `capacity`.
+    pub(crate) fn from_ptr(ptr: NonNull<u8>, capacity: usize) -> Self {
+        Self {
+            data: ptr,
+            len: 0,
+            capacity,
+        }
+    }
+
     /// creates a new [MutableBuffer] with capacity and length capable of holding `len` bits.
     /// This is useful to create a buffer for packed bitmaps.
     pub fn new_null(len: usize) -> Self {

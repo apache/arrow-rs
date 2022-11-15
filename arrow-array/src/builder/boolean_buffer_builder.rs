@@ -33,6 +33,10 @@ impl BooleanBufferBuilder {
         Self { buffer, len: 0 }
     }
 
+    pub fn new_from_buffer(buffer: MutableBuffer) -> Self {
+        Self { buffer, len: 0 }
+    }
+
     #[inline]
     pub fn len(&self) -> usize {
         self.len

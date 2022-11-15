@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::SizedArray;
 use crate::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
 use crate::iterator::PrimitiveIter;
 use crate::raw_pointer::RawPtrBox;
@@ -489,6 +490,41 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             )
         }
     }
+
+    /// Returns `PrimitiveBuilder` of this primitive array for mutating its values if the underlying
+    /// data buffer is not shared by others.
+    pub fn into_builder(self) -> Result<PrimitiveBuilder<T>, Self> {
+        let null_buffer = self
+            .data
+            .null_buffer()
+            .cloned()
+            .and_then(|b| b.into_mutable().ok());
+
+        let len = self.len();
+        let null_bit_buffer = self.data.null_buffer().cloned();
+
+        let mut buffers = self.data.get_buffers();
+        let buffer = buffers.remove(0);
+
+        let builder = buffer
+            .into_mutable()
+            .map(|buffer| PrimitiveBuilder::<T>::new_from_buffer(buffer, null_buffer));
+
+        match builder {
+            Ok(builder) => Ok(builder),
+            Err(buffer) => {
+                let builder = ArrayData::builder(T::DATA_TYPE)
+                    .len(len)
+                    .add_buffer(buffer)
+                    .null_bit_buffer(null_bit_buffer);
+
+                let array_data = unsafe { builder.build_unchecked() };
+                let array = PrimitiveArray::<T>::from(array_data);
+
+                Err(array)
+            }
+        }
+    }
 }
 
 #[inline]
@@ -528,6 +564,9 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
         self.into()
     }
 }
+
+/// Makes `PrimitiveArray<T>` can be "downcast_array".
+impl<T: ArrowPrimitiveType> SizedArray for PrimitiveArray<T> {}
 
 impl<'a, T: ArrowPrimitiveType> ArrayAccessor for &'a PrimitiveArray<T> {
     type Item = T::Native;
@@ -1036,7 +1075,8 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
 mod tests {
     use super::*;
     use crate::builder::{Decimal128Builder, Decimal256Builder};
-    use crate::BooleanArray;
+    use crate::{downcast_array, BooleanArray};
+    use std::sync::Arc;
 
     #[test]
     fn test_primitive_array_from_vec() {
@@ -1938,5 +1978,43 @@ mod tests {
         let array = Decimal128Array::from_iter_values(vec![-100, 0, 101].into_iter());
 
         array.value(4);
+    }
+
+    #[test]
+    fn test_into_builder() {
+        let array: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+
+        let boxed: Arc<dyn SizedArray> = Arc::new(array);
+        let array: Arc<Int32Array> = downcast_array(boxed).unwrap();
+
+        let col: Int32Array = Arc::try_unwrap(array).unwrap();
+        let mut builder = col.into_builder().unwrap();
+
+        builder.append_value(4);
+        builder.append_null();
+        builder.append_value(2);
+
+        let expected: Int32Array = vec![Some(4), None, Some(2)].into_iter().collect();
+
+        let new_array = builder.finish();
+        assert_eq!(expected, new_array);
+    }
+
+    #[test]
+    fn test_into_builder_cloned_array() {
+        let array: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+
+        let boxed: Arc<dyn SizedArray> = Arc::new(array);
+
+        let col: Int32Array = PrimitiveArray::<Int32Type>::from(boxed.data().clone());
+        let err = col.into_builder();
+
+        match err {
+            Ok(_) => panic!("Should not get builder from cloned array"),
+            Err(returned) => {
+                let expected: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+                assert_eq!(expected, returned)
+            }
+        }
     }
 }

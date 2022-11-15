@@ -19,6 +19,7 @@ use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::types::*;
 use crate::{ArrayRef, ArrowPrimitiveType, PrimitiveArray};
+use arrow_buffer::MutableBuffer;
 use arrow_data::ArrayData;
 use std::any::Any;
 use std::sync::Arc;
@@ -111,6 +112,21 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         Self {
             values_builder: BufferBuilder::<T::Native>::new(capacity),
             null_buffer_builder: NullBufferBuilder::new(capacity),
+        }
+    }
+
+    pub fn new_from_buffer(
+        values_buffer: MutableBuffer,
+        null_buffer: Option<MutableBuffer>,
+    ) -> Self {
+        let capacity = values_buffer.capacity();
+
+        Self {
+            values_builder: BufferBuilder::<T::Native>::new_from_buffer(values_buffer),
+            null_buffer_builder: NullBufferBuilder::new_from_buffer(
+                null_buffer,
+                capacity,
+            ),
         }
     }
 
