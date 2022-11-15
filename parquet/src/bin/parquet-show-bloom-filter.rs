@@ -33,7 +33,6 @@
 //! cargo run --features=cli --bin parquet-show-bloom-filter -- --file-name XYZ.parquet --column id --values a
 //! ```
 
-extern crate parquet;
 use clap::Parser;
 use parquet::bloom_filter::hash_bytes;
 use parquet::file::reader::{FileReader, SerializedFileReader};

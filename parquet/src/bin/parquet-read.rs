@@ -36,8 +36,6 @@
 //! Note that `parquet-read` reads full file schema, no projection or filtering is
 //! applied.
 
-extern crate parquet;
-
 use clap::Parser;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::record::Row;
