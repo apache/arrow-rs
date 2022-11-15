@@ -1898,13 +1898,13 @@ mod tests {
     #[test]
     fn test_unary_opt() {
         let array = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7]);
-        let r = array.unary_opt::<_, Int32Type>(|x| (x % 2 != 0).then(|| x));
+        let r = array.unary_opt::<_, Int32Type>(|x| (x % 2 != 0).then_some(x));
 
         let expected =
             Int32Array::from(vec![Some(1), None, Some(3), None, Some(5), None, Some(7)]);
         assert_eq!(r, expected);
 
-        let r = expected.unary_opt::<_, Int32Type>(|x| (x % 3 != 0).then(|| x));
+        let r = expected.unary_opt::<_, Int32Type>(|x| (x % 3 != 0).then_some(x));
         let expected =
             Int32Array::from(vec![Some(1), None, None, None, Some(5), None, Some(7)]);
         assert_eq!(r, expected);
