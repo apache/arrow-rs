@@ -34,7 +34,7 @@
 //! ```
 
 use clap::Parser;
-use parquet::bloom_filter::hash_bytes;
+use parquet::data_type::AsBytes;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::{fs::File, path::Path};
 
@@ -87,7 +87,7 @@ fn main() {
                     println!(
                         "Value {} is {} in bloom filter",
                         value,
-                        if sbbf.check(hash_bytes(value)) {
+                        if sbbf.check(value.as_str()) {
                             "present"
                         } else {
                             "absent"

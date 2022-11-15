@@ -18,6 +18,7 @@
 //! Bloom filter implementation specific to Parquet, as described
 //! in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md)
 
+use crate::data_type::AsBytes;
 use crate::errors::ParquetError;
 use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::reader::ChunkReader;
@@ -172,17 +173,27 @@ impl Sbbf {
         (((hash >> 32).saturating_mul(self.0.len() as u64)) >> 32) as usize
     }
 
+    /// Insert an [AsBytes] value into the filter
+    pub fn insert<T: AsBytes>(&mut self, value: T) {
+        self.insert_hash(hash_as_bytes(value));
+    }
+
     /// Insert a hash into the filter
-    pub fn insert(&mut self, hash: u64) {
+    fn insert_hash(&mut self, hash: u64) {
         let block_index = self.hash_to_block_index(hash);
         let block = &mut self.0[block_index];
         block_insert(block, hash as u32);
     }
 
+    /// Check if an [AsBytes] value is probably present or definitely absent in the filter
+    pub fn check<T: AsBytes>(&self, value: T) -> bool {
+        self.check_hash(hash_as_bytes(value))
+    }
+
     /// Check if a hash is in the filter. May return
     /// true for values that was never inserted ("false positive")
     /// but will always return false if a hash has not been inserted.
-    pub fn check(&self, hash: u64) -> bool {
+    fn check_hash(&self, hash: u64) -> bool {
         let block_index = self.hash_to_block_index(hash);
         let block = &self.0[block_index];
         block_check(block, hash as u32)
@@ -192,9 +203,10 @@ impl Sbbf {
 // per spec we use xxHash with seed=0
 const SEED: u64 = 0;
 
-pub fn hash_bytes<A: AsRef<[u8]>>(value: A) -> u64 {
+#[inline]
+fn hash_as_bytes<A: AsBytes>(value: A) -> u64 {
     let mut hasher = XxHash64::with_seed(SEED);
-    hasher.write(value.as_ref());
+    hasher.write(value.as_bytes());
     hasher.finish()
 }
 
@@ -208,7 +220,7 @@ mod tests {
 
     #[test]
     fn test_hash_bytes() {
-        assert_eq!(hash_bytes(b""), 17241709254077376921);
+        assert_eq!(hash_as_bytes(""), 17241709254077376921);
     }
 
     #[test]
@@ -247,8 +259,7 @@ mod tests {
         let sbbf = Sbbf::new(bitset);
         for a in 0..10i64 {
             let value = format!("a{}", a);
-            let hash = hash_bytes(value);
-            assert!(sbbf.check(hash));
+            assert!(sbbf.check(value.as_str()));
         }
     }
 
