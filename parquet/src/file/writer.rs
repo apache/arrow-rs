@@ -434,6 +434,7 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
                 .set_column_metadata(column_chunks)
                 .set_total_byte_size(self.total_bytes_written as i64)
                 .set_num_rows(self.total_rows_written.unwrap_or(0) as i64)
+                .set_sorting_columns(self.props.sorting_columns().cloned())
                 .build()?;
 
             let metadata = Arc::new(row_group_metadata);
@@ -653,6 +654,7 @@ mod tests {
         reader::{FileReader, SerializedFileReader, SerializedPageReader},
         statistics::{from_thrift, to_thrift, Statistics},
     };
+    use crate::format::SortingColumn;
     use crate::record::RowAccessor;
     use crate::schema::types::{ColumnDescriptor, ColumnPath};
     use crate::util::memory::ByteBufferPtr;
@@ -842,6 +844,65 @@ mod tests {
         assert_eq!(fields.len(), 1);
         let read_field = fields.get(0).unwrap();
         assert_eq!(read_field, &field);
+    }
+
+    #[test]
+    fn test_file_writer_with_sorting_columns_metadata() {
+        let file = tempfile::tempfile().unwrap();
+
+        let schema = Arc::new(
+            types::Type::group_type_builder("schema")
+                .with_fields(&mut vec![
+                    Arc::new(
+                        types::Type::primitive_type_builder("col1", Type::INT32)
+                            .build()
+                            .unwrap(),
+                    ),
+                    Arc::new(
+                        types::Type::primitive_type_builder("col2", Type::INT32)
+                            .build()
+                            .unwrap(),
+                    ),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let expected_result = Some(vec![SortingColumn {
+            column_idx: 0,
+            descending: false,
+            nulls_first: true,
+        }]);
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_key_value_metadata(Some(vec![KeyValue::new(
+                    "key".to_string(),
+                    "value".to_string(),
+                )]))
+                .set_sorting_columns(expected_result.clone())
+                .build(),
+        );
+        let mut writer =
+            SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
+        let mut row_group_writer = writer.next_row_group().expect("get row group writer");
+
+        let col_writer = row_group_writer.next_column().unwrap().unwrap();
+        col_writer.close().unwrap();
+
+        let col_writer = row_group_writer.next_column().unwrap().unwrap();
+        col_writer.close().unwrap();
+
+        row_group_writer.close().unwrap();
+        writer.close().unwrap();
+
+        let reader = SerializedFileReader::new(file).unwrap();
+        let result: Vec<Option<&Vec<SortingColumn>>> = reader
+            .metadata()
+            .row_groups()
+            .iter()
+            .map(|f| f.sorting_columns())
+            .collect();
+        // validate the sorting column read match the one written above
+        assert_eq!(expected_result.as_ref(), result[0]);
     }
 
     #[test]

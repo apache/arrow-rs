@@ -37,7 +37,7 @@ use std::sync::Arc;
 
 use crate::format::{
     BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation,
-    RowGroup,
+    RowGroup, SortingColumn,
 };
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
@@ -229,6 +229,7 @@ pub type RowGroupMetaDataPtr = Arc<RowGroupMetaData>;
 pub struct RowGroupMetaData {
     columns: Vec<ColumnChunkMetaData>,
     num_rows: i64,
+    sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
     page_offset_index: Option<Vec<Vec<PageLocation>>>,
@@ -258,6 +259,11 @@ impl RowGroupMetaData {
     /// Number of rows in this row group.
     pub fn num_rows(&self) -> i64 {
         self.num_rows
+    }
+
+    /// Returns the sort ordering of the rows in this RowGroup if any
+    pub fn sorting_columns(&self) -> Option<&Vec<SortingColumn>> {
+        self.sorting_columns.as_ref()
     }
 
     /// Total byte size of all uncompressed column data in this row group.
@@ -303,9 +309,11 @@ impl RowGroupMetaData {
             let cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
             columns.push(cc);
         }
+        let sorting_columns = rg.sorting_columns;
         Ok(RowGroupMetaData {
             columns,
             num_rows,
+            sorting_columns,
             total_byte_size,
             schema_descr,
             page_offset_index: None,
@@ -318,7 +326,7 @@ impl RowGroupMetaData {
             columns: self.columns().iter().map(|v| v.to_thrift()).collect(),
             total_byte_size: self.total_byte_size,
             num_rows: self.num_rows,
-            sorting_columns: None,
+            sorting_columns: self.sorting_columns().cloned(),
             file_offset: None,
             total_compressed_size: None,
             ordinal: None,
@@ -331,6 +339,7 @@ pub struct RowGroupMetaDataBuilder {
     columns: Vec<ColumnChunkMetaData>,
     schema_descr: SchemaDescPtr,
     num_rows: i64,
+    sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     page_offset_index: Option<Vec<Vec<PageLocation>>>,
 }
@@ -342,6 +351,7 @@ impl RowGroupMetaDataBuilder {
             columns: Vec::with_capacity(schema_descr.num_columns()),
             schema_descr,
             num_rows: 0,
+            sorting_columns: None,
             total_byte_size: 0,
             page_offset_index: None,
         }
@@ -350,6 +360,12 @@ impl RowGroupMetaDataBuilder {
     /// Sets number of rows in this row group.
     pub fn set_num_rows(mut self, value: i64) -> Self {
         self.num_rows = value;
+        self
+    }
+
+    /// Sets the sorting order for columns
+    pub fn set_sorting_columns(mut self, value: Option<Vec<SortingColumn>>) -> Self {
+        self.sorting_columns = value;
         self
     }
 
@@ -384,6 +400,7 @@ impl RowGroupMetaDataBuilder {
         Ok(RowGroupMetaData {
             columns: self.columns,
             num_rows: self.num_rows,
+            sorting_columns: self.sorting_columns,
             total_byte_size: self.total_byte_size,
             schema_descr: self.schema_descr,
             page_offset_index: self.page_offset_index,
