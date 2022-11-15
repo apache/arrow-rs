@@ -448,8 +448,9 @@ mod test {
         let mut field = Field::new("c1", DataType::Int64, false);
         let result = field
             .try_merge(&Field::new("c1", DataType::Float32, true))
-            .expect_err("should fail");
-        assert_eq!("Schema error: Fail to merge schema field 'c1' because the from data_type = Float32 does not equal Int64", format!("{}", result));
+            .expect_err("should fail")
+            .to_string();
+        assert_eq!("Schema error: Fail to merge schema field 'c1' because the from data_type = Float32 does not equal Int64", result);
     }
 
     #[test]
