@@ -380,9 +380,9 @@ impl RowGroupMetaDataBuilder {
     /// Sets the sorting order for columns
     pub fn set_sorting_columns(
         mut self,
-        value: Option<Vec<SortingColumnMetaData>>,
+        value: Option<&Vec<SortingColumnMetaData>>,
     ) -> Self {
-        self.sorting_columns = value;
+        self.sorting_columns = value.cloned();
         self
     }
 

@@ -434,6 +434,7 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
                 .set_column_metadata(column_chunks)
                 .set_total_byte_size(self.total_bytes_written as i64)
                 .set_num_rows(self.total_rows_written.unwrap_or(0) as i64)
+                .set_sorting_columns(self.props.sorting_columns())
                 .build()?;
 
             let metadata = Arc::new(row_group_metadata);

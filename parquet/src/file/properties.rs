@@ -71,6 +71,8 @@ use crate::compression::{CodecOptions, CodecOptionsBuilder};
 use crate::file::metadata::KeyValue;
 use crate::schema::types::ColumnPath;
 
+use super::metadata::SortingColumnMetaData;
+
 const DEFAULT_PAGE_SIZE: usize = 1024 * 1024;
 const DEFAULT_WRITE_BATCH_SIZE: usize = 1024;
 const DEFAULT_WRITER_VERSION: WriterVersion = WriterVersion::PARQUET_1_0;
@@ -121,6 +123,7 @@ pub struct WriterProperties {
     pub(crate) key_value_metadata: Option<Vec<KeyValue>>,
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
+    sorting_columns: Option<Vec<SortingColumnMetaData>>,
 }
 
 impl WriterProperties {
@@ -180,6 +183,11 @@ impl WriterProperties {
     /// Returns `key_value_metadata` KeyValue pairs.
     pub fn key_value_metadata(&self) -> Option<&Vec<KeyValue>> {
         self.key_value_metadata.as_ref()
+    }
+
+    /// Returns sorting columns.
+    pub fn sorting_columns(&self) -> Option<&Vec<SortingColumnMetaData>> {
+        self.sorting_columns.as_ref()
     }
 
     /// Returns encoding for a data page, when dictionary encoding is enabled.
@@ -262,6 +270,7 @@ pub struct WriterPropertiesBuilder {
     key_value_metadata: Option<Vec<KeyValue>>,
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
+    sorting_columns: Option<Vec<SortingColumnMetaData>>,
 }
 
 impl WriterPropertiesBuilder {
@@ -278,6 +287,7 @@ impl WriterPropertiesBuilder {
             key_value_metadata: None,
             default_column_properties: ColumnProperties::new(),
             column_properties: HashMap::new(),
+            sorting_columns: None,
         }
     }
 
@@ -294,6 +304,7 @@ impl WriterPropertiesBuilder {
             key_value_metadata: self.key_value_metadata,
             default_column_properties: self.default_column_properties,
             column_properties: self.column_properties,
+            sorting_columns: self.sorting_columns,
         }
     }
 
@@ -367,6 +378,15 @@ impl WriterPropertiesBuilder {
     /// Sets "key_value_metadata" property.
     pub fn set_key_value_metadata(mut self, value: Option<Vec<KeyValue>>) -> Self {
         self.key_value_metadata = value;
+        self
+    }
+
+    /// Sets sorting order of rows in the row group if any
+    pub fn set_sorting_columns(
+        mut self,
+        value: Option<Vec<SortingColumnMetaData>>,
+    ) -> Self {
+        self.sorting_columns = value;
         self
     }
 
