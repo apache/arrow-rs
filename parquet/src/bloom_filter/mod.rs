@@ -81,31 +81,23 @@ fn block_check(block: &Block, hash: u32) -> bool {
 /// A split block Bloom filter
 pub struct Sbbf(Vec<Block>);
 
-// this size should not be too large to not to hit short read too early (although unlikely)
-// but also not to small to ensure cache efficiency, this is essential a "guess" of the header
-// size. In the demo test the size is 15 bytes.
-const STEP_SIZE: usize = 16;
+const SBBF_HEADER_SIZE_ESTIMATE: usize = 20;
 
 /// given an initial offset, and a chunk reader, try to read out a bloom filter header by trying
 /// one or more iterations, returns both the header and the offset after it (for bitset).
 fn chunk_read_bloom_filter_header_and_offset<R: ChunkReader>(
-    offset: usize,
+    offset: u64,
     reader: Arc<R>,
-) -> Result<(BloomFilterHeader, usize), ParquetError> {
-    let mut length = STEP_SIZE;
-    loop {
-        let buffer = reader.get_bytes(offset as u64, length)?;
-        let mut buf_reader = buffer.reader();
-        let mut prot = TCompactInputProtocol::new(&mut buf_reader);
-        if let Ok(h) = BloomFilterHeader::read_from_in_protocol(&mut prot) {
-            let buffer = buf_reader.into_inner();
-            let bitset_offset = offset + length - buffer.remaining();
-            return Ok((h, bitset_offset));
-        } else {
-            // continue to try by reading another batch
-            length += STEP_SIZE;
-        }
-    }
+) -> Result<(BloomFilterHeader, u64), ParquetError> {
+    let buffer = reader.get_bytes(offset as u64, SBBF_HEADER_SIZE_ESTIMATE)?;
+    let mut buf_reader = buffer.reader();
+    let mut prot = TCompactInputProtocol::new(&mut buf_reader);
+    let header = BloomFilterHeader::read_from_in_protocol(&mut prot).map_err(|e| {
+        ParquetError::General(format!("Could not read bloom filter header: {}", e))
+    })?;
+    let bitset_offset =
+        offset + (SBBF_HEADER_SIZE_ESTIMATE - buf_reader.into_inner().remaining()) as u64;
+    Ok((header, bitset_offset))
 }
 
 impl Sbbf {
@@ -127,7 +119,7 @@ impl Sbbf {
         column_metadata: &ColumnChunkMetaData,
         reader: Arc<R>,
     ) -> Result<Option<Self>, ParquetError> {
-        let offset: usize = if let Some(offset) = column_metadata.bloom_filter_offset() {
+        let offset: u64 = if let Some(offset) = column_metadata.bloom_filter_offset() {
             offset.try_into().map_err(|_| {
                 ParquetError::General("Bloom filter offset is invalid".to_string())
             })?
@@ -157,7 +149,7 @@ impl Sbbf {
         let length: usize = header.num_bytes.try_into().map_err(|_| {
             ParquetError::General("Bloom filter length is invalid".to_string())
         })?;
-        let bitset = reader.get_bytes(bitset_offset as u64, length)?;
+        let bitset = reader.get_bytes(bitset_offset, length)?;
         Ok(Some(Self::new(&bitset)))
     }
 
