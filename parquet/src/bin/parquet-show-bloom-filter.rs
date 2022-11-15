@@ -40,7 +40,7 @@ use std::{fs::File, path::Path};
 #[derive(Debug, Parser)]
 #[clap(author, version, about("Binary file to read bloom filter data from a Parquet file"), long_about = None)]
 struct Args {
-    #[clap(short, long, help("Path to a parquet file, or - for stdin"))]
+    #[clap(short, long, help("Path to the parquet file"))]
     file_name: String,
     #[clap(
         short,
@@ -51,7 +51,7 @@ struct Args {
     #[clap(
         short,
         long,
-        help("Check if the given values match bloom filter"),
+        help("Check if the given values match bloom filter, the values will be evaluated as strings"),
         required = true
     )]
     values: Vec<String>,
