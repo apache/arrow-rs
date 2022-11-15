@@ -89,7 +89,7 @@ fn parquet_sorting_column_round_trip() {
             .collect();
 
         // validate the sorting column read match the one written above
-        assert_eq!(expected_result.clone().as_deref(), result[0]);
+        assert_eq!(expected_result.as_deref(), result[0]);
         if let Ok(()) = sender.send(true) {}
     });
     assert_ne!(
