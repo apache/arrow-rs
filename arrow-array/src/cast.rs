@@ -19,6 +19,7 @@
 
 use crate::array::*;
 use crate::types::*;
+use arrow_data::ArrayData;
 
 /// Repeats the provided pattern based on the number of comma separated identifiers
 #[doc(hidden)]
@@ -549,6 +550,38 @@ array_downcast_fn!(as_struct_array, StructArray);
 array_downcast_fn!(as_union_array, UnionArray);
 array_downcast_fn!(as_map_array, MapArray);
 array_downcast_fn!(as_decimal_array, Decimal128Array);
+
+/// Downcasts a `dyn Array` to a concrete type
+///
+/// ```
+/// # use arrow_array::{BooleanArray, Int32Array, RecordBatch, StringArray};
+/// # use arrow_array::cast::downcast_array;
+/// struct ConcreteBatch {
+///     col1: Int32Array,
+///     col2: BooleanArray,
+///     col3: StringArray,
+/// }
+///
+/// impl ConcreteBatch {
+///     fn new(batch: &RecordBatch) -> Self {
+///         Self {
+///             col1: downcast_array(batch.column(0).as_ref()),
+///             col2: downcast_array(batch.column(1).as_ref()),
+///             col3: downcast_array(batch.column(2).as_ref()),
+///         }
+///     }
+/// }
+/// ```
+///
+/// # Panics
+///
+/// Panics if array is not of the correct data type
+pub fn downcast_array<T>(array: &dyn Array) -> T
+where
+    T: From<ArrayData>,
+{
+    T::from(array.data().clone())
+}
 
 #[cfg(test)]
 mod tests {
