@@ -1,50 +1,34 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
-
 use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder, UInt8BufferBuilder};
-use crate::{ArrayRef, GenericBinaryArray, OffsetSizeTrait};
+use crate::types::{ByteArrayType, GenericBinaryType, GenericStringType};
+use crate::{ArrayRef, GenericByteArray, OffsetSizeTrait};
+use arrow_buffer::ArrowNativeType;
 use arrow_data::ArrayDataBuilder;
 use std::any::Any;
 use std::sync::Arc;
 
-///  Array builder for [`GenericBinaryArray`]
-#[derive(Debug)]
-pub struct GenericBinaryBuilder<OffsetSize: OffsetSizeTrait> {
+///  Array builder for [`GenericByteArray`]
+pub struct GenericByteBuilder<T: ByteArrayType> {
     value_builder: UInt8BufferBuilder,
-    offsets_builder: BufferBuilder<OffsetSize>,
+    offsets_builder: BufferBuilder<T::Offset>,
     null_buffer_builder: NullBufferBuilder,
 }
 
-impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
-    /// Creates a new [`GenericBinaryBuilder`].
+impl<T: ByteArrayType> GenericByteBuilder<T> {
+    /// Creates a new [`GenericByteBuilder`].
     pub fn new() -> Self {
         Self::with_capacity(1024, 1024)
     }
 
-    /// Creates a new [`GenericBinaryBuilder`].
+    /// Creates a new [`GenericByteBuilder`].
     ///
     /// - `item_capacity` is the number of items to pre-allocate.
     ///   The size of the preallocated buffer of offsets is the number of items plus one.
     /// - `data_capacity` is the total number of bytes of string data to pre-allocate
     ///   (for all items, not per item).
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
-        let mut offsets_builder = BufferBuilder::<OffsetSize>::new(item_capacity + 1);
-        offsets_builder.append(OffsetSize::zero());
+        let mut offsets_builder = BufferBuilder::<T::Offset>::new(item_capacity + 1);
+        offsets_builder.append(T::Offset::from_usize(0).unwrap());
         Self {
             value_builder: UInt8BufferBuilder::new(data_capacity),
             offsets_builder,
@@ -52,13 +36,22 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
         }
     }
 
-    /// Appends a byte slice into the builder.
+    /// Appends a value into the builder.
     #[inline]
-    pub fn append_value(&mut self, value: impl AsRef<[u8]>) {
-        self.value_builder.append_slice(value.as_ref());
+    pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
+        self.value_builder.append_slice(value.as_ref().as_ref());
         self.null_buffer_builder.append(true);
         self.offsets_builder
-            .append(OffsetSize::from_usize(self.value_builder.len()).unwrap());
+            .append(T::Offset::from_usize(self.value_builder.len()).unwrap());
+    }
+
+    /// Append an `Option` value into the builder.
+    #[inline]
+    pub fn append_option(&mut self, value: Option<impl AsRef<T::Native>>) {
+        match value {
+            None => self.append_null(),
+            Some(v) => self.append_value(v),
+        };
     }
 
     /// Append a null value into the builder.
@@ -66,21 +59,22 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
     pub fn append_null(&mut self) {
         self.null_buffer_builder.append(false);
         self.offsets_builder
-            .append(OffsetSize::from_usize(self.value_builder.len()).unwrap());
+            .append(T::Offset::from_usize(self.value_builder.len()).unwrap());
     }
 
-    /// Builds the [`GenericBinaryArray`] and reset this builder.
-    pub fn finish(&mut self) -> GenericBinaryArray<OffsetSize> {
-        let array_type = GenericBinaryArray::<OffsetSize>::DATA_TYPE;
+    /// Builds the [`GenericByteBuilder`] and reset this builder.
+    pub fn finish(&mut self) -> GenericByteArray<T> {
+        let array_type = T::DATA_TYPE;
         let array_builder = ArrayDataBuilder::new(array_type)
             .len(self.len())
             .add_buffer(self.offsets_builder.finish())
             .add_buffer(self.value_builder.finish())
             .null_bit_buffer(self.null_buffer_builder.finish());
 
-        self.offsets_builder.append(OffsetSize::zero());
+        self.offsets_builder
+            .append(T::Offset::from_usize(0).unwrap());
         let array_data = unsafe { array_builder.build_unchecked() };
-        GenericBinaryArray::<OffsetSize>::from(array_data)
+        GenericByteArray::from(array_data)
     }
 
     /// Returns the current values buffer as a slice
@@ -89,33 +83,29 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
     }
 
     /// Returns the current offsets buffer as a slice
-    pub fn offsets_slice(&self) -> &[OffsetSize] {
+    pub fn offsets_slice(&self) -> &[T::Offset] {
         self.offsets_builder.as_slice()
     }
 }
 
-impl<OffsetSize: OffsetSizeTrait> Default for GenericBinaryBuilder<OffsetSize> {
+impl<T: ByteArrayType> std::fmt::Debug for GenericByteBuilder<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}{}Builder", T::Offset::PREFIX, T::PREFIX)?;
+        f.debug_struct("")
+            .field("value_builder", &self.value_builder)
+            .field("offsets_builder", &self.offsets_builder)
+            .field("null_buffer_builder", &self.null_buffer_builder)
+            .finish()
+    }
+}
+
+impl<T: ByteArrayType> Default for GenericByteBuilder<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSize> {
-    /// Returns the builder as a non-mutable `Any` reference.
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    /// Returns the builder as a mutable `Any` reference.
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    /// Returns the boxed builder as a box of `Any`.
-    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
-        self
-    }
-
+impl<T: ByteArrayType> ArrayBuilder for GenericByteBuilder<T> {
     /// Returns the number of binary slots in the builder
     fn len(&self) -> usize {
         self.null_buffer_builder.len()
@@ -130,12 +120,34 @@ impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSi
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
     }
+
+    /// Returns the builder as a non-mutable `Any` reference.
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Returns the builder as a mutable `Any` reference.
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    /// Returns the boxed builder as a box of `Any`.
+    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
 }
+
+///  Array builder for [`GenericStringArray`][crate::GenericStringArray]
+pub type GenericStringBuilder<O> = GenericByteBuilder<GenericStringType<O>>;
+
+///  Array builder for [`GenericBinaryArray`][crate::GenericBinaryArray]
+pub type GenericBinaryBuilder<O> = GenericByteBuilder<GenericBinaryType<O>>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::array::{Array, OffsetSizeTrait};
+    use crate::GenericStringArray;
 
     fn _test_generic_binary_builder<O: OffsetSizeTrait>() {
         let mut builder = GenericBinaryBuilder::<O>::new();
@@ -229,5 +241,71 @@ mod tests {
     #[test]
     fn test_large_binary_builder_reset() {
         _test_generic_binary_builder_reset::<i64>()
+    }
+
+    fn _test_generic_string_array_builder<O: OffsetSizeTrait>() {
+        let mut builder = GenericStringBuilder::<O>::new();
+        let owned = "arrow".to_owned();
+
+        builder.append_value("hello");
+        builder.append_value("");
+        builder.append_value(&owned);
+        builder.append_null();
+        builder.append_option(Some("rust"));
+        builder.append_option(None::<&str>);
+        builder.append_option(None::<String>);
+        assert_eq!(7, builder.len());
+
+        assert_eq!(
+            GenericStringArray::<O>::from(vec![
+                Some("hello"),
+                Some(""),
+                Some("arrow"),
+                None,
+                Some("rust"),
+                None,
+                None
+            ]),
+            builder.finish()
+        );
+    }
+
+    #[test]
+    fn test_string_array_builder() {
+        _test_generic_string_array_builder::<i32>()
+    }
+
+    #[test]
+    fn test_large_string_array_builder() {
+        _test_generic_string_array_builder::<i64>()
+    }
+
+    fn _test_generic_string_array_builder_finish<O: OffsetSizeTrait>() {
+        let mut builder = GenericStringBuilder::<O>::with_capacity(3, 11);
+
+        builder.append_value("hello");
+        builder.append_value("rust");
+        builder.append_null();
+
+        builder.finish();
+        assert!(builder.is_empty());
+        assert_eq!(&[O::zero()], builder.offsets_slice());
+
+        builder.append_value("arrow");
+        builder.append_value("parquet");
+        let arr = builder.finish();
+        // array should not have null buffer because there is not `null` value.
+        assert_eq!(None, arr.data().null_buffer());
+        assert_eq!(GenericStringArray::<O>::from(vec!["arrow", "parquet"]), arr,)
+    }
+
+    #[test]
+    fn test_string_array_builder_finish() {
+        _test_generic_string_array_builder_finish::<i32>()
+    }
+
+    #[test]
+    fn test_large_string_array_builder_finish() {
+        _test_generic_string_array_builder_finish::<i64>()
     }
 }
