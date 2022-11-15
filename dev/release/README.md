@@ -259,6 +259,8 @@ Rust Arrow Crates:
 (cd arrow-select && cargo publish)
 (cd arrow-cast && cargo publish)
 (cd arrow-ipc && cargo publish)
+(cd arrow-csv && cargo publish)
+(cd arrow-json && cargo publish)
 (cd arrow && cargo publish)
 (cd arrow-flight && cargo publish)
 (cd parquet && cargo publish)
