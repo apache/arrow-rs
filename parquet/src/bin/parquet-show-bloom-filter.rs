@@ -34,7 +34,6 @@
 //! ```
 
 use clap::Parser;
-use parquet::data_type::AsBytes;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::{fs::File, path::Path};
 
