@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::SizedArray;
 use crate::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
 use crate::iterator::PrimitiveIter;
 use crate::raw_pointer::RawPtrBox;
@@ -565,9 +564,6 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
     }
 }
 
-/// Makes `PrimitiveArray<T>` can be "downcast_array".
-impl<T: ArrowPrimitiveType> SizedArray for PrimitiveArray<T> {}
-
 impl<'a, T: ArrowPrimitiveType> ArrayAccessor for &'a PrimitiveArray<T> {
     type Item = T::Native;
 
@@ -1075,7 +1071,8 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
 mod tests {
     use super::*;
     use crate::builder::{Decimal128Builder, Decimal256Builder};
-    use crate::{downcast_array, BooleanArray};
+    use crate::cast::downcast_array;
+    use crate::{ArrayRef, BooleanArray};
     use std::sync::Arc;
 
     #[test]
@@ -1984,10 +1981,10 @@ mod tests {
     fn test_into_builder() {
         let array: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
 
-        let boxed: Arc<dyn SizedArray> = Arc::new(array);
-        let array: Arc<Int32Array> = downcast_array(boxed).unwrap();
+        let boxed: ArrayRef = Arc::new(array);
+        let col: Int32Array = downcast_array(&boxed);
+        drop(boxed);
 
-        let col: Int32Array = Arc::try_unwrap(array).unwrap();
         let mut builder = col.into_builder().unwrap();
 
         builder.append_value(4);
@@ -2004,7 +2001,7 @@ mod tests {
     fn test_into_builder_cloned_array() {
         let array: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
 
-        let boxed: Arc<dyn SizedArray> = Arc::new(array);
+        let boxed: ArrayRef = Arc::new(array);
 
         let col: Int32Array = PrimitiveArray::<Int32Type>::from(boxed.data().clone());
         let err = col.into_builder();
