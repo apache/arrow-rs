@@ -438,6 +438,57 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             build_primitive_array(len, buffer.finish(), null_count, null_buffer)
         })
     }
+
+    /// Applies a unary and nullable function to all valid values in a primitive array
+    ///
+    /// This is unlike [`Self::unary`] which will apply an infallible function to all rows
+    /// regardless of validity, in many cases this will be significantly faster and should
+    /// be preferred if `op` is infallible.
+    ///
+    /// Note: LLVM is currently unable to effectively vectorize fallible operations
+    pub fn unary_opt<F, O>(&self, op: F) -> PrimitiveArray<O>
+    where
+        O: ArrowPrimitiveType,
+        F: Fn(T::Native) -> Option<O::Native>,
+    {
+        let data = self.data();
+        let len = data.len();
+        let offset = data.offset();
+        let null_count = data.null_count();
+        let nulls = data.null_buffer().map(|x| x.as_slice());
+
+        let mut null_builder = BooleanBufferBuilder::new(len);
+        match nulls {
+            Some(b) => null_builder.append_packed_range(offset..offset + len, b),
+            None => null_builder.append_n(len, true),
+        }
+
+        let mut buffer = BufferBuilder::<O::Native>::new(len);
+        buffer.append_n_zeroed(len);
+        let slice = buffer.as_slice_mut();
+
+        let mut out_null_count = null_count;
+
+        let _ = try_for_each_valid_idx(len, offset, null_count, nulls, |idx| {
+            match op(unsafe { self.value_unchecked(idx) }) {
+                Some(v) => unsafe { *slice.get_unchecked_mut(idx) = v },
+                None => {
+                    out_null_count += 1;
+                    null_builder.set_bit(idx, false);
+                }
+            }
+            Ok::<_, ()>(())
+        });
+
+        unsafe {
+            build_primitive_array(
+                len,
+                buffer.finish(),
+                out_null_count,
+                Some(null_builder.finish()),
+            )
+        }
+    }
 }
 
 #[inline]
@@ -801,8 +852,13 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
     }
 
     /// Construct a timestamp array with new timezone
-    pub fn with_timezone(&self, timezone: String) -> Self {
-        self.with_timezone_opt(Some(timezone))
+    pub fn with_timezone(&self, timezone: impl Into<String>) -> Self {
+        self.with_timezone_opt(Some(timezone.into()))
+    }
+
+    /// Construct a timestamp array with UTC
+    pub fn with_timezone_utc(&self) -> Self {
+        self.with_timezone("+00:00")
     }
 
     /// Construct a timestamp array with an optional timezone
@@ -1345,6 +1401,21 @@ mod tests {
     }
 
     #[test]
+    fn test_timestamp_utc_fmt_debug() {
+        let arr: PrimitiveArray<TimestampMillisecondType> =
+            TimestampMillisecondArray::from(vec![
+                1546214400000,
+                1546214400000,
+                -1546214400000,
+            ])
+            .with_timezone_utc();
+        assert_eq!(
+            "PrimitiveArray<Timestamp(Millisecond, Some(\"+00:00\"))>\n[\n  2018-12-31T00:00:00+00:00,\n  2018-12-31T00:00:00+00:00,\n  1921-01-02T00:00:00+00:00,\n]",
+            format!("{:?}", arr)
+        );
+    }
+
+    #[test]
     #[cfg(feature = "chrono-tz")]
     fn test_timestamp_with_named_tz_fmt_debug() {
         let arr: PrimitiveArray<TimestampMillisecondType> =
@@ -1842,6 +1913,21 @@ mod tests {
         assert!(array.is_null(1));
         assert_eq!(101_i128, array.value(2));
         assert!(!array.is_null(2));
+    }
+
+    #[test]
+    fn test_unary_opt() {
+        let array = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7]);
+        let r = array.unary_opt::<_, Int32Type>(|x| (x % 2 != 0).then_some(x));
+
+        let expected =
+            Int32Array::from(vec![Some(1), None, Some(3), None, Some(5), None, Some(7)]);
+        assert_eq!(r, expected);
+
+        let r = expected.unary_opt::<_, Int32Type>(|x| (x % 3 != 0).then_some(x));
+        let expected =
+            Int32Array::from(vec![Some(1), None, None, None, Some(5), None, Some(7)]);
+        assert_eq!(r, expected);
     }
 
     #[test]

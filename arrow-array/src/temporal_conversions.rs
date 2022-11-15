@@ -252,7 +252,7 @@ pub fn as_time<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveTime> {
             _ => None,
         },
         DataType::Timestamp(_, _) => as_datetime::<T>(v).map(|datetime| datetime.time()),
-        DataType::Date32 | DataType::Date64 => Some(NaiveTime::from_hms(0, 0, 0)),
+        DataType::Date32 | DataType::Date64 => NaiveTime::from_hms_opt(0, 0, 0),
         DataType::Interval(_) => None,
         _ => None,
     }
