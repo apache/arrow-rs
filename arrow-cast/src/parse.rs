@@ -149,30 +149,25 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
 /// or offset specified, as it considers only time since midnight.
 pub fn string_to_time_nanoseconds(s: &str) -> Result<i64, ArrowError> {
     // colon count, presence of decimal, presence of whitespace
-    fn preprocess_time_string(string: &str) -> (u8, bool, bool) {
+    fn preprocess_time_string(string: &str) -> (usize, bool, bool) {
         string
-            .chars()
+            .as_bytes()
+            .iter()
             .fold((0, false, false), |tup, char| match char {
-                ':' => (tup.0.saturating_add(1), tup.1, tup.2),
-                '.' => (tup.0, true, tup.2),
-                ' ' => (tup.0, tup.1, true),
+                b':' => (tup.0 + 1, tup.1, tup.2),
+                b'.' => (tup.0, true, tup.2),
+                b' ' => (tup.0, tup.1, true),
                 _ => tup,
             })
     }
 
-    fn naive_time_parser(string: &str, formats: &[&str]) -> Option<NaiveTime> {
-        formats
-            .iter()
-            .find_map(|f| NaiveTime::parse_from_str(string, f).ok())
-    }
-
     // Do a preprocess pass of the string to prune which formats to attempt parsing for
-    match preprocess_time_string(s.trim()) {
+    let formats: &[&str] = match preprocess_time_string(s.trim()) {
         // 24-hour clock, with hour, minutes, seconds and fractions of a second specified
         // Examples:
         // * 09:50:12.123456789
         // *  9:50:12.123456789
-        (2, true, false) => naive_time_parser(s, &["%H:%M:%S%.f", "%k:%M:%S%.f"]),
+        (2, true, false) => &["%H:%M:%S%.f", "%k:%M:%S%.f"],
 
         // 12-hour clock, with hour, minutes, seconds and fractions of a second specified
         // Examples:
@@ -180,21 +175,18 @@ pub fn string_to_time_nanoseconds(s: &str) -> Result<i64, ArrowError> {
         // * 09:50:12.123456789 pm
         // *  9:50:12.123456789 AM
         // *  9:50:12.123456789 am
-        (2, true, true) => naive_time_parser(
-            s,
-            &[
-                "%I:%M:%S%.f %P",
-                "%I:%M:%S%.f %p",
-                "%l:%M:%S%.f %P",
-                "%l:%M:%S%.f %p",
-            ],
-        ),
+        (2, true, true) => &[
+            "%I:%M:%S%.f %P",
+            "%I:%M:%S%.f %p",
+            "%l:%M:%S%.f %P",
+            "%l:%M:%S%.f %p",
+        ],
 
         // 24-hour clock, with hour, minutes and seconds specified
         // Examples:
         // * 09:50:12
         // *  9:50:12
-        (2, false, false) => naive_time_parser(s, &["%H:%M:%S", "%k:%M:%S"]),
+        (2, false, false) => &["%H:%M:%S", "%k:%M:%S"],
 
         // 12-hour clock, with hour, minutes and seconds specified
         // Examples:
@@ -202,16 +194,13 @@ pub fn string_to_time_nanoseconds(s: &str) -> Result<i64, ArrowError> {
         // * 09:50:12 pm
         // *  9:50:12 AM
         // *  9:50:12 am
-        (2, false, true) => naive_time_parser(
-            s,
-            &["%I:%M:%S %P", "%I:%M:%S %p", "%l:%M:%S %P", "%l:%M:%S %p"],
-        ),
+        (2, false, true) => &["%I:%M:%S %P", "%I:%M:%S %p", "%l:%M:%S %P", "%l:%M:%S %p"],
 
         // 24-hour clock, with hour and minutes specified
         // Examples:
         // * 09:50
         // *  9:50
-        (1, false, false) => naive_time_parser(s, &["%H:%M", "%k:%M"]),
+        (1, false, false) => &["%H:%M", "%k:%M"],
 
         // 12-hour clock, with hour and minutes specified
         // Examples:
@@ -219,17 +208,19 @@ pub fn string_to_time_nanoseconds(s: &str) -> Result<i64, ArrowError> {
         // * 09:50 pm
         // *  9:50 AM
         // *  9:50 am
-        (1, false, true) => {
-            naive_time_parser(s, &["%I:%M %P", "%I:%M %p", "%l:%M %P", "%l:%M %p"])
-        }
+        (1, false, true) => &["%I:%M %P", "%I:%M %p", "%l:%M %P", "%l:%M %p"],
 
-        _ => None,
-    }
-    .map(|nt| {
-        nt.num_seconds_from_midnight() as i64 * 1_000_000_000 + nt.nanosecond() as i64
-    })
-    // Return generic error as unknown which format user intended for the string
-    .ok_or_else(|| ArrowError::CastError(format!("Error parsing '{}' as time", s)))
+        _ => &[],
+    };
+
+    formats
+        .iter()
+        .find_map(|f| NaiveTime::parse_from_str(s, f).ok())
+        .map(|nt| {
+            nt.num_seconds_from_midnight() as i64 * 1_000_000_000 + nt.nanosecond() as i64
+        })
+        // Return generic error if failed to parse as unknown which format user intended for the string
+        .ok_or_else(|| ArrowError::CastError(format!("Error parsing '{}' as time", s)))
 }
 
 /// Specialized parsing implementations
@@ -656,12 +647,6 @@ mod tests {
 
         // parse directly as nanoseconds
         assert_eq!(Time64NanosecondType::parse("1"), Some(1));
-
-        // colon overflow
-        assert_eq!(
-            Time64NanosecondType::parse(&(0..=256).map(|_| ':').collect::<String>()),
-            None
-        );
 
         // leap second
         assert_eq!(
