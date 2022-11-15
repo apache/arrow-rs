@@ -267,14 +267,14 @@ impl Field {
     pub fn try_merge(&mut self, from: &Field) -> Result<(), ArrowError> {
         if from.dict_id != self.dict_id {
             return Err(ArrowError::SchemaError(format!(
-                "Fail to merge schema field because from dict_id = {} does not match {}",
-                from.dict_id, self.dict_id
+                "Fail to merge schema field '{}' because from dict_id = {} does not match {}",
+                self.name, from.dict_id, self.dict_id
             )));
         }
         if from.dict_is_ordered != self.dict_is_ordered {
             return Err(ArrowError::SchemaError(format!(
-                "Fail to merge schema field because from dict_is_ordered = {} does not match {}",
-                from.dict_is_ordered, self.dict_is_ordered
+                "Fail to merge schema field '{}' because from dict_is_ordered = {} does not match {}",
+                self.name, from.dict_is_ordered, self.dict_is_ordered
             )));
         }
         // merge metadata
@@ -285,8 +285,8 @@ impl Field {
                     if let Some(self_value) = self_metadata.get(key) {
                         if self_value != from_value {
                             return Err(ArrowError::SchemaError(format!(
-                                "Fail to merge field due to conflicting metadata data value for key {}. 
-                                    From value = {} does not match {}", key, from_value, self_value),
+                                "Fail to merge field '{}' due to conflicting metadata data value for key {}.
+                                    From value = {} does not match {}", self.name, key, from_value, self_value),
                             ));
                         }
                     } else {
@@ -315,8 +315,8 @@ impl Field {
                 }
                 _ => {
                     return Err(ArrowError::SchemaError(
-                        format!("Fail to merge schema field because the from data_type = {} is not DataType::Struct",
-                            from.data_type)
+                        format!("Fail to merge schema field '{}' because the from data_type = {} is not DataType::Struct",
+                            self.name, from.data_type)
                 ))}
             },
             DataType::Union(nested_fields, type_ids, _) => match &from.data_type {
@@ -334,8 +334,8 @@ impl Field {
                                 // type id.
                                 if self_type_id != field_type_id {
                                     return Err(ArrowError::SchemaError(
-                                        format!("Fail to merge schema field because the self_type_id = {} does not equal field_type_id = {}",
-                                            self_type_id, field_type_id)
+                                        format!("Fail to merge schema field '{}' because the self_type_id = {} does not equal field_type_id = {}",
+                                            self.name, self_type_id, field_type_id)
                                     ));
                                 }
 
@@ -352,8 +352,8 @@ impl Field {
                 }
                 _ => {
                     return Err(ArrowError::SchemaError(
-                        format!("Fail to merge schema field because the from data_type = {} is not DataType::Union",
-                            from.data_type)
+                        format!("Fail to merge schema field '{}' because the from data_type = {} is not DataType::Union",
+                            self.name, from.data_type)
                     ));
                 }
             },
@@ -391,8 +391,8 @@ impl Field {
             | DataType::Decimal256(_, _) => {
                 if self.data_type != from.data_type {
                     return Err(ArrowError::SchemaError(
-                        format!("Fail to merge schema field because the from data_type = {} does not equal {}",
-                            from.data_type, self.data_type)
+                        format!("Fail to merge schema field '{}' because the from data_type = {} does not equal {}",
+                            self.name, from.data_type, self.data_type)
                     ));
                 }
             }
@@ -442,6 +442,15 @@ mod test {
     use super::*;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
+
+    #[test]
+    fn test_merge_incompatible_types() {
+        let mut field = Field::new("c1", DataType::Int64, false);
+        let result = field
+            .try_merge(&Field::new("c1", DataType::Float32, true))
+            .expect_err("should fail");
+        assert_eq!("Schema error: Fail to merge schema field 'c1' because the from data_type = Float32 does not equal Int64", format!("{}", result));
+    }
 
     #[test]
     fn test_fields_with_dict_id() {
