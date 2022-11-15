@@ -475,7 +475,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
                 None => {
                     out_null_count += 1;
                     null_builder.set_bit(idx, false);
-                },
+                }
             }
             Ok::<_, ()>(())
         });
