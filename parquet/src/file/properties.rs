@@ -800,7 +800,7 @@ mod tests {
             props.max_statistics_size(&ColumnPath::from("col")),
             DEFAULT_MAX_STATISTICS_SIZE
         );
-        assert_eq!(props.bloom_filter_enabled(&ColumnPath::from("col")), false);
+        assert!(!props.bloom_filter_enabled(&ColumnPath::from("col")));
         assert_eq!(props.bloom_filter_fpp(&ColumnPath::from("col")), 0.01);
         assert_eq!(props.bloom_filter_ndv(&ColumnPath::from("col")), None);
         assert_eq!(
@@ -968,7 +968,7 @@ mod tests {
             .build();
 
         assert_eq!(props.codec_options(), &codec_options);
-        assert_eq!(props.read_bloom_filter(), true);
+        assert!(props.read_bloom_filter());
     }
 
     #[test]
