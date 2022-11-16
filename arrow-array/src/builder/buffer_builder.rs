@@ -125,9 +125,10 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     }
 
     pub fn new_from_buffer(buffer: MutableBuffer) -> Self {
+        let buffer_len = buffer.len();
         Self {
             buffer,
-            len: 0,
+            len: buffer_len / std::mem::size_of::<T>(),
             _marker: PhantomData,
         }
     }

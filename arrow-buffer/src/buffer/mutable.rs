@@ -94,11 +94,12 @@ impl MutableBuffer {
     }
 
     /// Allocates a new [MutableBuffer] from given `Bytes`.
-    pub(crate) fn from_bytes(bytes: Bytes, len: usize) -> Result<Self, Bytes> {
+    pub(crate) fn from_bytes(bytes: Bytes) -> Result<Self, Bytes> {
         if !matches!(bytes.deallocation(), Deallocation::Arrow(_)) {
             return Err(bytes);
         }
 
+        let len = bytes.len();
         let capacity = bytes.capacity();
         let ptr = bytes.ptr();
         mem::forget(bytes);

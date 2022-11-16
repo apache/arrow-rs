@@ -419,37 +419,12 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     where
         F: Fn(T::Native) -> T::Native,
     {
-        let data = self.data();
-        let len = self.len();
-        let null_count = self.null_count();
-        let null_buffer = data.null_buffer().map(|b| b.bit_slice(data.offset(), len));
-
-        let buffer = self.data.buffers()[0].clone();
-        let buffer_len = buffer.len();
-
-        drop(self.data);
-
-        let mutable_buffer = buffer.into_mutable(buffer_len);
-
-        match mutable_buffer {
-            Ok(mut mutable_buffer) => {
-                mutable_buffer
-                    .typed_data_mut()
-                    .iter_mut()
-                    .for_each(|l| *l = op(*l));
-                Ok(unsafe {
-                    build_primitive_array(
-                        len,
-                        mutable_buffer.into(),
-                        null_count,
-                        null_buffer,
-                    )
-                })
-            }
-            Err(buffer) => Err(unsafe {
-                build_primitive_array(len, buffer, null_count, null_buffer)
-            }),
-        }
+        let mut builder = self.into_builder()?;
+        builder
+            .values_slice_mut()
+            .iter_mut()
+            .for_each(|v| *v = op(*v));
+        Ok(builder.finish())
     }
 
     /// Applies a unary and fallible function to all valid values in a primitive array
@@ -552,7 +527,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             .data
             .null_buffer()
             .cloned()
-            .and_then(|b| b.into_mutable(0).ok());
+            .and_then(|b| b.into_mutable().ok());
 
         let len = self.len();
         let null_bit_buffer = self.data.null_buffer().cloned();
@@ -562,7 +537,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         drop(self.data);
 
         let builder = buffer
-            .into_mutable(0)
+            .into_mutable()
             .map(|buffer| PrimitiveBuilder::<T>::new_from_buffer(buffer, null_buffer));
 
         match builder {
@@ -2043,11 +2018,14 @@ mod tests {
 
         let mut builder = col.into_builder().unwrap();
 
-        builder.append_value(4);
-        builder.append_null();
-        builder.append_value(2);
+        let slice = builder.values_slice_mut();
+        assert_eq!(slice, &[1, 2, 3]);
 
-        let expected: Int32Array = vec![Some(4), None, Some(2)].into_iter().collect();
+        slice[0] = 4;
+        slice[1] = 2;
+        slice[2] = 1;
+
+        let expected: Int32Array = vec![Some(4), Some(2), Some(1)].into_iter().collect();
 
         let new_array = builder.finish();
         assert_eq!(expected, new_array);

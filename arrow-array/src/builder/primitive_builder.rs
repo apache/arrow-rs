@@ -121,12 +121,16 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     ) -> Self {
         let capacity = values_buffer.capacity();
 
+        let values_builder = BufferBuilder::<T::Native>::new_from_buffer(values_buffer);
+
         let null_buffer_builder = null_buffer
-            .map(|buffer| NullBufferBuilder::new_from_buffer(buffer, capacity))
+            .map(|buffer| {
+                NullBufferBuilder::new_from_buffer(buffer, values_builder.len(), capacity)
+            })
             .unwrap_or_else(|| NullBufferBuilder::new(capacity));
 
         Self {
-            values_builder: BufferBuilder::<T::Native>::new_from_buffer(values_buffer),
+            values_builder,
             null_buffer_builder,
         }
     }
@@ -220,6 +224,11 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Returns the current values buffer as a slice
     pub fn values_slice(&self) -> &[T::Native] {
         self.values_builder.as_slice()
+    }
+
+    /// Returns the current values buffer as a mutable slice
+    pub fn values_slice_mut(&mut self) -> &mut [T::Native] {
+        self.values_builder.as_slice_mut()
     }
 }
 

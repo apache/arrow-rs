@@ -230,7 +230,7 @@ impl Buffer {
 
     /// Returns `MutableBuffer` for mutating the buffer if this buffer is not shared.
     /// Returns `Err` if this is shared or its allocation is from an external source.
-    pub fn into_mutable(self, len: usize) -> Result<MutableBuffer, Self> {
+    pub fn into_mutable(self) -> Result<MutableBuffer, Self> {
         let offset_ptr = self.as_ptr();
         let offset = self.offset;
         let length = self.length;
@@ -238,7 +238,7 @@ impl Buffer {
             .and_then(|bytes| {
                 // The pointer of underlying buffer should not be offset.
                 assert_eq!(offset_ptr, bytes.ptr().as_ptr());
-                MutableBuffer::from_bytes(bytes, len).map_err(Arc::new)
+                MutableBuffer::from_bytes(bytes).map_err(Arc::new)
             })
             .map_err(|bytes| Buffer {
                 data: bytes,
