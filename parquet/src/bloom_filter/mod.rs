@@ -18,13 +18,16 @@
 //! Bloom filter implementation specific to Parquet, as described
 //! in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md)
 
+use crate::data_type::AsBytes;
 use crate::errors::ParquetError;
 use crate::file::metadata::ColumnChunkMetaData;
+use crate::file::reader::ChunkReader;
 use crate::format::{
     BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash, BloomFilterHeader,
 };
+use bytes::{Buf, Bytes};
 use std::hash::Hasher;
-use std::io::{Read, Seek, SeekFrom};
+use std::sync::Arc;
 use thrift::protocol::{TCompactInputProtocol, TSerializable};
 use twox_hash::XxHash64;
 
@@ -79,6 +82,37 @@ fn block_check(block: &Block, hash: u32) -> bool {
 /// A split block Bloom filter
 pub struct Sbbf(Vec<Block>);
 
+const SBBF_HEADER_SIZE_ESTIMATE: usize = 20;
+
+/// given an initial offset, and a [ChunkReader], try to read out a bloom filter header and return
+/// both the header and the offset after it (for bitset).
+fn chunk_read_bloom_filter_header_and_offset<R: ChunkReader>(
+    offset: u64,
+    reader: Arc<R>,
+) -> Result<(BloomFilterHeader, u64), ParquetError> {
+    let buffer = reader.get_bytes(offset as u64, SBBF_HEADER_SIZE_ESTIMATE)?;
+    let (header, length) = read_bloom_filter_header_and_length(buffer)?;
+    Ok((header, offset + length))
+}
+
+/// given a [Bytes] buffer, try to read out a bloom filter header and return both the header and
+/// length of the header.
+#[inline]
+fn read_bloom_filter_header_and_length(
+    buffer: Bytes,
+) -> Result<(BloomFilterHeader, u64), ParquetError> {
+    let total_length = buffer.len();
+    let mut buf_reader = buffer.reader();
+    let mut prot = TCompactInputProtocol::new(&mut buf_reader);
+    let header = BloomFilterHeader::read_from_in_protocol(&mut prot).map_err(|e| {
+        ParquetError::General(format!("Could not read bloom filter header: {}", e))
+    })?;
+    Ok((
+        header,
+        (total_length - buf_reader.into_inner().remaining()) as u64,
+    ))
+}
+
 impl Sbbf {
     fn new(bitset: &[u8]) -> Self {
         let data = bitset
@@ -94,17 +128,20 @@ impl Sbbf {
         Self(data)
     }
 
-    pub fn read_from_column_chunk<R: Read + Seek>(
+    pub fn read_from_column_chunk<R: ChunkReader>(
         column_metadata: &ColumnChunkMetaData,
-        mut reader: &mut R,
-    ) -> Result<Self, ParquetError> {
-        let offset = column_metadata.bloom_filter_offset().ok_or_else(|| {
-            ParquetError::General("Bloom filter offset is not set".to_string())
-        })? as u64;
-        reader.seek(SeekFrom::Start(offset))?;
-        // deserialize header
-        let mut prot = TCompactInputProtocol::new(&mut reader);
-        let header = BloomFilterHeader::read_from_in_protocol(&mut prot)?;
+        reader: Arc<R>,
+    ) -> Result<Option<Self>, ParquetError> {
+        let offset: u64 = if let Some(offset) = column_metadata.bloom_filter_offset() {
+            offset.try_into().map_err(|_| {
+                ParquetError::General("Bloom filter offset is invalid".to_string())
+            })?
+        } else {
+            return Ok(None);
+        };
+
+        let (header, bitset_offset) =
+            chunk_read_bloom_filter_header_and_offset(offset, reader.clone())?;
 
         match header.algorithm {
             BloomFilterAlgorithm::BLOCK(_) => {
@@ -125,11 +162,8 @@ impl Sbbf {
         let length: usize = header.num_bytes.try_into().map_err(|_| {
             ParquetError::General("Bloom filter length is invalid".to_string())
         })?;
-        let mut buffer = vec![0_u8; length];
-        reader.read_exact(&mut buffer).map_err(|e| {
-            ParquetError::General(format!("Could not read bloom filter: {}", e))
-        })?;
-        Ok(Self::new(&buffer))
+        let bitset = reader.get_bytes(bitset_offset, length)?;
+        Ok(Some(Self::new(&bitset)))
     }
 
     #[inline]
@@ -139,17 +173,27 @@ impl Sbbf {
         (((hash >> 32).saturating_mul(self.0.len() as u64)) >> 32) as usize
     }
 
+    /// Insert an [AsBytes] value into the filter
+    pub fn insert<T: AsBytes>(&mut self, value: T) {
+        self.insert_hash(hash_as_bytes(value));
+    }
+
     /// Insert a hash into the filter
-    pub fn insert(&mut self, hash: u64) {
+    fn insert_hash(&mut self, hash: u64) {
         let block_index = self.hash_to_block_index(hash);
         let block = &mut self.0[block_index];
         block_insert(block, hash as u32);
     }
 
+    /// Check if an [AsBytes] value is probably present or definitely absent in the filter
+    pub fn check<T: AsBytes>(&self, value: T) -> bool {
+        self.check_hash(hash_as_bytes(value))
+    }
+
     /// Check if a hash is in the filter. May return
     /// true for values that was never inserted ("false positive")
     /// but will always return false if a hash has not been inserted.
-    pub fn check(&self, hash: u64) -> bool {
+    fn check_hash(&self, hash: u64) -> bool {
         let block_index = self.hash_to_block_index(hash);
         let block = &self.0[block_index];
         block_check(block, hash as u32)
@@ -159,19 +203,24 @@ impl Sbbf {
 // per spec we use xxHash with seed=0
 const SEED: u64 = 0;
 
-pub fn hash_bytes<A: AsRef<[u8]>>(value: A) -> u64 {
+#[inline]
+fn hash_as_bytes<A: AsBytes>(value: A) -> u64 {
     let mut hasher = XxHash64::with_seed(SEED);
-    hasher.write(value.as_ref());
+    hasher.write(value.as_bytes());
     hasher.finish()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::format::{
+        BloomFilterAlgorithm, BloomFilterCompression, SplitBlockAlgorithm, Uncompressed,
+        XxHash,
+    };
 
     #[test]
     fn test_hash_bytes() {
-        assert_eq!(hash_bytes(b""), 17241709254077376921);
+        assert_eq!(hash_as_bytes(""), 17241709254077376921);
     }
 
     #[test]
@@ -210,8 +259,37 @@ mod tests {
         let sbbf = Sbbf::new(bitset);
         for a in 0..10i64 {
             let value = format!("a{}", a);
-            let hash = hash_bytes(value);
-            assert!(sbbf.check(hash));
+            assert!(sbbf.check(value.as_str()));
         }
+    }
+
+    /// test the assumption that bloom filter header size should not exceed SBBF_HEADER_SIZE_ESTIMATE
+    /// essentially we are testing that the struct is packed with 4 i32 fields, each can be 1-5 bytes
+    /// so altogether it'll be 20 bytes at most.
+    #[test]
+    fn test_bloom_filter_header_size_assumption() {
+        let buffer: &[u8; 16] =
+            &[21, 64, 28, 28, 0, 0, 28, 28, 0, 0, 28, 28, 0, 0, 0, 99];
+        let (
+            BloomFilterHeader {
+                algorithm,
+                compression,
+                hash,
+                num_bytes,
+            },
+            read_length,
+        ) = read_bloom_filter_header_and_length(Bytes::copy_from_slice(buffer)).unwrap();
+        assert_eq!(read_length, 15);
+        assert_eq!(
+            algorithm,
+            BloomFilterAlgorithm::BLOCK(SplitBlockAlgorithm {})
+        );
+        assert_eq!(
+            compression,
+            BloomFilterCompression::UNCOMPRESSED(Uncompressed {})
+        );
+        assert_eq!(hash, BloomFilterHash::XXHASH(XxHash {}));
+        assert_eq!(num_bytes, 32_i32);
+        assert_eq!(20, SBBF_HEADER_SIZE_ESTIMATE);
     }
 }

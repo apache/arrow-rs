@@ -36,7 +36,6 @@
 //! Note that `verbose` is an optional boolean flag that allows to print schema only,
 //! when not provided or print full file metadata when provided.
 
-extern crate parquet;
 use clap::Parser;
 use parquet::{
     file::reader::{FileReader, SerializedFileReader},

@@ -36,7 +36,6 @@
 //! Note that `parquet-rowcount` reads full file schema, no projection or filtering is
 //! applied.
 
-extern crate parquet;
 use clap::Parser;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::{fs::File, path::Path};
