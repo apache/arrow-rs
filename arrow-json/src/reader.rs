@@ -909,7 +909,6 @@ impl Decoder {
     }
 
     #[inline(always)]
-    #[allow(clippy::unnecessary_wraps)]
     fn build_string_dictionary_builder<T>(
         &self,
         row_len: usize,
@@ -983,7 +982,6 @@ impl Decoder {
         Ok(Arc::new(builder.finish()))
     }
 
-    #[allow(clippy::unnecessary_wraps)]
     fn build_primitive_array<T: ArrowPrimitiveType + Parser>(
         &self,
         rows: &[Value],
