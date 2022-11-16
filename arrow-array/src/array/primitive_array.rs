@@ -526,8 +526,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         let len = self.len();
         let null_bit_buffer = self.data.null_buffer().cloned();
 
+        let element_len = std::mem::size_of::<T::Native>();
         let buffer = self.data.buffers()[0]
-            .slice_with_length(0, len * std::mem::size_of::<T::Native>());
+            .slice_with_length(self.data.offset() * element_len, len * element_len);
 
         drop(self.data);
 
