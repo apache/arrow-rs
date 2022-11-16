@@ -859,10 +859,11 @@ fn convert_decimal_to_string(decimal: &Decimal) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::approx_constant, clippy::many_single_char_names)]
+#[allow(clippy::many_single_char_names)]
 mod tests {
     use super::*;
 
+    use std::f64::consts::PI;
     use std::sync::Arc;
 
     use crate::schema::types::{ColumnDescriptor, ColumnPath, PrimitiveTypeBuilder};
@@ -1581,8 +1582,8 @@ mod tests {
         ]);
         assert!((10.3 - list.get_float(2).unwrap()).abs() < f32::EPSILON);
 
-        let list = make_list(vec![Field::Double(3.1415)]);
-        assert!((3.1415 - list.get_double(0).unwrap()).abs() < f64::EPSILON);
+        let list = make_list(vec![Field::Double(PI)]);
+        assert!((PI - list.get_double(0).unwrap()).abs() < f64::EPSILON);
 
         let list = make_list(vec![Field::Str("abc".to_string())]);
         assert_eq!(&"abc".to_string(), list.get_string(0).unwrap());
@@ -1631,7 +1632,7 @@ mod tests {
         ]);
         assert!(list.get_double(2).is_err());
 
-        let list = make_list(vec![Field::Double(3.1415)]);
+        let list = make_list(vec![Field::Double(PI)]);
         assert!(list.get_string(0).is_err());
 
         let list = make_list(vec![Field::Str("abc".to_string())]);
@@ -1832,7 +1833,7 @@ mod tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::approx_constant, clippy::many_single_char_names)]
+#[allow(clippy::many_single_char_names)]
 mod api_tests {
     use super::{make_list, make_map, make_row};
     use crate::record::Field;

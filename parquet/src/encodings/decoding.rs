@@ -1069,10 +1069,11 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
 }
 
 #[cfg(test)]
-#[allow(clippy::approx_constant)]
 mod tests {
     use super::{super::encoding::*, *};
 
+    use std::f32::consts::PI as PI_f32;
+    use std::f64::consts::PI as PI_f64;
     use std::sync::Arc;
 
     use crate::schema::types::{
@@ -1214,7 +1215,7 @@ mod tests {
 
     #[test]
     fn test_plain_decode_float() {
-        let data = vec![3.14, 2.414, 12.51];
+        let data = vec![PI_f32, 2.414, 12.51];
         let data_bytes = FloatType::to_byte_array(&data[..]);
         let mut buffer = vec![0.0; 3];
         test_plain_decode::<FloatType>(
@@ -1228,7 +1229,7 @@ mod tests {
 
     #[test]
     fn test_plain_skip_float() {
-        let data = vec![3.14, 2.414, 12.51];
+        let data = vec![PI_f32, 2.414, 12.51];
         let data_bytes = FloatType::to_byte_array(&data[..]);
         test_plain_skip::<FloatType>(
             ByteBufferPtr::new(data_bytes),
@@ -1241,14 +1242,14 @@ mod tests {
 
     #[test]
     fn test_plain_skip_all_float() {
-        let data = vec![3.14, 2.414, 12.51];
+        let data = vec![PI_f32, 2.414, 12.51];
         let data_bytes = FloatType::to_byte_array(&data[..]);
         test_plain_skip::<FloatType>(ByteBufferPtr::new(data_bytes), 3, 4, -1, &[]);
     }
 
     #[test]
     fn test_plain_skip_double() {
-        let data = vec![3.14f64, 2.414f64, 12.51f64];
+        let data = vec![PI_f64, 2.414f64, 12.51f64];
         let data_bytes = DoubleType::to_byte_array(&data[..]);
         test_plain_skip::<DoubleType>(
             ByteBufferPtr::new(data_bytes),
@@ -1261,14 +1262,14 @@ mod tests {
 
     #[test]
     fn test_plain_skip_all_double() {
-        let data = vec![3.14f64, 2.414f64, 12.51f64];
+        let data = vec![PI_f64, 2.414f64, 12.51f64];
         let data_bytes = DoubleType::to_byte_array(&data[..]);
         test_plain_skip::<DoubleType>(ByteBufferPtr::new(data_bytes), 3, 5, -1, &[]);
     }
 
     #[test]
     fn test_plain_decode_double() {
-        let data = vec![3.14f64, 2.414f64, 12.51f64];
+        let data = vec![PI_f64, 2.414f64, 12.51f64];
         let data_bytes = DoubleType::to_byte_array(&data[..]);
         let mut buffer = vec![0.0f64; 3];
         test_plain_decode::<DoubleType>(
