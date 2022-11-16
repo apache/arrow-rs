@@ -42,9 +42,22 @@ impl NullBufferBuilder {
         }
     }
 
+    /// Creates a new builder with given length.
+    pub fn new_with_len(len: usize) -> Self {
+        Self {
+            bitmap_builder: None,
+            len,
+            capacity: len,
+        }
+    }
+
     /// Creates a new builder from a `MutableBuffer`.
-    pub fn new_from_buffer(buffer: MutableBuffer, len: usize, capacity: usize) -> Self {
-        let bitmap_builder = Some(BooleanBufferBuilder::new_from_buffer(buffer));
+    pub fn new_from_buffer(buffer: MutableBuffer, len: usize) -> Self {
+        let capacity = buffer.len() * 8;
+
+        assert!(len < capacity);
+
+        let bitmap_builder = Some(BooleanBufferBuilder::new_from_buffer(buffer, len));
         Self {
             bitmap_builder,
             len,

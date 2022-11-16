@@ -523,12 +523,6 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// Returns `PrimitiveBuilder` of this primitive array for mutating its values if the underlying
     /// data buffer is not shared by others.
     pub fn into_builder(self) -> Result<PrimitiveBuilder<T>, Self> {
-        let null_buffer = self
-            .data
-            .null_buffer()
-            .cloned()
-            .and_then(|b| b.into_mutable().ok());
-
         let len = self.len();
         let null_bit_buffer = self.data.null_buffer().cloned();
 
@@ -537,13 +531,37 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
         drop(self.data);
 
-        let builder = buffer
-            .into_mutable()
-            .map(|buffer| PrimitiveBuilder::<T>::new_from_buffer(buffer, null_buffer));
+        let try_mutable_null_buffer = match null_bit_buffer {
+            None => Ok(None),
+            Some(null_buffer) => {
+                // Null buffer exists, tries to make it mutable
+                null_buffer.into_mutable().map(Some)
+            }
+        };
 
-        match builder {
+        let try_mutable_buffers =
+            if let Err(mutable_null_buffer) = try_mutable_null_buffer {
+                // Unable to get mutable null buffer
+                Err((buffer, Some(mutable_null_buffer)))
+            } else {
+                // Got mutable null buffer, tries to get mutable value buffer
+                let mutable_null_buffer = try_mutable_null_buffer.unwrap();
+                let try_mutable_buffer = buffer.into_mutable();
+
+                // try_mutable_buffer.map(...).map_err(...) doesn't work as the compiler complains
+                // mutable_null_buffer is moved into map closure.
+                match try_mutable_buffer {
+                    Ok(mutable_buffer) => Ok(PrimitiveBuilder::<T>::new_from_buffer(
+                        mutable_buffer,
+                        mutable_null_buffer,
+                    )),
+                    Err(buffer) => Err((buffer, mutable_null_buffer.map(|b| b.into()))),
+                }
+            };
+
+        match try_mutable_buffers {
             Ok(builder) => Ok(builder),
-            Err(buffer) => {
+            Err((buffer, null_bit_buffer)) => {
                 let builder = ArrayData::builder(T::DATA_TYPE)
                     .len(len)
                     .add_buffer(buffer)
@@ -2058,5 +2076,9 @@ mod tests {
         let expected: Int32Array = vec![3, 5, 7].into_iter().map(Some).collect();
 
         assert_eq!(expected, c);
+
+        let array: Int32Array = Int32Array::from(vec![Some(5), Some(7), None]);
+        let c = array.unary_mut(|x| x * 2 + 1).unwrap();
+        assert_eq!(c, Int32Array::from(vec![Some(11), Some(15), None]));
     }
 }
