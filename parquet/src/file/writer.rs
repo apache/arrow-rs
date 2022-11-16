@@ -92,6 +92,7 @@ pub type OnCloseColumnChunk<'a> = Box<dyn FnOnce(ColumnCloseResult) -> Result<()
 pub type OnCloseRowGroup<'a> = Box<
     dyn FnOnce(
             RowGroupMetaDataPtr,
+            Vec<Option<Sbbf>>,
             Vec<Option<ColumnIndex>>,
             Vec<Option<OffsetIndex>>,
         ) -> Result<()>
@@ -151,10 +152,15 @@ impl<W: Write> SerializedFileWriter<W> {
         self.row_group_index += 1;
 
         let row_groups = &mut self.row_groups;
+        let row_bloom_filters = &mut self.bloom_filters;
         let row_column_indexes = &mut self.column_indexes;
         let row_offset_indexes = &mut self.offset_indexes;
-        let on_close = |metadata, row_group_column_index, row_group_offset_index| {
+        let on_close = |metadata,
+                        row_group_bloom_filter,
+                        row_group_column_index,
+                        row_group_offset_index| {
             row_groups.push(metadata);
+            row_bloom_filters.push(row_group_bloom_filter);
             row_column_indexes.push(row_group_column_index);
             row_offset_indexes.push(row_group_offset_index);
             Ok(())
@@ -220,8 +226,7 @@ impl<W: Write> SerializedFileWriter<W> {
         // iter each column
         // write bloom filter to the file
         for (row_group_idx, row_group) in row_groups.iter_mut().enumerate() {
-            for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate()
-            {
+            for (column_idx, column_chunk) in row_group.columns.iter_mut().enumerate() {
                 match &self.bloom_filters[row_group_idx][column_idx] {
                     Some(bloom_filter) => {
                         let start_offset = self.buf.bytes_written();
@@ -231,7 +236,7 @@ impl<W: Write> SerializedFileWriter<W> {
                         protocol.flush()?;
                         bloom_filter.write_bitset(&mut self.buf)?;
                         // set offset and index for bloom filter
-                        column_metadata
+                        column_chunk
                             .meta_data
                             .as_mut()
                             .expect("can't have bloom filter without column metadata")
@@ -480,6 +485,7 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
             if let Some(on_close) = self.on_close.take() {
                 on_close(
                     metadata,
+                    self.bloom_filters.clone(),
                     self.column_indexes.clone(),
                     self.offset_indexes.clone(),
                 )?
