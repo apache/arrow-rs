@@ -2069,6 +2069,18 @@ mod tests {
     }
 
     #[test]
+    fn test_into_builder_on_sliced_array() {
+        let array: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+        let slice = array.slice(1, 2);
+        let col: Int32Array = downcast_array(&slice);
+
+        drop(slice);
+
+        col.into_builder()
+            .expect_err("Should not build builder from sliced array");
+    }
+
+    #[test]
     fn test_unary_mut() {
         let array: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
 
