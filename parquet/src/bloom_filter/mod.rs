@@ -116,7 +116,39 @@ fn read_bloom_filter_header_and_length(
     ))
 }
 
+const BITSET_MIN_LENGTH: usize = 32;
+const BITSET_MAX_LENGTH: usize = 128 * 1024 * 1024;
+
+#[inline]
+fn optimal_num_of_bytes(num_bytes: usize) -> usize {
+    let num_bytes = num_bytes.min(BITSET_MAX_LENGTH);
+    let num_bytes = num_bytes.max(BITSET_MIN_LENGTH);
+    num_bytes.next_power_of_two()
+}
+
 impl Sbbf {
+    /// Create a new Sbbf with given number of distinct values and false positive probability.
+    /// Will panic if `fpp` is greater than 1.0 or less than 0.0.
+    pub fn new_with_ndv_fpp(ndv: u64, fpp: f64) -> Self {
+        assert!(0.0 <= fpp && fpp <= 1.0, "invalid fpp: {}", fpp);
+        let num_bits: f64 = -8.0 * ndv as f64 / (1.0 - fpp.powf(1.0 / 8.0)).ln();
+        let num_bits = if num_bits < 0.0 {
+            // overflow here
+            BITSET_MAX_LENGTH * 8
+        } else {
+            num_bits as usize
+        };
+        Self::new_with_num_of_bytes(num_bits / 8)
+    }
+
+    /// Create a new Sbbf with given number of bytes, the exact number of bytes will be adjusted
+    /// to the next power of two bounded by [BITSET_MIN_LENGTH] and [BITSET_MAX_LENGTH].
+    pub fn new_with_num_of_bytes(num_bytes: usize) -> Self {
+        let num_bytes = optimal_num_of_bytes(num_bytes);
+        let bitset = vec![0_u8; num_bytes];
+        Self::new(&bitset)
+    }
+
     fn new(bitset: &[u8]) -> Self {
         let data = bitset
             .chunks_exact(4 * 8)
@@ -321,5 +353,21 @@ mod tests {
         assert_eq!(hash, BloomFilterHash::XXHASH(XxHash {}));
         assert_eq!(num_bytes, 32_i32);
         assert_eq!(20, SBBF_HEADER_SIZE_ESTIMATE);
+    }
+
+    #[test]
+    fn test_optimal_num_of_bytes() {
+        for (input, expected) in &[
+            (0, 32),
+            (9, 32),
+            (31, 32),
+            (32, 32),
+            (33, 64),
+            (99, 128),
+            (1024, 1024),
+            (999_000_000, 128 * 1024 * 1024),
+        ] {
+            assert_eq!(*expected, optimal_num_of_bytes(*input));
+        }
     }
 }

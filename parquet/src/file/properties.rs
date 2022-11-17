@@ -310,6 +310,18 @@ macro_rules! def_opt_field_setter {
             }
         }
     };
+    ($field: ident, $type: ty, $min_value:expr, $max_value:expr) => {
+        paste! {
+            pub fn [<set_ $field>](&mut self, value: $type) -> &mut Self {
+                if value >= $min_value && value <= $max_value {
+                    self.$field = Some(value);
+                } else {
+                    self.$field = None
+                }
+                self
+            }
+        }
+    };
 }
 
 macro_rules! def_opt_field_getter {
@@ -638,7 +650,7 @@ impl ColumnProperties {
     }
 
     def_opt_field_setter!(bloom_filter_enabled, bool);
-    def_opt_field_setter!(bloom_filter_fpp, f64);
+    def_opt_field_setter!(bloom_filter_fpp, f64, 0.0, 1.0);
     def_opt_field_setter!(bloom_filter_max_bytes, u32);
     def_opt_field_setter!(bloom_filter_ndv, u64);
 

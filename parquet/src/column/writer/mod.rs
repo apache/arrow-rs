@@ -238,6 +238,19 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // Used for level information
         encodings.insert(Encoding::RLE);
 
+        let bloom_filter_enabled = props.bloom_filter_enabled(descr.path());
+        let bloom_filter = if bloom_filter_enabled {
+            if let Some(ndv) = props.bloom_filter_ndv(descr.path()) {
+                let fpp = props.bloom_filter_fpp(descr.path());
+                Some(Sbbf::new_with_ndv_fpp(ndv, fpp))
+            } else {
+                let max_bytes = props.bloom_filter_max_bytes(descr.path());
+                Some(Sbbf::new_with_num_of_bytes(max_bytes as usize))
+            }
+        } else {
+            None
+        };
+
         Self {
             descr,
             props,
@@ -267,8 +280,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 num_column_nulls: 0,
                 column_distinct_count: None,
             },
-            // TODO!
-            bloom_filter: None,
+            bloom_filter,
             column_index_builder: ColumnIndexBuilder::new(),
             offset_index_builder: OffsetIndexBuilder::new(),
             encodings,
