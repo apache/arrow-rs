@@ -617,8 +617,8 @@ mod test {
     #[cfg(feature = "serde")]
     #[test]
     fn test_field_with_empty_metadata_serde() {
-        let field = Field::new("name", DataType::Boolean, false)
-            .with_metadata(BTreeMap::new());
+        let field =
+            Field::new("name", DataType::Boolean, false).with_metadata(BTreeMap::new());
 
         assert_binary_serde_round_trip(field)
     }
@@ -628,8 +628,8 @@ mod test {
     fn test_field_with_nonempty_metadata_serde() {
         let mut metadata = BTreeMap::new();
         metadata.insert("hi".to_owned(), "".to_owned());
-        let field =
-            Field::new("name", DataType::Boolean, false).with_metadata(metadata);
+        let field = Field::new("name", DataType::Boolean, false).with_metadata(metadata);
 
         assert_binary_serde_round_trip(field)
-    }}
+    }
+}
