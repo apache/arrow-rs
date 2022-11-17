@@ -313,7 +313,7 @@ macro_rules! def_opt_field_setter {
     ($field: ident, $type: ty, $min_value:expr, $max_value:expr) => {
         paste! {
             pub fn [<set_ $field>](&mut self, value: $type) -> &mut Self {
-                if value >= $min_value && value <= $max_value {
+                if ($min_value..=$max_value).contains(&value) {
                     self.$field = Some(value);
                 } else {
                     self.$field = None

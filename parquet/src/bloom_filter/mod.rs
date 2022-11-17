@@ -139,7 +139,7 @@ impl Sbbf {
     /// Create a new [Sbbf] with given number of distinct values and false positive probability.
     /// Will panic if `fpp` is greater than 1.0 or less than 0.0.
     pub fn new_with_ndv_fpp(ndv: u64, fpp: f64) -> Self {
-        assert!(0.0 <= fpp && fpp <= 1.0, "invalid fpp: {}", fpp);
+        assert!((0.0..-1.0).contains(&fpp), "invalid fpp: {}", fpp);
         let num_bits = num_of_bits_from_ndv_fpp(ndv, fpp);
         let num_bits = if num_bits < 0.0 {
             // overflow here
