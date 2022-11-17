@@ -26,8 +26,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use arrow_ipc::writer;
+use arrow_schema::{DataType, Field, Schema, TimeUnit};
 
 use crate::basic::{
     ConvertedType, LogicalType, Repetition, TimeUnit as ParquetTimeUnit,
@@ -103,7 +103,7 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
     let decoded = base64::decode(encoded_meta);
     match decoded {
         Ok(bytes) => {
-            let slice = if bytes[0..4] == [255u8; 4] {
+            let slice = if bytes.len() > 8 && bytes[0..4] == [255u8; 4] {
                 &bytes[8..]
             } else {
                 bytes.as_slice()
