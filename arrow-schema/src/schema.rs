@@ -34,10 +34,6 @@ pub type SchemaRef = std::sync::Arc<Schema>;
 pub struct Schema {
     pub fields: Vec<Field>,
     /// A map of key-value pairs containing additional meta data.
-    #[cfg_attr(
-        feature = "serde",
-        serde(skip_serializing_if = "HashMap::is_empty", default)
-    )]
     pub metadata: HashMap<String, String>,
 }
 
