@@ -216,12 +216,18 @@ pub(crate) struct S3Client {
 }
 
 impl S3Client {
+    /// Create a new instance of [S3Client].
     pub fn new(config: S3Config) -> Self {
         let client = reqwest::ClientBuilder::new()
             .https_only(!config.allow_http)
             .build()
             .unwrap();
 
+        Self { config, client }
+    }
+
+    /// Create a new instance of [S3Client] with a custom [ReqwestClient].
+    pub fn new_with_client(config: S3Config, client: ReqwestClient) -> Self {
         Self { config, client }
     }
 

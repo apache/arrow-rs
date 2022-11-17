@@ -147,13 +147,18 @@ pub(crate) struct AzureClient {
 }
 
 impl AzureClient {
-    /// create a new instance of [AzureClient]
+    /// Create a new instance of [AzureClient]
     pub fn new(config: AzureConfig) -> Self {
         let client = reqwest::ClientBuilder::new()
             .https_only(!config.allow_http)
             .build()
             .unwrap();
 
+        Self { config, client }
+    }
+
+    /// Create a new instance of [AzureClient] with a custom [ReqwestClient].
+    pub fn new_with_client(config: AzureConfig, client: ReqwestClient) -> Self {
         Self { config, client }
     }
 

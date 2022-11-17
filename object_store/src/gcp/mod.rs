@@ -755,6 +755,12 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
+    /// Set the reqwest client.
+    pub fn with_client(mut self, client: Client) -> Self {
+        self.client = Some(client);
+        self
+    }
+
     /// Set the path to the service account file (required). Example
     /// `"/tmp/gcs.json"`
     ///
