@@ -34,6 +34,7 @@ impl BooleanBufferBuilder {
     }
 
     pub fn new_from_buffer(buffer: MutableBuffer, len: usize) -> Self {
+        assert!(len <= buffer.len() * 8);
         Self { buffer, len }
     }
 

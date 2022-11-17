@@ -524,7 +524,10 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// data buffer is not shared by others.
     pub fn into_builder(self) -> Result<PrimitiveBuilder<T>, Self> {
         let len = self.len();
-        let null_bit_buffer = self.data.null_buffer().cloned();
+        let null_bit_buffer = self
+            .data
+            .null_buffer()
+            .map(|b| b.bit_slice(self.data.offset(), len));
 
         let element_len = std::mem::size_of::<T::Native>();
         let buffer = self.data.buffers()[0]
@@ -540,13 +543,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             }
         };
 
-        let try_mutable_buffers =
-            if let Err(mutable_null_buffer) = try_mutable_null_buffer {
-                // Unable to get mutable null buffer
-                Err((buffer, Some(mutable_null_buffer)))
-            } else {
+        let try_mutable_buffers = match try_mutable_null_buffer {
+            Ok(mutable_null_buffer) => {
                 // Got mutable null buffer, tries to get mutable value buffer
-                let mutable_null_buffer = try_mutable_null_buffer.unwrap();
                 let try_mutable_buffer = buffer.into_mutable();
 
                 // try_mutable_buffer.map(...).map_err(...) doesn't work as the compiler complains
@@ -558,7 +557,12 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
                     )),
                     Err(buffer) => Err((buffer, mutable_null_buffer.map(|b| b.into()))),
                 }
-            };
+            }
+            Err(mutable_null_buffer) => {
+                // Unable to get mutable null buffer
+                Err((buffer, Some(mutable_null_buffer)))
+            }
+        };
 
         match try_mutable_buffers {
             Ok(builder) => Ok(builder),
