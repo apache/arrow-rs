@@ -45,3 +45,4 @@ default = []
 
 [dev-dependencies]
 serde_json = "1.0"
+postcard = { version = "1.0.2", default-features = false, features = ["alloc"] }
