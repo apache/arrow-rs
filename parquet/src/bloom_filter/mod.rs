@@ -127,10 +127,14 @@ fn optimal_num_of_bytes(num_bytes: usize) -> usize {
 }
 
 impl Sbbf {
-    /// Create a new Sbbf with given number of distinct values and false positive probability.
+    /// Create a new [Sbbf] with given number of distinct values and false positive probability.
     /// Will panic if `fpp` is greater than 1.0 or less than 0.0.
     pub fn new_with_ndv_fpp(ndv: u64, fpp: f64) -> Self {
         assert!(0.0 <= fpp && fpp <= 1.0, "invalid fpp: {}", fpp);
+        // see http://algo2.iti.kit.edu/documents/cacheefficientbloomfilters-jea.pdf
+        // given fpp = (1 - e^(-k * n / m)) ^ k
+        // we have m = - k * n / ln(1 - fpp ^ (1 / k))
+        // where k = number of hash functions, m = number of bits, n = number of distinct values
         let num_bits: f64 = -8.0 * ndv as f64 / (1.0 - fpp.powf(1.0 / 8.0)).ln();
         let num_bits = if num_bits < 0.0 {
             // overflow here
@@ -141,8 +145,8 @@ impl Sbbf {
         Self::new_with_num_of_bytes(num_bits / 8)
     }
 
-    /// Create a new Sbbf with given number of bytes, the exact number of bytes will be adjusted
-    /// to the next power of two bounded by [BITSET_MIN_LENGTH] and [BITSET_MAX_LENGTH].
+    /// Create a new [Sbbf] with given number of bytes, the exact number of bytes will be adjusted
+    /// to the next power of two bounded by `BITSET_MIN_LENGTH` and `BITSET_MAX_LENGTH`.
     pub fn new_with_num_of_bytes(num_bytes: usize) -> Self {
         let num_bytes = optimal_num_of_bytes(num_bytes);
         let bitset = vec![0_u8; num_bytes];
