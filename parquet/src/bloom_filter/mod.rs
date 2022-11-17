@@ -126,16 +126,21 @@ fn optimal_num_of_bytes(num_bytes: usize) -> usize {
     num_bytes.next_power_of_two()
 }
 
+// see http://algo2.iti.kit.edu/documents/cacheefficientbloomfilters-jea.pdf
+// given fpp = (1 - e^(-k * n / m)) ^ k
+// we have m = - k * n / ln(1 - fpp ^ (1 / k))
+// where k = number of hash functions, m = number of bits, n = number of distinct values
+#[inline]
+fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> f64 {
+    -8.0 * ndv as f64 / (1.0 - fpp.powf(1.0 / 8.0)).ln()
+}
+
 impl Sbbf {
     /// Create a new [Sbbf] with given number of distinct values and false positive probability.
     /// Will panic if `fpp` is greater than 1.0 or less than 0.0.
     pub fn new_with_ndv_fpp(ndv: u64, fpp: f64) -> Self {
         assert!(0.0 <= fpp && fpp <= 1.0, "invalid fpp: {}", fpp);
-        // see http://algo2.iti.kit.edu/documents/cacheefficientbloomfilters-jea.pdf
-        // given fpp = (1 - e^(-k * n / m)) ^ k
-        // we have m = - k * n / ln(1 - fpp ^ (1 / k))
-        // where k = number of hash functions, m = number of bits, n = number of distinct values
-        let num_bits: f64 = -8.0 * ndv as f64 / (1.0 - fpp.powf(1.0 / 8.0)).ln();
+        let num_bits = num_of_bits_from_ndv_fpp(ndv, fpp);
         let num_bits = if num_bits < 0.0 {
             // overflow here
             BITSET_MAX_LENGTH * 8
@@ -372,6 +377,32 @@ mod tests {
             (999_000_000, 128 * 1024 * 1024),
         ] {
             assert_eq!(*expected, optimal_num_of_bytes(*input));
+        }
+    }
+
+    #[test]
+    fn test_num_of_bits_from_ndv_fpp() {
+        for (fpp, ndv, num_bits) in &[
+            (0.1, 10, 57),
+            (0.01, 10, 96),
+            (0.001, 10, 146),
+            (0.1, 100, 577),
+            (0.01, 100, 968),
+            (0.001, 100, 1460),
+            (0.1, 1000, 5772),
+            (0.01, 1000, 9681),
+            (0.001, 1000, 14607),
+            (0.1, 10000, 57725),
+            (0.01, 10000, 96815),
+            (0.001, 10000, 146076),
+            (0.1, 100000, 577254),
+            (0.01, 100000, 968152),
+            (0.001, 100000, 1460769),
+            (0.1, 1000000, 5772541),
+            (0.01, 1000000, 9681526),
+            (0.001, 1000000, 14607697),
+        ] {
+            assert_eq!(*num_bits, num_of_bits_from_ndv_fpp(*ndv, *fpp) as u64);
         }
     }
 }
