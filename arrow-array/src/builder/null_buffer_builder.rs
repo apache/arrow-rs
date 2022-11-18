@@ -150,6 +150,11 @@ impl NullBufferBuilder {
             self.bitmap_builder = Some(b);
         }
     }
+
+    #[inline]
+    pub fn as_slice(&self) -> Option<&[u8]> {
+        self.bitmap_builder.as_ref().map(|b| b.as_slice())
+    }
 }
 
 impl NullBufferBuilder {

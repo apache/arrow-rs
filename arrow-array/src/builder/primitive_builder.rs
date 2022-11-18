@@ -228,6 +228,14 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     pub fn values_slice_mut(&mut self) -> &mut [T::Native] {
         self.values_builder.as_slice_mut()
     }
+
+    /// Returns the current values buffer and null buffer as a slice
+    pub fn as_slice(&mut self) -> (&mut [T::Native], Option<&[u8]>) {
+        (
+            self.values_builder.as_slice_mut(),
+            self.null_buffer_builder.as_slice(),
+        )
+    }
 }
 
 #[cfg(test)]

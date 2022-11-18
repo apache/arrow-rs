@@ -27,7 +27,8 @@ use crate::array::*;
 use crate::buffer::MutableBuffer;
 use crate::compute::kernels::arity::unary;
 use crate::compute::{
-    binary, binary_opt, try_binary, try_unary, try_unary_dyn, unary_dyn,
+    binary, binary_opt, try_binary, try_unary, try_unary_dyn, try_unary_mut, unary_dyn,
+    unary_mut,
 };
 use crate::datatypes::{
     ArrowNativeTypeOp, ArrowNumericType, DataType, Date32Type, Date64Type,
@@ -912,6 +913,47 @@ where
     T::Native: ArrowNativeTypeOp,
 {
     Ok(unary(array, |value| value.add_wrapping(scalar)))
+}
+
+/// Mutate an array by adding every value in an array by a scalar. If any value in the array
+/// is null then the result is also null.
+///
+/// This only mutates the array if it is not shared buffers with other arrays. For shared
+/// array, it returns an `Err` which wraps input array.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `add_scalar_checked_mut` instead.
+pub fn add_scalar_mut<T>(
+    array: PrimitiveArray<T>,
+    scalar: T::Native,
+) -> std::result::Result<PrimitiveArray<T>, PrimitiveArray<T>>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    unary_mut(array, |value| value.add_wrapping(scalar))
+}
+
+/// Mutate an array by adding every value in an array by a scalar. If any value in the array
+/// is null then the result is also null.
+///
+/// This only mutates the array if it is not shared buffers with other arrays. For shared
+/// array, it returns an `Err` which wraps input array with a `Ok`.
+///
+/// This detects overflow and returns an `Err` which wraps an `Erro` of actual error.
+/// For an non-overflow-checking variant, use `add_scalar_mut` instead.
+pub fn add_scalar_checked_mut<T>(
+    array: PrimitiveArray<T>,
+    scalar: T::Native,
+) -> std::result::Result<
+    PrimitiveArray<T>,
+    std::result::Result<PrimitiveArray<T>, ArrowError>,
+>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    try_unary_mut(array, |value| value.add_checked(scalar))
 }
 
 /// Add every value in an array by a scalar. If any value in the array is null then the
@@ -3097,5 +3139,27 @@ mod tests {
 
         assert_eq!(result.len(), 13);
         assert_eq!(result.null_count(), 13);
+    }
+
+    #[test]
+    fn test_primitive_array_add_scalar_mut() {
+        let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
+        let b = 3;
+        let c = add_scalar_mut(a, b).unwrap();
+        let expected = Int32Array::from(vec![18, 17, 12, 11, 4]);
+        assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn test_primitive_add_scalar_mut_wrapping_overflow() {
+        let a = Int32Array::from(vec![i32::MAX, i32::MIN]);
+
+        let wrapped = add_scalar_mut(a, 1).unwrap();
+        let expected = Int32Array::from(vec![-2147483648, -2147483647]);
+        assert_eq!(expected, wrapped);
+
+        let a = Int32Array::from(vec![i32::MAX, i32::MIN]);
+        let overflow = add_scalar_checked_mut(a, 1);
+        let _ = overflow.expect_err("overflow should be detected");
     }
 }

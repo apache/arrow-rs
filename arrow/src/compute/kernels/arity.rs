@@ -58,6 +58,18 @@ where
     array.unary(op)
 }
 
+/// See [`PrimitiveArray::unary_mut`]
+pub fn unary_mut<I, F>(
+    array: PrimitiveArray<I>,
+    op: F,
+) -> std::result::Result<PrimitiveArray<I>, PrimitiveArray<I>>
+where
+    I: ArrowPrimitiveType,
+    F: Fn(I::Native) -> I::Native,
+{
+    array.unary_mut(op)
+}
+
 /// See [`PrimitiveArray::try_unary`]
 pub fn try_unary<I, F, O>(array: &PrimitiveArray<I>, op: F) -> Result<PrimitiveArray<O>>
 where
@@ -66,6 +78,21 @@ where
     F: Fn(I::Native) -> Result<O::Native>,
 {
     array.try_unary(op)
+}
+
+/// See [`PrimitiveArray::try_unary_mut`]
+pub fn try_unary_mut<I, F>(
+    array: PrimitiveArray<I>,
+    op: F,
+) -> std::result::Result<
+    PrimitiveArray<I>,
+    std::result::Result<PrimitiveArray<I>, ArrowError>,
+>
+where
+    I: ArrowPrimitiveType,
+    F: Fn(I::Native) -> Result<I::Native>,
+{
+    array.try_unary_mut(op)
 }
 
 /// A helper function that applies an infallible unary function to a dictionary array with primitive value type.
