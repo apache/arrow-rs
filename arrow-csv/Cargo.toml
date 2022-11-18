@@ -43,7 +43,7 @@ arrow-buffer = { version = "27.0.0", path = "../arrow-buffer" }
 arrow-cast = { version = "27.0.0", path = "../arrow-cast" }
 arrow-data = { version = "27.0.0", path = "../arrow-data" }
 arrow-schema = { version = "27.0.0", path = "../arrow-schema" }
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
 csv = { version = "1.1", default-features = false }
 lazy_static = { version = "1.4", default-features = false }
 lexical-core = { version = "^0.8", default-features = false }
