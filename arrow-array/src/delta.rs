@@ -24,6 +24,7 @@
 
 //! Contains utility functions for shifting Date objects.
 use chrono::{Datelike, Months};
+use std::cmp::Ordering;
 
 /// Shift a date by the given number of months.
 pub(crate) fn shift_months<
@@ -34,12 +35,10 @@ pub(crate) fn shift_months<
     date: D,
     months: i32,
 ) -> D {
-    if months == 0 {
-        date
-    } else if months > 0 {
-        date + Months::new(months as u32)
-    } else {
-        date - Months::new(-months as u32)
+    match months.cmp(&0) {
+        Ordering::Equal => date,
+        Ordering::Greater => date + Months::new(months as u32),
+        Ordering::Less => date - Months::new(-months as u32),
     }
 }
 
