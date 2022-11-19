@@ -328,6 +328,79 @@ where
     }
 }
 
+/// Applies the provided fallible binary operation across `a` and `b` by mutating the mutable
+/// [`PrimitiveArray`] `a` with the results, returning any error. If any index is null in
+/// either `a` or `b`, the corresponding index in the result will also be null
+///
+/// Like [`try_unary`] the function is only evaluated for non-null indices
+///
+/// Mutable primitive array means that the buffer is not shared with other arrays.
+/// As a result, this mutates the buffer directly without allocating new buffer.
+///
+/// # Error
+///
+/// Return an error if the arrays have different lengths or
+/// the operation is under erroneous.
+/// This function gives error of original [`PrimitiveArray`] `a` if it is not a mutable
+/// primitive array.
+pub fn try_binary_mut<T, F>(
+    a: PrimitiveArray<T>,
+    b: &PrimitiveArray<T>,
+    op: F,
+) -> std::result::Result<
+    PrimitiveArray<T>,
+    std::result::Result<PrimitiveArray<T>, ArrowError>,
+>
+where
+    T: ArrowPrimitiveType,
+    F: Fn(T::Native, T::Native) -> Result<T::Native>,
+{
+    if a.len() != b.len() {
+        return Err(Err(ArrowError::ComputeError(
+            "Cannot perform binary operation on arrays of different length".to_string(),
+        )));
+    }
+    let len = a.len();
+
+    if a.is_empty() {
+        return Ok(PrimitiveArray::from(ArrayData::new_empty(&T::DATA_TYPE)));
+    }
+
+    if a.null_count() == 0 && b.null_count() == 0 {
+        try_binary_no_nulls_mut(len, a, b, op)
+    } else {
+        let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
+        let null_count = null_buffer
+            .as_ref()
+            .map(|x| len - x.count_set_bits_offset(0, len))
+            .unwrap_or_default();
+
+        let mut builder = a.into_builder().map_err(|arr| Ok(arr))?;
+
+        let slice = builder.values_slice_mut();
+
+        try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+            unsafe {
+                *slice.get_unchecked_mut(idx) =
+                    op(*slice.get_unchecked(idx), b.value_unchecked(idx))?
+            };
+            Ok::<_, ArrowError>(())
+        })
+        .map_err(|err| Err(err))?;
+
+        let array_builder = builder
+            .finish()
+            .data()
+            .clone()
+            .into_builder()
+            .null_bit_buffer(null_buffer)
+            .null_count(null_count);
+
+        let array_data = unsafe { array_builder.build_unchecked() };
+        Ok(PrimitiveArray::<T>::from(array_data))
+    }
+}
+
 /// This intentional inline(never) attribute helps LLVM optimize the loop.
 #[inline(never)]
 fn try_binary_no_nulls<A: ArrayAccessor, B: ArrayAccessor, F, O>(
@@ -347,6 +420,34 @@ where
         };
     }
     Ok(unsafe { build_primitive_array(len, buffer.into(), 0, None) })
+}
+
+/// This intentional inline(never) attribute helps LLVM optimize the loop.
+#[inline(never)]
+fn try_binary_no_nulls_mut<T, F>(
+    len: usize,
+    a: PrimitiveArray<T>,
+    b: &PrimitiveArray<T>,
+    op: F,
+) -> std::result::Result<
+    PrimitiveArray<T>,
+    std::result::Result<PrimitiveArray<T>, ArrowError>,
+>
+where
+    T: ArrowPrimitiveType,
+    F: Fn(T::Native, T::Native) -> Result<T::Native>,
+{
+    let mut builder = a.into_builder().map_err(|arr| Ok(arr))?;
+    let slice = builder.values_slice_mut();
+
+    for idx in 0..len {
+        unsafe {
+            *slice.get_unchecked_mut(idx) =
+                op(*slice.get_unchecked(idx), b.value_unchecked(idx))
+                    .map_err(|err| Err(err))?;
+        };
+    }
+    Ok(builder.finish())
 }
 
 #[inline(never)]
@@ -493,5 +594,28 @@ mod tests {
 
         let expected = Int32Array::from(vec![Some(16), None, Some(12), None, Some(6)]);
         assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn test_try_binary_mut() {
+        let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
+        let b = Int32Array::from(vec![Some(1), None, Some(3), None, Some(5)]);
+        let c = try_binary_mut(a, &b, |l, r| Ok(l + r)).unwrap();
+
+        let expected = Int32Array::from(vec![Some(16), None, Some(12), None, Some(6)]);
+        assert_eq!(c, expected);
+
+        let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
+        let b = Int32Array::from(vec![Some(1), None, Some(3), None, Some(5)]);
+        let _ = try_binary_mut(a, &b, |l, r| {
+            if l == 1 {
+                Err(ArrowError::InvalidArgumentError(
+                    "got error".parse().unwrap(),
+                ))
+            } else {
+                Ok(l + r)
+            }
+        })
+        .expect_err("should got error");
     }
 }
