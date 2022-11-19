@@ -980,7 +980,7 @@ mod tests {
             .build();
 
         assert_eq!(props.codec_options(), &codec_options);
-        assert!(props.read_bloom_filter());
+        assert!(!props.read_bloom_filter());
     }
 
     #[test]

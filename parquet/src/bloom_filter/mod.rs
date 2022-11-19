@@ -131,8 +131,9 @@ fn optimal_num_of_bytes(num_bytes: usize) -> usize {
 // we have m = - k * n / ln(1 - fpp ^ (1 / k))
 // where k = number of hash functions, m = number of bits, n = number of distinct values
 #[inline]
-fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> f64 {
-    -8.0 * ndv as f64 / (1.0 - fpp.powf(1.0 / 8.0)).ln()
+fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> usize {
+    let num_bits = -8.0 * ndv as f64 / (1.0 - fpp.powf(1.0 / 8.0)).ln();
+    num_bits as usize
 }
 
 impl Sbbf {
@@ -141,12 +142,6 @@ impl Sbbf {
     pub fn new_with_ndv_fpp(ndv: u64, fpp: f64) -> Self {
         assert!((0.0..-1.0).contains(&fpp), "invalid fpp: {}", fpp);
         let num_bits = num_of_bits_from_ndv_fpp(ndv, fpp);
-        let num_bits = if num_bits < 0.0 {
-            // overflow here
-            BITSET_MAX_LENGTH * 8
-        } else {
-            num_bits as usize
-        };
         Self::new_with_num_of_bytes(num_bits / 8)
     }
 
@@ -401,6 +396,7 @@ mod tests {
             (0.1, 1000000, 5772541),
             (0.01, 1000000, 9681526),
             (0.001, 1000000, 14607697),
+            (1e-50, 1_000_000_000_000, 14226231280773240832),
         ] {
             assert_eq!(*num_bits, num_of_bits_from_ndv_fpp(*ndv, *fpp) as u64);
         }
