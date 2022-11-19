@@ -251,7 +251,7 @@ where
         .map(|x| len - x.count_set_bits_offset(0, len))
         .unwrap_or_default();
 
-    let mut builder = a.into_builder().map_err(|arr| Ok(arr))?;
+    let mut builder = a.into_builder().map_err(Ok)?;
 
     builder
         .values_slice_mut()
@@ -375,7 +375,7 @@ where
             .map(|x| len - x.count_set_bits_offset(0, len))
             .unwrap_or_default();
 
-        let mut builder = a.into_builder().map_err(|arr| Ok(arr))?;
+        let mut builder = a.into_builder().map_err(Ok)?;
 
         let slice = builder.values_slice_mut();
 
@@ -386,7 +386,7 @@ where
             };
             Ok::<_, ArrowError>(())
         })
-        .map_err(|err| Err(err))?;
+        .map_err(Err)?;
 
         let array_builder = builder
             .finish()
@@ -437,14 +437,13 @@ where
     T: ArrowPrimitiveType,
     F: Fn(T::Native, T::Native) -> Result<T::Native>,
 {
-    let mut builder = a.into_builder().map_err(|arr| Ok(arr))?;
+    let mut builder = a.into_builder().map_err(Ok)?;
     let slice = builder.values_slice_mut();
 
     for idx in 0..len {
         unsafe {
             *slice.get_unchecked_mut(idx) =
-                op(*slice.get_unchecked(idx), b.value_unchecked(idx))
-                    .map_err(|err| Err(err))?;
+                op(*slice.get_unchecked(idx), b.value_unchecked(idx)).map_err(Err)?;
         };
     }
     Ok(builder.finish())
