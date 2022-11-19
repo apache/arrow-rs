@@ -27,7 +27,7 @@ use crate::array::*;
 use crate::buffer::MutableBuffer;
 use crate::compute::kernels::arity::unary;
 use crate::compute::{
-    binary, binary_opt, try_binary, try_unary, try_unary_dyn, unary_dyn,
+    binary, binary_mut, binary_opt, try_binary, try_unary, try_unary_dyn, unary_dyn,
 };
 use crate::datatypes::{
     ArrowNativeTypeOp, ArrowNumericType, DataType, Date32Type, Date64Type,
@@ -731,6 +731,28 @@ where
     T::Native: ArrowNativeTypeOp,
 {
     math_op(left, right, |a, b| a.add_wrapping(b))
+}
+
+/// Perform `left + right` operation on two arrays while mutating `left` with operation results.
+/// If either left or right value is null then the result is also null.
+///
+/// This only mutates the array if it is not shared buffers with other arrays. For shared
+/// array, it returns an `Err` which wraps input array.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `add_checked_mut` instead.
+pub fn add_mut<T>(
+    left: PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> std::result::Result<
+    PrimitiveArray<T>,
+    std::result::Result<PrimitiveArray<T>, ArrowError>,
+>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    binary_mut(left, right, |a, b| a.add_wrapping(b))
 }
 
 /// Perform `left + right` operation on two arrays. If either left or right value is null
