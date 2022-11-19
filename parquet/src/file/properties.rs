@@ -691,7 +691,7 @@ impl ColumnProperties {
 /// Reference counted reader properties.
 pub type ReaderPropertiesPtr = Arc<ReaderProperties>;
 
-const DEFAULT_READ_BLOOM_FILTER: bool = true;
+const DEFAULT_READ_BLOOM_FILTER: bool = false;
 
 /// Reader properties.
 ///
