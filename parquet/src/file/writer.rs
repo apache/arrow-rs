@@ -230,11 +230,7 @@ impl<W: Write> SerializedFileWriter<W> {
                 match &self.bloom_filters[row_group_idx][column_idx] {
                     Some(bloom_filter) => {
                         let start_offset = self.buf.bytes_written();
-                        let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-                        let header = bloom_filter.header();
-                        header.write_to_out_protocol(&mut protocol)?;
-                        protocol.flush()?;
-                        bloom_filter.write_bitset(&mut self.buf)?;
+                        bloom_filter.write(&mut self.buf)?;
                         // set offset and index for bloom filter
                         column_chunk
                             .meta_data

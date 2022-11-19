@@ -30,7 +30,9 @@ use bytes::{Buf, Bytes};
 use std::hash::Hasher;
 use std::io::Write;
 use std::sync::Arc;
-use thrift::protocol::{TCompactInputProtocol, TSerializable};
+use thrift::protocol::{
+    TCompactInputProtocol, TCompactOutputProtocol, TOutputProtocol, TSerializable,
+};
 use twox_hash::XxHash64;
 
 /// Salt as defined in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md#technical-approach)
@@ -167,8 +169,20 @@ impl Sbbf {
         Self(data)
     }
 
+    /// Write the bloom filter data (header and then bitset) to the output
+    pub fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
+        let mut protocol = TCompactOutputProtocol::new(&mut writer);
+        let header = self.header();
+        header.write_to_out_protocol(&mut protocol).map_err(|e| {
+            ParquetError::General(format!("Could not write bloom filter header: {}", e))
+        })?;
+        protocol.flush()?;
+        self.write_bitset(&mut writer)?;
+        Ok(())
+    }
+
     /// Write the bitset in serialized form to the writer.
-    pub fn write_bitset<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
+    fn write_bitset<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
         for block in &self.0 {
             for word in block {
                 writer.write_all(&word.to_le_bytes()).map_err(|e| {
@@ -183,7 +197,7 @@ impl Sbbf {
     }
 
     /// Create and populate [`BloomFilterHeader`] from this bitset for writing to serialized form
-    pub fn header(&self) -> BloomFilterHeader {
+    fn header(&self) -> BloomFilterHeader {
         BloomFilterHeader {
             // 8 i32 per block, 4 bytes per i32
             num_bytes: self.0.len() as i32 * 4 * 8,
