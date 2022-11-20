@@ -1223,6 +1223,11 @@ macro_rules! dyn_compare_scalar {
                 let left = as_primitive_array::<Float64Type>($LEFT);
                 $OP::<Float64Type>(left, right)
             }
+            DataType::Decimal128(_, _) => {
+                let right = try_to_type!($RIGHT, to_i128)?;
+                let left = as_primitive_array::<Decimal128Type>($LEFT);
+                $OP::<Decimal128Type>(left, right)
+            }
             _ => Err(ArrowError::ComputeError(format!(
                 "Unsupported data type {:?} for comparison {} with {:?}",
                 $LEFT.data_type(),
@@ -3562,7 +3567,7 @@ mod tests {
             vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
                 .into();
         let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None,  Some(false)]
+            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
                 .into();
 
         let res: Vec<Option<bool>> = eq_bool(&a, &b).unwrap().iter().collect();
@@ -4976,6 +4981,7 @@ mod tests {
             )
         );
     }
+
     #[test]
     fn test_lt_eq_dyn_scalar_with_dict() {
         let mut builder =
@@ -5265,6 +5271,7 @@ mod tests {
             )
         );
     }
+
     #[test]
     fn test_lt_dyn_utf8_scalar() {
         let array = StringArray::from(vec!["abc", "def", "xyz"]);
@@ -5274,6 +5281,7 @@ mod tests {
             BooleanArray::from(vec![Some(true), Some(true), Some(false)])
         );
     }
+
     #[test]
     fn test_lt_dyn_utf8_scalar_with_dict() {
         let mut builder = StringDictionaryBuilder::<Int8Type>::new();
@@ -5301,6 +5309,7 @@ mod tests {
             BooleanArray::from(vec![Some(true), Some(true), Some(false)])
         );
     }
+
     #[test]
     fn test_lt_eq_dyn_utf8_scalar_with_dict() {
         let mut builder = StringDictionaryBuilder::<Int8Type>::new();
@@ -5328,6 +5337,7 @@ mod tests {
             BooleanArray::from(vec![Some(false), Some(true), Some(true)])
         );
     }
+
     #[test]
     fn test_gt_eq_dyn_utf8_scalar_with_dict() {
         let mut builder = StringDictionaryBuilder::<Int8Type>::new();
@@ -5383,6 +5393,7 @@ mod tests {
             BooleanArray::from(vec![Some(true), Some(true), Some(false)])
         );
     }
+
     #[test]
     fn test_neq_dyn_utf8_scalar_with_dict() {
         let mut builder = StringDictionaryBuilder::<Int8Type>::new();
@@ -5883,16 +5894,16 @@ mod tests {
             .collect();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
         assert_eq!(lt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
@@ -5908,16 +5919,16 @@ mod tests {
             .collect();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
         assert_eq!(lt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
@@ -5936,16 +5947,16 @@ mod tests {
             .collect();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
         assert_eq!(gt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
@@ -5961,16 +5972,16 @@ mod tests {
             .collect();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
         assert_eq!(gt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
@@ -6556,13 +6567,13 @@ mod tests {
         let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
@@ -6574,13 +6585,13 @@ mod tests {
         let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
     }
 
@@ -6596,13 +6607,13 @@ mod tests {
         let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
@@ -6614,13 +6625,13 @@ mod tests {
         let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
     }
 
@@ -6912,6 +6923,67 @@ mod tests {
         assert_eq!(e, r);
 
         let r = gt_eq_dyn(&a, &b).unwrap();
+        assert_eq!(e, r);
+    }
+
+    #[test]
+    fn test_decimal128_scalar() {
+        let a = Decimal128Array::from(
+            vec![Some(1), Some(2), Some(3), None, Some(4), Some(5)],
+        );
+        let b = 3_i128;
+        // array eq scalar
+        let e = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), None, Some(false), Some(false)],
+        );
+        let r = eq_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = eq_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array neq scalar
+        let e = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), None, Some(true), Some(true)],
+        );
+        let r = neq_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = neq_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array lt scalar
+        let e = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), None, Some(false), Some(false)],
+        );
+        let r = lt_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = lt_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array lt_eq scalar
+        let e = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), None, Some(false), Some(false)],
+        );
+        let r = lt_eq_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = lt_eq_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array gt scalar
+        let e = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), None, Some(true), Some(true)],
+        );
+        let r = gt_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = gt_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array gt_eq scalar
+        let e = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), None, Some(true), Some(true)],
+        );
+        let r = gt_eq_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = gt_eq_dyn_scalar(&a, b).unwrap();
         assert_eq!(e, r);
     }
 
