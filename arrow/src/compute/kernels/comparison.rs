@@ -279,6 +279,39 @@ fn like_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
 }
 
 /// Perform SQL `left LIKE right` operation on [`StringArray`] /
+/// [`LargeStringArray`], or [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn like_utf8_scalar_dyn(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Utf8 => {
+            let left = as_string_array(left);
+            like_scalar(left, right)
+        }
+        DataType::LargeUtf8 => {
+            let left = as_largestring_array(left);
+            like_scalar(left, right)
+        }
+        DataType::Dictionary(_, _) => {
+            downcast_dictionary_array!(
+                left => {
+                    like_dict_scalar(left, right)
+                }
+                t => Err(ArrowError::ComputeError(format!(
+                    "Should be DictionaryArray but got: {}", t
+                )))
+            )
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "like_utf8_scalar_dyn only supports Utf8, LargeUtf8 or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
+}
+
+/// Perform SQL `left LIKE right` operation on [`StringArray`] /
 /// [`LargeStringArray`] and a scalar.
 ///
 /// See the documentation on [`like_utf8`] for more details.
@@ -4467,10 +4500,26 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        test_utf8_array_like_scalar_dyn_escape_testing,
+        vec!["varchar(255)", "int(255)", "varchar", "int"],
+        "%(%)%",
+        like_utf8_scalar_dyn,
+        vec![true, true, false, false]
+    );
+
+    test_utf8_scalar!(
         test_utf8_array_like_scalar_escape_regex,
         vec![".*", "a", "*"],
         ".*",
         like_utf8_scalar,
+        vec![true, false, false]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_like_scalar_dyn_escape_regex,
+        vec![".*", "a", "*"],
+        ".*",
+        like_utf8_scalar_dyn,
         vec![true, false, false]
     );
 
@@ -4483,17 +4532,42 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        test_utf8_array_like_scalar_dyn_escape_regex_dot,
+        vec![".", "a", "*"],
+        ".",
+        like_utf8_scalar_dyn,
+        vec![true, false, false]
+    );
+
+    test_utf8_scalar!(
         test_utf8_array_like_scalar,
         vec!["arrow", "parquet", "datafusion", "flight"],
         "%ar%",
         like_utf8_scalar,
         vec![true, true, false, false]
     );
+
+    test_utf8_scalar!(
+        test_utf8_array_like_scalar_dyn,
+        vec!["arrow", "parquet", "datafusion", "flight"],
+        "%ar%",
+        like_utf8_scalar_dyn,
+        vec![true, true, false, false]
+    );
+
     test_utf8_scalar!(
         test_utf8_array_like_scalar_start,
         vec!["arrow", "parrow", "arrows", "arr"],
         "arrow%",
         like_utf8_scalar,
+        vec![true, false, true, false]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_like_scalar_dyn_start,
+        vec!["arrow", "parrow", "arrows", "arr"],
+        "arrow%",
+        like_utf8_scalar_dyn,
         vec![true, false, true, false]
     );
 
@@ -4506,10 +4580,26 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        test_utf8_array_like_scalar_dyn_end,
+        vec!["arrow", "parrow", "arrows", "arr"],
+        "%arrow",
+        like_utf8_scalar_dyn,
+        vec![true, true, false, false]
+    );
+
+    test_utf8_scalar!(
         test_utf8_array_like_scalar_equals,
         vec!["arrow", "parrow", "arrows", "arr"],
         "arrow",
         like_utf8_scalar,
+        vec![true, false, false, false]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_like_scalar_dyn_equals,
+        vec!["arrow", "parrow", "arrows", "arr"],
+        "arrow",
+        like_utf8_scalar_dyn,
         vec![true, false, false, false]
     );
 
@@ -4522,6 +4612,14 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        test_utf8_array_like_scalar_dyn_one,
+        vec!["arrow", "arrows", "parrow", "arr"],
+        "arrow_",
+        like_utf8_scalar_dyn,
+        vec![false, true, false, false]
+    );
+
+    test_utf8_scalar!(
         test_utf8_scalar_like_escape,
         vec!["a%", "a\\x"],
         "a\\%",
@@ -4530,10 +4628,26 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        test_utf8_scalar_like_dyn_escape,
+        vec!["a%", "a\\x"],
+        "a\\%",
+        like_utf8_scalar_dyn,
+        vec![true, false]
+    );
+
+    test_utf8_scalar!(
         test_utf8_scalar_like_escape_contains,
         vec!["ba%", "ba\\x"],
         "%a\\%",
         like_utf8_scalar,
+        vec![true, false]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_scalar_like_dyn_escape_contains,
+        vec!["ba%", "ba\\x"],
+        "%a\\%",
+        like_utf8_scalar_dyn,
         vec![true, false]
     );
 
@@ -6127,8 +6241,21 @@ mod tests {
 
         let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
 
+        let data =
+            vec![Some("Earth"), Some("Fire"), Some("Water"), Some("Air"), None, Some("Air")];
+
+        let dict_arrayref: DictionaryArray<Int8Type> = data.into_iter().collect();
+        let dict_arrayref = Arc::new(dict_arrayref) as ArrayRef;
+
         assert_eq!(
             like_dict_scalar(&dict_array, "Air").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            like_utf8_scalar_dyn(&dict_arrayref, "Air").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(false), Some(false), Some(true), None, Some(true)]
             ),
@@ -6142,7 +6269,21 @@ mod tests {
         );
 
         assert_eq!(
+            like_utf8_scalar_dyn(&dict_arrayref, "Wa%").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
             like_dict_scalar(&dict_array, "%r").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            like_utf8_scalar_dyn(&dict_arrayref, "%r").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(false), Some(true), Some(true), None, Some(true)]
             ),
@@ -6156,7 +6297,21 @@ mod tests {
         );
 
         assert_eq!(
+            like_utf8_scalar_dyn(&dict_arrayref, "%i%").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
             like_dict_scalar(&dict_array, "%a%r%").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            like_utf8_scalar_dyn(&dict_arrayref, "%a%r%").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
             ),
