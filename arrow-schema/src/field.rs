@@ -653,8 +653,8 @@ mod test {
 
     #[cfg(feature = "serde")]
     fn assert_binary_serde_round_trip(field: Field) {
-        let serialized = postcard::to_allocvec(&field).unwrap();
-        let deserialized: Field = postcard::from_bytes(&serialized).unwrap();
+        let serialized = bincode::serialize(&field).unwrap();
+        let deserialized: Field = bincode::deserialize(&serialized).unwrap();
         assert_eq!(field, deserialized)
     }
 
@@ -669,7 +669,7 @@ mod test {
     #[test]
     fn test_field_with_empty_metadata_serde() {
         let field =
-            Field::new("name", DataType::Boolean, false).with_metadata(BTreeMap::new());
+            Field::new("name", DataType::Boolean, false).with_metadata(HashMap::new());
 
         assert_binary_serde_round_trip(field)
     }
@@ -677,7 +677,7 @@ mod test {
     #[cfg(feature = "serde")]
     #[test]
     fn test_field_with_nonempty_metadata_serde() {
-        let mut metadata = BTreeMap::new();
+        let mut metadata = HashMap::new();
         metadata.insert("hi".to_owned(), "".to_owned());
         let field = Field::new("name", DataType::Boolean, false).with_metadata(metadata);
 
