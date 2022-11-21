@@ -465,6 +465,20 @@ derive_op!(Mul, mul, wrapping_mul, checked_mul);
 derive_op!(Div, div, wrapping_div, checked_div);
 derive_op!(Rem, rem, wrapping_rem, checked_rem);
 
+impl std::ops::Neg for i256 {
+    type Output = i256;
+
+    #[cfg(debug_assertions)]
+    fn neg(self) -> Self::Output {
+        self.checked_neg().expect("i256 overflow")
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn neg(self) -> Self::Output {
+        self.wrapping_neg()
+    }
+}
+
 macro_rules! define_as_primitive {
     ($native_ty:ty) => {
         impl AsPrimitive<i256> for $native_ty {
