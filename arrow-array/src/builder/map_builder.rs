@@ -25,6 +25,8 @@ use std::sync::Arc;
 
 /// Creates a new `MapBuilder`
 /// ```
+/// use arrow_array::builder::{MapBuilder, Int32Builder, StringBuilder};
+///
 /// let string_builder = StringBuilder::new();
 /// let int_builder = Int32Builder::with_capacity(4);
 ///

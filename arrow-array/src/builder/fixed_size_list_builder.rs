@@ -25,6 +25,8 @@ use std::sync::Arc;
 
 ///  Array builder for [`FixedSizeListArray`]
 /// ```
+/// use arrow_array::builder::{Int32Builder, FixedSizeListBuilder};
+///
 /// let values_builder = Int32Builder::new();
 /// let mut builder = FixedSizeListBuilder::new(values_builder, 3);
 ///
