@@ -1223,6 +1223,11 @@ macro_rules! dyn_compare_scalar {
                 let left = as_primitive_array::<Float64Type>($LEFT);
                 $OP::<Float64Type>(left, right)
             }
+            DataType::Decimal128(_, _) => {
+                let right = try_to_type!($RIGHT, to_i128)?;
+                let left = as_primitive_array::<Decimal128Type>($LEFT);
+                $OP::<Decimal128Type>(left, right)
+            }
             _ => Err(ArrowError::ComputeError(format!(
                 "Unsupported data type {:?} for comparison {} with {:?}",
                 $LEFT.data_type(),
@@ -2270,6 +2275,18 @@ macro_rules! typed_compares {
                 as_largestring_array($RIGHT),
                 $OP,
             ),
+            (DataType::FixedSizeBinary(_), DataType::FixedSizeBinary(_)) => {
+                let lhs = $LEFT
+                    .as_any()
+                    .downcast_ref::<FixedSizeBinaryArray>()
+                    .unwrap();
+                let rhs = $RIGHT
+                    .as_any()
+                    .downcast_ref::<FixedSizeBinaryArray>()
+                    .unwrap();
+
+                compare_op(lhs, rhs, $OP)
+            }
             (DataType::Binary, DataType::Binary) => compare_op(
                 as_generic_binary_array::<i32>($LEFT),
                 as_generic_binary_array::<i32>($RIGHT),
@@ -2748,30 +2765,22 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(
-                left,
-                right,
-                |a, b| a == b,
-                |a, b| a.total_cmp(&b).is_eq(),
-                |a, b| a == b
-            )
+            typed_dict_compares!(left, right, |a, b| a == b, |a, b| a.is_eq(b), |a, b| a
+                == b)
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
             typed_cmp_dict_non_dict!(left, right, |a, b| a == b, |a, b| a == b, |a, b| a
-                .total_cmp(&b)
-                .is_eq())
+                .is_eq(b))
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
-            typed_cmp_dict_non_dict!(right, left, |a, b| a == b, |a, b| a == b, |a, b| a
-                .total_cmp(&b)
-                .is_eq())
+            typed_cmp_dict_non_dict!(right, left, |a, b| a == b, |a, b| a == b, |a, b| b
+                .is_eq(a))
         }
         _ => {
             typed_compares!(left, right, |a, b| !(a ^ b), |a, b| a == b, |a, b| a
-                .total_cmp(&b)
-                .is_eq())
+                .is_eq(b))
         }
     }
 }
@@ -2801,30 +2810,22 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(
-                left,
-                right,
-                |a, b| a != b,
-                |a, b| a.total_cmp(&b).is_ne(),
-                |a, b| a != b
-            )
+            typed_dict_compares!(left, right, |a, b| a != b, |a, b| a.is_ne(b), |a, b| a
+                != b)
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
             typed_cmp_dict_non_dict!(left, right, |a, b| a != b, |a, b| a != b, |a, b| a
-                .total_cmp(&b)
-                .is_ne())
+                .is_ne(b))
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
-            typed_cmp_dict_non_dict!(right, left, |a, b| a != b, |a, b| a != b, |a, b| a
-                .total_cmp(&b)
-                .is_ne())
+            typed_cmp_dict_non_dict!(right, left, |a, b| a != b, |a, b| a != b, |a, b| b
+                .is_ne(a))
         }
         _ => {
             typed_compares!(left, right, |a, b| (a ^ b), |a, b| a != b, |a, b| a
-                .total_cmp(&b)
-                .is_ne())
+                .is_ne(b))
         }
     }
 }
@@ -2854,30 +2855,22 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(
-                left,
-                right,
-                |a, b| a < b,
-                |a, b| a.total_cmp(&b).is_lt(),
-                |a, b| a < b
-            )
+            typed_dict_compares!(left, right, |a, b| a < b, |a, b| a.is_lt(b), |a, b| a
+                < b)
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
             typed_cmp_dict_non_dict!(left, right, |a, b| a < b, |a, b| a < b, |a, b| a
-                .total_cmp(&b)
-                .is_lt())
+                .is_lt(b))
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
             typed_cmp_dict_non_dict!(right, left, |a, b| a > b, |a, b| a > b, |a, b| b
-                .total_cmp(&a)
-                .is_lt())
+                .is_lt(a))
         }
         _ => {
             typed_compares!(left, right, |a, b| ((!a) & b), |a, b| a < b, |a, b| a
-                .total_cmp(&b)
-                .is_lt())
+                .is_lt(b))
         }
     }
 }
@@ -2906,30 +2899,22 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(
-                left,
-                right,
-                |a, b| a <= b,
-                |a, b| a.total_cmp(&b).is_le(),
-                |a, b| a <= b
-            )
+            typed_dict_compares!(left, right, |a, b| a <= b, |a, b| a.is_le(b), |a, b| a
+                <= b)
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
             typed_cmp_dict_non_dict!(left, right, |a, b| a <= b, |a, b| a <= b, |a, b| a
-                .total_cmp(&b)
-                .is_le())
+                .is_le(b))
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
             typed_cmp_dict_non_dict!(right, left, |a, b| a >= b, |a, b| a >= b, |a, b| b
-                .total_cmp(&a)
-                .is_le())
+                .is_le(a))
         }
         _ => {
             typed_compares!(left, right, |a, b| !(a & (!b)), |a, b| a <= b, |a, b| a
-                .total_cmp(&b)
-                .is_le())
+                .is_le(b))
         }
     }
 }
@@ -2958,30 +2943,22 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(
-                left,
-                right,
-                |a, b| a > b,
-                |a, b| a.total_cmp(&b).is_gt(),
-                |a, b| a > b
-            )
+            typed_dict_compares!(left, right, |a, b| a > b, |a, b| a.is_gt(b), |a, b| a
+                > b)
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
             typed_cmp_dict_non_dict!(left, right, |a, b| a > b, |a, b| a > b, |a, b| a
-                .total_cmp(&b)
-                .is_gt())
+                .is_gt(b))
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
             typed_cmp_dict_non_dict!(right, left, |a, b| a < b, |a, b| a < b, |a, b| b
-                .total_cmp(&a)
-                .is_gt())
+                .is_gt(a))
         }
         _ => {
             typed_compares!(left, right, |a, b| (a & (!b)), |a, b| a > b, |a, b| a
-                .total_cmp(&b)
-                .is_gt())
+                .is_gt(b))
         }
     }
 }
@@ -3009,30 +2986,22 @@ pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
-            typed_dict_compares!(
-                left,
-                right,
-                |a, b| a >= b,
-                |a, b| a.total_cmp(&b).is_ge(),
-                |a, b| a >= b
-            )
+            typed_dict_compares!(left, right, |a, b| a >= b, |a, b| a.is_ge(b), |a, b| a
+                >= b)
         }
         DataType::Dictionary(_, _)
             if !matches!(right.data_type(), DataType::Dictionary(_, _)) =>
         {
             typed_cmp_dict_non_dict!(left, right, |a, b| a >= b, |a, b| a >= b, |a, b| a
-                .total_cmp(&b)
-                .is_ge())
+                .is_ge(b))
         }
         _ if matches!(right.data_type(), DataType::Dictionary(_, _)) => {
             typed_cmp_dict_non_dict!(right, left, |a, b| a <= b, |a, b| a <= b, |a, b| b
-                .total_cmp(&a)
-                .is_ge())
+                .is_ge(a))
         }
         _ => {
             typed_compares!(left, right, |a, b| !((!a) & b), |a, b| a >= b, |a, b| a
-                .total_cmp(&b)
-                .is_ge())
+                .is_ge(b))
         }
     }
 }
@@ -3598,7 +3567,7 @@ mod tests {
             vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
                 .into();
         let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None,  Some(false)]
+            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
                 .into();
 
         let res: Vec<Option<bool>> = eq_bool(&a, &b).unwrap().iter().collect();
@@ -5012,6 +4981,7 @@ mod tests {
             )
         );
     }
+
     #[test]
     fn test_lt_eq_dyn_scalar_with_dict() {
         let mut builder =
@@ -5301,6 +5271,7 @@ mod tests {
             )
         );
     }
+
     #[test]
     fn test_lt_dyn_utf8_scalar() {
         let array = StringArray::from(vec!["abc", "def", "xyz"]);
@@ -5310,6 +5281,7 @@ mod tests {
             BooleanArray::from(vec![Some(true), Some(true), Some(false)])
         );
     }
+
     #[test]
     fn test_lt_dyn_utf8_scalar_with_dict() {
         let mut builder = StringDictionaryBuilder::<Int8Type>::new();
@@ -5337,6 +5309,7 @@ mod tests {
             BooleanArray::from(vec![Some(true), Some(true), Some(false)])
         );
     }
+
     #[test]
     fn test_lt_eq_dyn_utf8_scalar_with_dict() {
         let mut builder = StringDictionaryBuilder::<Int8Type>::new();
@@ -5364,6 +5337,7 @@ mod tests {
             BooleanArray::from(vec![Some(false), Some(true), Some(true)])
         );
     }
+
     #[test]
     fn test_gt_eq_dyn_utf8_scalar_with_dict() {
         let mut builder = StringDictionaryBuilder::<Int8Type>::new();
@@ -5419,6 +5393,7 @@ mod tests {
             BooleanArray::from(vec![Some(true), Some(true), Some(false)])
         );
     }
+
     #[test]
     fn test_neq_dyn_utf8_scalar_with_dict() {
         let mut builder = StringDictionaryBuilder::<Int8Type>::new();
@@ -5494,6 +5469,35 @@ mod tests {
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+        );
+    }
+
+    #[test]
+    fn test_eq_dyn_neq_dyn_fixed_size_binary() {
+        use crate::array::FixedSizeBinaryArray;
+
+        let values1: Vec<Option<&[u8]>> =
+            vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36, 0x01])];
+        let values2: Vec<Option<&[u8]>> =
+            vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36, 0x00])];
+
+        let array1 =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values1.into_iter(), 2)
+                .unwrap();
+        let array2 =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values2.into_iter(), 2)
+                .unwrap();
+
+        let result = eq_dyn(&array1, &array2).unwrap();
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(false)]),
+            result
+        );
+
+        let result = neq_dyn(&array1, &array2).unwrap();
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(true)]),
+            result
         );
     }
 
@@ -5890,16 +5894,16 @@ mod tests {
             .collect();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
         assert_eq!(lt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
@@ -5915,16 +5919,16 @@ mod tests {
             .collect();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
         assert_eq!(lt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
@@ -5943,16 +5947,16 @@ mod tests {
             .collect();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
         assert_eq!(gt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
@@ -5968,16 +5972,16 @@ mod tests {
             .collect();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
         assert_eq!(gt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
@@ -6563,13 +6567,13 @@ mod tests {
         let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
@@ -6581,13 +6585,13 @@ mod tests {
         let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
     }
 
@@ -6603,13 +6607,13 @@ mod tests {
         let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
@@ -6621,13 +6625,13 @@ mod tests {
         let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
     }
 
@@ -6919,6 +6923,67 @@ mod tests {
         assert_eq!(e, r);
 
         let r = gt_eq_dyn(&a, &b).unwrap();
+        assert_eq!(e, r);
+    }
+
+    #[test]
+    fn test_decimal128_scalar() {
+        let a = Decimal128Array::from(
+            vec![Some(1), Some(2), Some(3), None, Some(4), Some(5)],
+        );
+        let b = 3_i128;
+        // array eq scalar
+        let e = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), None, Some(false), Some(false)],
+        );
+        let r = eq_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = eq_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array neq scalar
+        let e = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), None, Some(true), Some(true)],
+        );
+        let r = neq_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = neq_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array lt scalar
+        let e = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), None, Some(false), Some(false)],
+        );
+        let r = lt_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = lt_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array lt_eq scalar
+        let e = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), None, Some(false), Some(false)],
+        );
+        let r = lt_eq_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = lt_eq_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array gt scalar
+        let e = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), None, Some(true), Some(true)],
+        );
+        let r = gt_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = gt_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array gt_eq scalar
+        let e = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), None, Some(true), Some(true)],
+        );
+        let r = gt_eq_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = gt_eq_dyn_scalar(&a, b).unwrap();
         assert_eq!(e, r);
     }
 

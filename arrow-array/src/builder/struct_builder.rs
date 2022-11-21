@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Data type List(Field { name: \"item\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }) is not currently supported"
+        expected = "Data type List(Field { name: \"item\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) is not currently supported"
     )]
     fn test_struct_array_builder_from_schema_unsupported_type() {
         let mut fields = vec![Field::new("f1", DataType::Int16, false)];

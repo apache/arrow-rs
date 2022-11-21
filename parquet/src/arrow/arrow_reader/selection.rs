@@ -323,6 +323,18 @@ impl RowSelection {
         Self { selectors }
     }
 
+    /// Compute the intersection of two [`RowSelection`]
+    /// For example:
+    /// self:      NNYYYYNNYYNYN
+    /// other:     NYNNNNNNY
+    ///
+    /// returned:  NNNNNNNNYYNYN
+    pub fn intersection(&self, other: &Self) -> Self {
+        Self {
+            selectors: intersect_row_selections(&self.selectors, &other.selectors),
+        }
+    }
+
     /// Returns `true` if this [`RowSelection`] selects any rows
     pub fn selects_any(&self) -> bool {
         self.selectors.iter().any(|x| !x.skip)
@@ -349,19 +361,19 @@ impl From<RowSelection> for VecDeque<RowSelector> {
     }
 }
 
-// Combine two lists of `RowSelection` return the intersection of them
-// For example:
-// self:      NNYYYYNNYYNYN
-// other:     NYNNNNNNY
-//
-// returned:  NNNNNNNNYYNYN
-pub fn intersect_row_selections(
-    left: Vec<RowSelector>,
-    right: Vec<RowSelector>,
+/// Combine two lists of `RowSelection` return the intersection of them
+/// For example:
+/// self:      NNYYYYNNYYNYN
+/// other:     NYNNNNNNY
+///
+/// returned:  NNNNNNNNYYNYN
+fn intersect_row_selections(
+    left: &[RowSelector],
+    right: &[RowSelector],
 ) -> Vec<RowSelector> {
     let mut res = Vec::with_capacity(left.len());
-    let mut l_iter = left.into_iter().peekable();
-    let mut r_iter = right.into_iter().peekable();
+    let mut l_iter = left.iter().copied().peekable();
+    let mut r_iter = right.iter().copied().peekable();
 
     while let (Some(a), Some(b)) = (l_iter.peek_mut(), r_iter.peek_mut()) {
         if a.row_count == 0 {
@@ -692,7 +704,7 @@ mod tests {
             RowSelector::select(1),
         ];
 
-        let res = intersect_row_selections(a, b);
+        let res = intersect_row_selections(&a, &b);
         assert_eq!(
             RowSelection::from_selectors_and_combine(&res).selectors,
             vec![
@@ -710,7 +722,7 @@ mod tests {
             RowSelector::skip(33),
         ];
         let b = vec![RowSelector::select(36), RowSelector::skip(36)];
-        let res = intersect_row_selections(a, b);
+        let res = intersect_row_selections(&a, &b);
         assert_eq!(
             RowSelection::from_selectors_and_combine(&res).selectors,
             vec![RowSelector::select(3), RowSelector::skip(69)]
@@ -725,7 +737,7 @@ mod tests {
             RowSelector::skip(2),
             RowSelector::select(2),
         ];
-        let res = intersect_row_selections(a, b);
+        let res = intersect_row_selections(&a, &b);
         assert_eq!(
             RowSelection::from_selectors_and_combine(&res).selectors,
             vec![RowSelector::select(2), RowSelector::skip(8)]
@@ -739,7 +751,7 @@ mod tests {
             RowSelector::skip(2),
             RowSelector::select(2),
         ];
-        let res = intersect_row_selections(a, b);
+        let res = intersect_row_selections(&a, &b);
         assert_eq!(
             RowSelection::from_selectors_and_combine(&res).selectors,
             vec![RowSelector::select(2), RowSelector::skip(8)]

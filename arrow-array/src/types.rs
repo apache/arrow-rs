@@ -327,7 +327,7 @@ impl Date32Type {
     ///
     /// * `i` - The Date32Type to convert
     pub fn to_naive_date(i: <Date32Type as ArrowPrimitiveType>::Native) -> NaiveDate {
-        let epoch = NaiveDate::from_ymd(1970, 1, 1);
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
         epoch.add(Duration::days(i as i64))
     }
 
@@ -337,7 +337,7 @@ impl Date32Type {
     ///
     /// * `d` - The NaiveDate to convert
     pub fn from_naive_date(d: NaiveDate) -> <Date32Type as ArrowPrimitiveType>::Native {
-        let epoch = NaiveDate::from_ymd(1970, 1, 1);
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
         d.sub(epoch).num_days() as <Date32Type as ArrowPrimitiveType>::Native
     }
 
@@ -400,7 +400,7 @@ impl Date64Type {
     ///
     /// * `i` - The Date64Type to convert
     pub fn to_naive_date(i: <Date64Type as ArrowPrimitiveType>::Native) -> NaiveDate {
-        let epoch = NaiveDate::from_ymd(1970, 1, 1);
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
         epoch.add(Duration::milliseconds(i as i64))
     }
 
@@ -410,7 +410,7 @@ impl Date64Type {
     ///
     /// * `d` - The NaiveDate to convert
     pub fn from_naive_date(d: NaiveDate) -> <Date64Type as ArrowPrimitiveType>::Native {
-        let epoch = NaiveDate::from_ymd(1970, 1, 1);
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
         d.sub(epoch).num_milliseconds() as <Date64Type as ArrowPrimitiveType>::Native
     }
 

@@ -23,7 +23,7 @@ use std::fs::File;
 
 fn main() {
     let path = format!(
-        "{}/test/data/uk_cities_with_headers.csv",
+        "{}/../arrow-csv/test/data/uk_cities_with_headers.csv",
         env!("CARGO_MANIFEST_DIR")
     );
     let file = File::open(path).unwrap();

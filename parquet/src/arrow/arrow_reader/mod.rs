@@ -41,7 +41,7 @@ mod filter;
 mod selection;
 
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
-pub use selection::{intersect_row_selections, RowSelection, RowSelector};
+pub use selection::{RowSelection, RowSelector};
 
 /// A generic builder for constructing sync or async arrow parquet readers. This is not intended
 /// to be used directly, instead you should use the specialization for the type of reader
@@ -2021,7 +2021,7 @@ mod tests {
             .collect();
 
         let schema_with_metadata =
-            Arc::new(Schema::new(vec![field.with_metadata(Some(metadata))]));
+            Arc::new(Schema::new(vec![field.with_metadata(metadata)]));
 
         assert_ne!(schema_with_metadata, schema_without_metadata);
 

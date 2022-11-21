@@ -124,6 +124,15 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
         }
     }
 
+    pub fn new_from_buffer(buffer: MutableBuffer) -> Self {
+        let buffer_len = buffer.len();
+        Self {
+            buffer,
+            len: buffer_len / std::mem::size_of::<T>(),
+            _marker: PhantomData,
+        }
+    }
+
     /// Returns the current number of array elements in the internal buffer.
     ///
     /// # Example:

@@ -99,6 +99,11 @@ impl Bytes {
             Deallocation::Custom(_) => 0,
         }
     }
+
+    #[inline]
+    pub(crate) fn deallocation(&self) -> &Deallocation {
+        &self.deallocation
+    }
 }
 
 // Deallocation is Send + Sync, repeating the bound here makes that refactoring safe

@@ -397,6 +397,36 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         unsafe { build_primitive_array(len, buffer, null_count, null_buffer) }
     }
 
+    /// Applies an unary and infallible function to a mutable primitive array.
+    /// Mutable primitive array means that the buffer is not shared with other arrays.
+    /// As a result, this mutates the buffer directly without allocating new buffer.
+    ///
+    /// # Implementation
+    ///
+    /// This will apply the function for all values, including those on null slots.
+    /// This implies that the operation must be infallible for any value of the corresponding type
+    /// or this function may panic.
+    /// # Example
+    /// ```rust
+    /// # use arrow_array::{Int32Array, types::Int32Type};
+    /// # fn main() {
+    /// let array = Int32Array::from(vec![Some(5), Some(7), None]);
+    /// let c = array.unary_mut(|x| x * 2 + 1).unwrap();
+    /// assert_eq!(c, Int32Array::from(vec![Some(11), Some(15), None]));
+    /// # }
+    /// ```
+    pub fn unary_mut<F>(self, op: F) -> Result<PrimitiveArray<T>, PrimitiveArray<T>>
+    where
+        F: Fn(T::Native) -> T::Native,
+    {
+        let mut builder = self.into_builder()?;
+        builder
+            .values_slice_mut()
+            .iter_mut()
+            .for_each(|v| *v = op(*v));
+        Ok(builder.finish())
+    }
+
     /// Applies a unary and fallible function to all valid values in a primitive array
     ///
     /// This is unlike [`Self::unary`] which will apply an infallible function to all rows
@@ -437,6 +467,117 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         Ok(unsafe {
             build_primitive_array(len, buffer.finish(), null_count, null_buffer)
         })
+    }
+
+    /// Applies a unary and nullable function to all valid values in a primitive array
+    ///
+    /// This is unlike [`Self::unary`] which will apply an infallible function to all rows
+    /// regardless of validity, in many cases this will be significantly faster and should
+    /// be preferred if `op` is infallible.
+    ///
+    /// Note: LLVM is currently unable to effectively vectorize fallible operations
+    pub fn unary_opt<F, O>(&self, op: F) -> PrimitiveArray<O>
+    where
+        O: ArrowPrimitiveType,
+        F: Fn(T::Native) -> Option<O::Native>,
+    {
+        let data = self.data();
+        let len = data.len();
+        let offset = data.offset();
+        let null_count = data.null_count();
+        let nulls = data.null_buffer().map(|x| x.as_slice());
+
+        let mut null_builder = BooleanBufferBuilder::new(len);
+        match nulls {
+            Some(b) => null_builder.append_packed_range(offset..offset + len, b),
+            None => null_builder.append_n(len, true),
+        }
+
+        let mut buffer = BufferBuilder::<O::Native>::new(len);
+        buffer.append_n_zeroed(len);
+        let slice = buffer.as_slice_mut();
+
+        let mut out_null_count = null_count;
+
+        let _ = try_for_each_valid_idx(len, offset, null_count, nulls, |idx| {
+            match op(unsafe { self.value_unchecked(idx) }) {
+                Some(v) => unsafe { *slice.get_unchecked_mut(idx) = v },
+                None => {
+                    out_null_count += 1;
+                    null_builder.set_bit(idx, false);
+                }
+            }
+            Ok::<_, ()>(())
+        });
+
+        unsafe {
+            build_primitive_array(
+                len,
+                buffer.finish(),
+                out_null_count,
+                Some(null_builder.finish()),
+            )
+        }
+    }
+
+    /// Returns `PrimitiveBuilder` of this primitive array for mutating its values if the underlying
+    /// data buffer is not shared by others.
+    pub fn into_builder(self) -> Result<PrimitiveBuilder<T>, Self> {
+        let len = self.len();
+        let null_bit_buffer = self
+            .data
+            .null_buffer()
+            .map(|b| b.bit_slice(self.data.offset(), len));
+
+        let element_len = std::mem::size_of::<T::Native>();
+        let buffer = self.data.buffers()[0]
+            .slice_with_length(self.data.offset() * element_len, len * element_len);
+
+        drop(self.data);
+
+        let try_mutable_null_buffer = match null_bit_buffer {
+            None => Ok(None),
+            Some(null_buffer) => {
+                // Null buffer exists, tries to make it mutable
+                null_buffer.into_mutable().map(Some)
+            }
+        };
+
+        let try_mutable_buffers = match try_mutable_null_buffer {
+            Ok(mutable_null_buffer) => {
+                // Got mutable null buffer, tries to get mutable value buffer
+                let try_mutable_buffer = buffer.into_mutable();
+
+                // try_mutable_buffer.map(...).map_err(...) doesn't work as the compiler complains
+                // mutable_null_buffer is moved into map closure.
+                match try_mutable_buffer {
+                    Ok(mutable_buffer) => Ok(PrimitiveBuilder::<T>::new_from_buffer(
+                        mutable_buffer,
+                        mutable_null_buffer,
+                    )),
+                    Err(buffer) => Err((buffer, mutable_null_buffer.map(|b| b.into()))),
+                }
+            }
+            Err(mutable_null_buffer) => {
+                // Unable to get mutable null buffer
+                Err((buffer, Some(mutable_null_buffer)))
+            }
+        };
+
+        match try_mutable_buffers {
+            Ok(builder) => Ok(builder),
+            Err((buffer, null_bit_buffer)) => {
+                let builder = ArrayData::builder(T::DATA_TYPE)
+                    .len(len)
+                    .add_buffer(buffer)
+                    .null_bit_buffer(null_bit_buffer);
+
+                let array_data = unsafe { builder.build_unchecked() };
+                let array = PrimitiveArray::<T>::from(array_data);
+
+                Err(array)
+            }
+        }
     }
 }
 
@@ -801,8 +942,13 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
     }
 
     /// Construct a timestamp array with new timezone
-    pub fn with_timezone(&self, timezone: String) -> Self {
-        self.with_timezone_opt(Some(timezone))
+    pub fn with_timezone(&self, timezone: impl Into<String>) -> Self {
+        self.with_timezone_opt(Some(timezone.into()))
+    }
+
+    /// Construct a timestamp array with UTC
+    pub fn with_timezone_utc(&self) -> Self {
+        self.with_timezone("+00:00")
     }
 
     /// Construct a timestamp array with an optional timezone
@@ -980,7 +1126,9 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
 mod tests {
     use super::*;
     use crate::builder::{Decimal128Builder, Decimal256Builder};
-    use crate::BooleanArray;
+    use crate::cast::downcast_array;
+    use crate::{ArrayRef, BooleanArray};
+    use std::sync::Arc;
 
     #[test]
     fn test_primitive_array_from_vec() {
@@ -1340,6 +1488,21 @@ mod tests {
             ]);
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, None)>\n[\n  2018-12-31T00:00:00,\n  2018-12-31T00:00:00,\n  1921-01-02T00:00:00,\n]",
+            format!("{:?}", arr)
+        );
+    }
+
+    #[test]
+    fn test_timestamp_utc_fmt_debug() {
+        let arr: PrimitiveArray<TimestampMillisecondType> =
+            TimestampMillisecondArray::from(vec![
+                1546214400000,
+                1546214400000,
+                -1546214400000,
+            ])
+            .with_timezone_utc();
+        assert_eq!(
+            "PrimitiveArray<Timestamp(Millisecond, Some(\"+00:00\"))>\n[\n  2018-12-31T00:00:00+00:00,\n  2018-12-31T00:00:00+00:00,\n  1921-01-02T00:00:00+00:00,\n]",
             format!("{:?}", arr)
         );
     }
@@ -1845,6 +2008,21 @@ mod tests {
     }
 
     #[test]
+    fn test_unary_opt() {
+        let array = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7]);
+        let r = array.unary_opt::<_, Int32Type>(|x| (x % 2 != 0).then_some(x));
+
+        let expected =
+            Int32Array::from(vec![Some(1), None, Some(3), None, Some(5), None, Some(7)]);
+        assert_eq!(r, expected);
+
+        let r = expected.unary_opt::<_, Int32Type>(|x| (x % 3 != 0).then_some(x));
+        let expected =
+            Int32Array::from(vec![Some(1), None, None, None, Some(5), None, Some(7)]);
+        assert_eq!(r, expected);
+    }
+
+    #[test]
     #[should_panic(
         expected = "Trying to access an element at index 4 from a PrimitiveArray of length 3"
     )]
@@ -1852,5 +2030,72 @@ mod tests {
         let array = Decimal128Array::from_iter_values(vec![-100, 0, 101].into_iter());
 
         array.value(4);
+    }
+
+    #[test]
+    fn test_into_builder() {
+        let array: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+
+        let boxed: ArrayRef = Arc::new(array);
+        let col: Int32Array = downcast_array(&boxed);
+        drop(boxed);
+
+        let mut builder = col.into_builder().unwrap();
+
+        let slice = builder.values_slice_mut();
+        assert_eq!(slice, &[1, 2, 3]);
+
+        slice[0] = 4;
+        slice[1] = 2;
+        slice[2] = 1;
+
+        let expected: Int32Array = vec![Some(4), Some(2), Some(1)].into_iter().collect();
+
+        let new_array = builder.finish();
+        assert_eq!(expected, new_array);
+    }
+
+    #[test]
+    fn test_into_builder_cloned_array() {
+        let array: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+
+        let boxed: ArrayRef = Arc::new(array);
+
+        let col: Int32Array = PrimitiveArray::<Int32Type>::from(boxed.data().clone());
+        let err = col.into_builder();
+
+        match err {
+            Ok(_) => panic!("Should not get builder from cloned array"),
+            Err(returned) => {
+                let expected: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+                assert_eq!(expected, returned)
+            }
+        }
+    }
+
+    #[test]
+    fn test_into_builder_on_sliced_array() {
+        let array: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+        let slice = array.slice(1, 2);
+        let col: Int32Array = downcast_array(&slice);
+
+        drop(slice);
+
+        col.into_builder()
+            .expect_err("Should not build builder from sliced array");
+    }
+
+    #[test]
+    fn test_unary_mut() {
+        let array: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+
+        let c = array.unary_mut(|x| x * 2 + 1).unwrap();
+        let expected: Int32Array = vec![3, 5, 7].into_iter().map(Some).collect();
+
+        assert_eq!(expected, c);
+
+        let array: Int32Array = Int32Array::from(vec![Some(5), Some(7), None]);
+        let c = array.unary_mut(|x| x * 2 + 1).unwrap();
+        assert_eq!(c, Int32Array::from(vec![Some(11), Some(15), None]));
     }
 }

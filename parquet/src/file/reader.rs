@@ -21,6 +21,8 @@
 use bytes::Bytes;
 use std::{boxed::Box, io::Read, sync::Arc};
 
+#[cfg(feature = "bloom")]
+use crate::bloom_filter::Sbbf;
 use crate::column::page::PageIterator;
 use crate::column::{page::PageReader, reader::ColumnReader};
 use crate::errors::{ParquetError, Result};
@@ -142,6 +144,10 @@ pub trait RowGroupReader: Send + Sync {
         };
         Ok(col_reader)
     }
+
+    #[cfg(feature = "bloom")]
+    /// Get bloom filter for the `i`th column chunk, if present.
+    fn get_column_bloom_filter(&self, i: usize) -> Result<Option<Sbbf>>;
 
     /// Get iterator of `Row`s from this row group.
     ///
