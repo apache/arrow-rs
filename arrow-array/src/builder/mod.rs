@@ -127,17 +127,17 @@ pub trait ArrayBuilder: Any + Send {
     fn into_box_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
-/// A list array builder with i32 size offsets
+/// A list array builder with i32 offsets
 pub type ListBuilder<T> = GenericListBuilder<i32, T>;
-/// A list array builder with i64 size offsets
+/// A list array builder with i64 offsets
 pub type LargeListBuilder<T> = GenericListBuilder<i64, T>;
 
-/// A binary array builder with i32 size offsets
+/// A binary array builder with i32 offsets
 pub type BinaryBuilder = GenericBinaryBuilder<i32>;
-/// A binary array builder with i64 size offsets
+/// A binary array builder with i64 offsets
 pub type LargeBinaryBuilder = GenericBinaryBuilder<i64>;
 
-/// A string array builder with i32 size offsets
+/// A string array builder with i32 offsets
 pub type StringBuilder = GenericStringBuilder<i32>;
-/// A string array builder with i64 size offsets
+/// A string array builder with i64 offsets
 pub type LargeStringBuilder = GenericStringBuilder<i64>;

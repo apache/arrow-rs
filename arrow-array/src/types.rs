@@ -734,9 +734,9 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericStringType<O> {
     };
 }
 
-/// An arrow utf8 array with i32 offset size
+/// An arrow utf8 array with i32 offsets
 pub type Utf8Type = GenericStringType<i32>;
-/// An arrow utf8 array with i64 offset size
+/// An arrow utf8 array with i64 offsets
 pub type LargeUtf8Type = GenericStringType<i64>;
 
 /// [`ByteArrayType`] for binary arrays
@@ -756,9 +756,9 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericBinaryType<O> {
     };
 }
 
-/// An arrow binary array with i32 offset size
+/// An arrow binary array with i32 offsets
 pub type BinaryType = GenericBinaryType<i32>;
-/// An arrow binary array with i64 offset size
+/// An arrow binary array with i64 offsets
 pub type LargeBinaryType = GenericBinaryType<i64>;
 
 #[cfg(test)]

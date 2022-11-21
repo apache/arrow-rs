@@ -148,7 +148,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         }
     }
 
-    /// Creates a new primitive from buffers
+    /// Creates a new primitive array builder from buffers
     pub fn new_from_buffer(
         values_buffer: MutableBuffer,
         null_buffer: Option<MutableBuffer>,

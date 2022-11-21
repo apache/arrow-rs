@@ -179,10 +179,10 @@ pub type Time32SecondArray = PrimitiveArray<Time32SecondType>;
 /// An array where each element is of 32-bit type representing time elapsed in milliseconds
 /// since midnight.
 pub type Time32MillisecondArray = PrimitiveArray<Time32MillisecondType>;
-/// An array where each element is of 32-bit type representing time elapsed in microseconds
+/// An array where each element is of 64-bit type representing time elapsed in microseconds
 /// since midnight.
 pub type Time64MicrosecondArray = PrimitiveArray<Time64MicrosecondType>;
-/// An array where each element is of 32-bit type representing time elapsed in nanoseconds
+/// An array where each element is of 64-bit type representing time elapsed in nanoseconds
 /// since midnight.
 pub type Time64NanosecondArray = PrimitiveArray<Time64NanosecondType>;
 

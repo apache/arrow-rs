@@ -76,7 +76,7 @@ impl BooleanBufferBuilder {
     }
 
     #[inline]
-    /// Advances the buffer by `additional`
+    /// Advances the buffer by `additional` bits
     pub fn advance(&mut self, additional: usize) {
         let new_len = self.len + additional;
         let new_len_bytes = bit_util::ceil(new_len, 8);
