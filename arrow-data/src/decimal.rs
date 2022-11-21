@@ -728,17 +728,17 @@ pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
 pub const DECIMAL128_MAX_PRECISION: u8 = 38;
 
 /// The maximum scale for [arrow_schema::DataType::Decimal128] values
-pub const DECIMAL128_MAX_SCALE: u8 = 38;
+pub const DECIMAL128_MAX_SCALE: i8 = 38;
 
 /// The maximum precision for [arrow_schema::DataType::Decimal256] values
 pub const DECIMAL256_MAX_PRECISION: u8 = 76;
 
 /// The maximum scale for [arrow_schema::DataType::Decimal256] values
-pub const DECIMAL256_MAX_SCALE: u8 = 76;
+pub const DECIMAL256_MAX_SCALE: i8 = 76;
 
 /// The default scale for [arrow_schema::DataType::Decimal128] and
 /// [arrow_schema::DataType::Decimal256] values
-pub const DECIMAL_DEFAULT_SCALE: u8 = 10;
+pub const DECIMAL_DEFAULT_SCALE: i8 = 10;
 
 /// Validates that the specified `i128` value can be properly
 /// interpreted as a Decimal number with precision `precision`

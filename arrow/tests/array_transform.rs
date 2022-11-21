@@ -31,7 +31,7 @@ use std::sync::Arc;
 fn create_decimal_array(
     array: Vec<Option<i128>>,
     precision: u8,
-    scale: u8,
+    scale: i8,
 ) -> Decimal128Array {
     array
         .into_iter()

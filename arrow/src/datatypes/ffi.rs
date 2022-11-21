@@ -103,7 +103,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                                         "The decimal type requires an integer precision".to_string(),
                                     )
                                 })?;
-                                let parsed_scale = scale.parse::<u8>().map_err(|_| {
+                                let parsed_scale = scale.parse::<i8>().map_err(|_| {
                                     ArrowError::CDataInterface(
                                         "The decimal type requires an integer scale".to_string(),
                                     )
@@ -119,7 +119,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                                         "The decimal type requires an integer precision".to_string(),
                                     )
                                 })?;
-                                let parsed_scale = scale.parse::<u8>().map_err(|_| {
+                                let parsed_scale = scale.parse::<i8>().map_err(|_| {
                                     ArrowError::CDataInterface(
                                         "The decimal type requires an integer scale".to_string(),
                                     )
