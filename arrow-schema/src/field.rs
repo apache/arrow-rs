@@ -35,10 +35,6 @@ pub struct Field {
     dict_id: i64,
     dict_is_ordered: bool,
     /// A map of key-value pairs containing additional custom meta data.
-    #[cfg_attr(
-        feature = "serde",
-        serde(skip_serializing_if = "HashMap::is_empty", default)
-    )]
     metadata: HashMap<String, String>,
 }
 
@@ -653,5 +649,38 @@ mod test {
 
         assert!(!field1.contains(&field2));
         assert!(!field2.contains(&field1));
+    }
+
+    #[cfg(feature = "serde")]
+    fn assert_binary_serde_round_trip(field: Field) {
+        let serialized = bincode::serialize(&field).unwrap();
+        let deserialized: Field = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(field, deserialized)
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_field_without_metadata_serde() {
+        let field = Field::new("name", DataType::Boolean, true);
+        assert_binary_serde_round_trip(field)
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_field_with_empty_metadata_serde() {
+        let field =
+            Field::new("name", DataType::Boolean, false).with_metadata(HashMap::new());
+
+        assert_binary_serde_round_trip(field)
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_field_with_nonempty_metadata_serde() {
+        let mut metadata = HashMap::new();
+        metadata.insert("hi".to_owned(), "".to_owned());
+        let field = Field::new("name", DataType::Boolean, false).with_metadata(metadata);
+
+        assert_binary_serde_round_trip(field)
     }
 }
