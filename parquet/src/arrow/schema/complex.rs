@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{HashMap};
+use std::collections::HashMap;
 
 use crate::arrow::schema::primitive::convert_primitive;
 use crate::arrow::ProjectionMask;
