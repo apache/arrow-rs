@@ -23,85 +23,31 @@
 // Copied from chronoutil crate
 
 //! Contains utility functions for shifting Date objects.
-use chrono::Datelike;
-
-/// Returns true if the year is a leap-year, as naively defined in the Gregorian calendar.
-#[inline]
-pub(crate) fn is_leap_year(year: i32) -> bool {
-    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
-}
-
-// If the day lies within the month, this function has no effect. Otherwise, it shifts
-// day backwards to the final day of the month.
-// XXX: No attempt is made to handle days outside the 1-31 range.
-#[inline]
-fn normalise_day(year: i32, month: u32, day: u32) -> u32 {
-    if day <= 28 {
-        day
-    } else if month == 2 {
-        28 + is_leap_year(year) as u32
-    } else if day == 31 && (month == 4 || month == 6 || month == 9 || month == 11) {
-        30
-    } else {
-        day
-    }
-}
+use chrono::{Datelike, Months};
+use std::cmp::Ordering;
 
 /// Shift a date by the given number of months.
-/// Ambiguous month-ends are shifted backwards as necessary.
-pub(crate) fn shift_months<D: Datelike>(date: D, months: i32) -> D {
-    let mut year = date.year() + (date.month() as i32 + months) / 12;
-    let mut month = (date.month() as i32 + months) % 12;
-    let mut day = date.day();
-
-    if month < 1 {
-        year -= 1;
-        month += 12;
-    }
-
-    day = normalise_day(year, month as u32, day);
-
-    // This is slow but guaranteed to succeed (short of interger overflow)
-    if day <= 28 {
-        date.with_day(day)
-            .unwrap()
-            .with_month(month as u32)
-            .unwrap()
-            .with_year(year)
-            .unwrap()
-    } else {
-        date.with_day(1)
-            .unwrap()
-            .with_month(month as u32)
-            .unwrap()
-            .with_year(year)
-            .unwrap()
-            .with_day(day)
-            .unwrap()
+pub(crate) fn shift_months<
+    D: Datelike
+        + std::ops::Add<chrono::Months, Output = D>
+        + std::ops::Sub<chrono::Months, Output = D>,
+>(
+    date: D,
+    months: i32,
+) -> D {
+    match months.cmp(&0) {
+        Ordering::Equal => date,
+        Ordering::Greater => date + Months::new(months as u32),
+        Ordering::Less => date - Months::new(-months as u32),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
 
     use chrono::naive::{NaiveDate, NaiveDateTime, NaiveTime};
 
     use super::*;
-
-    #[test]
-    fn test_leap_year_cases() {
-        let _leap_years: Vec<i32> = vec![
-            1904, 1908, 1912, 1916, 1920, 1924, 1928, 1932, 1936, 1940, 1944, 1948, 1952,
-            1956, 1960, 1964, 1968, 1972, 1976, 1980, 1984, 1988, 1992, 1996, 2000, 2004,
-            2008, 2012, 2016, 2020,
-        ];
-        let leap_years_1900_to_2020: HashSet<i32> = _leap_years.into_iter().collect();
-
-        for year in 1900..2021 {
-            assert_eq!(is_leap_year(year), leap_years_1900_to_2020.contains(&year))
-        }
-    }
 
     #[test]
     fn test_shift_months() {

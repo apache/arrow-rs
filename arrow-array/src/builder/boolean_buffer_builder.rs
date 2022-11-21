@@ -33,6 +33,11 @@ impl BooleanBufferBuilder {
         Self { buffer, len: 0 }
     }
 
+    pub fn new_from_buffer(buffer: MutableBuffer, len: usize) -> Self {
+        assert!(len <= buffer.len() * 8);
+        Self { buffer, len }
+    }
+
     #[inline]
     pub fn len(&self) -> usize {
         self.len

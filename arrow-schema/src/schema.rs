@@ -286,7 +286,6 @@ mod tests {
     use super::*;
     use crate::datatype::DataType;
     use crate::{TimeUnit, UnionMode};
-    use std::collections::BTreeMap;
 
     #[test]
     #[cfg(feature = "serde")]
@@ -519,7 +518,7 @@ mod tests {
 
     fn person_schema() -> Schema {
         let kv_array = [("k".to_string(), "v".to_string())];
-        let field_metadata: BTreeMap<String, String> = kv_array.iter().cloned().collect();
+        let field_metadata: HashMap<String, String> = kv_array.iter().cloned().collect();
         let first_name =
             Field::new("first_name", DataType::Utf8, false).with_metadata(field_metadata);
 
@@ -547,18 +546,16 @@ mod tests {
     #[test]
     fn test_try_merge_field_with_metadata() {
         // 1. Different values for the same key should cause error.
-        let metadata1: BTreeMap<String, String> =
-            [("foo".to_string(), "bar".to_string())]
-                .iter()
-                .cloned()
-                .collect();
+        let metadata1: HashMap<String, String> = [("foo".to_string(), "bar".to_string())]
+            .iter()
+            .cloned()
+            .collect();
         let f1 = Field::new("first_name", DataType::Utf8, false).with_metadata(metadata1);
 
-        let metadata2: BTreeMap<String, String> =
-            [("foo".to_string(), "baz".to_string())]
-                .iter()
-                .cloned()
-                .collect();
+        let metadata2: HashMap<String, String> = [("foo".to_string(), "baz".to_string())]
+            .iter()
+            .cloned()
+            .collect();
         let f2 = Field::new("first_name", DataType::Utf8, false).with_metadata(metadata2);
 
         assert!(
@@ -568,7 +565,7 @@ mod tests {
 
         // 2. None + Some
         let mut f1 = Field::new("first_name", DataType::Utf8, false);
-        let metadata2: BTreeMap<String, String> =
+        let metadata2: HashMap<String, String> =
             [("missing".to_string(), "value".to_string())]
                 .iter()
                 .cloned()

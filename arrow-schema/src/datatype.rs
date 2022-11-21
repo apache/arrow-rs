@@ -381,10 +381,10 @@ mod tests {
     #[test]
     #[cfg(feature = "serde")]
     fn serde_struct_type() {
-        use std::collections::BTreeMap;
+        use std::collections::HashMap;
 
         let kv_array = [("k".to_string(), "v".to_string())];
-        let field_metadata: BTreeMap<String, String> = kv_array.iter().cloned().collect();
+        let field_metadata: HashMap<String, String> = kv_array.iter().cloned().collect();
 
         // Non-empty map: should be converted as JSON obj { ... }
         let first_name =
@@ -392,7 +392,7 @@ mod tests {
 
         // Empty map: should be omitted.
         let last_name = Field::new("last_name", DataType::Utf8, false)
-            .with_metadata(BTreeMap::default());
+            .with_metadata(HashMap::default());
 
         let person = DataType::Struct(vec![
             first_name,
