@@ -47,7 +47,7 @@ brotli = { version = "3.3", default-features = false, features = ["std"], option
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"], optional = true }
 lz4 = { version = "1.23", default-features = false, optional = true }
 zstd = { version = "0.11.1", optional = true, default-features = false }
-chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+chrono = { version = "0.4.23", default-features = false, features = ["alloc"] }
 num = { version = "0.4", default-features = false }
 num-bigint = { version = "0.4", default-features = false }
 base64 = { version = "0.13", default-features = false, features = ["std"], optional = true }
