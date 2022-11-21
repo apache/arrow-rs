@@ -198,6 +198,7 @@ pub struct ValueIter<'a, R: Read> {
 }
 
 impl<'a, R: Read> ValueIter<'a, R> {
+    /// Creates a new `ValueIter`
     pub fn new(reader: &'a mut BufReader<R>, max_read_records: Option<usize>) -> Self {
         Self {
             reader,
@@ -613,6 +614,7 @@ impl Default for DecoderOptions {
 }
 
 impl DecoderOptions {
+    /// Creates a new `DecoderOptions`
     pub fn new() -> Self {
         Default::default()
     }
