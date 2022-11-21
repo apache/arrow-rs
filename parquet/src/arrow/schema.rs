@@ -1769,4 +1769,9 @@ mod tests {
         assert_eq!(&schema, read_schema.as_ref());
         Ok(())
     }
+
+    #[test]
+    fn test_get_arrow_schema_from_metadata() {
+        assert!(get_arrow_schema_from_metadata("").is_err());
+    }
 }
