@@ -41,7 +41,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     ///
     /// - `item_capacity` is the number of items to pre-allocate.
     ///   The size of the preallocated buffer of offsets is the number of items plus one.
-    /// - `data_capacity` is the total number of bytes of string data to pre-allocate
+    /// - `data_capacity` is the total number of bytes of data to pre-allocate
     ///   (for all items, not per item).
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         let mut offsets_builder = BufferBuilder::<T::Offset>::new(item_capacity + 1);
@@ -79,7 +79,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .append(T::Offset::from_usize(self.value_builder.len()).unwrap());
     }
 
-    /// Builds the [`GenericByteBuilder`] and reset this builder.
+    /// Builds the [`GenericByteArray`] and reset this builder.
     pub fn finish(&mut self) -> GenericByteArray<T> {
         let array_type = T::DATA_TYPE;
         let array_builder = ArrayDataBuilder::new(array_type)
