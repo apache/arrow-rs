@@ -21,7 +21,7 @@ use arrow_schema::*;
 use flatbuffers::{
     FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, WIPOffset,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use crate::{size_prefixed_root_as_message, CONTINUATION_MARKER};
 use DataType::*;
@@ -86,7 +86,7 @@ impl<'a> From<crate::Field<'a>> for Field {
             )
         };
 
-        let mut metadata_map = BTreeMap::default();
+        let mut metadata_map = HashMap::default();
         if let Some(list) = field.custom_metadata() {
             for kv in list {
                 if let (Some(k), Some(v)) = (kv.key(), kv.value()) {
@@ -812,7 +812,7 @@ mod tests {
             .iter()
             .cloned()
             .collect();
-        let field_md: BTreeMap<String, String> = [("k".to_string(), "v".to_string())]
+        let field_md: HashMap<String, String> = [("k".to_string(), "v".to_string())]
             .iter()
             .cloned()
             .collect();

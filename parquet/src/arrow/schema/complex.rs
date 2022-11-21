@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::BTreeMap;
+use std::collections::{HashMap};
 
 use crate::arrow::schema::primitive::convert_primitive;
 use crate::arrow::ProjectionMask;
@@ -347,7 +347,7 @@ impl Visitor {
                 let value_field = convert_field(map_value, &value, arrow_value);
                 let field_metadata = match arrow_map {
                     Some(field) => field.metadata().clone(),
-                    _ => BTreeMap::default(),
+                    _ => HashMap::default(),
                 };
 
                 let map_field = Field::new(
