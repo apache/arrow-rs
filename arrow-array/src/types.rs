@@ -34,16 +34,19 @@ use std::ops::{Add, Sub};
 
 // BooleanType is special: its bit-width is not the size of the primitive type, and its `index`
 // operation assumes bit-packing.
+/// A boolean datatype
 #[derive(Debug)]
 pub struct BooleanType {}
 
 impl BooleanType {
+    /// Type represetings is arrow [`DataType`]
     pub const DATA_TYPE: DataType = DataType::Boolean;
 }
 
 macro_rules! make_type {
-    ($name:ident, $native_ty:ty, $data_ty:expr) => {
+    ($name:ident, $native_ty:ty, $data_ty:expr, $doc_string: literal) => {
         #[derive(Debug)]
+        #[doc = $doc_string]
         pub struct $name {}
 
         impl ArrowPrimitiveType for $name {
@@ -53,89 +56,168 @@ macro_rules! make_type {
     };
 }
 
-make_type!(Int8Type, i8, DataType::Int8);
-make_type!(Int16Type, i16, DataType::Int16);
-make_type!(Int32Type, i32, DataType::Int32);
-make_type!(Int64Type, i64, DataType::Int64);
-make_type!(UInt8Type, u8, DataType::UInt8);
-make_type!(UInt16Type, u16, DataType::UInt16);
-make_type!(UInt32Type, u32, DataType::UInt32);
-make_type!(UInt64Type, u64, DataType::UInt64);
-make_type!(Float16Type, f16, DataType::Float16);
-make_type!(Float32Type, f32, DataType::Float32);
-make_type!(Float64Type, f64, DataType::Float64);
+make_type!(Int8Type, i8, DataType::Int8, "A signed 8-bit integer type.");
+make_type!(
+    Int16Type,
+    i16,
+    DataType::Int16,
+    "A signed 16-bit integer type."
+);
+make_type!(
+    Int32Type,
+    i32,
+    DataType::Int32,
+    "A signed 32-bit integer type."
+);
+make_type!(
+    Int64Type,
+    i64,
+    DataType::Int64,
+    "A signed 64-bit integer type."
+);
+make_type!(
+    UInt8Type,
+    u8,
+    DataType::UInt8,
+    "An unsigned 8-bit integer type."
+);
+make_type!(
+    UInt16Type,
+    u16,
+    DataType::UInt16,
+    "An unsigned 16-bit integer type."
+);
+make_type!(
+    UInt32Type,
+    u32,
+    DataType::UInt32,
+    "An unsigned 32-bit integer type."
+);
+make_type!(
+    UInt64Type,
+    u64,
+    DataType::UInt64,
+    "An unsigned 64-bit integer type."
+);
+make_type!(
+    Float16Type,
+    f16,
+    DataType::Float16,
+    "A 16-bit floating point number type."
+);
+make_type!(
+    Float32Type,
+    f32,
+    DataType::Float32,
+    "A 32-bit floating point number type."
+);
+make_type!(
+    Float64Type,
+    f64,
+    DataType::Float64,
+    "A 64-bit floating point number type."
+);
 make_type!(
     TimestampSecondType,
     i64,
-    DataType::Timestamp(TimeUnit::Second, None)
+    DataType::Timestamp(TimeUnit::Second, None),
+    "A timestamp second type with an optional timezone."
 );
 make_type!(
     TimestampMillisecondType,
     i64,
-    DataType::Timestamp(TimeUnit::Millisecond, None)
+    DataType::Timestamp(TimeUnit::Millisecond, None),
+    "A timestamp millisecond type with an optional timezone."
 );
 make_type!(
     TimestampMicrosecondType,
     i64,
-    DataType::Timestamp(TimeUnit::Microsecond, None)
+    DataType::Timestamp(TimeUnit::Microsecond, None),
+    "A timestamp microsecond type with an optional timezone."
 );
 make_type!(
     TimestampNanosecondType,
     i64,
-    DataType::Timestamp(TimeUnit::Nanosecond, None)
+    DataType::Timestamp(TimeUnit::Nanosecond, None),
+    "A timestamp nanosecond type with an optional timezone."
 );
-make_type!(Date32Type, i32, DataType::Date32);
-make_type!(Date64Type, i64, DataType::Date64);
-make_type!(Time32SecondType, i32, DataType::Time32(TimeUnit::Second));
+make_type!(
+    Date32Type,
+    i32,
+    DataType::Date32,
+    "A 32-bit date type representing the elapsed time since UNIX epoch in days(32 bits)."
+);
+make_type!(
+    Date64Type,
+    i64,
+    DataType::Date64,
+    "A 64-bit date type representing the elapsed time since UNIX epoch in days(32 bits)."
+);
+make_type!(
+    Time32SecondType,
+    i32,
+    DataType::Time32(TimeUnit::Second),
+    "A 32-bit time type representing the elapsed time since midnight in seconds."
+);
 make_type!(
     Time32MillisecondType,
     i32,
-    DataType::Time32(TimeUnit::Millisecond)
+    DataType::Time32(TimeUnit::Millisecond),
+    "A 32-bit time type representing the elapsed time since midnight in milliseconds."
 );
 make_type!(
     Time64MicrosecondType,
     i64,
-    DataType::Time64(TimeUnit::Microsecond)
+    DataType::Time64(TimeUnit::Microsecond),
+    "A 64-bit time type representing the elapsed time since midnight in microseconds."
 );
 make_type!(
     Time64NanosecondType,
     i64,
-    DataType::Time64(TimeUnit::Nanosecond)
+    DataType::Time64(TimeUnit::Nanosecond),
+    "A 64-bit time type representing the elapsed time since midnight in nanoseconds."
 );
 make_type!(
     IntervalYearMonthType,
     i32,
-    DataType::Interval(IntervalUnit::YearMonth)
+    DataType::Interval(IntervalUnit::YearMonth),
+    "A “calendar” interval type in months."
 );
 make_type!(
     IntervalDayTimeType,
     i64,
-    DataType::Interval(IntervalUnit::DayTime)
+    DataType::Interval(IntervalUnit::DayTime),
+    "A “calendar” interval type in days and milliseconds."
 );
 make_type!(
     IntervalMonthDayNanoType,
     i128,
-    DataType::Interval(IntervalUnit::MonthDayNano)
+    DataType::Interval(IntervalUnit::MonthDayNano),
+    "A “calendar” interval type in months, days, and nanoseconds."
 );
 make_type!(
     DurationSecondType,
     i64,
-    DataType::Duration(TimeUnit::Second)
+    DataType::Duration(TimeUnit::Second),
+    "An elapsed time type in seconds."
 );
 make_type!(
     DurationMillisecondType,
     i64,
-    DataType::Duration(TimeUnit::Millisecond)
+    DataType::Duration(TimeUnit::Millisecond),
+    "An elapsed time type in milliseconds."
 );
 make_type!(
     DurationMicrosecondType,
     i64,
-    DataType::Duration(TimeUnit::Microsecond)
+    DataType::Duration(TimeUnit::Microsecond),
+    "An elapsed time type in microseconds."
 );
 make_type!(
     DurationNanosecondType,
     i64,
-    DataType::Duration(TimeUnit::Nanosecond)
+    DataType::Duration(TimeUnit::Nanosecond),
+    "An elapsed time type in nanoseconds."
 );
 
 /// A subtype of primitive type that represents legal dictionary keys.
@@ -489,10 +571,15 @@ mod decimal {
 pub trait DecimalType:
     'static + Send + Sync + ArrowPrimitiveType + decimal::DecimalTypeSealed
 {
+    /// Width of the type
     const BYTE_LENGTH: usize;
+    /// Maximum number of significant digits
     const MAX_PRECISION: u8;
+    /// Maximum no of digits after the decimal point (note the scale can be negative)
     const MAX_SCALE: u8;
+    /// fn to create its [`DataType`]
     const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType;
+    /// Default values for [`DataType`]
     const DEFAULT_TYPE: DataType;
 
     /// "Decimal128" or "Decimal256", for use in error messages
@@ -618,10 +705,15 @@ pub(crate) mod bytes {
 ///
 /// See [Variable Size Binary Layout](https://arrow.apache.org/docs/format/Columnar.html#variable-size-binary-layout)
 pub trait ByteArrayType: 'static + Send + Sync + bytes::ByteArrayTypeSealed {
+    /// Type of offset i.e i32/i64
     type Offset: OffsetSizeTrait;
+    /// Type for representing its equivalent rust type i.e
+    /// Utf8Array will have native type has &str
+    /// BinaryArray will have type as [u8]
     type Native: bytes::ByteArrayNativeType + AsRef<[u8]> + ?Sized;
     /// "Binary" or "String", for use in error messages
     const PREFIX: &'static str;
+    /// Datatype of array elements
     const DATA_TYPE: DataType;
 }
 
@@ -642,7 +734,9 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericStringType<O> {
     };
 }
 
+/// An arrow utf8 array with i32 offset size
 pub type Utf8Type = GenericStringType<i32>;
+/// An arrow utf8 array with i64 offset size
 pub type LargeUtf8Type = GenericStringType<i64>;
 
 /// [`ByteArrayType`] for binary arrays
@@ -662,7 +756,9 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericBinaryType<O> {
     };
 }
 
+/// An arrow binary array with i32 offset size
 pub type BinaryType = GenericBinaryType<i32>;
+/// An arrow binary array with i64 offset size
 pub type LargeBinaryType = GenericBinaryType<i64>;
 
 #[cfg(test)]

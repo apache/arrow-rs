@@ -165,21 +165,48 @@ pub type TimestampMicrosecondArray = PrimitiveArray<TimestampMicrosecondType>;
 /// A primitive array where each element is of type `TimestampNanosecondType.`
 /// See examples for [`TimestampSecondArray.`](crate::array::TimestampSecondArray)
 pub type TimestampNanosecondArray = PrimitiveArray<TimestampNanosecondType>;
+
+// TODO: give examples for the below types
+
+/// A primitive array where each element is of 32-bit date type.
 pub type Date32Array = PrimitiveArray<Date32Type>;
+/// A primitive array where each element is of 64-bit date type.
 pub type Date64Array = PrimitiveArray<Date64Type>;
+
+/// An array where each element is of 32-bit type representing time elapsed in seconds
+/// since midnight.
 pub type Time32SecondArray = PrimitiveArray<Time32SecondType>;
+/// An array where each element is of 32-bit type representing time elapsed in milliseconds
+/// since midnight.
 pub type Time32MillisecondArray = PrimitiveArray<Time32MillisecondType>;
+/// An array where each element is of 32-bit type representing time elapsed in microseconds
+/// since midnight.
 pub type Time64MicrosecondArray = PrimitiveArray<Time64MicrosecondType>;
+/// An array where each element is of 32-bit type representing time elapsed in nanoseconds
+/// since midnight.
 pub type Time64NanosecondArray = PrimitiveArray<Time64NanosecondType>;
+
+/// An array where each element is a “calendar” interval in months.
 pub type IntervalYearMonthArray = PrimitiveArray<IntervalYearMonthType>;
+/// An array where each element is a “calendar” interval days and milliseconds.
 pub type IntervalDayTimeArray = PrimitiveArray<IntervalDayTimeType>;
+/// An array where each element is a “calendar” interval in  months, days, and nanoseconds.
 pub type IntervalMonthDayNanoArray = PrimitiveArray<IntervalMonthDayNanoType>;
+
+/// An array where each element is an elapsed time type in seconds.
 pub type DurationSecondArray = PrimitiveArray<DurationSecondType>;
+/// An array where each element is an elapsed time type in milliseconds.
 pub type DurationMillisecondArray = PrimitiveArray<DurationMillisecondType>;
+/// An array where each element is an elapsed time type in microseconds.
 pub type DurationMicrosecondArray = PrimitiveArray<DurationMicrosecondType>;
+/// An array where each element is an elapsed time type in nanoseconds.
 pub type DurationNanosecondArray = PrimitiveArray<DurationNanosecondType>;
 
+/// An array where each element is a 128-bits decimal with precision in [1, 38] and
+/// scale in [0, 38].
 pub type Decimal128Array = PrimitiveArray<Decimal128Type>;
+/// An array where each element is a 128-bits decimal with precision in [1, 64] and
+/// scale in [0, 64].
 pub type Decimal256Array = PrimitiveArray<Decimal256Type>;
 
 /// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
@@ -256,7 +283,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         }
     }
 
-    // Returns a new primitive array builder
+    /// Returns a new primitive array builder
     pub fn builder(capacity: usize) -> PrimitiveBuilder<T> {
         PrimitiveBuilder::<T>::with_capacity(capacity)
     }
@@ -749,6 +776,7 @@ impl<'a, T: ArrowPrimitiveType> PrimitiveArray<T> {
 /// the type can be collected to `PrimitiveArray`.
 #[derive(Debug)]
 pub struct NativeAdapter<T: ArrowPrimitiveType> {
+    /// Corresponding Rust native type if available
     pub native: Option<T::Native>,
 }
 

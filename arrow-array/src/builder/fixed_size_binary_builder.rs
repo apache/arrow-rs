@@ -23,6 +23,16 @@ use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
+/// A fixed size binary array builder
+/// ```
+/// let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 5);
+/// // [b"hello", null, "arrow"]
+/// builder.append_value(b"hello").unwrap();
+/// builder.append_null();
+/// builder.append_value(b"arrow").unwrap();
+/// // Create the array
+/// let array: FixedSizeBinaryArray = builder.finish();
+/// ```
 #[derive(Debug)]
 pub struct FixedSizeBinaryBuilder {
     values_builder: UInt8BufferBuilder,

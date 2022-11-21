@@ -45,61 +45,83 @@ pub trait ArrowNativeTypeOp: ArrowNativeType {
     /// The multiplicative identity
     const ONE: Self;
 
+    /// A checked add operation
     fn add_checked(self, rhs: Self) -> Result<Self, ArrowError>;
 
+    /// A wrapping add operation
     fn add_wrapping(self, rhs: Self) -> Self;
 
+    /// A checked subtract operation
     fn sub_checked(self, rhs: Self) -> Result<Self, ArrowError>;
 
+    /// A wrapping subtract operation
     fn sub_wrapping(self, rhs: Self) -> Self;
 
+    /// A checked multiplication operation
     fn mul_checked(self, rhs: Self) -> Result<Self, ArrowError>;
 
+    /// A wrapping multiplication operation
     fn mul_wrapping(self, rhs: Self) -> Self;
 
+    /// A checked division operation
     fn div_checked(self, rhs: Self) -> Result<Self, ArrowError>;
 
+    /// A wrapping division operation
     fn div_wrapping(self, rhs: Self) -> Self;
 
+    /// A checked modulo operation
     fn mod_checked(self, rhs: Self) -> Result<Self, ArrowError>;
 
+    /// A wrapping modulo operation
     fn mod_wrapping(self, rhs: Self) -> Self;
 
+    /// A checked negation operation
     fn neg_checked(self) -> Result<Self, ArrowError>;
 
+    /// A wrapping negation operation
     fn neg_wrapping(self) -> Self;
 
+    /// A checked exponentiation operation
     fn pow_checked(self, exp: u32) -> Result<Self, ArrowError>;
 
+    /// A wrapping exponentiation operation
     fn pow_wrapping(self, exp: u32) -> Self;
 
+    /// Returns true if zero else false
     fn is_zero(self) -> bool;
 
+    /// A compare operation
     fn compare(self, rhs: Self) -> Ordering;
 
+    /// A equality operation
     fn is_eq(self, rhs: Self) -> bool;
 
     #[inline]
+    /// A not equal operation
     fn is_ne(self, rhs: Self) -> bool {
         !self.is_eq(rhs)
     }
 
     #[inline]
+    /// A less than operation
     fn is_lt(self, rhs: Self) -> bool {
         self.compare(rhs).is_lt()
     }
 
     #[inline]
+    /// A less than equals operation
     fn is_le(self, rhs: Self) -> bool {
         self.compare(rhs).is_le()
     }
 
     #[inline]
+    /// A greater than operation
     fn is_gt(self, rhs: Self) -> bool {
         self.compare(rhs).is_gt()
     }
 
     #[inline]
+    /// A greater than equals operation
     fn is_ge(self, rhs: Self) -> bool {
         self.compare(rhs).is_ge()
     }

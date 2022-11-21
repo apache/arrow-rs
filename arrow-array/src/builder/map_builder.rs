@@ -23,6 +23,31 @@ use arrow_schema::{ArrowError, DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
 
+/// Creates a new `MapBuilder`
+/// ```
+/// let string_builder = StringBuilder::new();
+/// let int_builder = Int32Builder::with_capacity(4);
+///
+/// let mut builder = MapBuilder::new(None, string_builder, int_builder);
+///
+/// let string_builder = builder.keys();
+/// string_builder.append_value("joe");
+/// string_builder.append_null();
+/// string_builder.append_null();
+/// string_builder.append_value("mark");
+///
+/// let int_builder = builder.values();
+/// int_builder.append_value(1);
+/// int_builder.append_value(2);
+/// int_builder.append_null();
+/// int_builder.append_value(4);
+///
+/// builder.append(true).unwrap();
+/// builder.append(false).unwrap();
+/// builder.append(true).unwrap();
+///
+/// let arr = builder.finish();
+/// ```
 #[derive(Debug)]
 pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
     offsets_builder: BufferBuilder<i32>,
@@ -32,10 +57,14 @@ pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
     value_builder: V,
 }
 
+/// Contains details of the mapping
 #[derive(Debug, Clone)]
 pub struct MapFieldNames {
+    /// [`Field`] name for map
     pub entry: String,
+    /// [`Field`] name for key
     pub key: String,
+    /// [`Field`] name for value
     pub value: String,
 }
 
@@ -51,6 +80,7 @@ impl Default for MapFieldNames {
 
 #[allow(dead_code)]
 impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
+    /// Creates a new `MapBuilder`
     pub fn new(
         field_names: Option<MapFieldNames>,
         key_builder: K,
@@ -60,6 +90,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         Self::with_capacity(field_names, key_builder, value_builder, capacity)
     }
 
+    /// Creates a new `MapBuilder` with capacity
     pub fn with_capacity(
         field_names: Option<MapFieldNames>,
         key_builder: K,
@@ -78,10 +109,12 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         }
     }
 
+    /// Returns the keys of the map
     pub fn keys(&mut self) -> &mut K {
         &mut self.key_builder
     }
 
+    /// Returns the values of the map
     pub fn values(&mut self) -> &mut V {
         &mut self.value_builder
     }
@@ -103,6 +136,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         Ok(())
     }
 
+    /// Builds the [`MapArray`]
     pub fn finish(&mut self) -> MapArray {
         let len = self.len();
 

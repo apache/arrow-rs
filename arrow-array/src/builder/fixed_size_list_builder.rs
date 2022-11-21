@@ -24,6 +24,30 @@ use std::any::Any;
 use std::sync::Arc;
 
 ///  Array builder for [`FixedSizeListArray`]
+/// ```
+/// let values_builder = Int32Builder::new();
+/// let mut builder = FixedSizeListBuilder::new(values_builder, 3);
+///
+/// //  [[0, 1, 2], null, [3, null, 5], [6, 7, null]]
+/// builder.values().append_value(0);
+/// builder.values().append_value(1);
+/// builder.values().append_value(2);
+/// builder.append(true);
+/// builder.values().append_null();
+/// builder.values().append_null();
+/// builder.values().append_null();
+/// builder.append(false);
+/// builder.values().append_value(3);
+/// builder.values().append_null();
+/// builder.values().append_value(5);
+/// builder.append(true);
+/// builder.values().append_value(6);
+/// builder.values().append_value(7);
+/// builder.values().append_null();
+/// builder.append(true);
+/// let list_array = builder.finish();
+/// ```
+///
 #[derive(Debug)]
 pub struct FixedSizeListBuilder<T: ArrayBuilder> {
     null_buffer_builder: NullBufferBuilder,
@@ -98,6 +122,7 @@ where
         &mut self.values_builder
     }
 
+    /// Returns the length of the list
     pub fn value_length(&self) -> i32 {
         self.list_len
     }

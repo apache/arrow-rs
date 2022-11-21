@@ -168,6 +168,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
 }
 
 impl StructBuilder {
+    /// Creates a new `StructBuilder`
     pub fn new(fields: Vec<Field>, field_builders: Vec<Box<dyn ArrayBuilder>>) -> Self {
         Self {
             fields,
@@ -176,6 +177,7 @@ impl StructBuilder {
         }
     }
 
+    /// Creates a new `StructBuilder` from vector of [`Field`] with `capacity`
     pub fn from_fields(fields: Vec<Field>, capacity: usize) -> Self {
         let mut builders = Vec::with_capacity(fields.len());
         for field in &fields {

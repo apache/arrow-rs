@@ -417,6 +417,7 @@ pub struct RecordBatchOptions {
 }
 
 impl RecordBatchOptions {
+    /// Creates a new `RecordBatchOptions`
     pub fn new() -> Self {
         Self {
             match_field_names: true,

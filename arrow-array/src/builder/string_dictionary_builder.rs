@@ -266,6 +266,7 @@ where
     }
 
     #[inline]
+    /// Appends a null slot into the builder
     pub fn append_null(&mut self) {
         self.keys_builder.append_null()
     }
