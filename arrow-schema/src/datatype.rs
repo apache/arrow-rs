@@ -372,6 +372,56 @@ impl DataType {
             _ => self == other,
         }
     }
+
+    /// Return size of this instance in bytes.
+    ///
+    /// Includes the size of `Self`.
+    pub fn size(&self) -> usize {
+        std::mem::size_of_val(self)
+            + match self {
+                DataType::Null
+                | DataType::Boolean
+                | DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Float16
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::Date32
+                | DataType::Date64
+                | DataType::Time32(_)
+                | DataType::Time64(_)
+                | DataType::Duration(_)
+                | DataType::Interval(_)
+                | DataType::Binary
+                | DataType::FixedSizeBinary(_)
+                | DataType::LargeBinary
+                | DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _) => 0,
+                DataType::Timestamp(_, s) => {
+                    s.as_ref().map(|s| s.capacity()).unwrap_or_default()
+                }
+                DataType::List(field)
+                | DataType::FixedSizeList(field, _)
+                | DataType::LargeList(field)
+                | DataType::Map(field, _) => field.size(),
+                DataType::Struct(fields) | DataType::Union(fields, _, _) => {
+                    fields
+                        .iter()
+                        .map(|field| field.size() - std::mem::size_of_val(field))
+                        .sum::<usize>()
+                        + (std::mem::size_of::<Field>() * fields.capacity())
+                }
+                DataType::Dictionary(dt1, dt2) => dt1.size() + dt2.size(),
+            }
+    }
 }
 
 #[cfg(test)]
