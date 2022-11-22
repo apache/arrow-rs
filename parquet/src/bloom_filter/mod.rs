@@ -24,11 +24,15 @@ use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::reader::ChunkReader;
 use crate::format::{
     BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash, BloomFilterHeader,
+    SplitBlockAlgorithm, Uncompressed, XxHash,
 };
 use bytes::{Buf, Bytes};
 use std::hash::Hasher;
+use std::io::Write;
 use std::sync::Arc;
-use thrift::protocol::{TCompactInputProtocol, TSerializable};
+use thrift::protocol::{
+    TCompactInputProtocol, TCompactOutputProtocol, TOutputProtocol, TSerializable,
+};
 use twox_hash::XxHash64;
 
 /// Salt as defined in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md#technical-approach)
@@ -80,6 +84,7 @@ fn block_check(block: &Block, hash: u32) -> bool {
 }
 
 /// A split block Bloom filter
+#[derive(Debug, Clone)]
 pub struct Sbbf(Vec<Block>);
 
 const SBBF_HEADER_SIZE_ESTIMATE: usize = 20;
@@ -113,7 +118,43 @@ fn read_bloom_filter_header_and_length(
     ))
 }
 
+const BITSET_MIN_LENGTH: usize = 32;
+const BITSET_MAX_LENGTH: usize = 128 * 1024 * 1024;
+
+#[inline]
+fn optimal_num_of_bytes(num_bytes: usize) -> usize {
+    let num_bytes = num_bytes.min(BITSET_MAX_LENGTH);
+    let num_bytes = num_bytes.max(BITSET_MIN_LENGTH);
+    num_bytes.next_power_of_two()
+}
+
+// see http://algo2.iti.kit.edu/documents/cacheefficientbloomfilters-jea.pdf
+// given fpp = (1 - e^(-k * n / m)) ^ k
+// we have m = - k * n / ln(1 - fpp ^ (1 / k))
+// where k = number of hash functions, m = number of bits, n = number of distinct values
+#[inline]
+fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> usize {
+    let num_bits = -8.0 * ndv as f64 / (1.0 - fpp.powf(1.0 / 8.0)).ln();
+    num_bits as usize
+}
+
 impl Sbbf {
+    /// Create a new [Sbbf] with given number of distinct values and false positive probability.
+    /// Will panic if `fpp` is greater than 1.0 or less than 0.0.
+    pub fn new_with_ndv_fpp(ndv: u64, fpp: f64) -> Self {
+        assert!((0.0..-1.0).contains(&fpp), "invalid fpp: {}", fpp);
+        let num_bits = num_of_bits_from_ndv_fpp(ndv, fpp);
+        Self::new_with_num_of_bytes(num_bits / 8)
+    }
+
+    /// Create a new [Sbbf] with given number of bytes, the exact number of bytes will be adjusted
+    /// to the next power of two bounded by `BITSET_MIN_LENGTH` and `BITSET_MAX_LENGTH`.
+    pub fn new_with_num_of_bytes(num_bytes: usize) -> Self {
+        let num_bytes = optimal_num_of_bytes(num_bytes);
+        let bitset = vec![0_u8; num_bytes];
+        Self::new(&bitset)
+    }
+
     fn new(bitset: &[u8]) -> Self {
         let data = bitset
             .chunks_exact(4 * 8)
@@ -128,6 +169,45 @@ impl Sbbf {
         Self(data)
     }
 
+    /// Write the bloom filter data (header and then bitset) to the output
+    pub fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
+        let mut protocol = TCompactOutputProtocol::new(&mut writer);
+        let header = self.header();
+        header.write_to_out_protocol(&mut protocol).map_err(|e| {
+            ParquetError::General(format!("Could not write bloom filter header: {}", e))
+        })?;
+        protocol.flush()?;
+        self.write_bitset(&mut writer)?;
+        Ok(())
+    }
+
+    /// Write the bitset in serialized form to the writer.
+    fn write_bitset<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
+        for block in &self.0 {
+            for word in block {
+                writer.write_all(&word.to_le_bytes()).map_err(|e| {
+                    ParquetError::General(format!(
+                        "Could not write bloom filter bit set: {}",
+                        e
+                    ))
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Create and populate [`BloomFilterHeader`] from this bitset for writing to serialized form
+    fn header(&self) -> BloomFilterHeader {
+        BloomFilterHeader {
+            // 8 i32 per block, 4 bytes per i32
+            num_bytes: self.0.len() as i32 * 4 * 8,
+            algorithm: BloomFilterAlgorithm::BLOCK(SplitBlockAlgorithm {}),
+            hash: BloomFilterHash::XXHASH(XxHash {}),
+            compression: BloomFilterCompression::UNCOMPRESSED(Uncompressed {}),
+        }
+    }
+
+    /// Read a new bloom filter from the given offset in the given reader.
     pub fn read_from_column_chunk<R: ChunkReader>(
         column_metadata: &ColumnChunkMetaData,
         reader: Arc<R>,
@@ -291,5 +371,48 @@ mod tests {
         assert_eq!(hash, BloomFilterHash::XXHASH(XxHash {}));
         assert_eq!(num_bytes, 32_i32);
         assert_eq!(20, SBBF_HEADER_SIZE_ESTIMATE);
+    }
+
+    #[test]
+    fn test_optimal_num_of_bytes() {
+        for (input, expected) in &[
+            (0, 32),
+            (9, 32),
+            (31, 32),
+            (32, 32),
+            (33, 64),
+            (99, 128),
+            (1024, 1024),
+            (999_000_000, 128 * 1024 * 1024),
+        ] {
+            assert_eq!(*expected, optimal_num_of_bytes(*input));
+        }
+    }
+
+    #[test]
+    fn test_num_of_bits_from_ndv_fpp() {
+        for (fpp, ndv, num_bits) in &[
+            (0.1, 10, 57),
+            (0.01, 10, 96),
+            (0.001, 10, 146),
+            (0.1, 100, 577),
+            (0.01, 100, 968),
+            (0.001, 100, 1460),
+            (0.1, 1000, 5772),
+            (0.01, 1000, 9681),
+            (0.001, 1000, 14607),
+            (0.1, 10000, 57725),
+            (0.01, 10000, 96815),
+            (0.001, 10000, 146076),
+            (0.1, 100000, 577254),
+            (0.01, 100000, 968152),
+            (0.001, 100000, 1460769),
+            (0.1, 1000000, 5772541),
+            (0.01, 1000000, 9681526),
+            (0.001, 1000000, 14607697),
+            (1e-50, 1_000_000_000_000, 14226231280773240832),
+        ] {
+            assert_eq!(*num_bits, num_of_bits_from_ndv_fpp(*ndv, *fpp) as u64);
+        }
     }
 }

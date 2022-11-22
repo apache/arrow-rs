@@ -78,10 +78,7 @@ fn main() {
             let row_group_reader = file_reader
                 .get_row_group(ri)
                 .expect("Unable to read row group");
-            if let Some(sbbf) = row_group_reader
-                .get_column_bloom_filter(column_index)
-                .expect("Failed to parse bloom filter")
-            {
+            if let Some(sbbf) = row_group_reader.get_column_bloom_filter(column_index) {
                 args.values.iter().for_each(|value| {
                     println!(
                         "Value {} is {} in bloom filter",
