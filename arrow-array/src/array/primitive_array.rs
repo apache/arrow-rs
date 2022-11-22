@@ -993,12 +993,13 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for PrimitiveArray<T> {
 
 impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// Returns a Decimal array with the same data as self, with the
-    /// specified precision.
+    /// specified precision and scale.
     ///
     /// Returns an Error if:
-    /// 1. `precision` is larger than `T:MAX_PRECISION`
-    /// 2. `scale` is larger than `T::MAX_SCALE`
-    /// 3. `scale` is > `precision`
+    /// - `precision` is zero
+    /// - `precision` is larger than `T:MAX_PRECISION`
+    /// - `scale` is larger than `T::MAX_SCALE`
+    /// - `scale` is > `precision`
     pub fn with_precision_and_scale(
         self,
         precision: u8,
