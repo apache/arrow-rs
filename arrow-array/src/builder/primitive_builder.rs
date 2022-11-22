@@ -19,7 +19,7 @@ use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::types::*;
 use crate::{ArrayRef, ArrowPrimitiveType, PrimitiveArray};
-use arrow_buffer::MutableBuffer;
+use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use std::any::Any;
 use std::sync::Arc;
@@ -92,6 +92,11 @@ impl<T: ArrowPrimitiveType> ArrayBuilder for PrimitiveBuilder<T> {
     /// Builds the array and reset this builder.
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
+    }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> ArrayRef {
+        Arc::new(self.finish_cloned())
     }
 }
 
@@ -219,10 +224,14 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         PrimitiveArray::<T>::from(array_data)
     }
 
+    /// Builds the [`PrimitiveArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> PrimitiveArray<T> {
         let len = self.len();
-        let null_bit_buffer = self.null_buffer_builder.finish_cloned();
-        let values_buffer = self.values_builder.finish_cloned();
+        let null_bit_buffer = self
+            .null_buffer_builder
+            .as_slice()
+            .map(|b| Buffer::from_slice_ref(&b));
+        let values_buffer = Buffer::from_slice_ref(&self.values_builder.as_slice());
         let builder = ArrayData::builder(T::DATA_TYPE)
             .len(len)
             .add_buffer(values_buffer)

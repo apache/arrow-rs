@@ -647,20 +647,6 @@ impl PartialEq for MutableBuffer {
     }
 }
 
-impl Clone for MutableBuffer {
-    fn clone(&self) -> Self {
-        let mut result = MutableBuffer::with_capacity(self.capacity);
-        result.len = self.len;
-        unsafe {
-            let src = self.as_ptr();
-            let dst = result.as_mut_ptr();
-            std::ptr::copy_nonoverlapping(src, dst, self.len)
-        }
-
-        result
-    }
-}
-
 unsafe impl Sync for MutableBuffer {}
 unsafe impl Send for MutableBuffer {}
 

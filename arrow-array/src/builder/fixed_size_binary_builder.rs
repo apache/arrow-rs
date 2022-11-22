@@ -18,6 +18,7 @@
 use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, UInt8BufferBuilder};
 use crate::{ArrayRef, FixedSizeBinaryArray};
+use arrow_buffer::Buffer;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
@@ -87,6 +88,23 @@ impl FixedSizeBinaryBuilder {
         let array_data = unsafe { array_data_builder.build_unchecked() };
         FixedSizeBinaryArray::from(array_data)
     }
+
+    /// Builds the [`FixedSizeBinaryArray`] without resetting the builder.
+    pub fn finish_cloned(&self) -> FixedSizeBinaryArray {
+        let array_length = self.len();
+        let values_buffer = Buffer::from_slice_ref(&self.values_builder.as_slice());
+        let array_data_builder =
+            ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
+                .add_buffer(values_buffer)
+                .null_bit_buffer(
+                    self.null_buffer_builder
+                        .as_slice()
+                        .map(|b| Buffer::from_slice_ref(&b)),
+                )
+                .len(array_length);
+        let array_data = unsafe { array_data_builder.build_unchecked() };
+        FixedSizeBinaryArray::from(array_data)
+    }
 }
 
 impl ArrayBuilder for FixedSizeBinaryBuilder {
@@ -119,6 +137,11 @@ impl ArrayBuilder for FixedSizeBinaryBuilder {
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
     }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> ArrayRef {
+        Arc::new(self.finish_cloned())
+    }
 }
 
 #[cfg(test)]
@@ -143,6 +166,36 @@ mod tests {
         assert_eq!(3, array.len());
         assert_eq!(1, array.null_count());
         assert_eq!(10, array.value_offset(2));
+        assert_eq!(5, array.value_length());
+    }
+
+    #[test]
+    fn test_fixed_size_binary_builder_finish_cloned() {
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 5);
+
+        //  [b"hello", null, "arrow"]
+        builder.append_value(b"hello").unwrap();
+        builder.append_null();
+        builder.append_value(b"arrow").unwrap();
+        let mut array: FixedSizeBinaryArray = builder.finish_cloned();
+
+        assert_eq!(&DataType::FixedSizeBinary(5), array.data_type());
+        assert_eq!(3, array.len());
+        assert_eq!(1, array.null_count());
+        assert_eq!(10, array.value_offset(2));
+        assert_eq!(5, array.value_length());
+
+        //  [b"finis", null, "clone"]
+        builder.append_value(b"finis").unwrap();
+        builder.append_null();
+        builder.append_value(b"clone").unwrap();
+
+        array = builder.finish();
+
+        assert_eq!(&DataType::FixedSizeBinary(5), array.data_type());
+        assert_eq!(6, array.len());
+        assert_eq!(2, array.null_count());
+        assert_eq!(25, array.value_offset(5));
         assert_eq!(5, array.value_length());
     }
 

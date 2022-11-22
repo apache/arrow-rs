@@ -160,6 +160,11 @@ where
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
     }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> ArrayRef {
+        Arc::new(self.finish_cloned())
+    }
 }
 
 impl<K, V> PrimitiveDictionaryBuilder<K, V>
@@ -198,6 +203,23 @@ where
         self.map.clear();
         let values = self.values_builder.finish();
         let keys = self.keys_builder.finish();
+
+        let data_type =
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(V::DATA_TYPE));
+
+        let builder = keys
+            .into_data()
+            .into_builder()
+            .data_type(data_type)
+            .child_data(vec![values.into_data()]);
+
+        DictionaryArray::from(unsafe { builder.build_unchecked() })
+    }
+
+    /// Builds the `DictionaryArray` without resetting the builder.
+    pub fn finish_cloned(&self) -> DictionaryArray<K> {
+        let values = self.values_builder.finish_cloned();
+        let keys = self.keys_builder.finish_cloned();
 
         let data_type =
             DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(V::DATA_TYPE));

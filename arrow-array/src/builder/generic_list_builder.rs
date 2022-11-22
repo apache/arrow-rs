@@ -18,6 +18,7 @@
 use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::{ArrayRef, GenericListArray, OffsetSizeTrait};
+use arrow_buffer::Buffer;
 use arrow_data::ArrayData;
 use arrow_schema::Field;
 use std::any::Any;
@@ -85,6 +86,11 @@ where
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
     }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> ArrayRef {
+        Arc::new(self.finish_cloned())
+    }
 }
 
 impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize, T>
@@ -126,6 +132,39 @@ where
         let offset_buffer = self.offsets_builder.finish();
         let null_bit_buffer = self.null_buffer_builder.finish();
         self.offsets_builder.append(OffsetSize::zero());
+        let field = Box::new(Field::new(
+            "item",
+            values_data.data_type().clone(),
+            true, // TODO: find a consistent way of getting this
+        ));
+        let data_type = GenericListArray::<OffsetSize>::DATA_TYPE_CONSTRUCTOR(field);
+        let array_data_builder = ArrayData::builder(data_type)
+            .len(len)
+            .add_buffer(offset_buffer)
+            .add_child_data(values_data.clone())
+            .null_bit_buffer(null_bit_buffer);
+
+        let array_data = unsafe { array_data_builder.build_unchecked() };
+
+        GenericListArray::<OffsetSize>::from(array_data)
+    }
+
+    /// Builds the [`GenericListArray`] without resetting the builder.
+    pub fn finish_cloned(&self) -> GenericListArray<OffsetSize> {
+        let len = self.len();
+        let values_arr = self
+            .values_builder
+            .as_any()
+            .downcast_ref::<T>()
+            .unwrap()
+            .finish_cloned();
+        let values_data = values_arr.data();
+
+        let offset_buffer = Buffer::from_slice_ref(&self.offsets_builder.as_slice());
+        let null_bit_buffer = self
+            .null_buffer_builder
+            .as_slice()
+            .map(|b| Buffer::from_slice_ref(&b));
         let field = Box::new(Field::new(
             "item",
             values_data.data_type().clone(),
@@ -257,6 +296,27 @@ mod tests {
         builder.append(true);
         arr = builder.finish();
         assert_eq!(1, arr.len());
+        assert!(builder.is_empty());
+    }
+
+    #[test]
+    fn test_list_array_builder_finish_cloned() {
+        let values_builder = Int32Array::builder(5);
+        let mut builder = ListBuilder::new(values_builder);
+
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
+        builder.values().append_slice(&[4, 5, 6]);
+        builder.append(true);
+
+        let mut arr = builder.finish_cloned();
+        assert_eq!(2, arr.len());
+        assert!(!builder.is_empty());
+
+        builder.values().append_slice(&[7, 8, 9]);
+        builder.append(true);
+        arr = builder.finish();
+        assert_eq!(3, arr.len());
         assert!(builder.is_empty());
     }
 

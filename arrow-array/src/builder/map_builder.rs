@@ -18,6 +18,7 @@
 use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::{Array, ArrayRef, MapArray, StructArray};
+use arrow_buffer::Buffer;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
 use std::any::Any;
@@ -152,6 +153,58 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
 
         MapArray::from(array_data)
     }
+
+    pub fn finish_cloned(&self) -> MapArray {
+        let len = self.len();
+
+        // Build the keys
+        let keys_arr = self
+            .key_builder
+            .as_any()
+            .downcast_ref::<K>()
+            .unwrap()
+            .finish_cloned();
+        let values_arr = self
+            .value_builder
+            .as_any()
+            .downcast_ref::<V>()
+            .unwrap()
+            .finish_cloned();
+
+        let keys_field = Field::new(
+            self.field_names.key.as_str(),
+            keys_arr.data_type().clone(),
+            false, // always nullable
+        );
+        let values_field = Field::new(
+            self.field_names.value.as_str(),
+            values_arr.data_type().clone(),
+            true,
+        );
+
+        let struct_array =
+            StructArray::from(vec![(keys_field, keys_arr), (values_field, values_arr)]);
+
+        let offset_buffer = Buffer::from_slice_ref(&self.offsets_builder.as_slice());
+        let null_bit_buffer = self
+            .null_buffer_builder
+            .as_slice()
+            .map(|b| Buffer::from_slice_ref(&b));
+        let map_field = Box::new(Field::new(
+            self.field_names.entry.as_str(),
+            struct_array.data_type().clone(),
+            false, // always non-nullable
+        ));
+        let array_data = ArrayData::builder(DataType::Map(map_field, false)) // TODO: support sorted keys
+            .len(len)
+            .add_buffer(offset_buffer)
+            .add_child_data(struct_array.into_data())
+            .null_bit_buffer(null_bit_buffer);
+
+        let array_data = unsafe { array_data.build_unchecked() };
+
+        MapArray::from(array_data)
+    }
 }
 
 impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
@@ -165,6 +218,11 @@ impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
 
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
+    }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> ArrayRef {
+        Arc::new(self.finish_cloned())
     }
 
     fn as_any(&self) -> &dyn Any {

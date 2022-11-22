@@ -19,7 +19,7 @@ use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder, UInt8BufferBuilder};
 use crate::types::{ByteArrayType, GenericBinaryType, GenericStringType};
 use crate::{ArrayRef, GenericByteArray, OffsetSizeTrait};
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayDataBuilder;
 use std::any::Any;
 use std::sync::Arc;
@@ -94,6 +94,25 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         GenericByteArray::from(array_data)
     }
 
+    /// Builds the [`GenericByteArray`] without resetting the builder.
+    pub fn finish_cloned(&self) -> GenericByteArray<T> {
+        let array_type = T::DATA_TYPE;
+        let offset_buffer = Buffer::from_slice_ref(&self.offsets_builder.as_slice());
+        let value_buffer = Buffer::from_slice_ref(&self.value_builder.as_slice());
+        let array_builder = ArrayDataBuilder::new(array_type)
+            .len(self.len())
+            .add_buffer(offset_buffer)
+            .add_buffer(value_buffer)
+            .null_bit_buffer(
+                self.null_buffer_builder
+                    .as_slice()
+                    .map(|b| Buffer::from_slice_ref(&b)),
+            );
+
+        let array_data = unsafe { array_builder.build_unchecked() };
+        GenericByteArray::from(array_data)
+    }
+
     /// Returns the current values buffer as a slice
     pub fn values_slice(&self) -> &[u8] {
         self.value_builder.as_slice()
@@ -136,6 +155,11 @@ impl<T: ByteArrayType> ArrayBuilder for GenericByteBuilder<T> {
     /// Builds the array and reset this builder.
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
+    }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> ArrayRef {
+        Arc::new(self.finish_cloned())
     }
 
     /// Returns the builder as a non-mutable `Any` reference.
@@ -324,5 +348,35 @@ mod tests {
     #[test]
     fn test_large_string_array_builder_finish() {
         _test_generic_string_array_builder_finish::<i64>()
+    }
+
+    fn _test_generic_string_array_builder_finish_cloned<O: OffsetSizeTrait>() {
+        let mut builder = GenericStringBuilder::<O>::with_capacity(3, 11);
+
+        builder.append_value("hello");
+        builder.append_value("rust");
+        builder.append_null();
+
+        let mut arr = builder.finish_cloned();
+        assert!(!builder.is_empty());
+        assert_eq!(3, arr.len());
+
+        builder.append_value("arrow");
+        builder.append_value("parquet");
+        arr = builder.finish();
+
+        assert!(arr.data().null_buffer().is_some());
+        assert_eq!(&[O::zero()], builder.offsets_slice());
+        assert_eq!(5, arr.len());
+    }
+
+    #[test]
+    fn test_string_array_builder_finish_cloned() {
+        _test_generic_string_array_builder_finish_cloned::<i32>()
+    }
+
+    #[test]
+    fn test_large_string_array_builder_finish_cloned() {
+        _test_generic_string_array_builder_finish_cloned::<i64>()
     }
 }

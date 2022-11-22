@@ -47,6 +47,8 @@ trait FieldDataValues: std::fmt::Debug {
     fn append_null(&mut self);
 
     fn finish(&mut self) -> Buffer;
+
+    fn finish_cloned(&self) -> Buffer;
 }
 
 impl<T: ArrowNativeType> FieldDataValues for BufferBuilder<T> {
@@ -60,6 +62,10 @@ impl<T: ArrowNativeType> FieldDataValues for BufferBuilder<T> {
 
     fn finish(&mut self) -> Buffer {
         self.finish()
+    }
+
+    fn finish_cloned(&self) -> Buffer {
+        Buffer::from_slice_ref(&self.as_slice())
     }
 }
 

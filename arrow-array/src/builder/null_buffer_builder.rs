@@ -135,12 +135,11 @@ impl NullBufferBuilder {
         buf
     }
 
-    pub fn finish_cloned(&self) -> Option<Buffer> {
-        let buf = self.bitmap_builder.as_ref().map(|b| b.finish_cloned());
-        buf
+    /// Returns the inner bitmap builder as slice
+    pub fn as_slice(&self) -> Option<&[u8]> {
+        Some(self.bitmap_builder.as_ref()?.as_slice())
     }
 
-    #[inline]
     fn materialize_if_needed(&mut self) {
         if self.bitmap_builder.is_none() {
             self.materialize()

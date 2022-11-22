@@ -162,11 +162,6 @@ impl BooleanBufferBuilder {
         self.len = 0;
         buf.into()
     }
-
-    pub fn finish_cloned(&self) -> Buffer {
-        let buf = self.buffer.clone();
-        buf.into()
-    }
 }
 
 impl From<BooleanBufferBuilder> for Buffer {
