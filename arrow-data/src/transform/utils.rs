@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow_buffer::{bit_util, ArrowNativeType, MutableBuffer};
-use num::Integer;
+use num::{CheckedAdd, Integer};
 
 /// extends the `buffer` to be able to hold `len` bits, setting all bits of the new size to zero.
 #[inline]
@@ -27,7 +27,7 @@ pub(super) fn resize_for_bits(buffer: &mut MutableBuffer, len: usize) {
     }
 }
 
-pub(super) fn extend_offsets<T: ArrowNativeType + Integer>(
+pub(super) fn extend_offsets<T: ArrowNativeType + Integer + CheckedAdd>(
     buffer: &mut MutableBuffer,
     mut last_offset: T,
     offsets: &[T],
@@ -36,7 +36,7 @@ pub(super) fn extend_offsets<T: ArrowNativeType + Integer>(
     offsets.windows(2).for_each(|offsets| {
         // compute the new offset
         let length = offsets[1] - offsets[0];
-        last_offset = last_offset + length;
+        last_offset = last_offset.checked_add(&length).expect("offset overflow");
         buffer.push(last_offset);
     });
 }
@@ -54,4 +54,17 @@ pub(super) unsafe fn get_last_offset<T: ArrowNativeType>(
     let (prefix, offsets, suffix) = offset_buffer.as_slice().align_to::<T>();
     debug_assert!(prefix.is_empty() && suffix.is_empty());
     *offsets.get_unchecked(offsets.len() - 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::transform::utils::extend_offsets;
+    use arrow_buffer::MutableBuffer;
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn test_overflow() {
+        let mut buffer = MutableBuffer::new(10);
+        extend_offsets(&mut buffer, i32::MAX - 4, &[0, 5]);
+    }
 }
