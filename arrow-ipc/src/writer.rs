@@ -1557,8 +1557,8 @@ mod tests {
         let dctfield =
             Field::new_dict("dict", array.data_type().clone(), false, 2, false);
 
-        let types = Buffer::from_slice_ref(&[0_i8, 0, 0]);
-        let offsets = Buffer::from_slice_ref(&[0_i32, 1, 2]);
+        let types = Buffer::from_slice_ref([0_i8, 0, 0]);
+        let offsets = Buffer::from_slice_ref([0_i32, 1, 2]);
 
         let union =
             UnionArray::try_new(&[0], types, Some(offsets), vec![(dctfield, array)])

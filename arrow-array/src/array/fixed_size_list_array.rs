@@ -245,7 +245,7 @@ mod tests {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
             .len(9)
-            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7, 8]))
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8]))
             .build()
             .unwrap();
 
@@ -320,7 +320,7 @@ mod tests {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
-            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
             .build()
             .unwrap();
 
@@ -343,7 +343,7 @@ mod tests {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
             .len(10)
-            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
             .build()
             .unwrap();
 
@@ -405,7 +405,7 @@ mod tests {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
             .len(10)
-            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
             .build()
             .unwrap();
 

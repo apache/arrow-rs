@@ -1132,7 +1132,7 @@ mod tests {
 
     #[test]
     fn test_primitive_array_from_vec() {
-        let buf = Buffer::from_slice_ref(&[0, 1, 2, 3, 4]);
+        let buf = Buffer::from_slice_ref([0, 1, 2, 3, 4]);
         let arr = Int32Array::from(vec![0, 1, 2, 3, 4]);
         assert_eq!(buf, arr.data.buffers()[0]);
         assert_eq!(5, arr.len());
@@ -1631,7 +1631,7 @@ mod tests {
     #[test]
     fn test_primitive_array_builder() {
         // Test building a primitive array with ArrayData builder and offset
-        let buf = Buffer::from_slice_ref(&[0i32, 1, 2, 3, 4, 5, 6]);
+        let buf = Buffer::from_slice_ref([0i32, 1, 2, 3, 4, 5, 6]);
         let buf2 = buf.clone();
         let data = ArrayData::builder(DataType::Int32)
             .len(5)
@@ -1700,7 +1700,7 @@ mod tests {
     // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]
     fn test_primitive_array_invalid_buffer_len() {
-        let buffer = Buffer::from_slice_ref(&[0i32, 1, 2, 3, 4]);
+        let buffer = Buffer::from_slice_ref([0i32, 1, 2, 3, 4]);
         let data = unsafe {
             ArrayData::builder(DataType::Int32)
                 .add_buffer(buffer.clone())

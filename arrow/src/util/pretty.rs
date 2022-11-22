@@ -874,7 +874,7 @@ mod tests {
 
         // Can't use UnionBuilder with non-primitive types, so manually build outer UnionArray
         let a_array = Int32Array::from(vec![None, None, None, Some(1234), Some(23)]);
-        let type_ids = Buffer::from_slice_ref(&[1_i8, 1, 0, 0, 1]);
+        let type_ids = Buffer::from_slice_ref([1_i8, 1, 0, 0, 1]);
 
         let children: Vec<(Field, Arc<dyn Array>)> = vec![
             (Field::new("a", DataType::Int32, true), Arc::new(a_array)),
