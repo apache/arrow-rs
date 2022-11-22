@@ -157,6 +157,15 @@ impl OrderPreservingInterner {
     pub fn value(&self, key: Interned) -> &[u8] {
         self.values.index(key)
     }
+
+    /// Returns the size of this instance in bytes including self
+    pub fn size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.values.buffer_size()
+            + self.values.buffer_size()
+            + self.bucket.size()
+            + self.lookup.capacity() * std::mem::size_of::<Interned>()
+    }
 }
 
 /// A buffer of `[u8]` indexed by `[Interned]`
@@ -191,6 +200,11 @@ impl InternBuffer {
         let key = Interned(NonZeroU32::new(idx).unwrap());
         self.offsets.push(self.values.len());
         key
+    }
+
+    /// Returns the byte size of the associated buffers
+    fn buffer_size(&self) -> usize {
+        self.values.capacity() + self.offsets.capacity() * std::mem::size_of::<usize>()
     }
 }
 
@@ -323,6 +337,13 @@ impl Bucket {
                 self.slots.push(Slot { value, child: None })
             }
         }
+    }
+
+    /// Returns the size of this instance in bytes
+    fn size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.slots.capacity() * std::mem::size_of::<Slot>()
+            + self.next.as_ref().map(|x| x.size()).unwrap_or_default()
     }
 }
 
