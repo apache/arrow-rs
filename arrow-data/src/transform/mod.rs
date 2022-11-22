@@ -20,7 +20,7 @@ use super::{
     ArrayData, ArrayDataBuilder,
 };
 use crate::bit_mask::set_bits;
-use arrow_buffer::{bit_util, ArrowNativeType, MutableBuffer};
+use arrow_buffer::{bit_util, i256, ArrowNativeType, MutableBuffer};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
 use half::f16;
 use num::Integer;
@@ -186,7 +186,6 @@ fn build_extend_dictionary(
 
 fn build_extend(array: &ArrayData) -> Extend {
     match array.data_type() {
-        DataType::Decimal128(_, _) => primitive::build_extend::<i128>(array),
         DataType::Null => null::build_extend(array),
         DataType::Boolean => boolean::build_extend(array),
         DataType::UInt8 => primitive::build_extend::<u8>(array),
@@ -214,6 +213,8 @@ fn build_extend(array: &ArrayData) -> Extend {
         DataType::Interval(IntervalUnit::MonthDayNano) => {
             primitive::build_extend::<i128>(array)
         }
+        DataType::Decimal128(_, _) => primitive::build_extend::<i128>(array),
+        DataType::Decimal256(_, _) => primitive::build_extend::<i256>(array),
         DataType::Utf8 | DataType::Binary => variable_size::build_extend::<i32>(array),
         DataType::LargeUtf8 | DataType::LargeBinary => {
             variable_size::build_extend::<i64>(array)
@@ -222,9 +223,7 @@ fn build_extend(array: &ArrayData) -> Extend {
         DataType::LargeList(_) => list::build_extend::<i64>(array),
         DataType::Dictionary(_, _) => unreachable!("should use build_extend_dictionary"),
         DataType::Struct(_) => structure::build_extend(array),
-        DataType::FixedSizeBinary(_) | DataType::Decimal256(_, _) => {
-            fixed_binary::build_extend(array)
-        }
+        DataType::FixedSizeBinary(_) => fixed_binary::build_extend(array),
         DataType::Float16 => primitive::build_extend::<f16>(array),
         DataType::FixedSizeList(_, _) => fixed_size_list::build_extend(array),
         DataType::Union(_, _, mode) => match mode {
@@ -236,7 +235,6 @@ fn build_extend(array: &ArrayData) -> Extend {
 
 fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
     Box::new(match data_type {
-        DataType::Decimal128(_, _) => primitive::extend_nulls::<i128>,
         DataType::Null => null::extend_nulls,
         DataType::Boolean => boolean::extend_nulls,
         DataType::UInt8 => primitive::extend_nulls::<u8>,
@@ -258,6 +256,8 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime) => primitive::extend_nulls::<i64>,
         DataType::Interval(IntervalUnit::MonthDayNano) => primitive::extend_nulls::<i128>,
+        DataType::Decimal128(_, _) => primitive::extend_nulls::<i128>,
+        DataType::Decimal256(_, _) => primitive::extend_nulls::<i256>,
         DataType::Utf8 | DataType::Binary => variable_size::extend_nulls::<i32>,
         DataType::LargeUtf8 | DataType::LargeBinary => variable_size::extend_nulls::<i64>,
         DataType::Map(_, _) | DataType::List(_) => list::extend_nulls::<i32>,
@@ -274,9 +274,7 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
             _ => unreachable!(),
         },
         DataType::Struct(_) => structure::extend_nulls,
-        DataType::FixedSizeBinary(_) | DataType::Decimal256(_, _) => {
-            fixed_binary::extend_nulls
-        }
+        DataType::FixedSizeBinary(_) => fixed_binary::extend_nulls,
         DataType::Float16 => primitive::extend_nulls::<f16>,
         DataType::FixedSizeList(_, _) => fixed_size_list::extend_nulls,
         DataType::Union(_, _, mode) => match mode {
