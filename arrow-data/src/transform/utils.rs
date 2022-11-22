@@ -36,6 +36,9 @@ pub(super) fn extend_offsets<T: ArrowNativeType + Integer + CheckedAdd>(
     offsets.windows(2).for_each(|offsets| {
         // compute the new offset
         let length = offsets[1] - offsets[0];
+        // if you hit this appending to a StringArray / BinaryArray it is because you
+        // are trying to add more data than can fit into that type. Try breaking your data into
+        // smaller batches or using LargeStringArray / LargeBinaryArray
         last_offset = last_offset.checked_add(&length).expect("offset overflow");
         buffer.push(last_offset);
     });
