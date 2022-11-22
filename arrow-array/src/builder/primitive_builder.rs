@@ -219,6 +219,19 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         PrimitiveArray::<T>::from(array_data)
     }
 
+    pub fn finish_cloned(&self) -> PrimitiveArray<T> {
+        let len = self.len();
+        let null_bit_buffer = self.null_buffer_builder.finish_cloned();
+        let values_buffer = self.values_builder.finish_cloned();
+        let builder = ArrayData::builder(T::DATA_TYPE)
+            .len(len)
+            .add_buffer(values_buffer)
+            .null_bit_buffer(null_bit_buffer);
+
+        let array_data = unsafe { builder.build_unchecked() };
+        PrimitiveArray::<T>::from(array_data)
+    }
+
     /// Returns the current values buffer as a slice
     pub fn values_slice(&self) -> &[T::Native] {
         self.values_builder.as_slice()
@@ -424,6 +437,28 @@ mod tests {
         builder.append_slice(&[2, 4, 6, 8]);
         let mut arr = builder.finish();
         assert_eq!(4, arr.len());
+        assert_eq!(0, builder.len());
+
+        builder.append_slice(&[1, 3, 5, 7, 9]);
+        arr = builder.finish();
+        assert_eq!(5, arr.len());
+        assert_eq!(0, builder.len());
+    }
+
+    #[test]
+    fn test_primitive_array_builder_finish_cloned() {
+        let mut builder = Int32Builder::new();
+        builder.append_value(23);
+        builder.append_value(45);
+        let result = builder.finish_cloned();
+        assert_eq!(result, Int32Array::from(vec![23, 45]));
+        builder.append_value(56);
+        assert_eq!(builder.finish_cloned(), Int32Array::from(vec![23, 45, 56]));
+
+        builder.append_slice(&[2, 4, 6, 8]);
+        let mut arr = builder.finish();
+        assert_eq!(7, arr.len());
+        assert_eq!(arr, Int32Array::from(vec![23, 45, 56, 2, 4, 6, 8]));
         assert_eq!(0, builder.len());
 
         builder.append_slice(&[1, 3, 5, 7, 9]);

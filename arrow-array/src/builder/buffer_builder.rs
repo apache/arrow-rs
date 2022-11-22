@@ -402,6 +402,11 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
         self.len = 0;
         buf.into()
     }
+
+    pub fn finish_cloned(&self) -> Buffer {
+        let buf = self.buffer.clone();
+        buf.into()
+    }
 }
 
 #[cfg(test)]
