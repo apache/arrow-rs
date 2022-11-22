@@ -161,7 +161,7 @@ impl OrderPreservingInterner {
     /// Returns the size of this instance in bytes including self
     pub fn size(&self) -> usize {
         std::mem::size_of::<Self>()
-            + self.values.buffer_size()
+            + self.keys.buffer_size()
             + self.values.buffer_size()
             + self.bucket.size()
             + self.lookup.capacity() * std::mem::size_of::<Interned>()
