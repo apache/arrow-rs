@@ -16,7 +16,7 @@
 // under the License.
 
 //! Bloom filter implementation specific to Parquet, as described
-//! in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md)
+//! in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md).
 
 use crate::data_type::AsBytes;
 use crate::errors::ParquetError;
@@ -35,7 +35,7 @@ use thrift::protocol::{
 };
 use twox_hash::XxHash64;
 
-/// Salt as defined in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md#technical-approach)
+/// Salt as defined in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md#technical-approach).
 const SALT: [u32; 8] = [
     0x47b6137b_u32,
     0x44974d91_u32,
@@ -83,7 +83,9 @@ fn block_check(block: &Block, hash: u32) -> bool {
     true
 }
 
-/// A split block Bloom filter
+/// A split block Bloom filter. The creation of this structure is based on the
+/// [`crate::file::properties::BloomFilterProperties`] struct set via [`crate::file::properties::WriterProperties`] and
+/// is thus hidden by default.
 #[derive(Debug, Clone)]
 pub struct Sbbf(Vec<Block>);
 
@@ -118,8 +120,8 @@ fn read_bloom_filter_header_and_length(
     ))
 }
 
-const BITSET_MIN_LENGTH: usize = 32;
-const BITSET_MAX_LENGTH: usize = 128 * 1024 * 1024;
+pub(crate) const BITSET_MIN_LENGTH: usize = 32;
+pub(crate) const BITSET_MAX_LENGTH: usize = 128 * 1024 * 1024;
 
 #[inline]
 fn optimal_num_of_bytes(num_bytes: usize) -> usize {
@@ -141,15 +143,20 @@ fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> usize {
 impl Sbbf {
     /// Create a new [Sbbf] with given number of distinct values and false positive probability.
     /// Will panic if `fpp` is greater than 1.0 or less than 0.0.
-    pub fn new_with_ndv_fpp(ndv: u64, fpp: f64) -> Self {
-        assert!((0.0..-1.0).contains(&fpp), "invalid fpp: {}", fpp);
+    pub(crate) fn new_with_ndv_fpp(ndv: u64, fpp: f64) -> Result<Self, ParquetError> {
+        if !(0.0..1.0).contains(&fpp) {
+            return Err(ParquetError::General(format!(
+                "False positive probability must be between 0.0 and 1.0, got {}",
+                fpp
+            )));
+        }
         let num_bits = num_of_bits_from_ndv_fpp(ndv, fpp);
-        Self::new_with_num_of_bytes(num_bits / 8)
+        Ok(Self::new_with_num_of_bytes(num_bits / 8))
     }
 
     /// Create a new [Sbbf] with given number of bytes, the exact number of bytes will be adjusted
-    /// to the next power of two bounded by `BITSET_MIN_LENGTH` and `BITSET_MAX_LENGTH`.
-    pub fn new_with_num_of_bytes(num_bytes: usize) -> Self {
+    /// to the next power of two bounded by [BITSET_MIN_LENGTH] and [BITSET_MAX_LENGTH].
+    pub(crate) fn new_with_num_of_bytes(num_bytes: usize) -> Self {
         let num_bytes = optimal_num_of_bytes(num_bytes);
         let bitset = vec![0_u8; num_bytes];
         Self::new(&bitset)
@@ -170,7 +177,7 @@ impl Sbbf {
     }
 
     /// Write the bloom filter data (header and then bitset) to the output
-    pub fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
+    pub(crate) fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
         let mut protocol = TCompactOutputProtocol::new(&mut writer);
         let header = self.header();
         header.write_to_out_protocol(&mut protocol).map_err(|e| {
@@ -208,7 +215,7 @@ impl Sbbf {
     }
 
     /// Read a new bloom filter from the given offset in the given reader.
-    pub fn read_from_column_chunk<R: ChunkReader>(
+    pub(crate) fn read_from_column_chunk<R: ChunkReader>(
         column_metadata: &ColumnChunkMetaData,
         reader: Arc<R>,
     ) -> Result<Option<Self>, ParquetError> {
@@ -254,7 +261,7 @@ impl Sbbf {
     }
 
     /// Insert an [AsBytes] value into the filter
-    pub fn insert<T: AsBytes>(&mut self, value: T) {
+    pub fn insert<T: AsBytes>(&mut self, value: &T) {
         self.insert_hash(hash_as_bytes(value));
     }
 
@@ -266,7 +273,7 @@ impl Sbbf {
     }
 
     /// Check if an [AsBytes] value is probably present or definitely absent in the filter
-    pub fn check<T: AsBytes>(&self, value: T) -> bool {
+    pub fn check<T: AsBytes>(&self, value: &T) -> bool {
         self.check_hash(hash_as_bytes(value))
     }
 
@@ -284,7 +291,7 @@ impl Sbbf {
 const SEED: u64 = 0;
 
 #[inline]
-fn hash_as_bytes<A: AsBytes>(value: A) -> u64 {
+fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
     let mut hasher = XxHash64::with_seed(SEED);
     hasher.write(value.as_bytes());
     hasher.finish()
@@ -324,8 +331,8 @@ mod tests {
     fn test_sbbf_insert_and_check() {
         let mut sbbf = Sbbf(vec![[0_u32; 8]; 1_000]);
         for i in 0..1_000_000 {
-            sbbf.insert(i);
-            assert!(sbbf.check(i));
+            sbbf.insert(&i);
+            assert!(sbbf.check(&i));
         }
     }
 
@@ -339,7 +346,7 @@ mod tests {
         let sbbf = Sbbf::new(bitset);
         for a in 0..10i64 {
             let value = format!("a{}", a);
-            assert!(sbbf.check(value.as_str()));
+            assert!(sbbf.check(&value.as_str()));
         }
     }
 

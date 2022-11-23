@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::basic::Encoding;
+use crate::bloom_filter::Sbbf;
 use crate::column::writer::{
     compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max,
     update_min,
@@ -24,6 +25,7 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::DataType;
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
 use crate::errors::{ParquetError, Result};
+use crate::file::properties::BloomFilterProperties;
 use crate::file::properties::{EnabledStatistics, WriterProperties};
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
 use crate::util::memory::ByteBufferPtr;
@@ -83,6 +85,9 @@ pub trait ColumnValueEncoder {
         value_indices: Option<&[usize]>,
     ) -> Option<(Self::T, Self::T)>;
 
+    /// Returns the bloom filter for this collection if enabled.
+    fn bloom_filter(&self) -> Option<Sbbf>;
+
     /// Create a new [`ColumnValueEncoder`]
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self>
     where
@@ -125,6 +130,7 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     statistics_enabled: EnabledStatistics,
     min_value: Option<T::T>,
     max_value: Option<T::T>,
+    bloom_filter: Option<Sbbf>,
 }
 
 impl<T: DataType> ColumnValueEncoderImpl<T> {
@@ -133,6 +139,13 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             if let Some((min, max)) = self.min_max(slice, None) {
                 update_min(&self.descr, &min, &mut self.min_value);
                 update_max(&self.descr, &max, &mut self.max_value);
+            }
+        }
+
+        // encode the values into bloom filter if enabled
+        if let Some(bloom_filter) = &mut self.bloom_filter {
+            for value in slice {
+                bloom_filter.insert(value);
             }
         }
 
@@ -161,6 +174,11 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         }
     }
 
+    fn bloom_filter(&self) -> Option<Sbbf> {
+        // TODO reduce copy
+        self.bloom_filter.clone()
+    }
+
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {
         let dict_supported = props.dictionary_enabled(descr.path())
             && has_dictionary_support(T::get_physical_type(), props);
@@ -175,12 +193,25 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
         let statistics_enabled = props.statistics_enabled(descr.path());
 
+        let bloom_filter_enabled = props.bloom_filter_enabled(descr.path());
+        let bloom_filter =
+            if let Some(BloomFilterProperties { ndv, fpp }) = bloom_filter_enabled {
+                Sbbf::new_with_ndv_fpp(ndv, fpp)
+                    .map_err(|e| {
+                        eprintln!("invalid bloom filter properties: {}", e);
+                    })
+                    .ok()
+            } else {
+                None
+            };
+
         Ok(Self {
             encoder,
             dict_encoder,
             descr: descr.clone(),
             num_values: 0,
             statistics_enabled,
+            bloom_filter,
             min_value: None,
             max_value: None,
         })

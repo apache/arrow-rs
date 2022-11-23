@@ -180,7 +180,7 @@ impl<W: Write> SerializedFileWriter<W> {
         &self.row_groups
     }
 
-    /// Closes and finalises file writer, returning the file metadata.
+    /// Closes and finalizes file writer, returning the file metadata.
     pub fn close(mut self) -> Result<parquet::FileMetaData> {
         self.assert_previous_writer_closed()?;
         let metadata = self.write_metadata()?;
