@@ -263,30 +263,13 @@ impl fmt::Display for DataType {
 
 impl DataType {
     /// Returns true if the type is primitive: (numeric, temporal).
+    #[inline]
     pub fn is_primitive(t: &DataType) -> bool {
-        use DataType::*;
-        matches!(
-            t,
-            Int8 | Int16
-                | Int32
-                | Int64
-                | UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Float32
-                | Float64
-                | Date32
-                | Date64
-                | Time32(_)
-                | Time64(_)
-                | Timestamp(_, _)
-                | Interval(_)
-                | Duration(_)
-        )
+        Self::is_numeric(t) || Self::is_temporal(t)
     }
 
-    /// Returns true if this type is numeric: (UInt*, Int*, or Float*).
+    /// Returns true if this type is numeric: (UInt*, Int*, Float*, Decimal*).
+    #[inline]
     pub fn is_numeric(t: &DataType) -> bool {
         use DataType::*;
         matches!(
@@ -299,12 +282,16 @@ impl DataType {
                 | Int16
                 | Int32
                 | Int64
+                | Float16
                 | Float32
                 | Float64
+                | Decimal128(_, _)
+                | Decimal256(_, _)
         )
     }
 
     /// Returns true if this type is temporal: (Date*, Time*, Duration, or Interval).
+    #[inline]
     pub fn is_temporal(t: &DataType) -> bool {
         use DataType::*;
         matches!(
@@ -320,6 +307,7 @@ impl DataType {
     }
 
     /// Returns true if this type is valid as a dictionary key
+    #[inline]
     pub fn is_dictionary_key_type(t: &DataType) -> bool {
         use DataType::*;
         matches!(
