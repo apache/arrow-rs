@@ -1017,7 +1017,7 @@ mod tests {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
-            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
             .build()
             .unwrap();
 
@@ -1231,7 +1231,8 @@ mod tests {
             Some(vec![30, 30, 30]),
             None,
         ];
-        let array = FixedSizeBinaryArray::try_from_sparse_iter(values.into_iter())?;
+        let array =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), 3)?;
 
         // export it
         let array = ArrowArray::try_from(array.into_data())?;
@@ -1250,7 +1251,7 @@ mod tests {
         // verify
         assert_eq!(
             array,
-            &FixedSizeBinaryArray::try_from_sparse_iter(
+            &FixedSizeBinaryArray::try_from_sparse_iter_with_size(
                 vec![
                     None,
                     Some(vec![10, 10, 10]),
@@ -1265,7 +1266,8 @@ mod tests {
                     Some(vec![30, 30, 30]),
                     None,
                 ]
-                .into_iter()
+                .into_iter(),
+                3
             )?
         );
 

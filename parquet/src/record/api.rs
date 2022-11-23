@@ -795,7 +795,9 @@ impl fmt::Display for Field {
 #[inline]
 fn convert_date_to_string(value: u32) -> String {
     static NUM_SECONDS_IN_DAY: i64 = 60 * 60 * 24;
-    let dt = Utc.timestamp(value as i64 * NUM_SECONDS_IN_DAY, 0).date();
+    let dt = Utc
+        .timestamp_opt(value as i64 * NUM_SECONDS_IN_DAY, 0)
+        .unwrap();
     format!("{}", dt.format("%Y-%m-%d %:z"))
 }
 
@@ -804,7 +806,7 @@ fn convert_date_to_string(value: u32) -> String {
 /// Datetime is displayed in local timezone.
 #[inline]
 fn convert_timestamp_secs_to_string(value: i64) -> String {
-    let dt = Utc.timestamp(value, 0);
+    let dt = Utc.timestamp_opt(value, 0).unwrap();
     format!("{}", dt.format("%Y-%m-%d %H:%M:%S %:z"))
 }
 
@@ -857,10 +859,11 @@ fn convert_decimal_to_string(decimal: &Decimal) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::approx_constant, clippy::many_single_char_names)]
+#[allow(clippy::many_single_char_names)]
 mod tests {
     use super::*;
 
+    use std::f64::consts::PI;
     use std::sync::Arc;
 
     use crate::schema::types::{ColumnDescriptor, ColumnPath, PrimitiveTypeBuilder};
@@ -1075,7 +1078,10 @@ mod tests {
     #[test]
     fn test_convert_date_to_string() {
         fn check_date_conversion(y: u32, m: u32, d: u32) {
-            let datetime = chrono::NaiveDate::from_ymd(y as i32, m, d).and_hms(0, 0, 0);
+            let datetime = chrono::NaiveDate::from_ymd_opt(y as i32, m, d)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap();
             let dt = Utc.from_utc_datetime(&datetime);
             let res = convert_date_to_string((dt.timestamp() / 60 / 60 / 24) as u32);
             let exp = format!("{}", dt.format("%Y-%m-%d %:z"));
@@ -1092,7 +1098,10 @@ mod tests {
     #[test]
     fn test_convert_timestamp_millis_to_string() {
         fn check_datetime_conversion(y: u32, m: u32, d: u32, h: u32, mi: u32, s: u32) {
-            let datetime = chrono::NaiveDate::from_ymd(y as i32, m, d).and_hms(h, mi, s);
+            let datetime = chrono::NaiveDate::from_ymd_opt(y as i32, m, d)
+                .unwrap()
+                .and_hms_opt(h, mi, s)
+                .unwrap();
             let dt = Utc.from_utc_datetime(&datetime);
             let res = convert_timestamp_millis_to_string(dt.timestamp_millis() as u64);
             let exp = format!("{}", dt.format("%Y-%m-%d %H:%M:%S %:z"));
@@ -1110,7 +1119,10 @@ mod tests {
     #[test]
     fn test_convert_timestamp_micros_to_string() {
         fn check_datetime_conversion(y: u32, m: u32, d: u32, h: u32, mi: u32, s: u32) {
-            let datetime = chrono::NaiveDate::from_ymd(y as i32, m, d).and_hms(h, mi, s);
+            let datetime = chrono::NaiveDate::from_ymd_opt(y as i32, m, d)
+                .unwrap()
+                .and_hms_opt(h, mi, s)
+                .unwrap();
             let dt = Utc.from_utc_datetime(&datetime);
             let res = convert_timestamp_micros_to_string(dt.timestamp_micros() as u64);
             let exp = format!("{}", dt.format("%Y-%m-%d %H:%M:%S %:z"));
@@ -1570,8 +1582,8 @@ mod tests {
         ]);
         assert!((10.3 - list.get_float(2).unwrap()).abs() < f32::EPSILON);
 
-        let list = make_list(vec![Field::Double(3.1415)]);
-        assert!((3.1415 - list.get_double(0).unwrap()).abs() < f64::EPSILON);
+        let list = make_list(vec![Field::Double(PI)]);
+        assert!((PI - list.get_double(0).unwrap()).abs() < f64::EPSILON);
 
         let list = make_list(vec![Field::Str("abc".to_string())]);
         assert_eq!(&"abc".to_string(), list.get_string(0).unwrap());
@@ -1620,7 +1632,7 @@ mod tests {
         ]);
         assert!(list.get_double(2).is_err());
 
-        let list = make_list(vec![Field::Double(3.1415)]);
+        let list = make_list(vec![Field::Double(PI)]);
         assert!(list.get_string(0).is_err());
 
         let list = make_list(vec![Field::Str("abc".to_string())]);
@@ -1821,7 +1833,7 @@ mod tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::approx_constant, clippy::many_single_char_names)]
+#[allow(clippy::many_single_char_names)]
 mod api_tests {
     use super::{make_list, make_map, make_row};
     use crate::record::Field;

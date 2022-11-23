@@ -1291,35 +1291,11 @@ macro_rules! ensure_phys_ty {
 }
 
 #[cfg(test)]
-#[allow(clippy::float_cmp, clippy::approx_constant)]
 mod tests {
     use super::*;
 
     #[test]
-    #[allow(clippy::string_lit_as_bytes)]
     fn test_as_bytes() {
-        assert_eq!(false.as_bytes(), &[0]);
-        assert_eq!(true.as_bytes(), &[1]);
-        assert_eq!(7_i32.as_bytes(), &[7, 0, 0, 0]);
-        assert_eq!(555_i32.as_bytes(), &[43, 2, 0, 0]);
-        assert_eq!(555_u32.as_bytes(), &[43, 2, 0, 0]);
-        assert_eq!(i32::max_value().as_bytes(), &[255, 255, 255, 127]);
-        assert_eq!(i32::min_value().as_bytes(), &[0, 0, 0, 128]);
-        assert_eq!(7_i64.as_bytes(), &[7, 0, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(555_i64.as_bytes(), &[43, 2, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(
-            (i64::max_value()).as_bytes(),
-            &[255, 255, 255, 255, 255, 255, 255, 127]
-        );
-        assert_eq!((i64::min_value()).as_bytes(), &[0, 0, 0, 0, 0, 0, 0, 128]);
-        assert_eq!(3.14_f32.as_bytes(), &[195, 245, 72, 64]);
-        assert_eq!(3.14_f64.as_bytes(), &[31, 133, 235, 81, 184, 30, 9, 64]);
-        assert_eq!("hello".as_bytes(), &[b'h', b'e', b'l', b'l', b'o']);
-        assert_eq!(
-            Vec::from("hello".as_bytes()).as_bytes(),
-            &[b'h', b'e', b'l', b'l', b'o']
-        );
-
         // Test Int96
         let i96 = Int96::from(vec![1, 2, 3]);
         assert_eq!(i96.as_bytes(), &[1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0]);

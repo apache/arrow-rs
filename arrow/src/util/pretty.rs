@@ -874,7 +874,7 @@ mod tests {
 
         // Can't use UnionBuilder with non-primitive types, so manually build outer UnionArray
         let a_array = Int32Array::from(vec![None, None, None, Some(1234), Some(23)]);
-        let type_ids = Buffer::from_slice_ref(&[1_i8, 1, 0, 0, 1]);
+        let type_ids = Buffer::from_slice_ref([1_i8, 1, 0, 0, 1]);
 
         let children: Vec<(Field, Arc<dyn Array>)> = vec![
             (Field::new("a", DataType::Int32, true), Arc::new(a_array)),
@@ -983,6 +983,90 @@ mod tests {
         ];
 
         let actual: Vec<&str> = table.lines().collect();
+        assert_eq!(expected, actual, "Actual result:\n{}", table);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pretty_format_interval_day_time() -> Result<()> {
+        let arr = Arc::new(arrow_array::IntervalDayTimeArray::from(vec![
+            Some(1),
+            Some(10),
+            Some(100),
+        ]));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "IntervalDayTime",
+            arr.data_type().clone(),
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(schema, vec![arr])?;
+
+        let table = pretty_format_batches(&[batch])?.to_string();
+
+        let expected = vec![
+            "+-------------------------------------------------+",
+            "| IntervalDayTime                                 |",
+            "+-------------------------------------------------+",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.001 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.010 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.100 secs |",
+            "+-------------------------------------------------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+
+        assert_eq!(expected, actual, "Actual result:\n{}", table);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pretty_format_interval_month_day_nano_array() -> Result<()> {
+        let arr = Arc::new(arrow_array::IntervalMonthDayNanoArray::from(vec![
+            Some(1),
+            Some(10),
+            Some(100),
+            Some(1_000),
+            Some(10_000),
+            Some(100_000),
+            Some(1_000_000),
+            Some(10_000_000),
+            Some(100_000_000),
+            Some(1_000_000_000),
+        ]));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "IntervalMonthDayNano",
+            arr.data_type().clone(),
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(schema, vec![arr])?;
+
+        let table = pretty_format_batches(&[batch])?.to_string();
+
+        let expected = vec![
+            "+-------------------------------------------------------+",
+            "| IntervalMonthDayNano                                  |",
+            "+-------------------------------------------------------+",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000000001 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000000010 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000000100 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000001000 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000010000 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000100000 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.001000000 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.010000000 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.100000000 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs |",
+            "+-------------------------------------------------------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+
         assert_eq!(expected, actual, "Actual result:\n{}", table);
 
         Ok(())

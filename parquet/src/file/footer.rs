@@ -18,7 +18,7 @@
 use std::{io::Read, sync::Arc};
 
 use crate::format::{ColumnOrder as TColumnOrder, FileMetaData as TFileMetaData};
-use thrift::protocol::TCompactInputProtocol;
+use thrift::protocol::{TCompactInputProtocol, TSerializable};
 
 use crate::basic::ColumnOrder;
 

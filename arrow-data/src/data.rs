@@ -1575,7 +1575,7 @@ mod tests {
             5,
             None,
             0,
-            vec![Buffer::from_slice_ref(&[1i32, 2, 3, 4, 5])],
+            vec![Buffer::from_slice_ref([1i32, 2, 3, 4, 5])],
             vec![],
         )
         .unwrap();
@@ -1690,8 +1690,8 @@ mod tests {
         assert!(!int_data.ptr_eq(&int_data_slice));
         assert!(!int_data_slice.ptr_eq(&int_data));
 
-        let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
-        let offsets_buffer = Buffer::from_slice_ref(&[0_i32, 2_i32, 2_i32, 5_i32]);
+        let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+        let offsets_buffer = Buffer::from_slice_ref([0_i32, 2_i32, 2_i32, 5_i32]);
         let string_data = ArrayData::try_new(
             DataType::Utf8,
             3,

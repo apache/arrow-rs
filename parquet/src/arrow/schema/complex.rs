@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+
 use crate::arrow::schema::primitive::convert_primitive;
 use crate::arrow::ProjectionMask;
 use crate::basic::{ConvertedType, Repetition};
@@ -343,13 +345,17 @@ impl Visitor {
             (Some(key), Some(value)) => {
                 let key_field = convert_field(map_key, &key, arrow_key);
                 let value_field = convert_field(map_value, &value, arrow_value);
+                let field_metadata = match arrow_map {
+                    Some(field) => field.metadata().clone(),
+                    _ => HashMap::default(),
+                };
 
                 let map_field = Field::new(
                     map_key_value.name(),
                     DataType::Struct(vec![key_field, value_field]),
                     false, // The inner map field is always non-nullable (#1697)
                 )
-                .with_metadata(arrow_map.and_then(|f| f.metadata().cloned()));
+                .with_metadata(field_metadata);
 
                 Ok(Some(ParquetField {
                     rep_level,
@@ -539,7 +545,7 @@ fn convert_field(
                 _ => Field::new(name, data_type, nullable),
             };
 
-            field.with_metadata(hint.metadata().cloned())
+            field.with_metadata(hint.metadata().clone())
         }
         None => Field::new(name, data_type, nullable),
     }

@@ -18,7 +18,7 @@
 use crate::{data_type_from_json, data_type_to_json};
 use arrow::datatypes::{DataType, Field};
 use arrow::error::{ArrowError, Result};
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 /// Parse a `Field` definition from a JSON representation.
 pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
@@ -53,7 +53,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
             // Referenced example file: testing/data/arrow-ipc-stream/integration/1.0.0-littleendian/generated_custom_metadata.json.gz
             let metadata = match map.get("metadata") {
                 Some(&Value::Array(ref values)) => {
-                    let mut res: BTreeMap<String, String> = BTreeMap::new();
+                    let mut res: HashMap<String, String> = HashMap::default();
                     for value in values {
                         match value.as_object() {
                             Some(map) => {
@@ -87,12 +87,12 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                             }
                         }
                     }
-                    Some(res)
+                    res
                 }
                 // We also support map format, because Schema's metadata supports this.
                 // See https://github.com/apache/arrow/pull/5907
                 Some(&Value::Object(ref values)) => {
-                    let mut res: BTreeMap<String, String> = BTreeMap::new();
+                    let mut res: HashMap<String, String> = HashMap::default();
                     for (k, v) in values {
                         if let Some(str_value) = v.as_str() {
                             res.insert(k.clone(), str_value.to_string().clone());
@@ -103,14 +103,14 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                             )));
                         }
                     }
-                    Some(res)
+                    res
                 }
                 Some(_) => {
                     return Err(ArrowError::ParseError(
                         "Field `metadata` is not json array".to_string(),
                     ));
                 }
-                _ => None,
+                _ => HashMap::default(),
             };
 
             // if data_type is a struct or list, get its children

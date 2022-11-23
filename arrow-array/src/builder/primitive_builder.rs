@@ -19,6 +19,7 @@ use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::types::*;
 use crate::{ArrayRef, ArrowPrimitiveType, PrimitiveArray};
+use arrow_buffer::MutableBuffer;
 use arrow_data::ArrayData;
 use std::any::Any;
 use std::sync::Arc;
@@ -114,6 +115,24 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         }
     }
 
+    pub fn new_from_buffer(
+        values_buffer: MutableBuffer,
+        null_buffer: Option<MutableBuffer>,
+    ) -> Self {
+        let values_builder = BufferBuilder::<T::Native>::new_from_buffer(values_buffer);
+
+        let null_buffer_builder = null_buffer
+            .map(|buffer| {
+                NullBufferBuilder::new_from_buffer(buffer, values_builder.len())
+            })
+            .unwrap_or_else(|| NullBufferBuilder::new_with_len(values_builder.len()));
+
+        Self {
+            values_builder,
+            null_buffer_builder,
+        }
+    }
+
     /// Returns the capacity of this builder measured in slots of type `T`
     pub fn capacity(&self) -> usize {
         self.values_builder.capacity()
@@ -203,6 +222,11 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Returns the current values buffer as a slice
     pub fn values_slice(&self) -> &[T::Native] {
         self.values_builder.as_slice()
+    }
+
+    /// Returns the current values buffer as a mutable slice
+    pub fn values_slice_mut(&mut self) -> &mut [T::Native] {
+        self.values_builder.as_slice_mut()
     }
 }
 

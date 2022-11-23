@@ -584,6 +584,24 @@ fn parse(
                     i,
                     datetime_format,
                 ),
+                DataType::Time32(TimeUnit::Second) => {
+                    build_primitive_array::<Time32SecondType>(line_number, rows, i, None)
+                }
+                DataType::Time32(TimeUnit::Millisecond) => build_primitive_array::<
+                    Time32MillisecondType,
+                >(
+                    line_number, rows, i, None
+                ),
+                DataType::Time64(TimeUnit::Microsecond) => build_primitive_array::<
+                    Time64MicrosecondType,
+                >(
+                    line_number, rows, i, None
+                ),
+                DataType::Time64(TimeUnit::Nanosecond) => build_primitive_array::<
+                    Time64NanosecondType,
+                >(
+                    line_number, rows, i, None
+                ),
                 DataType::Timestamp(TimeUnit::Microsecond, _) => {
                     build_primitive_array::<TimestampMicrosecondType>(
                         line_number,
@@ -1594,6 +1612,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_time() {
+        assert_eq!(
+            parse_item::<Time64NanosecondType>("12:10:01.123456789 AM"),
+            Some(601_123_456_789)
+        );
+        assert_eq!(
+            parse_item::<Time64MicrosecondType>("12:10:01.123456 am"),
+            Some(601_123_456)
+        );
+        assert_eq!(
+            parse_item::<Time32MillisecondType>("2:10:01.12 PM"),
+            Some(51_001_120)
+        );
+        assert_eq!(parse_item::<Time32SecondType>("2:10:01 pm"), Some(51_001));
+    }
+
+    #[test]
     fn parse_date64() {
         assert_eq!(parse_item::<Date64Type>("1970-01-01T00:00:00").unwrap(), 0);
         assert_eq!(
@@ -1701,8 +1736,8 @@ mod tests {
             0
         );
         let naive_datetime = NaiveDateTime::new(
-            NaiveDate::from_ymd(2018, 11, 13),
-            NaiveTime::from_hms_nano(17, 11, 10, 0),
+            NaiveDate::from_ymd_opt(2018, 11, 13).unwrap(),
+            NaiveTime::from_hms_nano_opt(17, 11, 10, 0).unwrap(),
         );
         assert_eq!(
             parse_item::<TimestampMicrosecondType>("2018-11-13T17:11:10").unwrap(),
@@ -1713,16 +1748,16 @@ mod tests {
             naive_datetime.timestamp_nanos() / 1000
         );
         let naive_datetime = NaiveDateTime::new(
-            NaiveDate::from_ymd(2018, 11, 13),
-            NaiveTime::from_hms_nano(17, 11, 10, 11000000),
+            NaiveDate::from_ymd_opt(2018, 11, 13).unwrap(),
+            NaiveTime::from_hms_nano_opt(17, 11, 10, 11000000).unwrap(),
         );
         assert_eq!(
             parse_item::<TimestampMicrosecondType>("2018-11-13T17:11:10.011").unwrap(),
             naive_datetime.timestamp_nanos() / 1000
         );
         let naive_datetime = NaiveDateTime::new(
-            NaiveDate::from_ymd(1900, 2, 28),
-            NaiveTime::from_hms_nano(12, 34, 56, 0),
+            NaiveDate::from_ymd_opt(1900, 2, 28).unwrap(),
+            NaiveTime::from_hms_nano_opt(12, 34, 56, 0).unwrap(),
         );
         assert_eq!(
             parse_item::<TimestampMicrosecondType>("1900-02-28T12:34:56").unwrap(),
@@ -1737,8 +1772,8 @@ mod tests {
             0
         );
         let naive_datetime = NaiveDateTime::new(
-            NaiveDate::from_ymd(2018, 11, 13),
-            NaiveTime::from_hms_nano(17, 11, 10, 0),
+            NaiveDate::from_ymd_opt(2018, 11, 13).unwrap(),
+            NaiveTime::from_hms_nano_opt(17, 11, 10, 0).unwrap(),
         );
         assert_eq!(
             parse_item::<TimestampNanosecondType>("2018-11-13T17:11:10").unwrap(),
@@ -1749,16 +1784,16 @@ mod tests {
             naive_datetime.timestamp_nanos()
         );
         let naive_datetime = NaiveDateTime::new(
-            NaiveDate::from_ymd(2018, 11, 13),
-            NaiveTime::from_hms_nano(17, 11, 10, 11000000),
+            NaiveDate::from_ymd_opt(2018, 11, 13).unwrap(),
+            NaiveTime::from_hms_nano_opt(17, 11, 10, 11000000).unwrap(),
         );
         assert_eq!(
             parse_item::<TimestampNanosecondType>("2018-11-13T17:11:10.011").unwrap(),
             naive_datetime.timestamp_nanos()
         );
         let naive_datetime = NaiveDateTime::new(
-            NaiveDate::from_ymd(1900, 2, 28),
-            NaiveTime::from_hms_nano(12, 34, 56, 0),
+            NaiveDate::from_ymd_opt(1900, 2, 28).unwrap(),
+            NaiveTime::from_hms_nano_opt(12, 34, 56, 0).unwrap(),
         );
         assert_eq!(
             parse_item::<TimestampNanosecondType>("1900-02-28T12:34:56").unwrap(),

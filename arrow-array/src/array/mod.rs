@@ -862,6 +862,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cast::downcast_array;
     use arrow_schema::Field;
 
     #[test]
@@ -1112,5 +1113,16 @@ mod tests {
         let arr: ArrayRef = Arc::new(arr);
         assert!(compute_my_thing(&arr));
         assert!(compute_my_thing(arr.as_ref()));
+    }
+
+    #[test]
+    fn test_downcast_array() {
+        let array: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+
+        let boxed: ArrayRef = Arc::new(array);
+        let array: Int32Array = downcast_array(&boxed);
+
+        let expected: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+        assert_eq!(array, expected);
     }
 }

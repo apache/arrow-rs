@@ -300,15 +300,15 @@ mod tests {
         let expected_string_data = ArrayData::builder(DataType::Utf8)
             .len(4)
             .null_bit_buffer(Some(Buffer::from(&[9_u8])))
-            .add_buffer(Buffer::from_slice_ref(&[0, 3, 3, 3, 7]))
+            .add_buffer(Buffer::from_slice_ref([0, 3, 3, 3, 7]))
             .add_buffer(Buffer::from_slice_ref(b"joemark"))
             .build()
             .unwrap();
 
         let expected_int_data = ArrayData::builder(DataType::Int32)
             .len(4)
-            .null_bit_buffer(Some(Buffer::from_slice_ref(&[11_u8])))
-            .add_buffer(Buffer::from_slice_ref(&[1, 2, 0, 4]))
+            .null_bit_buffer(Some(Buffer::from_slice_ref([11_u8])))
+            .add_buffer(Buffer::from_slice_ref([1, 2, 0, 4]))
             .build()
             .unwrap();
 
@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Data type List(Field { name: \"item\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }) is not currently supported"
+        expected = "Data type List(Field { name: \"item\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) is not currently supported"
     )]
     fn test_struct_array_builder_from_schema_unsupported_type() {
         let mut fields = vec![Field::new("f1", DataType::Int16, false)];

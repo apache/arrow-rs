@@ -107,18 +107,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         let len = self.len();
 
         // Build the keys
-        let keys_arr = self
-            .key_builder
-            .as_any_mut()
-            .downcast_mut::<K>()
-            .unwrap()
-            .finish();
-        let values_arr = self
-            .value_builder
-            .as_any_mut()
-            .downcast_mut::<V>()
-            .unwrap()
-            .finish();
+        let keys_arr = self.key_builder.finish();
+        let values_arr = self.value_builder.finish();
 
         let keys_field = Field::new(
             self.field_names.key.as_str(),
@@ -228,15 +218,15 @@ mod tests {
         let expected_string_data = ArrayData::builder(DataType::Utf8)
             .len(4)
             .null_bit_buffer(Some(Buffer::from(&[9_u8])))
-            .add_buffer(Buffer::from_slice_ref(&[0, 3, 3, 3, 7]))
+            .add_buffer(Buffer::from_slice_ref([0, 3, 3, 3, 7]))
             .add_buffer(Buffer::from_slice_ref(b"joemark"))
             .build()
             .unwrap();
 
         let expected_int_data = ArrayData::builder(DataType::Int32)
             .len(4)
-            .null_bit_buffer(Some(Buffer::from_slice_ref(&[11_u8])))
-            .add_buffer(Buffer::from_slice_ref(&[1, 2, 0, 4]))
+            .null_bit_buffer(Some(Buffer::from_slice_ref([11_u8])))
+            .add_buffer(Buffer::from_slice_ref([1, 2, 0, 4]))
             .build()
             .unwrap();
 

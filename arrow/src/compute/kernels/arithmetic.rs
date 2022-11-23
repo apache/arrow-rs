@@ -1644,7 +1644,7 @@ mod tests {
     #[test]
     fn test_date32_month_add() {
         let a = Date32Array::from(vec![Date32Type::from_naive_date(
-            NaiveDate::from_ymd(2000, 1, 1),
+            NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
         )]);
         let b =
             IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(1, 2)]);
@@ -1652,28 +1652,28 @@ mod tests {
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
             c.value(0),
-            Date32Type::from_naive_date(NaiveDate::from_ymd(2001, 3, 1))
+            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2001, 3, 1).unwrap())
         );
     }
 
     #[test]
     fn test_date32_day_time_add() {
         let a = Date32Array::from(vec![Date32Type::from_naive_date(
-            NaiveDate::from_ymd(2000, 1, 1),
+            NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
         )]);
         let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
             c.value(0),
-            Date32Type::from_naive_date(NaiveDate::from_ymd(2000, 1, 2))
+            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 1, 2).unwrap())
         );
     }
 
     #[test]
     fn test_date32_month_day_nano_add() {
         let a = Date32Array::from(vec![Date32Type::from_naive_date(
-            NaiveDate::from_ymd(2000, 1, 1),
+            NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
         )]);
         let b =
             IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(
@@ -1683,14 +1683,14 @@ mod tests {
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
             c.value(0),
-            Date32Type::from_naive_date(NaiveDate::from_ymd(2000, 2, 3))
+            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 2, 3).unwrap())
         );
     }
 
     #[test]
     fn test_date64_month_add() {
         let a = Date64Array::from(vec![Date64Type::from_naive_date(
-            NaiveDate::from_ymd(2000, 1, 1),
+            NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
         )]);
         let b =
             IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(1, 2)]);
@@ -1698,28 +1698,28 @@ mod tests {
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
             c.value(0),
-            Date64Type::from_naive_date(NaiveDate::from_ymd(2001, 3, 1))
+            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2001, 3, 1).unwrap())
         );
     }
 
     #[test]
     fn test_date64_day_time_add() {
         let a = Date64Array::from(vec![Date64Type::from_naive_date(
-            NaiveDate::from_ymd(2000, 1, 1),
+            NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
         )]);
         let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
             c.value(0),
-            Date64Type::from_naive_date(NaiveDate::from_ymd(2000, 1, 2))
+            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 1, 2).unwrap())
         );
     }
 
     #[test]
     fn test_date64_month_day_nano_add() {
         let a = Date64Array::from(vec![Date64Type::from_naive_date(
-            NaiveDate::from_ymd(2000, 1, 1),
+            NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
         )]);
         let b =
             IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(
@@ -1729,7 +1729,7 @@ mod tests {
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
             c.value(0),
-            Date64Type::from_naive_date(NaiveDate::from_ymd(2000, 2, 3))
+            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 2, 3).unwrap())
         );
     }
 

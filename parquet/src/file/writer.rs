@@ -18,11 +18,11 @@
 //! Contains file writer API, and provides methods to write row groups and columns by
 //! using row group writers and column writers respectively.
 
-use std::{io::Write, sync::Arc};
-
+use crate::bloom_filter::Sbbf;
 use crate::format as parquet;
 use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
-use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol};
+use std::{io::Write, sync::Arc};
+use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol, TSerializable};
 
 use crate::basic::PageType;
 use crate::column::writer::{
@@ -92,6 +92,7 @@ pub type OnCloseColumnChunk<'a> = Box<dyn FnOnce(ColumnCloseResult) -> Result<()
 pub type OnCloseRowGroup<'a> = Box<
     dyn FnOnce(
             RowGroupMetaDataPtr,
+            Vec<Option<Sbbf>>,
             Vec<Option<ColumnIndex>>,
             Vec<Option<OffsetIndex>>,
         ) -> Result<()>
@@ -116,6 +117,7 @@ pub struct SerializedFileWriter<W: Write> {
     descr: SchemaDescPtr,
     props: WriterPropertiesPtr,
     row_groups: Vec<RowGroupMetaDataPtr>,
+    bloom_filters: Vec<Vec<Option<Sbbf>>>,
     column_indexes: Vec<Vec<Option<ColumnIndex>>>,
     offset_indexes: Vec<Vec<Option<OffsetIndex>>>,
     row_group_index: usize,
@@ -132,6 +134,7 @@ impl<W: Write> SerializedFileWriter<W> {
             descr: Arc::new(SchemaDescriptor::new(schema)),
             props: properties,
             row_groups: vec![],
+            bloom_filters: vec![],
             column_indexes: Vec::new(),
             offset_indexes: Vec::new(),
             row_group_index: 0,
@@ -149,10 +152,15 @@ impl<W: Write> SerializedFileWriter<W> {
         self.row_group_index += 1;
 
         let row_groups = &mut self.row_groups;
+        let row_bloom_filters = &mut self.bloom_filters;
         let row_column_indexes = &mut self.column_indexes;
         let row_offset_indexes = &mut self.offset_indexes;
-        let on_close = |metadata, row_group_column_index, row_group_offset_index| {
+        let on_close = |metadata,
+                        row_group_bloom_filter,
+                        row_group_column_index,
+                        row_group_offset_index| {
             row_groups.push(metadata);
+            row_bloom_filters.push(row_group_bloom_filter);
             row_column_indexes.push(row_group_column_index);
             row_offset_indexes.push(row_group_offset_index);
             Ok(())
@@ -212,6 +220,31 @@ impl<W: Write> SerializedFileWriter<W> {
         Ok(())
     }
 
+    /// Serialize all the bloom filter to the file
+    fn write_bloom_filters(&mut self, row_groups: &mut [RowGroup]) -> Result<()> {
+        // iter row group
+        // iter each column
+        // write bloom filter to the file
+        for (row_group_idx, row_group) in row_groups.iter_mut().enumerate() {
+            for (column_idx, column_chunk) in row_group.columns.iter_mut().enumerate() {
+                match &self.bloom_filters[row_group_idx][column_idx] {
+                    Some(bloom_filter) => {
+                        let start_offset = self.buf.bytes_written();
+                        bloom_filter.write(&mut self.buf)?;
+                        // set offset and index for bloom filter
+                        column_chunk
+                            .meta_data
+                            .as_mut()
+                            .expect("can't have bloom filter without column metadata")
+                            .bloom_filter_offset = Some(start_offset as i64);
+                    }
+                    None => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Serialize all the column index to the file
     fn write_column_indexes(&mut self, row_groups: &mut [RowGroup]) -> Result<()> {
         // iter row group
@@ -250,6 +283,7 @@ impl<W: Write> SerializedFileWriter<W> {
             .map(|v| v.to_thrift())
             .collect::<Vec<_>>();
 
+        self.write_bloom_filters(&mut row_groups)?;
         // Write column indexes and offset indexes
         self.write_column_indexes(&mut row_groups)?;
         self.write_offset_indexes(&mut row_groups)?;
@@ -320,6 +354,7 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     column_index: usize,
     row_group_metadata: Option<RowGroupMetaDataPtr>,
     column_chunks: Vec<ColumnChunkMetaData>,
+    bloom_filters: Vec<Option<Sbbf>>,
     column_indexes: Vec<Option<ColumnIndex>>,
     offset_indexes: Vec<Option<OffsetIndex>>,
     on_close: Option<OnCloseRowGroup<'a>>,
@@ -348,6 +383,7 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
             column_index: 0,
             row_group_metadata: None,
             column_chunks: Vec::with_capacity(num_columns),
+            bloom_filters: Vec::with_capacity(num_columns),
             column_indexes: Vec::with_capacity(num_columns),
             offset_indexes: Vec::with_capacity(num_columns),
             total_bytes_written: 0,
@@ -380,11 +416,13 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
         let column_chunks = &mut self.column_chunks;
         let column_indexes = &mut self.column_indexes;
         let offset_indexes = &mut self.offset_indexes;
+        let bloom_filters = &mut self.bloom_filters;
 
         let on_close = |r: ColumnCloseResult| {
             // Update row group writer metrics
             *total_bytes_written += r.bytes_written;
             column_chunks.push(r.metadata);
+            bloom_filters.push(r.bloom_filter);
             column_indexes.push(r.column_index);
             offset_indexes.push(r.offset_index);
 
@@ -434,6 +472,7 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
                 .set_column_metadata(column_chunks)
                 .set_total_byte_size(self.total_bytes_written as i64)
                 .set_num_rows(self.total_rows_written.unwrap_or(0) as i64)
+                .set_sorting_columns(self.props.sorting_columns().cloned())
                 .build()?;
 
             let metadata = Arc::new(row_group_metadata);
@@ -442,6 +481,7 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
             if let Some(on_close) = self.on_close.take() {
                 on_close(
                     metadata,
+                    self.bloom_filters.clone(),
                     self.column_indexes.clone(),
                     self.offset_indexes.clone(),
                 )?
@@ -622,6 +662,7 @@ impl<'a, W: Write> PageWriter for SerializedPageWriter<'a, W> {
 
         Ok(spec)
     }
+
     fn write_metadata(&mut self, metadata: &ColumnChunkMetaData) -> Result<()> {
         let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
         metadata
@@ -647,13 +688,15 @@ mod tests {
     use crate::basic::{Compression, Encoding, LogicalType, Repetition, Type};
     use crate::column::page::PageReader;
     use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
-    use crate::data_type::Int32Type;
+    use crate::data_type::{BoolType, Int32Type};
+    use crate::file::reader::ChunkReader;
     use crate::file::{
         properties::{ReaderProperties, WriterProperties, WriterVersion},
         reader::{FileReader, SerializedFileReader, SerializedPageReader},
         statistics::{from_thrift, to_thrift, Statistics},
     };
-    use crate::record::RowAccessor;
+    use crate::format::SortingColumn;
+    use crate::record::{Row, RowAccessor};
     use crate::schema::types::{ColumnDescriptor, ColumnPath};
     use crate::util::memory::ByteBufferPtr;
 
@@ -842,6 +885,65 @@ mod tests {
         assert_eq!(fields.len(), 1);
         let read_field = fields.get(0).unwrap();
         assert_eq!(read_field, &field);
+    }
+
+    #[test]
+    fn test_file_writer_with_sorting_columns_metadata() {
+        let file = tempfile::tempfile().unwrap();
+
+        let schema = Arc::new(
+            types::Type::group_type_builder("schema")
+                .with_fields(&mut vec![
+                    Arc::new(
+                        types::Type::primitive_type_builder("col1", Type::INT32)
+                            .build()
+                            .unwrap(),
+                    ),
+                    Arc::new(
+                        types::Type::primitive_type_builder("col2", Type::INT32)
+                            .build()
+                            .unwrap(),
+                    ),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let expected_result = Some(vec![SortingColumn {
+            column_idx: 0,
+            descending: false,
+            nulls_first: true,
+        }]);
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_key_value_metadata(Some(vec![KeyValue::new(
+                    "key".to_string(),
+                    "value".to_string(),
+                )]))
+                .set_sorting_columns(expected_result.clone())
+                .build(),
+        );
+        let mut writer =
+            SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
+        let mut row_group_writer = writer.next_row_group().expect("get row group writer");
+
+        let col_writer = row_group_writer.next_column().unwrap().unwrap();
+        col_writer.close().unwrap();
+
+        let col_writer = row_group_writer.next_column().unwrap().unwrap();
+        col_writer.close().unwrap();
+
+        row_group_writer.close().unwrap();
+        writer.close().unwrap();
+
+        let reader = SerializedFileReader::new(file).unwrap();
+        let result: Vec<Option<&Vec<SortingColumn>>> = reader
+            .metadata()
+            .row_groups()
+            .iter()
+            .map(|f| f.sorting_columns())
+            .collect();
+        // validate the sorting column read match the one written above
+        assert_eq!(expected_result.as_ref(), result[0]);
     }
 
     #[test]
@@ -1102,16 +1204,35 @@ mod tests {
         assert_eq!(to_thrift(left.statistics()), to_thrift(right.statistics()));
     }
 
-    /// File write-read roundtrip.
-    /// `data` consists of arrays of values for each row group.
-    fn test_file_roundtrip(
-        file: File,
+    /// Tests roundtrip of i32 data written using `W` and read using `R`
+    fn test_roundtrip_i32<W, R>(
+        file: W,
         data: Vec<Vec<i32>>,
-    ) -> crate::format::FileMetaData {
+    ) -> crate::format::FileMetaData
+    where
+        W: Write,
+        R: ChunkReader + From<W> + 'static,
+    {
+        test_roundtrip::<W, R, Int32Type, _>(file, data, |r| r.get_int(0).unwrap())
+    }
+
+    /// Tests roundtrip of data of type `D` written using `W` and read using `R`
+    /// and the provided `values` function
+    fn test_roundtrip<W, R, D, F>(
+        mut file: W,
+        data: Vec<Vec<D::T>>,
+        value: F,
+    ) -> crate::format::FileMetaData
+    where
+        W: Write,
+        R: ChunkReader + From<W> + 'static,
+        D: DataType,
+        F: Fn(Row) -> D::T,
+    {
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
                 .with_fields(&mut vec![Arc::new(
-                    types::Type::primitive_type_builder("col1", Type::INT32)
+                    types::Type::primitive_type_builder("col1", D::get_physical_type())
                         .with_repetition(Repetition::REQUIRED)
                         .build()
                         .unwrap(),
@@ -1120,16 +1241,15 @@ mod tests {
                 .unwrap(),
         );
         let props = Arc::new(WriterProperties::builder().build());
-        let mut file_writer = assert_send(
-            SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap(),
-        );
+        let mut file_writer =
+            SerializedFileWriter::new(&mut file, schema, props).unwrap();
         let mut rows: i64 = 0;
 
         for (idx, subset) in data.iter().enumerate() {
             let mut row_group_writer = file_writer.next_row_group().unwrap();
             if let Some(mut writer) = row_group_writer.next_column().unwrap() {
                 rows += writer
-                    .typed::<Int32Type>()
+                    .typed::<D>()
                     .write_batch(&subset[..], None, None)
                     .unwrap() as i64;
                 writer.close().unwrap();
@@ -1141,7 +1261,7 @@ mod tests {
         }
         let file_metadata = file_writer.close().unwrap();
 
-        let reader = assert_send(SerializedFileReader::new(file).unwrap());
+        let reader = SerializedFileReader::new(R::from(file)).unwrap();
         assert_eq!(reader.num_row_groups(), data.len());
         assert_eq!(
             reader.metadata().file_metadata().num_rows(),
@@ -1151,16 +1271,19 @@ mod tests {
         for (i, item) in data.iter().enumerate().take(reader.num_row_groups()) {
             let row_group_reader = reader.get_row_group(i).unwrap();
             let iter = row_group_reader.get_row_iter(None).unwrap();
-            let res = iter
-                .map(|elem| elem.get_int(0).unwrap())
-                .collect::<Vec<i32>>();
+            let res: Vec<_> = iter.map(&value).collect();
             assert_eq!(res, *item);
         }
         file_metadata
     }
 
-    fn assert_send<T: Send>(t: T) -> T {
-        t
+    /// File write-read roundtrip.
+    /// `data` consists of arrays of values for each row group.
+    fn test_file_roundtrip(
+        file: File,
+        data: Vec<Vec<i32>>,
+    ) -> crate::format::FileMetaData {
+        test_roundtrip_i32::<File, File>(file, data)
     }
 
     #[test]
@@ -1184,58 +1307,17 @@ mod tests {
     }
 
     fn test_bytes_roundtrip(data: Vec<Vec<i32>>) {
-        let mut buffer = vec![];
+        test_roundtrip_i32::<Vec<u8>, Bytes>(Vec::with_capacity(1024), data);
+    }
 
-        let schema = Arc::new(
-            types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![Arc::new(
-                    types::Type::primitive_type_builder("col1", Type::INT32)
-                        .with_repetition(Repetition::REQUIRED)
-                        .build()
-                        .unwrap(),
-                )])
-                .build()
-                .unwrap(),
+    #[test]
+    fn test_boolean_roundtrip() {
+        let my_bool_values: Vec<_> = (0..2049).map(|idx| idx % 2 == 0).collect();
+        test_roundtrip::<Vec<u8>, Bytes, BoolType, _>(
+            Vec::with_capacity(1024),
+            vec![my_bool_values],
+            |r| r.get_bool(0).unwrap(),
         );
-
-        let mut rows: i64 = 0;
-        {
-            let props = Arc::new(WriterProperties::builder().build());
-            let mut writer =
-                SerializedFileWriter::new(&mut buffer, schema, props).unwrap();
-
-            for subset in &data {
-                let mut row_group_writer = writer.next_row_group().unwrap();
-                if let Some(mut writer) = row_group_writer.next_column().unwrap() {
-                    rows += writer
-                        .typed::<Int32Type>()
-                        .write_batch(&subset[..], None, None)
-                        .unwrap() as i64;
-
-                    writer.close().unwrap();
-                }
-                row_group_writer.close().unwrap();
-            }
-            writer.close().unwrap();
-        }
-
-        let reading_cursor = Bytes::from(buffer);
-        let reader = SerializedFileReader::new(reading_cursor).unwrap();
-
-        assert_eq!(reader.num_row_groups(), data.len());
-        assert_eq!(
-            reader.metadata().file_metadata().num_rows(),
-            rows,
-            "row count in metadata not equal to number of rows written"
-        );
-        for (i, item) in data.iter().enumerate().take(reader.num_row_groups()) {
-            let row_group_reader = reader.get_row_group(i).unwrap();
-            let iter = row_group_reader.get_row_iter(None).unwrap();
-            let res = iter
-                .map(|elem| elem.get_int(0).unwrap())
-                .collect::<Vec<i32>>();
-            assert_eq!(res, *item);
-        }
     }
 
     #[test]

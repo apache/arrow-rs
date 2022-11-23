@@ -55,7 +55,7 @@ impl Buffer {
     }
 
     /// Initializes a [Buffer] from a slice of items.
-    pub fn from_slice_ref<U: ArrowNativeType, T: AsRef<[U]>>(items: &T) -> Self {
+    pub fn from_slice_ref<U: ArrowNativeType, T: AsRef<[U]>>(items: T) -> Self {
         let slice = items.as_ref();
         let capacity = slice.len() * std::mem::size_of::<U>();
         let mut buffer = MutableBuffer::with_capacity(capacity);
@@ -226,6 +226,25 @@ impl Buffer {
     /// inspected. Note that both `offset` and `length` are measured in bits.
     pub fn count_set_bits_offset(&self, offset: usize, len: usize) -> usize {
         UnalignedBitChunk::new(self.as_slice(), offset, len).count_ones()
+    }
+
+    /// Returns `MutableBuffer` for mutating the buffer if this buffer is not shared.
+    /// Returns `Err` if this is shared or its allocation is from an external source.
+    pub fn into_mutable(self) -> Result<MutableBuffer, Self> {
+        let offset_ptr = self.as_ptr();
+        let offset = self.offset;
+        let length = self.length;
+        Arc::try_unwrap(self.data)
+            .and_then(|bytes| {
+                // The pointer of underlying buffer should not be offset.
+                assert_eq!(offset_ptr, bytes.ptr().as_ptr());
+                MutableBuffer::from_bytes(bytes).map_err(Arc::new)
+            })
+            .map_err(|bytes| Buffer {
+                data: bytes,
+                offset,
+                length,
+            })
     }
 }
 

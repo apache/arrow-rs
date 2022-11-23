@@ -23,6 +23,7 @@ use crate::{
     native::{ArrowNativeType, ToByteSlice},
     util::bit_util,
 };
+use std::mem;
 use std::ptr::NonNull;
 
 /// A [`MutableBuffer`] is Arrow's interface to build a [`Buffer`] out of items or slices of items.
@@ -90,6 +91,24 @@ impl MutableBuffer {
             len,
             capacity: new_capacity,
         }
+    }
+
+    /// Allocates a new [MutableBuffer] from given `Bytes`.
+    pub(crate) fn from_bytes(bytes: Bytes) -> Result<Self, Bytes> {
+        if !matches!(bytes.deallocation(), Deallocation::Arrow(_)) {
+            return Err(bytes);
+        }
+
+        let len = bytes.len();
+        let capacity = bytes.capacity();
+        let ptr = bytes.ptr();
+        mem::forget(bytes);
+
+        Ok(Self {
+            data: ptr,
+            len,
+            capacity,
+        })
     }
 
     /// creates a new [MutableBuffer] with capacity and length capable of holding `len` bits.

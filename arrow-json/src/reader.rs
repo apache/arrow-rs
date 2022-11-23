@@ -909,7 +909,6 @@ impl Decoder {
     }
 
     #[inline(always)]
-    #[allow(clippy::unnecessary_wraps)]
     fn build_string_dictionary_builder<T>(
         &self,
         row_len: usize,
@@ -983,7 +982,6 @@ impl Decoder {
         Ok(Arc::new(builder.finish()))
     }
 
-    #[allow(clippy::unnecessary_wraps)]
     fn build_primitive_array<T: ArrowPrimitiveType + Parser>(
         &self,
         rows: &[Value],
@@ -2196,7 +2194,7 @@ mod tests {
             // test that the list offsets are correct
             assert_eq!(
                 cc.data().buffers()[0],
-                Buffer::from_slice_ref(&[0i32, 2, 2, 4, 5])
+                Buffer::from_slice_ref([0i32, 2, 2, 4, 5])
             );
             let cc = cc.values();
             let cc = cc.as_any().downcast_ref::<BooleanArray>().unwrap();
@@ -2217,7 +2215,7 @@ mod tests {
             // test that the list offsets are correct
             assert_eq!(
                 dd.data().buffers()[0],
-                Buffer::from_slice_ref(&[0i32, 1, 1, 2, 6])
+                Buffer::from_slice_ref([0i32, 1, 1, 2, 6])
             );
             let dd = dd.values();
             let dd = dd.as_any().downcast_ref::<StringArray>().unwrap();
@@ -2345,7 +2343,7 @@ mod tests {
             .unwrap();
         let a_list = ArrayDataBuilder::new(a_field.data_type().clone())
             .len(6)
-            .add_buffer(Buffer::from_slice_ref(&[0i32, 2, 3, 6, 6, 6, 7]))
+            .add_buffer(Buffer::from_slice_ref([0i32, 2, 3, 6, 6, 6, 7]))
             .add_child_data(a)
             .null_bit_buffer(Some(Buffer::from(vec![0b00110111])))
             .build()
@@ -2361,7 +2359,7 @@ mod tests {
         let expected = expected.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(
             read.data().buffers()[0],
-            Buffer::from_slice_ref(&[0i32, 2, 3, 6, 6, 6, 7])
+            Buffer::from_slice_ref([0i32, 2, 3, 6, 6, 6, 7])
         );
         // compare list null buffers
         assert_eq!(read.data().null_buffer(), expected.data().null_buffer());

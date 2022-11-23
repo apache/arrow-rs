@@ -557,8 +557,7 @@ fn test_list_append() {
         Some(14),
         Some(15),
     ]);
-    let list_value_offsets =
-        Buffer::from_slice_ref(&[0i32, 3, 5, 11, 13, 13, 15, 15, 17]);
+    let list_value_offsets = Buffer::from_slice_ref([0i32, 3, 5, 11, 13, 13, 15, 15, 17]);
     let expected_list_data = ArrayData::try_new(
         DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
         8,
@@ -637,7 +636,7 @@ fn test_list_nulls_append() {
         Some(15),
     ]);
     let list_value_offsets =
-        Buffer::from_slice_ref(&[0, 3, 5, 5, 13, 15, 15, 15, 19, 19, 19, 19, 23]);
+        Buffer::from_slice_ref([0, 3, 5, 5, 13, 15, 15, 15, 19, 19, 19, 19, 23]);
     let expected_list_data = ArrayData::try_new(
         DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
         12,
@@ -772,7 +771,7 @@ fn test_map_nulls_append() {
     ]);
 
     let map_offsets =
-        Buffer::from_slice_ref(&[0, 3, 5, 5, 13, 15, 15, 15, 19, 19, 19, 19, 23]);
+        Buffer::from_slice_ref([0, 3, 5, 5, 13, 15, 15, 15, 19, 19, 19, 19, 23]);
 
     let expected_list_data = ArrayData::try_new(
         DataType::Map(
@@ -852,7 +851,7 @@ fn test_list_of_strings_append() {
         None,
         // extend b[0..0]
     ]);
-    let list_value_offsets = Buffer::from_slice_ref(&[0, 3, 5, 6, 9, 10, 13]);
+    let list_value_offsets = Buffer::from_slice_ref([0, 3, 5, 6, 9, 10, 13]);
     let expected_list_data = ArrayData::try_new(
         DataType::List(Box::new(Field::new("item", DataType::Utf8, true))),
         6,
@@ -868,7 +867,7 @@ fn test_list_of_strings_append() {
 #[test]
 fn test_fixed_size_binary_append() {
     let a = vec![Some(vec![1, 2]), Some(vec![3, 4]), Some(vec![5, 6])];
-    let a = FixedSizeBinaryArray::try_from_sparse_iter(a.into_iter())
+    let a = FixedSizeBinaryArray::try_from_sparse_iter_with_size(a.into_iter(), 2)
         .expect("Failed to create FixedSizeBinaryArray from iterable");
 
     let b = vec![
@@ -879,7 +878,7 @@ fn test_fixed_size_binary_append() {
         Some(vec![13, 14]),
         None,
     ];
-    let b = FixedSizeBinaryArray::try_from_sparse_iter(b.into_iter())
+    let b = FixedSizeBinaryArray::try_from_sparse_iter_with_size(b.into_iter(), 2)
         .expect("Failed to create FixedSizeBinaryArray from iterable");
 
     let mut mutable = MutableArrayData::new(vec![a.data(), b.data()], false, 10);
@@ -911,8 +910,9 @@ fn test_fixed_size_binary_append() {
         Some(vec![9, 10]),
         // b[4..4]
     ];
-    let expected = FixedSizeBinaryArray::try_from_sparse_iter(expected.into_iter())
-        .expect("Failed to create FixedSizeBinaryArray from iterable");
+    let expected =
+        FixedSizeBinaryArray::try_from_sparse_iter_with_size(expected.into_iter(), 2)
+            .expect("Failed to create FixedSizeBinaryArray from iterable");
     assert_eq!(&result, expected.data());
 }
 

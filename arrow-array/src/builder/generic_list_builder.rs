@@ -115,12 +115,7 @@ where
     /// Builds the [`GenericListArray`] and reset this builder.
     pub fn finish(&mut self) -> GenericListArray<OffsetSize> {
         let len = self.len();
-        let values_arr = self
-            .values_builder
-            .as_any_mut()
-            .downcast_mut::<T>()
-            .unwrap()
-            .finish();
+        let values_arr = self.values_builder.finish();
         let values_data = values_arr.data();
 
         let offset_buffer = self.offsets_builder.finish();
@@ -176,9 +171,9 @@ mod tests {
         let list_array = builder.finish();
 
         let values = list_array.values().data().buffers()[0].clone();
-        assert_eq!(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]), values);
+        assert_eq!(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]), values);
         assert_eq!(
-            Buffer::from_slice_ref(&[0, 3, 6, 8].map(|n| O::from_usize(n).unwrap())),
+            Buffer::from_slice_ref([0, 3, 6, 8].map(|n| O::from_usize(n).unwrap())),
             list_array.data().buffers()[0].clone()
         );
         assert_eq!(DataType::Int32, list_array.value_type());
@@ -296,21 +291,21 @@ mod tests {
         assert_eq!(4, list_array.len());
         assert_eq!(1, list_array.null_count());
         assert_eq!(
-            Buffer::from_slice_ref(&[0, 2, 5, 5, 6]),
+            Buffer::from_slice_ref([0, 2, 5, 5, 6]),
             list_array.data().buffers()[0].clone()
         );
 
         assert_eq!(6, list_array.values().data().len());
         assert_eq!(1, list_array.values().data().null_count());
         assert_eq!(
-            Buffer::from_slice_ref(&[0, 2, 4, 7, 7, 8, 10]),
+            Buffer::from_slice_ref([0, 2, 4, 7, 7, 8, 10]),
             list_array.values().data().buffers()[0].clone()
         );
 
         assert_eq!(10, list_array.values().data().child_data()[0].len());
         assert_eq!(0, list_array.values().data().child_data()[0].null_count());
         assert_eq!(
-            Buffer::from_slice_ref(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+            Buffer::from_slice_ref([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
             list_array.values().data().child_data()[0].buffers()[0].clone()
         );
     }
