@@ -180,7 +180,7 @@ impl<W: Write> SerializedFileWriter<W> {
         &self.row_groups
     }
 
-    /// Closes and finalizes file writer, returning the file metadata.
+    /// Closes and finalises file writer, returning the file metadata.
     pub fn close(mut self) -> Result<parquet::FileMetaData> {
         self.assert_previous_writer_closed()?;
         let metadata = self.write_metadata()?;
@@ -418,7 +418,7 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
         let offset_indexes = &mut self.offset_indexes;
         let bloom_filters = &mut self.bloom_filters;
 
-        let on_close = move |r: ColumnCloseResult| {
+        let on_close = |r: ColumnCloseResult| {
             // Update row group writer metrics
             *total_bytes_written += r.bytes_written;
             column_chunks.push(r.metadata);
