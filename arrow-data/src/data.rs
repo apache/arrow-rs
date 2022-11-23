@@ -533,7 +533,7 @@ impl ArrayData {
             panic!("The buffer is not byte-aligned with its interpretation")
         };
         assert_ne!(self.data_type, DataType::Boolean);
-        &values.1[self.offset..]
+        &values.1[self.offset..self.offset + self.len]
     }
 
     /// Returns a new empty [ArrayData] valid for `data_type`.
@@ -1661,6 +1661,9 @@ mod tests {
         assert_eq!(data.len() - 2, new_data.len());
         assert_eq!(2, new_data.offset());
         assert_eq!(data.null_count() - 1, new_data.null_count());
+
+        assert_eq!(data.buffer::<i32>(0).len(), 16);
+        assert_eq!(new_data.buffer::<i32>(0).len(), 14);
     }
 
     #[test]
