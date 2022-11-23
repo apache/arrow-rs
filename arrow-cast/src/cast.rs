@@ -348,18 +348,16 @@ where
                 .and_then(|a| a.with_precision_and_scale(precision, scale))
                 .map(|a| Arc::new(a) as ArrayRef)
         }
+    } else if cast_options.safe {
+        array
+            .unary_opt::<_, D>(|v| v.as_().mul_checked(mul_or_div).ok())
+            .with_precision_and_scale(precision, scale)
+            .map(|a| Arc::new(a) as ArrayRef)
     } else {
-        if cast_options.safe {
-            array
-                .unary_opt::<_, D>(|v| v.as_().mul_checked(mul_or_div).ok())
-                .with_precision_and_scale(precision, scale)
-                .map(|a| Arc::new(a) as ArrayRef)
-        } else {
-            array
-                .try_unary::<_, D, _>(|v| v.as_().mul_checked(mul_or_div))
-                .and_then(|a| a.with_precision_and_scale(precision, scale))
-                .map(|a| Arc::new(a) as ArrayRef)
-        }
+        array
+            .try_unary::<_, D, _>(|v| v.as_().mul_checked(mul_or_div))
+            .and_then(|a| a.with_precision_and_scale(precision, scale))
+            .map(|a| Arc::new(a) as ArrayRef)
     }
 }
 
