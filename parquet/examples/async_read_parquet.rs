@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate arrow;
-
 use arrow::util::pretty::print_batches;
 use futures::TryStreamExt;
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
@@ -25,7 +23,7 @@ use parquet::errors::Result;
 use std::time::SystemTime;
 use tokio::fs::File;
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     // Create parquet file that will be read.
     let testdata = arrow::util::test_util::parquet_test_data();

@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::util::pretty::print_batches;
-use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::errors::Result;
 use std::fs::File;
 
