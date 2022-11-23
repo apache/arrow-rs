@@ -319,7 +319,7 @@ fn cast_integer_to_decimal<
 >(
     array: &PrimitiveArray<T>,
     precision: u8,
-    scale: u8,
+    scale: i8,
     base: M,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
@@ -327,7 +327,7 @@ where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<M>,
     M: ArrowNativeTypeOp,
 {
-    let mul: M = base.pow_checked(scale as u32).map_err(|_| {
+    let mul_or_div: M = base.pow_checked(scale.unsigned_abs() as u32).map_err(|_| {
         ArrowError::CastError(format!(
             "Cannot cast to {:?}({}, {}). The scale causes overflow.",
             D::PREFIX,
@@ -336,14 +336,26 @@ where
         ))
     })?;
 
-    if cast_options.safe {
+    if scale < 0 {
+        if cast_options.safe {
+            array
+                .unary_opt::<_, D>(|v| v.as_().div_checked(mul_or_div).ok())
+                .with_precision_and_scale(precision, scale)
+                .map(|a| Arc::new(a) as ArrayRef)
+        } else {
+            array
+                .try_unary::<_, D, _>(|v| v.as_().div_checked(mul_or_div))
+                .and_then(|a| a.with_precision_and_scale(precision, scale))
+                .map(|a| Arc::new(a) as ArrayRef)
+        }
+    } else if cast_options.safe {
         array
-            .unary_opt::<_, D>(|v| v.as_().mul_checked(mul).ok())
+            .unary_opt::<_, D>(|v| v.as_().mul_checked(mul_or_div).ok())
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
     } else {
         array
-            .try_unary::<_, D, _>(|v| v.as_().mul_checked(mul))
+            .try_unary::<_, D, _>(|v| v.as_().mul_checked(mul_or_div))
             .and_then(|a| a.with_precision_and_scale(precision, scale))
             .map(|a| Arc::new(a) as ArrayRef)
     }
@@ -352,7 +364,7 @@ where
 fn cast_floating_point_to_decimal128<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
     precision: u8,
-    scale: u8,
+    scale: i8,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
@@ -391,7 +403,7 @@ where
 fn cast_floating_point_to_decimal256<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
     precision: u8,
-    scale: u8,
+    scale: i8,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
@@ -437,7 +449,7 @@ fn cast_reinterpret_arrays<
 fn cast_decimal_to_integer<D, T>(
     array: &ArrayRef,
     base: D::Native,
-    scale: u8,
+    scale: i8,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
@@ -1921,9 +1933,9 @@ fn cast_decimal_to_decimal_with_option<
     const BYTE_WIDTH2: usize,
 >(
     array: &ArrayRef,
-    input_scale: &u8,
+    input_scale: &i8,
     output_precision: &u8,
-    output_scale: &u8,
+    output_scale: &i8,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     if cast_options.safe {
@@ -1947,9 +1959,9 @@ fn cast_decimal_to_decimal_with_option<
 /// the array values when cast failures happen.
 fn cast_decimal_to_decimal_safe<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
     array: &ArrayRef,
-    input_scale: &u8,
+    input_scale: &i8,
     output_precision: &u8,
-    output_scale: &u8,
+    output_scale: &i8,
 ) -> Result<ArrayRef, ArrowError> {
     if input_scale > output_scale {
         // For example, input_scale is 4 and output_scale is 3;
@@ -2062,9 +2074,9 @@ fn cast_decimal_to_decimal_safe<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usi
 /// cast failure happens.
 fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
     array: &ArrayRef,
-    input_scale: &u8,
+    input_scale: &i8,
     output_precision: &u8,
-    output_scale: &u8,
+    output_scale: &i8,
 ) -> Result<ArrayRef, ArrowError> {
     if input_scale > output_scale {
         // For example, input_scale is 4 and output_scale is 3;
@@ -3540,7 +3552,7 @@ mod tests {
     fn create_decimal_array(
         array: Vec<Option<i128>>,
         precision: u8,
-        scale: u8,
+        scale: i8,
     ) -> Result<Decimal128Array, ArrowError> {
         array
             .into_iter()
@@ -3551,7 +3563,7 @@ mod tests {
     fn create_decimal256_array(
         array: Vec<Option<i256>>,
         precision: u8,
-        scale: u8,
+        scale: i8,
     ) -> Result<Decimal256Array, ArrowError> {
         array
             .into_iter()
@@ -7205,5 +7217,63 @@ mod tests {
             expected_error,
             err
         );
+    }
+
+    #[test]
+    fn test_cast_decimal128_to_decimal128_negative_scale() {
+        let input_type = DataType::Decimal128(20, 0);
+        let output_type = DataType::Decimal128(20, -1);
+        assert!(can_cast_types(&input_type, &output_type));
+        let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
+        let input_decimal_array = create_decimal_array(array, 20, 0).unwrap();
+        let array = Arc::new(input_decimal_array) as ArrayRef;
+        generate_cast_test_case!(
+            &array,
+            Decimal128Array,
+            &output_type,
+            vec![
+                Some(112345_i128),
+                Some(212345_i128),
+                Some(312345_i128),
+                None
+            ]
+        );
+
+        let casted_array = cast(&array, &output_type).unwrap();
+        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+
+        assert_eq!("1123450", decimal_arr.value_as_string(0));
+        assert_eq!("2123450", decimal_arr.value_as_string(1));
+        assert_eq!("3123450", decimal_arr.value_as_string(2));
+    }
+
+    #[test]
+    fn test_cast_numeric_to_decimal128_negative() {
+        let decimal_type = DataType::Decimal128(38, -1);
+        let array = Arc::new(Int32Array::from(vec![
+            Some(1123456),
+            Some(2123456),
+            Some(3123456),
+        ])) as ArrayRef;
+
+        let casted_array = cast(&array, &decimal_type).unwrap();
+        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+
+        assert_eq!("1123450", decimal_arr.value_as_string(0));
+        assert_eq!("2123450", decimal_arr.value_as_string(1));
+        assert_eq!("3123450", decimal_arr.value_as_string(2));
+
+        let array = Arc::new(Float32Array::from(vec![
+            Some(1123.456),
+            Some(2123.456),
+            Some(3123.456),
+        ])) as ArrayRef;
+
+        let casted_array = cast(&array, &decimal_type).unwrap();
+        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+
+        assert_eq!("1120", decimal_arr.value_as_string(0));
+        assert_eq!("2120", decimal_arr.value_as_string(1));
+        assert_eq!("3120", decimal_arr.value_as_string(2));
     }
 }

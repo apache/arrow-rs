@@ -1003,7 +1003,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     pub fn with_precision_and_scale(
         self,
         precision: u8,
-        scale: u8,
+        scale: i8,
     ) -> Result<Self, ArrowError>
     where
         Self: Sized,
@@ -1024,7 +1024,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     fn validate_precision_scale(
         &self,
         precision: u8,
-        scale: u8,
+        scale: i8,
     ) -> Result<(), ArrowError> {
         if precision == 0 {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -1046,7 +1046,14 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
                 T::MAX_SCALE
             )));
         }
-        if scale > precision {
+        if scale < -T::MAX_SCALE {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "scale {} is smaller than min {}",
+                scale,
+                -Decimal128Type::MAX_SCALE
+            )));
+        }
+        if scale > 0 && scale as u8 > precision {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "scale {} is greater than precision {}",
                 scale, precision
@@ -1102,7 +1109,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     }
 
     /// Returns the decimal scale of this array
-    pub fn scale(&self) -> u8 {
+    pub fn scale(&self) -> i8 {
         match T::BYTE_LENGTH {
             16 => {
                 if let DataType::Decimal128(_, s) = self.data().data_type() {
