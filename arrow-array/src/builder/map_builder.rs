@@ -107,18 +107,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         let len = self.len();
 
         // Build the keys
-        let keys_arr = self
-            .key_builder
-            .as_any_mut()
-            .downcast_mut::<K>()
-            .unwrap()
-            .finish();
-        let values_arr = self
-            .value_builder
-            .as_any_mut()
-            .downcast_mut::<V>()
-            .unwrap()
-            .finish();
+        let keys_arr = self.key_builder.finish();
+        let values_arr = self.value_builder.finish();
 
         let keys_field = Field::new(
             self.field_names.key.as_str(),
