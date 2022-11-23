@@ -97,8 +97,8 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// Builds the [`GenericByteArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> GenericByteArray<T> {
         let array_type = T::DATA_TYPE;
-        let offset_buffer = Buffer::from_slice_ref(&self.offsets_builder.as_slice());
-        let value_buffer = Buffer::from_slice_ref(&self.value_builder.as_slice());
+        let offset_buffer = Buffer::from_slice_ref(self.offsets_builder.as_slice());
+        let value_buffer = Buffer::from_slice_ref(self.value_builder.as_slice());
         let array_builder = ArrayDataBuilder::new(array_type)
             .len(self.len())
             .add_buffer(offset_buffer)
@@ -106,7 +106,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .null_bit_buffer(
                 self.null_buffer_builder
                     .as_slice()
-                    .map(|b| Buffer::from_slice_ref(&b)),
+                    .map(Buffer::from_slice_ref),
             );
 
         let array_data = unsafe { array_builder.build_unchecked() };

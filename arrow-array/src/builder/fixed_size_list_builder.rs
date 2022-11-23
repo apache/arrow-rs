@@ -145,16 +145,11 @@ where
     /// Builds the [`FixedSizeListBuilder`] without resetting the builder.
     pub fn finish_cloned(&self) -> FixedSizeListArray {
         let len = self.len();
-        let values_arr = self
-            .values_builder
-            .as_any()
-            .downcast_ref::<T>()
-            .unwrap()
-            .finish_cloned();
+        let values_arr = self.values_builder.finish_cloned();
         let values_data = values_arr.data();
 
-        assert!(
-            values_data.len() == len * self.list_len as usize,
+        assert_eq!(
+            values_data.len(), len * self.list_len as usize,
             "Length of the child array ({}) must be the multiple of the value length ({}) and the array length ({}).",
             values_data.len(),
             self.list_len,
@@ -164,7 +159,7 @@ where
         let null_bit_buffer = self
             .null_buffer_builder
             .as_slice()
-            .map(|b| Buffer::from_slice_ref(&b));
+            .map(Buffer::from_slice_ref);
         let array_data = ArrayData::builder(DataType::FixedSizeList(
             Box::new(Field::new("item", values_data.data_type().clone(), true)),
             self.list_len,

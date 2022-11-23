@@ -249,7 +249,7 @@ impl StructBuilder {
         let null_bit_buffer = self
             .null_buffer_builder
             .as_slice()
-            .map(|b| Buffer::from_slice_ref(&b));
+            .map(Buffer::from_slice_ref);
 
         let builder = ArrayData::builder(DataType::Struct(self.fields.clone()))
             .len(length)

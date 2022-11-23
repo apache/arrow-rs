@@ -230,8 +230,8 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         let null_bit_buffer = self
             .null_buffer_builder
             .as_slice()
-            .map(|b| Buffer::from_slice_ref(&b));
-        let values_buffer = Buffer::from_slice_ref(&self.values_builder.as_slice());
+            .map(Buffer::from_slice_ref);
+        let values_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
         let builder = ArrayData::builder(T::DATA_TYPE)
             .len(len)
             .add_buffer(values_buffer)

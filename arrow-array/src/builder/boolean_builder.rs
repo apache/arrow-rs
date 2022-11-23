@@ -162,8 +162,8 @@ impl BooleanBuilder {
         let null_bit_buffer = self
             .null_buffer_builder
             .as_slice()
-            .map(|b| Buffer::from_slice_ref(&b));
-        let value_buffer = Buffer::from_slice_ref(&self.values_builder.as_slice());
+            .map(Buffer::from_slice_ref);
+        let value_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
         let builder = ArrayData::builder(DataType::Boolean)
             .len(len)
             .add_buffer(value_buffer)

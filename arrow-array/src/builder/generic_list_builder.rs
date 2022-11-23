@@ -147,19 +147,14 @@ where
     /// Builds the [`GenericListArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> GenericListArray<OffsetSize> {
         let len = self.len();
-        let values_arr = self
-            .values_builder
-            .as_any()
-            .downcast_ref::<T>()
-            .unwrap()
-            .finish_cloned();
+        let values_arr = self.values_builder.finish_cloned();
         let values_data = values_arr.data();
 
-        let offset_buffer = Buffer::from_slice_ref(&self.offsets_builder.as_slice());
+        let offset_buffer = Buffer::from_slice_ref(self.offsets_builder.as_slice());
         let null_bit_buffer = self
             .null_buffer_builder
             .as_slice()
-            .map(|b| Buffer::from_slice_ref(&b));
+            .map(Buffer::from_slice_ref);
         let field = Box::new(Field::new(
             "item",
             values_data.data_type().clone(),

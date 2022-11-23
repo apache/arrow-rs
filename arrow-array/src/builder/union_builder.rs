@@ -65,7 +65,7 @@ impl<T: ArrowNativeType> FieldDataValues for BufferBuilder<T> {
     }
 
     fn finish_cloned(&self) -> Buffer {
-        Buffer::from_slice_ref(&self.as_slice())
+        Buffer::from_slice_ref(self.as_slice())
     }
 }
 
@@ -307,6 +307,51 @@ impl UnionBuilder {
 
         children.sort_by(|a, b| {
             a.0.partial_cmp(&b.0)
+                .expect("This will never be None as type ids are always i8 values.")
+        });
+        let children: Vec<_> = children.into_iter().map(|(_, b)| b).collect();
+
+        let type_ids: Vec<i8> = (0_i8..children.len() as i8).collect();
+
+        UnionArray::try_new(&type_ids, type_id_buffer, value_offsets_buffer, children)
+    }
+
+    /// Builds this builder creating a new `UnionArray` without resetting the underlying builder.
+    pub fn build_cloned(&self) -> Result<UnionArray, ArrowError> {
+        let type_id_buffer = self.type_id_builder.finish_cloned();
+        let value_offsets_buffer = self
+            .value_offset_builder
+            .as_ref()
+            .map(|b| b.finish_cloned());
+        let mut children = Vec::new();
+        for (
+            name,
+            FieldData {
+                type_id,
+                data_type,
+                values_buffer,
+                slots,
+                null_buffer_builder: bitmap_builder,
+            },
+        ) in &self.fields
+        {
+            let buffer = values_buffer.finish_cloned();
+            let null_bit_buffer = bitmap_builder.as_slice().map(Buffer::from_slice_ref);
+            let arr_data_builder = ArrayDataBuilder::new(data_type.clone())
+                .add_buffer(buffer)
+                .len(*slots)
+                .null_bit_buffer(null_bit_buffer);
+
+            let arr_data_ref = unsafe { arr_data_builder.build_unchecked() };
+            let array_ref = make_array(arr_data_ref);
+            children.push((
+                type_id,
+                (Field::new(name, data_type.clone(), false), array_ref),
+            ))
+        }
+
+        children.sort_by(|a, b| {
+            a.0.partial_cmp(b.0)
                 .expect("This will never be None as type ids are always i8 values.")
         });
         let children: Vec<_> = children.into_iter().map(|(_, b)| b).collect();

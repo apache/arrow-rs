@@ -92,14 +92,14 @@ impl FixedSizeBinaryBuilder {
     /// Builds the [`FixedSizeBinaryArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> FixedSizeBinaryArray {
         let array_length = self.len();
-        let values_buffer = Buffer::from_slice_ref(&self.values_builder.as_slice());
+        let values_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
         let array_data_builder =
             ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
                 .add_buffer(values_buffer)
                 .null_bit_buffer(
                     self.null_buffer_builder
                         .as_slice()
-                        .map(|b| Buffer::from_slice_ref(&b)),
+                        .map(Buffer::from_slice_ref),
                 )
                 .len(array_length);
         let array_data = unsafe { array_data_builder.build_unchecked() };
