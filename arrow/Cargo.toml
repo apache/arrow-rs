@@ -53,6 +53,7 @@ arrow-ipc = { version = "27.0.0", path = "../arrow-ipc", optional = true }
 arrow-json = { version = "27.0.0", path = "../arrow-json", optional = true }
 arrow-schema = { version = "27.0.0", path = "../arrow-schema" }
 arrow-select = { version = "27.0.0", path = "../arrow-select" }
+parquet = { version = "27.0.0", path = "../parquet", features = ["arrow", "async"]}
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
@@ -65,6 +66,8 @@ comfy-table = { version = "6.0", optional = true, default-features = false }
 pyo3 = { version = "0.17", default-features = false, optional = true }
 multiversion = { version = "0.6.1", default-features = false }
 bitflags = { version = "1.2.1", default-features = false, optional = true }
+tokio = { version = "1.22.0", features = ["full"] }
+futures = "0.3.25"
 
 [package.metadata.docs.rs]
 features = ["prettyprint", "ipc_compression", "dyn_cmp_dict", "ffi", "pyarrow"]
@@ -119,6 +122,16 @@ path = "./examples/read_csv.rs"
 name = "read_csv_infer_schema"
 required-features = ["prettyprint", "csv"]
 path = "./examples/read_csv_infer_schema.rs"
+
+[[example]]
+name = "read_parquet"
+required-features = ["prettyprint"]
+path = "./examples/read_parquet.rs"
+
+[[example]]
+name = "async_read_parquet"
+required-features = ["prettyprint"]
+path = "./examples/async_read_parquet.rs"
 
 [[bench]]
 name = "aggregate_kernels"
