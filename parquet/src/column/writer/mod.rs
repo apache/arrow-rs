@@ -461,7 +461,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         Ok(ColumnCloseResult {
             bytes_written: self.column_metrics.total_bytes_written,
             rows_written: self.column_metrics.total_rows_written,
-            bloom_filter: self.encoder.bloom_filter(),
+            bloom_filter: self.encoder.flush_bloom_filter(),
             metadata,
             column_index,
             offset_index,

@@ -85,9 +85,6 @@ pub trait ColumnValueEncoder {
         value_indices: Option<&[usize]>,
     ) -> Option<(Self::T, Self::T)>;
 
-    /// Returns the bloom filter for this collection if enabled.
-    fn bloom_filter(&self) -> Option<Sbbf>;
-
     /// Create a new [`ColumnValueEncoder`]
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self>
     where
@@ -120,6 +117,11 @@ pub trait ColumnValueEncoder {
 
     /// Flush the next data page for this column chunk
     fn flush_data_page(&mut self) -> Result<DataPageValues<Self::T>>;
+
+    /// Flushes bloom filter if enabled and returns it, otherwise returns `None`. Subsequent writes
+    /// will *not* be tracked by the bloom filter as it is empty since. This should be called once
+    /// near the end of encoding.
+    fn flush_bloom_filter(&mut self) -> Option<Sbbf>;
 }
 
 pub struct ColumnValueEncoderImpl<T: DataType> {
@@ -174,9 +176,8 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         }
     }
 
-    fn bloom_filter(&self) -> Option<Sbbf> {
-        // TODO reduce copy
-        self.bloom_filter.clone()
+    fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
+        self.bloom_filter.take()
     }
 
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {

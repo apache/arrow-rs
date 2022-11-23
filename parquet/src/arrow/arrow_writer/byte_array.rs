@@ -452,7 +452,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         }
     }
 
-    fn bloom_filter(&self) -> Option<Sbbf> {
+    fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
         // TODO FIX ME need to handle bloom filter in arrow writer
         None
     }
