@@ -3402,14 +3402,13 @@ where
     OffsetSizeFrom: OffsetSizeTrait + ToPrimitive,
     OffsetSizeTo: OffsetSizeTrait + NumCast + ArrowNativeType,
 {
-    let str_array = array
-        .as_any()
-        .downcast_ref::<GenericStringArray<OffsetSizeFrom>>()
-        .unwrap();
-    let list_data = array.data();
-    let str_values_buf = str_array.value_data();
-
-    let offsets = list_data.buffers()[0].typed_data::<OffsetSizeFrom>();
+    let data = array.data();
+    assert_eq!(
+        data.data_type(),
+        &GenericStringArray::<OffsetSizeFrom>::DATA_TYPE
+    );
+    let str_values_buf = data.buffers()[1].clone();
+    let offsets = data.buffers()[0].typed_data::<OffsetSizeFrom>();
 
     let mut offset_builder = BufferBuilder::<OffsetSizeTo>::new(offsets.len());
     offsets
@@ -3426,18 +3425,14 @@ where
 
     let offset_buffer = offset_builder.finish();
 
-    let dtype = if matches!(std::mem::size_of::<OffsetSizeTo>(), 8) {
-        DataType::LargeUtf8
-    } else {
-        DataType::Utf8
-    };
+    let dtype = GenericStringArray::<OffsetSizeTo>::DATA_TYPE;
 
     let builder = ArrayData::builder(dtype)
         .offset(array.offset())
         .len(array.len())
         .add_buffer(offset_buffer)
         .add_buffer(str_values_buf)
-        .null_bit_buffer(list_data.null_buffer().cloned());
+        .null_bit_buffer(data.null_buffer().cloned());
 
     let array_data = unsafe { builder.build_unchecked() };
 
