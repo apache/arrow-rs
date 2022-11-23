@@ -152,8 +152,13 @@ impl NullBufferBuilder {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn as_slice(&self) -> Option<&[u8]> {
         self.bitmap_builder.as_ref().map(|b| b.as_slice())
+    }
+
+    pub fn as_slice_mut(&mut self) -> Option<&mut [u8]> {
+        self.bitmap_builder.as_mut().map(|b| b.as_slice_mut())
     }
 }
 

@@ -494,9 +494,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         let null_count = self.null_count();
         let mut builder = self.into_builder().map_err(|arr| Ok(arr))?;
 
-        let (slice, null_buffer) = builder.as_slice();
+        let (slice, null_buffer) = builder.slices_mut();
 
-        try_for_each_valid_idx(len, 0, null_count, null_buffer, |idx| {
+        try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
             unsafe { *slice.get_unchecked_mut(idx) = op(*slice.get_unchecked(idx))? };
             Ok::<_, E>(())
         })
