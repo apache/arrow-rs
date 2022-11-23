@@ -216,8 +216,19 @@ impl<OffsetSize: OffsetSizeTrait> From<GenericBinaryArray<OffsetSize>>
     for GenericStringArray<OffsetSize>
 {
     fn from(v: GenericBinaryArray<OffsetSize>) -> Self {
+        let offsets = v.value_offsets();
+        let values = v.data().buffers()[1].as_ref();
+
+        // We only need to validate that all values are valid UTF-8
+        let validated = std::str::from_utf8(values).unwrap();
+        for offset in offsets.iter() {
+            assert!(validated.is_char_boundary(offset.as_usize()))
+        }
+
         let builder = v.into_data().into_builder().data_type(Self::DATA_TYPE);
-        Self::from(builder.build().unwrap())
+        // SAFETY:
+        // Validated UTF-8 above
+        Self::from(unsafe { builder.build_unchecked() })
     }
 }
 
