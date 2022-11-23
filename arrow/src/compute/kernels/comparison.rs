@@ -4026,7 +4026,7 @@ mod tests {
         ])
         .data()
         .clone();
-        let value_offsets = Buffer::from_slice_ref(&[0i64, 3, 6, 6, 9]);
+        let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 6, 9]);
         let list_data_type =
             DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)

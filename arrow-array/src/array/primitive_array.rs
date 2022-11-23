@@ -993,12 +993,13 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for PrimitiveArray<T> {
 
 impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// Returns a Decimal array with the same data as self, with the
-    /// specified precision.
+    /// specified precision and scale.
     ///
     /// Returns an Error if:
-    /// 1. `precision` is larger than `T:MAX_PRECISION`
-    /// 2. `scale` is larger than `T::MAX_SCALE`
-    /// 3. `scale` is > `precision`
+    /// - `precision` is zero
+    /// - `precision` is larger than `T:MAX_PRECISION`
+    /// - `scale` is larger than `T::MAX_SCALE`
+    /// - `scale` is > `precision`
     pub fn with_precision_and_scale(
         self,
         precision: u8,
@@ -1025,18 +1026,24 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
         precision: u8,
         scale: u8,
     ) -> Result<(), ArrowError> {
+        if precision == 0 {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "precision cannot be 0, has to be between [1, {}]",
+                T::MAX_PRECISION
+            )));
+        }
         if precision > T::MAX_PRECISION {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "precision {} is greater than max {}",
                 precision,
-                Decimal128Type::MAX_PRECISION
+                T::MAX_PRECISION
             )));
         }
         if scale > T::MAX_SCALE {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "scale {} is greater than max {}",
                 scale,
-                Decimal128Type::MAX_SCALE
+                T::MAX_SCALE
             )));
         }
         if scale > precision {
@@ -1132,7 +1139,7 @@ mod tests {
 
     #[test]
     fn test_primitive_array_from_vec() {
-        let buf = Buffer::from_slice_ref(&[0, 1, 2, 3, 4]);
+        let buf = Buffer::from_slice_ref([0, 1, 2, 3, 4]);
         let arr = Int32Array::from(vec![0, 1, 2, 3, 4]);
         assert_eq!(buf, arr.data.buffers()[0]);
         assert_eq!(5, arr.len());
@@ -1631,7 +1638,7 @@ mod tests {
     #[test]
     fn test_primitive_array_builder() {
         // Test building a primitive array with ArrayData builder and offset
-        let buf = Buffer::from_slice_ref(&[0i32, 1, 2, 3, 4, 5, 6]);
+        let buf = Buffer::from_slice_ref([0i32, 1, 2, 3, 4, 5, 6]);
         let buf2 = buf.clone();
         let data = ArrayData::builder(DataType::Int32)
             .len(5)
@@ -1700,7 +1707,7 @@ mod tests {
     // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]
     fn test_primitive_array_invalid_buffer_len() {
-        let buffer = Buffer::from_slice_ref(&[0i32, 1, 2, 3, 4]);
+        let buffer = Buffer::from_slice_ref([0i32, 1, 2, 3, 4]);
         let data = unsafe {
             ArrayData::builder(DataType::Int32)
                 .add_buffer(buffer.clone())
@@ -1932,6 +1939,14 @@ mod tests {
             .with_precision_and_scale(5, 2)
             .unwrap();
         arr.validate_decimal_precision(5).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "precision cannot be 0, has to be between [1, 38]")]
+    fn test_decimal_array_with_precision_zero() {
+        Decimal128Array::from_iter_values([12345, 456])
+            .with_precision_and_scale(0, 2)
+            .unwrap();
     }
 
     #[test]

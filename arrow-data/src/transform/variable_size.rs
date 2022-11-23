@@ -18,7 +18,7 @@
 use crate::ArrayData;
 use arrow_buffer::{ArrowNativeType, MutableBuffer};
 use num::traits::AsPrimitive;
-use num::Integer;
+use num::{CheckedAdd, Integer};
 
 use super::{
     Extend, _MutableArrayData,
@@ -39,7 +39,9 @@ fn extend_offset_values<T: ArrowNativeType + AsPrimitive<usize>>(
     buffer.extend_from_slice(new_values);
 }
 
-pub(super) fn build_extend<T: ArrowNativeType + Integer + AsPrimitive<usize>>(
+pub(super) fn build_extend<
+    T: ArrowNativeType + Integer + CheckedAdd + AsPrimitive<usize>,
+>(
     array: &ArrayData,
 ) -> Extend {
     let offsets = array.buffer::<T>(0);

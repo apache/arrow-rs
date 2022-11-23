@@ -1846,7 +1846,7 @@ mod tests {
             .data()
             .clone();
         // Construct offsets
-        let value_offsets = Buffer::from_slice_ref(&[0, 3, 6, 8]);
+        let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
         // Construct a list array from the above two
         let list_data_type =
             DataType::List(Box::new(Field::new("item", DataType::Int32, false)));

@@ -117,16 +117,11 @@ where
     /// Builds the [`FixedSizeListBuilder`] and reset this builder.
     pub fn finish(&mut self) -> FixedSizeListArray {
         let len = self.len();
-        let values_arr = self
-            .values_builder
-            .as_any_mut()
-            .downcast_mut::<T>()
-            .unwrap()
-            .finish();
+        let values_arr = self.values_builder.finish();
         let values_data = values_arr.data();
 
-        assert!(
-            values_data.len() == len * self.list_len as usize,
+        assert_eq!(
+            values_data.len(), len * self.list_len as usize,
             "Length of the child array ({}) must be the multiple of the value length ({}) and the array length ({}).",
             values_data.len(),
             self.list_len,

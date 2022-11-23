@@ -924,11 +924,11 @@ mod tests {
     fn test_filter_list_array() {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
-            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
             .build()
             .unwrap();
 
-        let value_offsets = Buffer::from_slice_ref(&[0i64, 3, 6, 8, 8]);
+        let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 8, 8]);
 
         let list_data_type =
             DataType::LargeList(Box::new(Field::new("item", DataType::Int32, false)));
@@ -948,11 +948,11 @@ mod tests {
         // expected: [[3, 4, 5], null]
         let value_data = ArrayData::builder(DataType::Int32)
             .len(3)
-            .add_buffer(Buffer::from_slice_ref(&[3, 4, 5]))
+            .add_buffer(Buffer::from_slice_ref([3, 4, 5]))
             .build()
             .unwrap();
 
-        let value_offsets = Buffer::from_slice_ref(&[0i64, 3, 3]);
+        let value_offsets = Buffer::from_slice_ref([0i64, 3, 3]);
 
         let list_data_type =
             DataType::LargeList(Box::new(Field::new("item", DataType::Int32, false)));
@@ -1305,7 +1305,7 @@ mod tests {
     fn test_filter_fixed_size_list_arrays() {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(9)
-            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7, 8]))
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8]))
             .build()
             .unwrap();
         let list_data_type = DataType::FixedSizeList(
@@ -1355,7 +1355,7 @@ mod tests {
     fn test_filter_fixed_size_list_arrays_with_null() {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(10)
-            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
             .build()
             .unwrap();
 

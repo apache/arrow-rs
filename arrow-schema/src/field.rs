@@ -455,6 +455,21 @@ impl Field {
             }
         }
     }
+
+    /// Return size of this instance in bytes.
+    ///
+    /// Includes the size of `Self`.
+    pub fn size(&self) -> usize {
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.data_type)
+            + self.data_type.size()
+            + self.name.capacity()
+            + (std::mem::size_of::<(String, String)>() * self.metadata.capacity())
+            + self
+                .metadata
+                .iter()
+                .map(|(k, v)| k.capacity() + v.capacity())
+                .sum::<usize>()
+    }
 }
 
 // TODO: improve display with crate https://crates.io/crates/derive_more ?
