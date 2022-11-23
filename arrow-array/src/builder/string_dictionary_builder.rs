@@ -222,6 +222,11 @@ where
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
     }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> ArrayRef {
+        Arc::new(self.finish_cloned())
+    }
 }
 
 impl<K> StringDictionaryBuilder<K>
@@ -287,6 +292,23 @@ where
 
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
+
+    /// Builds the `DictionaryArray` without resetting the builder.
+    pub fn finish_cloned(&self) -> DictionaryArray<K> {
+        let values = self.values_builder.finish_cloned();
+        let keys = self.keys_builder.finish_cloned();
+
+        let data_type =
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(DataType::Utf8));
+
+        let builder = keys
+            .into_data()
+            .into_builder()
+            .data_type(data_type)
+            .child_data(vec![values.into_data()]);
+
+        DictionaryArray::from(unsafe { builder.build_unchecked() })
+    }
 }
 
 fn get_bytes<'a, K: ArrowNativeType>(values: &'a StringBuilder, key: &K) -> &'a [u8] {
@@ -329,6 +351,57 @@ mod tests {
 
         assert_eq!(ava.value(0), "abc");
         assert_eq!(ava.value(1), "def");
+    }
+
+    #[test]
+    fn test_string_dictionary_builder_finish_cloned() {
+        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
+        builder.append("abc").unwrap();
+        builder.append_null();
+        builder.append("def").unwrap();
+        builder.append("def").unwrap();
+        builder.append("abc").unwrap();
+        let mut array = builder.finish_cloned();
+
+        assert_eq!(
+            array.keys(),
+            &Int8Array::from(vec![Some(0), None, Some(1), Some(1), Some(0)])
+        );
+
+        // Values are polymorphic and so require a downcast.
+        let av = array.values();
+        let ava: &StringArray = av.as_any().downcast_ref::<StringArray>().unwrap();
+
+        assert_eq!(ava.value(0), "abc");
+        assert_eq!(ava.value(1), "def");
+
+        builder.append("abc").unwrap();
+        builder.append("ghi").unwrap();
+        builder.append("def").unwrap();
+
+        array = builder.finish();
+
+        assert_eq!(
+            array.keys(),
+            &Int8Array::from(vec![
+                Some(0),
+                None,
+                Some(1),
+                Some(1),
+                Some(0),
+                Some(0),
+                Some(2),
+                Some(1)
+            ])
+        );
+
+        // Values are polymorphic and so require a downcast.
+        let av2 = array.values();
+        let ava2: &StringArray = av2.as_any().downcast_ref::<StringArray>().unwrap();
+
+        assert_eq!(ava2.value(0), "abc");
+        assert_eq!(ava2.value(1), "def");
+        assert_eq!(ava2.value(2), "ghi");
     }
 
     #[test]

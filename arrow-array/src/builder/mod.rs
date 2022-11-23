@@ -107,6 +107,9 @@ pub trait ArrayBuilder: Any + Send {
     /// Builds the array
     fn finish(&mut self) -> ArrayRef;
 
+    /// Builds the array without resetting the underlying builder.
+    fn finish_cloned(&self) -> ArrayRef;
+
     /// Returns the builder as a non-mutable `Any` reference.
     ///
     /// This is most useful when one wants to call non-mutable APIs on a specific builder
