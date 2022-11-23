@@ -358,6 +358,14 @@ impl SortField {
     pub fn new_with_options(data_type: DataType, options: SortOptions) -> Self {
         Self { options, data_type }
     }
+
+    /// Return size of this instance in bytes.
+    ///
+    /// Includes the size of `Self`.
+    pub fn size(&self) -> usize {
+        self.data_type.size() + std::mem::size_of::<Self>()
+            - std::mem::size_of::<DataType>()
+    }
 }
 
 impl RowConverter {
@@ -480,6 +488,21 @@ impl RowConverter {
             })
             .collect()
     }
+
+    /// Returns the size of this instance in bytes
+    ///
+    /// Includes the size of `Self`.
+    pub fn size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.fields.iter().map(|x| x.size()).sum::<usize>()
+            + self.interners.capacity()
+                * std::mem::size_of::<Option<Box<OrderPreservingInterner>>>()
+            + self
+                .interners
+                .iter()
+                .filter_map(|x| x.as_ref().map(|x| x.size()))
+                .sum::<usize>()
+    }
 }
 
 /// A row-oriented representation of arrow data, that is normalized for comparison.
@@ -511,6 +534,16 @@ impl Rows {
 
     pub fn iter(&self) -> RowsIter<'_> {
         self.into_iter()
+    }
+
+    /// Returns the size of this instance in bytes
+    ///
+    /// Includes the size of `Self`.
+    pub fn size(&self) -> usize {
+        // Size of fields is accounted for as part of RowConverter
+        std::mem::size_of::<Self>()
+            + self.buffer.len()
+            + self.offsets.len() * std::mem::size_of::<usize>()
     }
 }
 
