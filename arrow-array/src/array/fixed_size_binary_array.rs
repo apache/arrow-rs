@@ -539,7 +539,7 @@ mod tests {
         let values_data = ArrayData::builder(DataType::UInt8)
             .len(12)
             .offset(2)
-            .add_buffer(Buffer::from_slice_ref(&values))
+            .add_buffer(Buffer::from_slice_ref(values))
             .build()
             .unwrap();
         // [null, [10, 11, 12, 13]]
@@ -551,7 +551,7 @@ mod tests {
             .len(2)
             .offset(1)
             .add_child_data(values_data)
-            .null_bit_buffer(Some(Buffer::from_slice_ref(&[0b101])))
+            .null_bit_buffer(Some(Buffer::from_slice_ref([0b101])))
             .build_unchecked()
         };
         let list_array = FixedSizeListArray::from(array_data);
@@ -575,7 +575,7 @@ mod tests {
         let values: [u32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
         let values_data = ArrayData::builder(DataType::UInt32)
             .len(12)
-            .add_buffer(Buffer::from_slice_ref(&values))
+            .add_buffer(Buffer::from_slice_ref(values))
             .build()
             .unwrap();
 
@@ -598,8 +598,8 @@ mod tests {
         let values = [0_u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
         let values_data = ArrayData::builder(DataType::UInt8)
             .len(12)
-            .add_buffer(Buffer::from_slice_ref(&values))
-            .null_bit_buffer(Some(Buffer::from_slice_ref(&[0b101010101010])))
+            .add_buffer(Buffer::from_slice_ref(values))
+            .null_bit_buffer(Some(Buffer::from_slice_ref([0b101010101010])))
             .build()
             .unwrap();
 

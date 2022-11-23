@@ -4460,7 +4460,7 @@ mod tests {
             .data()
             .clone();
 
-        let value_offsets = Buffer::from_slice_ref(&[0, 3, 6, 8]);
+        let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
 
         // Construct a list array from the above two
         // [[0,0,0], [-1, -2, -1], [2, 100000000]]
@@ -4525,7 +4525,7 @@ mod tests {
             .data()
             .clone();
 
-        let value_offsets = Buffer::from_slice_ref(&[0, 3, 6, 9]);
+        let value_offsets = Buffer::from_slice_ref([0, 3, 6, 9]);
 
         // Construct a list array from the above two
         let list_data_type =
@@ -6765,13 +6765,13 @@ mod tests {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
-            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
             .build()
             .unwrap();
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        let value_offsets = Buffer::from_slice_ref(&[0, 3, 6, 8]);
+        let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
 
         // Construct a list array from the above two
         let list_data_type =
@@ -6789,13 +6789,13 @@ mod tests {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
-            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
             .build()
             .unwrap();
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        let value_offsets = Buffer::from_slice_ref(&[0i64, 3, 6, 8]);
+        let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 8]);
 
         // Construct a list array from the above two
         let list_data_type =
@@ -7007,7 +7007,7 @@ mod tests {
     #[test]
     fn test_list_to_string() {
         let str_array = StringArray::from(vec!["a", "b", "c", "d", "e", "f", "g", "h"]);
-        let value_offsets = Buffer::from_slice_ref(&[0, 3, 6, 8]);
+        let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
         let value_data = ArrayData::builder(DataType::Utf8)
             .len(str_array.len())
             .buffers(str_array.data().buffers().to_vec())
