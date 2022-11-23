@@ -494,7 +494,6 @@ impl RowConverter {
     /// Includes the size of `Self`.
     pub fn size(&self) -> usize {
         std::mem::size_of::<Self>()
-            + std::mem::size_of_val(&self.interners)
             + self.fields.iter().map(|x| x.size()).sum::<usize>()
             + self.interners.capacity()
                 * std::mem::size_of::<Option<Box<OrderPreservingInterner>>>()
