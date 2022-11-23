@@ -327,7 +327,7 @@ where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<M>,
     M: ArrowNativeTypeOp,
 {
-    let mul: M = base.pow_checked(scale as u32).map_err(|_| {
+    let mul_or_div: M = base.pow_checked(scale.unsigned_abs() as u32).map_err(|_| {
         ArrowError::CastError(format!(
             "Cannot cast to {:?}({}, {}). The scale causes overflow.",
             D::PREFIX,
@@ -336,16 +336,30 @@ where
         ))
     })?;
 
-    if cast_options.safe {
-        array
-            .unary_opt::<_, D>(|v| v.as_().mul_checked(mul).ok())
-            .with_precision_and_scale(precision, scale)
-            .map(|a| Arc::new(a) as ArrayRef)
+    if scale < 0 {
+        if cast_options.safe {
+            array
+                .unary_opt::<_, D>(|v| v.as_().div_checked(mul_or_div).ok())
+                .with_precision_and_scale(precision, scale)
+                .map(|a| Arc::new(a) as ArrayRef)
+        } else {
+            array
+                .try_unary::<_, D, _>(|v| v.as_().div_checked(mul_or_div))
+                .and_then(|a| a.with_precision_and_scale(precision, scale))
+                .map(|a| Arc::new(a) as ArrayRef)
+        }
     } else {
-        array
-            .try_unary::<_, D, _>(|v| v.as_().mul_checked(mul))
-            .and_then(|a| a.with_precision_and_scale(precision, scale))
-            .map(|a| Arc::new(a) as ArrayRef)
+        if cast_options.safe {
+            array
+                .unary_opt::<_, D>(|v| v.as_().mul_checked(mul_or_div).ok())
+                .with_precision_and_scale(precision, scale)
+                .map(|a| Arc::new(a) as ArrayRef)
+        } else {
+            array
+                .try_unary::<_, D, _>(|v| v.as_().mul_checked(mul_or_div))
+                .and_then(|a| a.with_precision_and_scale(precision, scale))
+                .map(|a| Arc::new(a) as ArrayRef)
+        }
     }
 }
 
@@ -7233,5 +7247,35 @@ mod tests {
         assert_eq!("1123450", decimal_arr.value_as_string(0));
         assert_eq!("2123450", decimal_arr.value_as_string(1));
         assert_eq!("3123450", decimal_arr.value_as_string(2));
+    }
+
+    #[test]
+    fn test_cast_numeric_to_decimal128_negative() {
+        let decimal_type = DataType::Decimal128(38, -1);
+        let array = Arc::new(Int32Array::from(vec![
+            Some(1123456),
+            Some(2123456),
+            Some(3123456),
+        ])) as ArrayRef;
+
+        let casted_array = cast(&array, &decimal_type).unwrap();
+        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+
+        assert_eq!("1123450", decimal_arr.value_as_string(0));
+        assert_eq!("2123450", decimal_arr.value_as_string(1));
+        assert_eq!("3123450", decimal_arr.value_as_string(2));
+
+        let array = Arc::new(Float32Array::from(vec![
+            Some(1123.456),
+            Some(2123.456),
+            Some(3123.456),
+        ])) as ArrayRef;
+
+        let casted_array = cast(&array, &decimal_type).unwrap();
+        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+
+        assert_eq!("1120", decimal_arr.value_as_string(0));
+        assert_eq!("2120", decimal_arr.value_as_string(1));
+        assert_eq!("3120", decimal_arr.value_as_string(2));
     }
 }
