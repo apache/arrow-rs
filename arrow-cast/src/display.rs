@@ -35,7 +35,7 @@ macro_rules! make_string {
         // SAFETY: This is safe because array_value_to_string(the macro caller) is already
         // checking for is_null($row) which also acts like a bounds check. Hence we can
         // directly call value_unchecked.
-        unsafe {Ok(array.value_unchecked($row).to_string())}
+        unsafe { Ok(array.value_unchecked($row).to_string()) }
     }};
 }
 
@@ -45,11 +45,11 @@ macro_rules! make_string_interval_year_month {
             .as_any()
             .downcast_ref::<array::IntervalYearMonthArray>()
             .unwrap();
-        
+
         // SAFETY: This is safe because array_value_to_string(the macro caller) is already
         // checking for is_null($row) which also acts like a bounds check. Hence we can
         // directly call value_unchecked.
-        let interval = unsafe {array.value_unchecked($row) as f64};
+        let interval = unsafe { array.value_unchecked($row) as f64 };
         let years = (interval / 12_f64).floor();
         let month = interval - (years * 12_f64);
 
@@ -70,7 +70,7 @@ macro_rules! make_string_interval_day_time {
         // SAFETY: This is safe because array_value_to_string(the macro caller) is already
         // checking for is_null($row) which also acts like a bounds check. Hence we can
         // directly call value_unchecked.
-        let value: u64 = unsafe {array.value_unchecked($row) as u64};
+        let value: u64 = unsafe { array.value_unchecked($row) as u64 };
 
         let days_parts: i32 = ((value & 0xFFFFFFFF00000000) >> 32) as i32;
         let milliseconds_part: i32 = (value & 0xFFFFFFFF) as i32;
@@ -103,7 +103,7 @@ macro_rules! make_string_interval_month_day_nano {
         // SAFETY: This is safe because array_value_to_string(the macro caller) is already
         // checking for is_null($row) which also acts like a bounds check. Hence we can
         // directly call value_unchecked.
-        let value: u128 = unsafe {array.value_unchecked($row) as u128};
+        let value: u128 = unsafe { array.value_unchecked($row) as u128 };
 
         let months_part: i32 =
             ((value & 0xFFFFFFFF000000000000000000000000) >> 96) as i32;
@@ -126,7 +126,6 @@ macro_rules! make_string_interval_month_day_nano {
             secs,
             (nanoseconds_part % 1000000000),
         ))
-
     }};
 }
 
@@ -210,7 +209,6 @@ macro_rules! make_string_hex {
         }
 
         Ok(tmp)
-
     }};
 }
 
@@ -466,14 +464,20 @@ pub fn array_value_to_string(
         DataType::Union(field_vec, type_ids, mode) => {
             union_to_string(column, row, field_vec, type_ids, mode)
         }
-        DataType::Duration(unit) => {
-            match *unit {
-                TimeUnit::Second => make_string_from_duration!(array::DurationSecondArray, column, row),
-                TimeUnit::Millisecond => make_string_from_duration!(array::DurationMillisecondArray, column, row),
-                TimeUnit::Microsecond => make_string_from_duration!(array::DurationMicrosecondArray, column, row),
-                TimeUnit::Nanosecond => make_string_from_duration!(array::DurationNanosecondArray, column, row),
+        DataType::Duration(unit) => match *unit {
+            TimeUnit::Second => {
+                make_string_from_duration!(array::DurationSecondArray, column, row)
             }
-        }
+            TimeUnit::Millisecond => {
+                make_string_from_duration!(array::DurationMillisecondArray, column, row)
+            }
+            TimeUnit::Microsecond => {
+                make_string_from_duration!(array::DurationMicrosecondArray, column, row)
+            }
+            TimeUnit::Nanosecond => {
+                make_string_from_duration!(array::DurationNanosecondArray, column, row)
+            }
+        },
         _ => Err(ArrowError::InvalidArgumentError(format!(
             "Pretty printing not implemented for {:?} type",
             column.data_type()
@@ -556,19 +560,26 @@ mod tests {
 
     #[test]
     fn test_array_value_to_string_duration() {
-        let ns_array = Arc::new(DurationNanosecondArray::from(vec![Some(1), None])) as ArrayRef;
-        assert_eq!(array_value_to_string(&ns_array, 0).unwrap(), "PT0.000000001S");
+        let ns_array =
+            Arc::new(DurationNanosecondArray::from(vec![Some(1), None])) as ArrayRef;
+        assert_eq!(
+            array_value_to_string(&ns_array, 0).unwrap(),
+            "PT0.000000001S"
+        );
         assert_eq!(array_value_to_string(&ns_array, 1).unwrap(), "");
 
-        let us_array = Arc::new(DurationMicrosecondArray::from(vec![Some(1), None])) as ArrayRef;
+        let us_array =
+            Arc::new(DurationMicrosecondArray::from(vec![Some(1), None])) as ArrayRef;
         assert_eq!(array_value_to_string(&us_array, 0).unwrap(), "PT0.000001S");
         assert_eq!(array_value_to_string(&us_array, 1).unwrap(), "");
 
-        let ms_array = Arc::new(DurationMillisecondArray::from(vec![Some(1), None])) as ArrayRef;
+        let ms_array =
+            Arc::new(DurationMillisecondArray::from(vec![Some(1), None])) as ArrayRef;
         assert_eq!(array_value_to_string(&ms_array, 0).unwrap(), "PT0.001S");
         assert_eq!(array_value_to_string(&ms_array, 1).unwrap(), "");
 
-        let s_array = Arc::new(DurationSecondArray::from(vec![Some(1), None])) as ArrayRef;
+        let s_array =
+            Arc::new(DurationSecondArray::from(vec![Some(1), None])) as ArrayRef;
         assert_eq!(array_value_to_string(&s_array, 0).unwrap(), "PT1S");
         assert_eq!(array_value_to_string(&s_array, 1).unwrap(), "");
     }
