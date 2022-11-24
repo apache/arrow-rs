@@ -60,7 +60,13 @@ pub type DynComparator = Box<dyn Fn(usize, usize) -> Ordering + Send + Sync>;
 
 /// returns a comparison function that compares two values at two different positions
 /// between the two arrays.
+///
 /// The arrays' types must be equal.
+///
+/// Note: the [row format][crate::row] will drastically outperform [`DynComparator`] for
+/// almost all use-cases, expect potentially those that only perform a very small number
+/// of comparisons
+///
 /// # Example
 /// ```
 /// use arrow::array::{build_compare, Int32Array};
@@ -76,8 +82,7 @@ pub type DynComparator = Box<dyn Fn(usize, usize) -> Ordering + Send + Sync>;
 /// # Ok(())
 /// # }
 /// ```
-// This is a factory of comparisons.
-// The lifetime 'a enforces that we cannot use the closure beyond any of the array's lifetime.
+///
 pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparator> {
     let left_d = left.data_type();
     let right_d = right.data_type();
