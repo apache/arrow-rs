@@ -194,10 +194,10 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
         let statistics_enabled = props.statistics_enabled(descr.path());
 
-        let bloom_filter_enabled = props.bloom_filter_enabled(descr.path());
+        let bloom_filter_enabled = props.bloom_filter_properties(descr.path());
         let bloom_filter =
             if let Some(BloomFilterProperties { ndv, fpp }) = bloom_filter_enabled {
-                Sbbf::new_with_ndv_fpp(ndv, fpp)
+                Sbbf::new_with_ndv_fpp(*ndv, *fpp)
                     .map_err(|e| {
                         eprintln!("invalid bloom filter properties: {}", e);
                     })
