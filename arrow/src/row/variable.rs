@@ -214,16 +214,18 @@ pub fn decode_binary<I: OffsetSizeTrait>(
 pub unsafe fn decode_string<I: OffsetSizeTrait>(
     rows: &mut [&[u8]],
     options: SortOptions,
+    validate_utf8: bool,
 ) -> GenericStringArray<I> {
-    let d = match I::IS_LARGE {
-        true => DataType::LargeUtf8,
-        false => DataType::Utf8,
-    };
+    let decoded = decode_binary::<I>(rows, options);
 
-    let builder = decode_binary::<I>(rows, options)
+    if validate_utf8 {
+        return GenericStringArray::from(decoded);
+    }
+
+    let builder = decoded
         .into_data()
         .into_builder()
-        .data_type(d);
+        .data_type(GenericStringArray::<I>::DATA_TYPE);
 
     // SAFETY:
     // Row data must have come from a valid UTF-8 array
