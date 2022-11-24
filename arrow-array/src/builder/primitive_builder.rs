@@ -24,36 +24,69 @@ use arrow_data::ArrayData;
 use std::any::Any;
 use std::sync::Arc;
 
+/// A signed 8-bit integer array builder.
 pub type Int8Builder = PrimitiveBuilder<Int8Type>;
+/// A signed 16-bit integer array builder.
 pub type Int16Builder = PrimitiveBuilder<Int16Type>;
+/// A signed 32-bit integer array builder.
 pub type Int32Builder = PrimitiveBuilder<Int32Type>;
+/// A signed 64-bit integer array builder.
 pub type Int64Builder = PrimitiveBuilder<Int64Type>;
+/// An usigned 8-bit integer array builder.
 pub type UInt8Builder = PrimitiveBuilder<UInt8Type>;
+/// An usigned 16-bit integer array builder.
 pub type UInt16Builder = PrimitiveBuilder<UInt16Type>;
+/// An usigned 32-bit integer array builder.
 pub type UInt32Builder = PrimitiveBuilder<UInt32Type>;
+/// An usigned 64-bit integer array builder.
 pub type UInt64Builder = PrimitiveBuilder<UInt64Type>;
+/// A 32-bit floating point array builder.
 pub type Float32Builder = PrimitiveBuilder<Float32Type>;
+/// A 64-bit floating point array builder.
 pub type Float64Builder = PrimitiveBuilder<Float64Type>;
 
+/// A timestamp second array builder.
 pub type TimestampSecondBuilder = PrimitiveBuilder<TimestampSecondType>;
+/// A timestamp millisecond array builder.
 pub type TimestampMillisecondBuilder = PrimitiveBuilder<TimestampMillisecondType>;
+/// A timestamp microsecond array builder.
 pub type TimestampMicrosecondBuilder = PrimitiveBuilder<TimestampMicrosecondType>;
+/// A timestamp nanosecond array builder.
 pub type TimestampNanosecondBuilder = PrimitiveBuilder<TimestampNanosecondType>;
+
+/// A 32-bit date array builder.
 pub type Date32Builder = PrimitiveBuilder<Date32Type>;
+/// A 64-bit date array builder.
 pub type Date64Builder = PrimitiveBuilder<Date64Type>;
+
+/// A 32-bit elaspsed time in seconds array builder.
 pub type Time32SecondBuilder = PrimitiveBuilder<Time32SecondType>;
+/// A 32-bit elaspsed time in milliseconds array builder.
 pub type Time32MillisecondBuilder = PrimitiveBuilder<Time32MillisecondType>;
+/// A 64-bit elaspsed time in microseconds array builder.
 pub type Time64MicrosecondBuilder = PrimitiveBuilder<Time64MicrosecondType>;
+/// A 64-bit elaspsed time in nanoseconds array builder.
 pub type Time64NanosecondBuilder = PrimitiveBuilder<Time64NanosecondType>;
+
+/// A “calendar” interval in months array builder.
 pub type IntervalYearMonthBuilder = PrimitiveBuilder<IntervalYearMonthType>;
+/// A “calendar” interval in days and milliseconds array builder.
 pub type IntervalDayTimeBuilder = PrimitiveBuilder<IntervalDayTimeType>;
+/// A “calendar” interval in months, days, and nanoseconds array builder.
 pub type IntervalMonthDayNanoBuilder = PrimitiveBuilder<IntervalMonthDayNanoType>;
+
+/// An elapsed time in seconds array builder.
 pub type DurationSecondBuilder = PrimitiveBuilder<DurationSecondType>;
+/// An elapsed time in milliseconds array builder.
 pub type DurationMillisecondBuilder = PrimitiveBuilder<DurationMillisecondType>;
+/// An elapsed time in microseconds array builder.
 pub type DurationMicrosecondBuilder = PrimitiveBuilder<DurationMicrosecondType>;
+/// An elapsed time in nanoseconds array builder.
 pub type DurationNanosecondBuilder = PrimitiveBuilder<DurationNanosecondType>;
 
+/// A decimal 128 array builder
 pub type Decimal128Builder = PrimitiveBuilder<Decimal128Type>;
+/// A decimal 256 array builder
 pub type Decimal256Builder = PrimitiveBuilder<Decimal256Type>;
 
 ///  Array builder for fixed-width primitive types
@@ -120,6 +153,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         }
     }
 
+    /// Creates a new primitive array builder from buffers
     pub fn new_from_buffer(
         values_buffer: MutableBuffer,
         null_buffer: Option<MutableBuffer>,
@@ -157,6 +191,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         self.values_builder.advance(1);
     }
 
+    /// Appends `n` no. of null's into the builder
     #[inline]
     pub fn append_nulls(&mut self, n: usize) {
         self.null_buffer_builder.append_n_nulls(n);

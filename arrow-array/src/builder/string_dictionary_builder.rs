@@ -270,6 +270,7 @@ where
         Ok(key)
     }
 
+    /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
         self.keys_builder.append_null()

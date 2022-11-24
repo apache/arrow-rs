@@ -91,7 +91,7 @@ impl BooleanArray {
         self.data.is_empty()
     }
 
-    // Returns a new boolean array builder
+    /// Returns a new boolean array builder
     pub fn builder(capacity: usize) -> BooleanBuilder {
         BooleanBuilder::with_capacity(capacity)
     }
