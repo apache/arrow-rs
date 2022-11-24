@@ -303,6 +303,26 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
 
             Box::new(move |i, j| left.value(i).cmp(right.value(j)))
         }
+        (Struct(f), Struct(_)) => {
+            let left = as_struct_array(left);
+            let right = as_struct_array(right);
+
+            let comparators = (0..f.len())
+                .map(|idx| {
+                    build_compare(left.column(idx).as_ref(), right.column(idx).as_ref())
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            Box::new(move |i, j| {
+                for c in &comparators {
+                    match c(i, j) {
+                        Ordering::Equal => {}
+                        r => return r,
+                    }
+                }
+                Ordering::Equal
+            })
+        }
         (lhs, _) => {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "The data type type {:?} has no natural order",
@@ -318,6 +338,7 @@ pub mod tests {
     use crate::array::{FixedSizeBinaryArray, Float64Array, Int32Array};
     use crate::error::Result;
     use std::cmp::Ordering;
+    use std::sync::Arc;
 
     #[test]
     fn test_fixed_size_binary() -> Result<()> {
@@ -455,5 +476,33 @@ pub mod tests {
         assert_eq!(Ordering::Greater, (cmp)(3, 1));
         assert_eq!(Ordering::Greater, (cmp)(3, 2));
         Ok(())
+    }
+
+    #[test]
+    fn test_struct() {
+        let a_field = Field::new("a", DataType::Int32, false);
+        let b_field = Field::new("b", DataType::Utf8, false);
+
+        let a = Int32Array::from(vec![1_i32, 0, 2, 5]);
+        let b = StringArray::from(vec!["hello", "a", "b", "cd"]);
+        let s1 = StructArray::from(vec![
+            (a_field.clone(), Arc::new(a) as ArrayRef),
+            (b_field.clone(), Arc::new(b) as ArrayRef),
+        ]);
+
+        let a = Int32Array::from(vec![1_i32, 0, 2, 2]);
+        let b = StringArray::from(vec!["hello", "b", "bb", "cd"]);
+        let s2 = StructArray::from(vec![
+            (a_field, Arc::new(a) as ArrayRef),
+            (b_field, Arc::new(b) as ArrayRef),
+        ]);
+
+        let compare = build_compare(&s1, &s2).unwrap();
+
+        assert_eq!(Ordering::Equal, compare(0, 0));
+        assert_eq!(Ordering::Less, compare(1, 1));
+        assert_eq!(Ordering::Less, compare(2, 2));
+        assert_eq!(Ordering::Greater, compare(3, 3));
+        assert_eq!(Ordering::Less, compare(1, 0));
     }
 }
