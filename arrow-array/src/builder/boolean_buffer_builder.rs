@@ -41,14 +41,14 @@ impl BooleanBufferBuilder {
         Self { buffer, len }
     }
 
-    #[inline]
     /// Returns the length of the buffer
+    #[inline]
     pub fn len(&self) -> usize {
         self.len
     }
 
-    #[inline]
     /// Sets a bit in the buffer at `index`
+    #[inline]
     pub fn set_bit(&mut self, index: usize, v: bool) {
         if v {
             bit_util::set_bit(self.buffer.as_mut(), index);
@@ -57,26 +57,26 @@ impl BooleanBufferBuilder {
         }
     }
 
-    #[inline]
     /// Gets a bit in the buffer at `index`
+    #[inline]
     pub fn get_bit(&self, index: usize) -> bool {
         bit_util::get_bit(self.buffer.as_slice(), index)
     }
 
-    #[inline]
     /// Returns true if empty
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    #[inline]
     /// Returns the capacity of the buffer
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.buffer.capacity() * 8
     }
 
-    #[inline]
     /// Advances the buffer by `additional` bits
+    #[inline]
     pub fn advance(&mut self, additional: usize) {
         let new_len = self.len + additional;
         let new_len_bytes = bit_util::ceil(new_len, 8);
@@ -108,8 +108,8 @@ impl BooleanBufferBuilder {
         self.len = len;
     }
 
-    #[inline]
     /// Appends a boolean `v` into the buffer
+    #[inline]
     pub fn append(&mut self, v: bool) {
         self.advance(1);
         if v {
@@ -117,8 +117,8 @@ impl BooleanBufferBuilder {
         }
     }
 
-    #[inline]
     /// Appends n `additional` bits of value `v` into the buffer
+    #[inline]
     pub fn append_n(&mut self, additional: usize, v: bool) {
         self.advance(additional);
         if additional > 0 && v {
@@ -129,8 +129,8 @@ impl BooleanBufferBuilder {
         }
     }
 
-    #[inline]
     /// Appends a slice of booleans into the buffer
+    #[inline]
     pub fn append_slice(&mut self, slice: &[bool]) {
         let additional = slice.len();
         self.advance(additional);
@@ -168,8 +168,8 @@ impl BooleanBufferBuilder {
         self.buffer.as_slice()
     }
 
-    #[inline]
     /// Creates a [`Buffer`]
+    #[inline]
     pub fn finish(&mut self) -> Buffer {
         let buf = std::mem::replace(&mut self.buffer, MutableBuffer::new(0));
         self.len = 0;

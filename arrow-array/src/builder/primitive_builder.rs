@@ -186,8 +186,8 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         self.values_builder.advance(1);
     }
 
-    #[inline]
     /// Appends `n` no. of null's into the builder
+    #[inline]
     pub fn append_nulls(&mut self, n: usize) {
         self.null_buffer_builder.append_n_nulls(n);
         self.values_builder.advance(n);

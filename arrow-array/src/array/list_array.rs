@@ -29,7 +29,7 @@ use std::any::Any;
 
 /// trait declaring an offset size, relevant for i32 vs i64 array types.
 pub trait OffsetSizeTrait: ArrowNativeType + std::ops::AddAssign + Integer {
-    /// True for 64 bit size and false for 32 bit size
+    /// True for 64 bit offset size and false for 32 bit offset size
     const IS_LARGE: bool;
     /// Prefix for the offset size
     const PREFIX: &'static str;

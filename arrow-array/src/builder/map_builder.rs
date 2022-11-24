@@ -26,6 +26,8 @@ use std::sync::Arc;
 /// Creates a new `MapBuilder`
 /// ```
 /// use arrow_array::builder::{MapBuilder, Int32Builder, StringBuilder};
+/// use arrow_array::{StringArray, Int32Array};
+/// use std::sync::Arc;
 ///
 /// let string_builder = StringBuilder::new();
 /// let int_builder = Int32Builder::with_capacity(4);
@@ -49,6 +51,14 @@ use std::sync::Arc;
 /// builder.append(true).unwrap();
 ///
 /// let arr = builder.finish();
+/// assert_eq!(
+///     *arr.values(),
+///     Int32Array::from(vec![Some(1), Some(2), None, Some(4)])
+/// );
+/// assert_eq!(
+///     *arr.keys(),
+///     StringArray::from(vec![Some("joe"), None, None, Some("mark")])
+/// );
 /// ```
 #[derive(Debug)]
 pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
@@ -62,11 +72,11 @@ pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
 /// Contains details of the mapping
 #[derive(Debug, Clone)]
 pub struct MapFieldNames {
-    /// [`Field`] name for map
+    /// [`Field`] name for map entries
     pub entry: String,
-    /// [`Field`] name for key
+    /// [`Field`] name for map key
     pub key: String,
-    /// [`Field`] name for value
+    /// [`Field`] name for map value
     pub value: String,
 }
 
@@ -111,12 +121,12 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         }
     }
 
-    /// Returns the keys of the map
+    /// Returns the key array builder of the map
     pub fn keys(&mut self) -> &mut K {
         &mut self.key_builder
     }
 
-    /// Returns the values of the map
+    /// Returns the value array builder of the map
     pub fn values(&mut self) -> &mut V {
         &mut self.value_builder
     }

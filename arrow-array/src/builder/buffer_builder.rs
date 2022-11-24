@@ -21,78 +21,78 @@ use std::marker::PhantomData;
 
 use crate::types::*;
 
-/// A signed 8-bit integer buffer builder.
+/// Buffer builder for signed 8-bit integer type.
 pub type Int8BufferBuilder = BufferBuilder<i8>;
-/// A signed 16-bit integer buffer builder.
+/// Buffer builder for signed 16-bit integer type.
 pub type Int16BufferBuilder = BufferBuilder<i16>;
-/// A signed 32-bit integer buffer builder.
+/// Buffer builder for signed 32-bit integer type.
 pub type Int32BufferBuilder = BufferBuilder<i32>;
-/// A signed 64-bit integer buffer builder.
+/// Buffer builder for signed 64-bit integer type.
 pub type Int64BufferBuilder = BufferBuilder<i64>;
-/// An usigned 8-bit integer buffer builder.
+/// Buffer builder for usigned 8-bit integer type.
 pub type UInt8BufferBuilder = BufferBuilder<u8>;
-/// An usigned 16-bit integer buffer builder.
+/// Buffer builder for usigned 16-bit integer type.
 pub type UInt16BufferBuilder = BufferBuilder<u16>;
-/// An usigned 32-bit integer buffer builder.
+/// Buffer builder for usigned 32-bit integer type.
 pub type UInt32BufferBuilder = BufferBuilder<u32>;
-/// An usigned 64-bit integer buffer builder.
+/// Buffer builder for usigned 64-bit integer type.
 pub type UInt64BufferBuilder = BufferBuilder<u64>;
-/// A 32-bit floating point buffer builder.
+/// Buffer builder for 32-bit floating point type.
 pub type Float32BufferBuilder = BufferBuilder<f32>;
-/// A 64-bit floating point buffer builder.
+/// Buffer builder for 64-bit floating point type.
 pub type Float64BufferBuilder = BufferBuilder<f64>;
 
-/// A timestamp second array builder.
+/// Buffer builder for timestamp type of second unit.
 pub type TimestampSecondBufferBuilder =
     BufferBuilder<<TimestampSecondType as ArrowPrimitiveType>::Native>;
-/// A timestamp millisecond array builder.
+/// Buffer builder for timestamp type of millisecond unit.
 pub type TimestampMillisecondBufferBuilder =
     BufferBuilder<<TimestampMillisecondType as ArrowPrimitiveType>::Native>;
-/// A timestamp microsecond array builder.
+/// Buffer builder for timestamp type of microsecond unit.
 pub type TimestampMicrosecondBufferBuilder =
     BufferBuilder<<TimestampMicrosecondType as ArrowPrimitiveType>::Native>;
-/// A timestamp nanosecond array builder.
+/// Buffer builder for timestamp type of nanosecond unit.
 pub type TimestampNanosecondBufferBuilder =
     BufferBuilder<<TimestampNanosecondType as ArrowPrimitiveType>::Native>;
 
-/// A 32-bit date array builder.
+/// Buffer builder for 32-bit date type.
 pub type Date32BufferBuilder = BufferBuilder<<Date32Type as ArrowPrimitiveType>::Native>;
-/// A 64-bit date array builder.
+/// Buffer builder for 64-bit date type.
 pub type Date64BufferBuilder = BufferBuilder<<Date64Type as ArrowPrimitiveType>::Native>;
 
-/// A 32-bit elaspsed time in seconds array builder.
+/// Buffer builder for 32-bit elaspsed time since midnight of second unit.
 pub type Time32SecondBufferBuilder =
     BufferBuilder<<Time32SecondType as ArrowPrimitiveType>::Native>;
-/// A 32-bit elaspsed time in milliseconds array builder.   
+/// Buffer builder for 32-bit elaspsed time since midnight of millisecond unit.   
 pub type Time32MillisecondBufferBuilder =
     BufferBuilder<<Time32MillisecondType as ArrowPrimitiveType>::Native>;
-/// A 64-bit elaspsed time in microseconds array builder.
+/// Buffer builder for 64-bit elaspsed time since midnight of microsecond unit.
 pub type Time64MicrosecondBufferBuilder =
     BufferBuilder<<Time64MicrosecondType as ArrowPrimitiveType>::Native>;
-/// A 64-bit elaspsed time in nanoseconds array builder.
+/// Buffer builder for 64-bit elaspsed time since midnight of nanosecond unit.
 pub type Time64NanosecondBufferBuilder =
     BufferBuilder<<Time64NanosecondType as ArrowPrimitiveType>::Native>;
 
-/// A “calendar” interval in months array builder.
+/// Buffer builder for “calendar” interval in months.
 pub type IntervalYearMonthBufferBuilder =
     BufferBuilder<<IntervalYearMonthType as ArrowPrimitiveType>::Native>;
-/// A “calendar” interval in days and milliseconds array builder.
+/// Buffer builder for “calendar” interval in days and milliseconds.
 pub type IntervalDayTimeBufferBuilder =
     BufferBuilder<<IntervalDayTimeType as ArrowPrimitiveType>::Native>;
-/// A “calendar” interval in months, days, and nanoseconds array builder.
+/// Buffer builder “calendar” interval in months, days, and nanoseconds.
 pub type IntervalMonthDayNanoBufferBuilder =
     BufferBuilder<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native>;
 
-/// An elapsed time in seconds array builder.
+/// Buffer builder for elaspsed time of second unit.
 pub type DurationSecondBufferBuilder =
     BufferBuilder<<DurationSecondType as ArrowPrimitiveType>::Native>;
-/// An elapsed time in milliseconds array builder.
+/// Buffer builder for elaspsed time of milliseconds unit.
 pub type DurationMillisecondBufferBuilder =
     BufferBuilder<<DurationMillisecondType as ArrowPrimitiveType>::Native>;
-/// An elapsed time in microseconds array builder.
+/// Buffer builder for elaspsed time of microseconds unit.
 pub type DurationMicrosecondBufferBuilder =
     BufferBuilder<<DurationMicrosecondType as ArrowPrimitiveType>::Native>;
-/// An elapsed time in nanoseconds array builder.
+/// Buffer builder for elaspsed time of nanoseconds unit.
 pub type DurationNanosecondBufferBuilder =
     BufferBuilder<<DurationNanosecondType as ArrowPrimitiveType>::Native>;
 
