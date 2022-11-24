@@ -29,12 +29,23 @@ use arrow_schema::{ArrowError, DataType};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
+/// A mapping from a dictionary array's keys to normalized keys
+pub struct DictionaryMapping<'a>(Vec<Option<&'a [u8]>>);
+
+impl<'a> std::ops::Index<usize> for DictionaryMapping<'a> {
+    type Output = Option<&'a [u8]>;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.0.index(index)
+    }
+}
+
 /// Computes the dictionary mapping for the given dictionary values
-pub fn compute_dictionary_mapping(
-    interner: &mut OrderPreservingInterner,
+pub fn compute_dictionary_mapping<'a>(
+    interner: &'a mut OrderPreservingInterner,
     values: &ArrayRef,
-) -> Vec<Option<Interned>> {
-    downcast_primitive_array! {
+) -> DictionaryMapping<'a> {
+    let mapping = downcast_primitive_array! {
         values => interner
             .intern(values.iter().map(|x| x.map(|x| x.encode()))),
         DataType::Binary => {
@@ -54,7 +65,16 @@ pub fn compute_dictionary_mapping(
             interner.intern(iter)
         }
         _ => unreachable!(),
-    }
+    };
+
+    let mapping: Vec<_> = mapping
+        .into_iter()
+        .map(|maybe_interned| {
+            maybe_interned.map(|interned| interner.normalized_key(interned))
+        })
+        .collect();
+
+    DictionaryMapping(mapping)
 }
 
 /// Dictionary types are encoded as
@@ -64,7 +84,7 @@ pub fn compute_dictionary_mapping(
 pub fn encode_dictionary<K: ArrowDictionaryKeyType>(
     out: &mut Rows,
     column: &DictionaryArray<K>,
-    normalized_keys: &[Option<&[u8]>],
+    normalized_keys: &DictionaryMapping<'_>,
     opts: SortOptions,
 ) {
     for (offset, k) in out.offsets.iter_mut().skip(1).zip(column.keys()) {

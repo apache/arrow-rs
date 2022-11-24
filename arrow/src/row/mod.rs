@@ -130,6 +130,7 @@
 
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
+use std::slice::Iter;
 use std::sync::Arc;
 
 use arrow_array::cast::*;
@@ -139,7 +140,7 @@ use crate::compute::SortOptions;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::row::dictionary::{
-    compute_dictionary_mapping, decode_dictionary, encode_dictionary,
+    compute_dictionary_mapping, decode_dictionary, encode_dictionary, DictionaryMapping,
 };
 use crate::row::fixed::{decode_bool, decode_primitive};
 use crate::row::interner::OrderPreservingInterner;
@@ -335,8 +336,8 @@ mod variable;
 #[derive(Debug)]
 pub struct RowConverter {
     fields: Arc<[SortField]>,
-    /// interning state for column `i`, if column`i` is a dictionary
-    interners: Vec<Option<Box<OrderPreservingInterner>>>,
+    /// Interning state for dictionary columns, in depth-first order
+    interners: Vec<OrderPreservingInterner>,
 }
 
 /// Configure the data type and sort order for a given column
@@ -378,7 +379,13 @@ impl RowConverter {
             )));
         }
 
-        let interners = (0..fields.len()).map(|_| None).collect();
+        let mut interners = vec![];
+        for field in &fields {
+            if matches!(field.data_type, DataType::Dictionary(_, _)) {
+                interners.push(OrderPreservingInterner::default())
+            }
+        }
+
         Ok(Self {
             fields: fields.into(),
             interners,
@@ -406,34 +413,26 @@ impl RowConverter {
             )));
         }
 
+        let mut interners = self.interners.iter_mut();
         let dictionaries = columns
             .iter()
-            .zip(&mut self.interners)
             .zip(self.fields.iter())
-            .map(|((column, interner), field)| {
+            .flat_map(|(column, field)| {
                 if !column.data_type().equals_datatype(&field.data_type) {
-                    return Err(ArrowError::InvalidArgumentError(format!(
+                    return Some(Err(ArrowError::InvalidArgumentError(format!(
                         "RowConverter column schema mismatch, expected {} got {}",
                         field.data_type,
                         column.data_type()
-                    )));
+                    ))));
                 }
 
                 let values = downcast_dictionary_array! {
                     column => column.values(),
-                    _ => return Ok(None)
+                    _ => return None
                 };
 
-                let interner = interner.get_or_insert_with(Default::default);
-
-                let mapping: Vec<_> = compute_dictionary_mapping(interner, values)
-                    .into_iter()
-                    .map(|maybe_interned| {
-                        maybe_interned.map(|interned| interner.normalized_key(interned))
-                    })
-                    .collect();
-
-                Ok(Some(mapping))
+                let interner = interners.next().unwrap();
+                Some(Ok(compute_dictionary_mapping(interner, values)))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -444,11 +443,10 @@ impl RowConverter {
         };
         let mut rows = new_empty_rows(columns, &dictionaries, config);
 
-        for ((column, field), dictionary) in
-            columns.iter().zip(self.fields.iter()).zip(dictionaries)
-        {
+        let mut dictionaries = dictionaries.iter();
+        for (column, field) in columns.iter().zip(self.fields.iter()) {
             // We encode a column at a time to minimise dispatch overheads
-            encode_column(&mut rows, column, field.options, dictionary.as_deref())
+            encode_column(&mut rows, column, field.options, &mut dictionaries)
         }
 
         if cfg!(debug_assertions) {
@@ -483,16 +481,14 @@ impl RowConverter {
             })
             .collect();
 
+        let mut interners = self.interners.iter();
         self.fields
             .iter()
-            .zip(&self.interners)
-            .map(|(field, interner)| {
+            .map(|field| {
                 // SAFETY
                 // We have validated that the rows came from this [`RowConverter`]
                 // and therefore must be valid
-                unsafe {
-                    decode_column(field, &mut rows, interner.as_deref(), validate_utf8)
-                }
+                unsafe { decode_column(field, &mut rows, &mut interners, validate_utf8) }
             })
             .collect()
     }
@@ -510,11 +506,7 @@ impl RowConverter {
             + self.fields.iter().map(|x| x.size()).sum::<usize>()
             + self.interners.capacity()
                 * std::mem::size_of::<Option<Box<OrderPreservingInterner>>>()
-            + self
-                .interners
-                .iter()
-                .filter_map(|x| x.as_ref().map(|x| x.size()))
-                .sum::<usize>()
+            + self.interners.iter().map(|x| x.size()).sum::<usize>()
     }
 }
 
@@ -788,7 +780,7 @@ fn null_sentinel(options: SortOptions) -> u8 {
 /// Computes the length of each encoded [`Rows`] and returns an empty [`Rows`]
 fn new_empty_rows(
     cols: &[ArrayRef],
-    dictionaries: &[Option<Vec<Option<&[u8]>>>],
+    dictionaries: &[DictionaryMapping<'_>],
     config: RowConfig,
 ) -> Rows {
     use fixed::FixedLengthEncoding;
@@ -796,7 +788,8 @@ fn new_empty_rows(
     let num_rows = cols.first().map(|x| x.len()).unwrap_or(0);
     let mut lengths = vec![0; num_rows];
 
-    for (array, dict) in cols.iter().zip(dictionaries) {
+    let mut dictionaries = dictionaries.iter();
+    for array in cols {
         downcast_primitive_array! {
             array => lengths.iter_mut().for_each(|x| *x += fixed::encoded_len(array)),
             DataType::Null => {},
@@ -823,7 +816,7 @@ fn new_empty_rows(
                 }),
             DataType::Dictionary(_, _) => downcast_dictionary_array! {
                 array => {
-                    let dict = dict.as_ref().unwrap();
+                    let dict = dictionaries.next().unwrap();
                     for (v, length) in array.keys().iter().zip(lengths.iter_mut()) {
                         match v.and_then(|v| dict[v as usize]) {
                             Some(k) => *length += k.len() + 1,
@@ -875,7 +868,7 @@ fn encode_column(
     out: &mut Rows,
     column: &ArrayRef,
     opts: SortOptions,
-    dictionary: Option<&[Option<&[u8]>]>,
+    dictionaries: &mut Iter<'_, DictionaryMapping<'_>>,
 ) {
     downcast_primitive_array! {
         column => fixed::encode(out, column, opts),
@@ -900,7 +893,7 @@ fn encode_column(
             opts,
         ),
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
-            column => encode_dictionary(out, column, dictionary.unwrap(), opts),
+            column => encode_dictionary(out, column, dictionaries.next().unwrap(), opts),
             _ => unreachable!()
         }
         _ => unreachable!(),
@@ -921,7 +914,7 @@ macro_rules! decode_primitive_helper {
 unsafe fn decode_column(
     field: &SortField,
     rows: &mut [&[u8]],
-    interner: Option<&OrderPreservingInterner>,
+    interners: &mut Iter<'_, OrderPreservingInterner>,
     validate_utf8: bool,
 ) -> Result<ArrayRef> {
     let options = field.options;
@@ -936,49 +929,49 @@ unsafe fn decode_column(
         DataType::LargeUtf8 => Arc::new(decode_string::<i64>(rows, options, validate_utf8)),
         DataType::Dictionary(k, v) => match k.as_ref() {
             DataType::Int8 => Arc::new(decode_dictionary::<Int8Type>(
-                interner.unwrap(),
+                interners.next().unwrap(),
                 v.as_ref(),
                 options,
                 rows,
             )?),
             DataType::Int16 => Arc::new(decode_dictionary::<Int16Type>(
-                interner.unwrap(),
+                interners.next().unwrap(),
                 v.as_ref(),
                 options,
                 rows,
             )?),
             DataType::Int32 => Arc::new(decode_dictionary::<Int32Type>(
-                interner.unwrap(),
+                interners.next().unwrap(),
                 v.as_ref(),
                 options,
                 rows,
             )?),
             DataType::Int64 => Arc::new(decode_dictionary::<Int64Type>(
-                interner.unwrap(),
+                interners.next().unwrap(),
                 v.as_ref(),
                 options,
                 rows,
             )?),
             DataType::UInt8 => Arc::new(decode_dictionary::<UInt8Type>(
-                interner.unwrap(),
+                interners.next().unwrap(),
                 v.as_ref(),
                 options,
                 rows,
             )?),
             DataType::UInt16 => Arc::new(decode_dictionary::<UInt16Type>(
-                interner.unwrap(),
+                interners.next().unwrap(),
                 v.as_ref(),
                 options,
                 rows,
             )?),
             DataType::UInt32 => Arc::new(decode_dictionary::<UInt32Type>(
-                interner.unwrap(),
+                interners.next().unwrap(),
                 v.as_ref(),
                 options,
                 rows,
             )?),
             DataType::UInt64 => Arc::new(decode_dictionary::<UInt64Type>(
-                interner.unwrap(),
+                interners.next().unwrap(),
                 v.as_ref(),
                 options,
                 rows,
