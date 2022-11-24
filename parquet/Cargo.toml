@@ -92,6 +92,16 @@ experimental = []
 # Enable async APIs
 async = ["futures", "tokio"]
 
+[[example]]
+name = "read_parquet"
+required-features = ["arrow"]
+path = "./examples/read_parquet.rs"
+
+[[example]]
+name = "async_read_parquet"
+required-features = ["arrow", "async"]
+path = "./examples/async_read_parquet.rs"
+
 [[test]]
 name = "arrow_writer_layout"
 required-features = ["arrow"]
