@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::basic::Encoding;
+use crate::bloom_filter::Sbbf;
 use crate::column::writer::{
     compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max,
     update_min,
@@ -24,6 +25,7 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::DataType;
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
 use crate::errors::{ParquetError, Result};
+use crate::file::properties::BloomFilterProperties;
 use crate::file::properties::{EnabledStatistics, WriterProperties};
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
 use crate::util::memory::ByteBufferPtr;
@@ -115,6 +117,11 @@ pub trait ColumnValueEncoder {
 
     /// Flush the next data page for this column chunk
     fn flush_data_page(&mut self) -> Result<DataPageValues<Self::T>>;
+
+    /// Flushes bloom filter if enabled and returns it, otherwise returns `None`. Subsequent writes
+    /// will *not* be tracked by the bloom filter as it is empty since. This should be called once
+    /// near the end of encoding.
+    fn flush_bloom_filter(&mut self) -> Option<Sbbf>;
 }
 
 pub struct ColumnValueEncoderImpl<T: DataType> {
@@ -125,6 +132,7 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     statistics_enabled: EnabledStatistics,
     min_value: Option<T::T>,
     max_value: Option<T::T>,
+    bloom_filter: Option<Sbbf>,
 }
 
 impl<T: DataType> ColumnValueEncoderImpl<T> {
@@ -133,6 +141,13 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             if let Some((min, max)) = self.min_max(slice, None) {
                 update_min(&self.descr, &min, &mut self.min_value);
                 update_max(&self.descr, &max, &mut self.max_value);
+            }
+        }
+
+        // encode the values into bloom filter if enabled
+        if let Some(bloom_filter) = &mut self.bloom_filter {
+            for value in slice {
+                bloom_filter.insert(value);
             }
         }
 
@@ -161,6 +176,10 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         }
     }
 
+    fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
+        self.bloom_filter.take()
+    }
+
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {
         let dict_supported = props.dictionary_enabled(descr.path())
             && has_dictionary_support(T::get_physical_type(), props);
@@ -175,12 +194,25 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
         let statistics_enabled = props.statistics_enabled(descr.path());
 
+        let bloom_filter_enabled = props.bloom_filter_enabled(descr.path());
+        let bloom_filter =
+            if let Some(BloomFilterProperties { ndv, fpp }) = bloom_filter_enabled {
+                Sbbf::new_with_ndv_fpp(ndv, fpp)
+                    .map_err(|e| {
+                        eprintln!("invalid bloom filter properties: {}", e);
+                    })
+                    .ok()
+            } else {
+                None
+            };
+
         Ok(Self {
             encoder,
             dict_encoder,
             descr: descr.clone(),
             num_values: 0,
             statistics_enabled,
+            bloom_filter,
             min_value: None,
             max_value: None,
         })
