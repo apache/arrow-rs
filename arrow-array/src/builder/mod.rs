@@ -28,12 +28,10 @@ mod fixed_size_binary_builder;
 pub use fixed_size_binary_builder::*;
 mod fixed_size_list_builder;
 pub use fixed_size_list_builder::*;
-mod generic_binary_builder;
-pub use generic_binary_builder::*;
+mod generic_bytes_builder;
+pub use generic_bytes_builder::*;
 mod generic_list_builder;
 pub use generic_list_builder::*;
-mod generic_string_builder;
-pub use generic_string_builder::*;
 mod map_builder;
 pub use map_builder::*;
 mod null_buffer_builder;
@@ -108,6 +106,9 @@ pub trait ArrayBuilder: Any + Send {
 
     /// Builds the array
     fn finish(&mut self) -> ArrayRef;
+
+    /// Builds the array without resetting the underlying builder.
+    fn finish_cloned(&self) -> ArrayRef;
 
     /// Returns the builder as a non-mutable `Any` reference.
     ///

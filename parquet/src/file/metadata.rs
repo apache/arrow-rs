@@ -236,7 +236,7 @@ pub struct RowGroupMetaData {
 }
 
 impl RowGroupMetaData {
-    /// Returns builer for row group metadata.
+    /// Returns builder for row group metadata.
     pub fn builder(schema_descr: SchemaDescPtr) -> RowGroupMetaDataBuilder {
         RowGroupMetaDataBuilder::new(schema_descr)
     }

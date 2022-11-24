@@ -64,6 +64,7 @@
 //!     .build();
 //! ```
 
+use paste::paste;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::basic::{Compression, Encoding};
@@ -82,6 +83,9 @@ const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
 const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
 const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
 const DEFAULT_CREATED_BY: &str = env!("PARQUET_CREATED_BY");
+const DEFAULT_BLOOM_FILTER_ENABLED: bool = false;
+const DEFAULT_BLOOM_FILTER_MAX_BYTES: u32 = 1024 * 1024;
+const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.01;
 
 /// Parquet writer version.
 ///
@@ -123,6 +127,26 @@ pub struct WriterProperties {
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
+}
+
+macro_rules! def_col_property_getter {
+    ($field:ident, $field_type:ty) => {
+        pub fn $field(&self, col: &ColumnPath) -> Option<$field_type> {
+            self.column_properties
+                .get(col)
+                .and_then(|c| c.$field())
+                .or_else(|| self.default_column_properties.$field())
+        }
+    };
+    ($field:ident, $field_type:ty, $default_val:expr) => {
+        pub fn $field(&self, col: &ColumnPath) -> $field_type {
+            self.column_properties
+                .get(col)
+                .and_then(|c| c.$field())
+                .or_else(|| self.default_column_properties.$field())
+                .unwrap_or($default_val)
+        }
+    };
 }
 
 impl WriterProperties {
@@ -255,6 +279,11 @@ impl WriterProperties {
             .or_else(|| self.default_column_properties.max_statistics_size())
             .unwrap_or(DEFAULT_MAX_STATISTICS_SIZE)
     }
+
+    def_col_property_getter!(bloom_filter_enabled, bool, DEFAULT_BLOOM_FILTER_ENABLED);
+    def_col_property_getter!(bloom_filter_fpp, f64, DEFAULT_BLOOM_FILTER_FPP);
+    def_col_property_getter!(bloom_filter_ndv, u64);
+    def_col_property_getter!(bloom_filter_max_bytes, u32, DEFAULT_BLOOM_FILTER_MAX_BYTES);
 }
 
 /// Writer properties builder.
@@ -272,6 +301,52 @@ pub struct WriterPropertiesBuilder {
     sorting_columns: Option<Vec<SortingColumn>>,
 }
 
+macro_rules! def_opt_field_setter {
+    ($field: ident, $type: ty) => {
+        paste! {
+            pub fn [<set_ $field>](&mut self, value: $type) -> &mut Self {
+                self.$field = Some(value);
+                self
+            }
+        }
+    };
+    ($field: ident, $type: ty, $min_value:expr, $max_value:expr) => {
+        paste! {
+            pub fn [<set_ $field>](&mut self, value: $type) -> &mut Self {
+                if ($min_value..=$max_value).contains(&value) {
+                    self.$field = Some(value);
+                } else {
+                    self.$field = None
+                }
+                self
+            }
+        }
+    };
+}
+
+macro_rules! def_opt_field_getter {
+    ($field: ident, $type: ty) => {
+        paste! {
+            #[doc = "Returns " $field " if set."]
+            pub fn $field(&self) -> Option<$type> {
+                self.$field
+            }
+        }
+    };
+}
+
+macro_rules! def_per_col_setter {
+    ($field:ident, $field_type:ty) => {
+        paste! {
+            #[doc = "Sets " $field " for a column. Takes precedence over globally defined settings."]
+            pub fn [<set_column_ $field>](mut self, col: ColumnPath, value: $field_type) -> Self {
+                self.get_mut_props(col).[<set_ $field>](value);
+                self
+            }
+        }
+    }
+}
+
 impl WriterPropertiesBuilder {
     /// Returns default state of the builder.
     fn with_defaults() -> Self {
@@ -284,7 +359,7 @@ impl WriterPropertiesBuilder {
             writer_version: DEFAULT_WRITER_VERSION,
             created_by: DEFAULT_CREATED_BY.to_string(),
             key_value_metadata: None,
-            default_column_properties: ColumnProperties::new(),
+            default_column_properties: Default::default(),
             column_properties: HashMap::new(),
             sorting_columns: None,
         }
@@ -439,7 +514,7 @@ impl WriterPropertiesBuilder {
     fn get_mut_props(&mut self, col: ColumnPath) -> &mut ColumnProperties {
         self.column_properties
             .entry(col)
-            .or_insert_with(ColumnProperties::new)
+            .or_insert_with(Default::default)
     }
 
     /// Sets encoding for a column.
@@ -492,6 +567,11 @@ impl WriterPropertiesBuilder {
         self.get_mut_props(col).set_max_statistics_size(value);
         self
     }
+
+    def_per_col_setter!(bloom_filter_enabled, bool);
+    def_per_col_setter!(bloom_filter_fpp, f64);
+    def_per_col_setter!(bloom_filter_max_bytes, u32);
+    def_per_col_setter!(bloom_filter_ndv, u64);
 }
 
 /// Controls the level of statistics to be computed by the writer
@@ -515,27 +595,24 @@ impl Default for EnabledStatistics {
 ///
 /// If a field is `None`, it means that no specific value has been set for this column,
 /// so some subsequent or default value must be used.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 struct ColumnProperties {
     encoding: Option<Encoding>,
     codec: Option<Compression>,
     dictionary_enabled: Option<bool>,
     statistics_enabled: Option<EnabledStatistics>,
     max_statistics_size: Option<usize>,
+    /// bloom filter enabled
+    bloom_filter_enabled: Option<bool>,
+    /// bloom filter expected number of distinct values
+    bloom_filter_ndv: Option<u64>,
+    /// bloom filter false positive probability
+    bloom_filter_fpp: Option<f64>,
+    /// bloom filter max number of bytes
+    bloom_filter_max_bytes: Option<u32>,
 }
 
 impl ColumnProperties {
-    /// Initialise column properties with default values.
-    fn new() -> Self {
-        Self {
-            encoding: None,
-            codec: None,
-            dictionary_enabled: None,
-            statistics_enabled: None,
-            max_statistics_size: None,
-        }
-    }
-
     /// Sets encoding for this column.
     ///
     /// If dictionary is not enabled, this is treated as a primary encoding for a column.
@@ -572,6 +649,11 @@ impl ColumnProperties {
         self.max_statistics_size = Some(value);
     }
 
+    def_opt_field_setter!(bloom_filter_enabled, bool);
+    def_opt_field_setter!(bloom_filter_fpp, f64, 0.0, 1.0);
+    def_opt_field_setter!(bloom_filter_max_bytes, u32);
+    def_opt_field_setter!(bloom_filter_ndv, u64);
+
     /// Returns optional encoding for this column.
     fn encoding(&self) -> Option<Encoding> {
         self.encoding
@@ -599,10 +681,17 @@ impl ColumnProperties {
     fn max_statistics_size(&self) -> Option<usize> {
         self.max_statistics_size
     }
+
+    def_opt_field_getter!(bloom_filter_enabled, bool);
+    def_opt_field_getter!(bloom_filter_fpp, f64);
+    def_opt_field_getter!(bloom_filter_max_bytes, u32);
+    def_opt_field_getter!(bloom_filter_ndv, u64);
 }
 
 /// Reference counted reader properties.
 pub type ReaderPropertiesPtr = Arc<ReaderProperties>;
+
+const DEFAULT_READ_BLOOM_FILTER: bool = false;
 
 /// Reader properties.
 ///
@@ -610,6 +699,7 @@ pub type ReaderPropertiesPtr = Arc<ReaderProperties>;
 /// Use [`ReaderPropertiesBuilder`] to assemble these properties.
 pub struct ReaderProperties {
     codec_options: CodecOptions,
+    read_bloom_filter: bool,
 }
 
 impl ReaderProperties {
@@ -622,11 +712,17 @@ impl ReaderProperties {
     pub(crate) fn codec_options(&self) -> &CodecOptions {
         &self.codec_options
     }
+
+    /// Returns whether to read bloom filter
+    pub(crate) fn read_bloom_filter(&self) -> bool {
+        self.read_bloom_filter
+    }
 }
 
 /// Reader properties builder.
 pub struct ReaderPropertiesBuilder {
     codec_options_builder: CodecOptionsBuilder,
+    read_bloom_filter: Option<bool>,
 }
 
 /// Reader properties builder.
@@ -635,6 +731,7 @@ impl ReaderPropertiesBuilder {
     fn with_defaults() -> Self {
         Self {
             codec_options_builder: CodecOptionsBuilder::default(),
+            read_bloom_filter: None,
         }
     }
 
@@ -642,6 +739,9 @@ impl ReaderPropertiesBuilder {
     pub fn build(self) -> ReaderProperties {
         ReaderProperties {
             codec_options: self.codec_options_builder.build(),
+            read_bloom_filter: self
+                .read_bloom_filter
+                .unwrap_or(DEFAULT_READ_BLOOM_FILTER),
         }
     }
 
@@ -657,6 +757,17 @@ impl ReaderPropertiesBuilder {
         self.codec_options_builder = self
             .codec_options_builder
             .set_backward_compatible_lz4(value);
+        self
+    }
+
+    /// Enable/disable reading bloom filter
+    ///
+    /// If reading bloom filter is enabled, bloom filter will be read from the file.
+    /// If reading bloom filter is disabled, bloom filter will not be read from the file.
+    ///
+    /// By default bloom filter is set to be read.
+    pub fn set_read_bloom_filter(mut self, value: bool) -> Self {
+        self.read_bloom_filter = Some(value);
         self
     }
 }
@@ -700,6 +811,13 @@ mod tests {
         assert_eq!(
             props.max_statistics_size(&ColumnPath::from("col")),
             DEFAULT_MAX_STATISTICS_SIZE
+        );
+        assert!(!props.bloom_filter_enabled(&ColumnPath::from("col")));
+        assert_eq!(props.bloom_filter_fpp(&ColumnPath::from("col")), 0.01);
+        assert_eq!(props.bloom_filter_ndv(&ColumnPath::from("col")), None);
+        assert_eq!(
+            props.bloom_filter_max_bytes(&ColumnPath::from("col")),
+            1024 * 1024
         );
     }
 
@@ -784,6 +902,10 @@ mod tests {
                 EnabledStatistics::Chunk,
             )
             .set_column_max_statistics_size(ColumnPath::from("col"), 123)
+            .set_column_bloom_filter_enabled(ColumnPath::from("col"), true)
+            .set_column_bloom_filter_ndv(ColumnPath::from("col"), 100)
+            .set_column_bloom_filter_fpp(ColumnPath::from("col"), 0.1)
+            .set_column_bloom_filter_max_bytes(ColumnPath::from("col"), 1000)
             .build();
 
         assert_eq!(props.writer_version(), WriterVersion::PARQUET_2_0);
@@ -858,6 +980,7 @@ mod tests {
             .build();
 
         assert_eq!(props.codec_options(), &codec_options);
+        assert!(!props.read_bloom_filter());
     }
 
     #[test]

@@ -2518,4 +2518,38 @@ mod tests {
         assert_eq!(actual.num_rows(), 1);
         assert_eq!(actual.column(0), &expected.column(0).slice(1, 1));
     }
+
+    #[test]
+    fn test_arbitary_decimal() {
+        let values = [1, 2, 3, 4, 5, 6, 7, 8];
+        let decimals_19_0 = Decimal128Array::from_iter_values(values)
+            .with_precision_and_scale(19, 0)
+            .unwrap();
+        let decimals_12_0 = Decimal128Array::from_iter_values(values)
+            .with_precision_and_scale(12, 0)
+            .unwrap();
+        let decimals_17_10 = Decimal128Array::from_iter_values(values)
+            .with_precision_and_scale(17, 10)
+            .unwrap();
+
+        let written = RecordBatch::try_from_iter([
+            ("decimal_values_19_0", Arc::new(decimals_19_0) as ArrayRef),
+            ("decimal_values_12_0", Arc::new(decimals_12_0) as ArrayRef),
+            ("decimal_values_17_10", Arc::new(decimals_17_10) as ArrayRef),
+        ])
+        .unwrap();
+
+        let mut buffer = Vec::with_capacity(1024);
+        let mut writer =
+            ArrowWriter::try_new(&mut buffer, written.schema(), None).unwrap();
+        writer.write(&written).unwrap();
+        writer.close().unwrap();
+
+        let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 8)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(&written.slice(0, 8), &read[0]);
+    }
 }

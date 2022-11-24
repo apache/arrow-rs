@@ -233,7 +233,14 @@ pub fn parquet_to_arrow_field(parquet_column: &ColumnDescriptor) -> Result<Field
 }
 
 pub fn decimal_length_from_precision(precision: u8) -> usize {
-    (10.0_f64.powi(precision as i32).log2() / 8.0).ceil() as usize
+    // digits = floor(log_10(2^(8*n - 1) - 1))  // definition in parquet's logical types
+    // ceil(digits) = log10(2^(8*n - 1) - 1)
+    // 10^ceil(digits) = 2^(8*n - 1) - 1
+    // 10^ceil(digits) + 1 = 2^(8*n - 1)
+    // log2(10^ceil(digits) + 1) = (8*n - 1)
+    // log2(10^ceil(digits) + 1) + 1 = 8*n
+    // (log2(10^ceil(a) + 1) + 1) / 8 = n
+    (((10.0_f64.powi(precision as i32) + 1.0).log2() + 1.0) / 8.0).ceil() as usize
 }
 
 /// Convert an arrow field to a parquet `Type`

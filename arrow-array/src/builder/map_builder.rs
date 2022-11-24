@@ -18,6 +18,7 @@
 use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::{Array, ArrayRef, MapArray, StructArray};
+use arrow_buffer::Buffer;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
 use std::any::Any;
@@ -153,18 +154,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         let len = self.len();
 
         // Build the keys
-        let keys_arr = self
-            .key_builder
-            .as_any_mut()
-            .downcast_mut::<K>()
-            .unwrap()
-            .finish();
-        let values_arr = self
-            .value_builder
-            .as_any_mut()
-            .downcast_mut::<V>()
-            .unwrap()
-            .finish();
+        let keys_arr = self.key_builder.finish();
+        let values_arr = self.value_builder.finish();
 
         let keys_field = Field::new(
             self.field_names.key.as_str(),
@@ -198,6 +189,49 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
 
         MapArray::from(array_data)
     }
+
+    /// Builds the [`MapArray`] without resetting the builder.
+    pub fn finish_cloned(&self) -> MapArray {
+        let len = self.len();
+
+        // Build the keys
+        let keys_arr = self.key_builder.finish_cloned();
+        let values_arr = self.value_builder.finish_cloned();
+
+        let keys_field = Field::new(
+            self.field_names.key.as_str(),
+            keys_arr.data_type().clone(),
+            false, // always nullable
+        );
+        let values_field = Field::new(
+            self.field_names.value.as_str(),
+            values_arr.data_type().clone(),
+            true,
+        );
+
+        let struct_array =
+            StructArray::from(vec![(keys_field, keys_arr), (values_field, values_arr)]);
+
+        let offset_buffer = Buffer::from_slice_ref(self.offsets_builder.as_slice());
+        let null_bit_buffer = self
+            .null_buffer_builder
+            .as_slice()
+            .map(Buffer::from_slice_ref);
+        let map_field = Box::new(Field::new(
+            self.field_names.entry.as_str(),
+            struct_array.data_type().clone(),
+            false, // always non-nullable
+        ));
+        let array_data = ArrayData::builder(DataType::Map(map_field, false)) // TODO: support sorted keys
+            .len(len)
+            .add_buffer(offset_buffer)
+            .add_child_data(struct_array.into_data())
+            .null_bit_buffer(null_bit_buffer);
+
+        let array_data = unsafe { array_data.build_unchecked() };
+
+        MapArray::from(array_data)
+    }
 }
 
 impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
@@ -211,6 +245,11 @@ impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
 
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
+    }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> ArrayRef {
+        Arc::new(self.finish_cloned())
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -274,15 +313,15 @@ mod tests {
         let expected_string_data = ArrayData::builder(DataType::Utf8)
             .len(4)
             .null_bit_buffer(Some(Buffer::from(&[9_u8])))
-            .add_buffer(Buffer::from_slice_ref(&[0, 3, 3, 3, 7]))
+            .add_buffer(Buffer::from_slice_ref([0, 3, 3, 3, 7]))
             .add_buffer(Buffer::from_slice_ref(b"joemark"))
             .build()
             .unwrap();
 
         let expected_int_data = ArrayData::builder(DataType::Int32)
             .len(4)
-            .null_bit_buffer(Some(Buffer::from_slice_ref(&[11_u8])))
-            .add_buffer(Buffer::from_slice_ref(&[1, 2, 0, 4]))
+            .null_bit_buffer(Some(Buffer::from_slice_ref([11_u8])))
+            .add_buffer(Buffer::from_slice_ref([1, 2, 0, 4]))
             .build()
             .unwrap();
 

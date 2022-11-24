@@ -57,7 +57,8 @@ seq-macro = { version = "0.3", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
 tokio = { version = "1.0", optional = true, default-features = false, features = ["macros", "rt", "io-util"] }
 hashbrown = { version = "0.13", default-features = false }
-twox-hash = { version = "1.6", optional = true }
+twox-hash = { version = "1.6", default-features = false }
+paste = { version = "1.0" }
 
 [dev-dependencies]
 base64 = { version = "0.13", default-features = false, features = ["std"] }
@@ -77,7 +78,7 @@ rand = { version = "0.8", default-features = false, features = ["std", "std_rng"
 all-features = true
 
 [features]
-default = ["arrow", "bloom", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
+default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
 # Enable arrow reader/writer APIs
 arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-cast", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
 # Enable CLI tools
@@ -90,8 +91,6 @@ test_common = ["arrow/test_utils"]
 experimental = []
 # Enable async APIs
 async = ["futures", "tokio"]
-# Bloomfilter
-bloom = ["twox-hash"]
 
 [[test]]
 name = "arrow_writer_layout"
@@ -115,7 +114,7 @@ required-features = ["arrow", "cli"]
 
 [[bin]]
 name = "parquet-show-bloom-filter"
-required-features = ["cli", "bloom"]
+required-features = ["cli"]
 
 [[bench]]
 name = "arrow_writer"
