@@ -204,6 +204,7 @@ pub type UInt64DictionaryArray = DictionaryArray<UInt64Type>;
 ///    .collect();
 /// assert_eq!(&array, &expected);
 /// ```
+#[derive(Clone)]
 pub struct DictionaryArray<K: ArrowPrimitiveType> {
     /// Data of this dictionary. Note that this is _not_ compatible with the C Data interface,
     /// as, in the current implementation, `values` below are the first child of this struct.
