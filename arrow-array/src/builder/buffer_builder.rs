@@ -21,47 +21,78 @@ use std::marker::PhantomData;
 
 use crate::types::*;
 
+/// Buffer builder for signed 8-bit integer type.
 pub type Int8BufferBuilder = BufferBuilder<i8>;
+/// Buffer builder for signed 16-bit integer type.
 pub type Int16BufferBuilder = BufferBuilder<i16>;
+/// Buffer builder for signed 32-bit integer type.
 pub type Int32BufferBuilder = BufferBuilder<i32>;
+/// Buffer builder for signed 64-bit integer type.
 pub type Int64BufferBuilder = BufferBuilder<i64>;
+/// Buffer builder for usigned 8-bit integer type.
 pub type UInt8BufferBuilder = BufferBuilder<u8>;
+/// Buffer builder for usigned 16-bit integer type.
 pub type UInt16BufferBuilder = BufferBuilder<u16>;
+/// Buffer builder for usigned 32-bit integer type.
 pub type UInt32BufferBuilder = BufferBuilder<u32>;
+/// Buffer builder for usigned 64-bit integer type.
 pub type UInt64BufferBuilder = BufferBuilder<u64>;
+/// Buffer builder for 32-bit floating point type.
 pub type Float32BufferBuilder = BufferBuilder<f32>;
+/// Buffer builder for 64-bit floating point type.
 pub type Float64BufferBuilder = BufferBuilder<f64>;
 
+/// Buffer builder for timestamp type of second unit.
 pub type TimestampSecondBufferBuilder =
     BufferBuilder<<TimestampSecondType as ArrowPrimitiveType>::Native>;
+/// Buffer builder for timestamp type of millisecond unit.
 pub type TimestampMillisecondBufferBuilder =
     BufferBuilder<<TimestampMillisecondType as ArrowPrimitiveType>::Native>;
+/// Buffer builder for timestamp type of microsecond unit.
 pub type TimestampMicrosecondBufferBuilder =
     BufferBuilder<<TimestampMicrosecondType as ArrowPrimitiveType>::Native>;
+/// Buffer builder for timestamp type of nanosecond unit.
 pub type TimestampNanosecondBufferBuilder =
     BufferBuilder<<TimestampNanosecondType as ArrowPrimitiveType>::Native>;
+
+/// Buffer builder for 32-bit date type.
 pub type Date32BufferBuilder = BufferBuilder<<Date32Type as ArrowPrimitiveType>::Native>;
+/// Buffer builder for 64-bit date type.
 pub type Date64BufferBuilder = BufferBuilder<<Date64Type as ArrowPrimitiveType>::Native>;
+
+/// Buffer builder for 32-bit elaspsed time since midnight of second unit.
 pub type Time32SecondBufferBuilder =
     BufferBuilder<<Time32SecondType as ArrowPrimitiveType>::Native>;
+/// Buffer builder for 32-bit elaspsed time since midnight of millisecond unit.   
 pub type Time32MillisecondBufferBuilder =
     BufferBuilder<<Time32MillisecondType as ArrowPrimitiveType>::Native>;
+/// Buffer builder for 64-bit elaspsed time since midnight of microsecond unit.
 pub type Time64MicrosecondBufferBuilder =
     BufferBuilder<<Time64MicrosecondType as ArrowPrimitiveType>::Native>;
+/// Buffer builder for 64-bit elaspsed time since midnight of nanosecond unit.
 pub type Time64NanosecondBufferBuilder =
     BufferBuilder<<Time64NanosecondType as ArrowPrimitiveType>::Native>;
+
+/// Buffer builder for “calendar” interval in months.
 pub type IntervalYearMonthBufferBuilder =
     BufferBuilder<<IntervalYearMonthType as ArrowPrimitiveType>::Native>;
+/// Buffer builder for “calendar” interval in days and milliseconds.
 pub type IntervalDayTimeBufferBuilder =
     BufferBuilder<<IntervalDayTimeType as ArrowPrimitiveType>::Native>;
+/// Buffer builder “calendar” interval in months, days, and nanoseconds.
 pub type IntervalMonthDayNanoBufferBuilder =
     BufferBuilder<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native>;
+
+/// Buffer builder for elaspsed time of second unit.
 pub type DurationSecondBufferBuilder =
     BufferBuilder<<DurationSecondType as ArrowPrimitiveType>::Native>;
+/// Buffer builder for elaspsed time of milliseconds unit.
 pub type DurationMillisecondBufferBuilder =
     BufferBuilder<<DurationMillisecondType as ArrowPrimitiveType>::Native>;
+/// Buffer builder for elaspsed time of microseconds unit.
 pub type DurationMicrosecondBufferBuilder =
     BufferBuilder<<DurationMicrosecondType as ArrowPrimitiveType>::Native>;
+/// Buffer builder for elaspsed time of nanoseconds unit.
 pub type DurationNanosecondBufferBuilder =
     BufferBuilder<<DurationNanosecondType as ArrowPrimitiveType>::Native>;
 
@@ -124,6 +155,7 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
         }
     }
 
+    /// Creates a new builder from a [`MutableBuffer`]
     pub fn new_from_buffer(buffer: MutableBuffer) -> Self {
         let buffer_len = buffer.len();
         Self {

@@ -28,12 +28,10 @@ mod fixed_size_binary_builder;
 pub use fixed_size_binary_builder::*;
 mod fixed_size_list_builder;
 pub use fixed_size_list_builder::*;
-mod generic_binary_builder;
-pub use generic_binary_builder::*;
+mod generic_bytes_builder;
+pub use generic_bytes_builder::*;
 mod generic_list_builder;
 pub use generic_list_builder::*;
-mod generic_string_builder;
-pub use generic_string_builder::*;
 mod map_builder;
 pub use map_builder::*;
 mod null_buffer_builder;
@@ -109,6 +107,9 @@ pub trait ArrayBuilder: Any + Send {
     /// Builds the array
     fn finish(&mut self) -> ArrayRef;
 
+    /// Builds the array without resetting the underlying builder.
+    fn finish_cloned(&self) -> ArrayRef;
+
     /// Returns the builder as a non-mutable `Any` reference.
     ///
     /// This is most useful when one wants to call non-mutable APIs on a specific builder
@@ -127,11 +128,17 @@ pub trait ArrayBuilder: Any + Send {
     fn into_box_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
+/// A list array builder with i32 offsets
 pub type ListBuilder<T> = GenericListBuilder<i32, T>;
+/// A list array builder with i64 offsets
 pub type LargeListBuilder<T> = GenericListBuilder<i64, T>;
 
+/// A binary array builder with i32 offsets
 pub type BinaryBuilder = GenericBinaryBuilder<i32>;
+/// A binary array builder with i64 offsets
 pub type LargeBinaryBuilder = GenericBinaryBuilder<i64>;
 
+/// A string array builder with i32 offsets
 pub type StringBuilder = GenericStringBuilder<i32>;
+/// A string array builder with i64 offsets
 pub type LargeStringBuilder = GenericStringBuilder<i64>;

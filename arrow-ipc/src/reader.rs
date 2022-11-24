@@ -525,7 +525,7 @@ fn get_aligned_buffer<T>(buffer: &Buffer, length: usize) -> Buffer {
     if align_offset != 0 {
         let len_in_bytes = (length * std::mem::size_of::<T>()).min(buffer.len());
         let slice = &buffer.as_slice()[0..len_in_bytes];
-        Buffer::from_slice_ref(&slice)
+        Buffer::from_slice_ref(slice)
     } else {
         buffer.clone()
     }
@@ -1282,9 +1282,7 @@ mod tests {
 
         let array8_values = ArrayData::builder(DataType::Int32)
             .len(9)
-            .add_buffer(Buffer::from_slice_ref(&[
-                40, 41, 42, 43, 44, 45, 46, 47, 48,
-            ]))
+            .add_buffer(Buffer::from_slice_ref([40, 41, 42, 43, 44, 45, 46, 47, 48]))
             .build()
             .unwrap();
         let array8_data = ArrayData::builder(schema.field(8).data_type().clone())
@@ -1593,7 +1591,7 @@ mod tests {
             false,
         );
 
-        let entry_offsets = Buffer::from_slice_ref(&[0, 2, 4, 6]);
+        let entry_offsets = Buffer::from_slice_ref([0, 2, 4, 6]);
         let map_data = ArrayData::builder(map_data_type)
             .len(3)
             .add_buffer(entry_offsets)

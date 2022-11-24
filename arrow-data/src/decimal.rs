@@ -18,6 +18,11 @@
 use arrow_buffer::i256;
 use arrow_schema::ArrowError;
 
+pub use arrow_schema::{
+    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
+    DECIMAL256_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
+};
+
 // MAX decimal256 value of little-endian format for each precision.
 // Each element is the max value of signed 256-bit integer for the specified precision which
 // is encoded to the 32-byte width format of little-endian.
@@ -638,8 +643,8 @@ pub(crate) const MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [i256; 76] = [
     ]),
 ];
 
-/// `MAX_DECIMAL_FOR_EACH_PRECISION[p]` holds the maximum `i128` value
-/// that can be stored in [arrow_schema::DataType::Decimal128] value of precision `p`
+/// `MAX_DECIMAL_FOR_EACH_PRECISION[p]` holds the maximum `i128` value that can
+/// be stored in [arrow_schema::DataType::Decimal128] value of precision `p`
 pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     9,
     99,
@@ -681,8 +686,8 @@ pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     99999999999999999999999999999999999999,
 ];
 
-/// `MIN_DECIMAL_FOR_EACH_PRECISION[p]` holds the minimum `i128` value
-/// that can be stored in a [arrow_schema::DataType::Decimal128] value of precision `p`
+/// `MIN_DECIMAL_FOR_EACH_PRECISION[p]` holds the minimum `i128` value that can
+/// be stored in a [arrow_schema::DataType::Decimal128] value of precision `p`
 pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     -9,
     -99,
@@ -723,22 +728,6 @@ pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     -9999999999999999999999999999999999999,
     -99999999999999999999999999999999999999,
 ];
-
-/// The maximum precision for [arrow_schema::DataType::Decimal128] values
-pub const DECIMAL128_MAX_PRECISION: u8 = 38;
-
-/// The maximum scale for [arrow_schema::DataType::Decimal128] values
-pub const DECIMAL128_MAX_SCALE: u8 = 38;
-
-/// The maximum precision for [arrow_schema::DataType::Decimal256] values
-pub const DECIMAL256_MAX_PRECISION: u8 = 76;
-
-/// The maximum scale for [arrow_schema::DataType::Decimal256] values
-pub const DECIMAL256_MAX_SCALE: u8 = 76;
-
-/// The default scale for [arrow_schema::DataType::Decimal128] and
-/// [arrow_schema::DataType::Decimal256] values
-pub const DECIMAL_DEFAULT_SCALE: u8 = 10;
 
 /// Validates that the specified `i128` value can be properly
 /// interpreted as a Decimal number with precision `precision`

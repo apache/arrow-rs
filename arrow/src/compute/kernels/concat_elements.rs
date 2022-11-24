@@ -50,10 +50,8 @@ pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
     let left_offsets = left.value_offsets();
     let right_offsets = right.value_offsets();
 
-    let left_buffer = left.value_data();
-    let right_buffer = right.value_data();
-    let left_values = left_buffer.as_slice();
-    let right_values = right_buffer.as_slice();
+    let left_values = left.value_data();
+    let right_values = right.value_data();
 
     let mut output_values = BufferBuilder::<u8>::new(
         left_values.len() + right_values.len()
@@ -115,14 +113,9 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
         size,
     )?;
 
-    let data_buffers = arrays
+    let data_values = arrays
         .iter()
         .map(|array| array.value_data())
-        .collect::<Vec<_>>();
-
-    let data_values = data_buffers
-        .iter()
-        .map(|buffer| buffer.as_slice())
         .collect::<Vec<_>>();
 
     let mut offsets = arrays

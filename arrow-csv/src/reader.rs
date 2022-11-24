@@ -721,7 +721,7 @@ fn build_decimal_array(
     rows: &[StringRecord],
     col_idx: usize,
     precision: u8,
-    scale: u8,
+    scale: i8,
 ) -> Result<ArrayRef, ArrowError> {
     let mut decimal_builder = Decimal128Builder::with_capacity(rows.len());
     for row in rows {
@@ -762,13 +762,13 @@ fn build_decimal_array(
 fn parse_decimal_with_parameter(
     s: &str,
     precision: u8,
-    scale: u8,
+    scale: i8,
 ) -> Result<i128, ArrowError> {
     if PARSE_DECIMAL_RE.is_match(s) {
         let mut offset = s.len();
         let len = s.len();
         let mut base = 1;
-        let scale_usize = usize::from(scale);
+        let scale_usize = usize::from(scale as u8);
 
         // handle the value after the '.' and meet the scale
         let delimiter_position = s.find('.');

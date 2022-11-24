@@ -116,10 +116,15 @@ impl<T: ArrayAccessor> ExactSizeIterator for ArrayIter<T> {}
 
 /// an iterator that returns Some(T) or None, that can be used on any PrimitiveArray
 pub type PrimitiveIter<'a, T> = ArrayIter<&'a PrimitiveArray<T>>;
+/// an iterator that returns Some(T) or None, that can be used on any BooleanArray
 pub type BooleanIter<'a> = ArrayIter<&'a BooleanArray>;
+/// an iterator that returns Some(T) or None, that can be used on any Utf8Array
 pub type GenericStringIter<'a, T> = ArrayIter<&'a GenericStringArray<T>>;
+/// an iterator that returns Some(T) or None, that can be used on any BinaryArray
 pub type GenericBinaryIter<'a, T> = ArrayIter<&'a GenericBinaryArray<T>>;
+/// an iterator that returns Some(T) or None, that can be used on any FixedSizeBinaryArray
 pub type FixedSizeBinaryIter<'a> = ArrayIter<&'a FixedSizeBinaryArray>;
+/// an iterator that returns Some(T) or None, that can be used on any ListArray
 pub type GenericListArrayIter<'a, O> = ArrayIter<&'a GenericListArray<O>>;
 
 #[cfg(test)]

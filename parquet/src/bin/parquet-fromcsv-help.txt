@@ -37,10 +37,10 @@ Options:
           [possible values: lf, crlf, cr]
 
   -e, --escape-char <ESCAPE_CHAR>
-          escape charactor
+          escape character
 
   -q, --quote-char <QUOTE_CHAR>
-          quate charactor
+          quote character
 
   -D, --double-quote <DOUBLE_QUOTE>
           double quote
@@ -57,6 +57,11 @@ Options:
 
   -m, --max-row-group-size <MAX_ROW_GROUP_SIZE>
           max row group size
+
+      --enable-bloom-filter <ENABLE_BLOOM_FILTER>
+          whether to enable bloom filter writing
+          
+          [possible values: true, false]
 
       --help
           display usage help

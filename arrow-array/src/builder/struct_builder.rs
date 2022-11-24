@@ -18,6 +18,7 @@
 use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::*;
 use crate::{Array, ArrayRef, StructArray};
+use arrow_buffer::Buffer;
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
 use std::any::Any;
@@ -61,6 +62,11 @@ impl ArrayBuilder for StructBuilder {
     /// Builds the array.
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
+    }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> ArrayRef {
+        Arc::new(self.finish_cloned())
     }
 
     /// Returns the builder as a non-mutable `Any` reference.
@@ -168,6 +174,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
 }
 
 impl StructBuilder {
+    /// Creates a new `StructBuilder`
     pub fn new(fields: Vec<Field>, field_builders: Vec<Box<dyn ArrayBuilder>>) -> Self {
         Self {
             fields,
@@ -176,6 +183,7 @@ impl StructBuilder {
         }
     }
 
+    /// Creates a new `StructBuilder` from vector of [`Field`] with `capacity`
     pub fn from_fields(fields: Vec<Field>, capacity: usize) -> Self {
         let mut builders = Vec::with_capacity(fields.len());
         for field in &fields {
@@ -220,6 +228,30 @@ impl StructBuilder {
         }
         let length = self.len();
         let null_bit_buffer = self.null_buffer_builder.finish();
+
+        let builder = ArrayData::builder(DataType::Struct(self.fields.clone()))
+            .len(length)
+            .child_data(child_data)
+            .null_bit_buffer(null_bit_buffer);
+
+        let array_data = unsafe { builder.build_unchecked() };
+        StructArray::from(array_data)
+    }
+
+    /// Builds the `StructArray` without resetting the builder.
+    pub fn finish_cloned(&self) -> StructArray {
+        self.validate_content();
+
+        let mut child_data = Vec::with_capacity(self.field_builders.len());
+        for f in &self.field_builders {
+            let arr = f.finish_cloned();
+            child_data.push(arr.data().clone());
+        }
+        let length = self.len();
+        let null_bit_buffer = self
+            .null_buffer_builder
+            .as_slice()
+            .map(Buffer::from_slice_ref);
 
         let builder = ArrayData::builder(DataType::Struct(self.fields.clone()))
             .len(length)
@@ -300,15 +332,15 @@ mod tests {
         let expected_string_data = ArrayData::builder(DataType::Utf8)
             .len(4)
             .null_bit_buffer(Some(Buffer::from(&[9_u8])))
-            .add_buffer(Buffer::from_slice_ref(&[0, 3, 3, 3, 7]))
+            .add_buffer(Buffer::from_slice_ref([0, 3, 3, 3, 7]))
             .add_buffer(Buffer::from_slice_ref(b"joemark"))
             .build()
             .unwrap();
 
         let expected_int_data = ArrayData::builder(DataType::Int32)
             .len(4)
-            .null_bit_buffer(Some(Buffer::from_slice_ref(&[11_u8])))
-            .add_buffer(Buffer::from_slice_ref(&[1, 2, 0, 4]))
+            .null_bit_buffer(Some(Buffer::from_slice_ref([11_u8])))
+            .add_buffer(Buffer::from_slice_ref([1, 2, 0, 4]))
             .build()
             .unwrap();
 
@@ -371,6 +403,64 @@ mod tests {
         let arr = builder.finish();
 
         assert_eq!(5, arr.len());
+        assert_eq!(0, builder.len());
+    }
+
+    #[test]
+    fn test_struct_array_builder_finish_cloned() {
+        let int_builder = Int32Builder::new();
+        let bool_builder = BooleanBuilder::new();
+
+        let mut fields = Vec::new();
+        let mut field_builders = Vec::new();
+        fields.push(Field::new("f1", DataType::Int32, false));
+        field_builders.push(Box::new(int_builder) as Box<dyn ArrayBuilder>);
+        fields.push(Field::new("f2", DataType::Boolean, false));
+        field_builders.push(Box::new(bool_builder) as Box<dyn ArrayBuilder>);
+
+        let mut builder = StructBuilder::new(fields, field_builders);
+        builder
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_slice(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        builder
+            .field_builder::<BooleanBuilder>(1)
+            .unwrap()
+            .append_slice(&[
+                false, true, false, true, false, true, false, true, false, true,
+            ]);
+
+        // Append slot values - all are valid.
+        for _ in 0..10 {
+            builder.append(true);
+        }
+
+        assert_eq!(10, builder.len());
+
+        let mut arr = builder.finish_cloned();
+
+        assert_eq!(10, arr.len());
+        assert_eq!(10, builder.len());
+
+        builder
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_slice(&[1, 3, 5, 7, 9]);
+        builder
+            .field_builder::<BooleanBuilder>(1)
+            .unwrap()
+            .append_slice(&[false, true, false, true, false]);
+
+        // Append slot values - all are valid.
+        for _ in 0..5 {
+            builder.append(true);
+        }
+
+        assert_eq!(15, builder.len());
+
+        arr = builder.finish();
+
+        assert_eq!(15, arr.len());
         assert_eq!(0, builder.len());
     }
 

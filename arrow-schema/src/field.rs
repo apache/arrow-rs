@@ -17,7 +17,7 @@
 
 use crate::error::ArrowError;
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use crate::datatype::DataType;
@@ -35,11 +35,7 @@ pub struct Field {
     dict_id: i64,
     dict_is_ordered: bool,
     /// A map of key-value pairs containing additional custom meta data.
-    #[cfg_attr(
-        feature = "serde",
-        serde(skip_serializing_if = "BTreeMap::is_empty", default)
-    )]
-    metadata: BTreeMap<String, String>,
+    metadata: HashMap<String, String>,
 }
 
 // Auto-derive `PartialEq` traits will pull `dict_id` and `dict_is_ordered`
@@ -68,9 +64,33 @@ impl Ord for Field {
     fn cmp(&self, other: &Self) -> Ordering {
         self.name
             .cmp(other.name())
-            .then(self.data_type.cmp(other.data_type()))
-            .then(self.nullable.cmp(&other.nullable))
-            .then(self.metadata.cmp(&other.metadata))
+            .then_with(|| self.data_type.cmp(other.data_type()))
+            .then_with(|| self.nullable.cmp(&other.nullable))
+            .then_with(|| {
+                // ensure deterministic key order
+                let mut keys: Vec<&String> =
+                    self.metadata.keys().chain(other.metadata.keys()).collect();
+                keys.sort();
+                for k in keys {
+                    match (self.metadata.get(k), other.metadata.get(k)) {
+                        (None, None) => {}
+                        (Some(_), None) => {
+                            return Ordering::Less;
+                        }
+                        (None, Some(_)) => {
+                            return Ordering::Greater;
+                        }
+                        (Some(v1), Some(v2)) => match v1.cmp(v2) {
+                            Ordering::Equal => {}
+                            other => {
+                                return other;
+                            }
+                        },
+                    }
+                }
+
+                Ordering::Equal
+            })
     }
 }
 
@@ -79,7 +99,14 @@ impl Hash for Field {
         self.name.hash(state);
         self.data_type.hash(state);
         self.nullable.hash(state);
-        self.metadata.hash(state);
+
+        // ensure deterministic key order
+        let mut keys: Vec<&String> = self.metadata.keys().collect();
+        keys.sort();
+        for k in keys {
+            k.hash(state);
+            self.metadata.get(k).expect("key valid").hash(state);
+        }
     }
 }
 
@@ -92,7 +119,7 @@ impl Field {
             nullable,
             dict_id: 0,
             dict_is_ordered: false,
-            metadata: BTreeMap::default(),
+            metadata: HashMap::default(),
         }
     }
 
@@ -110,29 +137,29 @@ impl Field {
             nullable,
             dict_id,
             dict_is_ordered,
-            metadata: BTreeMap::default(),
+            metadata: HashMap::default(),
         }
     }
 
     /// Sets the `Field`'s optional custom metadata.
     /// The metadata is set as `None` for empty map.
     #[inline]
-    pub fn set_metadata(&mut self, metadata: BTreeMap<String, String>) {
-        self.metadata = BTreeMap::default();
+    pub fn set_metadata(&mut self, metadata: HashMap<String, String>) {
+        self.metadata = HashMap::default();
         if !metadata.is_empty() {
             self.metadata = metadata;
         }
     }
 
     /// Sets the metadata of this `Field` to be `metadata` and returns self
-    pub fn with_metadata(mut self, metadata: BTreeMap<String, String>) -> Self {
+    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
         self.set_metadata(metadata);
         self
     }
 
     /// Returns the immutable reference to the `Field`'s optional custom metadata.
     #[inline]
-    pub const fn metadata(&self) -> &BTreeMap<String, String> {
+    pub const fn metadata(&self) -> &HashMap<String, String> {
         &self.metadata
     }
 
@@ -428,6 +455,21 @@ impl Field {
             }
         }
     }
+
+    /// Return size of this instance in bytes.
+    ///
+    /// Includes the size of `Self`.
+    pub fn size(&self) -> usize {
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.data_type)
+            + self.data_type.size()
+            + self.name.capacity()
+            + (std::mem::size_of::<(String, String)>() * self.metadata.capacity())
+            + self
+                .metadata
+                .iter()
+                .map(|(k, v)| k.capacity() + v.capacity())
+                .sum::<usize>()
+    }
 }
 
 // TODO: improve display with crate https://crates.io/crates/derive_more ?
@@ -546,9 +588,29 @@ mod test {
     }
 
     #[test]
+    fn test_field_comparison_metadata() {
+        let f1 = Field::new("x", DataType::Binary, false).with_metadata(HashMap::from([
+            (String::from("k1"), String::from("v1")),
+            (String::from("k2"), String::from("v2")),
+        ]));
+        let f2 = Field::new("x", DataType::Binary, false).with_metadata(HashMap::from([
+            (String::from("k1"), String::from("v1")),
+            (String::from("k3"), String::from("v3")),
+        ]));
+        let f3 = Field::new("x", DataType::Binary, false).with_metadata(HashMap::from([
+            (String::from("k1"), String::from("v1")),
+            (String::from("k3"), String::from("v4")),
+        ]));
+
+        assert!(f1.cmp(&f2).is_lt());
+        assert!(f2.cmp(&f3).is_lt());
+        assert!(f1.cmp(&f3).is_lt());
+    }
+
+    #[test]
     fn test_contains_reflexivity() {
         let mut field = Field::new("field1", DataType::Float16, false);
-        field.set_metadata(BTreeMap::from([
+        field.set_metadata(HashMap::from([
             (String::from("k0"), String::from("v0")),
             (String::from("k1"), String::from("v1")),
         ]));
@@ -560,14 +622,14 @@ mod test {
         let child_field = Field::new("child1", DataType::Float16, false);
 
         let mut field1 = Field::new("field1", DataType::Struct(vec![child_field]), false);
-        field1.set_metadata(BTreeMap::from([(String::from("k1"), String::from("v1"))]));
+        field1.set_metadata(HashMap::from([(String::from("k1"), String::from("v1"))]));
 
         let mut field2 = Field::new("field1", DataType::Struct(vec![]), true);
-        field2.set_metadata(BTreeMap::from([(String::from("k2"), String::from("v2"))]));
+        field2.set_metadata(HashMap::from([(String::from("k2"), String::from("v2"))]));
         field2.try_merge(&field1).unwrap();
 
         let mut field3 = Field::new("field1", DataType::Struct(vec![]), false);
-        field3.set_metadata(BTreeMap::from([(String::from("k3"), String::from("v3"))]));
+        field3.set_metadata(HashMap::from([(String::from("k3"), String::from("v3"))]));
         field3.try_merge(&field2).unwrap();
 
         assert!(field2.contains(&field1));
@@ -602,5 +664,38 @@ mod test {
 
         assert!(!field1.contains(&field2));
         assert!(!field2.contains(&field1));
+    }
+
+    #[cfg(feature = "serde")]
+    fn assert_binary_serde_round_trip(field: Field) {
+        let serialized = bincode::serialize(&field).unwrap();
+        let deserialized: Field = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(field, deserialized)
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_field_without_metadata_serde() {
+        let field = Field::new("name", DataType::Boolean, true);
+        assert_binary_serde_round_trip(field)
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_field_with_empty_metadata_serde() {
+        let field =
+            Field::new("name", DataType::Boolean, false).with_metadata(HashMap::new());
+
+        assert_binary_serde_round_trip(field)
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_field_with_nonempty_metadata_serde() {
+        let mut metadata = HashMap::new();
+        metadata.insert("hi".to_owned(), "".to_owned());
+        let field = Field::new("name", DataType::Boolean, false).with_metadata(metadata);
+
+        assert_binary_serde_round_trip(field)
     }
 }

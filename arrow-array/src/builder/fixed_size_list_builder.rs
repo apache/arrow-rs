@@ -18,12 +18,51 @@
 use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::ArrayBuilder;
 use crate::{ArrayRef, FixedSizeListArray};
+use arrow_buffer::Buffer;
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
 
 ///  Array builder for [`FixedSizeListArray`]
+/// ```
+/// use arrow_array::{builder::{Int32Builder, FixedSizeListBuilder}, Array, Int32Array};
+/// let values_builder = Int32Builder::new();
+/// let mut builder = FixedSizeListBuilder::new(values_builder, 3);
+///
+/// //  [[0, 1, 2], null, [3, null, 5], [6, 7, null]]
+/// builder.values().append_value(0);
+/// builder.values().append_value(1);
+/// builder.values().append_value(2);
+/// builder.append(true);
+/// builder.values().append_null();
+/// builder.values().append_null();
+/// builder.values().append_null();
+/// builder.append(false);
+/// builder.values().append_value(3);
+/// builder.values().append_null();
+/// builder.values().append_value(5);
+/// builder.append(true);
+/// builder.values().append_value(6);
+/// builder.values().append_value(7);
+/// builder.values().append_null();
+/// builder.append(true);
+/// let list_array = builder.finish();
+/// assert_eq!(
+///     *list_array.value(0),
+///     Int32Array::from(vec![Some(0), Some(1), Some(2)])
+/// );
+/// assert!(list_array.is_null(1));
+/// assert_eq!(
+///     *list_array.value(2),
+///     Int32Array::from(vec![Some(3), None, Some(5)])
+/// );
+/// assert_eq!(
+///     *list_array.value(3),
+///     Int32Array::from(vec![Some(6), Some(7), None])
+/// )
+/// ```
+///
 #[derive(Debug)]
 pub struct FixedSizeListBuilder<T: ArrayBuilder> {
     null_buffer_builder: NullBufferBuilder,
@@ -84,6 +123,11 @@ where
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
     }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> ArrayRef {
+        Arc::new(self.finish_cloned())
+    }
 }
 
 impl<T: ArrayBuilder> FixedSizeListBuilder<T>
@@ -98,6 +142,7 @@ where
         &mut self.values_builder
     }
 
+    /// Returns the length of the list
     pub fn value_length(&self) -> i32 {
         self.list_len
     }
@@ -111,16 +156,11 @@ where
     /// Builds the [`FixedSizeListBuilder`] and reset this builder.
     pub fn finish(&mut self) -> FixedSizeListArray {
         let len = self.len();
-        let values_arr = self
-            .values_builder
-            .as_any_mut()
-            .downcast_mut::<T>()
-            .unwrap()
-            .finish();
+        let values_arr = self.values_builder.finish();
         let values_data = values_arr.data();
 
-        assert!(
-            values_data.len() == len * self.list_len as usize,
+        assert_eq!(
+            values_data.len(), len * self.list_len as usize,
             "Length of the child array ({}) must be the multiple of the value length ({}) and the array length ({}).",
             values_data.len(),
             self.list_len,
@@ -128,6 +168,37 @@ where
         );
 
         let null_bit_buffer = self.null_buffer_builder.finish();
+        let array_data = ArrayData::builder(DataType::FixedSizeList(
+            Box::new(Field::new("item", values_data.data_type().clone(), true)),
+            self.list_len,
+        ))
+        .len(len)
+        .add_child_data(values_data.clone())
+        .null_bit_buffer(null_bit_buffer);
+
+        let array_data = unsafe { array_data.build_unchecked() };
+
+        FixedSizeListArray::from(array_data)
+    }
+
+    /// Builds the [`FixedSizeListBuilder`] without resetting the builder.
+    pub fn finish_cloned(&self) -> FixedSizeListArray {
+        let len = self.len();
+        let values_arr = self.values_builder.finish_cloned();
+        let values_data = values_arr.data();
+
+        assert_eq!(
+            values_data.len(), len * self.list_len as usize,
+            "Length of the child array ({}) must be the multiple of the value length ({}) and the array length ({}).",
+            values_data.len(),
+            self.list_len,
+            len,
+        );
+
+        let null_bit_buffer = self
+            .null_buffer_builder
+            .as_slice()
+            .map(Buffer::from_slice_ref);
         let array_data = ArrayData::builder(DataType::FixedSizeList(
             Box::new(Field::new("item", values_data.data_type().clone(), true)),
             self.list_len,
@@ -177,6 +248,48 @@ mod tests {
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(4, list_array.len());
         assert_eq!(1, list_array.null_count());
+        assert_eq!(6, list_array.value_offset(2));
+        assert_eq!(3, list_array.value_length());
+    }
+
+    #[test]
+    fn test_fixed_size_list_array_builder_finish_cloned() {
+        let values_builder = Int32Builder::new();
+        let mut builder = FixedSizeListBuilder::new(values_builder, 3);
+
+        //  [[0, 1, 2], null, [3, null, 5], [6, 7, null]]
+        builder.values().append_value(0);
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true);
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.append(false);
+        builder.values().append_value(3);
+        builder.values().append_null();
+        builder.values().append_value(5);
+        builder.append(true);
+        let mut list_array = builder.finish_cloned();
+
+        assert_eq!(DataType::Int32, list_array.value_type());
+        assert_eq!(3, list_array.len());
+        assert_eq!(1, list_array.null_count());
+        assert_eq!(3, list_array.value_length());
+
+        builder.values().append_value(6);
+        builder.values().append_value(7);
+        builder.values().append_null();
+        builder.append(true);
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.append(false);
+        list_array = builder.finish();
+
+        assert_eq!(DataType::Int32, list_array.value_type());
+        assert_eq!(5, list_array.len());
+        assert_eq!(2, list_array.null_count());
         assert_eq!(6, list_array.value_offset(2));
         assert_eq!(3, list_array.value_length());
     }

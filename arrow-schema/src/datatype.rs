@@ -190,14 +190,14 @@ pub enum DataType {
     /// * scale is the number of digits past the decimal
     ///
     /// For example the number 123.45 has precision 5 and scale 2.
-    Decimal128(u8, u8),
+    Decimal128(u8, i8),
     /// Exact 256-bit width decimal value with precision and scale
     ///
     /// * precision is the total number of digits
     /// * scale is the number of digits past the decimal
     ///
     /// For example the number 123.45 has precision 5 and scale 2.
-    Decimal256(u8, u8),
+    Decimal256(u8, i8),
     /// A Map is a logical nested type that is represented as
     ///
     /// `List<entries: Struct<key: K, value: V>>`
@@ -263,30 +263,13 @@ impl fmt::Display for DataType {
 
 impl DataType {
     /// Returns true if the type is primitive: (numeric, temporal).
+    #[inline]
     pub fn is_primitive(t: &DataType) -> bool {
-        use DataType::*;
-        matches!(
-            t,
-            Int8 | Int16
-                | Int32
-                | Int64
-                | UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Float32
-                | Float64
-                | Date32
-                | Date64
-                | Time32(_)
-                | Time64(_)
-                | Timestamp(_, _)
-                | Interval(_)
-                | Duration(_)
-        )
+        Self::is_numeric(t) || Self::is_temporal(t)
     }
 
-    /// Returns true if this type is numeric: (UInt*, Int*, or Float*).
+    /// Returns true if this type is numeric: (UInt*, Int*, Float*, Decimal*).
+    #[inline]
     pub fn is_numeric(t: &DataType) -> bool {
         use DataType::*;
         matches!(
@@ -299,12 +282,16 @@ impl DataType {
                 | Int16
                 | Int32
                 | Int64
+                | Float16
                 | Float32
                 | Float64
+                | Decimal128(_, _)
+                | Decimal256(_, _)
         )
     }
 
     /// Returns true if this type is temporal: (Date*, Time*, Duration, or Interval).
+    #[inline]
     pub fn is_temporal(t: &DataType) -> bool {
         use DataType::*;
         matches!(
@@ -320,6 +307,7 @@ impl DataType {
     }
 
     /// Returns true if this type is valid as a dictionary key
+    #[inline]
     pub fn is_dictionary_key_type(t: &DataType) -> bool {
         use DataType::*;
         matches!(
@@ -372,7 +360,73 @@ impl DataType {
             _ => self == other,
         }
     }
+
+    /// Return size of this instance in bytes.
+    ///
+    /// Includes the size of `Self`.
+    pub fn size(&self) -> usize {
+        std::mem::size_of_val(self)
+            + match self {
+                DataType::Null
+                | DataType::Boolean
+                | DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Float16
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::Date32
+                | DataType::Date64
+                | DataType::Time32(_)
+                | DataType::Time64(_)
+                | DataType::Duration(_)
+                | DataType::Interval(_)
+                | DataType::Binary
+                | DataType::FixedSizeBinary(_)
+                | DataType::LargeBinary
+                | DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _) => 0,
+                DataType::Timestamp(_, s) => {
+                    s.as_ref().map(|s| s.capacity()).unwrap_or_default()
+                }
+                DataType::List(field)
+                | DataType::FixedSizeList(field, _)
+                | DataType::LargeList(field)
+                | DataType::Map(field, _) => field.size(),
+                DataType::Struct(fields) | DataType::Union(fields, _, _) => {
+                    fields
+                        .iter()
+                        .map(|field| field.size() - std::mem::size_of_val(field))
+                        .sum::<usize>()
+                        + (std::mem::size_of::<Field>() * fields.capacity())
+                }
+                DataType::Dictionary(dt1, dt2) => dt1.size() + dt2.size(),
+            }
+    }
 }
+
+/// The maximum precision for [DataType::Decimal128] values
+pub const DECIMAL128_MAX_PRECISION: u8 = 38;
+
+/// The maximum scale for [DataType::Decimal128] values
+pub const DECIMAL128_MAX_SCALE: i8 = 38;
+
+/// The maximum precision for [DataType::Decimal256] values
+pub const DECIMAL256_MAX_PRECISION: u8 = 76;
+
+/// The maximum scale for [DataType::Decimal256] values
+pub const DECIMAL256_MAX_SCALE: i8 = 76;
+
+/// The default scale for [DataType::Decimal128] and [DataType::Decimal256]
+/// values
+pub const DECIMAL_DEFAULT_SCALE: i8 = 10;
 
 #[cfg(test)]
 mod tests {
@@ -381,10 +435,10 @@ mod tests {
     #[test]
     #[cfg(feature = "serde")]
     fn serde_struct_type() {
-        use std::collections::BTreeMap;
+        use std::collections::HashMap;
 
         let kv_array = [("k".to_string(), "v".to_string())];
-        let field_metadata: BTreeMap<String, String> = kv_array.iter().cloned().collect();
+        let field_metadata: HashMap<String, String> = kv_array.iter().cloned().collect();
 
         // Non-empty map: should be converted as JSON obj { ... }
         let first_name =
@@ -392,7 +446,7 @@ mod tests {
 
         // Empty map: should be omitted.
         let last_name = Field::new("last_name", DataType::Utf8, false)
-            .with_metadata(BTreeMap::default());
+            .with_metadata(HashMap::default());
 
         let person = DataType::Struct(vec![
             first_name,
@@ -415,11 +469,11 @@ mod tests {
         assert_eq!(
             "{\"Struct\":[\
              {\"name\":\"first_name\",\"data_type\":\"Utf8\",\"nullable\":false,\"dict_id\":0,\"dict_is_ordered\":false,\"metadata\":{\"k\":\"v\"}},\
-             {\"name\":\"last_name\",\"data_type\":\"Utf8\",\"nullable\":false,\"dict_id\":0,\"dict_is_ordered\":false},\
+             {\"name\":\"last_name\",\"data_type\":\"Utf8\",\"nullable\":false,\"dict_id\":0,\"dict_is_ordered\":false,\"metadata\":{}},\
              {\"name\":\"address\",\"data_type\":{\"Struct\":\
-             [{\"name\":\"street\",\"data_type\":\"Utf8\",\"nullable\":false,\"dict_id\":0,\"dict_is_ordered\":false},\
-             {\"name\":\"zip\",\"data_type\":\"UInt16\",\"nullable\":false,\"dict_id\":0,\"dict_is_ordered\":false}\
-             ]},\"nullable\":false,\"dict_id\":0,\"dict_is_ordered\":false}]}",
+             [{\"name\":\"street\",\"data_type\":\"Utf8\",\"nullable\":false,\"dict_id\":0,\"dict_is_ordered\":false,\"metadata\":{}},\
+             {\"name\":\"zip\",\"data_type\":\"UInt16\",\"nullable\":false,\"dict_id\":0,\"dict_is_ordered\":false,\"metadata\":{}}\
+             ]},\"nullable\":false,\"dict_id\":0,\"dict_is_ordered\":false,\"metadata\":{}}]}",
             serialized
         );
 

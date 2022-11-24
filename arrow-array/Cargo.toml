@@ -48,7 +48,7 @@ ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] 
 arrow-buffer = { version = "27.0.0", path = "../arrow-buffer" }
 arrow-schema = { version = "27.0.0", path = "../arrow-schema" }
 arrow-data = { version = "27.0.0", path = "../arrow-data" }
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
 chrono-tz = { version = "0.8", optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }

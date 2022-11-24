@@ -418,15 +418,15 @@ mod tests {
         // Check data
         assert_eq!(
             union.data().child_data()[0].buffers()[0],
-            Buffer::from_slice_ref(&[1_i32, 4, 6])
+            Buffer::from_slice_ref([1_i32, 4, 6])
         );
         assert_eq!(
             union.data().child_data()[1].buffers()[0],
-            Buffer::from_slice_ref(&[2_i32, 7])
+            Buffer::from_slice_ref([2_i32, 7])
         );
         assert_eq!(
             union.data().child_data()[2].buffers()[0],
-            Buffer::from_slice_ref(&[3_i32, 5]),
+            Buffer::from_slice_ref([3_i32, 5]),
         );
 
         assert_eq!(expected_array_values.len(), union.len());
@@ -627,8 +627,8 @@ mod tests {
         let type_ids = [1_i8, 0, 0, 2, 0, 1];
         let value_offsets = [0_i32, 0, 1, 0, 2, 1];
 
-        let type_id_buffer = Buffer::from_slice_ref(&type_ids);
-        let value_offsets_buffer = Buffer::from_slice_ref(&value_offsets);
+        let type_id_buffer = Buffer::from_slice_ref(type_ids);
+        let value_offsets_buffer = Buffer::from_slice_ref(value_offsets);
 
         let children: Vec<(Field, Arc<dyn Array>)> = vec![
             (
@@ -650,14 +650,14 @@ mod tests {
         .unwrap();
 
         // Check type ids
-        assert_eq!(Buffer::from_slice_ref(&type_ids), array.data().buffers()[0]);
+        assert_eq!(Buffer::from_slice_ref(type_ids), array.data().buffers()[0]);
         for (i, id) in type_ids.iter().enumerate() {
             assert_eq!(id, &array.type_id(i));
         }
 
         // Check offsets
         assert_eq!(
-            Buffer::from_slice_ref(&value_offsets),
+            Buffer::from_slice_ref(value_offsets),
             array.data().buffers()[1]
         );
         for (i, id) in value_offsets.iter().enumerate() {
@@ -738,14 +738,14 @@ mod tests {
         // Check data
         assert_eq!(
             union.data().child_data()[0].buffers()[0],
-            Buffer::from_slice_ref(&[1_i32, 0, 0, 4, 0, 6, 0]),
+            Buffer::from_slice_ref([1_i32, 0, 0, 4, 0, 6, 0]),
         );
         assert_eq!(
-            Buffer::from_slice_ref(&[0_i32, 2_i32, 0, 0, 0, 0, 7]),
+            Buffer::from_slice_ref([0_i32, 2_i32, 0, 0, 0, 0, 7]),
             union.data().child_data()[1].buffers()[0]
         );
         assert_eq!(
-            Buffer::from_slice_ref(&[0_i32, 0, 3_i32, 0, 5, 0, 0]),
+            Buffer::from_slice_ref([0_i32, 0, 3_i32, 0, 5, 0, 0]),
             union.data().child_data()[2].buffers()[0]
         );
 
