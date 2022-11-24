@@ -32,10 +32,7 @@ macro_rules! make_string {
     ($array_type:ty, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
-        // SAFETY: This is safe because array_value_to_string(the macro caller) is already
-        // checking for is_null($row) which also acts like a bounds check. Hence we can
-        // directly call value_unchecked.
-        unsafe { Ok(array.value_unchecked($row).to_string()) }
+        Ok(array.value($row).to_string())
     }};
 }
 
@@ -46,10 +43,7 @@ macro_rules! make_string_interval_year_month {
             .downcast_ref::<array::IntervalYearMonthArray>()
             .unwrap();
 
-        // SAFETY: This is safe because array_value_to_string(the macro caller) is already
-        // checking for is_null($row) which also acts like a bounds check. Hence we can
-        // directly call value_unchecked.
-        let interval = unsafe { array.value_unchecked($row) as f64 };
+        let interval = array.value($row) as f64;
         let years = (interval / 12_f64).floor();
         let month = interval - (years * 12_f64);
 
@@ -67,10 +61,7 @@ macro_rules! make_string_interval_day_time {
             .downcast_ref::<array::IntervalDayTimeArray>()
             .unwrap();
 
-        // SAFETY: This is safe because array_value_to_string(the macro caller) is already
-        // checking for is_null($row) which also acts like a bounds check. Hence we can
-        // directly call value_unchecked.
-        let value: u64 = unsafe { array.value_unchecked($row) as u64 };
+        let value: u64 = array.value($row) as u64;
 
         let days_parts: i32 = ((value & 0xFFFFFFFF00000000) >> 32) as i32;
         let milliseconds_part: i32 = (value & 0xFFFFFFFF) as i32;
@@ -100,10 +91,7 @@ macro_rules! make_string_interval_month_day_nano {
             .downcast_ref::<array::IntervalMonthDayNanoArray>()
             .unwrap();
 
-        // SAFETY: This is safe because array_value_to_string(the macro caller) is already
-        // checking for is_null($row) which also acts like a bounds check. Hence we can
-        // directly call value_unchecked.
-        let value: u128 = unsafe { array.value_unchecked($row) as u128 };
+        let value: u128 = array.value($row) as u128;
 
         let months_part: i32 =
             ((value & 0xFFFFFFFF000000000000000000000000) >> 96) as i32;
@@ -133,13 +121,10 @@ macro_rules! make_string_date {
     ($array_type:ty, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
-        // We are skipping the null check because array_value_to_string(the macro caller) is already
-        // checking for is_null($row)
         Ok(array
             .value_as_date($row)
             .map(|d| d.to_string())
             .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
-
     }};
 }
 
@@ -147,13 +132,10 @@ macro_rules! make_string_time {
     ($array_type:ty, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
-        // We are skipping the null check because array_value_to_string(the macro caller) is already
-        // checking for is_null($row)
         Ok(array
             .value_as_time($row)
             .map(|d| d.to_string())
             .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
-
     }};
 }
 
@@ -161,13 +143,10 @@ macro_rules! make_string_datetime {
     ($array_type:ty, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
-        // We are skipping the null check because array_value_to_string(the macro caller) is already
-        // checking for is_null($row)
         Ok(array
             .value_as_datetime($row)
             .map(|d| format!("{:?}", d))
             .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
-
     }};
 }
 
@@ -175,8 +154,6 @@ macro_rules! make_string_datetime_with_tz {
     ($array_type:ty, $tz_string: ident, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
-        // We are skipping the null check because array_value_to_string(the macro caller) is already
-        // checking for is_null($row)
         let s = match $tz_string.parse::<Tz>() {
             Ok(tz) => array
                 .value_as_datetime_with_tz($row, tz)
@@ -199,13 +176,8 @@ macro_rules! make_string_hex {
 
         let mut tmp = "".to_string();
 
-        // SAFETY: This is safe because array_value_to_string(the macro caller) is already
-        // checking for is_null($row) which also acts like a bounds check. Hence we can
-        // directly call value_unchecked.
-        unsafe {
-            for character in array.value_unchecked($row) {
-                let _ = write!(tmp, "{:02x}", character);
-            }
+        for character in array.value($row) {
+            let _ = write!(tmp, "{:02x}", character);
         }
 
         Ok(tmp)
@@ -264,13 +236,10 @@ macro_rules! make_string_from_duration {
     ($array_type:ty, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
-        // We are skipping the null check because array_value_to_string(the macro caller) is already
-        // checking for is_null($row)
         Ok(array
             .value_as_duration($row)
             .map(|d| d.to_string())
             .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
-
     }};
 }
 
