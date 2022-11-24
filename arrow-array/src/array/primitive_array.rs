@@ -217,6 +217,7 @@ pub trait ArrowPrimitiveType: 'static {
 ///     assert_eq!(i + 1, arr.value(i as usize));
 /// }
 /// ```
+#[derive(Clone)]
 pub struct PrimitiveArray<T: ArrowPrimitiveType> {
     /// Underlying ArrayData
     /// # Safety

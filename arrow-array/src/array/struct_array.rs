@@ -50,6 +50,7 @@ use std::any::Any;
 /// assert_eq!(0, struct_array.null_count());
 /// assert_eq!(0, struct_array.offset());
 /// ```
+#[derive(Clone)]
 pub struct StructArray {
     data: ArrayData,
     pub(crate) boxed_fields: Vec<ArrayRef>,

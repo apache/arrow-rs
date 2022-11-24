@@ -36,6 +36,7 @@ use std::any::Any;
 /// [`LargeStringArray`]: crate::LargeStringArray
 /// [`BinaryArray`]: crate::BinaryArray
 /// [`LargeBinaryArray`]: crate::LargeBinaryArray
+#[derive(Clone)]
 pub struct GenericByteArray<T: ByteArrayType> {
     data: ArrayData,
     value_offsets: RawPtrBox<T::Offset>,

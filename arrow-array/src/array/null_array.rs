@@ -36,6 +36,7 @@ use std::any::Any;
 /// assert_eq!(array.len(), 10);
 /// assert_eq!(array.null_count(), 10);
 /// ```
+#[derive(Clone)]
 pub struct NullArray {
     data: ArrayData,
 }

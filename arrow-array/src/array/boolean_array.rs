@@ -63,6 +63,7 @@ use std::any::Any;
 ///     assert!(arr.is_valid(3));
 ///     assert_eq!(true, arr.value(3));
 /// ```
+#[derive(Clone)]
 pub struct BooleanArray {
     data: ArrayData,
     /// Pointer to the value array. The lifetime of this must be <= to the value buffer

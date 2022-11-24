@@ -21,6 +21,7 @@ use std::ptr::NonNull;
 /// self-reference a [arrow_buffer::Buffer] from
 /// [arrow_data::ArrayData], as a pointer to the beginning of its
 /// contents.
+#[derive(Copy, Clone)]
 pub(super) struct RawPtrBox<T> {
     ptr: NonNull<T>,
 }
