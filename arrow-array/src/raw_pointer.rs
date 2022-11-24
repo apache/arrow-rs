@@ -27,9 +27,7 @@ pub(super) struct RawPtrBox<T> {
 
 impl<T> Clone for RawPtrBox<T> {
     fn clone(&self) -> Self {
-        Self {
-            ptr: self.ptr.clone(),
-        }
+        Self { ptr: self.ptr }
     }
 }
 
