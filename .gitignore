@@ -92,3 +92,6 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
+# Python virtual env in parquet crate
+parquet/pytest/venv/
+__pycache__/

@@ -34,7 +34,11 @@
 //! ```
 
 use clap::Parser;
-use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::file::{
+    properties::ReaderProperties,
+    reader::{FileReader, SerializedFileReader},
+    serialized_reader::ReadOptionsBuilder,
+};
 use std::{fs::File, path::Path};
 
 #[derive(Debug, Parser)]
@@ -63,8 +67,17 @@ fn main() {
     let path = Path::new(&file_name);
     let file = File::open(path).expect("Unable to open file");
 
-    let file_reader =
-        SerializedFileReader::new(file).expect("Unable to open file as Parquet");
+    let file_reader = SerializedFileReader::new_with_options(
+        file,
+        ReadOptionsBuilder::new()
+            .with_reader_properties(
+                ReaderProperties::builder()
+                    .set_read_bloom_filter(true)
+                    .build(),
+            )
+            .build(),
+    )
+    .expect("Unable to open file as Parquet");
     let metadata = file_reader.metadata();
     for (ri, row_group) in metadata.row_groups().iter().enumerate() {
         println!("Row group #{}", ri);
