@@ -17,7 +17,7 @@
 
 use arrow::util::pretty::print_batches;
 use futures::TryStreamExt;
-use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
+use parquet::arrow::arrow_reader::{ArrowPredicateFn, RowFilter};
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::errors::Result;
 use std::time::SystemTime;
@@ -36,16 +36,19 @@ async fn main() -> Result<()> {
         .await
         .unwrap()
         .with_batch_size(8192);
-    let file_metadata = builder.metadata().file_metadata();
 
-    let mask = ProjectionMask::roots(file_metadata.schema_descr(), [1, 2]);
-    // Set projection mask to read only leaf columns 1 and 2.
-    builder = builder.with_projection(mask);
+    let file_metadata = builder.metadata().file_metadata().clone();
+    let mask = ProjectionMask::roots(file_metadata.schema_descr(), [0, 1, 2]);
+    // Set projection mask to read only root columns 1 and 2.
+    builder = builder.with_projection(mask.clone());
 
     // Highlight: set `RowFilter`, it'll push down filter predicates to skip IO and decode.
     // For more specific usage: please refer to https://github.com/apache/arrow-datafusion/blob/master/datafusion/core/src/physical_plan/file_format/parquet/row_filter.rs.
-    let predicates: Vec<Box<dyn ArrowPredicate>> = Vec::new();
-    let row_filter = RowFilter::new(predicates);
+    let filter = ArrowPredicateFn::new(
+        ProjectionMask::roots(file_metadata.schema_descr(), [0]),
+        |record_batch| arrow::compute::eq_dyn_scalar(record_batch.column(0), 1),
+    );
+    let row_filter = RowFilter::new(vec![Box::new(filter)]);
     builder = builder.with_row_filter(row_filter);
 
     // Build a async parquet reader.
