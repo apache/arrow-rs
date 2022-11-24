@@ -303,7 +303,7 @@ unsafe fn decode_fixed<T: FixedLengthEncoding + ArrowNativeType>(
         .len(len)
         .null_count(null_count)
         .add_buffer(values.finish())
-        .null_bit_buffer(Some(nulls.into()));
+        .null_bit_buffer(Some(nulls));
 
     // SAFETY: Buffers correct length
     builder.build_unchecked()
