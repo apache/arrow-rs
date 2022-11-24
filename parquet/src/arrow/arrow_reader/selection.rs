@@ -59,6 +59,30 @@ impl RowSelector {
 /// A typical use-case would be using the [`PageIndex`] to filter out rows
 /// that don't satisfy a predicate
 ///
+/// # Example
+/// ```
+/// use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+///
+/// let selectors = vec![
+///   RowSelector { row_count: 5, skip: true },
+///   RowSelector { row_count: 5, skip: false },
+///   RowSelector { row_count: 5, skip: false },
+///   RowSelector { row_count: 5, skip: true },
+/// ];
+///
+/// // Creating a selection will combine adjacent selectors
+/// let selection: RowSelection = selectors.into();
+///
+/// let expected = vec![
+///   RowSelector { row_count: 5, skip: true },
+///   RowSelector { row_count: 10, skip: false },
+///   RowSelector { row_count: 5, skip: true },
+/// ];
+///
+/// let actual: Vec<RowSelector> = selection.into();
+/// assert_eq!(actual, expected);
+/// ```
+///
 /// [`PageIndex`]: [crate::file::page_index::index::PageIndex]
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct RowSelection {
@@ -243,7 +267,6 @@ impl RowSelection {
             selectors: remaining,
         }
     }
-
     /// Given a [`RowSelection`] computed under `self`, returns the [`RowSelection`]
     /// representing their conjunction
     ///
@@ -347,11 +370,23 @@ impl RowSelection {
         }
         self
     }
+
+    /// Returns an iterator over the [`RowSelector`]s for this
+    /// [`RowSelection`].
+    pub fn iter(&self) -> impl Iterator<Item = &RowSelector> {
+        self.selectors.iter()
+    }
 }
 
 impl From<Vec<RowSelector>> for RowSelection {
     fn from(selectors: Vec<RowSelector>) -> Self {
         Self::from_selectors_and_combine(selectors.as_slice())
+    }
+}
+
+impl From<RowSelection> for Vec<RowSelector> {
+    fn from(r: RowSelection) -> Self {
+        r.selectors
     }
 }
 
@@ -787,6 +822,23 @@ mod tests {
 
             assert_eq!(a.and_then(&b), expected);
         }
+    }
+
+    #[test]
+    fn test_iter() {
+        // use the iter() API to show it does what is expected and
+        // avoid accidental deletion
+        let selectors = vec![
+            RowSelector::select(3),
+            RowSelector::skip(33),
+            RowSelector::select(4),
+        ];
+
+        let round_tripped = RowSelection::from(selectors.clone())
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(selectors, round_tripped);
     }
 
     #[test]

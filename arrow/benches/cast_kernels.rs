@@ -84,7 +84,7 @@ fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
     Arc::new(builder.finish())
 }
 
-fn build_decimal128_array(size: usize, precision: u8, scale: u8) -> ArrayRef {
+fn build_decimal128_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     let mut rng = seedable_rng();
     let mut builder = Decimal128Builder::with_capacity(size);
 
@@ -99,7 +99,7 @@ fn build_decimal128_array(size: usize, precision: u8, scale: u8) -> ArrayRef {
     )
 }
 
-fn build_decimal256_array(size: usize, precision: u8, scale: u8) -> ArrayRef {
+fn build_decimal256_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     let mut rng = seedable_rng();
     let mut builder = Decimal256Builder::with_capacity(size);
     let mut bytes = [0; 32];

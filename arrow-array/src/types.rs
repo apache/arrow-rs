@@ -576,9 +576,9 @@ pub trait DecimalType:
     /// Maximum number of significant digits
     const MAX_PRECISION: u8;
     /// Maximum no of digits after the decimal point (note the scale can be negative)
-    const MAX_SCALE: u8;
+    const MAX_SCALE: i8;
     /// fn to create its [`DataType`]
-    const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType;
+    const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType;
     /// Default values for [`DataType`]
     const DEFAULT_TYPE: DataType;
 
@@ -586,7 +586,7 @@ pub trait DecimalType:
     const PREFIX: &'static str;
 
     /// Formats the decimal value with the provided precision and scale
-    fn format_decimal(value: Self::Native, precision: u8, scale: u8) -> String;
+    fn format_decimal(value: Self::Native, precision: u8, scale: i8) -> String;
 
     /// Validates that `value` contains no more than `precision` decimal digits
     fn validate_decimal_precision(
@@ -602,14 +602,14 @@ pub struct Decimal128Type {}
 impl DecimalType for Decimal128Type {
     const BYTE_LENGTH: usize = 16;
     const MAX_PRECISION: u8 = DECIMAL128_MAX_PRECISION;
-    const MAX_SCALE: u8 = DECIMAL128_MAX_SCALE;
-    const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType = DataType::Decimal128;
+    const MAX_SCALE: i8 = DECIMAL128_MAX_SCALE;
+    const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal128;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
     const PREFIX: &'static str = "Decimal128";
 
-    fn format_decimal(value: Self::Native, precision: u8, scale: u8) -> String {
-        format_decimal_str(&value.to_string(), precision as usize, scale as usize)
+    fn format_decimal(value: Self::Native, precision: u8, scale: i8) -> String {
+        format_decimal_str(&value.to_string(), precision as usize, scale)
     }
 
     fn validate_decimal_precision(num: i128, precision: u8) -> Result<(), ArrowError> {
@@ -630,14 +630,14 @@ pub struct Decimal256Type {}
 impl DecimalType for Decimal256Type {
     const BYTE_LENGTH: usize = 32;
     const MAX_PRECISION: u8 = DECIMAL256_MAX_PRECISION;
-    const MAX_SCALE: u8 = DECIMAL256_MAX_SCALE;
-    const TYPE_CONSTRUCTOR: fn(u8, u8) -> DataType = DataType::Decimal256;
+    const MAX_SCALE: i8 = DECIMAL256_MAX_SCALE;
+    const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal256;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
     const PREFIX: &'static str = "Decimal256";
 
-    fn format_decimal(value: Self::Native, precision: u8, scale: u8) -> String {
-        format_decimal_str(&value.to_string(), precision as usize, scale as usize)
+    fn format_decimal(value: Self::Native, precision: u8, scale: i8) -> String {
+        format_decimal_str(&value.to_string(), precision as usize, scale)
     }
 
     fn validate_decimal_precision(num: i256, precision: u8) -> Result<(), ArrowError> {
@@ -651,7 +651,7 @@ impl ArrowPrimitiveType for Decimal256Type {
     const DATA_TYPE: DataType = <Self as DecimalType>::DEFAULT_TYPE;
 }
 
-fn format_decimal_str(value_str: &str, precision: usize, scale: usize) -> String {
+fn format_decimal_str(value_str: &str, precision: usize, scale: i8) -> String {
     let (sign, rest) = match value_str.strip_prefix('-') {
         Some(stripped) => ("-", stripped),
         None => ("", value_str),
@@ -661,13 +661,16 @@ fn format_decimal_str(value_str: &str, precision: usize, scale: usize) -> String
 
     if scale == 0 {
         value_str.to_string()
-    } else if rest.len() > scale {
+    } else if scale < 0 {
+        let padding = value_str.len() + scale.unsigned_abs() as usize;
+        format!("{:0<width$}", value_str, width = padding)
+    } else if rest.len() > scale as usize {
         // Decimal separator is in the middle of the string
-        let (whole, decimal) = value_str.split_at(value_str.len() - scale);
+        let (whole, decimal) = value_str.split_at(value_str.len() - scale as usize);
         format!("{}.{}", whole, decimal)
     } else {
         // String has to be padded
-        format!("{}0.{:0>width$}", sign, rest, width = scale)
+        format!("{}0.{:0>width$}", sign, rest, width = scale as usize)
     }
 }
 

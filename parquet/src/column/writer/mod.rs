@@ -212,10 +212,6 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     def_levels_sink: Vec<i16>,
     rep_levels_sink: Vec<i16>,
     data_pages: VecDeque<CompressedPage>,
-
-    // bloom filter
-    bloom_filter: Option<Sbbf>,
-
     // column index and offset index
     column_index_builder: ColumnIndexBuilder,
     offset_index_builder: OffsetIndexBuilder,
@@ -237,19 +233,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let mut encodings = BTreeSet::new();
         // Used for level information
         encodings.insert(Encoding::RLE);
-
-        let bloom_filter_enabled = props.bloom_filter_enabled(descr.path());
-        let bloom_filter = if bloom_filter_enabled {
-            if let Some(ndv) = props.bloom_filter_ndv(descr.path()) {
-                let fpp = props.bloom_filter_fpp(descr.path());
-                Some(Sbbf::new_with_ndv_fpp(ndv, fpp))
-            } else {
-                let max_bytes = props.bloom_filter_max_bytes(descr.path());
-                Some(Sbbf::new_with_num_of_bytes(max_bytes as usize))
-            }
-        } else {
-            None
-        };
 
         Self {
             descr,
@@ -280,7 +263,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 num_column_nulls: 0,
                 column_distinct_count: None,
             },
-            bloom_filter,
             column_index_builder: ColumnIndexBuilder::new(),
             offset_index_builder: OffsetIndexBuilder::new(),
             encodings,
@@ -454,7 +436,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         &self.descr
     }
 
-    /// Finalises writes and closes the column writer.
+    /// Finalizes writes and closes the column writer.
     /// Returns total bytes written, total rows written and column chunk metadata.
     pub fn close(mut self) -> Result<ColumnCloseResult> {
         if self.page_metrics.num_buffered_values > 0 {
@@ -479,7 +461,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         Ok(ColumnCloseResult {
             bytes_written: self.column_metrics.total_bytes_written,
             rows_written: self.column_metrics.total_rows_written,
-            bloom_filter: self.bloom_filter,
+            bloom_filter: self.encoder.flush_bloom_filter(),
             metadata,
             column_index,
             offset_index,

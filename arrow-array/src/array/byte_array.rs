@@ -21,7 +21,7 @@ use crate::raw_pointer::RawPtrBox;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::ByteArrayType;
 use crate::{Array, ArrayAccessor, OffsetSizeTrait};
-use arrow_buffer::{ArrowNativeType, Buffer};
+use arrow_buffer::ArrowNativeType;
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 use std::any::Any;
@@ -55,9 +55,9 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         offsets[i + 1] - offsets[i]
     }
 
-    /// Returns a clone of the value data buffer
-    pub fn value_data(&self) -> Buffer {
-        self.data.buffers()[1].clone()
+    /// Returns the raw value data
+    pub fn value_data(&self) -> &[u8] {
+        self.data.buffers()[1].as_slice()
     }
 
     /// Returns the offset values in the offsets buffer

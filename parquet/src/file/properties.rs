@@ -64,7 +64,6 @@
 //!     .build();
 //! ```
 
-use paste::paste;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::basic::{Compression, Encoding};
@@ -83,9 +82,10 @@ const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
 const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
 const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
 const DEFAULT_CREATED_BY: &str = env!("PARQUET_CREATED_BY");
-const DEFAULT_BLOOM_FILTER_ENABLED: bool = false;
-const DEFAULT_BLOOM_FILTER_MAX_BYTES: u32 = 1024 * 1024;
-const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.01;
+/// default value for the false positive probability used in a bloom filter.
+pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.05;
+/// default value for the expected number of distinct values used in a bloom filter.
+pub const DEFAULT_BLOOM_FILTER_NDV: u64 = 1_000_000_u64;
 
 /// Parquet writer version.
 ///
@@ -127,26 +127,6 @@ pub struct WriterProperties {
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
-}
-
-macro_rules! def_col_property_getter {
-    ($field:ident, $field_type:ty) => {
-        pub fn $field(&self, col: &ColumnPath) -> Option<$field_type> {
-            self.column_properties
-                .get(col)
-                .and_then(|c| c.$field())
-                .or_else(|| self.default_column_properties.$field())
-        }
-    };
-    ($field:ident, $field_type:ty, $default_val:expr) => {
-        pub fn $field(&self, col: &ColumnPath) -> $field_type {
-            self.column_properties
-                .get(col)
-                .and_then(|c| c.$field())
-                .or_else(|| self.default_column_properties.$field())
-                .unwrap_or($default_val)
-        }
-    };
 }
 
 impl WriterProperties {
@@ -280,10 +260,18 @@ impl WriterProperties {
             .unwrap_or(DEFAULT_MAX_STATISTICS_SIZE)
     }
 
-    def_col_property_getter!(bloom_filter_enabled, bool, DEFAULT_BLOOM_FILTER_ENABLED);
-    def_col_property_getter!(bloom_filter_fpp, f64, DEFAULT_BLOOM_FILTER_FPP);
-    def_col_property_getter!(bloom_filter_ndv, u64);
-    def_col_property_getter!(bloom_filter_max_bytes, u32, DEFAULT_BLOOM_FILTER_MAX_BYTES);
+    /// Returns the [`BloomFilterProperties`] for the given column
+    ///
+    /// Returns `None` if bloom filter is disabled
+    pub fn bloom_filter_properties(
+        &self,
+        col: &ColumnPath,
+    ) -> Option<&BloomFilterProperties> {
+        self.column_properties
+            .get(col)
+            .and_then(|c| c.bloom_filter_properties())
+            .or_else(|| self.default_column_properties.bloom_filter_properties())
+    }
 }
 
 /// Writer properties builder.
@@ -299,52 +287,6 @@ pub struct WriterPropertiesBuilder {
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
-}
-
-macro_rules! def_opt_field_setter {
-    ($field: ident, $type: ty) => {
-        paste! {
-            pub fn [<set_ $field>](&mut self, value: $type) -> &mut Self {
-                self.$field = Some(value);
-                self
-            }
-        }
-    };
-    ($field: ident, $type: ty, $min_value:expr, $max_value:expr) => {
-        paste! {
-            pub fn [<set_ $field>](&mut self, value: $type) -> &mut Self {
-                if ($min_value..=$max_value).contains(&value) {
-                    self.$field = Some(value);
-                } else {
-                    self.$field = None
-                }
-                self
-            }
-        }
-    };
-}
-
-macro_rules! def_opt_field_getter {
-    ($field: ident, $type: ty) => {
-        paste! {
-            #[doc = "Returns " $field " if set."]
-            pub fn $field(&self) -> Option<$type> {
-                self.$field
-            }
-        }
-    };
-}
-
-macro_rules! def_per_col_setter {
-    ($field:ident, $field_type:ty) => {
-        paste! {
-            #[doc = "Sets " $field " for a column. Takes precedence over globally defined settings."]
-            pub fn [<set_column_ $field>](mut self, col: ColumnPath, value: $field_type) -> Self {
-                self.get_mut_props(col).[<set_ $field>](value);
-                self
-            }
-        }
-    }
 }
 
 impl WriterPropertiesBuilder {
@@ -506,6 +448,30 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets whether bloom filter is enabled for any column.
+    /// If the bloom filter is enabled previously then it is a no-op.
+    /// If the bloom filter is not yet enabled, a default set of ndv and fpp value will be used.
+    /// You can use [`set_bloom_filter_ndv`](Self::set_bloom_filter_ndv) and [`set_bloom_filter_fpp`](Self::set_bloom_filter_fpp) to further adjust the ndv and fpp.
+    pub fn set_bloom_filter_enabled(mut self, value: bool) -> Self {
+        self.default_column_properties
+            .set_bloom_filter_enabled(value);
+        self
+    }
+
+    /// Sets bloom filter false positive probability (fpp) for any column.
+    /// Implicitly [`set_bloom_filter_enabled`](Self::set_bloom_filter_enabled).
+    pub fn set_bloom_filter_fpp(mut self, value: f64) -> Self {
+        self.default_column_properties.set_bloom_filter_fpp(value);
+        self
+    }
+
+    /// Sets number of distinct values (ndv) for bloom filter for any column.
+    /// Implicitly [`set_bloom_filter_enabled`](Self::set_bloom_filter_enabled).
+    pub fn set_bloom_filter_ndv(mut self, value: u64) -> Self {
+        self.default_column_properties.set_bloom_filter_ndv(value);
+        self
+    }
+
     // ----------------------------------------------------------------------
     // Setters for a specific column
 
@@ -568,10 +534,33 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    def_per_col_setter!(bloom_filter_enabled, bool);
-    def_per_col_setter!(bloom_filter_fpp, f64);
-    def_per_col_setter!(bloom_filter_max_bytes, u32);
-    def_per_col_setter!(bloom_filter_ndv, u64);
+    /// Sets whether a bloom filter should be created for a specific column.
+    /// The behavior is similar to [`set_bloom_filter_enabled`](Self::set_bloom_filter_enabled).
+    /// Takes precedence over globally defined settings.
+    pub fn set_column_bloom_filter_enabled(
+        mut self,
+        col: ColumnPath,
+        value: bool,
+    ) -> Self {
+        self.get_mut_props(col).set_bloom_filter_enabled(value);
+        self
+    }
+
+    /// Sets the false positive probability for bloom filter for a specific column.
+    /// The behavior is similar to [`set_bloom_filter_fpp`](Self::set_bloom_filter_fpp) but will
+    /// override the default.
+    pub fn set_column_bloom_filter_fpp(mut self, col: ColumnPath, value: f64) -> Self {
+        self.get_mut_props(col).set_bloom_filter_fpp(value);
+        self
+    }
+
+    /// Sets the number of distinct values for bloom filter for a specific column.
+    /// The behavior is similar to [`set_bloom_filter_ndv`](Self::set_bloom_filter_ndv) but will
+    /// override the default.
+    pub fn set_column_bloom_filter_ndv(mut self, col: ColumnPath, value: u64) -> Self {
+        self.get_mut_props(col).set_bloom_filter_ndv(value);
+        self
+    }
 }
 
 /// Controls the level of statistics to be computed by the writer
@@ -591,6 +580,43 @@ impl Default for EnabledStatistics {
     }
 }
 
+/// Controls the bloom filter to be computed by the writer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BloomFilterProperties {
+    /// False positive probability, should be always between 0 and 1 exclusive. Defaults to [`DEFAULT_BLOOM_FILTER_FPP`].
+    ///
+    /// You should set this value by calling [`WriterPropertiesBuilder::set_bloom_filter_fpp`].
+    ///
+    /// The bloom filter data structure is a trade of between disk and memory space versus fpp, the
+    /// smaller the fpp, the more memory and disk space is required, thus setting it to a reasonable value
+    /// e.g. 0.1, 0.05, or 0.001 is recommended.
+    ///
+    /// Setting to very small number diminishes the value of the filter itself, as the bitset size is
+    /// even larger than just storing the whole value. You are also expected to set `ndv` if it can
+    /// be known in advance in order to largely reduce space usage.
+    pub fpp: f64,
+    /// Number of distinct values, should be non-negative to be meaningful. Defaults to [`DEFAULT_BLOOM_FILTER_NDV`].
+    ///
+    /// You should set this value by calling [`WriterPropertiesBuilder::set_bloom_filter_ndv`].
+    ///
+    /// Usage of bloom filter is most beneficial for columns with large cardinality, so a good heuristic
+    /// is to set ndv to number of rows. However it can reduce disk size if you know in advance a smaller
+    /// number of distinct values. For very small ndv value it is probably not worth it to use bloom filter
+    /// anyway.
+    ///
+    /// Increasing this value (without increasing fpp) will result in an increase in disk or memory size.
+    pub ndv: u64,
+}
+
+impl Default for BloomFilterProperties {
+    fn default() -> Self {
+        BloomFilterProperties {
+            fpp: DEFAULT_BLOOM_FILTER_FPP,
+            ndv: DEFAULT_BLOOM_FILTER_NDV,
+        }
+    }
+}
+
 /// Container for column properties that can be changed as part of writer.
 ///
 /// If a field is `None`, it means that no specific value has been set for this column,
@@ -602,14 +628,8 @@ struct ColumnProperties {
     dictionary_enabled: Option<bool>,
     statistics_enabled: Option<EnabledStatistics>,
     max_statistics_size: Option<usize>,
-    /// bloom filter enabled
-    bloom_filter_enabled: Option<bool>,
-    /// bloom filter expected number of distinct values
-    bloom_filter_ndv: Option<u64>,
-    /// bloom filter false positive probability
-    bloom_filter_fpp: Option<f64>,
-    /// bloom filter max number of bytes
-    bloom_filter_max_bytes: Option<u32>,
+    /// bloom filter related properties
+    bloom_filter_properies: Option<BloomFilterProperties>,
 }
 
 impl ColumnProperties {
@@ -649,10 +669,42 @@ impl ColumnProperties {
         self.max_statistics_size = Some(value);
     }
 
-    def_opt_field_setter!(bloom_filter_enabled, bool);
-    def_opt_field_setter!(bloom_filter_fpp, f64, 0.0, 1.0);
-    def_opt_field_setter!(bloom_filter_max_bytes, u32);
-    def_opt_field_setter!(bloom_filter_ndv, u64);
+    /// If `value` is `true`, sets bloom filter properties to default values if not previously set,
+    /// otherwise it is a no-op.
+    /// If `value` is `false`, resets bloom filter properties to `None`.
+    fn set_bloom_filter_enabled(&mut self, value: bool) {
+        if value && self.bloom_filter_properies.is_none() {
+            self.bloom_filter_properies = Some(Default::default())
+        } else if !value {
+            self.bloom_filter_properies = None
+        }
+    }
+
+    /// Sets the false positive probability for bloom filter for this column, and implicitly enables
+    /// bloom filter if not previously enabled.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `value` is not between 0 and 1 exclusive
+    fn set_bloom_filter_fpp(&mut self, value: f64) {
+        assert!(
+            value > 0. && value < 1.0,
+            "fpp must be between 0 and 1 exclusive, got {}",
+            value
+        );
+
+        self.bloom_filter_properies
+            .get_or_insert_with(Default::default)
+            .fpp = value;
+    }
+
+    /// Sets the number of distinct (unique) values for bloom filter for this column, and implicitly
+    /// enables bloom filter if not previously enabled.
+    fn set_bloom_filter_ndv(&mut self, value: u64) {
+        self.bloom_filter_properies
+            .get_or_insert_with(Default::default)
+            .ndv = value;
+    }
 
     /// Returns optional encoding for this column.
     fn encoding(&self) -> Option<Encoding> {
@@ -682,10 +734,10 @@ impl ColumnProperties {
         self.max_statistics_size
     }
 
-    def_opt_field_getter!(bloom_filter_enabled, bool);
-    def_opt_field_getter!(bloom_filter_fpp, f64);
-    def_opt_field_getter!(bloom_filter_max_bytes, u32);
-    def_opt_field_getter!(bloom_filter_ndv, u64);
+    /// Returns the bloom filter properties, or `None` if not enabled
+    fn bloom_filter_properties(&self) -> Option<&BloomFilterProperties> {
+        self.bloom_filter_properies.as_ref()
+    }
 }
 
 /// Reference counted reader properties.
@@ -812,13 +864,9 @@ mod tests {
             props.max_statistics_size(&ColumnPath::from("col")),
             DEFAULT_MAX_STATISTICS_SIZE
         );
-        assert!(!props.bloom_filter_enabled(&ColumnPath::from("col")));
-        assert_eq!(props.bloom_filter_fpp(&ColumnPath::from("col")), 0.01);
-        assert_eq!(props.bloom_filter_ndv(&ColumnPath::from("col")), None);
-        assert_eq!(
-            props.bloom_filter_max_bytes(&ColumnPath::from("col")),
-            1024 * 1024
-        );
+        assert!(props
+            .bloom_filter_properties(&ColumnPath::from("col"))
+            .is_none());
     }
 
     #[test]
@@ -903,9 +951,8 @@ mod tests {
             )
             .set_column_max_statistics_size(ColumnPath::from("col"), 123)
             .set_column_bloom_filter_enabled(ColumnPath::from("col"), true)
-            .set_column_bloom_filter_ndv(ColumnPath::from("col"), 100)
+            .set_column_bloom_filter_ndv(ColumnPath::from("col"), 100_u64)
             .set_column_bloom_filter_fpp(ColumnPath::from("col"), 0.1)
-            .set_column_bloom_filter_max_bytes(ColumnPath::from("col"), 1000)
             .build();
 
         assert_eq!(props.writer_version(), WriterVersion::PARQUET_2_0);
@@ -947,6 +994,10 @@ mod tests {
             EnabledStatistics::Chunk
         );
         assert_eq!(props.max_statistics_size(&ColumnPath::from("col")), 123);
+        assert_eq!(
+            props.bloom_filter_properties(&ColumnPath::from("col")),
+            Some(&BloomFilterProperties { fpp: 0.1, ndv: 100 })
+        );
     }
 
     #[test]
@@ -954,6 +1005,7 @@ mod tests {
         let props = WriterProperties::builder()
             .set_encoding(Encoding::DELTA_BINARY_PACKED)
             .set_compression(Compression::GZIP)
+            .set_bloom_filter_enabled(true)
             .set_column_encoding(ColumnPath::from("col"), Encoding::RLE)
             .build();
 
@@ -968,6 +1020,43 @@ mod tests {
         assert_eq!(
             props.dictionary_enabled(&ColumnPath::from("col")),
             DEFAULT_DICTIONARY_ENABLED
+        );
+        assert_eq!(
+            props.bloom_filter_properties(&ColumnPath::from("col")),
+            Some(&BloomFilterProperties {
+                fpp: 0.05,
+                ndv: 1_000_000_u64
+            })
+        );
+    }
+
+    #[test]
+    fn test_writer_properties_bloom_filter_ndv_fpp_set() {
+        assert_eq!(
+            WriterProperties::builder()
+                .build()
+                .bloom_filter_properties(&ColumnPath::from("col")),
+            None
+        );
+        assert_eq!(
+            WriterProperties::builder()
+                .set_bloom_filter_ndv(100)
+                .build()
+                .bloom_filter_properties(&ColumnPath::from("col")),
+            Some(&BloomFilterProperties {
+                fpp: 0.05,
+                ndv: 100
+            })
+        );
+        assert_eq!(
+            WriterProperties::builder()
+                .set_bloom_filter_fpp(0.1)
+                .build()
+                .bloom_filter_properties(&ColumnPath::from("col")),
+            Some(&BloomFilterProperties {
+                fpp: 0.1,
+                ndv: 1_000_000_u64
+            })
         );
     }
 

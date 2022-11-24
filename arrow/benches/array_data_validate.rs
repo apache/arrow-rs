@@ -52,6 +52,12 @@ fn validate_benchmark(c: &mut Criterion) {
     c.bench_function("validate_utf8_array_data 20000", |b| {
         b.iter(|| validate_utf8_array(&str_arr))
     });
+
+    let byte_array =
+        BinaryArray::from_iter_values(std::iter::repeat(b"test").take(20000));
+    c.bench_function("byte_array_to_string_array 20000", |b| {
+        b.iter(|| StringArray::from(BinaryArray::from(byte_array.data().clone())))
+    });
 }
 
 criterion_group!(benches, validate_benchmark);

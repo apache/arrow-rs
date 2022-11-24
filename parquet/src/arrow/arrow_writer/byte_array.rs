@@ -17,6 +17,7 @@
 
 use crate::arrow::arrow_writer::levels::LevelInfo;
 use crate::basic::Encoding;
+use crate::bloom_filter::Sbbf;
 use crate::column::page::PageWriter;
 use crate::column::writer::encoder::{
     ColumnValueEncoder, DataPageValues, DictionaryPage,
@@ -449,6 +450,11 @@ impl ColumnValueEncoder for ByteArrayEncoder {
                 downcast_op!(values.data_type(), values, compute_min_max, 0..len)
             }
         }
+    }
+
+    fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
+        // TODO FIX ME need to handle bloom filter in arrow writer
+        None
     }
 
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self>

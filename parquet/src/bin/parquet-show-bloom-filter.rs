@@ -83,7 +83,7 @@ fn main() {
                     println!(
                         "Value {} is {} in bloom filter",
                         value,
-                        if sbbf.check(value.as_str()) {
+                        if sbbf.check(&value.as_str()) {
                             "present"
                         } else {
                             "absent"
