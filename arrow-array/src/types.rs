@@ -21,12 +21,12 @@ use crate::array::ArrowPrimitiveType;
 use crate::delta::shift_months;
 use crate::OffsetSizeTrait;
 use arrow_buffer::i256;
-use arrow_data::decimal::{
-    validate_decimal256_precision, validate_decimal_precision, DECIMAL128_MAX_PRECISION,
+use arrow_data::decimal::{validate_decimal256_precision, validate_decimal_precision};
+use arrow_schema::{
+    ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
     DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
     DECIMAL_DEFAULT_SCALE,
 };
-use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use chrono::{Duration, NaiveDate};
 use half::f16;
 use std::marker::PhantomData;

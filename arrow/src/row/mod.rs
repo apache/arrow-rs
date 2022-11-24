@@ -1004,6 +1004,7 @@ unsafe fn decode_column(
 mod tests {
     use std::sync::Arc;
 
+    use arrow_schema::{DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION};
     use rand::distributions::uniform::SampleUniform;
     use rand::distributions::{Distribution, Standard};
     use rand::{thread_rng, Rng};
