@@ -26,8 +26,7 @@ use std::sync::Arc;
 
 ///  Array builder for [`FixedSizeListArray`]
 /// ```
-/// use arrow_array::builder::{Int32Builder, FixedSizeListBuilder};
-///
+/// use arrow_array::{builder::{Int32Builder, FixedSizeListBuilder}, Array, Int32Array};
 /// let values_builder = Int32Builder::new();
 /// let mut builder = FixedSizeListBuilder::new(values_builder, 3);
 ///
@@ -49,6 +48,19 @@ use std::sync::Arc;
 /// builder.values().append_null();
 /// builder.append(true);
 /// let list_array = builder.finish();
+/// assert_eq!(
+///     *list_array.value(0),
+///     Int32Array::from(vec![Some(0), Some(1), Some(2)])
+/// );
+/// assert!(list_array.is_null(1));
+/// assert_eq!(
+///     *list_array.value(2),
+///     Int32Array::from(vec![Some(3), None, Some(5)])
+/// );
+/// assert_eq!(
+///     *list_array.value(3),
+///     Int32Array::from(vec![Some(6), Some(7), None])
+/// )
 /// ```
 ///
 #[derive(Debug)]
