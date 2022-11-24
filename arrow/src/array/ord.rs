@@ -20,140 +20,43 @@
 use std::cmp::Ordering;
 
 use crate::array::*;
-use crate::datatypes::TimeUnit;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 
-use num::Float;
+use arrow_array::{downcast_integer, downcast_primitive};
+
+macro_rules! primitive_helper {
+    ($t:ty, $left:ident, $right:ident) => {{
+        let left = PrimitiveArray::<$t>::from($left.data().clone());
+        let right = PrimitiveArray::<$t>::from($right.data().clone());
+        Box::new(move |i, j| left.value(i).compare(right.value(j)))
+    }};
+}
+
+macro_rules! array_helper {
+    ($t:ty, $left:ident, $right:ident) => {{
+        let left = <$t>::from($left.data().clone());
+        let right = <$t>::from($right.data().clone());
+        Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
+    }};
+}
+
+macro_rules! dictionary_helper {
+    ($t:ty, $build_compare:ident, $left:ident, $right:ident) => {{
+        let left = DictionaryArray::<$t>::from($left.data().clone());
+        let right = DictionaryArray::<$t>::from($right.data().clone());
+        let compare = $build_compare(left.values().as_ref(), right.values().as_ref())?;
+
+        Box::new(move |i, j| {
+            let left_v = left.keys().value(i);
+            let right_v = right.keys().value(j);
+            compare(left_v as _, right_v as _)
+        })
+    }};
+}
 
 /// Compare the values at two arbitrary indices in two arrays.
 pub type DynComparator = Box<dyn Fn(usize, usize) -> Ordering + Send + Sync>;
-
-/// compares two floats, placing NaNs at last
-fn cmp_nans_last<T: Float>(a: &T, b: &T) -> Ordering {
-    match (a.is_nan(), b.is_nan()) {
-        (true, true) => Ordering::Equal,
-        (true, false) => Ordering::Greater,
-        (false, true) => Ordering::Less,
-        _ => a.partial_cmp(b).unwrap(),
-    }
-}
-
-fn compare_primitives<T: ArrowPrimitiveType>(
-    left: &dyn Array,
-    right: &dyn Array,
-) -> DynComparator
-where
-    T::Native: Ord,
-{
-    let left: PrimitiveArray<T> = PrimitiveArray::from(left.data().clone());
-    let right: PrimitiveArray<T> = PrimitiveArray::from(right.data().clone());
-    Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
-}
-
-fn compare_boolean(left: &dyn Array, right: &dyn Array) -> DynComparator {
-    let left: BooleanArray = BooleanArray::from(left.data().clone());
-    let right: BooleanArray = BooleanArray::from(right.data().clone());
-
-    Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
-}
-
-fn compare_float<T: ArrowPrimitiveType>(
-    left: &dyn Array,
-    right: &dyn Array,
-) -> DynComparator
-where
-    T::Native: Float,
-{
-    let left: PrimitiveArray<T> = PrimitiveArray::from(left.data().clone());
-    let right: PrimitiveArray<T> = PrimitiveArray::from(right.data().clone());
-    Box::new(move |i, j| cmp_nans_last(&left.value(i), &right.value(j)))
-}
-
-fn compare_string<T>(left: &dyn Array, right: &dyn Array) -> DynComparator
-where
-    T: OffsetSizeTrait,
-{
-    let left: StringArray = StringArray::from(left.data().clone());
-    let right: StringArray = StringArray::from(right.data().clone());
-
-    Box::new(move |i, j| left.value(i).cmp(right.value(j)))
-}
-
-fn compare_dict_primitive<K, V>(left: &dyn Array, right: &dyn Array) -> DynComparator
-where
-    K: ArrowDictionaryKeyType,
-    V: ArrowPrimitiveType,
-    V::Native: Ord,
-{
-    let left = left.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
-    let right = right.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
-
-    let left_keys: PrimitiveArray<K> = PrimitiveArray::from(left.keys().data().clone());
-    let right_keys: PrimitiveArray<K> = PrimitiveArray::from(right.keys().data().clone());
-    let left_values: PrimitiveArray<V> =
-        PrimitiveArray::from(left.values().data().clone());
-    let right_values: PrimitiveArray<V> =
-        PrimitiveArray::from(right.values().data().clone());
-
-    Box::new(move |i: usize, j: usize| {
-        let key_left = left_keys.value(i).as_usize();
-        let key_right = right_keys.value(j).as_usize();
-        let left = left_values.value(key_left);
-        let right = right_values.value(key_right);
-        left.cmp(&right)
-    })
-}
-
-fn compare_dict_string<T>(left: &dyn Array, right: &dyn Array) -> DynComparator
-where
-    T: ArrowDictionaryKeyType,
-{
-    let left = left.as_any().downcast_ref::<DictionaryArray<T>>().unwrap();
-    let right = right.as_any().downcast_ref::<DictionaryArray<T>>().unwrap();
-
-    let left_keys: PrimitiveArray<T> = PrimitiveArray::from(left.keys().data().clone());
-    let right_keys: PrimitiveArray<T> = PrimitiveArray::from(right.keys().data().clone());
-    let left_values = StringArray::from(left.values().data().clone());
-    let right_values = StringArray::from(right.values().data().clone());
-
-    Box::new(move |i: usize, j: usize| {
-        let key_left = left_keys.value(i).as_usize();
-        let key_right = right_keys.value(j).as_usize();
-        let left = left_values.value(key_left);
-        let right = right_values.value(key_right);
-        left.cmp(right)
-    })
-}
-
-fn cmp_dict_primitive<VT>(
-    key_type: &DataType,
-    left: &dyn Array,
-    right: &dyn Array,
-) -> Result<DynComparator>
-where
-    VT: ArrowPrimitiveType,
-    VT::Native: Ord,
-{
-    use DataType::*;
-
-    Ok(match key_type {
-        UInt8 => compare_dict_primitive::<UInt8Type, VT>(left, right),
-        UInt16 => compare_dict_primitive::<UInt16Type, VT>(left, right),
-        UInt32 => compare_dict_primitive::<UInt32Type, VT>(left, right),
-        UInt64 => compare_dict_primitive::<UInt64Type, VT>(left, right),
-        Int8 => compare_dict_primitive::<Int8Type, VT>(left, right),
-        Int16 => compare_dict_primitive::<Int16Type, VT>(left, right),
-        Int32 => compare_dict_primitive::<Int32Type, VT>(left, right),
-        Int64 => compare_dict_primitive::<Int64Type, VT>(left, right),
-        t => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Dictionaries do not support keys of type {:?}",
-                t
-            )));
-        }
-    })
-}
 
 /// returns a comparison function that compares two values at two different positions
 /// between the two arrays.
@@ -176,138 +79,33 @@ where
 // This is a factory of comparisons.
 // The lifetime 'a enforces that we cannot use the closure beyond any of the array's lifetime.
 pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparator> {
-    use DataType::*;
-    use IntervalUnit::*;
-    use TimeUnit::*;
-    Ok(match (left.data_type(), right.data_type()) {
-        (a, b) if a != b => {
-            return Err(ArrowError::InvalidArgumentError(
-                "Can't compare arrays of different types".to_string(),
-            ));
-        }
-        (Boolean, Boolean) => compare_boolean(left, right),
-        (UInt8, UInt8) => compare_primitives::<UInt8Type>(left, right),
-        (UInt16, UInt16) => compare_primitives::<UInt16Type>(left, right),
-        (UInt32, UInt32) => compare_primitives::<UInt32Type>(left, right),
-        (UInt64, UInt64) => compare_primitives::<UInt64Type>(left, right),
-        (Int8, Int8) => compare_primitives::<Int8Type>(left, right),
-        (Int16, Int16) => compare_primitives::<Int16Type>(left, right),
-        (Int32, Int32) => compare_primitives::<Int32Type>(left, right),
-        (Int64, Int64) => compare_primitives::<Int64Type>(left, right),
-        (Float32, Float32) => compare_float::<Float32Type>(left, right),
-        (Float64, Float64) => compare_float::<Float64Type>(left, right),
-        (Date32, Date32) => compare_primitives::<Date32Type>(left, right),
-        (Date64, Date64) => compare_primitives::<Date64Type>(left, right),
-        (Time32(Second), Time32(Second)) => {
-            compare_primitives::<Time32SecondType>(left, right)
-        }
-        (Time32(Millisecond), Time32(Millisecond)) => {
-            compare_primitives::<Time32MillisecondType>(left, right)
-        }
-        (Time64(Microsecond), Time64(Microsecond)) => {
-            compare_primitives::<Time64MicrosecondType>(left, right)
-        }
-        (Time64(Nanosecond), Time64(Nanosecond)) => {
-            compare_primitives::<Time64NanosecondType>(left, right)
-        }
-        (Timestamp(Second, _), Timestamp(Second, _)) => {
-            compare_primitives::<TimestampSecondType>(left, right)
-        }
-        (Timestamp(Millisecond, _), Timestamp(Millisecond, _)) => {
-            compare_primitives::<TimestampMillisecondType>(left, right)
-        }
-        (Timestamp(Microsecond, _), Timestamp(Microsecond, _)) => {
-            compare_primitives::<TimestampMicrosecondType>(left, right)
-        }
-        (Timestamp(Nanosecond, _), Timestamp(Nanosecond, _)) => {
-            compare_primitives::<TimestampNanosecondType>(left, right)
-        }
-        (Interval(YearMonth), Interval(YearMonth)) => {
-            compare_primitives::<IntervalYearMonthType>(left, right)
-        }
-        (Interval(DayTime), Interval(DayTime)) => {
-            compare_primitives::<IntervalDayTimeType>(left, right)
-        }
-        (Interval(MonthDayNano), Interval(MonthDayNano)) => {
-            compare_primitives::<IntervalMonthDayNanoType>(left, right)
-        }
-        (Duration(Second), Duration(Second)) => {
-            compare_primitives::<DurationSecondType>(left, right)
-        }
-        (Duration(Millisecond), Duration(Millisecond)) => {
-            compare_primitives::<DurationMillisecondType>(left, right)
-        }
-        (Duration(Microsecond), Duration(Microsecond)) => {
-            compare_primitives::<DurationMicrosecondType>(left, right)
-        }
-        (Duration(Nanosecond), Duration(Nanosecond)) => {
-            compare_primitives::<DurationNanosecondType>(left, right)
-        }
-        (Utf8, Utf8) => compare_string::<i32>(left, right),
-        (LargeUtf8, LargeUtf8) => compare_string::<i64>(left, right),
-        (
-            Dictionary(key_type_lhs, value_type_lhs),
-            Dictionary(key_type_rhs, value_type_rhs),
-        ) => {
-            if key_type_lhs != key_type_rhs || value_type_lhs != value_type_rhs {
-                return Err(ArrowError::InvalidArgumentError(
-                    "Can't compare arrays of different types".to_string(),
-                ));
-            }
+    let left_d = left.data_type();
+    let right_d = right.data_type();
 
-            let key_type_lhs = key_type_lhs.as_ref();
+    if left_d != right_d {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Cannot compare arrays with different types ({}, {})",
+            left_d, right_d
+        )));
+    }
 
-            match value_type_lhs.as_ref() {
-                Int8 => cmp_dict_primitive::<Int8Type>(key_type_lhs, left, right)?,
-                Int16 => cmp_dict_primitive::<Int16Type>(key_type_lhs, left, right)?,
-                Int32 => cmp_dict_primitive::<Int32Type>(key_type_lhs, left, right)?,
-                Int64 => cmp_dict_primitive::<Int64Type>(key_type_lhs, left, right)?,
-                UInt8 => cmp_dict_primitive::<UInt8Type>(key_type_lhs, left, right)?,
-                UInt16 => cmp_dict_primitive::<UInt16Type>(key_type_lhs, left, right)?,
-                UInt32 => cmp_dict_primitive::<UInt32Type>(key_type_lhs, left, right)?,
-                UInt64 => cmp_dict_primitive::<UInt64Type>(key_type_lhs, left, right)?,
-                Utf8 => match key_type_lhs {
-                    UInt8 => compare_dict_string::<UInt8Type>(left, right),
-                    UInt16 => compare_dict_string::<UInt16Type>(left, right),
-                    UInt32 => compare_dict_string::<UInt32Type>(left, right),
-                    UInt64 => compare_dict_string::<UInt64Type>(left, right),
-                    Int8 => compare_dict_string::<Int8Type>(left, right),
-                    Int16 => compare_dict_string::<Int16Type>(left, right),
-                    Int32 => compare_dict_string::<Int32Type>(left, right),
-                    Int64 => compare_dict_string::<Int64Type>(left, right),
-                    lhs => {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "Dictionaries do not support keys of type {:?}",
-                            lhs
-                        )));
-                    }
-                },
-                t => {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Dictionaries of value data type {:?} are not supported",
-                        t
-                    )));
-                }
-            }
-        }
-        (Decimal128(_, _), Decimal128(_, _)) => {
-            let left: Decimal128Array = Decimal128Array::from(left.data().clone());
-            let right: Decimal128Array = Decimal128Array::from(right.data().clone());
-            Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
-        }
-        (FixedSizeBinary(_), FixedSizeBinary(_)) => {
-            let left: FixedSizeBinaryArray =
-                FixedSizeBinaryArray::from(left.data().clone());
-            let right: FixedSizeBinaryArray =
-                FixedSizeBinaryArray::from(right.data().clone());
-
-            Box::new(move |i, j| left.value(i).cmp(right.value(j)))
-        }
-        (lhs, _) => {
+    Ok(downcast_primitive! {
+        left_d => (primitive_helper, left, right),
+        DataType::Boolean => array_helper!(BooleanArray, left, right),
+        DataType::Utf8 => array_helper!(StringArray, left, right),
+        DataType::LargeUtf8 => array_helper!(LargeStringArray, left, right),
+        DataType::Binary => array_helper!(BinaryArray, left, right),
+        DataType::LargeBinary => array_helper!(LargeBinaryArray, left, right),
+        DataType::FixedSizeBinary(_) => array_helper!(FixedSizeBinaryArray, left, right),
+        DataType::Dictionary(k, _) => downcast_integer! {
+            k.as_ref() => (dictionary_helper, build_compare, left, right),
+            _ => unreachable!()
+        },
+        lhs => {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "The data type type {:?} has no natural order",
                 lhs
-            )));
+            )))
         }
     })
 }
@@ -390,8 +188,8 @@ pub mod tests {
 
         let cmp = build_compare(&array, &array)?;
 
-        assert_eq!(Ordering::Equal, (cmp)(0, 1));
-        assert_eq!(Ordering::Equal, (cmp)(1, 0));
+        assert_eq!((-0.0_f32).total_cmp(&0.0), (cmp)(0, 1));
+        assert_eq!(0.0_f32.total_cmp(&-0.0), (cmp)(1, 0));
         Ok(())
     }
 
