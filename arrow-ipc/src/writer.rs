@@ -177,7 +177,7 @@ impl IpcDataGenerator {
         match column.data_type() {
             DataType::Struct(fields) => {
                 let s = as_struct_array(column);
-                for (field, &column) in fields.iter().zip(s.columns().iter()) {
+                for (field, column) in fields.iter().zip(s.columns()) {
                     self.encode_dictionaries(
                         field,
                         column,
