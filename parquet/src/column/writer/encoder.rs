@@ -25,7 +25,6 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::DataType;
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::BloomFilterProperties;
 use crate::file::properties::{EnabledStatistics, WriterProperties};
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
 use crate::util::memory::ByteBufferPtr;
@@ -194,17 +193,10 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
         let statistics_enabled = props.statistics_enabled(descr.path());
 
-        let bloom_filter_enabled = props.bloom_filter_enabled(descr.path());
-        let bloom_filter =
-            if let Some(BloomFilterProperties { ndv, fpp }) = bloom_filter_enabled {
-                Sbbf::new_with_ndv_fpp(ndv, fpp)
-                    .map_err(|e| {
-                        eprintln!("invalid bloom filter properties: {}", e);
-                    })
-                    .ok()
-            } else {
-                None
-            };
+        let bloom_filter = props
+            .bloom_filter_properties(descr.path())
+            .map(|props| Sbbf::new_with_ndv_fpp(props.ndv, props.fpp))
+            .transpose()?;
 
         Ok(Self {
             encoder,

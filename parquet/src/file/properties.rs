@@ -260,16 +260,17 @@ impl WriterProperties {
             .unwrap_or(DEFAULT_MAX_STATISTICS_SIZE)
     }
 
-    /// Returns whether bloom filter is enabled for a given column. Bloom filter can be enabled over
-    /// all or for a specific column, and is by default set to be disabled.
-    pub fn bloom_filter_enabled(
+    /// Returns the [`BloomFilterProperties`] for the given column
+    ///
+    /// Returns `None` if bloom filter is disabled
+    pub fn bloom_filter_properties(
         &self,
         col: &ColumnPath,
-    ) -> Option<BloomFilterProperties> {
+    ) -> Option<&BloomFilterProperties> {
         self.column_properties
             .get(col)
-            .and_then(|c| c.bloom_filter_enabled())
-            .or_else(|| self.default_column_properties.bloom_filter_enabled())
+            .and_then(|c| c.bloom_filter_properties())
+            .or_else(|| self.default_column_properties.bloom_filter_properties())
     }
 }
 
@@ -628,7 +629,7 @@ struct ColumnProperties {
     statistics_enabled: Option<EnabledStatistics>,
     max_statistics_size: Option<usize>,
     /// bloom filter related properties
-    bloom_filter_enabled: Option<BloomFilterProperties>,
+    bloom_filter_properies: Option<BloomFilterProperties>,
 }
 
 impl ColumnProperties {
@@ -672,40 +673,37 @@ impl ColumnProperties {
     /// otherwise it is a no-op.
     /// If `value` is `false`, resets bloom filter properties to `None`.
     fn set_bloom_filter_enabled(&mut self, value: bool) {
-        if value {
-            self.bloom_filter_enabled = self
-                .bloom_filter_enabled()
-                .or_else(|| Some(Default::default()));
-        } else {
-            self.bloom_filter_enabled = None;
+        if value && self.bloom_filter_properies.is_none() {
+            self.bloom_filter_properies = Some(Default::default())
+        } else if !value {
+            self.bloom_filter_properies = None
         }
     }
 
     /// Sets the false positive probability for bloom filter for this column, and implicitly enables
-    /// bloom filter if not previously enabled. If the `value` is not between 0 and 1 exclusive, it is
-    /// discarded as no-op.
+    /// bloom filter if not previously enabled.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `value` is not between 0 and 1 exclusive
     fn set_bloom_filter_fpp(&mut self, value: f64) {
-        if (0.0..1.0).contains(&value) {
-            self.bloom_filter_enabled = self
-                .bloom_filter_enabled()
-                .or_else(|| Some(Default::default()))
-                .map(|BloomFilterProperties { ndv, .. }| BloomFilterProperties {
-                    ndv,
-                    fpp: value,
-                });
-        }
+        assert!(
+            value > 0. && value < 1.0,
+            "fpp must be between 0 and 1 exclusive, got {}",
+            value
+        );
+
+        self.bloom_filter_properies
+            .get_or_insert_with(Default::default)
+            .fpp = value;
     }
 
     /// Sets the number of distinct (unique) values for bloom filter for this column, and implicitly
     /// enables bloom filter if not previously enabled.
     fn set_bloom_filter_ndv(&mut self, value: u64) {
-        self.bloom_filter_enabled = self
-            .bloom_filter_enabled()
-            .or_else(|| Some(Default::default()))
-            .map(|BloomFilterProperties { fpp, .. }| BloomFilterProperties {
-                ndv: value,
-                fpp,
-            });
+        self.bloom_filter_properies
+            .get_or_insert_with(Default::default)
+            .ndv = value;
     }
 
     /// Returns optional encoding for this column.
@@ -736,9 +734,9 @@ impl ColumnProperties {
         self.max_statistics_size
     }
 
-    /// Returns bloom filter properties if set.
-    fn bloom_filter_enabled(&self) -> Option<BloomFilterProperties> {
-        self.bloom_filter_enabled.clone()
+    /// Returns the bloom filter properties, or `None` if not enabled
+    fn bloom_filter_properties(&self) -> Option<&BloomFilterProperties> {
+        self.bloom_filter_properies.as_ref()
     }
 }
 
@@ -867,7 +865,7 @@ mod tests {
             DEFAULT_MAX_STATISTICS_SIZE
         );
         assert!(props
-            .bloom_filter_enabled(&ColumnPath::from("col"))
+            .bloom_filter_properties(&ColumnPath::from("col"))
             .is_none());
     }
 
@@ -997,8 +995,8 @@ mod tests {
         );
         assert_eq!(props.max_statistics_size(&ColumnPath::from("col")), 123);
         assert_eq!(
-            props.bloom_filter_enabled(&ColumnPath::from("col")),
-            Some(BloomFilterProperties { fpp: 0.1, ndv: 100 })
+            props.bloom_filter_properties(&ColumnPath::from("col")),
+            Some(&BloomFilterProperties { fpp: 0.1, ndv: 100 })
         );
     }
 
@@ -1024,8 +1022,8 @@ mod tests {
             DEFAULT_DICTIONARY_ENABLED
         );
         assert_eq!(
-            props.bloom_filter_enabled(&ColumnPath::from("col")),
-            Some(BloomFilterProperties {
+            props.bloom_filter_properties(&ColumnPath::from("col")),
+            Some(&BloomFilterProperties {
                 fpp: 0.05,
                 ndv: 1_000_000_u64
             })
@@ -1037,15 +1035,15 @@ mod tests {
         assert_eq!(
             WriterProperties::builder()
                 .build()
-                .bloom_filter_enabled(&ColumnPath::from("col")),
+                .bloom_filter_properties(&ColumnPath::from("col")),
             None
         );
         assert_eq!(
             WriterProperties::builder()
                 .set_bloom_filter_ndv(100)
                 .build()
-                .bloom_filter_enabled(&ColumnPath::from("col")),
-            Some(BloomFilterProperties {
+                .bloom_filter_properties(&ColumnPath::from("col")),
+            Some(&BloomFilterProperties {
                 fpp: 0.05,
                 ndv: 100
             })
@@ -1054,8 +1052,8 @@ mod tests {
             WriterProperties::builder()
                 .set_bloom_filter_fpp(0.1)
                 .build()
-                .bloom_filter_enabled(&ColumnPath::from("col")),
-            Some(BloomFilterProperties {
+                .bloom_filter_properties(&ColumnPath::from("col")),
+            Some(&BloomFilterProperties {
                 fpp: 0.1,
                 ndv: 1_000_000_u64
             })
