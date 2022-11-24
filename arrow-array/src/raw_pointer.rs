@@ -21,10 +21,19 @@ use std::ptr::NonNull;
 /// self-reference a [arrow_buffer::Buffer] from
 /// [arrow_data::ArrayData], as a pointer to the beginning of its
 /// contents.
-#[derive(Copy, Clone)]
 pub(super) struct RawPtrBox<T> {
     ptr: NonNull<T>,
 }
+
+impl<T> Clone for RawPtrBox<T> {
+    fn clone(&self) -> Self {
+        Self {
+            ptr: self.ptr.clone(),
+        }
+    }
+}
+
+impl<T> Copy for RawPtrBox<T> {}
 
 impl<T> RawPtrBox<T> {
     /// # Safety

@@ -204,7 +204,6 @@ pub type UInt64DictionaryArray = DictionaryArray<UInt64Type>;
 ///    .collect();
 /// assert_eq!(&array, &expected);
 /// ```
-#[derive(Clone)]
 pub struct DictionaryArray<K: ArrowPrimitiveType> {
     /// Data of this dictionary. Note that this is _not_ compatible with the C Data interface,
     /// as, in the current implementation, `values` below are the first child of this struct.
@@ -221,6 +220,17 @@ pub struct DictionaryArray<K: ArrowPrimitiveType> {
 
     /// Values are ordered.
     is_ordered: bool,
+}
+
+impl<K: ArrowPrimitiveType> Clone for DictionaryArray<K> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            keys: self.keys.clone(),
+            values: self.values.clone(),
+            is_ordered: self.is_ordered,
+        }
+    }
 }
 
 impl<K: ArrowPrimitiveType> DictionaryArray<K> {

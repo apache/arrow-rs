@@ -60,11 +60,20 @@ pub(crate) fn empty_offsets<OffsetSize: OffsetSizeTrait>() -> &'static [OffsetSi
 /// <https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout>
 ///
 /// For non generic lists, you may wish to consider using [`ListArray`] or [`LargeListArray`]`
-#[derive(Clone)]
 pub struct GenericListArray<OffsetSize> {
     data: ArrayData,
     values: ArrayRef,
     value_offsets: RawPtrBox<OffsetSize>,
+}
+
+impl<OffsetSize> Clone for GenericListArray<OffsetSize> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            values: self.values.clone(),
+            value_offsets: self.value_offsets,
+        }
+    }
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {

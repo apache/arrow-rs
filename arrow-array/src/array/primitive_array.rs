@@ -217,7 +217,6 @@ pub trait ArrowPrimitiveType: 'static {
 ///     assert_eq!(i + 1, arr.value(i as usize));
 /// }
 /// ```
-#[derive(Clone)]
 pub struct PrimitiveArray<T: ArrowPrimitiveType> {
     /// Underlying ArrayData
     /// # Safety
@@ -229,6 +228,15 @@ pub struct PrimitiveArray<T: ArrowPrimitiveType> {
     /// raw_values must have a value equivalent to `data.buffers()[0].raw_data()`
     /// raw_values must have alignment for type T::NativeType
     raw_values: RawPtrBox<T::Native>,
+}
+
+impl<T: ArrowPrimitiveType> Clone for PrimitiveArray<T> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            raw_values: self.raw_values,
+        }
+    }
 }
 
 impl<T: ArrowPrimitiveType> PrimitiveArray<T> {

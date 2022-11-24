@@ -36,11 +36,20 @@ use std::any::Any;
 /// [`LargeStringArray`]: crate::LargeStringArray
 /// [`BinaryArray`]: crate::BinaryArray
 /// [`LargeBinaryArray`]: crate::LargeBinaryArray
-#[derive(Clone)]
 pub struct GenericByteArray<T: ByteArrayType> {
     data: ArrayData,
     value_offsets: RawPtrBox<T::Offset>,
     value_data: RawPtrBox<u8>,
+}
+
+impl<T: ByteArrayType> Clone for GenericByteArray<T> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            value_offsets: self.value_offsets,
+            value_data: self.value_data,
+        }
+    }
 }
 
 impl<T: ByteArrayType> GenericByteArray<T> {
