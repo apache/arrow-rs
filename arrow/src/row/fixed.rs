@@ -20,7 +20,7 @@ use crate::compute::SortOptions;
 use crate::datatypes::ArrowPrimitiveType;
 use crate::row::{null_sentinel, Rows};
 use arrow_array::builder::BufferBuilder;
-use arrow_array::BooleanArray;
+use arrow_array::{BooleanArray, FixedSizeBinaryArray};
 use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
@@ -201,6 +201,29 @@ pub fn encode<T: FixedLengthEncoding, I: IntoIterator<Item = Option<T>>>(
     }
 }
 
+pub fn encode_fixed_size_binary(
+    out: &mut Rows,
+    array: &FixedSizeBinaryArray,
+    opts: SortOptions,
+) {
+    let len = array.value_length() as usize;
+    for (offset, maybe_val) in out.offsets.iter_mut().skip(1).zip(array.iter()) {
+        let end_offset = *offset + len + 1;
+        if let Some(val) = maybe_val {
+            let to_write = &mut out.buffer[*offset..end_offset];
+            to_write[0] = 1;
+            to_write[1..].copy_from_slice(&val[..len]);
+            if opts.descending {
+                // Flip bits to reverse order
+                to_write[1..1 + len].iter_mut().for_each(|v| *v = !*v)
+            }
+        } else {
+            out.buffer[*offset] = null_sentinel(opts);
+        }
+        *offset = end_offset;
+    }
+}
+
 /// Splits `len` bytes from `src`
 #[inline]
 fn split_off<'a>(src: &mut &'a [u8], len: usize) -> &'a [u8] {
@@ -325,4 +348,38 @@ where
     // SAFETY:
     // Validated data type above
     unsafe { decode_fixed::<T::Native>(rows, data_type, options).into() }
+}
+
+/// Decodes a `FixedLengthBinary` from rows
+pub fn decode_fixed_size_binary(
+    rows: &mut [&[u8]],
+    size: i32,
+    options: SortOptions,
+) -> FixedSizeBinaryArray {
+    let len = rows.len();
+
+    let mut values = MutableBuffer::new(size as usize * rows.len());
+    let (null_count, nulls) = decode_nulls(rows);
+
+    let encoded_len = size as usize + 1;
+
+    for row in rows {
+        let i = split_off(row, encoded_len);
+        values.extend_from_slice(&i[1..]);
+    }
+
+    if options.descending {
+        for v in values.as_slice_mut() {
+            *v = !*v;
+        }
+    }
+
+    let builder = ArrayDataBuilder::new(DataType::FixedSizeBinary(size))
+        .len(len)
+        .null_count(null_count)
+        .add_buffer(values.into())
+        .null_bit_buffer(Some(nulls));
+
+    // SAFETY: Buffers correct length
+    unsafe { builder.build_unchecked().into() }
 }
