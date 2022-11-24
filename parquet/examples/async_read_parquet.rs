@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
     let file_metadata = builder.metadata().file_metadata().clone();
     let mask = ProjectionMask::roots(file_metadata.schema_descr(), [0, 1, 2]);
     // Set projection mask to read only root columns 1 and 2.
-    builder = builder.with_projection(mask.clone());
+    builder = builder.with_projection(mask);
 
     // Highlight: set `RowFilter`, it'll push down filter predicates to skip IO and decode.
     // For more specific usage: please refer to https://github.com/apache/arrow-datafusion/blob/master/datafusion/core/src/physical_plan/file_format/parquet/row_filter.rs.
