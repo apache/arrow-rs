@@ -47,7 +47,7 @@ chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
 csv = { version = "1.1", default-features = false }
 lazy_static = { version = "1.4", default-features = false }
 lexical-core = { version = "^0.8", default-features = false }
-regex = { version = "1.5.6", default-features = false, features = ["std", "unicode"] }
+regex = { version = "1.7.0", default-features = false, features = ["std", "unicode", "perf"] }
 
 [dev-dependencies]
 tempfile = "3.3"
