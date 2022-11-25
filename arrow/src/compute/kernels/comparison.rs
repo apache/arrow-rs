@@ -140,14 +140,13 @@ fn is_like_pattern(c: char) -> bool {
 /// Evaluate regex `op(left)` matching `right` on [`StringArray`] / [`LargeStringArray`]
 ///
 /// If `negate_regex` is true, the regex expression will be negated. (for example, with `not like`)
-fn regex_like<OffsetSize, F>(
-    left: &GenericStringArray<OffsetSize>,
-    right: &GenericStringArray<OffsetSize>,
+fn regex_like<'a, S: ArrayAccessor<Item = &'a str>, F>(
+    left: S,
+    right: S,
     negate_regex: bool,
     op: F,
 ) -> Result<BooleanArray>
 where
-    OffsetSize: OffsetSizeTrait,
     F: Fn(&str) -> Result<Regex>,
 {
     let mut map = HashMap::new();
@@ -225,6 +224,48 @@ pub fn like_utf8<OffsetSize: OffsetSizeTrait>(
             ))
         })
     })
+}
+
+/// Perform SQL `left LIKE right` operation on on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn like_dict<K: ArrowNumericType>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+) -> Result<BooleanArray> {
+    match (left.value_type(), right.value_type()) {
+        (DataType::Utf8, DataType::Utf8) => {
+            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
+            let right = right.downcast_dict::<GenericStringArray<i32>>().unwrap();
+
+            regex_like(left, right, false, |re_pattern| {
+                Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Unable to build regex from LIKE pattern: {}",
+                        e
+                    ))
+                })
+            })
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
+            let right = right.downcast_dict::<GenericStringArray<i64>>().unwrap();
+
+            regex_like(left, right, false, |re_pattern| {
+                Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Unable to build regex from LIKE pattern: {}",
+                        e
+                    ))
+                })
+            })
+        }
+        _ => Err(ArrowError::ComputeError(
+            "like_dict only supports DictionaryArray with Utf8 or LargeUtf8 values"
+                .to_string(),
+        )),
+    }
 }
 
 #[inline]
@@ -402,6 +443,48 @@ pub fn nlike_utf8<OffsetSize: OffsetSizeTrait>(
     })
 }
 
+/// Perform SQL `left NOT LIKE right` operation on on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn nlike_dict<K: ArrowNumericType>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+) -> Result<BooleanArray> {
+    match (left.value_type(), right.value_type()) {
+        (DataType::Utf8, DataType::Utf8) => {
+            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
+            let right = right.downcast_dict::<GenericStringArray<i32>>().unwrap();
+
+            regex_like(left, right, true, |re_pattern| {
+                Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Unable to build regex from LIKE pattern: {}",
+                        e
+                    ))
+                })
+            })
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
+            let right = right.downcast_dict::<GenericStringArray<i64>>().unwrap();
+
+            regex_like(left, right, true, |re_pattern| {
+                Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Unable to build regex from LIKE pattern: {}",
+                        e
+                    ))
+                })
+            })
+        }
+        _ => Err(ArrowError::ComputeError(
+            "nlike_dict only supports DictionaryArray with Utf8 or LargeUtf8 values"
+                .to_string(),
+        )),
+    }
+}
+
 #[inline]
 fn nlike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
     left: L,
@@ -462,6 +545,48 @@ pub fn ilike_utf8<OffsetSize: OffsetSizeTrait>(
             ))
         })
     })
+}
+
+/// Perform SQL `left ILIKE right` operation on on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn ilike_dict<K: ArrowNumericType>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+) -> Result<BooleanArray> {
+    match (left.value_type(), right.value_type()) {
+        (DataType::Utf8, DataType::Utf8) => {
+            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
+            let right = right.downcast_dict::<GenericStringArray<i32>>().unwrap();
+
+            regex_like(left, right, false, |re_pattern| {
+                Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Unable to build regex from ILIKE pattern: {}",
+                        e
+                    ))
+                })
+            })
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
+            let right = right.downcast_dict::<GenericStringArray<i64>>().unwrap();
+
+            regex_like(left, right, false, |re_pattern| {
+                Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Unable to build regex from ILIKE pattern: {}",
+                        e
+                    ))
+                })
+            })
+        }
+        _ => Err(ArrowError::ComputeError(
+            "ilike_dict only supports DictionaryArray with Utf8 or LargeUtf8 values"
+                .to_string(),
+        )),
+    }
 }
 
 #[inline]
@@ -608,6 +733,48 @@ pub fn nilike_utf8<OffsetSize: OffsetSizeTrait>(
             ))
         })
     })
+}
+
+/// Perform SQL `left NOT ILIKE right` operation on on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn nilike_dict<K: ArrowNumericType>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+) -> Result<BooleanArray> {
+    match (left.value_type(), right.value_type()) {
+        (DataType::Utf8, DataType::Utf8) => {
+            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
+            let right = right.downcast_dict::<GenericStringArray<i32>>().unwrap();
+
+            regex_like(left, right, true, |re_pattern| {
+                Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Unable to build regex from ILIKE pattern: {}",
+                        e
+                    ))
+                })
+            })
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
+            let right = right.downcast_dict::<GenericStringArray<i64>>().unwrap();
+
+            regex_like(left, right, true, |re_pattern| {
+                Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Unable to build regex from ILIKE pattern: {}",
+                        e
+                    ))
+                })
+            })
+        }
+        _ => Err(ArrowError::ComputeError(
+            "nilike_dict only supports DictionaryArray with Utf8 or LargeUtf8 values"
+                .to_string(),
+        )),
+    }
 }
 
 #[inline]
@@ -4352,6 +4519,23 @@ mod tests {
         };
     }
 
+    macro_rules! test_dict_utf8 {
+        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
+            #[test]
+            fn $test_name() {
+                let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
+                let right: DictionaryArray<Int8Type> = $right.into_iter().collect();
+                let res = $op(&left, &right).unwrap();
+                let expected = $expected;
+                assert_eq!(expected.len(), res.len());
+                for i in 0..res.len() {
+                    let v = res.value(i);
+                    assert_eq!(v, expected[i]);
+                }
+            }
+        };
+    }
+
     #[test]
     fn test_utf8_eq_scalar_on_slice() {
         let a = StringArray::from(
@@ -4493,6 +4677,14 @@ mod tests {
         vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow", "arrow"],
         vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_", ".*"],
         like_utf8,
+        vec![true, true, true, false, false, true, false, false]
+    );
+
+    test_dict_utf8!(
+        test_utf8_array_like_dict,
+        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow", "arrow"],
+        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_", ".*"],
+        like_dict,
         vec![true, true, true, false, false, true, false, false]
     );
 
@@ -4664,6 +4856,14 @@ mod tests {
         vec![true]
     );
 
+    test_dict_utf8!(
+        test_utf8_scalar_ilike_regex_dict,
+        vec!["%%%"],
+        vec![r#"\%_\%"#],
+        ilike_dict,
+        vec![true]
+    );
+
     #[test]
     fn test_replace_like_wildcards() {
         let a_eq = "_%";
@@ -4714,6 +4914,15 @@ mod tests {
         nlike_utf8,
         vec![false, false, false, true, true, false, true]
     );
+
+    test_dict_utf8!(
+        test_utf8_array_nlike_dict,
+        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow"],
+        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_"],
+        nlike_dict,
+        vec![false, false, false, true, true, false, true]
+    );
+
     test_utf8_scalar!(
         test_utf8_array_nlike_escape_testing,
         vec!["varchar(255)", "int(255)", "varchar", "int"],
@@ -4784,6 +4993,15 @@ mod tests {
         ilike_utf8,
         vec![true, true, true, false, false, true, false]
     );
+
+    test_dict_utf8!(
+        test_utf8_array_ilike_dict,
+        vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
+        vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
+        ilike_dict,
+        vec![true, true, true, false, false, true, false]
+    );
+
     test_utf8_scalar!(
         ilike_utf8_scalar_escape_testing,
         vec!["varchar(255)", "int(255)", "varchar", "int"],
@@ -4838,6 +5056,15 @@ mod tests {
         nilike_utf8,
         vec![false, false, false, true, true, false, true]
     );
+
+    test_dict_utf8!(
+        test_utf8_array_nilike_dict,
+        vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
+        vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
+        nilike_dict,
+        vec![false, false, false, true, true, false, true]
+    );
+
     test_utf8_scalar!(
         nilike_utf8_scalar_escape_testing,
         vec!["varchar(255)", "int(255)", "varchar", "int"],
