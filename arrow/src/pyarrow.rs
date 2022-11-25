@@ -195,9 +195,12 @@ impl PyArrowConvert for RecordBatch {
             py_names.push(field.name());
         }
 
+        let py_schema = schema.to_pyarrow(py)?;
+
         let module = py.import("pyarrow")?;
         let class = module.getattr("RecordBatch")?;
-        let record = class.call_method1("from_arrays", (py_arrays, py_names))?;
+        let record =
+            class.call_method1("from_arrays", (py_arrays, py_names, py_schema))?;
 
         Ok(PyObject::from(record))
     }
