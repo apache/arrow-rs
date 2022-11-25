@@ -86,6 +86,7 @@ jobs:
       - name: Configure Fake GCS Server (GCP emulation)
         run: |
           docker run -d -p 4443:4443 fsouza/fake-gcs-server -scheme http
+          # Give the container a moment to start up prior to configuring it
           sleep 1
           curl -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "http://localhost:4443/storage/v1/b"
           echo '{"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": ""}' > "$GOOGLE_SERVICE_ACCOUNT"
