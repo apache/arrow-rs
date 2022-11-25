@@ -908,8 +908,19 @@ fn encode_column(
 }
 
 macro_rules! decode_primitive_helper {
-    ($t:ty, $rows: ident, $data_type:ident, $options:ident) => {
+    ($t:ty, $rows:ident, $data_type:ident, $options:ident) => {
         Arc::new(decode_primitive::<$t>($rows, $data_type, $options))
+    };
+}
+
+macro_rules! decode_dictionary_helper {
+    ($t:ty, $interner:ident, $v:ident, $options:ident, $rows:ident) => {
+        Arc::new(decode_dictionary::<$t>(
+            $interner.unwrap(),
+            $v.as_ref(),
+            $options,
+            $rows,
+        )?)
     };
 }
 
@@ -934,61 +945,9 @@ unsafe fn decode_column(
         DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)),
         DataType::Utf8 => Arc::new(decode_string::<i32>(rows, options, validate_utf8)),
         DataType::LargeUtf8 => Arc::new(decode_string::<i64>(rows, options, validate_utf8)),
-        DataType::Dictionary(k, v) => match k.as_ref() {
-            DataType::Int8 => Arc::new(decode_dictionary::<Int8Type>(
-                interner.unwrap(),
-                v.as_ref(),
-                options,
-                rows,
-            )?),
-            DataType::Int16 => Arc::new(decode_dictionary::<Int16Type>(
-                interner.unwrap(),
-                v.as_ref(),
-                options,
-                rows,
-            )?),
-            DataType::Int32 => Arc::new(decode_dictionary::<Int32Type>(
-                interner.unwrap(),
-                v.as_ref(),
-                options,
-                rows,
-            )?),
-            DataType::Int64 => Arc::new(decode_dictionary::<Int64Type>(
-                interner.unwrap(),
-                v.as_ref(),
-                options,
-                rows,
-            )?),
-            DataType::UInt8 => Arc::new(decode_dictionary::<UInt8Type>(
-                interner.unwrap(),
-                v.as_ref(),
-                options,
-                rows,
-            )?),
-            DataType::UInt16 => Arc::new(decode_dictionary::<UInt16Type>(
-                interner.unwrap(),
-                v.as_ref(),
-                options,
-                rows,
-            )?),
-            DataType::UInt32 => Arc::new(decode_dictionary::<UInt32Type>(
-                interner.unwrap(),
-                v.as_ref(),
-                options,
-                rows,
-            )?),
-            DataType::UInt64 => Arc::new(decode_dictionary::<UInt64Type>(
-                interner.unwrap(),
-                v.as_ref(),
-                options,
-                rows,
-            )?),
-            _ => {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "{} is not a valid dictionary key type",
-                    field.data_type
-                )));
-            }
+        DataType::Dictionary(k, v) => downcast_integer! {
+            k.as_ref() => (decode_dictionary_helper, interner, v, options, rows),
+            _ => unreachable!()
         },
         _ => {
             return Err(ArrowError::NotYetImplemented(format!(
