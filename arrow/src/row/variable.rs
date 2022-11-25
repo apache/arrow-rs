@@ -16,13 +16,18 @@
 // under the License.
 
 use crate::compute::SortOptions;
-use crate::row::{null_sentinel, Rows};
+use crate::row::{null_sentinel, Codec, Rows};
 use crate::util::bit_util::ceil;
 use arrow_array::builder::BufferBuilder;
-use arrow_array::{Array, GenericBinaryArray, GenericStringArray, OffsetSizeTrait};
+use arrow_array::cast::as_generic_binary_array;
+use arrow_array::{
+    Array, ArrayRef, GenericBinaryArray, GenericStringArray, OffsetSizeTrait,
+};
 use arrow_buffer::MutableBuffer;
 use arrow_data::ArrayDataBuilder;
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType};
+use std::marker::PhantomData;
+use std::sync::Arc;
 
 /// The block size of the variable length encoding
 pub const BLOCK_SIZE: usize = 32;
@@ -55,7 +60,7 @@ pub fn encoded_len(a: Option<&[u8]>) -> usize {
 /// - [`BLOCK_SIZE`] bytes of string data, padded with 0s
 /// - `0xFF_u8` if this is not the last block for this string
 /// - otherwise the length of the block as a `u8`
-pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
+fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
     out: &mut Rows,
     i: I,
     opts: SortOptions,
@@ -148,7 +153,7 @@ fn decoded_len(row: &[u8], options: SortOptions) -> usize {
 }
 
 /// Decodes a binary array from `rows` with the provided `options`
-pub fn decode_binary<I: OffsetSizeTrait>(
+fn decode_binary<I: OffsetSizeTrait>(
     rows: &mut [&[u8]],
     options: SortOptions,
 ) -> GenericBinaryArray<I> {
@@ -211,7 +216,7 @@ pub fn decode_binary<I: OffsetSizeTrait>(
 /// # Safety
 ///
 /// The row must contain valid UTF-8 data
-pub unsafe fn decode_string<I: OffsetSizeTrait>(
+unsafe fn decode_string<I: OffsetSizeTrait>(
     rows: &mut [&[u8]],
     options: SortOptions,
     validate_utf8: bool,
@@ -230,4 +235,95 @@ pub unsafe fn decode_string<I: OffsetSizeTrait>(
     // SAFETY:
     // Row data must have come from a valid UTF-8 array
     GenericStringArray::from(builder.build_unchecked())
+}
+
+pub struct StringCodec<O> {
+    options: SortOptions,
+    _phantom: PhantomData<O>,
+}
+
+impl<O> StringCodec<O> {
+    pub fn new(options: SortOptions) -> Self {
+        Self {
+            options,
+            _phantom: Default::default(),
+        }
+    }
+}
+
+impl<O: OffsetSizeTrait> Codec for StringCodec<O> {
+    fn size(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
+
+    fn prepare_encode(&mut self, array: &dyn Array, lengths: &mut [usize]) {
+        let array: &GenericStringArray<O> = array.as_any().downcast_ref().unwrap();
+        array
+            .iter()
+            .zip(lengths.iter_mut())
+            .for_each(|(slice, length)| {
+                *length += encoded_len(slice.map(|x| x.as_bytes()))
+            })
+    }
+
+    fn do_encode(&mut self, array: &dyn Array, out: &mut Rows) {
+        let array: &GenericStringArray<O> = array.as_any().downcast_ref().unwrap();
+        encode(
+            out,
+            array.iter().map(|x| x.map(|x| x.as_bytes())),
+            self.options,
+        )
+    }
+
+    unsafe fn decode(
+        &self,
+        rows: &mut [&[u8]],
+        validate_utf8: bool,
+    ) -> Result<ArrayRef, ArrowError> {
+        Ok(Arc::new(decode_string::<O>(
+            rows,
+            self.options,
+            validate_utf8,
+        )))
+    }
+}
+
+pub struct BinaryCodec<O> {
+    options: SortOptions,
+    _phantom: PhantomData<O>,
+}
+
+impl<O> BinaryCodec<O> {
+    pub fn new(options: SortOptions) -> Self {
+        Self {
+            options,
+            _phantom: Default::default(),
+        }
+    }
+}
+
+impl<O: OffsetSizeTrait> Codec for BinaryCodec<O> {
+    fn size(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
+
+    fn prepare_encode(&mut self, array: &dyn Array, lengths: &mut [usize]) {
+        as_generic_binary_array::<O>(array)
+            .iter()
+            .zip(lengths.iter_mut())
+            .for_each(|(slice, length)| *length += encoded_len(slice))
+    }
+
+    fn do_encode(&mut self, array: &dyn Array, out: &mut Rows) {
+        let array = as_generic_binary_array::<O>(array);
+        encode(out, array.iter(), self.options)
+    }
+
+    unsafe fn decode(
+        &self,
+        rows: &mut [&[u8]],
+        _validate_utf8: bool,
+    ) -> Result<ArrayRef, ArrowError> {
+        Ok(Arc::new(decode_binary::<O>(rows, self.options)))
+    }
 }

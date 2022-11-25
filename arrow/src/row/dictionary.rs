@@ -18,7 +18,7 @@
 use crate::compute::SortOptions;
 use crate::row::fixed::{FixedLengthEncoding, FromSlice};
 use crate::row::interner::{Interned, OrderPreservingInterner};
-use crate::row::{null_sentinel, Rows};
+use crate::row::{null_sentinel, Codec, Rows};
 use arrow_array::builder::*;
 use arrow_array::cast::*;
 use arrow_array::types::*;
@@ -28,11 +28,13 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::sync::Arc;
 
 /// Computes the dictionary mapping for the given dictionary values
-pub fn compute_dictionary_mapping(
+fn compute_dictionary_mapping(
     interner: &mut OrderPreservingInterner,
-    values: &ArrayRef,
+    values: &dyn Array,
 ) -> Vec<Option<Interned>> {
     downcast_primitive_array! {
         values => interner
@@ -61,15 +63,17 @@ pub fn compute_dictionary_mapping(
 ///
 /// - single `0_u8` if null
 /// - the bytes of the corresponding normalized key including the null terminator
-pub fn encode_dictionary<K: ArrowDictionaryKeyType>(
+fn encode_dictionary<K: ArrowDictionaryKeyType>(
     out: &mut Rows,
     column: &DictionaryArray<K>,
-    normalized_keys: &[Option<&[u8]>],
+    interner: &OrderPreservingInterner,
+    dict: &[Option<Interned>],
     opts: SortOptions,
 ) {
     for (offset, k) in out.offsets.iter_mut().skip(1).zip(column.keys()) {
-        match k.and_then(|k| normalized_keys[k.as_usize()]) {
-            Some(normalized_key) => {
+        match k.and_then(|k| dict[k.as_usize()]) {
+            Some(interned) => {
+                let normalized_key = interner.normalized_key(interned);
                 let end_offset = *offset + 1 + normalized_key.len();
                 out.buffer[*offset] = 1;
                 out.buffer[*offset + 1..end_offset].copy_from_slice(normalized_key);
@@ -100,7 +104,7 @@ macro_rules! decode_primitive_helper {
 /// # Safety
 ///
 /// `interner` must contain valid data for the provided `value_type`
-pub unsafe fn decode_dictionary<K: ArrowDictionaryKeyType>(
+unsafe fn decode_dictionary<K: ArrowDictionaryKeyType>(
     interner: &OrderPreservingInterner,
     value_type: &DataType,
     options: SortOptions,
@@ -279,4 +283,65 @@ where
     // SAFETY:
     // Validated data type above
     unsafe { decode_fixed::<T::Native>(values, data_type) }
+}
+
+pub struct DictionaryCodec<T> {
+    interner: OrderPreservingInterner,
+    value_type: DataType,
+    options: SortOptions,
+    /// The mapping for the next array to encode
+    next_mapping: Option<Vec<Option<Interned>>>,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> DictionaryCodec<T> {
+    pub fn new(value_type: DataType, options: SortOptions) -> Self {
+        Self {
+            value_type,
+            options,
+            next_mapping: None,
+            interner: Default::default(),
+            _phantom: Default::default(),
+        }
+    }
+}
+
+impl<T: ArrowDictionaryKeyType> Codec for DictionaryCodec<T> {
+    fn size(&self) -> usize {
+        std::mem::size_of::<Self>() + self.interner.size()
+            - std::mem::size_of::<OrderPreservingInterner>()
+    }
+
+    fn prepare_encode(&mut self, array: &dyn Array, lengths: &mut [usize]) {
+        let array = as_dictionary_array::<T>(array);
+        let values = array.values().as_ref();
+        let mapping = compute_dictionary_mapping(&mut self.interner, values);
+
+        for (v, length) in array.keys().iter().zip(lengths.iter_mut()) {
+            match v.and_then(|v| mapping[v.as_usize()]) {
+                Some(k) => *length += self.interner.normalized_key(k).len() + 1,
+                None => *length += 1,
+            }
+        }
+        self.next_mapping = Some(mapping);
+    }
+
+    fn do_encode(&mut self, array: &dyn Array, out: &mut Rows) {
+        let array = as_dictionary_array::<T>(array);
+        let mapping = self.next_mapping.take().unwrap();
+        encode_dictionary(out, array, &self.interner, &mapping, self.options);
+    }
+
+    unsafe fn decode(
+        &self,
+        rows: &mut [&[u8]],
+        _validate_utf8: bool,
+    ) -> Result<ArrayRef, ArrowError> {
+        Ok(Arc::new(decode_dictionary::<T>(
+            &self.interner,
+            &self.value_type,
+            self.options,
+            rows,
+        )?))
+    }
 }

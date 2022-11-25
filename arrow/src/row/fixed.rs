@@ -18,13 +18,16 @@
 use crate::array::PrimitiveArray;
 use crate::compute::SortOptions;
 use crate::datatypes::ArrowPrimitiveType;
-use crate::row::{null_sentinel, Rows};
+use crate::row::{null_sentinel, Codec, Rows};
 use arrow_array::builder::BufferBuilder;
-use arrow_array::BooleanArray;
+use arrow_array::cast::{as_boolean_array, as_primitive_array};
+use arrow_array::{Array, ArrayRef, BooleanArray, NullArray};
 use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType};
 use half::f16;
+use std::marker::PhantomData;
+use std::sync::Arc;
 
 pub trait FromSlice {
     fn from_slice(slice: &[u8], invert: bool) -> Self;
@@ -165,20 +168,11 @@ impl FixedLengthEncoding for f64 {
     }
 }
 
-/// Returns the total encoded length (including null byte) for a value of type `T::Native`
-pub const fn encoded_len<T>(_col: &PrimitiveArray<T>) -> usize
-where
-    T: ArrowPrimitiveType,
-    T::Native: FixedLengthEncoding,
-{
-    T::Native::ENCODED_LEN
-}
-
 /// Fixed width types are encoded as
 ///
 /// - 1 byte `0` if null or `1` if valid
 /// - bytes of [`FixedLengthEncoding`]
-pub fn encode<T: FixedLengthEncoding, I: IntoIterator<Item = Option<T>>>(
+fn encode<T: FixedLengthEncoding, I: IntoIterator<Item = Option<T>>>(
     out: &mut Rows,
     i: I,
     opts: SortOptions,
@@ -210,7 +204,7 @@ fn split_off<'a>(src: &mut &'a [u8], len: usize) -> &'a [u8] {
 }
 
 /// Decodes a `BooleanArray` from rows
-pub fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
+fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
     let true_val = match options.descending {
         true => !1,
         false => 1,
@@ -310,7 +304,7 @@ unsafe fn decode_fixed<T: FixedLengthEncoding + ArrowNativeType>(
 }
 
 /// Decodes a `PrimitiveArray` from rows
-pub fn decode_primitive<T: ArrowPrimitiveType>(
+fn decode_primitive<T: ArrowPrimitiveType>(
     rows: &mut [&[u8]],
     data_type: DataType,
     options: SortOptions,
@@ -325,4 +319,111 @@ where
     // SAFETY:
     // Validated data type above
     unsafe { decode_fixed::<T::Native>(rows, data_type, options).into() }
+}
+
+pub struct PrimitiveCodec<T> {
+    data_type: DataType,
+    options: SortOptions,
+    _phantom: PhantomData<T>,
+}
+
+impl<T: ArrowPrimitiveType> PrimitiveCodec<T> {
+    pub fn new(data_type: DataType, options: SortOptions) -> Self {
+        assert_eq!(
+            std::mem::discriminant(&data_type),
+            std::mem::discriminant(&T::DATA_TYPE)
+        );
+        Self {
+            data_type,
+            options,
+            _phantom: Default::default(),
+        }
+    }
+}
+
+impl<T> Codec for PrimitiveCodec<T>
+where
+    T: ArrowPrimitiveType,
+    T::Native: FixedLengthEncoding,
+{
+    fn size(&self) -> usize {
+        0
+    }
+
+    fn prepare_encode(&mut self, _array: &dyn Array, lengths: &mut [usize]) {
+        lengths
+            .iter_mut()
+            .for_each(|x| *x += T::Native::ENCODED_LEN)
+    }
+
+    fn do_encode(&mut self, array: &dyn Array, out: &mut Rows) {
+        let array = as_primitive_array::<T>(array);
+        encode(out, array, self.options)
+    }
+
+    unsafe fn decode(
+        &self,
+        rows: &mut [&[u8]],
+        _validate_utf8: bool,
+    ) -> Result<ArrayRef, ArrowError> {
+        Ok(Arc::new(decode_primitive::<T>(
+            rows,
+            self.data_type.clone(),
+            self.options,
+        )))
+    }
+}
+
+pub struct BooleanCodec {
+    options: SortOptions,
+}
+
+impl BooleanCodec {
+    pub fn new(options: SortOptions) -> Self {
+        Self { options }
+    }
+}
+
+impl Codec for BooleanCodec {
+    fn size(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
+
+    fn prepare_encode(&mut self, _array: &dyn Array, lengths: &mut [usize]) {
+        lengths.iter_mut().for_each(|x| *x += bool::ENCODED_LEN)
+    }
+
+    fn do_encode(&mut self, array: &dyn Array, out: &mut Rows) {
+        let array = as_boolean_array(array);
+        encode(out, array, self.options)
+    }
+
+    unsafe fn decode(
+        &self,
+        rows: &mut [&[u8]],
+        _validate_utf8: bool,
+    ) -> Result<ArrayRef, ArrowError> {
+        Ok(Arc::new(decode_bool(rows, self.options)))
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct NullCodec {}
+
+impl Codec for NullCodec {
+    fn size(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
+
+    fn prepare_encode(&mut self, _array: &dyn Array, _lengths: &mut [usize]) {}
+
+    fn do_encode(&mut self, _array: &dyn Array, _out: &mut Rows) {}
+
+    unsafe fn decode(
+        &self,
+        rows: &mut [&[u8]],
+        _validate_utf8: bool,
+    ) -> Result<ArrayRef, ArrowError> {
+        Ok(Arc::new(NullArray::new(rows.len())))
+    }
 }

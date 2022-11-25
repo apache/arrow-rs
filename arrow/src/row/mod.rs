@@ -132,19 +132,11 @@ use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use arrow_array::cast::*;
 use arrow_array::*;
 
 use crate::compute::SortOptions;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
-use crate::row::dictionary::{
-    compute_dictionary_mapping, decode_dictionary, encode_dictionary,
-};
-use crate::row::fixed::{decode_bool, decode_primitive};
-use crate::row::interner::OrderPreservingInterner;
-use crate::row::variable::{decode_binary, decode_string};
-use crate::{downcast_dictionary_array, downcast_primitive_array};
 
 mod dictionary;
 mod fixed;
@@ -332,11 +324,18 @@ mod variable;
 ///
 /// [COBS]: https://en.wikipedia.org/wiki/Consistent_Overhead_Byte_Stuffing
 /// [byte stuffing]: https://en.wikipedia.org/wiki/High-Level_Data_Link_Control#Asynchronous_framing
-#[derive(Debug)]
 pub struct RowConverter {
     fields: Arc<[SortField]>,
-    /// interning state for column `i`, if column`i` is a dictionary
-    interners: Vec<Option<Box<OrderPreservingInterner>>>,
+
+    codecs: Vec<Box<dyn Codec>>,
+}
+
+impl std::fmt::Debug for RowConverter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RowConverter")
+            .field("fields", &self.fields)
+            .finish()
+    }
 }
 
 /// Configure the data type and sort order for a given column
@@ -371,23 +370,22 @@ impl SortField {
 impl RowConverter {
     /// Create a new [`RowConverter`] with the provided schema
     pub fn new(fields: Vec<SortField>) -> Result<Self> {
-        if !Self::supports_fields(&fields) {
-            return Err(ArrowError::NotYetImplemented(format!(
-                "not yet implemented: {:?}",
-                fields
-            )));
-        }
+        let codecs = fields
+            .iter()
+            .map(|x| make_codec(&x.data_type, x.options))
+            .collect::<Result<_>>()?;
 
-        let interners = (0..fields.len()).map(|_| None).collect();
         Ok(Self {
             fields: fields.into(),
-            interners,
+            codecs,
         })
     }
 
     /// Check if the given fields are supported by the row format.
     pub fn supports_fields(fields: &[SortField]) -> bool {
-        fields.iter().all(|x| !DataType::is_nested(&x.data_type))
+        fields
+            .iter()
+            .all(|x| make_codec(&x.data_type, x.options).is_ok())
     }
 
     /// Convert [`ArrayRef`] columns into [`Rows`]
@@ -405,59 +403,26 @@ impl RowConverter {
                 columns.len()
             )));
         }
+        let row_count = columns.first().map(|x| x.len()).unwrap_or(0);
+        assert!(columns.iter().skip(1).all(|x| x.len() == row_count));
+        assert_eq!(columns.len(), self.codecs.len());
 
-        let dictionaries = columns
-            .iter()
-            .zip(&mut self.interners)
-            .zip(self.fields.iter())
-            .map(|((column, interner), field)| {
-                if !column.data_type().equals_datatype(&field.data_type) {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "RowConverter column schema mismatch, expected {} got {}",
-                        field.data_type,
-                        column.data_type()
-                    )));
-                }
-
-                let values = downcast_dictionary_array! {
-                    column => column.values(),
-                    _ => return Ok(None)
-                };
-
-                let interner = interner.get_or_insert_with(Default::default);
-
-                let mapping: Vec<_> = compute_dictionary_mapping(interner, values)
-                    .into_iter()
-                    .map(|maybe_interned| {
-                        maybe_interned.map(|interned| interner.normalized_key(interned))
-                    })
-                    .collect();
-
-                Ok(Some(mapping))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut lengths = vec![0; row_count];
+        self.codecs
+            .iter_mut()
+            .zip(columns)
+            .for_each(|(c, a)| c.prepare_encode(a.as_ref(), &mut lengths));
 
         let config = RowConfig {
             fields: Arc::clone(&self.fields),
             // Don't need to validate UTF-8 as came from arrow array
             validate_utf8: false,
         };
-        let mut rows = new_empty_rows(columns, &dictionaries, config);
 
-        for ((column, field), dictionary) in
-            columns.iter().zip(self.fields.iter()).zip(dictionaries)
-        {
-            // We encode a column at a time to minimise dispatch overheads
-            encode_column(&mut rows, column, field.options, dictionary.as_deref())
+        let mut rows = Rows::new_empty(&lengths, config);
+        for (codec, array) in self.codecs.iter_mut().zip(columns) {
+            codec.do_encode(array.as_ref(), &mut rows)
         }
-
-        if cfg!(debug_assertions) {
-            assert_eq!(*rows.offsets.last().unwrap(), rows.buffer.len());
-            rows.offsets
-                .windows(2)
-                .for_each(|w| assert!(w[0] <= w[1], "offsets should be monotonic"));
-        }
-
         Ok(rows)
     }
 
@@ -483,17 +448,9 @@ impl RowConverter {
             })
             .collect();
 
-        self.fields
+        self.codecs
             .iter()
-            .zip(&self.interners)
-            .map(|(field, interner)| {
-                // SAFETY
-                // We have validated that the rows came from this [`RowConverter`]
-                // and therefore must be valid
-                unsafe {
-                    decode_column(field, &mut rows, interner.as_deref(), validate_utf8)
-                }
-            })
+            .map(|x| unsafe { x.decode(&mut rows, validate_utf8) })
             .collect()
     }
 
@@ -508,13 +465,8 @@ impl RowConverter {
     pub fn size(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.fields.iter().map(|x| x.size()).sum::<usize>()
-            + self.interners.capacity()
-                * std::mem::size_of::<Option<Box<OrderPreservingInterner>>>()
-            + self
-                .interners
-                .iter()
-                .filter_map(|x| x.as_ref().map(|x| x.size()))
-                .sum::<usize>()
+            + self.codecs.capacity() * std::mem::size_of::<Box<dyn Codec>>()
+            + self.codecs.iter().map(|x| x.size()).sum::<usize>()
     }
 }
 
@@ -569,6 +521,40 @@ pub struct Rows {
 }
 
 impl Rows {
+    fn new_empty(lengths: &[usize], config: RowConfig) -> Self {
+        let mut offsets = Vec::with_capacity(lengths.len() + 1);
+        offsets.push(0);
+
+        // We initialize the offsets shifted down by one row index.
+        //
+        // As the rows are appended to the offsets will be incremented to match
+        //
+        // For example, consider the case of 3 rows of length 3, 4, and 6 respectively.
+        // The offsets would be initialized to `0, 0, 3, 7`
+        //
+        // Writing the first row entirely would yield `0, 3, 3, 7`
+        // The second, `0, 3, 7, 7`
+        // The third, `0, 3, 7, 13`
+        //
+        // This would be the final offsets for reading
+        //
+        // In this way offsets tracks the position during writing whilst eventually serving
+        // as identifying the offsets of the written rows
+        let mut cur_offset = 0_usize;
+        for l in lengths {
+            offsets.push(cur_offset);
+            cur_offset = cur_offset.checked_add(*l).expect("overflow");
+        }
+
+        let buffer = vec![0_u8; cur_offset];
+
+        Self {
+            buffer: buffer.into(),
+            offsets: offsets.into(),
+            config,
+        }
+    }
+
     pub fn row(&self, row: usize) -> Row<'_> {
         let end = self.offsets[row + 1];
         let start = self.offsets[row];
@@ -776,6 +762,56 @@ impl AsRef<[u8]> for OwnedRow {
     }
 }
 
+trait Codec {
+    fn size(&self) -> usize;
+
+    fn prepare_encode(&mut self, array: &dyn Array, lengths: &mut [usize]);
+
+    fn do_encode(&mut self, array: &dyn Array, out: &mut Rows);
+
+    /// Decodes a the provided `field` from `rows`
+    ///
+    /// # Safety
+    ///
+    /// Rows must contain valid data for the provided field
+    unsafe fn decode(&self, rows: &mut [&[u8]], validate_utf8: bool) -> Result<ArrayRef>;
+}
+
+macro_rules! primitive_codec_helper {
+    ($t:ty, $d:ident, $options:ident) => {
+        Box::new(fixed::PrimitiveCodec::<$t>::new($d.clone(), $options))
+    };
+}
+
+macro_rules! dictionary_codec_helper {
+    ($t:ty, $v:ident, $options:ident) => {
+        Box::new(dictionary::DictionaryCodec::<$t>::new(
+            $v.as_ref().clone(),
+            $options,
+        ))
+    };
+}
+
+fn make_codec(data_type: &DataType, options: SortOptions) -> Result<Box<dyn Codec>> {
+    Ok(downcast_primitive! {
+        data_type => (primitive_codec_helper, data_type, options),
+        DataType::Null => Box::new(fixed::NullCodec::default())
+        DataType::Boolean => Box::new(fixed::BooleanCodec::new(options))
+        DataType::Utf8 => Box::new(variable::StringCodec::<i32>::new(options))
+        DataType::LargeUtf8 => Box::new(variable::StringCodec::<i64>::new(options))
+        DataType::Binary => Box::new(variable::BinaryCodec::<i32>::new(options))
+        DataType::LargeBinary => Box::new(variable::BinaryCodec::<i64>::new(options))
+        DataType::Dictionary(k, v) => downcast_integer! {
+            k.as_ref() => (dictionary_codec_helper, v, options),
+            _ => unreachable!()
+        }
+        _ => return Err(ArrowError::NotYetImplemented(format!(
+            "not yet implemented: {:?}",
+            data_type
+        ))),
+    })
+}
+
 /// Returns the null sentinel, negated if `invert` is true
 #[inline]
 fn null_sentinel(options: SortOptions) -> u8 {
@@ -783,180 +819,6 @@ fn null_sentinel(options: SortOptions) -> u8 {
         true => 0,
         false => 0xFF,
     }
-}
-
-/// Computes the length of each encoded [`Rows`] and returns an empty [`Rows`]
-fn new_empty_rows(
-    cols: &[ArrayRef],
-    dictionaries: &[Option<Vec<Option<&[u8]>>>],
-    config: RowConfig,
-) -> Rows {
-    use fixed::FixedLengthEncoding;
-
-    let num_rows = cols.first().map(|x| x.len()).unwrap_or(0);
-    let mut lengths = vec![0; num_rows];
-
-    for (array, dict) in cols.iter().zip(dictionaries) {
-        downcast_primitive_array! {
-            array => lengths.iter_mut().for_each(|x| *x += fixed::encoded_len(array)),
-            DataType::Null => {},
-            DataType::Boolean => lengths.iter_mut().for_each(|x| *x += bool::ENCODED_LEN),
-            DataType::Binary => as_generic_binary_array::<i32>(array)
-                .iter()
-                .zip(lengths.iter_mut())
-                .for_each(|(slice, length)| *length += variable::encoded_len(slice)),
-            DataType::LargeBinary => as_generic_binary_array::<i64>(array)
-                .iter()
-                .zip(lengths.iter_mut())
-                .for_each(|(slice, length)| *length += variable::encoded_len(slice)),
-            DataType::Utf8 => as_string_array(array)
-                .iter()
-                .zip(lengths.iter_mut())
-                .for_each(|(slice, length)| {
-                    *length += variable::encoded_len(slice.map(|x| x.as_bytes()))
-                }),
-            DataType::LargeUtf8 => as_largestring_array(array)
-                .iter()
-                .zip(lengths.iter_mut())
-                .for_each(|(slice, length)| {
-                    *length += variable::encoded_len(slice.map(|x| x.as_bytes()))
-                }),
-            DataType::Dictionary(_, _) => downcast_dictionary_array! {
-                array => {
-                    let dict = dict.as_ref().unwrap();
-                    for (v, length) in array.keys().iter().zip(lengths.iter_mut()) {
-                        match v.and_then(|v| dict[v as usize]) {
-                            Some(k) => *length += k.len() + 1,
-                            None => *length += 1,
-                        }
-                    }
-                }
-                _ => unreachable!(),
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    let mut offsets = Vec::with_capacity(num_rows + 1);
-    offsets.push(0);
-
-    // We initialize the offsets shifted down by one row index.
-    //
-    // As the rows are appended to the offsets will be incremented to match
-    //
-    // For example, consider the case of 3 rows of length 3, 4, and 6 respectively.
-    // The offsets would be initialized to `0, 0, 3, 7`
-    //
-    // Writing the first row entirely would yield `0, 3, 3, 7`
-    // The second, `0, 3, 7, 7`
-    // The third, `0, 3, 7, 13`
-    //
-    // This would be the final offsets for reading
-    //
-    // In this way offsets tracks the position during writing whilst eventually serving
-    // as identifying the offsets of the written rows
-    let mut cur_offset = 0_usize;
-    for l in lengths {
-        offsets.push(cur_offset);
-        cur_offset = cur_offset.checked_add(l).expect("overflow");
-    }
-
-    let buffer = vec![0_u8; cur_offset];
-
-    Rows {
-        buffer: buffer.into(),
-        offsets: offsets.into(),
-        config,
-    }
-}
-
-/// Encodes a column to the provided [`Rows`] incrementing the offsets as it progresses
-fn encode_column(
-    out: &mut Rows,
-    column: &ArrayRef,
-    opts: SortOptions,
-    dictionary: Option<&[Option<&[u8]>]>,
-) {
-    downcast_primitive_array! {
-        column => fixed::encode(out, column, opts),
-        DataType::Null => {}
-        DataType::Boolean => fixed::encode(out, as_boolean_array(column), opts),
-        DataType::Binary => {
-            variable::encode(out, as_generic_binary_array::<i32>(column).iter(), opts)
-        }
-        DataType::LargeBinary => {
-            variable::encode(out, as_generic_binary_array::<i64>(column).iter(), opts)
-        }
-        DataType::Utf8 => variable::encode(
-            out,
-            as_string_array(column).iter().map(|x| x.map(|x| x.as_bytes())),
-            opts,
-        ),
-        DataType::LargeUtf8 => variable::encode(
-            out,
-            as_largestring_array(column)
-                .iter()
-                .map(|x| x.map(|x| x.as_bytes())),
-            opts,
-        ),
-        DataType::Dictionary(_, _) => downcast_dictionary_array! {
-            column => encode_dictionary(out, column, dictionary.unwrap(), opts),
-            _ => unreachable!()
-        }
-        _ => unreachable!(),
-    }
-}
-
-macro_rules! decode_primitive_helper {
-    ($t:ty, $rows:ident, $data_type:ident, $options:ident) => {
-        Arc::new(decode_primitive::<$t>($rows, $data_type, $options))
-    };
-}
-
-macro_rules! decode_dictionary_helper {
-    ($t:ty, $interner:ident, $v:ident, $options:ident, $rows:ident) => {
-        Arc::new(decode_dictionary::<$t>(
-            $interner.unwrap(),
-            $v.as_ref(),
-            $options,
-            $rows,
-        )?)
-    };
-}
-
-/// Decodes a the provided `field` from `rows`
-///
-/// # Safety
-///
-/// Rows must contain valid data for the provided field
-unsafe fn decode_column(
-    field: &SortField,
-    rows: &mut [&[u8]],
-    interner: Option<&OrderPreservingInterner>,
-    validate_utf8: bool,
-) -> Result<ArrayRef> {
-    let options = field.options;
-    let data_type = field.data_type.clone();
-    let array: ArrayRef = downcast_primitive! {
-        data_type => (decode_primitive_helper, rows, data_type, options),
-        DataType::Null => Arc::new(NullArray::new(rows.len())),
-        DataType::Boolean => Arc::new(decode_bool(rows, options)),
-        DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)),
-        DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)),
-        DataType::Utf8 => Arc::new(decode_string::<i32>(rows, options, validate_utf8)),
-        DataType::LargeUtf8 => Arc::new(decode_string::<i64>(rows, options, validate_utf8)),
-        DataType::Dictionary(k, v) => downcast_integer! {
-            k.as_ref() => (decode_dictionary_helper, interner, v, options, rows),
-            _ => unreachable!()
-        },
-        _ => {
-            return Err(ArrowError::NotYetImplemented(format!(
-                "converting {} row is not supported",
-                field.data_type
-            )))
-        }
-    };
-    Ok(array)
 }
 
 #[cfg(test)]
