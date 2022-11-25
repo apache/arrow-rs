@@ -68,13 +68,14 @@ impl StructArray {
     }
 
     /// Returns the fields of the struct array
-    pub fn columns(&self) -> Vec<&ArrayRef> {
-        self.boxed_fields.iter().collect()
+    pub fn columns(&self) -> &[ArrayRef] {
+        &self.boxed_fields
     }
 
     /// Returns child array refs of the struct array
+    #[deprecated(note = "Use columns().to_vec()")]
     pub fn columns_ref(&self) -> Vec<ArrayRef> {
-        self.boxed_fields.clone()
+        self.columns().to_vec()
     }
 
     /// Return field names in this struct array
