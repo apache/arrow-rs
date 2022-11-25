@@ -459,7 +459,7 @@ pub fn array_value_to_string(
 
             let mut s = String::new();
             s.push('{');
-            let mut kv_iter = st.columns().into_iter().zip(st.column_names().into_iter());
+            let mut kv_iter = st.columns().iter().zip(st.column_names());
             if let Some((col, name)) = kv_iter.next() {
                 append_struct_field_string(&mut s, name, col, row)?;
             }

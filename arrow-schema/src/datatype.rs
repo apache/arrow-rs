@@ -412,6 +412,22 @@ impl DataType {
     }
 }
 
+/// The maximum precision for [DataType::Decimal128] values
+pub const DECIMAL128_MAX_PRECISION: u8 = 38;
+
+/// The maximum scale for [DataType::Decimal128] values
+pub const DECIMAL128_MAX_SCALE: i8 = 38;
+
+/// The maximum precision for [DataType::Decimal256] values
+pub const DECIMAL256_MAX_PRECISION: u8 = 76;
+
+/// The maximum scale for [DataType::Decimal256] values
+pub const DECIMAL256_MAX_SCALE: i8 = 76;
+
+/// The default scale for [DataType::Decimal128] and [DataType::Decimal256]
+/// values
+pub const DECIMAL_DEFAULT_SCALE: i8 = 10;
+
 #[cfg(test)]
 mod tests {
     use super::*;

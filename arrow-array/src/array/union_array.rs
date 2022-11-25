@@ -104,6 +104,7 @@ use std::any::Any;
 /// let value = array.value(2).as_any().downcast_ref::<Int32Array>().unwrap().value(0);
 /// assert_eq!(34, value);
 /// ```
+#[derive(Clone)]
 pub struct UnionArray {
     data: ArrayData,
     boxed_fields: Vec<ArrayRef>,

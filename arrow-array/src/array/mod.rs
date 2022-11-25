@@ -382,6 +382,7 @@ impl<'a, T: Array> Array for &'a T {
 /// The value at null indexes is unspecified, and implementations must not rely on a specific
 /// value such as [`Default::default`] being returned, however, it must not be undefined
 pub trait ArrayAccessor: Array {
+    /// The Arrow type of the element being accessed.
     type Item: Send + Sync;
 
     /// Returns the element at index `i`

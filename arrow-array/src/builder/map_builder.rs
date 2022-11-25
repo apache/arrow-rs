@@ -24,6 +24,43 @@ use arrow_schema::{ArrowError, DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
 
+/// Creates a new `MapBuilder`
+/// ```
+/// use arrow_array::builder::{MapBuilder, Int32Builder, StringBuilder};
+/// use arrow_array::{StringArray, Int32Array};
+/// use std::sync::Arc;
+///
+/// let string_builder = StringBuilder::new();
+/// let int_builder = Int32Builder::with_capacity(4);
+///
+/// let mut builder = MapBuilder::new(None, string_builder, int_builder);
+///
+/// let string_builder = builder.keys();
+/// string_builder.append_value("joe");
+/// string_builder.append_null();
+/// string_builder.append_null();
+/// string_builder.append_value("mark");
+///
+/// let int_builder = builder.values();
+/// int_builder.append_value(1);
+/// int_builder.append_value(2);
+/// int_builder.append_null();
+/// int_builder.append_value(4);
+///
+/// builder.append(true).unwrap();
+/// builder.append(false).unwrap();
+/// builder.append(true).unwrap();
+///
+/// let arr = builder.finish();
+/// assert_eq!(
+///     *arr.values(),
+///     Int32Array::from(vec![Some(1), Some(2), None, Some(4)])
+/// );
+/// assert_eq!(
+///     *arr.keys(),
+///     StringArray::from(vec![Some("joe"), None, None, Some("mark")])
+/// );
+/// ```
 #[derive(Debug)]
 pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
     offsets_builder: BufferBuilder<i32>,
@@ -33,10 +70,14 @@ pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
     value_builder: V,
 }
 
+/// Contains details of the mapping
 #[derive(Debug, Clone)]
 pub struct MapFieldNames {
+    /// [`Field`] name for map entries
     pub entry: String,
+    /// [`Field`] name for map key
     pub key: String,
+    /// [`Field`] name for map value
     pub value: String,
 }
 
@@ -52,6 +93,7 @@ impl Default for MapFieldNames {
 
 #[allow(dead_code)]
 impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
+    /// Creates a new `MapBuilder`
     pub fn new(
         field_names: Option<MapFieldNames>,
         key_builder: K,
@@ -61,6 +103,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         Self::with_capacity(field_names, key_builder, value_builder, capacity)
     }
 
+    /// Creates a new `MapBuilder` with capacity
     pub fn with_capacity(
         field_names: Option<MapFieldNames>,
         key_builder: K,
@@ -79,10 +122,12 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         }
     }
 
+    /// Returns the key array builder of the map
     pub fn keys(&mut self) -> &mut K {
         &mut self.key_builder
     }
 
+    /// Returns the value array builder of the map
     pub fn values(&mut self) -> &mut V {
         &mut self.value_builder
     }
@@ -104,6 +149,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         Ok(())
     }
 
+    /// Builds the [`MapArray`]
     pub fn finish(&mut self) -> MapArray {
         let len = self.len();
 
@@ -144,6 +190,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         MapArray::from(array_data)
     }
 
+    /// Builds the [`MapArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> MapArray {
         let len = self.len();
 

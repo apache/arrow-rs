@@ -60,6 +60,7 @@ use std::any::Any;
 ///
 /// For non generic lists, you may wish to consider using
 /// [crate::array::FixedSizeBinaryArray]
+#[derive(Clone)]
 pub struct FixedSizeListArray {
     data: ArrayData,
     values: ArrayRef,

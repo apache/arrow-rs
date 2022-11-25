@@ -42,6 +42,16 @@ pub struct GenericByteArray<T: ByteArrayType> {
     value_data: RawPtrBox<u8>,
 }
 
+impl<T: ByteArrayType> Clone for GenericByteArray<T> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            value_offsets: self.value_offsets,
+            value_data: self.value_data,
+        }
+    }
+}
+
 impl<T: ByteArrayType> GenericByteArray<T> {
     /// Data type of the array.
     pub const DATA_TYPE: DataType = T::DATA_TYPE;
