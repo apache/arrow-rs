@@ -303,14 +303,15 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
 
             Box::new(move |i, j| left.value(i).cmp(right.value(j)))
         }
-        (Struct(f), Struct(_)) => {
+        (Struct(_), Struct(_)) => {
             let left = as_struct_array(left);
             let right = as_struct_array(right);
 
-            let comparators = (0..f.len())
-                .map(|idx| {
-                    build_compare(left.column(idx).as_ref(), right.column(idx).as_ref())
-                })
+            let comparators = left
+                .columns()
+                .iter()
+                .zip(right.columns())
+                .map(|(left, right)| build_compare(left.as_ref(), right.as_ref()))
                 .collect::<Result<Vec<_>>>()?;
 
             Box::new(move |i, j| {
