@@ -186,10 +186,9 @@ impl PyArrowConvert for RecordBatch {
         let mut py_arrays = vec![];
 
         let schema = self.schema();
-        let fields = schema.fields().iter();
         let columns = self.columns().iter();
 
-        for (array, field) in columns.zip(fields) {
+        for array in columns {
             py_arrays.push(array.data().to_pyarrow(py)?);
         }
 
