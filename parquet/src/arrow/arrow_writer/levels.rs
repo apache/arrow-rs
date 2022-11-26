@@ -324,7 +324,7 @@ impl LevelInfoBuilder {
         };
 
         let write_non_null = |children: &mut [LevelInfoBuilder], range: Range<usize>| {
-            for (child_array, child) in array.columns().into_iter().zip(children) {
+            for (child_array, child) in array.columns().iter().zip(children) {
                 child.write(child_array, range.clone())
             }
         };

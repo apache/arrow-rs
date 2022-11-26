@@ -47,6 +47,7 @@ use std::any::Any;
 ///
 /// ```
 ///
+#[derive(Clone)]
 pub struct FixedSizeBinaryArray {
     data: ArrayData,
     value_data: RawPtrBox<u8>,

@@ -222,6 +222,17 @@ pub struct DictionaryArray<K: ArrowPrimitiveType> {
     is_ordered: bool,
 }
 
+impl<K: ArrowPrimitiveType> Clone for DictionaryArray<K> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            keys: self.keys.clone(),
+            values: self.values.clone(),
+            is_ordered: self.is_ordered,
+        }
+    }
+}
+
 impl<K: ArrowPrimitiveType> DictionaryArray<K> {
     /// Attempt to create a new DictionaryArray with a specified keys
     /// (indexes into the dictionary) and values (dictionary)

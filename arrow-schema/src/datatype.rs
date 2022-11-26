@@ -264,16 +264,16 @@ impl fmt::Display for DataType {
 impl DataType {
     /// Returns true if the type is primitive: (numeric, temporal).
     #[inline]
-    pub fn is_primitive(t: &DataType) -> bool {
-        Self::is_numeric(t) || Self::is_temporal(t)
+    pub fn is_primitive(&self) -> bool {
+        self.is_numeric() || self.is_temporal()
     }
 
     /// Returns true if this type is numeric: (UInt*, Int*, Float*, Decimal*).
     #[inline]
-    pub fn is_numeric(t: &DataType) -> bool {
+    pub fn is_numeric(&self) -> bool {
         use DataType::*;
         matches!(
-            t,
+            self,
             UInt8
                 | UInt16
                 | UInt32
@@ -292,10 +292,10 @@ impl DataType {
 
     /// Returns true if this type is temporal: (Date*, Time*, Duration, or Interval).
     #[inline]
-    pub fn is_temporal(t: &DataType) -> bool {
+    pub fn is_temporal(&self) -> bool {
         use DataType::*;
         matches!(
-            t,
+            self,
             Date32
                 | Date64
                 | Timestamp(_, _)
@@ -308,19 +308,19 @@ impl DataType {
 
     /// Returns true if this type is valid as a dictionary key
     #[inline]
-    pub fn is_dictionary_key_type(t: &DataType) -> bool {
+    pub fn is_dictionary_key_type(&self) -> bool {
         use DataType::*;
         matches!(
-            t,
+            self,
             UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64
         )
     }
 
     /// Returns true if this type is nested (List, FixedSizeList, LargeList, Struct, Union,
     /// or Map), or a dictionary of a nested type
-    pub fn is_nested(t: &DataType) -> bool {
+    pub fn is_nested(&self) -> bool {
         use DataType::*;
-        match t {
+        match self {
             Dictionary(_, v) => DataType::is_nested(v.as_ref()),
             List(_)
             | FixedSizeList(_, _)

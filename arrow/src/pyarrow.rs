@@ -184,20 +184,19 @@ impl PyArrowConvert for RecordBatch {
 
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let mut py_arrays = vec![];
-        let mut py_names = vec![];
 
         let schema = self.schema();
-        let fields = schema.fields().iter();
         let columns = self.columns().iter();
 
-        for (array, field) in columns.zip(fields) {
+        for array in columns {
             py_arrays.push(array.data().to_pyarrow(py)?);
-            py_names.push(field.name());
         }
+
+        let py_schema = schema.to_pyarrow(py)?;
 
         let module = py.import("pyarrow")?;
         let class = module.getattr("RecordBatch")?;
-        let record = class.call_method1("from_arrays", (py_arrays, py_names))?;
+        let record = class.call_method1("from_arrays", (py_arrays, py_schema))?;
 
         Ok(PyObject::from(record))
     }
