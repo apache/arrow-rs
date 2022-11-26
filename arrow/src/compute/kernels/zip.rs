@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::array::*;
-use crate::compute::SlicesIterator;
 use crate::error::{ArrowError, Result};
+use arrow_select::filter::build_slices_iterator;
 
 /// Zip two arrays by some boolean mask. Where the mask evaluates `true` values of `truthy`
 /// are taken, where the mask evaluates `false` values of `falsy` are taken.
@@ -52,7 +52,7 @@ pub fn zip(
     // keep track of how much is filled
     let mut filled = 0;
 
-    SlicesIterator::new(mask).for_each(|(start, end)| {
+    build_slices_iterator(mask).for_each(|(start, end)| {
         // the gap needs to be filled with falsy values
         if start > filled {
             mutable.extend(1, filled, start);
