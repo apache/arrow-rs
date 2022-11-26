@@ -27,6 +27,7 @@ keywords = ["arrow"]
 include = [
     "benches/*.rs",
     "src/**/*.rs",
+    "tests/*.rs",
     "Cargo.toml",
 ]
 edition = "2021"
