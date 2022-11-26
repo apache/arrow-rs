@@ -25,12 +25,14 @@ use crate::array::ArrayRef;
 /// where:
 /// * it performs a bounds-check on the array
 /// * it slices from offset 0
+#[deprecated(note = "Use Array::slice")]
 pub fn limit(array: &ArrayRef, num_elements: usize) -> ArrayRef {
     let lim = num_elements.min(array.len());
     array.slice(0, lim)
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::array::*;
