@@ -269,3 +269,7 @@ required-features = ["test_utils", "ipc"]
 [[test]]
 name = "csv"
 required-features = ["csv", "chrono-tz"]
+
+[[test]]
+name = "pyarrow"
+required-features = ["pyarrow"]
