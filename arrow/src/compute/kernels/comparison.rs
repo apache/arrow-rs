@@ -226,11 +226,47 @@ pub fn like_utf8<OffsetSize: OffsetSizeTrait>(
     })
 }
 
+/// Perform SQL `left LIKE right` operation on [`StringArray`] /
+/// [`LargeStringArray`], or [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn like_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+    match (left.data_type(), right.data_type()) {
+        (DataType::Utf8, DataType::Utf8)  => {
+            let left = as_string_array(left);
+            let right = as_string_array(right);
+            like_utf8(left, right)
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = as_largestring_array(left);
+            let right = as_largestring_array(right);
+            like_utf8(left, right)
+        }
+        (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
+            downcast_dictionary_array!(
+                left => {
+                    let right = as_dictionary_array(right);
+                    like_dict(left, right)
+                }
+                t => Err(ArrowError::ComputeError(format!(
+                    "Should be DictionaryArray but got: {}", t
+                )))
+            )
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "like_dyn only supports Utf8, LargeUtf8 or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
+}
+
 /// Perform SQL `left LIKE right` operation on on [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`].
 ///
 /// See the documentation on [`like_utf8`] for more details.
-pub fn like_dict<K: ArrowNumericType>(
+fn like_dict<K: ArrowNumericType>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
 ) -> Result<BooleanArray> {
@@ -447,7 +483,42 @@ pub fn nlike_utf8<OffsetSize: OffsetSizeTrait>(
 /// [`StringArray`]/[`LargeStringArray`].
 ///
 /// See the documentation on [`like_utf8`] for more details.
-pub fn nlike_dict<K: ArrowNumericType>(
+pub fn nlike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+    match (left.data_type(), right.data_type()) {
+        (DataType::Utf8, DataType::Utf8)  => {
+            let left = as_string_array(left);
+            let right = as_string_array(right);
+            nlike_utf8(left, right)
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = as_largestring_array(left);
+            let right = as_largestring_array(right);
+            nlike_utf8(left, right)
+        }
+        (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
+            downcast_dictionary_array!(
+                left => {
+                    let right = as_dictionary_array(right);
+                    nlike_dict(left, right)
+                }
+                t => Err(ArrowError::ComputeError(format!(
+                    "Should be DictionaryArray but got: {}", t
+                )))
+            )
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "nlike_dyn only supports Utf8, LargeUtf8 or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
+}
+
+/// Perform SQL `left NOT LIKE right` operation on on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+fn nlike_dict<K: ArrowNumericType>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
 ) -> Result<BooleanArray> {
@@ -584,7 +655,42 @@ pub fn ilike_utf8<OffsetSize: OffsetSizeTrait>(
 /// [`StringArray`]/[`LargeStringArray`].
 ///
 /// See the documentation on [`like_utf8`] for more details.
-pub fn ilike_dict<K: ArrowNumericType>(
+pub fn ilike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+    match (left.data_type(), right.data_type()) {
+        (DataType::Utf8, DataType::Utf8)  => {
+            let left = as_string_array(left);
+            let right = as_string_array(right);
+            ilike_utf8(left, right)
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = as_largestring_array(left);
+            let right = as_largestring_array(right);
+            ilike_utf8(left, right)
+        }
+        (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
+            downcast_dictionary_array!(
+                left => {
+                    let right = as_dictionary_array(right);
+                    ilike_dict(left, right)
+                }
+                t => Err(ArrowError::ComputeError(format!(
+                    "Should be DictionaryArray but got: {}", t
+                )))
+            )
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "ilike_dyn only supports Utf8, LargeUtf8 or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
+}
+
+/// Perform SQL `left ILIKE right` operation on on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+fn ilike_dict<K: ArrowNumericType>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
 ) -> Result<BooleanArray> {
@@ -805,7 +911,42 @@ pub fn nilike_utf8<OffsetSize: OffsetSizeTrait>(
 /// [`StringArray`]/[`LargeStringArray`].
 ///
 /// See the documentation on [`like_utf8`] for more details.
-pub fn nilike_dict<K: ArrowNumericType>(
+pub fn nilike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+    match (left.data_type(), right.data_type()) {
+        (DataType::Utf8, DataType::Utf8)  => {
+            let left = as_string_array(left);
+            let right = as_string_array(right);
+            nilike_utf8(left, right)
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = as_largestring_array(left);
+            let right = as_largestring_array(right);
+            nilike_utf8(left, right)
+        }
+        (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
+            downcast_dictionary_array!(
+                left => {
+                    let right = as_dictionary_array(right);
+                    nilike_dict(left, right)
+                }
+                t => Err(ArrowError::ComputeError(format!(
+                    "Should be DictionaryArray but got: {}", t
+                )))
+            )
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "nilike_dyn only supports Utf8, LargeUtf8 or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
+}
+
+/// Perform SQL `left NOT ILIKE right` operation on on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+fn nilike_dict<K: ArrowNumericType>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
 ) -> Result<BooleanArray> {
@@ -4787,7 +4928,7 @@ mod tests {
         test_utf8_array_like_dict,
         vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow", "arrow"],
         vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_", ".*"],
-        like_dict,
+        like_dyn,
         vec![true, true, true, false, false, true, false, false]
     );
 
@@ -4903,7 +5044,7 @@ mod tests {
         test_utf8_scalar_ilike_regex_dict,
         vec!["%%%"],
         vec![r#"\%_\%"#],
-        ilike_dict,
+        ilike_dyn,
         vec![true]
     );
 
@@ -4962,7 +5103,7 @@ mod tests {
         test_utf8_array_nlike_dict,
         vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow"],
         vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_"],
-        nlike_dict,
+        nlike_dyn,
         vec![false, false, false, true, true, false, true]
     );
 
@@ -5057,7 +5198,7 @@ mod tests {
         test_utf8_array_ilike_dict,
         vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
         vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
-        ilike_dict,
+        ilike_dyn,
         vec![true, true, true, false, false, true, false]
     );
 
@@ -5133,7 +5274,7 @@ mod tests {
         test_utf8_array_nilike_dict,
         vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
         vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
-        nilike_dict,
+        nilike_dyn,
         vec![false, false, false, true, true, false, true]
     );
 
