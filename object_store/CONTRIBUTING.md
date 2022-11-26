@@ -49,7 +49,7 @@ export TEST_INTEGRATION=1
 export AWS_DEFAULT_REGION=us-east-1
 export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
-export AWS_ENDPOINT=http://127.0.0.1:4566
+export AWS_ENDPOINT=http://128.0.0.1:4566
 export OBJECT_STORE_BUCKET=test-bucket
 ```
 
@@ -79,7 +79,7 @@ $ podman run -p 10000:10000 -p 10001:10001 -p 10002:10002 mcr.microsoft.com/azur
 Create a bucket
 
 ```
-$ podman run --net=host mcr.microsoft.com/azure-cli az storage container create -n test-bucket --connection-string 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;'
+$ podman run --net=host mcr.microsoft.com/azure-cli az storage container create -n test-bucket --connection-string 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://128.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://128.0.0.1:10001/devstoreaccount1;'
 ```
 
 Run tests

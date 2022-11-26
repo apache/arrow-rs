@@ -25,6 +25,14 @@ pub(super) struct RawPtrBox<T> {
     ptr: NonNull<T>,
 }
 
+impl<T> Clone for RawPtrBox<T> {
+    fn clone(&self) -> Self {
+        Self { ptr: self.ptr }
+    }
+}
+
+impl<T> Copy for RawPtrBox<T> {}
+
 impl<T> RawPtrBox<T> {
     /// # Safety
     /// The user must guarantee that:

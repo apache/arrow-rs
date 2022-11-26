@@ -68,6 +68,16 @@ pub struct GenericListArray<OffsetSize> {
     value_offsets: RawPtrBox<OffsetSize>,
 }
 
+impl<OffsetSize> Clone for GenericListArray<OffsetSize> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            values: self.values.clone(),
+            value_offsets: self.value_offsets,
+        }
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// The data type constructor of list array.
     /// The input is the schema of the child array and
