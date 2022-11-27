@@ -7457,5 +7457,20 @@ mod tests {
         let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
 
         assert_eq!("1200", decimal_arr.value_as_string(0));
+
+        let array = vec![Some(125)];
+        let input_decimal_array = create_decimal_array(array, 10, -1).unwrap();
+        let array = Arc::new(input_decimal_array) as ArrayRef;
+        generate_cast_test_case!(
+            &array,
+            Decimal128Array,
+            &output_type,
+            vec![Some(13_i128),]
+        );
+
+        let casted_array = cast(&array, &output_type).unwrap();
+        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+
+        assert_eq!("1300", decimal_arr.value_as_string(0));
     }
 }
