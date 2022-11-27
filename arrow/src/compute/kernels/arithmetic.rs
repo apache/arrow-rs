@@ -938,10 +938,10 @@ where
 /// is null then the result is also null.
 ///
 /// This only mutates the array if it is not shared buffers with other arrays. For shared
-/// array, it returns an `Err` which wraps input array with a `Ok`.
+/// array, it returns an `Err` which wraps input array.
 ///
-/// This detects overflow and returns an `Err` which wraps an `Erro` of actual error.
-/// For an non-overflow-checking variant, use `add_scalar_mut` instead.
+/// This detects overflow and returns an `Err` within an `Ok` which wraps an `Error` of
+/// actual error. For an non-overflow-checking variant, use `add_scalar_mut` instead.
 pub fn add_scalar_checked_mut<T>(
     array: PrimitiveArray<T>,
     scalar: T::Native,

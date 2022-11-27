@@ -513,10 +513,10 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// regardless of validity, in many cases this will be significantly faster and should
     /// be preferred if `op` is infallible.
     ///
-    /// This returns an `Err` for two cases. First is input array is shared buffer with other
-    /// array. In the case, returned `Err` wraps a `Ok` of input array. Second, if the function
-    /// encounters an error during applying on values. In the case, returned `Err` wraps an
-    /// `Err` of the actual error.
+    /// This returns an `Err` when the input array is shared buffer with other
+    /// array. In the case, returned `Err` wraps input array. If the function
+    /// encounters an error during applying on values. In the case, this returns an `Err` within
+    /// an `Ok` which wraps the actual error.
     ///
     /// Note: LLVM is currently unable to effectively vectorize fallible operations
     pub fn try_unary_mut<F, E>(
