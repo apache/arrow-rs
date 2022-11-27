@@ -243,6 +243,7 @@ pub fn like_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
             let right = as_largestring_array(right);
             like_utf8(left, right)
         }
+        #[cfg(feature = "dyn_cmp_dict")]
         (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
             downcast_dictionary_array!(
                 left => {
@@ -256,7 +257,7 @@ pub fn like_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         }
         _ => {
             Err(ArrowError::ComputeError(
-                "like_dyn only supports Utf8, LargeUtf8 or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+                "like_dyn only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values".to_string(),
             ))
         }
     }
@@ -266,6 +267,7 @@ pub fn like_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// [`StringArray`]/[`LargeStringArray`].
 ///
 /// See the documentation on [`like_utf8`] for more details.
+#[cfg(feature = "dyn_cmp_dict")]
 fn like_dict<K: ArrowNumericType>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
@@ -495,6 +497,7 @@ pub fn nlike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
             let right = as_largestring_array(right);
             nlike_utf8(left, right)
         }
+        #[cfg(feature = "dyn_cmp_dict")]
         (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
             downcast_dictionary_array!(
                 left => {
@@ -508,7 +511,7 @@ pub fn nlike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         }
         _ => {
             Err(ArrowError::ComputeError(
-                "nlike_dyn only supports Utf8, LargeUtf8 or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+                "nlike_dyn only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values".to_string(),
             ))
         }
     }
@@ -518,6 +521,7 @@ pub fn nlike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// [`StringArray`]/[`LargeStringArray`].
 ///
 /// See the documentation on [`like_utf8`] for more details.
+#[cfg(feature = "dyn_cmp_dict")]
 fn nlike_dict<K: ArrowNumericType>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
@@ -667,6 +671,7 @@ pub fn ilike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
             let right = as_largestring_array(right);
             ilike_utf8(left, right)
         }
+        #[cfg(feature = "dyn_cmp_dict")]
         (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
             downcast_dictionary_array!(
                 left => {
@@ -680,7 +685,7 @@ pub fn ilike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         }
         _ => {
             Err(ArrowError::ComputeError(
-                "ilike_dyn only supports Utf8, LargeUtf8 or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+                "ilike_dyn only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values".to_string(),
             ))
         }
     }
@@ -690,6 +695,7 @@ pub fn ilike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// [`StringArray`]/[`LargeStringArray`].
 ///
 /// See the documentation on [`like_utf8`] for more details.
+#[cfg(feature = "dyn_cmp_dict")]
 fn ilike_dict<K: ArrowNumericType>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
@@ -847,7 +853,7 @@ pub fn ilike_utf8_scalar_dyn(left: &dyn Array, right: &str) -> Result<BooleanArr
         }
         _ => {
             Err(ArrowError::ComputeError(
-                "ilike_utf8_scalar_dyn only supports Utf8, LargeUtf8 or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+                "ilike_utf8_scalar_dyn only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values".to_string(),
             ))
         }
     }
@@ -923,6 +929,7 @@ pub fn nilike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
             let right = as_largestring_array(right);
             nilike_utf8(left, right)
         }
+        #[cfg(feature = "dyn_cmp_dict")]
         (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
             downcast_dictionary_array!(
                 left => {
@@ -936,7 +943,7 @@ pub fn nilike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         }
         _ => {
             Err(ArrowError::ComputeError(
-                "nilike_dyn only supports Utf8, LargeUtf8 or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+                "nilike_dyn only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values".to_string(),
             ))
         }
     }
@@ -946,6 +953,7 @@ pub fn nilike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// [`StringArray`]/[`LargeStringArray`].
 ///
 /// See the documentation on [`like_utf8`] for more details.
+#[cfg(feature = "dyn_cmp_dict")]
 fn nilike_dict<K: ArrowNumericType>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
@@ -4762,6 +4770,7 @@ mod tests {
     macro_rules! test_dict_utf8 {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
+            #[cfg(feature = "dyn_cmp_dict")]
             fn $test_name() {
                 let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
                 let right: DictionaryArray<Int8Type> = $right.into_iter().collect();
