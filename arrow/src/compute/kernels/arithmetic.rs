@@ -746,8 +746,8 @@ pub fn add_mut<T>(
     left: PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> std::result::Result<
-    PrimitiveArray<T>,
     std::result::Result<PrimitiveArray<T>, ArrowError>,
+    PrimitiveArray<T>,
 >
 where
     T: ArrowNumericType,
@@ -784,8 +784,8 @@ pub fn add_checked_mut<T>(
     left: PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> std::result::Result<
-    PrimitiveArray<T>,
     std::result::Result<PrimitiveArray<T>, ArrowError>,
+    PrimitiveArray<T>,
 >
 where
     T: ArrowNumericType,
@@ -3149,7 +3149,7 @@ mod tests {
         let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
         let b = Int32Array::from(vec![Some(1), None, Some(3), None, Some(5)]);
 
-        let c = add_mut(a, &b).unwrap();
+        let c = add_mut(a, &b).unwrap().unwrap();
         let expected = Int32Array::from(vec![Some(16), None, Some(12), None, Some(6)]);
         assert_eq!(c, expected);
     }
@@ -3159,13 +3159,13 @@ mod tests {
         let a = Int32Array::from(vec![i32::MAX, i32::MIN]);
         let b = Int32Array::from(vec![1, 1]);
 
-        let wrapped = add_mut(a, &b).unwrap();
+        let wrapped = add_mut(a, &b).unwrap().unwrap();
         let expected = Int32Array::from(vec![-2147483648, -2147483647]);
         assert_eq!(expected, wrapped);
 
         let a = Int32Array::from(vec![i32::MAX, i32::MIN]);
         let b = Int32Array::from(vec![1, 1]);
         let overflow = add_checked_mut(a, &b);
-        let _ = overflow.expect_err("overflow should be detected");
+        let _ = overflow.unwrap().expect_err("overflow should be detected");
     }
 }

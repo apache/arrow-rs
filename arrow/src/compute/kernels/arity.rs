@@ -227,23 +227,26 @@ pub fn binary_mut<T, F>(
     b: &PrimitiveArray<T>,
     op: F,
 ) -> std::result::Result<
-    PrimitiveArray<T>,
     std::result::Result<PrimitiveArray<T>, ArrowError>,
+    PrimitiveArray<T>,
 >
 where
     T: ArrowPrimitiveType,
     F: Fn(T::Native, T::Native) -> T::Native,
 {
     if a.len() != b.len() {
-        return Err(Err(ArrowError::ComputeError(
+        return Ok(Err(ArrowError::ComputeError(
             "Cannot perform binary operation on arrays of different length".to_string(),
         )));
     }
-    let len = a.len();
 
     if a.is_empty() {
-        return Ok(PrimitiveArray::from(ArrayData::new_empty(&T::DATA_TYPE)));
+        return Ok(Ok(PrimitiveArray::from(ArrayData::new_empty(
+            &T::DATA_TYPE,
+        ))));
     }
+
+    let len = a.len();
 
     let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
     let null_count = null_buffer
@@ -251,7 +254,7 @@ where
         .map(|x| len - x.count_set_bits_offset(0, len))
         .unwrap_or_default();
 
-    let mut builder = a.into_builder().map_err(Ok)?;
+    let mut builder = a.into_builder()?;
 
     builder
         .values_slice_mut()
@@ -268,7 +271,7 @@ where
         .null_count(null_count);
 
     let array_data = unsafe { array_builder.build_unchecked() };
-    Ok(PrimitiveArray::<T>::from(array_data))
+    Ok(Ok(PrimitiveArray::<T>::from(array_data)))
 }
 
 /// Applies the provided fallible binary operation across `a` and `b`, returning any error,
@@ -348,22 +351,24 @@ pub fn try_binary_mut<T, F>(
     b: &PrimitiveArray<T>,
     op: F,
 ) -> std::result::Result<
-    PrimitiveArray<T>,
     std::result::Result<PrimitiveArray<T>, ArrowError>,
+    PrimitiveArray<T>,
 >
 where
     T: ArrowPrimitiveType,
     F: Fn(T::Native, T::Native) -> Result<T::Native>,
 {
     if a.len() != b.len() {
-        return Err(Err(ArrowError::ComputeError(
+        return Ok(Err(ArrowError::ComputeError(
             "Cannot perform binary operation on arrays of different length".to_string(),
         )));
     }
     let len = a.len();
 
     if a.is_empty() {
-        return Ok(PrimitiveArray::from(ArrayData::new_empty(&T::DATA_TYPE)));
+        return Ok(Ok(PrimitiveArray::from(ArrayData::new_empty(
+            &T::DATA_TYPE,
+        ))));
     }
 
     if a.null_count() == 0 && b.null_count() == 0 {
@@ -375,18 +380,20 @@ where
             .map(|x| len - x.count_set_bits_offset(0, len))
             .unwrap_or_default();
 
-        let mut builder = a.into_builder().map_err(Ok)?;
+        let mut builder = a.into_builder()?;
 
         let slice = builder.values_slice_mut();
 
-        try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+        match try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
             unsafe {
                 *slice.get_unchecked_mut(idx) =
                     op(*slice.get_unchecked(idx), b.value_unchecked(idx))?
             };
             Ok::<_, ArrowError>(())
-        })
-        .map_err(Err)?;
+        }) {
+            Ok(_) => {}
+            Err(err) => return Ok(Err(err)),
+        };
 
         let array_builder = builder
             .finish()
@@ -397,7 +404,7 @@ where
             .null_count(null_count);
 
         let array_data = unsafe { array_builder.build_unchecked() };
-        Ok(PrimitiveArray::<T>::from(array_data))
+        Ok(Ok(PrimitiveArray::<T>::from(array_data)))
     }
 }
 
@@ -430,23 +437,25 @@ fn try_binary_no_nulls_mut<T, F>(
     b: &PrimitiveArray<T>,
     op: F,
 ) -> std::result::Result<
-    PrimitiveArray<T>,
     std::result::Result<PrimitiveArray<T>, ArrowError>,
+    PrimitiveArray<T>,
 >
 where
     T: ArrowPrimitiveType,
     F: Fn(T::Native, T::Native) -> Result<T::Native>,
 {
-    let mut builder = a.into_builder().map_err(Ok)?;
+    let mut builder = a.into_builder()?;
     let slice = builder.values_slice_mut();
 
     for idx in 0..len {
         unsafe {
-            *slice.get_unchecked_mut(idx) =
-                op(*slice.get_unchecked(idx), b.value_unchecked(idx)).map_err(Err)?;
+            match op(*slice.get_unchecked(idx), b.value_unchecked(idx)) {
+                Ok(value) => *slice.get_unchecked_mut(idx) = value,
+                Err(err) => return Ok(Err(err)),
+            };
         };
     }
-    Ok(builder.finish())
+    Ok(Ok(builder.finish()))
 }
 
 #[inline(never)]
@@ -589,7 +598,7 @@ mod tests {
     fn test_binary_mut() {
         let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
         let b = Int32Array::from(vec![Some(1), None, Some(3), None, Some(5)]);
-        let c = binary_mut(a, &b, |l, r| l + r).unwrap();
+        let c = binary_mut(a, &b, |l, r| l + r).unwrap().unwrap();
 
         let expected = Int32Array::from(vec![Some(16), None, Some(12), None, Some(6)]);
         assert_eq!(c, expected);
@@ -599,9 +608,15 @@ mod tests {
     fn test_try_binary_mut() {
         let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
         let b = Int32Array::from(vec![Some(1), None, Some(3), None, Some(5)]);
-        let c = try_binary_mut(a, &b, |l, r| Ok(l + r)).unwrap();
+        let c = try_binary_mut(a, &b, |l, r| Ok(l + r)).unwrap().unwrap();
 
         let expected = Int32Array::from(vec![Some(16), None, Some(12), None, Some(6)]);
+        assert_eq!(c, expected);
+
+        let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
+        let b = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let c = try_binary_mut(a, &b, |l, r| Ok(l + r)).unwrap().unwrap();
+        let expected = Int32Array::from(vec![16, 16, 12, 12, 6]);
         assert_eq!(c, expected);
 
         let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
@@ -615,6 +630,7 @@ mod tests {
                 Ok(l + r)
             }
         })
+        .unwrap()
         .expect_err("should got error");
     }
 }
