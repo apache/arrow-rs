@@ -7437,4 +7437,25 @@ mod tests {
         assert_eq!("2120", decimal_arr.value_as_string(1));
         assert_eq!("3120", decimal_arr.value_as_string(2));
     }
+
+    #[test]
+    fn test_cast_decimal128_to_decimal128_negative() {
+        let input_type = DataType::Decimal128(10, -1);
+        let output_type = DataType::Decimal128(10, -2);
+        assert!(can_cast_types(&input_type, &output_type));
+        let array = vec![Some(123)];
+        let input_decimal_array = create_decimal_array(array, 10, -1).unwrap();
+        let array = Arc::new(input_decimal_array) as ArrayRef;
+        generate_cast_test_case!(
+            &array,
+            Decimal128Array,
+            &output_type,
+            vec![Some(12_i128),]
+        );
+
+        let casted_array = cast(&array, &output_type).unwrap();
+        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+
+        assert_eq!("1200", decimal_arr.value_as_string(0));
+    }
 }
