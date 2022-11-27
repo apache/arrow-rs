@@ -522,23 +522,25 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     pub fn try_unary_mut<F, E>(
         self,
         op: F,
-    ) -> Result<PrimitiveArray<T>, Result<PrimitiveArray<T>, E>>
+    ) -> Result<Result<PrimitiveArray<T>, E>, PrimitiveArray<T>>
     where
         F: Fn(T::Native) -> Result<T::Native, E>,
     {
         let len = self.len();
         let null_count = self.null_count();
-        let mut builder = self.into_builder().map_err(|arr| Ok(arr))?;
+        let mut builder = self.into_builder()?;
 
         let (slice, null_buffer) = builder.slices_mut();
 
-        try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+        match try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
             unsafe { *slice.get_unchecked_mut(idx) = op(*slice.get_unchecked(idx))? };
             Ok::<_, E>(())
-        })
-        .map_err(|err| Err(err))?;
+        }) {
+            Ok(_) => {}
+            Err(err) => return Ok(Err(err)),
+        };
 
-        Ok(builder.finish())
+        Ok(Ok(builder.finish()))
     }
 
     /// Applies a unary and nullable function to all valid values in a primitive array

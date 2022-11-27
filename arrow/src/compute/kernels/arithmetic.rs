@@ -946,8 +946,8 @@ pub fn add_scalar_checked_mut<T>(
     array: PrimitiveArray<T>,
     scalar: T::Native,
 ) -> std::result::Result<
-    PrimitiveArray<T>,
     std::result::Result<PrimitiveArray<T>, ArrowError>,
+    PrimitiveArray<T>,
 >
 where
     T: ArrowNumericType,
@@ -3160,6 +3160,6 @@ mod tests {
 
         let a = Int32Array::from(vec![i32::MAX, i32::MIN]);
         let overflow = add_scalar_checked_mut(a, 1);
-        let _ = overflow.expect_err("overflow should be detected");
+        let _ = overflow.unwrap().expect_err("overflow should be detected");
     }
 }

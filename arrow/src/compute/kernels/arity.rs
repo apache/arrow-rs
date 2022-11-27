@@ -85,8 +85,8 @@ pub fn try_unary_mut<I, F>(
     array: PrimitiveArray<I>,
     op: F,
 ) -> std::result::Result<
-    PrimitiveArray<I>,
     std::result::Result<PrimitiveArray<I>, ArrowError>,
+    PrimitiveArray<I>,
 >
 where
     I: ArrowPrimitiveType,
