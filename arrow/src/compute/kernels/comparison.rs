@@ -326,7 +326,7 @@ pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 /// [`StringArray`]/[`LargeStringArray`] and a scalar.
 ///
 /// See the documentation on [`like_utf8`] for more details.
-pub fn like_dict_scalar<K: ArrowNumericType>(
+fn like_dict_scalar<K: ArrowNumericType>(
     left: &DictionaryArray<K>,
     right: &str,
 ) -> Result<BooleanArray> {
@@ -458,7 +458,7 @@ pub fn nlike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 /// [`StringArray`]/[`LargeStringArray`] and a scalar.
 ///
 /// See the documentation on [`like_utf8`] for more details.
-pub fn nlike_dict_scalar<K: ArrowNumericType>(
+fn nlike_dict_scalar<K: ArrowNumericType>(
     left: &DictionaryArray<K>,
     right: &str,
 ) -> Result<BooleanArray> {
@@ -637,7 +637,7 @@ pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 /// [`StringArray`]/[`LargeStringArray`] and a scalar.
 ///
 /// See the documentation on [`like_utf8`] for more details.
-pub fn ilike_dict_scalar<K: ArrowNumericType>(
+fn ilike_dict_scalar<K: ArrowNumericType>(
     left: &DictionaryArray<K>,
     right: &str,
 ) -> Result<BooleanArray> {
@@ -816,7 +816,7 @@ pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 /// [`StringArray`]/[`LargeStringArray`] and a scalar.
 ///
 /// See the documentation on [`like_utf8`] for more details.
-pub fn nilike_dict_scalar<K: ArrowNumericType>(
+fn nilike_dict_scalar<K: ArrowNumericType>(
     left: &DictionaryArray<K>,
     right: &str,
 ) -> Result<BooleanArray> {
@@ -6342,7 +6342,7 @@ mod tests {
         let dict_arrayref = Arc::new(dict_array.clone()) as ArrayRef;
 
         assert_eq!(
-            like_dict_scalar(&dict_array, "Air").unwrap(),
+            like_utf8_scalar_dyn(&dict_array, "Air").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(false), Some(false), Some(true), None, Some(true)]
             ),
@@ -6356,7 +6356,7 @@ mod tests {
         );
 
         assert_eq!(
-            like_dict_scalar(&dict_array, "Wa%").unwrap(),
+            like_utf8_scalar_dyn(&dict_array, "Wa%").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(false), Some(true), Some(false), None, Some(false)]
             ),
@@ -6370,7 +6370,7 @@ mod tests {
         );
 
         assert_eq!(
-            like_dict_scalar(&dict_array, "%r").unwrap(),
+            like_utf8_scalar_dyn(&dict_array, "%r").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(false), Some(true), Some(true), None, Some(true)]
             ),
@@ -6384,7 +6384,7 @@ mod tests {
         );
 
         assert_eq!(
-            like_dict_scalar(&dict_array, "%i%").unwrap(),
+            like_utf8_scalar_dyn(&dict_array, "%i%").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
             ),
@@ -6398,7 +6398,7 @@ mod tests {
         );
 
         assert_eq!(
-            like_dict_scalar(&dict_array, "%a%r%").unwrap(),
+            like_utf8_scalar_dyn(&dict_array, "%a%r%").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
             ),
@@ -6634,7 +6634,7 @@ mod tests {
         let dict_arrayref = Arc::new(dict_array.clone()) as ArrayRef;
 
         assert_eq!(
-            nlike_dict_scalar(&dict_array, "Air").unwrap(),
+            nlike_utf8_scalar_dyn(&dict_array, "Air").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(true), Some(true), Some(false), None, Some(false)]
             ),
@@ -6648,7 +6648,7 @@ mod tests {
         );
 
         assert_eq!(
-            nlike_dict_scalar(&dict_array, "Wa%").unwrap(),
+            nlike_utf8_scalar_dyn(&dict_array, "Wa%").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(true), Some(false), Some(true), None, Some(true)]
             ),
@@ -6662,7 +6662,7 @@ mod tests {
         );
 
         assert_eq!(
-            nlike_dict_scalar(&dict_array, "%r").unwrap(),
+            nlike_utf8_scalar_dyn(&dict_array, "%r").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
             ),
@@ -6676,7 +6676,7 @@ mod tests {
         );
 
         assert_eq!(
-            nlike_dict_scalar(&dict_array, "%i%").unwrap(),
+            nlike_utf8_scalar_dyn(&dict_array, "%i%").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
             ),
@@ -6690,7 +6690,7 @@ mod tests {
         );
 
         assert_eq!(
-            nlike_dict_scalar(&dict_array, "%a%r%").unwrap(),
+            nlike_utf8_scalar_dyn(&dict_array, "%a%r%").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
             ),
@@ -6714,7 +6714,7 @@ mod tests {
         let dict_arrayref = Arc::new(dict_array.clone()) as ArrayRef;
 
         assert_eq!(
-            ilike_dict_scalar(&dict_array, "air").unwrap(),
+            ilike_utf8_scalar_dyn(&dict_array, "air").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(false), Some(false), Some(true), None, Some(true)]
             ),
@@ -6728,7 +6728,7 @@ mod tests {
         );
 
         assert_eq!(
-            ilike_dict_scalar(&dict_array, "wa%").unwrap(),
+            ilike_utf8_scalar_dyn(&dict_array, "wa%").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(false), Some(true), Some(false), None, Some(false)]
             ),
@@ -6742,7 +6742,7 @@ mod tests {
         );
 
         assert_eq!(
-            ilike_dict_scalar(&dict_array, "%R").unwrap(),
+            ilike_utf8_scalar_dyn(&dict_array, "%R").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(false), Some(true), Some(true), None, Some(true)]
             ),
@@ -6756,7 +6756,7 @@ mod tests {
         );
 
         assert_eq!(
-            ilike_dict_scalar(&dict_array, "%I%").unwrap(),
+            ilike_utf8_scalar_dyn(&dict_array, "%I%").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
             ),
@@ -6770,7 +6770,7 @@ mod tests {
         );
 
         assert_eq!(
-            ilike_dict_scalar(&dict_array, "%A%r%").unwrap(),
+            ilike_utf8_scalar_dyn(&dict_array, "%A%r%").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(true), None, Some(true)]
             ),
@@ -6794,7 +6794,7 @@ mod tests {
         let dict_arrayref = Arc::new(dict_array.clone()) as ArrayRef;
 
         assert_eq!(
-            nilike_dict_scalar(&dict_array, "air").unwrap(),
+            nilike_utf8_scalar_dyn(&dict_array, "air").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(true), Some(true), Some(false), None, Some(false)]
             ),
@@ -6808,7 +6808,7 @@ mod tests {
         );
 
         assert_eq!(
-            nilike_dict_scalar(&dict_array, "wa%").unwrap(),
+            nilike_utf8_scalar_dyn(&dict_array, "wa%").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(true), Some(false), Some(true), None, Some(true)]
             ),
@@ -6822,7 +6822,7 @@ mod tests {
         );
 
         assert_eq!(
-            nilike_dict_scalar(&dict_array, "%R").unwrap(),
+            nilike_utf8_scalar_dyn(&dict_array, "%R").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
             ),
@@ -6836,7 +6836,7 @@ mod tests {
         );
 
         assert_eq!(
-            nilike_dict_scalar(&dict_array, "%I%").unwrap(),
+            nilike_utf8_scalar_dyn(&dict_array, "%I%").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
             ),
@@ -6850,7 +6850,7 @@ mod tests {
         );
 
         assert_eq!(
-            nilike_dict_scalar(&dict_array, "%A%r%").unwrap(),
+            nilike_utf8_scalar_dyn(&dict_array, "%A%r%").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(true), Some(false), Some(false), None, Some(false)]
             ),
