@@ -6686,8 +6686,7 @@ mod tests {
         cast_from_null_to_other(&data_type);
 
         // Cast null from and to struct
-        let data_type =
-            DataType::Struct(vec![Field::new("data", DataType::Int64, false)]);
+        let data_type = DataType::Struct(vec![Field::new("data", DataType::Int64, true)]);
         cast_from_null_to_other(&data_type);
     }
 
