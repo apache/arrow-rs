@@ -196,7 +196,7 @@ impl<T: Clone> Iterator for BadIterator<T> {
 
     /// report whatever the iterator says to
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, Some(self.claimed as usize))
+        (0, Some(self.claimed))
     }
 }
 

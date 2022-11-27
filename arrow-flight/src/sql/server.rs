@@ -36,8 +36,8 @@ use super::{
     TicketStatementQuery,
 };
 
-static CREATE_PREPARED_STATEMENT: &str = "CreatePreparedStatement";
-static CLOSE_PREPARED_STATEMENT: &str = "ClosePreparedStatement";
+pub(crate) static CREATE_PREPARED_STATEMENT: &str = "CreatePreparedStatement";
+pub(crate) static CLOSE_PREPARED_STATEMENT: &str = "ClosePreparedStatement";
 
 /// Implements FlightSqlService to handle the flight sql protocol
 #[tonic::async_trait]

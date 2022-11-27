@@ -245,7 +245,7 @@ pub fn make_row(fields: Vec<(String, Field)>) -> Row {
 impl fmt::Display for Row {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{{")?;
-        for (i, &(ref key, ref value)) in self.fields.iter().enumerate() {
+        for (i, (key, value)) in self.fields.iter().enumerate() {
             key.fmt(f)?;
             write!(f, ": ")?;
             value.fmt(f)?;
@@ -775,7 +775,7 @@ impl fmt::Display for Field {
             Field::MapInternal(ref map) => {
                 let entries = &map.entries;
                 write!(f, "{{")?;
-                for (i, &(ref key, ref value)) in entries.iter().enumerate() {
+                for (i, (key, value)) in entries.iter().enumerate() {
                     key.fmt(f)?;
                     write!(f, " -> ")?;
                     value.fmt(f)?;

@@ -52,10 +52,6 @@ use num::{ToPrimitive, Zero};
 /// * An index cannot be casted to `usize` (typically 32 bit architectures)
 /// * An index is out of bounds and `options` is set to check bounds.
 ///
-/// # Safety
-///
-/// When `options` is not set to check bounds, taking indexes after `len` will panic.
-///
 /// # Examples
 /// ```
 /// # use arrow_array::{StringArray, UInt32Array};

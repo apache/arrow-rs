@@ -405,11 +405,11 @@ impl DictEncoder {
         let num_values = self.indices.len();
         let buffer_len = self.estimated_data_page_size();
         let mut buffer = Vec::with_capacity(buffer_len);
-        buffer.push(self.bit_width() as u8);
+        buffer.push(self.bit_width());
 
         let mut encoder = RleEncoder::new_from_buf(self.bit_width(), buffer);
         for index in &self.indices {
-            encoder.put(*index as u64)
+            encoder.put(*index)
         }
 
         self.indices.clear();

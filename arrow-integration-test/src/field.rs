@@ -26,7 +26,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
     match *json {
         Value::Object(ref map) => {
             let name = match map.get("name") {
-                Some(&Value::String(ref name)) => name.to_string(),
+                Some(Value::String(name)) => name.to_string(),
                 _ => {
                     return Err(ArrowError::ParseError(
                         "Field missing 'name' attribute".to_string(),
@@ -52,7 +52,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
 
             // Referenced example file: testing/data/arrow-ipc-stream/integration/1.0.0-littleendian/generated_custom_metadata.json.gz
             let metadata = match map.get("metadata") {
-                Some(&Value::Array(ref values)) => {
+                Some(Value::Array(values)) => {
                     let mut res: HashMap<String, String> = HashMap::default();
                     for value in values {
                         match value.as_object() {
@@ -91,7 +91,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                 }
                 // We also support map format, because Schema's metadata supports this.
                 // See https://github.com/apache/arrow/pull/5907
-                Some(&Value::Object(ref values)) => {
+                Some(Value::Object(values)) => {
                     let mut res: HashMap<String, String> = HashMap::default();
                     for (k, v) in values {
                         if let Some(str_value) = v.as_str() {
