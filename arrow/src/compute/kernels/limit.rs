@@ -25,12 +25,14 @@ use crate::array::ArrayRef;
 /// where:
 /// * it performs a bounds-check on the array
 /// * it slices from offset 0
+#[deprecated(note = "Use Array::slice")]
 pub fn limit(array: &ArrayRef, num_elements: usize) -> ArrayRef {
     let lim = num_elements.min(array.len());
     array.slice(0, lim)
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::array::*;
@@ -91,13 +93,13 @@ mod tests {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
             .len(10)
-            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
             .build()
             .unwrap();
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1], null, [2, 3], null, [4, 5], null, [6, 7, 8], null, [9]]
-        let value_offsets = Buffer::from_slice_ref(&[0, 2, 2, 4, 4, 6, 6, 9, 9, 10]);
+        let value_offsets = Buffer::from_slice_ref([0, 2, 2, 4, 4, 6, 6, 9, 9, 10]);
         // 01010101 00000001
         let mut null_bits: [u8; 2] = [0; 2];
         bit_util::set_bit(&mut null_bits, 0);
@@ -150,7 +152,7 @@ mod tests {
             .unwrap();
         let int_data = ArrayData::builder(DataType::Int32)
             .len(5)
-            .add_buffer(Buffer::from_slice_ref(&[0, 28, 42, 0, 0]))
+            .add_buffer(Buffer::from_slice_ref([0, 28, 42, 0, 0]))
             .null_bit_buffer(Some(Buffer::from([0b00000110])))
             .build()
             .unwrap();

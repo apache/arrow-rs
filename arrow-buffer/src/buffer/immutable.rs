@@ -55,7 +55,7 @@ impl Buffer {
     }
 
     /// Initializes a [Buffer] from a slice of items.
-    pub fn from_slice_ref<U: ArrowNativeType, T: AsRef<[U]>>(items: &T) -> Self {
+    pub fn from_slice_ref<U: ArrowNativeType, T: AsRef<[U]>>(items: T) -> Self {
         let slice = items.as_ref();
         let capacity = slice.len() * std::mem::size_of::<U>();
         let mut buffer = MutableBuffer::with_capacity(capacity);

@@ -16,6 +16,8 @@
 // under the License.
 
 //! Contains column writer API.
+
+use crate::bloom_filter::Sbbf;
 use crate::format::{ColumnIndex, OffsetIndex};
 use std::collections::{BTreeSet, VecDeque};
 
@@ -154,6 +156,8 @@ pub struct ColumnCloseResult {
     pub rows_written: u64,
     /// Metadata for this column chunk
     pub metadata: ColumnChunkMetaData,
+    /// Optional bloom filter for this column
+    pub bloom_filter: Option<Sbbf>,
     /// Optional column index, for filtering
     pub column_index: Option<ColumnIndex>,
     /// Optional offset index, identifying page locations
@@ -208,7 +212,6 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     def_levels_sink: Vec<i16>,
     rep_levels_sink: Vec<i16>,
     data_pages: VecDeque<CompressedPage>,
-
     // column index and offset index
     column_index_builder: ColumnIndexBuilder,
     offset_index_builder: OffsetIndexBuilder,
@@ -433,7 +436,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         &self.descr
     }
 
-    /// Finalises writes and closes the column writer.
+    /// Finalizes writes and closes the column writer.
     /// Returns total bytes written, total rows written and column chunk metadata.
     pub fn close(mut self) -> Result<ColumnCloseResult> {
         if self.page_metrics.num_buffered_values > 0 {
@@ -458,6 +461,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         Ok(ColumnCloseResult {
             bytes_written: self.column_metrics.total_bytes_written,
             rows_written: self.column_metrics.total_rows_written,
+            bloom_filter: self.encoder.flush_bloom_filter(),
             metadata,
             column_index,
             offset_index,

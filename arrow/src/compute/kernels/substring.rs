@@ -253,8 +253,7 @@ fn binary_substring<OffsetSize: OffsetSizeTrait>(
     length: Option<OffsetSize>,
 ) -> Result<ArrayRef> {
     let offsets = array.value_offsets();
-    let values = array.value_data();
-    let data = values.as_slice();
+    let data = array.value_data();
     let zero = OffsetSize::zero();
 
     // start and end offsets of all substrings
@@ -364,8 +363,7 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
     length: Option<OffsetSize>,
 ) -> Result<ArrayRef> {
     let offsets = array.value_offsets();
-    let values = array.value_data();
-    let data = values.as_slice();
+    let data = array.value_data();
     let zero = OffsetSize::zero();
 
     // Check if `offset` is at a valid char boundary.

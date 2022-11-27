@@ -20,10 +20,10 @@
 
 use std::collections::VecDeque;
 use std::io::Cursor;
+use std::iter;
 use std::{convert::TryFrom, fs::File, io::Read, path::Path, sync::Arc};
 
 use crate::basic::{Encoding, Type};
-#[cfg(feature = "bloom")]
 use crate::bloom_filter::Sbbf;
 use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
@@ -329,7 +329,7 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
             f,
             row_group_metadata,
             props,
-        )))
+        )?))
     }
 
     fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter> {
@@ -342,6 +342,7 @@ pub struct SerializedRowGroupReader<'a, R: ChunkReader> {
     chunk_reader: Arc<R>,
     metadata: &'a RowGroupMetaData,
     props: ReaderPropertiesPtr,
+    bloom_filters: Vec<Option<Sbbf>>,
 }
 
 impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
@@ -350,12 +351,22 @@ impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
         chunk_reader: Arc<R>,
         metadata: &'a RowGroupMetaData,
         props: ReaderPropertiesPtr,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let bloom_filters = if props.read_bloom_filter() {
+            metadata
+                .columns()
+                .iter()
+                .map(|col| Sbbf::read_from_column_chunk(col, chunk_reader.clone()))
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            iter::repeat(None).take(metadata.columns().len()).collect()
+        };
+        Ok(Self {
             chunk_reader,
             metadata,
             props,
-        }
+            bloom_filters,
+        })
     }
 }
 
@@ -388,11 +399,9 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
         )?))
     }
 
-    #[cfg(feature = "bloom")]
     /// get bloom filter for the `i`th column
-    fn get_column_bloom_filter(&self, i: usize) -> Result<Option<Sbbf>> {
-        let col = self.metadata.column(i);
-        Sbbf::read_from_column_chunk(col, self.chunk_reader.clone())
+    fn get_column_bloom_filter(&self, i: usize) -> Option<&Sbbf> {
+        self.bloom_filters[i].as_ref()
     }
 
     fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter> {

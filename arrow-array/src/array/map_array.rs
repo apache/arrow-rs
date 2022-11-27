@@ -28,6 +28,7 @@ use std::sync::Arc;
 ///
 /// [MapArray] is physically a [crate::array::ListArray] that has a
 /// [crate::array::StructArray] with 2 child fields.
+#[derive(Clone)]
 pub struct MapArray {
     data: ArrayData,
     values: ArrayRef,

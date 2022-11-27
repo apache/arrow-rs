@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-cast"
-version = "27.0.0"
+version = "28.0.0"
 description = "Cast kernel and utilities for Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -38,12 +38,12 @@ path = "src/lib.rs"
 bench = false
 
 [dependencies]
-arrow-array = { version = "27.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "27.0.0", path = "../arrow-buffer" }
-arrow-data = { version = "27.0.0", path = "../arrow-data" }
-arrow-schema = { version = "27.0.0", path = "../arrow-schema" }
-arrow-select = { version = "27.0.0", path = "../arrow-select" }
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+arrow-array = { version = "28.0.0", path = "../arrow-array" }
+arrow-buffer = { version = "28.0.0", path = "../arrow-buffer" }
+arrow-data = { version = "28.0.0", path = "../arrow-data" }
+arrow-schema = { version = "28.0.0", path = "../arrow-schema" }
+arrow-select = { version = "28.0.0", path = "../arrow-select" }
+chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
 num = { version = "0.4", default-features = false, features = ["std"] }
 lexical-core = { version = "^0.8", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 

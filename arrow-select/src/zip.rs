@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::*;
-use crate::compute::SlicesIterator;
-use crate::error::{ArrowError, Result};
+use crate::filter::SlicesIterator;
+use arrow_array::*;
+use arrow_data::transform::MutableArrayData;
+use arrow_schema::ArrowError;
 
 /// Zip two arrays by some boolean mask. Where the mask evaluates `true` values of `truthy`
 /// are taken, where the mask evaluates `false` values of `falsy` are taken.
@@ -30,7 +31,7 @@ pub fn zip(
     mask: &BooleanArray,
     truthy: &dyn Array,
     falsy: &dyn Array,
-) -> Result<ArrayRef> {
+) -> Result<ArrayRef, ArrowError> {
     if truthy.data_type() != falsy.data_type() {
         return Err(ArrowError::InvalidArgumentError(
             "arguments need to have the same data type".into(),

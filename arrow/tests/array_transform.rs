@@ -31,7 +31,7 @@ use std::sync::Arc;
 fn create_decimal_array(
     array: Vec<Option<i128>>,
     precision: u8,
-    scale: u8,
+    scale: i8,
 ) -> Decimal128Array {
     array
         .into_iter()
@@ -557,8 +557,7 @@ fn test_list_append() {
         Some(14),
         Some(15),
     ]);
-    let list_value_offsets =
-        Buffer::from_slice_ref(&[0i32, 3, 5, 11, 13, 13, 15, 15, 17]);
+    let list_value_offsets = Buffer::from_slice_ref([0i32, 3, 5, 11, 13, 13, 15, 15, 17]);
     let expected_list_data = ArrayData::try_new(
         DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
         8,
@@ -637,7 +636,7 @@ fn test_list_nulls_append() {
         Some(15),
     ]);
     let list_value_offsets =
-        Buffer::from_slice_ref(&[0, 3, 5, 5, 13, 15, 15, 15, 19, 19, 19, 19, 23]);
+        Buffer::from_slice_ref([0, 3, 5, 5, 13, 15, 15, 15, 19, 19, 19, 19, 23]);
     let expected_list_data = ArrayData::try_new(
         DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
         12,
@@ -772,7 +771,7 @@ fn test_map_nulls_append() {
     ]);
 
     let map_offsets =
-        Buffer::from_slice_ref(&[0, 3, 5, 5, 13, 15, 15, 15, 19, 19, 19, 19, 23]);
+        Buffer::from_slice_ref([0, 3, 5, 5, 13, 15, 15, 15, 19, 19, 19, 19, 23]);
 
     let expected_list_data = ArrayData::try_new(
         DataType::Map(
@@ -852,7 +851,7 @@ fn test_list_of_strings_append() {
         None,
         // extend b[0..0]
     ]);
-    let list_value_offsets = Buffer::from_slice_ref(&[0, 3, 5, 6, 9, 10, 13]);
+    let list_value_offsets = Buffer::from_slice_ref([0, 3, 5, 6, 9, 10, 13]);
     let expected_list_data = ArrayData::try_new(
         DataType::List(Box::new(Field::new("item", DataType::Utf8, true))),
         6,

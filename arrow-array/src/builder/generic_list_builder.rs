@@ -18,6 +18,7 @@
 use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::{ArrayRef, GenericListArray, OffsetSizeTrait};
+use arrow_buffer::Buffer;
 use arrow_data::ArrayData;
 use arrow_schema::Field;
 use std::any::Any;
@@ -85,6 +86,11 @@ where
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
     }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> ArrayRef {
+        Arc::new(self.finish_cloned())
+    }
 }
 
 impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize, T>
@@ -115,17 +121,40 @@ where
     /// Builds the [`GenericListArray`] and reset this builder.
     pub fn finish(&mut self) -> GenericListArray<OffsetSize> {
         let len = self.len();
-        let values_arr = self
-            .values_builder
-            .as_any_mut()
-            .downcast_mut::<T>()
-            .unwrap()
-            .finish();
+        let values_arr = self.values_builder.finish();
         let values_data = values_arr.data();
 
         let offset_buffer = self.offsets_builder.finish();
         let null_bit_buffer = self.null_buffer_builder.finish();
         self.offsets_builder.append(OffsetSize::zero());
+        let field = Box::new(Field::new(
+            "item",
+            values_data.data_type().clone(),
+            true, // TODO: find a consistent way of getting this
+        ));
+        let data_type = GenericListArray::<OffsetSize>::DATA_TYPE_CONSTRUCTOR(field);
+        let array_data_builder = ArrayData::builder(data_type)
+            .len(len)
+            .add_buffer(offset_buffer)
+            .add_child_data(values_data.clone())
+            .null_bit_buffer(null_bit_buffer);
+
+        let array_data = unsafe { array_data_builder.build_unchecked() };
+
+        GenericListArray::<OffsetSize>::from(array_data)
+    }
+
+    /// Builds the [`GenericListArray`] without resetting the builder.
+    pub fn finish_cloned(&self) -> GenericListArray<OffsetSize> {
+        let len = self.len();
+        let values_arr = self.values_builder.finish_cloned();
+        let values_data = values_arr.data();
+
+        let offset_buffer = Buffer::from_slice_ref(self.offsets_builder.as_slice());
+        let null_bit_buffer = self
+            .null_buffer_builder
+            .as_slice()
+            .map(Buffer::from_slice_ref);
         let field = Box::new(Field::new(
             "item",
             values_data.data_type().clone(),
@@ -176,9 +205,9 @@ mod tests {
         let list_array = builder.finish();
 
         let values = list_array.values().data().buffers()[0].clone();
-        assert_eq!(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]), values);
+        assert_eq!(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]), values);
         assert_eq!(
-            Buffer::from_slice_ref(&[0, 3, 6, 8].map(|n| O::from_usize(n).unwrap())),
+            Buffer::from_slice_ref([0, 3, 6, 8].map(|n| O::from_usize(n).unwrap())),
             list_array.data().buffers()[0].clone()
         );
         assert_eq!(DataType::Int32, list_array.value_type());
@@ -261,6 +290,27 @@ mod tests {
     }
 
     #[test]
+    fn test_list_array_builder_finish_cloned() {
+        let values_builder = Int32Array::builder(5);
+        let mut builder = ListBuilder::new(values_builder);
+
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
+        builder.values().append_slice(&[4, 5, 6]);
+        builder.append(true);
+
+        let mut arr = builder.finish_cloned();
+        assert_eq!(2, arr.len());
+        assert!(!builder.is_empty());
+
+        builder.values().append_slice(&[7, 8, 9]);
+        builder.append(true);
+        arr = builder.finish();
+        assert_eq!(3, arr.len());
+        assert!(builder.is_empty());
+    }
+
+    #[test]
     fn test_list_list_array_builder() {
         let primitive_builder = Int32Builder::with_capacity(10);
         let values_builder = ListBuilder::new(primitive_builder);
@@ -296,21 +346,21 @@ mod tests {
         assert_eq!(4, list_array.len());
         assert_eq!(1, list_array.null_count());
         assert_eq!(
-            Buffer::from_slice_ref(&[0, 2, 5, 5, 6]),
+            Buffer::from_slice_ref([0, 2, 5, 5, 6]),
             list_array.data().buffers()[0].clone()
         );
 
         assert_eq!(6, list_array.values().data().len());
         assert_eq!(1, list_array.values().data().null_count());
         assert_eq!(
-            Buffer::from_slice_ref(&[0, 2, 4, 7, 7, 8, 10]),
+            Buffer::from_slice_ref([0, 2, 4, 7, 7, 8, 10]),
             list_array.values().data().buffers()[0].clone()
         );
 
         assert_eq!(10, list_array.values().data().child_data()[0].len());
         assert_eq!(0, list_array.values().data().child_data()[0].null_count());
         assert_eq!(
-            Buffer::from_slice_ref(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+            Buffer::from_slice_ref([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
             list_array.values().data().child_data()[0].buffers()[0].clone()
         );
     }
