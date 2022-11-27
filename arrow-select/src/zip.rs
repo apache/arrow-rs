@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::filter::build_slices_iterator;
+use crate::filter::SlicesIterator;
 use arrow_array::*;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::ArrowError;
@@ -53,7 +53,7 @@ pub fn zip(
     // keep track of how much is filled
     let mut filled = 0;
 
-    build_slices_iterator(mask).for_each(|(start, end)| {
+    SlicesIterator::new(mask).for_each(|(start, end)| {
         // the gap needs to be filled with falsy values
         if start > filled {
             mutable.extend(1, filled, start);

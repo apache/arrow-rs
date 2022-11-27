@@ -28,4 +28,3 @@ pub mod transform;
 pub mod bit_iterator;
 pub mod bit_mask;
 pub mod decimal;
-pub mod slices_iterator;

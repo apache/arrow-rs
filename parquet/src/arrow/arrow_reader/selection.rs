@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow_array::{Array, BooleanArray};
-use arrow_select::filter::build_slices_iterator;
+use arrow_select::filter::SlicesIterator;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::Range;
@@ -103,7 +103,7 @@ impl RowSelection {
             let offset = next_offset;
             next_offset += filter.len();
             assert_eq!(filter.null_count(), 0);
-            build_slices_iterator(filter)
+            SlicesIterator::new(filter)
                 .map(move |(start, end)| start + offset..end + offset)
         });
 

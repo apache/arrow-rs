@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::bit_iterator::BitSliceIterator;
 use crate::contains_nulls;
 use crate::data::ArrayData;
 use crate::equal::primitive::NULL_SLICES_SELECTIVITY_THRESHOLD;
-use crate::slices_iterator::SlicesIterator;
 use arrow_buffer::bit_util::get_bit;
 use arrow_schema::DataType;
 
@@ -75,12 +75,12 @@ pub(super) fn fixed_binary_equal(
                         )
             })
         } else {
-            let lhs_slices_iter = SlicesIterator::new_from_buffer(
+            let lhs_slices_iter = BitSliceIterator::new(
                 lhs.null_buffer().as_ref().unwrap(),
                 lhs_start + lhs.offset(),
                 len,
             );
-            let rhs_slices_iter = SlicesIterator::new_from_buffer(
+            let rhs_slices_iter = BitSliceIterator::new(
                 rhs.null_buffer().as_ref().unwrap(),
                 rhs_start + rhs.offset(),
                 len,

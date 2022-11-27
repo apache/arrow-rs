@@ -25,8 +25,7 @@ use arrow_array::types::ByteArrayType;
 use arrow_array::*;
 use arrow_buffer::bit_util;
 use arrow_buffer::{buffer::buffer_bin_and, Buffer, MutableBuffer};
-use arrow_data::bit_iterator::BitIndexIterator;
-use arrow_data::slices_iterator::SlicesIterator;
+use arrow_data::bit_iterator::{BitIndexIterator, BitSliceIterator};
 use arrow_data::transform::MutableArrayData;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::*;
@@ -39,12 +38,35 @@ use arrow_schema::*;
 ///
 const FILTER_SLICES_SELECTIVITY_THRESHOLD: f64 = 0.8;
 
-pub fn build_slices_iterator(filter: &BooleanArray) -> SlicesIterator {
-    let values = &filter.data_ref().buffers()[0];
-    let len = filter.len();
-    let offset = filter.offset();
+/// An iterator of `(usize, usize)` each representing an interval
+/// `[start, end)` whose slots of a bitmap [Buffer] are true. Each
+/// interval corresponds to a contiguous region of memory to be
+/// "taken" from an array to be filtered.
+///
+/// ## Notes:
+///
+/// 1. Ignores the validity bitmap (ignores nulls)
+///
+/// 2. Only performant for filters that copy across long contiguous runs
+#[derive(Debug)]
+pub struct SlicesIterator<'a>(BitSliceIterator<'a>);
 
-    SlicesIterator::new_from_buffer(values, offset, len)
+impl<'a> SlicesIterator<'a> {
+    pub fn new(filter: &'a BooleanArray) -> Self {
+        let values = &filter.data_ref().buffers()[0];
+        let len = filter.len();
+        let offset = filter.offset();
+
+        Self(BitSliceIterator::new(values, offset, len))
+    }
+}
+
+impl<'a> Iterator for SlicesIterator<'a> {
+    type Item = (usize, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
 }
 
 /// An iterator of `usize` whose index in [`BooleanArray`] is true
@@ -108,7 +130,7 @@ pub type Filter<'a> = Box<dyn Fn(&ArrayData) -> ArrayData + 'a>;
 #[deprecated]
 #[allow(deprecated)]
 pub fn build_filter(filter: &BooleanArray) -> Result<Filter, ArrowError> {
-    let iter = build_slices_iterator(filter);
+    let iter = SlicesIterator::new(filter);
     let filter_count = filter_count(filter);
     let chunks = iter.collect::<Vec<_>>();
 
@@ -221,7 +243,7 @@ impl FilterBuilder {
     pub fn optimize(mut self) -> Self {
         match self.strategy {
             IterationStrategy::SlicesIterator => {
-                let slices = build_slices_iterator(&self.filter).collect();
+                let slices = SlicesIterator::new(&self.filter).collect();
                 self.strategy = IterationStrategy::Slices(slices)
             }
             IterationStrategy::IndexIterator => {
@@ -362,7 +384,7 @@ fn filter_array(
                             .for_each(|(start, end)| mutable.extend(0, *start, *end));
                     }
                     _ => {
-                        let iter = build_slices_iterator(&predicate.filter);
+                        let iter = SlicesIterator::new(&predicate.filter);
                         iter.for_each(|(start, end)| mutable.extend(0, start, end));
                     }
                 }
@@ -423,7 +445,7 @@ fn filter_bits(buffer: &Buffer, offset: usize, predicate: &FilterPredicate) -> B
         IterationStrategy::SlicesIterator => {
             let mut builder =
                 BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
-            for (start, end) in build_slices_iterator(&predicate.filter) {
+            for (start, end) in SlicesIterator::new(&predicate.filter) {
                 builder.append_packed_range(start + offset..end + offset, src)
             }
             builder.finish()
@@ -479,7 +501,7 @@ where
         IterationStrategy::SlicesIterator => {
             let mut buffer =
                 MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
-            for (start, end) in build_slices_iterator(&predicate.filter) {
+            for (start, end) in SlicesIterator::new(&predicate.filter) {
                 buffer.extend_from_slice(&values[start..end]);
             }
             buffer
@@ -618,7 +640,7 @@ where
 
     match &predicate.strategy {
         IterationStrategy::SlicesIterator => {
-            filter.extend_slices(build_slices_iterator(&predicate.filter))
+            filter.extend_slices(SlicesIterator::new(&predicate.filter))
         }
         IterationStrategy::Slices(slices) => filter.extend_slices(slices.iter().cloned()),
         IterationStrategy::IndexIterator => {
@@ -951,7 +973,7 @@ mod tests {
         let filter = BooleanArray::from(filter_values);
         let filter_count = filter_count(&filter);
 
-        let iter = build_slices_iterator(&filter);
+        let iter = SlicesIterator::new(&filter);
         let chunks = iter.collect::<Vec<_>>();
 
         assert_eq!(chunks, vec![(1, 2)]);
@@ -964,7 +986,7 @@ mod tests {
         let filter = BooleanArray::from(filter_values);
         let filter_count = filter_count(&filter);
 
-        let iter = build_slices_iterator(&filter);
+        let iter = SlicesIterator::new(&filter);
         let chunks = iter.collect::<Vec<_>>();
 
         assert_eq!(chunks, vec![(0, 1), (2, 64)]);
@@ -977,7 +999,7 @@ mod tests {
         let filter = BooleanArray::from(filter_values);
         let filter_count = filter_count(&filter);
 
-        let iter = build_slices_iterator(&filter);
+        let iter = SlicesIterator::new(&filter);
         let chunks = iter.collect::<Vec<_>>();
 
         assert_eq!(chunks, vec![(1, 62), (63, 124), (125, 130)]);
@@ -1026,7 +1048,7 @@ mod tests {
 
         let bool_array: BooleanArray = bools.map(Some).collect();
 
-        let slices: Vec<_> = build_slices_iterator(&bool_array).collect();
+        let slices: Vec<_> = SlicesIterator::new(&bool_array).collect();
         let expected = vec![(0, 10), (40, 60), (77, 81)];
         assert_eq!(slices, expected);
 
@@ -1037,7 +1059,7 @@ mod tests {
             .as_any()
             .downcast_ref::<BooleanArray>()
             .unwrap();
-        let slices: Vec<_> = build_slices_iterator(sliced_array).collect();
+        let slices: Vec<_> = SlicesIterator::new(sliced_array).collect();
         let expected = vec![(0, 3), (33, 53), (70, 71)];
         assert_eq!(slices, expected);
     }
@@ -1062,7 +1084,7 @@ mod tests {
 
         let filter = BooleanArray::from(data);
 
-        let slice_bits: Vec<_> = build_slices_iterator(&filter)
+        let slice_bits: Vec<_> = SlicesIterator::new(&filter)
             .flat_map(|(start, end)| start..end)
             .collect();
 
