@@ -131,6 +131,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::*;
 use arrow_array::*;
+use arrow_data::ArrayDataBuilder;
 
 use crate::compute::SortOptions;
 use crate::datatypes::*;
@@ -307,6 +308,13 @@ mod variable;
 ///
 ///      Input                  Row Format
 /// ```
+///
+/// ## Struct Encoding
+///
+/// A null is encoded as a `0_u8`.
+///
+/// A valid value is encoded as `1_u8` followed by the row encoding of each child
+///
 /// # Ordering
 ///
 /// ## Float Ordering
@@ -338,26 +346,53 @@ pub struct RowConverter {
 
 #[derive(Debug)]
 enum Codec {
+    /// No additional codec state is necessary
     Stateless,
+    // The interner used to encode dictionary values
     Dictionary(OrderPreservingInterner),
-    // Nested(RowConverter),
+    // A row converter for the child fields
+    // and the encoding of a row containing only nulls
+    Struct(RowConverter, OwnedRow),
 }
 
 impl Codec {
-    fn new(d: &DataType) -> Result<Self> {
-        match d {
+    fn new(sort_field: &SortField) -> Result<Self> {
+        match &sort_field.data_type {
             DataType::Dictionary(_, _) => Ok(Self::Dictionary(Default::default())),
-            _ if !d.is_nested() => Ok(Self::Stateless),
+            d if !d.is_nested() => Ok(Self::Stateless),
+            DataType::Struct(f) => {
+                let sort_fields = f
+                    .iter()
+                    .map(|x| {
+                        SortField::new_with_options(
+                            x.data_type().clone(),
+                            sort_field.options,
+                        )
+                    })
+                    .collect();
+
+                let mut converter = RowConverter::new(sort_fields)?;
+                let nulls: Vec<_> =
+                    f.iter().map(|x| new_null_array(x.data_type(), 1)).collect();
+
+                let nulls = converter.convert_columns(&nulls)?;
+                let owned = OwnedRow {
+                    data: nulls.buffer,
+                    config: nulls.config,
+                };
+
+                Ok(Self::Struct(converter, owned))
+            }
             _ => Err(ArrowError::NotYetImplemented(format!(
                 "not yet implemented: {:?}",
-                d
+                sort_field.data_type
             ))),
         }
     }
 
-    fn encoder(&mut self, array: &dyn Array) -> Encoder<'_> {
+    fn encoder(&mut self, array: &dyn Array) -> Result<Encoder<'_>> {
         match self {
-            Codec::Stateless => Encoder::Stateless,
+            Codec::Stateless => Ok(Encoder::Stateless),
             Codec::Dictionary(interner) => {
                 let values = downcast_dictionary_array! {
                     array => array.values(),
@@ -371,7 +406,12 @@ impl Codec {
                     })
                     .collect();
 
-                Encoder::Dictionary(mapping)
+                Ok(Encoder::Dictionary(mapping))
+            }
+            Codec::Struct(converter, null) => {
+                let v = as_struct_array(array);
+                let rows = converter.convert_columns(v.columns())?;
+                Ok(Encoder::Struct(rows, null.row()))
             }
         }
     }
@@ -380,15 +420,19 @@ impl Codec {
         match self {
             Codec::Stateless => 0,
             Codec::Dictionary(interner) => interner.size(),
+            Codec::Struct(converter, nulls) => converter.size() + nulls.data.len(),
         }
     }
 }
 
 #[derive(Debug)]
 enum Encoder<'a> {
+    /// No additional encoder state is necessary
     Stateless,
+    /// The mapping from dictionary keys to normalized keys
     Dictionary(Vec<Option<&'a [u8]>>),
-    // Nested(Rows),
+    /// The row encoding of the child array and the encoding of a null row
+    Struct(Rows, Row<'a>),
 }
 
 /// Configure the data type and sort order for a given column
@@ -430,11 +474,7 @@ impl RowConverter {
             )));
         }
 
-        let codecs = fields
-            .iter()
-            .map(|f| Codec::new(&f.data_type))
-            .collect::<Result<_>>()?;
-
+        let codecs = fields.iter().map(Codec::new).collect::<Result<_>>()?;
         Ok(Self {
             fields: fields.into(),
             codecs,
@@ -443,7 +483,17 @@ impl RowConverter {
 
     /// Check if the given fields are supported by the row format.
     pub fn supports_fields(fields: &[SortField]) -> bool {
-        fields.iter().all(|x| !DataType::is_nested(&x.data_type))
+        fields.iter().all(|x| Self::supports_datatype(&x.data_type))
+    }
+
+    fn supports_datatype(d: &DataType) -> bool {
+        match d {
+            _ if !d.is_nested() => true,
+            DataType::Struct(f) => {
+                f.iter().all(|x| Self::supports_datatype(x.data_type()))
+            }
+            _ => false,
+        }
     }
 
     /// Convert [`ArrayRef`] columns into [`Rows`]
@@ -474,7 +524,7 @@ impl RowConverter {
                         column.data_type()
                     )));
                 }
-                Ok(codec.encoder(column.as_ref()))
+                codec.encoder(column.as_ref())
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -524,15 +574,26 @@ impl RowConverter {
             })
             .collect();
 
+        // SAFETY
+        // We have validated that the rows came from this [`RowConverter`]
+        // and therefore must be valid
+        unsafe { self.convert_raw(&mut rows, validate_utf8) }
+    }
+
+    /// Convert raw bytes into [`ArrayRef`]
+    ///
+    /// # Safety
+    ///
+    /// `rows` must contain valid data for this [`RowConverter`]
+    unsafe fn convert_raw(
+        &self,
+        rows: &mut [&[u8]],
+        validate_utf8: bool,
+    ) -> Result<Vec<ArrayRef>> {
         self.fields
             .iter()
             .zip(&self.codecs)
-            .map(|(field, codec)| {
-                // SAFETY
-                // We have validated that the rows came from this [`RowConverter`]
-                // and therefore must be valid
-                unsafe { decode_column(field, &mut rows, codec, validate_utf8) }
-            })
+            .map(|(field, codec)| decode_column(field, rows, codec, validate_utf8))
             .collect()
     }
 
@@ -705,7 +766,7 @@ impl<'a> Row<'a> {
     /// Create owned version of the row to detach it from the shared [`Rows`].
     pub fn owned(&self) -> OwnedRow {
         OwnedRow {
-            data: self.data.to_vec(),
+            data: self.data.into(),
             config: self.config.clone(),
         }
     }
@@ -755,7 +816,7 @@ impl<'a> AsRef<[u8]> for Row<'a> {
 /// This contains the data for the one specific row (not the entire buffer of all rows).
 #[derive(Debug, Clone)]
 pub struct OwnedRow {
-    data: Vec<u8>,
+    data: Box<[u8]>,
     config: RowConfig,
 }
 
@@ -869,6 +930,15 @@ fn new_empty_rows(cols: &[ArrayRef], encoders: &[Encoder], config: RowConfig) ->
                     _ => unreachable!(),
                 }
             }
+            Encoder::Struct(rows, null) => {
+                let array = as_struct_array(array);
+                lengths.iter_mut().enumerate().for_each(|(idx, length)| {
+                    match array.is_valid(idx) {
+                        true => *length += 1 + rows.row(idx).as_ref().len(),
+                        false => *length += 1 + null.data.len(),
+                    }
+                });
+            }
         }
     }
 
@@ -945,6 +1015,24 @@ fn encode_column(
                 _ => unreachable!()
             }
         }
+        Encoder::Struct(rows, null) => {
+            let array = as_struct_array(column.as_ref());
+            let null_sentinel = null_sentinel(opts);
+            out.offsets
+                .iter_mut()
+                .skip(1)
+                .enumerate()
+                .for_each(|(idx, offset)| {
+                    let (row, sentinel) = match array.is_valid(idx) {
+                        true => (rows.row(idx), 0x01),
+                        false => (*null, null_sentinel),
+                    };
+                    let end_offset = *offset + 1 + row.as_ref().len();
+                    out.buffer[*offset] = sentinel;
+                    out.buffer[*offset + 1..end_offset].copy_from_slice(row.as_ref());
+                    *offset = end_offset;
+                })
+        }
     }
 }
 
@@ -997,6 +1085,45 @@ unsafe fn decode_column(
                 _ => unreachable!()
             }
         }
+        Codec::Struct(converter, _) => {
+            let child_fields = match &field.data_type {
+                DataType::Struct(f) => f,
+                _ => unreachable!(),
+            };
+
+            let (null_count, nulls) = fixed::decode_nulls(rows);
+            rows.iter_mut().for_each(|row| *row = &row[1..]);
+            let children = converter.convert_raw(rows, validate_utf8)?;
+
+            let child_data = child_fields
+                .iter()
+                .zip(&children)
+                .map(|(f, c)| {
+                    let data = c.data().clone();
+                    match f.is_nullable() {
+                        true => data,
+                        false => {
+                            assert_eq!(data.null_count(), null_count);
+                            // Need to strip out null buffer if any as this is created
+                            // as an artifact of the row encoding process that encodes
+                            // nulls from the parent struct array in the children
+                            data.into_builder()
+                                .null_count(0)
+                                .null_bit_buffer(None)
+                                .build_unchecked()
+                        }
+                    }
+                })
+                .collect();
+
+            let builder = ArrayDataBuilder::new(field.data_type.clone())
+                .len(rows.len())
+                .null_count(null_count)
+                .null_bit_buffer(Some(nulls))
+                .child_data(child_data);
+
+            Arc::new(StructArray::from(builder.build_unchecked()))
+        }
     };
     Ok(array)
 }
@@ -1010,6 +1137,7 @@ mod tests {
     use rand::{thread_rng, Rng};
 
     use arrow_array::NullArray;
+    use arrow_buffer::Buffer;
 
     use crate::array::{
         BinaryArray, BooleanArray, DictionaryArray, Float32Array, GenericStringArray,
@@ -1372,6 +1500,54 @@ mod tests {
 
         let cols = converter.convert_rows(&rows_c).unwrap();
         assert_eq!(&cols[0], &a);
+    }
+
+    #[test]
+    fn test_struct() {
+        // Test basic
+        let a = Arc::new(Int32Array::from(vec![1, 1, 2, 2])) as ArrayRef;
+        let a_f = Field::new("int", DataType::Int32, false);
+        let u = Arc::new(StringArray::from(vec!["a", "b", "c", "d"])) as ArrayRef;
+        let u_f = Field::new("s", DataType::Utf8, false);
+        let s1 = Arc::new(StructArray::from(vec![(a_f, a), (u_f, u)])) as ArrayRef;
+
+        let sort_fields = vec![SortField::new(s1.data_type().clone())];
+        let mut converter = RowConverter::new(sort_fields).unwrap();
+        let r1 = converter.convert_columns(&[Arc::clone(&s1)]).unwrap();
+
+        for (a, b) in r1.iter().zip(r1.iter().skip(1)) {
+            assert!(a < b);
+        }
+
+        let back = converter.convert_rows(&r1).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(&back[0], &s1);
+
+        // Test struct nullability
+        let data = s1
+            .data()
+            .clone()
+            .into_builder()
+            .null_bit_buffer(Some(Buffer::from_slice_ref([0b00001010])))
+            .null_count(2)
+            .build()
+            .unwrap();
+
+        let s2 = Arc::new(StructArray::from(data)) as ArrayRef;
+        let r2 = converter.convert_columns(&[Arc::clone(&s2)]).unwrap();
+        assert_eq!(r2.row(0), r2.row(2)); // Nulls equal
+        assert!(r2.row(0) < r2.row(1)); // Nulls first
+        assert_ne!(r1.row(0), r2.row(0)); // Value does not equal null
+        assert_eq!(r1.row(1), r2.row(1)); // Values equal
+
+        let back = converter.convert_rows(&r2).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(&back[0], &s2);
+        let back_s = as_struct_array(&back[0]);
+        for c in back_s.columns() {
+            // Children should not contain nulls
+            assert_eq!(c.null_count(), 0);
+        }
     }
 
     #[test]
