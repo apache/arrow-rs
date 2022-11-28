@@ -154,6 +154,10 @@ impl NullBufferBuilder {
             self.bitmap_builder = Some(b);
         }
     }
+
+    pub fn as_slice_mut(&mut self) -> Option<&mut [u8]> {
+        self.bitmap_builder.as_mut().map(|b| b.as_slice_mut())
+    }
 }
 
 impl NullBufferBuilder {
