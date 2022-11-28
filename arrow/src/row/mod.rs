@@ -313,7 +313,25 @@ mod variable;
 ///
 /// A null is encoded as a `0_u8`.
 ///
-/// A valid value is encoded as `1_u8` followed by the row encoding of each child
+/// A valid value is encoded as `1_u8` followed by the row encoding of each child.
+///
+/// This encoding effectively flattens the schema in a depth-first fashion.
+///
+/// For example
+///
+/// ```text
+/// ┌───────┬────────────────────────┬───────┐
+/// │ Int32 │ Struct[Int32, Float32] │ Int32 │
+/// └───────┴────────────────────────┴───────┘
+/// ```
+///
+/// Is encoded as
+///
+/// ```text
+/// ┌───────┬───────────────┬───────┬─────────┬───────┐
+/// │ Int32 │ Null Sentinel │ Int32 │ Float32 │ Int32 │
+/// └───────┴───────────────┴───────┴─────────┴───────┘
+/// ```
 ///
 /// # Ordering
 ///
@@ -348,10 +366,10 @@ pub struct RowConverter {
 enum Codec {
     /// No additional codec state is necessary
     Stateless,
-    // The interner used to encode dictionary values
+    /// The interner used to encode dictionary values
     Dictionary(OrderPreservingInterner),
-    // A row converter for the child fields
-    // and the encoding of a row containing only nulls
+    /// A row converter for the child fields
+    /// and the encoding of a row containing only nulls
     Struct(RowConverter, OwnedRow),
 }
 
@@ -432,6 +450,10 @@ enum Encoder<'a> {
     /// The mapping from dictionary keys to normalized keys
     Dictionary(Vec<Option<&'a [u8]>>),
     /// The row encoding of the child array and the encoding of a null row
+    ///
+    /// It is necessary to encode to a temporary [`Rows`] to avoid serializing
+    /// values that are masked by a null in the parent StructArray, otherwise
+    /// this would establish an ordering between semantically null values
     Struct(Rows, Row<'a>),
 }
 
