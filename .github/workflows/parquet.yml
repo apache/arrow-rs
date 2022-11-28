@@ -144,7 +144,9 @@ jobs:
           rustup toolchain install ${{ matrix.rust }}
           rustup default ${{ matrix.rust }}
       - name: Install binary for checking
-        run: cargo install --path parquet --bin parquet-show-bloom-filter --features=arrow,cli
+        run: |
+          cargo install --path parquet --bin parquet-show-bloom-filter --features=cli
+          cargo install --path parquet --bin parquet-fromcsv --features=arrow,cli
       - name: Run pytest
         run: |
           cd parquet/pytest

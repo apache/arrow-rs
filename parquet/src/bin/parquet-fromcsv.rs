@@ -25,7 +25,7 @@
 //! cargo install parquet --features=cli
 //! ```
 //!
-//! After this `parquet-fromcsv` shoud be available:
+//! After this `parquet-fromcsv` should be available:
 //!
 //! ```text
 //! parquet-fromcsv --schema message_schema_for_parquet.txt input.csv output.parquet
@@ -52,6 +52,7 @@
 //! - `-o`, `--output-file` : Path to output Parquet file
 //! - `-w`, `--writer-version` : Writer version
 //! - `-m`, `--max-row-group-size` : Max row group size
+//! -       `--enable-bloom-filter` : Enable bloom filter during writing
 //!
 //! ## Input file options
 //!
