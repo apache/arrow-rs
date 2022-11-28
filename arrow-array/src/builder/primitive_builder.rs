@@ -287,13 +287,11 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     }
 
     /// Returns the current values buffer as a slice
-    #[allow(dead_code)]
     pub fn validity_slice(&self) -> Option<&[u8]> {
         self.null_buffer_builder.as_slice()
     }
 
     /// Returns the current values buffer as a mutable slice
-    #[allow(dead_code)]
     pub fn validity_slice_mut(&mut self) -> Option<&mut [u8]> {
         self.null_buffer_builder.as_slice_mut()
     }
