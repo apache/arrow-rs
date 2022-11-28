@@ -72,9 +72,9 @@ lazy_static! {
         .unwrap();
     static ref DATE32_RE: Regex = Regex::new(r"^\d{4}-\d\d-\d\d$").unwrap();
     static ref DATE64_RE: Regex =
-        Regex::new(r"^\d{4}-\d\d-\d\d(T|\s)\d\d:\d\d:\d\d$").unwrap();
+        Regex::new(r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d$").unwrap();
     static ref DATETIME_RE: Regex =
-        Regex::new(r"^\d{4}-\d\d-\d\d(T|\s)\d\d:\d\d:\d\d(.\d{1,9})?$").unwrap();
+        Regex::new(r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,9}$").unwrap();
 }
 
 /// Infer the data type of a record
