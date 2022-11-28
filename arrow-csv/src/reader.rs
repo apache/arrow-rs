@@ -70,9 +70,11 @@ lazy_static! {
         .case_insensitive(true)
         .build()
         .unwrap();
-    static ref DATE_RE: Regex = Regex::new(r"^\d{4}-\d\d-\d\d$").unwrap();
+    static ref DATE32_RE: Regex = Regex::new(r"^\d{4}-\d\d-\d\d$").unwrap();
+    static ref DATE64_RE: Regex =
+        Regex::new(r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d$").unwrap();
     static ref DATETIME_RE: Regex =
-        Regex::new(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$").unwrap();
+        Regex::new(r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,9}$").unwrap();
 }
 
 /// Infer the data type of a record
@@ -90,10 +92,12 @@ fn infer_field_schema(string: &str, datetime_re: Option<Regex>) -> DataType {
         DataType::Float64
     } else if INTEGER_RE.is_match(string) {
         DataType::Int64
-    } else if datetime_re.is_match(string) {
-        DataType::Date64
-    } else if DATE_RE.is_match(string) {
+    } else if DATE32_RE.is_match(string) {
         DataType::Date32
+    } else if DATE64_RE.is_match(string) {
+        DataType::Date64
+    } else if datetime_re.is_match(string) {
+        DataType::Timestamp(TimeUnit::Nanosecond, None)
     } else {
         DataType::Utf8
     }
@@ -1590,10 +1594,9 @@ mod tests {
             infer_field_schema("2020-11-08T14:20:01", None),
             DataType::Date64
         );
-        // to be inferred as a date64 this needs a custom datetime_re
         assert_eq!(
             infer_field_schema("2020-11-08 14:20:01", None),
-            DataType::Utf8
+            DataType::Date64
         );
         let reg = Regex::new(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$").ok();
         assert_eq!(
@@ -1602,6 +1605,14 @@ mod tests {
         );
         assert_eq!(infer_field_schema("-5.13", None), DataType::Float64);
         assert_eq!(infer_field_schema("0.1300", None), DataType::Float64);
+        assert_eq!(
+            infer_field_schema("2021-12-19 13:12:30.921", None),
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+        assert_eq!(
+            infer_field_schema("2021-12-19T13:12:30.123456789", None),
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
     }
 
     #[test]
