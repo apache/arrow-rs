@@ -332,8 +332,63 @@ mod variable;
 #[derive(Debug)]
 pub struct RowConverter {
     fields: Arc<[SortField]>,
-    /// interning state for column `i`, if column`i` is a dictionary
-    interners: Vec<Option<Box<OrderPreservingInterner>>>,
+    /// State for codecs
+    codecs: Vec<Codec>,
+}
+
+#[derive(Debug)]
+enum Codec {
+    Stateless,
+    Dictionary(OrderPreservingInterner),
+    // Nested(RowConverter),
+}
+
+impl Codec {
+    fn new(d: &DataType) -> Result<Self> {
+        match d {
+            DataType::Dictionary(_, _) => Ok(Self::Dictionary(Default::default())),
+            _ if !d.is_nested() => Ok(Self::Stateless),
+            _ => Err(ArrowError::NotYetImplemented(format!(
+                "not yet implemented: {:?}",
+                d
+            ))),
+        }
+    }
+
+    fn encoder(&mut self, array: &dyn Array) -> Encoder<'_> {
+        match self {
+            Codec::Stateless => Encoder::Stateless,
+            Codec::Dictionary(interner) => {
+                let values = downcast_dictionary_array! {
+                    array => array.values(),
+                    _ => unreachable!()
+                };
+
+                let mapping = compute_dictionary_mapping(interner, values)
+                    .into_iter()
+                    .map(|maybe_interned| {
+                        maybe_interned.map(|interned| interner.normalized_key(interned))
+                    })
+                    .collect();
+
+                Encoder::Dictionary(mapping)
+            }
+        }
+    }
+
+    fn size(&self) -> usize {
+        match self {
+            Codec::Stateless => 0,
+            Codec::Dictionary(interner) => interner.size(),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum Encoder<'a> {
+    Stateless,
+    Dictionary(Vec<Option<&'a [u8]>>),
+    // Nested(Rows),
 }
 
 /// Configure the data type and sort order for a given column
@@ -375,10 +430,14 @@ impl RowConverter {
             )));
         }
 
-        let interners = (0..fields.len()).map(|_| None).collect();
+        let codecs = fields
+            .iter()
+            .map(|f| Codec::new(&f.data_type))
+            .collect::<Result<_>>()?;
+
         Ok(Self {
             fields: fields.into(),
-            interners,
+            codecs,
         })
     }
 
@@ -403,11 +462,11 @@ impl RowConverter {
             )));
         }
 
-        let dictionaries = columns
+        let encoders = columns
             .iter()
-            .zip(&mut self.interners)
+            .zip(&mut self.codecs)
             .zip(self.fields.iter())
-            .map(|((column, interner), field)| {
+            .map(|((column, codec), field)| {
                 if !column.data_type().equals_datatype(&field.data_type) {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "RowConverter column schema mismatch, expected {} got {}",
@@ -415,22 +474,7 @@ impl RowConverter {
                         column.data_type()
                     )));
                 }
-
-                let values = downcast_dictionary_array! {
-                    column => column.values(),
-                    _ => return Ok(None)
-                };
-
-                let interner = interner.get_or_insert_with(Default::default);
-
-                let mapping: Vec<_> = compute_dictionary_mapping(interner, values)
-                    .into_iter()
-                    .map(|maybe_interned| {
-                        maybe_interned.map(|interned| interner.normalized_key(interned))
-                    })
-                    .collect();
-
-                Ok(Some(mapping))
+                Ok(codec.encoder(column.as_ref()))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -439,13 +483,13 @@ impl RowConverter {
             // Don't need to validate UTF-8 as came from arrow array
             validate_utf8: false,
         };
-        let mut rows = new_empty_rows(columns, &dictionaries, config);
+        let mut rows = new_empty_rows(columns, &encoders, config);
 
-        for ((column, field), dictionary) in
-            columns.iter().zip(self.fields.iter()).zip(dictionaries)
+        for ((column, field), encoder) in
+            columns.iter().zip(self.fields.iter()).zip(encoders)
         {
             // We encode a column at a time to minimise dispatch overheads
-            encode_column(&mut rows, column, field.options, dictionary.as_deref())
+            encode_column(&mut rows, column, field.options, &encoder)
         }
 
         if cfg!(debug_assertions) {
@@ -482,14 +526,12 @@ impl RowConverter {
 
         self.fields
             .iter()
-            .zip(&self.interners)
-            .map(|(field, interner)| {
+            .zip(&self.codecs)
+            .map(|(field, codec)| {
                 // SAFETY
                 // We have validated that the rows came from this [`RowConverter`]
                 // and therefore must be valid
-                unsafe {
-                    decode_column(field, &mut rows, interner.as_deref(), validate_utf8)
-                }
+                unsafe { decode_column(field, &mut rows, codec, validate_utf8) }
             })
             .collect()
     }
@@ -505,13 +547,8 @@ impl RowConverter {
     pub fn size(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.fields.iter().map(|x| x.size()).sum::<usize>()
-            + self.interners.capacity()
-                * std::mem::size_of::<Option<Box<OrderPreservingInterner>>>()
-            + self
-                .interners
-                .iter()
-                .filter_map(|x| x.as_ref().map(|x| x.size()))
-                .sum::<usize>()
+            + self.codecs.capacity() * std::mem::size_of::<Codec>()
+            + self.codecs.iter().map(Codec::size).sum::<usize>()
     }
 }
 
@@ -783,54 +820,55 @@ fn null_sentinel(options: SortOptions) -> u8 {
 }
 
 /// Computes the length of each encoded [`Rows`] and returns an empty [`Rows`]
-fn new_empty_rows(
-    cols: &[ArrayRef],
-    dictionaries: &[Option<Vec<Option<&[u8]>>>],
-    config: RowConfig,
-) -> Rows {
+fn new_empty_rows(cols: &[ArrayRef], encoders: &[Encoder], config: RowConfig) -> Rows {
     use fixed::FixedLengthEncoding;
 
     let num_rows = cols.first().map(|x| x.len()).unwrap_or(0);
     let mut lengths = vec![0; num_rows];
 
-    for (array, dict) in cols.iter().zip(dictionaries) {
-        downcast_primitive_array! {
-            array => lengths.iter_mut().for_each(|x| *x += fixed::encoded_len(array)),
-            DataType::Null => {},
-            DataType::Boolean => lengths.iter_mut().for_each(|x| *x += bool::ENCODED_LEN),
-            DataType::Binary => as_generic_binary_array::<i32>(array)
-                .iter()
-                .zip(lengths.iter_mut())
-                .for_each(|(slice, length)| *length += variable::encoded_len(slice)),
-            DataType::LargeBinary => as_generic_binary_array::<i64>(array)
-                .iter()
-                .zip(lengths.iter_mut())
-                .for_each(|(slice, length)| *length += variable::encoded_len(slice)),
-            DataType::Utf8 => as_string_array(array)
-                .iter()
-                .zip(lengths.iter_mut())
-                .for_each(|(slice, length)| {
-                    *length += variable::encoded_len(slice.map(|x| x.as_bytes()))
-                }),
-            DataType::LargeUtf8 => as_largestring_array(array)
-                .iter()
-                .zip(lengths.iter_mut())
-                .for_each(|(slice, length)| {
-                    *length += variable::encoded_len(slice.map(|x| x.as_bytes()))
-                }),
-            DataType::Dictionary(_, _) => downcast_dictionary_array! {
-                array => {
-                    let dict = dict.as_ref().unwrap();
-                    for (v, length) in array.keys().iter().zip(lengths.iter_mut()) {
-                        match v.and_then(|v| dict[v as usize]) {
-                            Some(k) => *length += k.len() + 1,
-                            None => *length += 1,
+    for (array, encoder) in cols.iter().zip(encoders) {
+        match encoder {
+            Encoder::Stateless => {
+                downcast_primitive_array! {
+                    array => lengths.iter_mut().for_each(|x| *x += fixed::encoded_len(array)),
+                    DataType::Null => {},
+                    DataType::Boolean => lengths.iter_mut().for_each(|x| *x += bool::ENCODED_LEN),
+                    DataType::Binary => as_generic_binary_array::<i32>(array)
+                        .iter()
+                        .zip(lengths.iter_mut())
+                        .for_each(|(slice, length)| *length += variable::encoded_len(slice)),
+                    DataType::LargeBinary => as_generic_binary_array::<i64>(array)
+                        .iter()
+                        .zip(lengths.iter_mut())
+                        .for_each(|(slice, length)| *length += variable::encoded_len(slice)),
+                    DataType::Utf8 => as_string_array(array)
+                        .iter()
+                        .zip(lengths.iter_mut())
+                        .for_each(|(slice, length)| {
+                            *length += variable::encoded_len(slice.map(|x| x.as_bytes()))
+                        }),
+                    DataType::LargeUtf8 => as_largestring_array(array)
+                        .iter()
+                        .zip(lengths.iter_mut())
+                        .for_each(|(slice, length)| {
+                            *length += variable::encoded_len(slice.map(|x| x.as_bytes()))
+                        }),
+                    _ => unreachable!(),
+                }
+            }
+            Encoder::Dictionary(dict) => {
+                downcast_dictionary_array! {
+                    array => {
+                        for (v, length) in array.keys().iter().zip(lengths.iter_mut()) {
+                            match v.and_then(|v| dict[v as usize]) {
+                                Some(k) => *length += k.len() + 1,
+                                None => *length += 1,
+                            }
                         }
                     }
+                    _ => unreachable!(),
                 }
-                _ => unreachable!(),
             }
-            _ => unreachable!(),
         }
     }
 
@@ -872,35 +910,41 @@ fn encode_column(
     out: &mut Rows,
     column: &ArrayRef,
     opts: SortOptions,
-    dictionary: Option<&[Option<&[u8]>]>,
+    encoder: &Encoder<'_>,
 ) {
-    downcast_primitive_array! {
-        column => fixed::encode(out, column, opts),
-        DataType::Null => {}
-        DataType::Boolean => fixed::encode(out, as_boolean_array(column), opts),
-        DataType::Binary => {
-            variable::encode(out, as_generic_binary_array::<i32>(column).iter(), opts)
+    match encoder {
+        Encoder::Stateless => {
+            downcast_primitive_array! {
+                column => fixed::encode(out, column, opts),
+                DataType::Null => {}
+                DataType::Boolean => fixed::encode(out, as_boolean_array(column), opts),
+                DataType::Binary => {
+                    variable::encode(out, as_generic_binary_array::<i32>(column).iter(), opts)
+                }
+                DataType::LargeBinary => {
+                    variable::encode(out, as_generic_binary_array::<i64>(column).iter(), opts)
+                }
+                DataType::Utf8 => variable::encode(
+                    out,
+                    as_string_array(column).iter().map(|x| x.map(|x| x.as_bytes())),
+                    opts,
+                ),
+                DataType::LargeUtf8 => variable::encode(
+                    out,
+                    as_largestring_array(column)
+                        .iter()
+                        .map(|x| x.map(|x| x.as_bytes())),
+                    opts,
+                ),
+                _ => unreachable!(),
+            }
         }
-        DataType::LargeBinary => {
-            variable::encode(out, as_generic_binary_array::<i64>(column).iter(), opts)
+        Encoder::Dictionary(dict) => {
+            downcast_dictionary_array! {
+                column => encode_dictionary(out, column, dict, opts),
+                _ => unreachable!()
+            }
         }
-        DataType::Utf8 => variable::encode(
-            out,
-            as_string_array(column).iter().map(|x| x.map(|x| x.as_bytes())),
-            opts,
-        ),
-        DataType::LargeUtf8 => variable::encode(
-            out,
-            as_largestring_array(column)
-                .iter()
-                .map(|x| x.map(|x| x.as_bytes())),
-            opts,
-        ),
-        DataType::Dictionary(_, _) => downcast_dictionary_array! {
-            column => encode_dictionary(out, column, dictionary.unwrap(), opts),
-            _ => unreachable!()
-        }
-        _ => unreachable!(),
     }
 }
 
@@ -912,12 +956,7 @@ macro_rules! decode_primitive_helper {
 
 macro_rules! decode_dictionary_helper {
     ($t:ty, $interner:ident, $v:ident, $options:ident, $rows:ident) => {
-        Arc::new(decode_dictionary::<$t>(
-            $interner.unwrap(),
-            $v.as_ref(),
-            $options,
-            $rows,
-        )?)
+        Arc::new(decode_dictionary::<$t>($interner, $v, $options, $rows)?)
     };
 }
 
@@ -929,28 +968,34 @@ macro_rules! decode_dictionary_helper {
 unsafe fn decode_column(
     field: &SortField,
     rows: &mut [&[u8]],
-    interner: Option<&OrderPreservingInterner>,
+    codec: &Codec,
     validate_utf8: bool,
 ) -> Result<ArrayRef> {
     let options = field.options;
-    let data_type = field.data_type.clone();
-    let array: ArrayRef = downcast_primitive! {
-        data_type => (decode_primitive_helper, rows, data_type, options),
-        DataType::Null => Arc::new(NullArray::new(rows.len())),
-        DataType::Boolean => Arc::new(decode_bool(rows, options)),
-        DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)),
-        DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)),
-        DataType::Utf8 => Arc::new(decode_string::<i32>(rows, options, validate_utf8)),
-        DataType::LargeUtf8 => Arc::new(decode_string::<i64>(rows, options, validate_utf8)),
-        DataType::Dictionary(k, v) => downcast_integer! {
-            k.as_ref() => (decode_dictionary_helper, interner, v, options, rows),
-            _ => unreachable!()
-        },
-        _ => {
-            return Err(ArrowError::NotYetImplemented(format!(
-                "converting {} row is not supported",
-                field.data_type
-            )))
+
+    let array: ArrayRef = match codec {
+        Codec::Stateless => {
+            let data_type = field.data_type.clone();
+            downcast_primitive! {
+                data_type => (decode_primitive_helper, rows, data_type, options),
+                DataType::Null => Arc::new(NullArray::new(rows.len())),
+                DataType::Boolean => Arc::new(decode_bool(rows, options)),
+                DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)),
+                DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)),
+                DataType::Utf8 => Arc::new(decode_string::<i32>(rows, options, validate_utf8)),
+                DataType::LargeUtf8 => Arc::new(decode_string::<i64>(rows, options, validate_utf8)),
+                _ => unreachable!()
+            }
+        }
+        Codec::Dictionary(interner) => {
+            let (k, v) = match &field.data_type {
+                DataType::Dictionary(k, v) => (k.as_ref(), v.as_ref()),
+                _ => unreachable!(),
+            };
+            downcast_integer! {
+                k => (decode_dictionary_helper, interner, v, options, rows),
+                _ => unreachable!()
+            }
         }
     };
     Ok(array)
