@@ -39,7 +39,7 @@ use arrow_schema::*;
 const FILTER_SLICES_SELECTIVITY_THRESHOLD: f64 = 0.8;
 
 /// An iterator of `(usize, usize)` each representing an interval
-/// `[start, end)` whose slots of a [BooleanArray] are true. Each
+/// `[start, end)` whose slots of a bitmap [Buffer] are true. Each
 /// interval corresponds to a contiguous region of memory to be
 /// "taken" from an array to be filtered.
 ///

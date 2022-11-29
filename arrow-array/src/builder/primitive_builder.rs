@@ -285,6 +285,24 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     pub fn values_slice_mut(&mut self) -> &mut [T::Native] {
         self.values_builder.as_slice_mut()
     }
+
+    /// Returns the current values buffer as a slice
+    pub fn validity_slice(&self) -> Option<&[u8]> {
+        self.null_buffer_builder.as_slice()
+    }
+
+    /// Returns the current values buffer as a mutable slice
+    pub fn validity_slice_mut(&mut self) -> Option<&mut [u8]> {
+        self.null_buffer_builder.as_slice_mut()
+    }
+
+    /// Returns the current values buffer and null buffer as a slice
+    pub fn slices_mut(&mut self) -> (&mut [T::Native], Option<&mut [u8]>) {
+        (
+            self.values_builder.as_slice_mut(),
+            self.null_buffer_builder.as_slice_mut(),
+        )
+    }
 }
 
 #[cfg(test)]
