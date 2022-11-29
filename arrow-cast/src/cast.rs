@@ -160,7 +160,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Time64(TimeUnit::Nanosecond)
             | Timestamp(TimeUnit::Nanosecond, None)
         ) => true,
-        (Utf8, _) => DataType::is_numeric(to_type),
+        (Utf8, _) => DataType::is_numeric(to_type) && to_type != &Float16,
         (LargeUtf8,
             LargeBinary
             | Date32
@@ -171,11 +171,11 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Time64(TimeUnit::Nanosecond)
             | Timestamp(TimeUnit::Nanosecond, None)
         ) => true,
-        (LargeUtf8, _) => DataType::is_numeric(to_type),
+        (LargeUtf8, _) => DataType::is_numeric(to_type) && to_type != &Float16,
         (Timestamp(_, _), Utf8) | (Timestamp(_, _), LargeUtf8) => true,
         (Date32, Utf8) | (Date32, LargeUtf8) => true,
         (Date64, Utf8) | (Date64, LargeUtf8) => true,
-        (_, Utf8 | LargeUtf8) => DataType::is_numeric(from_type) || from_type == &Binary,
+        (_, Utf8 | LargeUtf8) => (DataType::is_numeric(from_type) && from_type != &Float16) || from_type == &Binary,
 
         // start numeric casts
         (
@@ -972,6 +972,7 @@ pub fn cast_with_options(
             Int16 => cast_numeric_to_bool::<Int16Type>(array),
             Int32 => cast_numeric_to_bool::<Int32Type>(array),
             Int64 => cast_numeric_to_bool::<Int64Type>(array),
+            Float16 => cast_numeric_to_bool::<Float16Type>(array),
             Float32 => cast_numeric_to_bool::<Float32Type>(array),
             Float64 => cast_numeric_to_bool::<Float64Type>(array),
             Utf8 => cast_utf8_to_boolean(array, cast_options),
@@ -989,6 +990,7 @@ pub fn cast_with_options(
             Int16 => cast_bool_to_numeric::<Int16Type>(array, cast_options),
             Int32 => cast_bool_to_numeric::<Int32Type>(array, cast_options),
             Int64 => cast_bool_to_numeric::<Int64Type>(array, cast_options),
+            Float16 => cast_bool_to_numeric::<Float16Type>(array, cast_options),
             Float32 => cast_bool_to_numeric::<Float32Type>(array, cast_options),
             Float64 => cast_bool_to_numeric::<Float64Type>(array, cast_options),
             Utf8 => {
@@ -3565,6 +3567,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use half::f16;
 
     macro_rules! generate_cast_test_case {
         ($INPUT_ARRAY: expr, $OUTPUT_TYPE_ARRAY: ident, $OUTPUT_TYPE: expr, $OUTPUT_VALUES: expr) => {
@@ -3614,7 +3618,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "force_validate"))]
     fn test_cast_decimal_to_decimal_round() {
         let array = vec![
             Some(1123454),
@@ -3733,7 +3736,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "force_validate"))]
     fn test_cast_decimal128_to_decimal128() {
         let input_type = DataType::Decimal128(20, 3);
         let output_type = DataType::Decimal128(20, 4);
@@ -4096,7 +4098,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "force_validate"))]
     fn test_cast_numeric_to_decimal128() {
         let decimal_type = DataType::Decimal128(38, 6);
         // u8, u16, u32, u64
@@ -4268,7 +4269,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "force_validate"))]
     fn test_cast_numeric_to_decimal256() {
         // test negative cast type
         let decimal_type = DataType::Decimal256(58, 6);
@@ -5247,7 +5247,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "chrono-tz")]
     fn test_cast_timestamp_to_string() {
         let a = TimestampMillisecondArray::from(vec![
             Some(864000000005),
@@ -6774,7 +6773,6 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // running forever
-    #[cfg(feature = "chrono-tz")]
     fn test_can_cast_types() {
         // this function attempts to ensure that can_cast_types stays
         // in sync with cast.  It simply tries all combinations of
@@ -6842,7 +6840,6 @@ mod tests {
     }
 
     /// Create instances of arrays with varying types for cast tests
-    #[cfg(feature = "chrono-tz")]
     fn get_arrays_of_all_types() -> Vec<ArrayRef> {
         let tz_name = String::from("America/New_York");
         let binary_data: Vec<&[u8]> = vec![b"foo", b"bar"];
@@ -6893,6 +6890,11 @@ mod tests {
             Arc::new(UInt16Array::from(vec![1, 2])),
             Arc::new(UInt32Array::from(vec![1, 2])),
             Arc::new(UInt64Array::from(vec![1, 2])),
+            Arc::new(
+                [Some(f16::from_f64(1.0)), Some(f16::from_f64(2.0))]
+                    .into_iter()
+                    .collect::<Float16Array>(),
+            ),
             Arc::new(Float32Array::from(vec![1.0, 2.0])),
             Arc::new(Float64Array::from(vec![1.0, 2.0])),
             Arc::new(TimestampSecondArray::from(vec![1000, 2000])),
@@ -6982,7 +6984,6 @@ mod tests {
         LargeListArray::from(list_data)
     }
 
-    #[cfg(feature = "chrono-tz")]
     fn make_fixed_size_list_array() -> FixedSizeListArray {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
@@ -7004,7 +7005,6 @@ mod tests {
         FixedSizeListArray::from(list_data)
     }
 
-    #[cfg(feature = "chrono-tz")]
     fn make_fixed_size_binary_array() -> FixedSizeBinaryArray {
         let values: [u8; 15] = *b"hellotherearrow";
 
@@ -7016,7 +7016,6 @@ mod tests {
         FixedSizeBinaryArray::from(array_data)
     }
 
-    #[cfg(feature = "chrono-tz")]
     fn make_union_array() -> UnionArray {
         let mut builder = UnionBuilder::with_capacity_dense(7);
         builder.append::<Int32Type>("a", 1).unwrap();
@@ -7025,7 +7024,6 @@ mod tests {
     }
 
     /// Creates a dictionary with primitive dictionary values, and keys of type K
-    #[cfg(feature = "chrono-tz")]
     fn make_dictionary_primitive<K: ArrowDictionaryKeyType>() -> ArrayRef {
         // Pick Int32 arbitrarily for dictionary values
         let mut b: PrimitiveDictionaryBuilder<K, Int32Type> =
@@ -7036,7 +7034,6 @@ mod tests {
     }
 
     /// Creates a dictionary with utf8 values, and keys of type K
-    #[cfg(feature = "chrono-tz")]
     fn make_dictionary_utf8<K: ArrowDictionaryKeyType>() -> ArrayRef {
         // Pick Int32 arbitrarily for dictionary values
         let mut b: StringDictionaryBuilder<K> = StringDictionaryBuilder::new();
@@ -7046,7 +7043,6 @@ mod tests {
     }
 
     // Get a selection of datatypes to try and cast to
-    #[cfg(feature = "chrono-tz")]
     fn get_all_types() -> Vec<DataType> {
         use DataType::*;
         let tz_name = String::from("America/New_York");
@@ -7143,7 +7139,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "chrono-tz")]
     fn test_timestamp_cast_utf8() {
         let array: PrimitiveArray<TimestampMicrosecondType> =
             vec![Some(37800000000), None, Some(86339000000)].into();
@@ -7241,7 +7236,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "force_validate"))]
     fn test_cast_f64_to_decimal128() {
         // to reproduce https://github.com/apache/arrow-rs/issues/2997
 
