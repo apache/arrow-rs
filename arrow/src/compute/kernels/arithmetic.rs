@@ -734,28 +734,6 @@ where
     math_op(left, right, |a, b| a.add_wrapping(b))
 }
 
-/// Perform `left + right` operation on two arrays by mutating `left` with operation results.
-/// If either left or right value is null then the result is also null.
-///
-/// This only mutates the array if it is not shared buffers with other arrays. For shared
-/// array, it returns an `Err` which wraps input array.
-///
-/// This doesn't detect overflow. Once overflowing, the result will wrap around.
-/// For an overflow-checking variant, use `add_checked_mut` instead.
-pub fn add_mut<T>(
-    left: PrimitiveArray<T>,
-    right: &PrimitiveArray<T>,
-) -> std::result::Result<
-    std::result::Result<PrimitiveArray<T>, ArrowError>,
-    PrimitiveArray<T>,
->
-where
-    T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp,
-{
-    binary_mut(left, right, |a, b| a.add_wrapping(b))
-}
-
 /// Perform `left + right` operation on two arrays. If either left or right value is null
 /// then the result is also null.
 ///
@@ -770,28 +748,6 @@ where
     T::Native: ArrowNativeTypeOp,
 {
     try_binary(left, right, |a, b| a.add_checked(b))
-}
-
-/// Perform `left + right` operation on two arrays by mutating `left` with operation results.
-/// If either left or right value is null then the result is also null.
-///
-/// This only mutates the array if it is not shared buffers with other arrays. For shared
-/// array, it returns an `Err` which wraps input array.
-///
-/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
-/// use `add_mut` instead.
-pub fn add_checked_mut<T>(
-    left: PrimitiveArray<T>,
-    right: &PrimitiveArray<T>,
-) -> std::result::Result<
-    std::result::Result<PrimitiveArray<T>, ArrowError>,
-    PrimitiveArray<T>,
->
-where
-    T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp,
-{
-    try_binary_mut(left, right, |a, b| a.add_checked(b))
 }
 
 /// Perform `left + right` operation on two arrays. If either left or right value is null
@@ -3145,27 +3101,31 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive_array_add_mut() {
+    fn test_primitive_array_add_mut_by_binary_mut() {
         let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
         let b = Int32Array::from(vec![Some(1), None, Some(3), None, Some(5)]);
 
-        let c = add_mut(a, &b).unwrap().unwrap();
+        let c = binary_mut(a, &b, |a, b| a.add_wrapping(b))
+            .unwrap()
+            .unwrap();
         let expected = Int32Array::from(vec![Some(16), None, Some(12), None, Some(6)]);
         assert_eq!(c, expected);
     }
 
     #[test]
-    fn test_primitive_add_mut_wrapping_overflow() {
+    fn test_primitive_add_mut_wrapping_overflow_by_try_binary_mut() {
         let a = Int32Array::from(vec![i32::MAX, i32::MIN]);
         let b = Int32Array::from(vec![1, 1]);
 
-        let wrapped = add_mut(a, &b).unwrap().unwrap();
+        let wrapped = binary_mut(a, &b, |a, b| a.add_wrapping(b))
+            .unwrap()
+            .unwrap();
         let expected = Int32Array::from(vec![-2147483648, -2147483647]);
         assert_eq!(expected, wrapped);
 
         let a = Int32Array::from(vec![i32::MAX, i32::MIN]);
         let b = Int32Array::from(vec![1, 1]);
-        let overflow = add_checked_mut(a, &b);
+        let overflow = try_binary_mut(a, &b, |a, b| a.add_checked(b));
         let _ = overflow.unwrap().expect_err("overflow should be detected");
     }
 }
