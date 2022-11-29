@@ -27,7 +27,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use itertools::Itertools;
 use reqwest::{
     header::{HeaderValue, CONTENT_LENGTH, IF_NONE_MATCH, RANGE},
-    Client as ReqwestClient, Method, Response, StatusCode,
+    Client as ReqwestClient, Method, Proxy, Response, StatusCode,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use snafu::{ResultExt, Snafu};
@@ -82,6 +82,9 @@ pub(crate) enum Error {
     Authorization {
         source: crate::azure::credential::Error,
     },
+
+    #[snafu(display("Unable to use proxy url: {}", source))]
+    ProxyUrl { source: reqwest::Error },
 }
 
 impl From<Error> for crate::Error {
@@ -124,6 +127,7 @@ pub struct AzureConfig {
     pub allow_http: bool,
     pub service: Url,
     pub is_emulator: bool,
+    pub proxy_url: Option<String>,
 }
 
 impl AzureConfig {
@@ -148,13 +152,20 @@ pub(crate) struct AzureClient {
 
 impl AzureClient {
     /// create a new instance of [AzureClient]
-    pub fn new(config: AzureConfig) -> Self {
-        let client = reqwest::ClientBuilder::new()
-            .https_only(!config.allow_http)
-            .build()
-            .unwrap();
+    pub fn new(config: AzureConfig) -> Result<Self> {
+        let builder = ReqwestClient::builder();
 
-        Self { config, client }
+        let client = if let Some(url) = config.proxy_url.as_ref() {
+            let pr = Proxy::all(url).map_err(|source| Error::ProxyUrl { source });
+            builder.proxy(pr.unwrap())
+        } else {
+            builder
+        }
+        .https_only(!config.allow_http)
+        .build()
+        .unwrap();
+
+        Ok(Self { config, client })
     }
 
     /// Returns the config

@@ -290,7 +290,11 @@ pub fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
     unsafe { BooleanArray::from(builder.build_unchecked()) }
 }
 
-fn decode_nulls(rows: &[&[u8]]) -> (usize, Buffer) {
+/// Decodes a single byte from each row, interpreting `0x01` as a valid value
+/// and all other values as a null
+///
+/// Returns the null count and null buffer
+pub fn decode_nulls(rows: &[&[u8]]) -> (usize, Buffer) {
     let mut null_count = 0;
     let buffer = MutableBuffer::collect_bool(rows.len(), |idx| {
         let valid = rows[idx][0] == 1;
