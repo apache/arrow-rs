@@ -139,7 +139,7 @@ use crate::error::{ArrowError, Result};
 use crate::row::dictionary::{
     compute_dictionary_mapping, decode_dictionary, encode_dictionary,
 };
-use crate::row::fixed::{decode_bool, decode_primitive};
+use crate::row::fixed::{decode_bool, decode_fixed_size_binary, decode_primitive};
 use crate::row::interner::OrderPreservingInterner;
 use crate::row::variable::{decode_binary, decode_string};
 use crate::{downcast_dictionary_array, downcast_primitive_array};
@@ -212,6 +212,16 @@ mod variable;
 /// by flipping all bar the sign bit if they are negative.
 ///
 /// They are then encoded in the same manner as a signed integer.
+///
+/// ## Fixed Length Bytes Encoding
+///
+/// Fixed length bytes are encoded in the same fashion as primitive types above.
+///
+/// For a fixed length array of length `n`:
+///
+/// A null is encoded as `0_u8` null sentinel followed by `n` `0_u8` bytes
+///
+/// A valid value is encoded as `1_u8` followed by the value bytes
 ///
 /// ## Variable Length Bytes (including Strings) Encoding
 ///
@@ -936,6 +946,10 @@ fn new_empty_rows(cols: &[ArrayRef], encoders: &[Encoder], config: RowConfig) ->
                         .for_each(|(slice, length)| {
                             *length += variable::encoded_len(slice.map(|x| x.as_bytes()))
                         }),
+                    DataType::FixedSizeBinary(len) => {
+                        let len = len.to_usize().unwrap();
+                        lengths.iter_mut().for_each(|x| *x += 1 + len)
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -1028,6 +1042,10 @@ fn encode_column(
                         .map(|x| x.map(|x| x.as_bytes())),
                     opts,
                 ),
+                DataType::FixedSizeBinary(_) => {
+                    let array = column.as_any().downcast_ref().unwrap();
+                    fixed::encode_fixed_size_binary(out, array, opts)
+                }
                 _ => unreachable!(),
             }
         }
@@ -1092,6 +1110,7 @@ unsafe fn decode_column(
                 DataType::Boolean => Arc::new(decode_bool(rows, options)),
                 DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)),
                 DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)),
+                DataType::FixedSizeBinary(size) => Arc::new(decode_fixed_size_binary(rows, size, options)),
                 DataType::Utf8 => Arc::new(decode_string::<i32>(rows, options, validate_utf8)),
                 DataType::LargeUtf8 => Arc::new(decode_string::<i64>(rows, options, validate_utf8)),
                 _ => unreachable!()
@@ -1154,6 +1173,7 @@ unsafe fn decode_column(
 mod tests {
     use std::sync::Arc;
 
+    use arrow_array::builder::FixedSizeBinaryBuilder;
     use rand::distributions::uniform::SampleUniform;
     use rand::distributions::{Distribution, Standard};
     use rand::{thread_rng, Rng};
@@ -1713,9 +1733,31 @@ mod tests {
         DictionaryArray::from(data)
     }
 
+    fn generate_fixed_size_binary(
+        len: usize,
+        valid_percent: f64,
+    ) -> FixedSizeBinaryArray {
+        let mut rng = thread_rng();
+        let width = rng.gen_range(0..20);
+        let mut builder = FixedSizeBinaryBuilder::new(width);
+
+        let mut b = vec![0; width as usize];
+        for _ in 0..len {
+            match rng.gen_bool(valid_percent) {
+                true => {
+                    b.iter_mut().for_each(|x| *x = rng.gen());
+                    builder.append_value(&b).unwrap();
+                }
+                false => builder.append_null(),
+            }
+        }
+
+        builder.finish()
+    }
+
     fn generate_column(len: usize) -> ArrayRef {
         let mut rng = thread_rng();
-        match rng.gen_range(0..9) {
+        match rng.gen_range(0..10) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(len, 0.8)),
             2 => Arc::new(generate_primitive_array::<Int64Type>(len, 0.8)),
@@ -1738,6 +1780,7 @@ mod tests {
                 len,
                 0.8,
             )),
+            9 => Arc::new(generate_fixed_size_binary(len, 0.8)),
             _ => unreachable!(),
         }
     }
