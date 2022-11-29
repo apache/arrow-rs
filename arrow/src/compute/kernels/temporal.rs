@@ -935,6 +935,31 @@ mod tests {
     }
 
     #[test]
+    fn test_temporal_array_timestamp_week_without_timezone() {
+        // 1970-01-01T00:00:00                     -> 1970-01-01T00:00:00 Thursday (week 1)
+        // 1970-01-01T00:00:00 + 4 days            -> 1970-01-05T00:00:00 Monday   (week 2)
+        // 1970-01-01T00:00:00 + 4 days - 1 second -> 1970-01-04T23:59:59 Sunday   (week 1)
+        let a = TimestampSecondArray::from(vec![0, 86400 * 4, 86400 * 4 - 1]);
+        let b = week(&a).unwrap();
+        assert_eq!(1, b.value(0));
+        assert_eq!(2, b.value(1));
+        assert_eq!(1, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_week_with_timezone() {
+        // 1970-01-01T01:00:00+01:00                     -> 1970-01-01T01:00:00+01:00 Thursday (week 1)
+        // 1970-01-01T01:00:00+01:00 + 4 days            -> 1970-01-05T01:00:00+01:00 Monday   (week 2)
+        // 1970-01-01T01:00:00+01:00 + 4 days - 1 second -> 1970-01-05T00:59:59+01:00 Monday   (week 2)
+        let a = TimestampSecondArray::from(vec![0, 86400 * 4, 86400 * 4 - 1])
+            .with_timezone("+01:00".to_string());
+        let b = week(&a).unwrap();
+        assert_eq!(1, b.value(0));
+        assert_eq!(2, b.value(1));
+        assert_eq!(2, b.value(2));
+    }
+
+    #[test]
     fn test_hour_minute_second_dictionary_array() {
         let a = TimestampSecondArray::from(vec![
             60 * 60 * 10 + 61,
