@@ -15,12 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::bit_iterator::BitSliceIterator;
+use crate::contains_nulls;
+use arrow_buffer::bit_util::get_bit;
 use std::mem::size_of;
 
-use crate::data::{contains_nulls, ArrayData};
-use arrow_buffer::bit_util::get_bit;
+use crate::data::ArrayData;
 
 use super::utils::equal_len;
+
+pub(crate) const NULL_SLICES_SELECTIVITY_THRESHOLD: f64 = 0.4;
 
 pub(super) fn primitive_equal<T>(
     lhs: &ArrayData,
@@ -45,25 +49,54 @@ pub(super) fn primitive_equal<T>(
             len * byte_width,
         )
     } else {
-        // get a ref of the null buffer bytes, to use in testing for nullness
-        let lhs_null_bytes = lhs.null_buffer().as_ref().unwrap().as_slice();
-        let rhs_null_bytes = rhs.null_buffer().as_ref().unwrap().as_slice();
-        // with nulls, we need to compare item by item whenever it is not null
-        (0..len).all(|i| {
-            let lhs_pos = lhs_start + i;
-            let rhs_pos = rhs_start + i;
-            let lhs_is_null = !get_bit(lhs_null_bytes, lhs_pos + lhs.offset());
-            let rhs_is_null = !get_bit(rhs_null_bytes, rhs_pos + rhs.offset());
+        let selectivity_frac = lhs.null_count() as f64 / lhs.len() as f64;
 
-            lhs_is_null
-                || (lhs_is_null == rhs_is_null)
-                    && equal_len(
-                        lhs_values,
-                        rhs_values,
-                        lhs_pos * byte_width,
-                        rhs_pos * byte_width,
-                        byte_width, // 1 * byte_width since we are comparing a single entry
-                    )
-        })
+        if selectivity_frac >= NULL_SLICES_SELECTIVITY_THRESHOLD {
+            // get a ref of the null buffer bytes, to use in testing for nullness
+            let lhs_null_bytes = lhs.null_buffer().as_ref().unwrap().as_slice();
+            let rhs_null_bytes = rhs.null_buffer().as_ref().unwrap().as_slice();
+            // with nulls, we need to compare item by item whenever it is not null
+            (0..len).all(|i| {
+                let lhs_pos = lhs_start + i;
+                let rhs_pos = rhs_start + i;
+                let lhs_is_null = !get_bit(lhs_null_bytes, lhs_pos + lhs.offset());
+                let rhs_is_null = !get_bit(rhs_null_bytes, rhs_pos + rhs.offset());
+
+                lhs_is_null
+                    || (lhs_is_null == rhs_is_null)
+                        && equal_len(
+                            lhs_values,
+                            rhs_values,
+                            lhs_pos * byte_width,
+                            rhs_pos * byte_width,
+                            byte_width, // 1 * byte_width since we are comparing a single entry
+                        )
+            })
+        } else {
+            let lhs_slices_iter = BitSliceIterator::new(
+                lhs.null_buffer().as_ref().unwrap(),
+                lhs_start + lhs.offset(),
+                len,
+            );
+            let rhs_slices_iter = BitSliceIterator::new(
+                rhs.null_buffer().as_ref().unwrap(),
+                rhs_start + rhs.offset(),
+                len,
+            );
+
+            lhs_slices_iter.zip(rhs_slices_iter).all(
+                |((l_start, l_end), (r_start, r_end))| {
+                    l_start == r_start
+                        && l_end == r_end
+                        && equal_len(
+                            lhs_values,
+                            rhs_values,
+                            (lhs_start + l_start) * byte_width,
+                            (rhs_start + r_start) * byte_width,
+                            (l_end - l_start) * byte_width,
+                        )
+                },
+            )
+        }
     }
 }

@@ -36,7 +36,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
-use reqwest::Client;
+use reqwest::{Client, Proxy};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -120,6 +120,9 @@ enum Error {
 
     #[snafu(display("Error reading token file: {}", source))]
     ReadTokenFile { source: std::io::Error },
+
+    #[snafu(display("Unable to use proxy url: {}", source))]
+    ProxyUrl { source: reqwest::Error },
 }
 
 impl From<Error> for super::Error {
@@ -363,6 +366,7 @@ pub struct AmazonS3Builder {
     virtual_hosted_style_request: bool,
     metadata_endpoint: Option<String>,
     profile: Option<String>,
+    proxy_url: Option<String>,
 }
 
 impl AmazonS3Builder {
@@ -537,6 +541,12 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Set the proxy_url to be used by the underlying client
+    pub fn with_proxy_url(mut self, proxy_url: impl Into<String>) -> Self {
+        self.proxy_url = Some(proxy_url.into());
+        self
+    }
+
     /// Set the AWS profile name, see <https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html>
     ///
     /// This makes use of [aws-config] to provide credentials and therefore requires
@@ -561,6 +571,14 @@ impl AmazonS3Builder {
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
         let region = self.region.context(MissingRegionSnafu)?;
 
+        let clientbuilder = match self.proxy_url {
+            Some(ref url) => {
+                let pr: Proxy =
+                    Proxy::all(url).map_err(|source| Error::ProxyUrl { source })?;
+                Client::builder().proxy(pr)
+            }
+            None => Client::builder(),
+        };
         let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
             (Some(key_id), Some(secret_key), token) => {
                 info!("Using Static credential provider");
@@ -590,7 +608,7 @@ impl AmazonS3Builder {
                     let endpoint = format!("https://sts.{}.amazonaws.com", region);
 
                     // Disallow non-HTTPs requests
-                    let client = Client::builder().https_only(true).build().unwrap();
+                    let client = clientbuilder.https_only(true).build().unwrap();
 
                     Box::new(WebIdentityProvider {
                         cache: Default::default(),
@@ -611,7 +629,7 @@ impl AmazonS3Builder {
                         info!("Using Instance credential provider");
 
                         // The instance metadata endpoint is access over HTTP
-                        let client = Client::builder().https_only(false).build().unwrap();
+                        let client = clientbuilder.https_only(false).build().unwrap();
 
                         Box::new(InstanceCredentialProvider {
                             cache: Default::default(),
@@ -653,9 +671,10 @@ impl AmazonS3Builder {
             credentials,
             retry_config: self.retry_config,
             allow_http: self.allow_http,
+            proxy_url: self.proxy_url,
         };
 
-        let client = Arc::new(S3Client::new(config));
+        let client = Arc::new(S3Client::new(config).unwrap());
 
         Ok(AmazonS3 { client })
     }
@@ -897,5 +916,36 @@ mod tests {
 
         let err = integration.delete(&location).await.unwrap_err();
         assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
+    }
+
+    #[tokio::test]
+    async fn s3_test_proxy_url() {
+        let s3 = AmazonS3Builder::new()
+            .with_access_key_id("access_key_id")
+            .with_secret_access_key("secret_access_key")
+            .with_region("region")
+            .with_bucket_name("bucket_name")
+            .with_allow_http(true)
+            .with_proxy_url("https://example.com")
+            .build();
+
+        assert!(s3.is_ok());
+
+        let s3 = AmazonS3Builder::new()
+            .with_access_key_id("access_key_id")
+            .with_secret_access_key("secret_access_key")
+            .with_region("region")
+            .with_bucket_name("bucket_name")
+            .with_allow_http(true)
+            .with_proxy_url("asdf://example.com")
+            .build();
+
+        assert!(match s3 {
+            Err(crate::Error::Generic { source, .. }) => matches!(
+                source.downcast_ref(),
+                Some(crate::aws::Error::ProxyUrl { .. })
+            ),
+            _ => false,
+        })
     }
 }

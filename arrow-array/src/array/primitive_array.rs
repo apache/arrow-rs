@@ -505,6 +505,44 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         })
     }
 
+    /// Applies an unary and fallible function to all valid values in a mutable primitive array.
+    /// Mutable primitive array means that the buffer is not shared with other arrays.
+    /// As a result, this mutates the buffer directly without allocating new buffer.
+    ///
+    /// This is unlike [`Self::unary_mut`] which will apply an infallible function to all rows
+    /// regardless of validity, in many cases this will be significantly faster and should
+    /// be preferred if `op` is infallible.
+    ///
+    /// This returns an `Err` when the input array is shared buffer with other
+    /// array. In the case, returned `Err` wraps input array. If the function
+    /// encounters an error during applying on values. In the case, this returns an `Err` within
+    /// an `Ok` which wraps the actual error.
+    ///
+    /// Note: LLVM is currently unable to effectively vectorize fallible operations
+    pub fn try_unary_mut<F, E>(
+        self,
+        op: F,
+    ) -> Result<Result<PrimitiveArray<T>, E>, PrimitiveArray<T>>
+    where
+        F: Fn(T::Native) -> Result<T::Native, E>,
+    {
+        let len = self.len();
+        let null_count = self.null_count();
+        let mut builder = self.into_builder()?;
+
+        let (slice, null_buffer) = builder.slices_mut();
+
+        match try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+            unsafe { *slice.get_unchecked_mut(idx) = op(*slice.get_unchecked(idx))? };
+            Ok::<_, E>(())
+        }) {
+            Ok(_) => {}
+            Err(err) => return Ok(Err(err)),
+        };
+
+        Ok(Ok(builder.finish()))
+    }
+
     /// Applies a unary and nullable function to all valid values in a primitive array
     ///
     /// This is unlike [`Self::unary`] which will apply an infallible function to all rows
