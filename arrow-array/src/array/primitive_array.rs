@@ -1083,13 +1083,6 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
                 T::MAX_SCALE
             )));
         }
-        if scale < -T::MAX_SCALE {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "scale {} is smaller than min {}",
-                scale,
-                -Decimal128Type::MAX_SCALE
-            )));
-        }
         if scale > 0 && scale as u8 > precision {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "scale {} is greater than precision {}",
