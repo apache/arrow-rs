@@ -21,3 +21,5 @@ pub mod concat;
 pub mod filter;
 pub mod interleave;
 pub mod take;
+pub mod window;
+pub mod zip;

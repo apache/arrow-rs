@@ -1799,7 +1799,7 @@ mod tests {
                     Arc::new(strings) as ArrayRef,
                 ),
                 (
-                    Field::new("c", DataType::Int32, false),
+                    Field::new("c", DataType::Int32, true),
                     Arc::new(ints) as ArrayRef,
                 ),
             ]);

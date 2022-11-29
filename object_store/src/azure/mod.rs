@@ -360,6 +360,7 @@ pub struct MicrosoftAzureBuilder {
     use_emulator: bool,
     retry_config: RetryConfig,
     allow_http: bool,
+    proxy_url: Option<String>,
 }
 
 impl Debug for MicrosoftAzureBuilder {
@@ -500,6 +501,12 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// Set the proxy_url to be used by the underlying client
+    pub fn with_proxy_url(mut self, proxy_url: impl Into<String>) -> Self {
+        self.proxy_url = Some(proxy_url.into());
+        self
+    }
+
     /// Configure a connection to container with given name on Microsoft Azure
     /// Blob store.
     pub fn build(self) -> Result<MicrosoftAzure> {
@@ -516,6 +523,7 @@ impl MicrosoftAzureBuilder {
             retry_config,
             allow_http,
             authority_host,
+            proxy_url,
         } = self;
 
         let container = container_name.ok_or(Error::MissingContainerName {})?;
@@ -567,9 +575,10 @@ impl MicrosoftAzureBuilder {
             container,
             credentials: auth,
             is_emulator,
+            proxy_url,
         };
 
-        let client = Arc::new(client::AzureClient::new(config));
+        let client = Arc::new(client::AzureClient::new(config)?);
 
         Ok(MicrosoftAzure { client })
     }
