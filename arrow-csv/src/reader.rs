@@ -42,7 +42,7 @@
 
 use core::cmp::min;
 use lazy_static::lazy_static;
-use regex::{Regex, RegexBuilder, RegexSet};
+use regex::{Regex, RegexSet};
 use std::collections::HashSet;
 use std::fmt;
 use std::fs::File;
@@ -62,7 +62,7 @@ use std::ops::Neg;
 
 lazy_static! {
     static ref REGEX_SET: RegexSet = RegexSet::new([
-        r"^(true)$|^(false)$", //BOOLEAN
+        r"(?i)^(true)$|^(false)$(?-i)", //BOOLEAN
         r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$", //DECIMAL
         r"^-?(\d+)$", //INTEGER
         r"^\d{4}-\d\d-\d\d$", //DATE32
@@ -78,16 +78,6 @@ lazy_static! {
     ];
     static ref PARSE_DECIMAL_RE: Regex =
         Regex::new(r"^-?(\d+\.?\d*|\d*\.?\d+)$").unwrap();
-    static ref DECIMAL_RE: Regex =
-        Regex::new(r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$").unwrap();
-    static ref INTEGER_RE: Regex = Regex::new(r"^-?(\d+)$").unwrap();
-    static ref BOOLEAN_RE: Regex = RegexBuilder::new(r"^(true)$|^(false)$")
-        .case_insensitive(true)
-        .build()
-        .unwrap();
-    static ref DATE32_RE: Regex = Regex::new(r"^\d{4}-\d\d-\d\d$").unwrap();
-    static ref DATE64_RE: Regex =
-        Regex::new(r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d$").unwrap();
     static ref DATETIME_RE: Regex =
         Regex::new(r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,9}$").unwrap();
 }
@@ -1599,6 +1589,7 @@ mod tests {
         assert_eq!(infer_field_schema(".2", None), DataType::Float64);
         assert_eq!(infer_field_schema("2.", None), DataType::Float64);
         assert_eq!(infer_field_schema("true", None), DataType::Boolean);
+        assert_eq!(infer_field_schema("trUe", None), DataType::Boolean);
         assert_eq!(infer_field_schema("false", None), DataType::Boolean);
         assert_eq!(infer_field_schema("2020-11-08", None), DataType::Date32);
         assert_eq!(
