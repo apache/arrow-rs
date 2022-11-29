@@ -579,10 +579,10 @@ pub mod flight_service_client {
 pub mod flight_service_server {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
     use tonic::codegen::*;
-    ///Generated trait containing gRPC methods that should be implemented for use with FlightServiceServer.
+    /// Generated trait containing gRPC methods that should be implemented for use with FlightServiceServer.
     #[async_trait]
     pub trait FlightService: Send + Sync + 'static {
-        ///Server streaming response type for the Handshake method.
+        /// Server streaming response type for the Handshake method.
         type HandshakeStream: futures_core::Stream<
                 Item = Result<super::HandshakeResponse, tonic::Status>,
             >
@@ -597,7 +597,7 @@ pub mod flight_service_server {
             &self,
             request: tonic::Request<tonic::Streaming<super::HandshakeRequest>>,
         ) -> Result<tonic::Response<Self::HandshakeStream>, tonic::Status>;
-        ///Server streaming response type for the ListFlights method.
+        /// Server streaming response type for the ListFlights method.
         type ListFlightsStream: futures_core::Stream<
                 Item = Result<super::FlightInfo, tonic::Status>,
             >
@@ -638,7 +638,7 @@ pub mod flight_service_server {
             &self,
             request: tonic::Request<super::FlightDescriptor>,
         ) -> Result<tonic::Response<super::SchemaResult>, tonic::Status>;
-        ///Server streaming response type for the DoGet method.
+        /// Server streaming response type for the DoGet method.
         type DoGetStream: futures_core::Stream<
                 Item = Result<super::FlightData, tonic::Status>,
             >
@@ -653,7 +653,7 @@ pub mod flight_service_server {
             &self,
             request: tonic::Request<super::Ticket>,
         ) -> Result<tonic::Response<Self::DoGetStream>, tonic::Status>;
-        ///Server streaming response type for the DoPut method.
+        /// Server streaming response type for the DoPut method.
         type DoPutStream: futures_core::Stream<
                 Item = Result<super::PutResult, tonic::Status>,
             >
@@ -670,7 +670,7 @@ pub mod flight_service_server {
             &self,
             request: tonic::Request<tonic::Streaming<super::FlightData>>,
         ) -> Result<tonic::Response<Self::DoPutStream>, tonic::Status>;
-        ///Server streaming response type for the DoExchange method.
+        /// Server streaming response type for the DoExchange method.
         type DoExchangeStream: futures_core::Stream<
                 Item = Result<super::FlightData, tonic::Status>,
             >
@@ -686,7 +686,7 @@ pub mod flight_service_server {
             &self,
             request: tonic::Request<tonic::Streaming<super::FlightData>>,
         ) -> Result<tonic::Response<Self::DoExchangeStream>, tonic::Status>;
-        ///Server streaming response type for the DoAction method.
+        /// Server streaming response type for the DoAction method.
         type DoActionStream: futures_core::Stream<
                 Item = Result<super::Result, tonic::Status>,
             >
@@ -703,7 +703,7 @@ pub mod flight_service_server {
             &self,
             request: tonic::Request<super::Action>,
         ) -> Result<tonic::Response<Self::DoActionStream>, tonic::Status>;
-        ///Server streaming response type for the ListActions method.
+        /// Server streaming response type for the ListActions method.
         type ListActionsStream: futures_core::Stream<
                 Item = Result<super::ActionType, tonic::Status>,
             >
