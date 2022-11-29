@@ -3865,34 +3865,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_decimal256_to_decimal128_overflow() {
-        let input_type = DataType::Decimal256(76, 5);
-        let output_type = DataType::Decimal128(38, 7);
-        assert!(can_cast_types(&input_type, &output_type));
-        let array = vec![Some(i256::from_i128(i128::MAX))];
-        let input_decimal_array = create_decimal256_array(array, 76, 5).unwrap();
-        let array = Arc::new(input_decimal_array) as ArrayRef;
-        let result =
-            cast_with_options(&array, &output_type, &CastOptions { safe: false });
-        assert_eq!("Invalid argument error: 17014118346046923173168730371588410572700 cannot be casted to 128-bit integer for Decimal128",
-                   result.unwrap_err().to_string());
-    }
-
-    #[test]
-    fn test_cast_decimal256_to_decimal256_overflow() {
-        let input_type = DataType::Decimal256(76, 5);
-        let output_type = DataType::Decimal256(76, 55);
-        assert!(can_cast_types(&input_type, &output_type));
-        let array = vec![Some(i256::from_i128(i128::MAX))];
-        let input_decimal_array = create_decimal256_array(array, 76, 5).unwrap();
-        let array = Arc::new(input_decimal_array) as ArrayRef;
-        let result =
-            cast_with_options(&array, &output_type, &CastOptions { safe: false });
-        assert_eq!("Cast error: Cannot cast to \"Decimal256\"(76, 55). Overflowing on 170141183460469231731687303715884105727",
-                   result.unwrap_err().to_string());
-    }
-
-    #[test]
     fn test_cast_decimal128_to_decimal256() {
         let input_type = DataType::Decimal128(20, 3);
         let output_type = DataType::Decimal256(20, 4);
