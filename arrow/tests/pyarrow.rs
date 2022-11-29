@@ -15,23 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Computation kernels on Arrow Arrays
+use arrow::array::{ArrayRef, Int32Array, StringArray};
+use arrow::pyarrow::PyArrowConvert;
+use arrow::record_batch::RecordBatch;
+use pyo3::Python;
+use std::sync::Arc;
 
-pub mod aggregate;
-pub mod arithmetic;
-pub mod arity;
-pub mod bitwise;
-pub mod boolean;
-pub mod comparison;
-pub mod concat_elements;
-pub mod length;
-pub mod limit;
-pub mod partition;
-pub mod regexp;
-pub mod sort;
-pub mod substring;
-pub mod temporal;
+#[test]
+fn test_to_pyarrow() {
+    pyo3::prepare_freethreaded_python();
 
-pub use arrow_cast::cast;
-pub use arrow_cast::parse as cast_utils;
-pub use arrow_select::{concat, filter, interleave, take, window, zip};
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+    let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+    let input = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
+    println!("input: {:?}", input);
+
+    let res = Python::with_gil(|py| {
+        let py_input = input.to_pyarrow(py)?;
+        let records = RecordBatch::from_pyarrow(py_input.as_ref(py))?;
+        let py_records = records.to_pyarrow(py)?;
+        RecordBatch::from_pyarrow(py_records.as_ref(py))
+    })
+    .unwrap();
+
+    assert_eq!(input, res);
+}

@@ -37,8 +37,8 @@ use std::sync::Arc;
 ///
 /// let string_builder = builder.keys();
 /// string_builder.append_value("joe");
-/// string_builder.append_null();
-/// string_builder.append_null();
+/// string_builder.append_value("n1");
+/// string_builder.append_value("n2");
 /// string_builder.append_value("mark");
 ///
 /// let int_builder = builder.values();
@@ -58,7 +58,7 @@ use std::sync::Arc;
 /// );
 /// assert_eq!(
 ///     *arr.keys(),
-///     StringArray::from(vec![Some("joe"), None, None, Some("mark")])
+///     StringArray::from(vec![Some("joe"), Some("n1"), Some("n2"), Some("mark")])
 /// );
 /// ```
 #[derive(Debug)]
@@ -286,8 +286,8 @@ mod tests {
 
         let string_builder = builder.keys();
         string_builder.append_value("joe");
-        string_builder.append_null();
-        string_builder.append_null();
+        string_builder.append_value("n1");
+        string_builder.append_value("n2");
         string_builder.append_value("mark");
 
         let int_builder = builder.values();
@@ -312,9 +312,8 @@ mod tests {
 
         let expected_string_data = ArrayData::builder(DataType::Utf8)
             .len(4)
-            .null_bit_buffer(Some(Buffer::from(&[9_u8])))
-            .add_buffer(Buffer::from_slice_ref([0, 3, 3, 3, 7]))
-            .add_buffer(Buffer::from_slice_ref(b"joemark"))
+            .add_buffer(Buffer::from_slice_ref([0, 3, 5, 7, 11]))
+            .add_buffer(Buffer::from_slice_ref(b"joen1n2mark"))
             .build()
             .unwrap();
 
