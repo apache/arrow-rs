@@ -165,21 +165,48 @@ pub type TimestampMicrosecondArray = PrimitiveArray<TimestampMicrosecondType>;
 /// A primitive array where each element is of type `TimestampNanosecondType.`
 /// See examples for [`TimestampSecondArray.`](crate::array::TimestampSecondArray)
 pub type TimestampNanosecondArray = PrimitiveArray<TimestampNanosecondType>;
+
+// TODO: give examples for the below types
+
+/// A primitive array where each element is of 32-bit date type.
 pub type Date32Array = PrimitiveArray<Date32Type>;
+/// A primitive array where each element is of 64-bit date type.
 pub type Date64Array = PrimitiveArray<Date64Type>;
+
+/// An array where each element is of 32-bit type representing time elapsed in seconds
+/// since midnight.
 pub type Time32SecondArray = PrimitiveArray<Time32SecondType>;
+/// An array where each element is of 32-bit type representing time elapsed in milliseconds
+/// since midnight.
 pub type Time32MillisecondArray = PrimitiveArray<Time32MillisecondType>;
+/// An array where each element is of 64-bit type representing time elapsed in microseconds
+/// since midnight.
 pub type Time64MicrosecondArray = PrimitiveArray<Time64MicrosecondType>;
+/// An array where each element is of 64-bit type representing time elapsed in nanoseconds
+/// since midnight.
 pub type Time64NanosecondArray = PrimitiveArray<Time64NanosecondType>;
+
+/// An array where each element is a “calendar” interval in months.
 pub type IntervalYearMonthArray = PrimitiveArray<IntervalYearMonthType>;
+/// An array where each element is a “calendar” interval days and milliseconds.
 pub type IntervalDayTimeArray = PrimitiveArray<IntervalDayTimeType>;
+/// An array where each element is a “calendar” interval in  months, days, and nanoseconds.
 pub type IntervalMonthDayNanoArray = PrimitiveArray<IntervalMonthDayNanoType>;
+
+/// An array where each element is an elapsed time type in seconds.
 pub type DurationSecondArray = PrimitiveArray<DurationSecondType>;
+/// An array where each element is an elapsed time type in milliseconds.
 pub type DurationMillisecondArray = PrimitiveArray<DurationMillisecondType>;
+/// An array where each element is an elapsed time type in microseconds.
 pub type DurationMicrosecondArray = PrimitiveArray<DurationMicrosecondType>;
+/// An array where each element is an elapsed time type in nanoseconds.
 pub type DurationNanosecondArray = PrimitiveArray<DurationNanosecondType>;
 
+/// An array where each element is a 128-bits decimal with precision in [1, 38] and
+/// scale in [-38, 38].
 pub type Decimal128Array = PrimitiveArray<Decimal128Type>;
+/// An array where each element is a 256-bits decimal with precision in [1, 76] and
+/// scale in [-76, 76].
 pub type Decimal256Array = PrimitiveArray<Decimal256Type>;
 
 /// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
@@ -230,6 +257,15 @@ pub struct PrimitiveArray<T: ArrowPrimitiveType> {
     raw_values: RawPtrBox<T::Native>,
 }
 
+impl<T: ArrowPrimitiveType> Clone for PrimitiveArray<T> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            raw_values: self.raw_values,
+        }
+    }
+}
+
 impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// Returns the length of this array.
     #[inline]
@@ -256,7 +292,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         }
     }
 
-    // Returns a new primitive array builder
+    /// Returns a new primitive array builder
     pub fn builder(capacity: usize) -> PrimitiveBuilder<T> {
         PrimitiveBuilder::<T>::with_capacity(capacity)
     }
@@ -467,6 +503,44 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         Ok(unsafe {
             build_primitive_array(len, buffer.finish(), null_count, null_buffer)
         })
+    }
+
+    /// Applies an unary and fallible function to all valid values in a mutable primitive array.
+    /// Mutable primitive array means that the buffer is not shared with other arrays.
+    /// As a result, this mutates the buffer directly without allocating new buffer.
+    ///
+    /// This is unlike [`Self::unary_mut`] which will apply an infallible function to all rows
+    /// regardless of validity, in many cases this will be significantly faster and should
+    /// be preferred if `op` is infallible.
+    ///
+    /// This returns an `Err` when the input array is shared buffer with other
+    /// array. In the case, returned `Err` wraps input array. If the function
+    /// encounters an error during applying on values. In the case, this returns an `Err` within
+    /// an `Ok` which wraps the actual error.
+    ///
+    /// Note: LLVM is currently unable to effectively vectorize fallible operations
+    pub fn try_unary_mut<F, E>(
+        self,
+        op: F,
+    ) -> Result<Result<PrimitiveArray<T>, E>, PrimitiveArray<T>>
+    where
+        F: Fn(T::Native) -> Result<T::Native, E>,
+    {
+        let len = self.len();
+        let null_count = self.null_count();
+        let mut builder = self.into_builder()?;
+
+        let (slice, null_buffer) = builder.slices_mut();
+
+        match try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+            unsafe { *slice.get_unchecked_mut(idx) = op(*slice.get_unchecked(idx))? };
+            Ok::<_, E>(())
+        }) {
+            Ok(_) => {}
+            Err(err) => return Ok(Err(err)),
+        };
+
+        Ok(Ok(builder.finish()))
     }
 
     /// Applies a unary and nullable function to all valid values in a primitive array
@@ -749,6 +823,7 @@ impl<'a, T: ArrowPrimitiveType> PrimitiveArray<T> {
 /// the type can be collected to `PrimitiveArray`.
 #[derive(Debug)]
 pub struct NativeAdapter<T: ArrowPrimitiveType> {
+    /// Corresponding Rust native type if available
     pub native: Option<T::Native>,
 }
 
@@ -993,16 +1068,17 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for PrimitiveArray<T> {
 
 impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// Returns a Decimal array with the same data as self, with the
-    /// specified precision.
+    /// specified precision and scale.
     ///
     /// Returns an Error if:
-    /// 1. `precision` is larger than `T:MAX_PRECISION`
-    /// 2. `scale` is larger than `T::MAX_SCALE`
-    /// 3. `scale` is > `precision`
+    /// - `precision` is zero
+    /// - `precision` is larger than `T:MAX_PRECISION`
+    /// - `scale` is larger than `T::MAX_SCALE`
+    /// - `scale` is > `precision`
     pub fn with_precision_and_scale(
         self,
         precision: u8,
-        scale: u8,
+        scale: i8,
     ) -> Result<Self, ArrowError>
     where
         Self: Sized,
@@ -1023,23 +1099,36 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     fn validate_precision_scale(
         &self,
         precision: u8,
-        scale: u8,
+        scale: i8,
     ) -> Result<(), ArrowError> {
+        if precision == 0 {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "precision cannot be 0, has to be between [1, {}]",
+                T::MAX_PRECISION
+            )));
+        }
         if precision > T::MAX_PRECISION {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "precision {} is greater than max {}",
                 precision,
-                Decimal128Type::MAX_PRECISION
+                T::MAX_PRECISION
             )));
         }
         if scale > T::MAX_SCALE {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "scale {} is greater than max {}",
                 scale,
-                Decimal128Type::MAX_SCALE
+                T::MAX_SCALE
             )));
         }
-        if scale > precision {
+        if scale < -T::MAX_SCALE {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "scale {} is smaller than min {}",
+                scale,
+                -Decimal128Type::MAX_SCALE
+            )));
+        }
+        if scale > 0 && scale as u8 > precision {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "scale {} is greater than precision {}",
                 scale, precision
@@ -1095,7 +1184,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     }
 
     /// Returns the decimal scale of this array
-    pub fn scale(&self) -> u8 {
+    pub fn scale(&self) -> i8 {
         match T::BYTE_LENGTH {
             16 => {
                 if let DataType::Decimal128(_, s) = self.data().data_type() {
@@ -1132,7 +1221,7 @@ mod tests {
 
     #[test]
     fn test_primitive_array_from_vec() {
-        let buf = Buffer::from_slice_ref(&[0, 1, 2, 3, 4]);
+        let buf = Buffer::from_slice_ref([0, 1, 2, 3, 4]);
         let arr = Int32Array::from(vec![0, 1, 2, 3, 4]);
         assert_eq!(buf, arr.data.buffers()[0]);
         assert_eq!(5, arr.len());
@@ -1631,7 +1720,7 @@ mod tests {
     #[test]
     fn test_primitive_array_builder() {
         // Test building a primitive array with ArrayData builder and offset
-        let buf = Buffer::from_slice_ref(&[0i32, 1, 2, 3, 4, 5, 6]);
+        let buf = Buffer::from_slice_ref([0i32, 1, 2, 3, 4, 5, 6]);
         let buf2 = buf.clone();
         let data = ArrayData::builder(DataType::Int32)
             .len(5)
@@ -1700,7 +1789,7 @@ mod tests {
     // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]
     fn test_primitive_array_invalid_buffer_len() {
-        let buffer = Buffer::from_slice_ref(&[0i32, 1, 2, 3, 4]);
+        let buffer = Buffer::from_slice_ref([0i32, 1, 2, 3, 4]);
         let data = unsafe {
             ArrayData::builder(DataType::Int32)
                 .add_buffer(buffer.clone())
@@ -1932,6 +2021,14 @@ mod tests {
             .with_precision_and_scale(5, 2)
             .unwrap();
         arr.validate_decimal_precision(5).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "precision cannot be 0, has to be between [1, 38]")]
+    fn test_decimal_array_with_precision_zero() {
+        Decimal128Array::from_iter_values([12345, 456])
+            .with_precision_and_scale(0, 2)
+            .unwrap();
     }
 
     #[test]

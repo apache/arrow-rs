@@ -32,13 +32,7 @@ macro_rules! make_string {
     ($array_type:ty, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
-        let s = if array.is_null($row) {
-            "".to_string()
-        } else {
-            array.value($row).to_string()
-        };
-
-        Ok(s)
+        Ok(array.value($row).to_string())
     }};
 }
 
@@ -49,20 +43,14 @@ macro_rules! make_string_interval_year_month {
             .downcast_ref::<array::IntervalYearMonthArray>()
             .unwrap();
 
-        let s = if array.is_null($row) {
-            "NULL".to_string()
-        } else {
-            let interval = array.value($row) as f64;
-            let years = (interval / 12_f64).floor();
-            let month = interval - (years * 12_f64);
+        let interval = array.value($row) as f64;
+        let years = (interval / 12_f64).floor();
+        let month = interval - (years * 12_f64);
 
-            format!(
-                "{} years {} mons 0 days 0 hours 0 mins 0.00 secs",
-                years, month,
-            )
-        };
-
-        Ok(s)
+        Ok(format!(
+            "{} years {} mons 0 days 0 hours 0 mins 0.00 secs",
+            years, month,
+        ))
     }};
 }
 
@@ -73,32 +61,26 @@ macro_rules! make_string_interval_day_time {
             .downcast_ref::<array::IntervalDayTimeArray>()
             .unwrap();
 
-        let s = if array.is_null($row) {
-            "NULL".to_string()
-        } else {
-            let value: u64 = array.value($row) as u64;
+        let value: u64 = array.value($row) as u64;
 
-            let days_parts: i32 = ((value & 0xFFFFFFFF00000000) >> 32) as i32;
-            let milliseconds_part: i32 = (value & 0xFFFFFFFF) as i32;
+        let days_parts: i32 = ((value & 0xFFFFFFFF00000000) >> 32) as i32;
+        let milliseconds_part: i32 = (value & 0xFFFFFFFF) as i32;
 
-            let secs = milliseconds_part / 1000;
-            let mins = secs / 60;
-            let hours = mins / 60;
+        let secs = milliseconds_part / 1000;
+        let mins = secs / 60;
+        let hours = mins / 60;
 
-            let secs = secs - (mins * 60);
-            let mins = mins - (hours * 60);
+        let secs = secs - (mins * 60);
+        let mins = mins - (hours * 60);
 
-            format!(
-                "0 years 0 mons {} days {} hours {} mins {}.{:03} secs",
-                days_parts,
-                hours,
-                mins,
-                secs,
-                (milliseconds_part % 1000),
-            )
-        };
-
-        Ok(s)
+        Ok(format!(
+            "0 years 0 mons {} days {} hours {} mins {}.{:03} secs",
+            days_parts,
+            hours,
+            mins,
+            secs,
+            (milliseconds_part % 1000),
+        ))
     }};
 }
 
@@ -109,35 +91,29 @@ macro_rules! make_string_interval_month_day_nano {
             .downcast_ref::<array::IntervalMonthDayNanoArray>()
             .unwrap();
 
-        let s = if array.is_null($row) {
-            "NULL".to_string()
-        } else {
-            let value: u128 = array.value($row) as u128;
+        let value: u128 = array.value($row) as u128;
 
-            let months_part: i32 =
-                ((value & 0xFFFFFFFF000000000000000000000000) >> 96) as i32;
-            let days_part: i32 = ((value & 0xFFFFFFFF0000000000000000) >> 64) as i32;
-            let nanoseconds_part: i64 = (value & 0xFFFFFFFFFFFFFFFF) as i64;
+        let months_part: i32 =
+            ((value & 0xFFFFFFFF000000000000000000000000) >> 96) as i32;
+        let days_part: i32 = ((value & 0xFFFFFFFF0000000000000000) >> 64) as i32;
+        let nanoseconds_part: i64 = (value & 0xFFFFFFFFFFFFFFFF) as i64;
 
-            let secs = nanoseconds_part / 1000000000;
-            let mins = secs / 60;
-            let hours = mins / 60;
+        let secs = nanoseconds_part / 1000000000;
+        let mins = secs / 60;
+        let hours = mins / 60;
 
-            let secs = secs - (mins * 60);
-            let mins = mins - (hours * 60);
+        let secs = secs - (mins * 60);
+        let mins = mins - (hours * 60);
 
-            format!(
-                "0 years {} mons {} days {} hours {} mins {}.{:09} secs",
-                months_part,
-                days_part,
-                hours,
-                mins,
-                secs,
-                (nanoseconds_part % 1000000000),
-            )
-        };
-
-        Ok(s)
+        Ok(format!(
+            "0 years {} mons {} days {} hours {} mins {}.{:09} secs",
+            months_part,
+            days_part,
+            hours,
+            mins,
+            secs,
+            (nanoseconds_part % 1000000000),
+        ))
     }};
 }
 
@@ -145,16 +121,10 @@ macro_rules! make_string_date {
     ($array_type:ty, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
-        let s = if array.is_null($row) {
-            "".to_string()
-        } else {
-            array
-                .value_as_date($row)
-                .map(|d| d.to_string())
-                .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string())
-        };
-
-        Ok(s)
+        Ok(array
+            .value_as_date($row)
+            .map(|d| d.to_string())
+            .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
     }};
 }
 
@@ -162,16 +132,10 @@ macro_rules! make_string_time {
     ($array_type:ty, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
-        let s = if array.is_null($row) {
-            "".to_string()
-        } else {
-            array
-                .value_as_time($row)
-                .map(|d| d.to_string())
-                .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string())
-        };
-
-        Ok(s)
+        Ok(array
+            .value_as_time($row)
+            .map(|d| d.to_string())
+            .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
     }};
 }
 
@@ -179,16 +143,10 @@ macro_rules! make_string_datetime {
     ($array_type:ty, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
-        let s = if array.is_null($row) {
-            "".to_string()
-        } else {
-            array
-                .value_as_datetime($row)
-                .map(|d| format!("{:?}", d))
-                .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string())
-        };
-
-        Ok(s)
+        Ok(array
+            .value_as_datetime($row)
+            .map(|d| format!("{:?}", d))
+            .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
     }};
 }
 
@@ -196,19 +154,15 @@ macro_rules! make_string_datetime_with_tz {
     ($array_type:ty, $tz_string: ident, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
-        let s = if array.is_null($row) {
-            "".to_string()
-        } else {
-            match $tz_string.parse::<Tz>() {
-                Ok(tz) => array
-                    .value_as_datetime_with_tz($row, tz)
-                    .map(|d| format!("{}", d.to_rfc3339()))
-                    .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()),
-                Err(_) => array
-                    .value_as_datetime($row)
-                    .map(|d| format!("{:?} (Unknown Time Zone '{}')", d, $tz_string))
-                    .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()),
-            }
+        let s = match $tz_string.parse::<Tz>() {
+            Ok(tz) => array
+                .value_as_datetime_with_tz($row, tz)
+                .map(|d| format!("{}", d.to_rfc3339()))
+                .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()),
+            Err(_) => array
+                .value_as_datetime($row)
+                .map(|d| format!("{:?} (Unknown Time Zone '{}')", d, $tz_string))
+                .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()),
         };
 
         Ok(s)
@@ -220,19 +174,13 @@ macro_rules! make_string_hex {
     ($array_type:ty, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
-        let s = if array.is_null($row) {
-            "".to_string()
-        } else {
-            let mut tmp = "".to_string();
+        let mut tmp = "".to_string();
 
-            for character in array.value($row) {
-                let _ = write!(tmp, "{:02x}", character);
-            }
+        for character in array.value($row) {
+            let _ = write!(tmp, "{:02x}", character);
+        }
 
-            tmp
-        };
-
-        Ok(s)
+        Ok(tmp)
     }};
 }
 
@@ -281,6 +229,17 @@ macro_rules! make_string_from_fixed_size_list {
             .map(|i| array_value_to_string(&list.clone(), i))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(format!("[{}]", string_values.join(", ")))
+    }};
+}
+
+macro_rules! make_string_from_duration {
+    ($array_type:ty, $column: ident, $row: ident) => {{
+        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
+
+        Ok(array
+            .value_as_duration($row)
+            .map(|d| d.to_string())
+            .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
     }};
 }
 
@@ -459,7 +418,7 @@ pub fn array_value_to_string(
 
             let mut s = String::new();
             s.push('{');
-            let mut kv_iter = st.columns().into_iter().zip(st.column_names().into_iter());
+            let mut kv_iter = st.columns().iter().zip(st.column_names());
             if let Some((col, name)) = kv_iter.next() {
                 append_struct_field_string(&mut s, name, col, row)?;
             }
@@ -474,6 +433,20 @@ pub fn array_value_to_string(
         DataType::Union(field_vec, type_ids, mode) => {
             union_to_string(column, row, field_vec, type_ids, mode)
         }
+        DataType::Duration(unit) => match *unit {
+            TimeUnit::Second => {
+                make_string_from_duration!(array::DurationSecondArray, column, row)
+            }
+            TimeUnit::Millisecond => {
+                make_string_from_duration!(array::DurationMillisecondArray, column, row)
+            }
+            TimeUnit::Microsecond => {
+                make_string_from_duration!(array::DurationMicrosecondArray, column, row)
+            }
+            TimeUnit::Nanosecond => {
+                make_string_from_duration!(array::DurationNanosecondArray, column, row)
+            }
+        },
         _ => Err(ArrowError::InvalidArgumentError(format!(
             "Pretty printing not implemented for {:?} type",
             column.data_type()
@@ -547,5 +520,36 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
         let len = lexical_core::write(n, slice).len();
         buf.set_len(len);
         String::from_utf8_unchecked(buf)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_array_value_to_string_duration() {
+        let ns_array =
+            Arc::new(DurationNanosecondArray::from(vec![Some(1), None])) as ArrayRef;
+        assert_eq!(
+            array_value_to_string(&ns_array, 0).unwrap(),
+            "PT0.000000001S"
+        );
+        assert_eq!(array_value_to_string(&ns_array, 1).unwrap(), "");
+
+        let us_array =
+            Arc::new(DurationMicrosecondArray::from(vec![Some(1), None])) as ArrayRef;
+        assert_eq!(array_value_to_string(&us_array, 0).unwrap(), "PT0.000001S");
+        assert_eq!(array_value_to_string(&us_array, 1).unwrap(), "");
+
+        let ms_array =
+            Arc::new(DurationMillisecondArray::from(vec![Some(1), None])) as ArrayRef;
+        assert_eq!(array_value_to_string(&ms_array, 0).unwrap(), "PT0.001S");
+        assert_eq!(array_value_to_string(&ms_array, 1).unwrap(), "");
+
+        let s_array =
+            Arc::new(DurationSecondArray::from(vec![Some(1), None])) as ArrayRef;
+        assert_eq!(array_value_to_string(&s_array, 0).unwrap(), "PT1S");
+        assert_eq!(array_value_to_string(&s_array, 1).unwrap(), "");
     }
 }

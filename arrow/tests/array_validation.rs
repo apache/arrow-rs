@@ -32,7 +32,7 @@ use std::sync::Arc;
     expected = "Need at least 80 bytes in buffers[0] in array of type Int64, but got 8"
 )]
 fn test_buffer_too_small() {
-    let buffer = Buffer::from_slice_ref(&[0i32, 2i32]);
+    let buffer = Buffer::from_slice_ref([0i32, 2i32]);
     // should fail as the declared size (10*8 = 80) is larger than the underlying bfufer (8)
     ArrayData::try_new(DataType::Int64, 10, None, 0, vec![buffer], vec![]).unwrap();
 }
@@ -42,7 +42,7 @@ fn test_buffer_too_small() {
     expected = "Need at least 16 bytes in buffers[0] in array of type Int64, but got 8"
 )]
 fn test_buffer_too_small_offset() {
-    let buffer = Buffer::from_slice_ref(&[0i32, 2i32]);
+    let buffer = Buffer::from_slice_ref([0i32, 2i32]);
     // should fail -- size is ok, but also has offset
     ArrayData::try_new(DataType::Int64, 1, None, 1, vec![buffer], vec![]).unwrap();
 }
@@ -50,8 +50,8 @@ fn test_buffer_too_small_offset() {
 #[test]
 #[should_panic(expected = "Expected 1 buffers in array of type Int64, got 2")]
 fn test_bad_number_of_buffers() {
-    let buffer1 = Buffer::from_slice_ref(&[0i32, 2i32]);
-    let buffer2 = Buffer::from_slice_ref(&[0i32, 2i32]);
+    let buffer1 = Buffer::from_slice_ref([0i32, 2i32]);
+    let buffer2 = Buffer::from_slice_ref([0i32, 2i32]);
     ArrayData::try_new(DataType::Int64, 1, None, 0, vec![buffer1, buffer2], vec![])
         .unwrap();
 }
@@ -59,7 +59,7 @@ fn test_bad_number_of_buffers() {
 #[test]
 #[should_panic(expected = "integer overflow computing min buffer size")]
 fn test_fixed_width_overflow() {
-    let buffer = Buffer::from_slice_ref(&[0i32, 2i32]);
+    let buffer = Buffer::from_slice_ref([0i32, 2i32]);
     ArrayData::try_new(DataType::Int64, usize::MAX, None, 0, vec![buffer], vec![])
         .unwrap();
 }
@@ -85,7 +85,7 @@ fn test_bitmap_too_small() {
 #[test]
 #[should_panic(expected = "Dictionary key type must be integer, but was Utf8")]
 fn test_non_int_dictionary() {
-    let i32_buffer = Buffer::from_slice_ref(&[0i32, 2i32]);
+    let i32_buffer = Buffer::from_slice_ref([0i32, 2i32]);
     let data_type =
         DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Int32));
     let child_data = ArrayData::try_new(
@@ -113,7 +113,7 @@ fn test_non_int_dictionary() {
 fn test_mismatched_dictionary_types() {
     // test w/ dictionary created with a child array data that has type different than declared
     let string_array: StringArray = vec![Some("foo"), Some("bar")].into_iter().collect();
-    let i32_buffer = Buffer::from_slice_ref(&[0i32, 1i32]);
+    let i32_buffer = Buffer::from_slice_ref([0i32, 1i32]);
     // Dict says LargeUtf8 but array is Utf8
     let data_type =
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::LargeUtf8));
@@ -140,7 +140,7 @@ fn test_empty_utf8_array_with_empty_offsets_buffer() {
 #[test]
 fn test_empty_utf8_array_with_single_zero_offset() {
     let data_buffer = Buffer::from(&[]);
-    let offsets_buffer = Buffer::from_slice_ref(&[0i32]);
+    let offsets_buffer = Buffer::from_slice_ref([0i32]);
     ArrayData::try_new(
         DataType::Utf8,
         0,
@@ -156,7 +156,7 @@ fn test_empty_utf8_array_with_single_zero_offset() {
 #[should_panic(expected = "First offset 1 of Utf8 is larger than values length 0")]
 fn test_empty_utf8_array_with_invalid_offset() {
     let data_buffer = Buffer::from(&[]);
-    let offsets_buffer = Buffer::from_slice_ref(&[1i32]);
+    let offsets_buffer = Buffer::from_slice_ref([1i32]);
     ArrayData::try_new(
         DataType::Utf8,
         0,
@@ -170,8 +170,8 @@ fn test_empty_utf8_array_with_invalid_offset() {
 
 #[test]
 fn test_empty_utf8_array_with_non_zero_offset() {
-    let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
-    let offsets_buffer = Buffer::from_slice_ref(&[0i32, 2, 6, 0]);
+    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+    let offsets_buffer = Buffer::from_slice_ref([0i32, 2, 6, 0]);
     ArrayData::try_new(
         DataType::Utf8,
         0,
@@ -189,7 +189,7 @@ fn test_empty_utf8_array_with_non_zero_offset() {
 )]
 fn test_empty_large_utf8_array_with_wrong_type_offsets() {
     let data_buffer = Buffer::from(&[]);
-    let offsets_buffer = Buffer::from_slice_ref(&[0i32]);
+    let offsets_buffer = Buffer::from_slice_ref([0i32]);
     ArrayData::try_new(
         DataType::LargeUtf8,
         0,
@@ -204,8 +204,8 @@ fn test_empty_large_utf8_array_with_wrong_type_offsets() {
 #[test]
 #[should_panic(expected = "Buffer 0 of Utf8 isn't large enough. Expected 12 bytes got 8")]
 fn test_validate_offsets_i32() {
-    let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
-    let offsets_buffer = Buffer::from_slice_ref(&[0i32, 2i32]);
+    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+    let offsets_buffer = Buffer::from_slice_ref([0i32, 2i32]);
     ArrayData::try_new(
         DataType::Utf8,
         2,
@@ -222,8 +222,8 @@ fn test_validate_offsets_i32() {
     expected = "Buffer 0 of LargeUtf8 isn't large enough. Expected 24 bytes got 16"
 )]
 fn test_validate_offsets_i64() {
-    let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
-    let offsets_buffer = Buffer::from_slice_ref(&[0i64, 2i64]);
+    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+    let offsets_buffer = Buffer::from_slice_ref([0i64, 2i64]);
     ArrayData::try_new(
         DataType::LargeUtf8,
         2,
@@ -238,8 +238,8 @@ fn test_validate_offsets_i64() {
 #[test]
 #[should_panic(expected = "Error converting offset[0] (-2) to usize for Utf8")]
 fn test_validate_offsets_negative_first_i32() {
-    let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
-    let offsets_buffer = Buffer::from_slice_ref(&[-2i32, 1i32, 3i32]);
+    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+    let offsets_buffer = Buffer::from_slice_ref([-2i32, 1i32, 3i32]);
     ArrayData::try_new(
         DataType::Utf8,
         2,
@@ -254,8 +254,8 @@ fn test_validate_offsets_negative_first_i32() {
 #[test]
 #[should_panic(expected = "Error converting offset[2] (-3) to usize for Utf8")]
 fn test_validate_offsets_negative_last_i32() {
-    let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
-    let offsets_buffer = Buffer::from_slice_ref(&[0i32, 2i32, -3i32]);
+    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+    let offsets_buffer = Buffer::from_slice_ref([0i32, 2i32, -3i32]);
     ArrayData::try_new(
         DataType::Utf8,
         2,
@@ -270,9 +270,9 @@ fn test_validate_offsets_negative_last_i32() {
 #[test]
 #[should_panic(expected = "First offset 4 in Utf8 is smaller than last offset 3")]
 fn test_validate_offsets_range_too_small() {
-    let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
+    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
     // start offset is larger than end
-    let offsets_buffer = Buffer::from_slice_ref(&[4i32, 2i32, 3i32]);
+    let offsets_buffer = Buffer::from_slice_ref([4i32, 2i32, 3i32]);
     ArrayData::try_new(
         DataType::Utf8,
         2,
@@ -287,9 +287,9 @@ fn test_validate_offsets_range_too_small() {
 #[test]
 #[should_panic(expected = "Last offset 10 of Utf8 is larger than values length 6")]
 fn test_validate_offsets_range_too_large() {
-    let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
+    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
     // 10 is off the end of the buffer
-    let offsets_buffer = Buffer::from_slice_ref(&[0i32, 2i32, 10i32]);
+    let offsets_buffer = Buffer::from_slice_ref([0i32, 2i32, 10i32]);
     ArrayData::try_new(
         DataType::Utf8,
         2,
@@ -304,9 +304,9 @@ fn test_validate_offsets_range_too_large() {
 #[test]
 #[should_panic(expected = "First offset 10 of Utf8 is larger than values length 6")]
 fn test_validate_offsets_first_too_large() {
-    let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
+    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
     // 10 is off the end of the buffer
-    let offsets_buffer = Buffer::from_slice_ref(&[10i32, 2i32, 10i32]);
+    let offsets_buffer = Buffer::from_slice_ref([10i32, 2i32, 10i32]);
     ArrayData::try_new(
         DataType::Utf8,
         2,
@@ -320,9 +320,9 @@ fn test_validate_offsets_first_too_large() {
 
 #[test]
 fn test_validate_offsets_first_too_large_skipped() {
-    let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
+    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
     // 10 is off the end of the buffer, but offset starts at 1 so it is skipped
-    let offsets_buffer = Buffer::from_slice_ref(&[10i32, 2i32, 3i32, 4i32]);
+    let offsets_buffer = Buffer::from_slice_ref([10i32, 2i32, 3i32, 4i32]);
     let data = ArrayData::try_new(
         DataType::Utf8,
         2,
@@ -340,9 +340,9 @@ fn test_validate_offsets_first_too_large_skipped() {
 #[test]
 #[should_panic(expected = "Last offset 8 of Utf8 is larger than values length 6")]
 fn test_validate_offsets_last_too_large() {
-    let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
+    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
     // 10 is off the end of the buffer
-    let offsets_buffer = Buffer::from_slice_ref(&[5i32, 7i32, 8i32]);
+    let offsets_buffer = Buffer::from_slice_ref([5i32, 7i32, 8i32]);
     ArrayData::try_new(
         DataType::Utf8,
         2,
@@ -421,7 +421,7 @@ fn test_validate_struct_child_length() {
 /// Test that the array of type `data_type` that has invalid utf8 data errors
 fn check_utf8_validation<T: ArrowNativeType>(data_type: DataType) {
     // 0x80 is a utf8 continuation sequence and is not a valid utf8 sequence itself
-    let data_buffer = Buffer::from_slice_ref(&[b'a', b'a', 0x80, 0x00]);
+    let data_buffer = Buffer::from_slice_ref([b'a', b'a', 0x80, 0x00]);
     let offsets: Vec<T> = [0, 2, 3]
         .iter()
         .map(|&v| T::from_usize(v).unwrap())
@@ -485,7 +485,7 @@ fn test_validate_large_utf8_char_boundary() {
 
 /// Test that the array of type `data_type` that has invalid indexes (out of bounds)
 fn check_index_out_of_bounds_validation<T: ArrowNativeType>(data_type: DataType) {
-    let data_buffer = Buffer::from_slice_ref(&[b'a', b'b', b'c', b'd']);
+    let data_buffer = Buffer::from_slice_ref([b'a', b'b', b'c', b'd']);
     // First two offsets are fine, then 5 is out of bounds
     let offsets: Vec<T> = [0, 1, 2, 5, 2]
         .iter()
@@ -538,7 +538,7 @@ fn test_validate_large_binary_out_of_bounds() {
 
 // validate that indexes don't go bacwards check indexes that go backwards
 fn check_index_backwards_validation<T: ArrowNativeType>(data_type: DataType) {
-    let data_buffer = Buffer::from_slice_ref(&[b'a', b'b', b'c', b'd']);
+    let data_buffer = Buffer::from_slice_ref([b'a', b'b', b'c', b'd']);
     // First three offsets are fine, then 1 goes backwards
     let offsets: Vec<T> = [0, 1, 2, 2, 1]
         .iter()
@@ -799,7 +799,7 @@ fn test_validate_union_different_types() {
 
     let field2 = vec![Some(1), Some(2)].into_iter().collect::<Int32Array>();
 
-    let type_ids = Buffer::from_slice_ref(&[0i8, 1i8]);
+    let type_ids = Buffer::from_slice_ref([0i8, 1i8]);
 
     ArrayData::try_new(
         DataType::Union(
@@ -830,7 +830,7 @@ fn test_validate_union_sparse_different_child_len() {
     // field 2 only has 1 item but array should have 2
     let field2 = vec![Some(1)].into_iter().collect::<Int64Array>();
 
-    let type_ids = Buffer::from_slice_ref(&[0i8, 1i8]);
+    let type_ids = Buffer::from_slice_ref([0i8, 1i8]);
 
     ArrayData::try_new(
         DataType::Union(
@@ -857,7 +857,7 @@ fn test_validate_union_dense_without_offsets() {
 
     let field2 = vec![Some(1)].into_iter().collect::<Int64Array>();
 
-    let type_ids = Buffer::from_slice_ref(&[0i8, 1i8]);
+    let type_ids = Buffer::from_slice_ref([0i8, 1i8]);
 
     ArrayData::try_new(
         DataType::Union(
@@ -884,8 +884,8 @@ fn test_validate_union_dense_with_bad_len() {
 
     let field2 = vec![Some(1)].into_iter().collect::<Int64Array>();
 
-    let type_ids = Buffer::from_slice_ref(&[0i8, 1i8]);
-    let offsets = Buffer::from_slice_ref(&[0i32]); // should have 2 offsets, but only have 1
+    let type_ids = Buffer::from_slice_ref([0i8, 1i8]);
+    let offsets = Buffer::from_slice_ref([0i32]); // should have 2 offsets, but only have 1
 
     ArrayData::try_new(
         DataType::Union(

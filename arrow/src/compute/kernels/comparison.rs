@@ -140,14 +140,13 @@ fn is_like_pattern(c: char) -> bool {
 /// Evaluate regex `op(left)` matching `right` on [`StringArray`] / [`LargeStringArray`]
 ///
 /// If `negate_regex` is true, the regex expression will be negated. (for example, with `not like`)
-fn regex_like<OffsetSize, F>(
-    left: &GenericStringArray<OffsetSize>,
-    right: &GenericStringArray<OffsetSize>,
+fn regex_like<'a, S: ArrayAccessor<Item = &'a str>, F>(
+    left: S,
+    right: S,
     negate_regex: bool,
     op: F,
 ) -> Result<BooleanArray>
 where
-    OffsetSize: OffsetSizeTrait,
     F: Fn(&str) -> Result<Regex>,
 {
     let mut map = HashMap::new();
@@ -227,6 +226,86 @@ pub fn like_utf8<OffsetSize: OffsetSizeTrait>(
     })
 }
 
+/// Perform SQL `left LIKE right` operation on [`StringArray`] /
+/// [`LargeStringArray`], or [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn like_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+    match (left.data_type(), right.data_type()) {
+        (DataType::Utf8, DataType::Utf8)  => {
+            let left = as_string_array(left);
+            let right = as_string_array(right);
+            like_utf8(left, right)
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = as_largestring_array(left);
+            let right = as_largestring_array(right);
+            like_utf8(left, right)
+        }
+        #[cfg(feature = "dyn_cmp_dict")]
+        (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
+            downcast_dictionary_array!(
+                left => {
+                    let right = as_dictionary_array(right);
+                    like_dict(left, right)
+                }
+                t => Err(ArrowError::ComputeError(format!(
+                    "Should be DictionaryArray but got: {}", t
+                )))
+            )
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "like_dyn only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
+}
+
+/// Perform SQL `left LIKE right` operation on on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+#[cfg(feature = "dyn_cmp_dict")]
+fn like_dict<K: ArrowNumericType>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+) -> Result<BooleanArray> {
+    match (left.value_type(), right.value_type()) {
+        (DataType::Utf8, DataType::Utf8) => {
+            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
+            let right = right.downcast_dict::<GenericStringArray<i32>>().unwrap();
+
+            regex_like(left, right, false, |re_pattern| {
+                Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Unable to build regex from LIKE pattern: {}",
+                        e
+                    ))
+                })
+            })
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
+            let right = right.downcast_dict::<GenericStringArray<i64>>().unwrap();
+
+            regex_like(left, right, false, |re_pattern| {
+                Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Unable to build regex from LIKE pattern: {}",
+                        e
+                    ))
+                })
+            })
+        }
+        _ => Err(ArrowError::ComputeError(
+            "like_dict only supports DictionaryArray with Utf8 or LargeUtf8 values"
+                .to_string(),
+        )),
+    }
+}
+
 #[inline]
 fn like_scalar_op<'a, F: Fn(bool) -> bool, L: ArrayAccessor<Item = &'a str>>(
     left: L,
@@ -279,6 +358,39 @@ fn like_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
 }
 
 /// Perform SQL `left LIKE right` operation on [`StringArray`] /
+/// [`LargeStringArray`], or [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn like_utf8_scalar_dyn(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Utf8 => {
+            let left = as_string_array(left);
+            like_scalar(left, right)
+        }
+        DataType::LargeUtf8 => {
+            let left = as_largestring_array(left);
+            like_scalar(left, right)
+        }
+        DataType::Dictionary(_, _) => {
+            downcast_dictionary_array!(
+                left => {
+                    like_dict_scalar(left, right)
+                }
+                t => Err(ArrowError::ComputeError(format!(
+                    "Should be DictionaryArray but got: {}", t
+                )))
+            )
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "like_utf8_scalar_dyn only supports Utf8, LargeUtf8 or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
+}
+
+/// Perform SQL `left LIKE right` operation on [`StringArray`] /
 /// [`LargeStringArray`] and a scalar.
 ///
 /// See the documentation on [`like_utf8`] for more details.
@@ -293,7 +405,7 @@ pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 /// [`StringArray`]/[`LargeStringArray`] and a scalar.
 ///
 /// See the documentation on [`like_utf8`] for more details.
-pub fn like_dict_scalar<K: ArrowNumericType>(
+fn like_dict_scalar<K: ArrowNumericType>(
     left: &DictionaryArray<K>,
     right: &str,
 ) -> Result<BooleanArray> {
@@ -369,12 +481,124 @@ pub fn nlike_utf8<OffsetSize: OffsetSizeTrait>(
     })
 }
 
+/// Perform SQL `left NOT LIKE right` operation on on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn nlike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+    match (left.data_type(), right.data_type()) {
+        (DataType::Utf8, DataType::Utf8)  => {
+            let left = as_string_array(left);
+            let right = as_string_array(right);
+            nlike_utf8(left, right)
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = as_largestring_array(left);
+            let right = as_largestring_array(right);
+            nlike_utf8(left, right)
+        }
+        #[cfg(feature = "dyn_cmp_dict")]
+        (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
+            downcast_dictionary_array!(
+                left => {
+                    let right = as_dictionary_array(right);
+                    nlike_dict(left, right)
+                }
+                t => Err(ArrowError::ComputeError(format!(
+                    "Should be DictionaryArray but got: {}", t
+                )))
+            )
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "nlike_dyn only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
+}
+
+/// Perform SQL `left NOT LIKE right` operation on on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+#[cfg(feature = "dyn_cmp_dict")]
+fn nlike_dict<K: ArrowNumericType>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+) -> Result<BooleanArray> {
+    match (left.value_type(), right.value_type()) {
+        (DataType::Utf8, DataType::Utf8) => {
+            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
+            let right = right.downcast_dict::<GenericStringArray<i32>>().unwrap();
+
+            regex_like(left, right, true, |re_pattern| {
+                Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Unable to build regex from LIKE pattern: {}",
+                        e
+                    ))
+                })
+            })
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
+            let right = right.downcast_dict::<GenericStringArray<i64>>().unwrap();
+
+            regex_like(left, right, true, |re_pattern| {
+                Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Unable to build regex from LIKE pattern: {}",
+                        e
+                    ))
+                })
+            })
+        }
+        _ => Err(ArrowError::ComputeError(
+            "nlike_dict only supports DictionaryArray with Utf8 or LargeUtf8 values"
+                .to_string(),
+        )),
+    }
+}
+
 #[inline]
 fn nlike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
     left: L,
     right: &str,
 ) -> Result<BooleanArray> {
     like_scalar_op(left, right, |x| !x)
+}
+
+/// Perform SQL `left NOT LIKE right` operation on [`StringArray`] /
+/// [`LargeStringArray`], or [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn nlike_utf8_scalar_dyn(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Utf8 => {
+            let left = as_string_array(left);
+            nlike_scalar(left, right)
+        }
+        DataType::LargeUtf8 => {
+            let left = as_largestring_array(left);
+            nlike_scalar(left, right)
+        }
+        DataType::Dictionary(_, _) => {
+            downcast_dictionary_array!(
+                left => {
+                    nlike_dict_scalar(left, right)
+                }
+                t => Err(ArrowError::ComputeError(format!(
+                    "Should be DictionaryArray but got: {}", t
+                )))
+            )
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "nlike_utf8_scalar_dyn only supports Utf8, LargeUtf8 or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
 }
 
 /// Perform SQL `left NOT LIKE right` operation on [`StringArray`] /
@@ -392,7 +616,7 @@ pub fn nlike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 /// [`StringArray`]/[`LargeStringArray`] and a scalar.
 ///
 /// See the documentation on [`like_utf8`] for more details.
-pub fn nlike_dict_scalar<K: ArrowNumericType>(
+fn nlike_dict_scalar<K: ArrowNumericType>(
     left: &DictionaryArray<K>,
     right: &str,
 ) -> Result<BooleanArray> {
@@ -429,6 +653,85 @@ pub fn ilike_utf8<OffsetSize: OffsetSizeTrait>(
             ))
         })
     })
+}
+
+/// Perform SQL `left ILIKE right` operation on on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn ilike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+    match (left.data_type(), right.data_type()) {
+        (DataType::Utf8, DataType::Utf8)  => {
+            let left = as_string_array(left);
+            let right = as_string_array(right);
+            ilike_utf8(left, right)
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = as_largestring_array(left);
+            let right = as_largestring_array(right);
+            ilike_utf8(left, right)
+        }
+        #[cfg(feature = "dyn_cmp_dict")]
+        (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
+            downcast_dictionary_array!(
+                left => {
+                    let right = as_dictionary_array(right);
+                    ilike_dict(left, right)
+                }
+                t => Err(ArrowError::ComputeError(format!(
+                    "Should be DictionaryArray but got: {}", t
+                )))
+            )
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "ilike_dyn only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
+}
+
+/// Perform SQL `left ILIKE right` operation on on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+#[cfg(feature = "dyn_cmp_dict")]
+fn ilike_dict<K: ArrowNumericType>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+) -> Result<BooleanArray> {
+    match (left.value_type(), right.value_type()) {
+        (DataType::Utf8, DataType::Utf8) => {
+            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
+            let right = right.downcast_dict::<GenericStringArray<i32>>().unwrap();
+
+            regex_like(left, right, false, |re_pattern| {
+                Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Unable to build regex from ILIKE pattern: {}",
+                        e
+                    ))
+                })
+            })
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
+            let right = right.downcast_dict::<GenericStringArray<i64>>().unwrap();
+
+            regex_like(left, right, false, |re_pattern| {
+                Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Unable to build regex from ILIKE pattern: {}",
+                        e
+                    ))
+                })
+            })
+        }
+        _ => Err(ArrowError::ComputeError(
+            "ilike_dict only supports DictionaryArray with Utf8 or LargeUtf8 values"
+                .to_string(),
+        )),
+    }
 }
 
 #[inline]
@@ -524,6 +827,39 @@ fn ilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
 }
 
 /// Perform SQL `left ILIKE right` operation on [`StringArray`] /
+/// [`LargeStringArray`], or [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn ilike_utf8_scalar_dyn(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Utf8 => {
+            let left = as_string_array(left);
+            ilike_scalar(left, right)
+        }
+        DataType::LargeUtf8 => {
+            let left = as_largestring_array(left);
+            ilike_scalar(left, right)
+        }
+        DataType::Dictionary(_, _) => {
+            downcast_dictionary_array!(
+                left => {
+                    ilike_dict_scalar(left, right)
+                }
+                t => Err(ArrowError::ComputeError(format!(
+                    "Should be DictionaryArray but got: {}", t
+                )))
+            )
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "ilike_utf8_scalar_dyn only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
+}
+
+/// Perform SQL `left ILIKE right` operation on [`StringArray`] /
 /// [`LargeStringArray`] and a scalar.
 ///
 /// See the documentation on [`like_utf8`] for more details.
@@ -538,7 +874,7 @@ pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 /// [`StringArray`]/[`LargeStringArray`] and a scalar.
 ///
 /// See the documentation on [`like_utf8`] for more details.
-pub fn ilike_dict_scalar<K: ArrowNumericType>(
+fn ilike_dict_scalar<K: ArrowNumericType>(
     left: &DictionaryArray<K>,
     right: &str,
 ) -> Result<BooleanArray> {
@@ -575,6 +911,85 @@ pub fn nilike_utf8<OffsetSize: OffsetSizeTrait>(
             ))
         })
     })
+}
+
+/// Perform SQL `left NOT ILIKE right` operation on on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn nilike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+    match (left.data_type(), right.data_type()) {
+        (DataType::Utf8, DataType::Utf8)  => {
+            let left = as_string_array(left);
+            let right = as_string_array(right);
+            nilike_utf8(left, right)
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = as_largestring_array(left);
+            let right = as_largestring_array(right);
+            nilike_utf8(left, right)
+        }
+        #[cfg(feature = "dyn_cmp_dict")]
+        (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
+            downcast_dictionary_array!(
+                left => {
+                    let right = as_dictionary_array(right);
+                    nilike_dict(left, right)
+                }
+                t => Err(ArrowError::ComputeError(format!(
+                    "Should be DictionaryArray but got: {}", t
+                )))
+            )
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "nilike_dyn only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
+}
+
+/// Perform SQL `left NOT ILIKE right` operation on on [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+#[cfg(feature = "dyn_cmp_dict")]
+fn nilike_dict<K: ArrowNumericType>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+) -> Result<BooleanArray> {
+    match (left.value_type(), right.value_type()) {
+        (DataType::Utf8, DataType::Utf8) => {
+            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
+            let right = right.downcast_dict::<GenericStringArray<i32>>().unwrap();
+
+            regex_like(left, right, true, |re_pattern| {
+                Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Unable to build regex from ILIKE pattern: {}",
+                        e
+                    ))
+                })
+            })
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
+            let right = right.downcast_dict::<GenericStringArray<i64>>().unwrap();
+
+            regex_like(left, right, true, |re_pattern| {
+                Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Unable to build regex from ILIKE pattern: {}",
+                        e
+                    ))
+                })
+            })
+        }
+        _ => Err(ArrowError::ComputeError(
+            "nilike_dict only supports DictionaryArray with Utf8 or LargeUtf8 values"
+                .to_string(),
+        )),
+    }
 }
 
 #[inline]
@@ -670,6 +1085,39 @@ fn nilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
 }
 
 /// Perform SQL `left NOT ILIKE right` operation on [`StringArray`] /
+/// [`LargeStringArray`], or [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn nilike_utf8_scalar_dyn(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Utf8 => {
+            let left = as_string_array(left);
+            nilike_scalar(left, right)
+        }
+        DataType::LargeUtf8 => {
+            let left = as_largestring_array(left);
+            nilike_scalar(left, right)
+        }
+        DataType::Dictionary(_, _) => {
+            downcast_dictionary_array!(
+                left => {
+                    nilike_dict_scalar(left, right)
+                }
+                t => Err(ArrowError::ComputeError(format!(
+                    "Should be DictionaryArray but got: {}", t
+                )))
+            )
+        }
+        _ => {
+            Err(ArrowError::ComputeError(
+                "nilike_utf8_scalar_dyn only supports Utf8, LargeUtf8 or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+            ))
+        }
+    }
+}
+
+/// Perform SQL `left NOT ILIKE right` operation on [`StringArray`] /
 /// [`LargeStringArray`] and a scalar.
 ///
 /// See the documentation on [`like_utf8`] for more details.
@@ -684,7 +1132,7 @@ pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 /// [`StringArray`]/[`LargeStringArray`] and a scalar.
 ///
 /// See the documentation on [`like_utf8`] for more details.
-pub fn nilike_dict_scalar<K: ArrowNumericType>(
+fn nilike_dict_scalar<K: ArrowNumericType>(
     left: &DictionaryArray<K>,
     right: &str,
 ) -> Result<BooleanArray> {
@@ -1222,6 +1670,11 @@ macro_rules! dyn_compare_scalar {
                 let right = try_to_type!($RIGHT, to_f64)?;
                 let left = as_primitive_array::<Float64Type>($LEFT);
                 $OP::<Float64Type>(left, right)
+            }
+            DataType::Decimal128(_, _) => {
+                let right = try_to_type!($RIGHT, to_i128)?;
+                let left = as_primitive_array::<Decimal128Type>($LEFT);
+                $OP::<Decimal128Type>(left, right)
             }
             _ => Err(ArrowError::ComputeError(format!(
                 "Unsupported data type {:?} for comparison {} with {:?}",
@@ -3562,7 +4015,7 @@ mod tests {
             vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
                 .into();
         let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None,  Some(false)]
+            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
                 .into();
 
         let res: Vec<Option<bool>> = eq_bool(&a, &b).unwrap().iter().collect();
@@ -3988,7 +4441,7 @@ mod tests {
         ])
         .data()
         .clone();
-        let value_offsets = Buffer::from_slice_ref(&[0i64, 3, 6, 6, 9]);
+        let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 6, 9]);
         let list_data_type =
             DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
@@ -4314,6 +4767,24 @@ mod tests {
         };
     }
 
+    macro_rules! test_dict_utf8 {
+        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
+            #[test]
+            #[cfg(feature = "dyn_cmp_dict")]
+            fn $test_name() {
+                let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
+                let right: DictionaryArray<Int8Type> = $right.into_iter().collect();
+                let res = $op(&left, &right).unwrap();
+                let expected = $expected;
+                assert_eq!(expected.len(), res.len());
+                for i in 0..res.len() {
+                    let v = res.value(i);
+                    assert_eq!(v, expected[i]);
+                }
+            }
+        };
+    }
+
     #[test]
     fn test_utf8_eq_scalar_on_slice() {
         let a = StringArray::from(
@@ -4371,6 +4842,10 @@ mod tests {
                     );
                 }
             }
+        };
+        ($test_name:ident, $test_name_dyn:ident, $left:expr, $right:expr, $op:expr, $op_dyn:expr, $expected:expr) => {
+            test_utf8_scalar!($test_name, $left, $right, $op, $expected);
+            test_utf8_scalar!($test_name_dyn, $left, $right, $op_dyn, $expected);
         };
     }
 
@@ -4458,82 +4933,111 @@ mod tests {
         vec![true, true, true, false, false, true, false, false]
     );
 
+    test_dict_utf8!(
+        test_utf8_array_like_dict,
+        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow", "arrow"],
+        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_", ".*"],
+        like_dyn,
+        vec![true, true, true, false, false, true, false, false]
+    );
+
     test_utf8_scalar!(
         test_utf8_array_like_scalar_escape_testing,
+        test_utf8_array_like_scalar_dyn_escape_testing,
         vec!["varchar(255)", "int(255)", "varchar", "int"],
         "%(%)%",
         like_utf8_scalar,
+        like_utf8_scalar_dyn,
         vec![true, true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_escape_regex,
+        test_utf8_array_like_scalar_dyn_escape_regex,
         vec![".*", "a", "*"],
         ".*",
         like_utf8_scalar,
+        like_utf8_scalar_dyn,
         vec![true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_escape_regex_dot,
+        test_utf8_array_like_scalar_dyn_escape_regex_dot,
         vec![".", "a", "*"],
         ".",
         like_utf8_scalar,
+        like_utf8_scalar_dyn,
         vec![true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar,
+        test_utf8_array_like_scalar_dyn,
         vec!["arrow", "parquet", "datafusion", "flight"],
         "%ar%",
         like_utf8_scalar,
+        like_utf8_scalar_dyn,
         vec![true, true, false, false]
     );
+
     test_utf8_scalar!(
         test_utf8_array_like_scalar_start,
+        test_utf8_array_like_scalar_dyn_start,
         vec!["arrow", "parrow", "arrows", "arr"],
         "arrow%",
         like_utf8_scalar,
+        like_utf8_scalar_dyn,
         vec![true, false, true, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_end,
+        test_utf8_array_like_scalar_dyn_end,
         vec!["arrow", "parrow", "arrows", "arr"],
         "%arrow",
         like_utf8_scalar,
+        like_utf8_scalar_dyn,
         vec![true, true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_equals,
+        test_utf8_array_like_scalar_dyn_equals,
         vec!["arrow", "parrow", "arrows", "arr"],
         "arrow",
         like_utf8_scalar,
+        like_utf8_scalar_dyn,
         vec![true, false, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_one,
+        test_utf8_array_like_scalar_dyn_one,
         vec!["arrow", "arrows", "parrow", "arr"],
         "arrow_",
         like_utf8_scalar,
+        like_utf8_scalar_dyn,
         vec![false, true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_scalar_like_escape,
+        test_utf8_scalar_like_dyn_escape,
         vec!["a%", "a\\x"],
         "a\\%",
         like_utf8_scalar,
+        like_utf8_scalar_dyn,
         vec![true, false]
     );
 
     test_utf8_scalar!(
         test_utf8_scalar_like_escape_contains,
+        test_utf8_scalar_like_dyn_escape_contains,
         vec!["ba%", "ba\\x"],
         "%a\\%",
         like_utf8_scalar,
+        like_utf8_scalar_dyn,
         vec![true, false]
     );
 
@@ -4542,6 +5046,14 @@ mod tests {
         vec!["%%%"],
         vec![r#"\%_\%"#],
         ilike_utf8,
+        vec![true]
+    );
+
+    test_dict_utf8!(
+        test_utf8_scalar_ilike_regex_dict,
+        vec!["%%%"],
+        vec![r#"\%_\%"#],
+        ilike_dyn,
         vec![true]
     );
 
@@ -4595,66 +5107,91 @@ mod tests {
         nlike_utf8,
         vec![false, false, false, true, true, false, true]
     );
+
+    test_dict_utf8!(
+        test_utf8_array_nlike_dict,
+        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow"],
+        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_"],
+        nlike_dyn,
+        vec![false, false, false, true, true, false, true]
+    );
+
     test_utf8_scalar!(
         test_utf8_array_nlike_escape_testing,
+        test_utf8_array_nlike_escape_dyn_testing_dyn,
         vec!["varchar(255)", "int(255)", "varchar", "int"],
         "%(%)%",
         nlike_utf8_scalar,
+        nlike_utf8_scalar_dyn,
         vec![false, false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar_escape_regex,
+        test_utf8_array_nlike_scalar_dyn_escape_regex,
         vec![".*", "a", "*"],
         ".*",
         nlike_utf8_scalar,
+        nlike_utf8_scalar_dyn,
         vec![false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar_escape_regex_dot,
+        test_utf8_array_nlike_scalar_dyn_escape_regex_dot,
         vec![".", "a", "*"],
         ".",
         nlike_utf8_scalar,
+        nlike_utf8_scalar_dyn,
         vec![false, true, true]
     );
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar,
+        test_utf8_array_nlike_scalar_dyn,
         vec!["arrow", "parquet", "datafusion", "flight"],
         "%ar%",
         nlike_utf8_scalar,
+        nlike_utf8_scalar_dyn,
         vec![false, false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar_start,
+        test_utf8_array_nlike_scalar_dyn_start,
         vec!["arrow", "parrow", "arrows", "arr"],
         "arrow%",
         nlike_utf8_scalar,
+        nlike_utf8_scalar_dyn,
         vec![false, true, false, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar_end,
+        test_utf8_array_nlike_scalar_dyn_end,
         vec!["arrow", "parrow", "arrows", "arr"],
         "%arrow",
         nlike_utf8_scalar,
+        nlike_utf8_scalar_dyn,
         vec![false, false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar_equals,
+        test_utf8_array_nlike_scalar_dyn_equals,
         vec!["arrow", "parrow", "arrows", "arr"],
         "arrow",
         nlike_utf8_scalar,
+        nlike_utf8_scalar_dyn,
         vec![false, true, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar_one,
+        test_utf8_array_nlike_scalar_dyn_one,
         vec!["arrow", "arrows", "parrow", "arr"],
         "arrow_",
         nlike_utf8_scalar,
+        nlike_utf8_scalar_dyn,
         vec![true, false, true, true]
     );
 
@@ -4665,50 +5202,72 @@ mod tests {
         ilike_utf8,
         vec![true, true, true, false, false, true, false]
     );
+
+    test_dict_utf8!(
+        test_utf8_array_ilike_dict,
+        vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
+        vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
+        ilike_dyn,
+        vec![true, true, true, false, false, true, false]
+    );
+
     test_utf8_scalar!(
         ilike_utf8_scalar_escape_testing,
+        ilike_utf8_scalar_escape_dyn_testing,
         vec!["varchar(255)", "int(255)", "varchar", "int"],
         "%(%)%",
         ilike_utf8_scalar,
+        ilike_utf8_scalar_dyn,
         vec![true, true, false, false]
     );
+
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar,
+        test_utf8_array_ilike_dyn_scalar,
         vec!["arrow", "parquet", "datafusion", "flight"],
         "%AR%",
         ilike_utf8_scalar,
+        ilike_utf8_scalar_dyn,
         vec![true, true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar_start,
+        test_utf8_array_ilike_scalar_dyn_start,
         vec!["arrow", "parrow", "arrows", "ARR"],
         "aRRow%",
         ilike_utf8_scalar,
+        ilike_utf8_scalar_dyn,
         vec![true, false, true, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar_end,
+        test_utf8_array_ilike_scalar_dyn_end,
         vec!["ArroW", "parrow", "ARRowS", "arr"],
         "%arrow",
         ilike_utf8_scalar,
+        ilike_utf8_scalar_dyn,
         vec![true, true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar_equals,
+        test_utf8_array_ilike_scalar_dyn_equals,
         vec!["arrow", "parrow", "arrows", "arr"],
         "Arrow",
         ilike_utf8_scalar,
+        ilike_utf8_scalar_dyn,
         vec![true, false, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar_one,
+        test_utf8_array_ilike_scalar_dyn_one,
         vec!["arrow", "arrows", "parrow", "arr"],
         "arrow_",
         ilike_utf8_scalar,
+        ilike_utf8_scalar_dyn,
         vec![false, true, false, false]
     );
 
@@ -4719,50 +5278,72 @@ mod tests {
         nilike_utf8,
         vec![false, false, false, true, true, false, true]
     );
+
+    test_dict_utf8!(
+        test_utf8_array_nilike_dict,
+        vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
+        vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
+        nilike_dyn,
+        vec![false, false, false, true, true, false, true]
+    );
+
     test_utf8_scalar!(
         nilike_utf8_scalar_escape_testing,
+        nilike_utf8_scalar_escape_dyn_testing,
         vec!["varchar(255)", "int(255)", "varchar", "int"],
         "%(%)%",
         nilike_utf8_scalar,
+        nilike_utf8_scalar_dyn,
         vec![false, false, true, true]
     );
+
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar,
+        test_utf8_array_nilike_dyn_scalar,
         vec!["arrow", "parquet", "datafusion", "flight"],
         "%AR%",
         nilike_utf8_scalar,
+        nilike_utf8_scalar_dyn,
         vec![false, false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar_start,
+        test_utf8_array_nilike_scalar_dyn_start,
         vec!["arrow", "parrow", "arrows", "ARR"],
         "aRRow%",
         nilike_utf8_scalar,
+        nilike_utf8_scalar_dyn,
         vec![false, true, false, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar_end,
+        test_utf8_array_nilike_scalar_dyn_end,
         vec!["ArroW", "parrow", "ARRowS", "arr"],
         "%arrow",
         nilike_utf8_scalar,
+        nilike_utf8_scalar_dyn,
         vec![false, false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar_equals,
+        test_utf8_array_nilike_scalar_dyn_equals,
         vec!["arRow", "parrow", "arrows", "arr"],
         "Arrow",
         nilike_utf8_scalar,
+        nilike_utf8_scalar_dyn,
         vec![false, true, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar_one,
+        test_utf8_array_nilike_scalar_dyn_one,
         vec!["arrow", "arrows", "parrow", "arr"],
         "arrow_",
         nilike_utf8_scalar,
+        nilike_utf8_scalar_dyn,
         vec![true, false, true, true]
     );
 
@@ -4976,6 +5557,7 @@ mod tests {
             )
         );
     }
+
     #[test]
     fn test_lt_eq_dyn_scalar_with_dict() {
         let mut builder =
@@ -5265,6 +5847,7 @@ mod tests {
             )
         );
     }
+
     #[test]
     fn test_lt_dyn_utf8_scalar() {
         let array = StringArray::from(vec!["abc", "def", "xyz"]);
@@ -5274,6 +5857,7 @@ mod tests {
             BooleanArray::from(vec![Some(true), Some(true), Some(false)])
         );
     }
+
     #[test]
     fn test_lt_dyn_utf8_scalar_with_dict() {
         let mut builder = StringDictionaryBuilder::<Int8Type>::new();
@@ -5301,6 +5885,7 @@ mod tests {
             BooleanArray::from(vec![Some(true), Some(true), Some(false)])
         );
     }
+
     #[test]
     fn test_lt_eq_dyn_utf8_scalar_with_dict() {
         let mut builder = StringDictionaryBuilder::<Int8Type>::new();
@@ -5328,6 +5913,7 @@ mod tests {
             BooleanArray::from(vec![Some(false), Some(true), Some(true)])
         );
     }
+
     #[test]
     fn test_gt_eq_dyn_utf8_scalar_with_dict() {
         let mut builder = StringDictionaryBuilder::<Int8Type>::new();
@@ -5383,6 +5969,7 @@ mod tests {
             BooleanArray::from(vec![Some(true), Some(true), Some(false)])
         );
     }
+
     #[test]
     fn test_neq_dyn_utf8_scalar_with_dict() {
         let mut builder = StringDictionaryBuilder::<Int8Type>::new();
@@ -5883,16 +6470,16 @@ mod tests {
             .collect();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
         assert_eq!(lt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
@@ -5908,16 +6495,16 @@ mod tests {
             .collect();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
         assert_eq!(lt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
@@ -5936,16 +6523,16 @@ mod tests {
             .collect();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
         assert_eq!(gt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
@@ -5961,16 +6548,16 @@ mod tests {
             .collect();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
         assert_eq!(gt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         #[cfg(not(feature = "simd"))]
@@ -6127,36 +6714,73 @@ mod tests {
 
         let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
 
+        let dict_arrayref = Arc::new(dict_array.clone()) as ArrayRef;
+
         assert_eq!(
-            like_dict_scalar(&dict_array, "Air").unwrap(),
+            like_utf8_scalar_dyn(&dict_array, "Air").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(false), Some(false), Some(true), None, Some(true)]
             ),
         );
 
         assert_eq!(
-            like_dict_scalar(&dict_array, "Wa%").unwrap(),
+            like_utf8_scalar_dyn(&dict_arrayref, "Air").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            like_utf8_scalar_dyn(&dict_array, "Wa%").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(false), Some(true), Some(false), None, Some(false)]
             ),
         );
 
         assert_eq!(
-            like_dict_scalar(&dict_array, "%r").unwrap(),
+            like_utf8_scalar_dyn(&dict_arrayref, "Wa%").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            like_utf8_scalar_dyn(&dict_array, "%r").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(false), Some(true), Some(true), None, Some(true)]
             ),
         );
 
         assert_eq!(
-            like_dict_scalar(&dict_array, "%i%").unwrap(),
+            like_utf8_scalar_dyn(&dict_arrayref, "%r").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            like_utf8_scalar_dyn(&dict_array, "%i%").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
             ),
         );
 
         assert_eq!(
-            like_dict_scalar(&dict_array, "%a%r%").unwrap(),
+            like_utf8_scalar_dyn(&dict_arrayref, "%i%").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            like_utf8_scalar_dyn(&dict_array, "%a%r%").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            like_utf8_scalar_dyn(&dict_arrayref, "%a%r%").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
             ),
@@ -6382,36 +7006,73 @@ mod tests {
 
         let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
 
+        let dict_arrayref = Arc::new(dict_array.clone()) as ArrayRef;
+
         assert_eq!(
-            nlike_dict_scalar(&dict_array, "Air").unwrap(),
+            nlike_utf8_scalar_dyn(&dict_array, "Air").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(true), Some(true), Some(false), None, Some(false)]
             ),
         );
 
         assert_eq!(
-            nlike_dict_scalar(&dict_array, "Wa%").unwrap(),
+            nlike_utf8_scalar_dyn(&dict_arrayref, "Air").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(true), Some(true), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            nlike_utf8_scalar_dyn(&dict_array, "Wa%").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(true), Some(false), Some(true), None, Some(true)]
             ),
         );
 
         assert_eq!(
-            nlike_dict_scalar(&dict_array, "%r").unwrap(),
+            nlike_utf8_scalar_dyn(&dict_arrayref, "Wa%").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(true), Some(false), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            nlike_utf8_scalar_dyn(&dict_array, "%r").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
             ),
         );
 
         assert_eq!(
-            nlike_dict_scalar(&dict_array, "%i%").unwrap(),
+            nlike_utf8_scalar_dyn(&dict_arrayref, "%r").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            nlike_utf8_scalar_dyn(&dict_array, "%i%").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
             ),
         );
 
         assert_eq!(
-            nlike_dict_scalar(&dict_array, "%a%r%").unwrap(),
+            nlike_utf8_scalar_dyn(&dict_arrayref, "%i%").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            nlike_utf8_scalar_dyn(&dict_array, "%a%r%").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            nlike_utf8_scalar_dyn(&dict_arrayref, "%a%r%").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
             ),
@@ -6425,36 +7086,73 @@ mod tests {
 
         let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
 
+        let dict_arrayref = Arc::new(dict_array.clone()) as ArrayRef;
+
         assert_eq!(
-            ilike_dict_scalar(&dict_array, "air").unwrap(),
+            ilike_utf8_scalar_dyn(&dict_array, "air").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(false), Some(false), Some(true), None, Some(true)]
             ),
         );
 
         assert_eq!(
-            ilike_dict_scalar(&dict_array, "wa%").unwrap(),
+            ilike_utf8_scalar_dyn(&dict_arrayref, "air").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(false), Some(false), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            ilike_utf8_scalar_dyn(&dict_array, "wa%").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(false), Some(true), Some(false), None, Some(false)]
             ),
         );
 
         assert_eq!(
-            ilike_dict_scalar(&dict_array, "%R").unwrap(),
+            ilike_utf8_scalar_dyn(&dict_arrayref, "wa%").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            ilike_utf8_scalar_dyn(&dict_array, "%R").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(false), Some(true), Some(true), None, Some(true)]
             ),
         );
 
         assert_eq!(
-            ilike_dict_scalar(&dict_array, "%I%").unwrap(),
+            ilike_utf8_scalar_dyn(&dict_arrayref, "%R").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            ilike_utf8_scalar_dyn(&dict_array, "%I%").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
             ),
         );
 
         assert_eq!(
-            ilike_dict_scalar(&dict_array, "%A%r%").unwrap(),
+            ilike_utf8_scalar_dyn(&dict_arrayref, "%I%").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            ilike_utf8_scalar_dyn(&dict_array, "%A%r%").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            ilike_utf8_scalar_dyn(&dict_arrayref, "%A%r%").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(true), None, Some(true)]
             ),
@@ -6468,36 +7166,73 @@ mod tests {
 
         let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
 
+        let dict_arrayref = Arc::new(dict_array.clone()) as ArrayRef;
+
         assert_eq!(
-            nilike_dict_scalar(&dict_array, "air").unwrap(),
+            nilike_utf8_scalar_dyn(&dict_array, "air").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(true), Some(true), Some(false), None, Some(false)]
             ),
         );
 
         assert_eq!(
-            nilike_dict_scalar(&dict_array, "wa%").unwrap(),
+            nilike_utf8_scalar_dyn(&dict_arrayref, "air").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(true), Some(true), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            nilike_utf8_scalar_dyn(&dict_array, "wa%").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(true), Some(false), Some(true), None, Some(true)]
             ),
         );
 
         assert_eq!(
-            nilike_dict_scalar(&dict_array, "%R").unwrap(),
+            nilike_utf8_scalar_dyn(&dict_arrayref, "wa%").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(true), Some(false), Some(true), None, Some(true)]
+            ),
+        );
+
+        assert_eq!(
+            nilike_utf8_scalar_dyn(&dict_array, "%R").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
             ),
         );
 
         assert_eq!(
-            nilike_dict_scalar(&dict_array, "%I%").unwrap(),
+            nilike_utf8_scalar_dyn(&dict_arrayref, "%R").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            nilike_utf8_scalar_dyn(&dict_array, "%I%").unwrap(),
             BooleanArray::from(
                 vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
             ),
         );
 
         assert_eq!(
-            nilike_dict_scalar(&dict_array, "%A%r%").unwrap(),
+            nilike_utf8_scalar_dyn(&dict_arrayref, "%I%").unwrap(),
+            BooleanArray::from(
+                vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            nilike_utf8_scalar_dyn(&dict_array, "%A%r%").unwrap(),
+            BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), Some(false), None, Some(false)]
+            ),
+        );
+
+        assert_eq!(
+            nilike_utf8_scalar_dyn(&dict_arrayref, "%A%r%").unwrap(),
             BooleanArray::from(
                 vec![Some(false), Some(true), Some(false), Some(false), None, Some(false)]
             ),
@@ -6556,13 +7291,13 @@ mod tests {
         let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
@@ -6574,13 +7309,13 @@ mod tests {
         let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
-            );
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
         assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
     }
 
@@ -6596,13 +7331,13 @@ mod tests {
         let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
@@ -6614,13 +7349,13 @@ mod tests {
         let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
 
         let expected = BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
-            );
+            vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+        );
         assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
     }
 
@@ -6912,6 +7647,67 @@ mod tests {
         assert_eq!(e, r);
 
         let r = gt_eq_dyn(&a, &b).unwrap();
+        assert_eq!(e, r);
+    }
+
+    #[test]
+    fn test_decimal128_scalar() {
+        let a = Decimal128Array::from(
+            vec![Some(1), Some(2), Some(3), None, Some(4), Some(5)],
+        );
+        let b = 3_i128;
+        // array eq scalar
+        let e = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), None, Some(false), Some(false)],
+        );
+        let r = eq_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = eq_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array neq scalar
+        let e = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), None, Some(true), Some(true)],
+        );
+        let r = neq_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = neq_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array lt scalar
+        let e = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), None, Some(false), Some(false)],
+        );
+        let r = lt_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = lt_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array lt_eq scalar
+        let e = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), None, Some(false), Some(false)],
+        );
+        let r = lt_eq_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = lt_eq_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array gt scalar
+        let e = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), None, Some(true), Some(true)],
+        );
+        let r = gt_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = gt_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array gt_eq scalar
+        let e = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), None, Some(true), Some(true)],
+        );
+        let r = gt_eq_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = gt_eq_dyn_scalar(&a, b).unwrap();
         assert_eq!(e, r);
     }
 

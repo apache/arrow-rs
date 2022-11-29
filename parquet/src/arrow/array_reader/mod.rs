@@ -102,7 +102,7 @@ pub trait RowGroupCollection {
     /// Get schema of parquet file.
     fn schema(&self) -> SchemaDescPtr;
 
-    /// Get the numer of rows in this collection
+    /// Get the number of rows in this collection
     fn num_rows(&self) -> usize;
 
     /// Returns an iterator over the column chunks for particular column

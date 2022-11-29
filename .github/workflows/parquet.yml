@@ -19,7 +19,6 @@
 # tests for parquet crate
 name: "parquet"
 
-
 # trigger for all PRs that touch certain files and changes to master
 on:
   push:
@@ -57,7 +56,6 @@ jobs:
         run: cargo test -p parquet
       - name: Test --all-features
         run: cargo test -p parquet --all-features
-
 
   # test compilation
   linux-features:
@@ -119,6 +117,38 @@ jobs:
         run: cargo build -p parquet --no-default-features --features cli,snap,flate2,brotli --target wasm32-unknown-unknown
       - name: Build wasm32-wasi
         run: cargo build -p parquet --no-default-features --features cli,snap,flate2,brotli --target wasm32-wasi
+
+  pyspark-integration-test:
+    name: PySpark Integration Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: [stable]
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+          cache: "pip"
+      - name: Install Python dependencies
+        run: |
+          cd parquet/pytest
+          pip install -r requirements.txt
+      - name: Black check the test files
+        run: |
+          cd parquet/pytest
+          black --check *.py --verbose
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install ${{ matrix.rust }}
+          rustup default ${{ matrix.rust }}
+      - name: Install binary for checking
+        run: cargo install --path parquet --bin parquet-show-bloom-filter --features=arrow,cli
+      - name: Run pytest
+        run: |
+          cd parquet/pytest
+          pytest -v
 
   clippy:
     name: Clippy

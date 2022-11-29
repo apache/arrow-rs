@@ -21,9 +21,11 @@ use super::{
 };
 use crate::ArrayData;
 use arrow_buffer::ArrowNativeType;
-use num::Integer;
+use num::{CheckedAdd, Integer};
 
-pub(super) fn build_extend<T: ArrowNativeType + Integer>(array: &ArrayData) -> Extend {
+pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
+    array: &ArrayData,
+) -> Extend {
     let offsets = array.buffer::<T>(0);
     if array.null_count() == 0 {
         // fast case where we can copy regions without nullability checks

@@ -57,11 +57,11 @@
 //!
 //! - `-i`, `--input-file` : Path to input CSV file
 //! - `-f`, `--input-format` : Dialect for input file, `csv` or `tsv`.
-//! - `-d`, `--delimiter : Field delimitor for CSV file, default depends `--input-format`
-//! - `-e`, `--escape` : Escape charactor for input file
+//! - `-d`, `--delimiter : Field delimiter for CSV file, default depends `--input-format`
+//! - `-e`, `--escape` : Escape character for input file
 //! - `-h`, `--has-header` : Input has header
-//! - `-r`, `--record-terminator` : Record terminator charactor for input. default is CRLF
-//! - `-q`, `--quote-char` : Input quoting charactor
+//! - `-r`, `--record-terminator` : Record terminator character for input. default is CRLF
+//! - `-q`, `--quote-char` : Input quoting character
 //!
 
 use std::{
@@ -182,9 +182,9 @@ struct Args {
     delimiter: Option<char>,
     #[clap(value_enum, short, long, help("record terminator"))]
     record_terminator: Option<RecordTerminator>,
-    #[clap(short, long, help("escape charactor"))]
+    #[clap(short, long, help("escape character"))]
     escape_char: Option<char>,
-    #[clap(short, long, help("quate charactor"))]
+    #[clap(short, long, help("quote character"))]
     quote_char: Option<char>,
     #[clap(short('D'), long, help("double quote"))]
     double_quote: Option<bool>,
@@ -197,6 +197,8 @@ struct Args {
     writer_version: Option<WriterVersion>,
     #[clap(short, long, help("max row group size"))]
     max_row_group_size: Option<usize>,
+    #[clap(long, help("whether to enable bloom filter writing"))]
+    enable_bloom_filter: Option<bool>,
 
     #[clap(long, action=clap::ArgAction::Help, help("display usage help"))]
     help: Option<bool>,
@@ -289,6 +291,10 @@ fn configure_writer_properties(args: &Args) -> WriterProperties {
     if let Some(max_row_group_size) = args.max_row_group_size {
         properties_builder =
             properties_builder.set_max_row_group_size(max_row_group_size);
+    }
+    if let Some(enable_bloom_filter) = args.enable_bloom_filter {
+        properties_builder =
+            properties_builder.set_bloom_filter_enabled(enable_bloom_filter);
     }
     properties_builder.build()
 }
@@ -548,6 +554,7 @@ mod tests {
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
             max_row_group_size: None,
+            enable_bloom_filter: None,
             help: None,
         };
         let arrow_schema = Arc::new(Schema::new(vec![
@@ -582,6 +589,7 @@ mod tests {
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
             max_row_group_size: None,
+            enable_bloom_filter: None,
             help: None,
         };
         let arrow_schema = Arc::new(Schema::new(vec![
@@ -636,6 +644,8 @@ mod tests {
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
             max_row_group_size: None,
+            // by default we shall test bloom filter writing
+            enable_bloom_filter: Some(true),
             help: None,
         };
         convert_csv_to_parquet(&args).unwrap();

@@ -914,7 +914,7 @@ mod tests {
         options: Option<TakeOptions>,
         expected_data: Vec<Option<i128>>,
         precision: &u8,
-        scale: &u8,
+        scale: &i8,
     ) -> Result<(), ArrowError> {
         let output = data
             .into_iter()
@@ -1032,7 +1032,7 @@ mod tests {
     fn test_take_decimal128_non_null_indices() {
         let index = UInt32Array::from(vec![0, 5, 3, 1, 4, 2]);
         let precision: u8 = 10;
-        let scale: u8 = 5;
+        let scale: i8 = 5;
         test_take_decimal_arrays(
             vec![None, Some(3), Some(5), Some(2), Some(3), None],
             &index,
@@ -1048,7 +1048,7 @@ mod tests {
     fn test_take_decimal128() {
         let index = UInt32Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]);
         let precision: u8 = 10;
-        let scale: u8 = 5;
+        let scale: i8 = 5;
         test_take_decimal_arrays(
             vec![Some(0), Some(1), Some(2), Some(3), Some(4)],
             &index,
@@ -1846,7 +1846,7 @@ mod tests {
             .data()
             .clone();
         // Construct offsets
-        let value_offsets = Buffer::from_slice_ref(&[0, 3, 6, 8]);
+        let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
         // Construct a list array from the above two
         let list_data_type =
             DataType::List(Box::new(Field::new("item", DataType::Int32, false)));

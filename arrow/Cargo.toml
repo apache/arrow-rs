@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow"
-version = "27.0.0"
+version = "28.0.0"
 description = "Rust implementation of Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -27,6 +27,7 @@ keywords = ["arrow"]
 include = [
     "benches/*.rs",
     "src/**/*.rs",
+    "tests/*.rs",
     "Cargo.toml",
 ]
 edition = "2021"
@@ -44,23 +45,23 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
-arrow-array = { version = "27.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "27.0.0", path = "../arrow-buffer" }
-arrow-cast = { version = "27.0.0", path = "../arrow-cast" }
-arrow-csv = { version = "27.0.0", path = "../arrow-csv", optional = true }
-arrow-data = { version = "27.0.0", path = "../arrow-data" }
-arrow-ipc = { version = "27.0.0", path = "../arrow-ipc", optional = true }
-arrow-json = { version = "27.0.0", path = "../arrow-json", optional = true }
-arrow-schema = { version = "27.0.0", path = "../arrow-schema" }
-arrow-select = { version = "27.0.0", path = "../arrow-select" }
+arrow-array = { version = "28.0.0", path = "../arrow-array" }
+arrow-buffer = { version = "28.0.0", path = "../arrow-buffer" }
+arrow-cast = { version = "28.0.0", path = "../arrow-cast" }
+arrow-csv = { version = "28.0.0", path = "../arrow-csv", optional = true }
+arrow-data = { version = "28.0.0", path = "../arrow-data" }
+arrow-ipc = { version = "28.0.0", path = "../arrow-ipc", optional = true }
+arrow-json = { version = "28.0.0", path = "../arrow-json", optional = true }
+arrow-schema = { version = "28.0.0", path = "../arrow-schema" }
+arrow-select = { version = "28.0.0", path = "../arrow-select" }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 hashbrown = { version = "0.13", default-features = false }
-regex = { version = "1.5.6", default-features = false, features = ["std", "unicode"] }
+regex = { version = "1.7.0", default-features = false, features = ["std", "unicode", "perf"] }
 regex-syntax = { version = "0.6.27", default-features = false, features = ["unicode"] }
 packed_simd = { version = "0.3", default-features = false, optional = true, package = "packed_simd_2" }
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
 comfy-table = { version = "6.0", optional = true, default-features = false }
 pyo3 = { version = "0.17", default-features = false, optional = true }
 multiversion = { version = "0.6.1", default-features = false }
@@ -98,7 +99,7 @@ dyn_arith_dict = []
 chrono-tz = ["arrow-array/chrono-tz"]
 
 [dev-dependencies]
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
 criterion = { version = "0.4", default-features = false }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 tempfile = { version = "3", default-features = false }
@@ -268,3 +269,7 @@ required-features = ["test_utils", "ipc"]
 [[test]]
 name = "csv"
 required-features = ["csv", "chrono-tz"]
+
+[[test]]
+name = "pyarrow"
+required-features = ["pyarrow"]

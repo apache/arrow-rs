@@ -19,6 +19,7 @@ use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_data::bit_mask;
 use std::ops::Range;
 
+/// A builder for creating a boolean [`Buffer`]
 #[derive(Debug)]
 pub struct BooleanBufferBuilder {
     buffer: MutableBuffer,
@@ -26,6 +27,7 @@ pub struct BooleanBufferBuilder {
 }
 
 impl BooleanBufferBuilder {
+    /// Creates a new `BooleanBufferBuilder`
     #[inline]
     pub fn new(capacity: usize) -> Self {
         let byte_capacity = bit_util::ceil(capacity, 8);
@@ -33,16 +35,19 @@ impl BooleanBufferBuilder {
         Self { buffer, len: 0 }
     }
 
+    /// Creates a new `BooleanBufferBuilder` from [`MutableBuffer`] of `len`
     pub fn new_from_buffer(buffer: MutableBuffer, len: usize) -> Self {
         assert!(len <= buffer.len() * 8);
         Self { buffer, len }
     }
 
+    /// Returns the length of the buffer
     #[inline]
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// Sets a bit in the buffer at `index`
     #[inline]
     pub fn set_bit(&mut self, index: usize, v: bool) {
         if v {
@@ -52,21 +57,25 @@ impl BooleanBufferBuilder {
         }
     }
 
+    /// Gets a bit in the buffer at `index`
     #[inline]
     pub fn get_bit(&self, index: usize) -> bool {
         bit_util::get_bit(self.buffer.as_slice(), index)
     }
 
+    /// Returns true if empty
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
+    /// Returns the capacity of the buffer
     #[inline]
     pub fn capacity(&self) -> usize {
         self.buffer.capacity() * 8
     }
 
+    /// Advances the buffer by `additional` bits
     #[inline]
     pub fn advance(&mut self, additional: usize) {
         let new_len = self.len + additional;
@@ -99,6 +108,7 @@ impl BooleanBufferBuilder {
         self.len = len;
     }
 
+    /// Appends a boolean `v` into the buffer
     #[inline]
     pub fn append(&mut self, v: bool) {
         self.advance(1);
@@ -107,6 +117,7 @@ impl BooleanBufferBuilder {
         }
     }
 
+    /// Appends n `additional` bits of value `v` into the buffer
     #[inline]
     pub fn append_n(&mut self, additional: usize, v: bool) {
         self.advance(additional);
@@ -118,6 +129,7 @@ impl BooleanBufferBuilder {
         }
     }
 
+    /// Appends a slice of booleans into the buffer
     #[inline]
     pub fn append_slice(&mut self, slice: &[bool]) {
         let additional = slice.len();
@@ -156,6 +168,12 @@ impl BooleanBufferBuilder {
         self.buffer.as_slice()
     }
 
+    /// Returns the packed bits
+    pub fn as_slice_mut(&mut self) -> &mut [u8] {
+        self.buffer.as_slice_mut()
+    }
+
+    /// Creates a [`Buffer`]
     #[inline]
     pub fn finish(&mut self) -> Buffer {
         let buf = std::mem::replace(&mut self.buffer, MutableBuffer::new(0));

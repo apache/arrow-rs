@@ -216,8 +216,22 @@ impl<OffsetSize: OffsetSizeTrait> From<GenericBinaryArray<OffsetSize>>
     for GenericStringArray<OffsetSize>
 {
     fn from(v: GenericBinaryArray<OffsetSize>) -> Self {
+        let offsets = v.value_offsets();
+        let values = v.value_data();
+
+        // We only need to validate that all values are valid UTF-8
+        let validated = std::str::from_utf8(values).expect("Invalid UTF-8 sequence");
+        for offset in offsets.iter() {
+            assert!(
+                validated.is_char_boundary(offset.as_usize()),
+                "Invalid UTF-8 sequence"
+            )
+        }
+
         let builder = v.into_data().into_builder().data_type(Self::DATA_TYPE);
-        Self::from(builder.build().unwrap())
+        // SAFETY:
+        // Validated UTF-8 above
+        Self::from(unsafe { builder.build_unchecked() })
     }
 }
 
@@ -371,8 +385,8 @@ mod tests {
         let offsets: [i32; 4] = [0, 5, 5, 12];
         let array_data = ArrayData::builder(DataType::Utf8)
             .len(3)
-            .add_buffer(Buffer::from_slice_ref(&offsets))
-            .add_buffer(Buffer::from_slice_ref(&values))
+            .add_buffer(Buffer::from_slice_ref(offsets))
+            .add_buffer(Buffer::from_slice_ref(values))
             .build()
             .unwrap();
         let string_array = StringArray::from(array_data);
@@ -548,7 +562,7 @@ mod tests {
             .unwrap();
 
         let offsets = [0, 5, 8, 15].map(|n| O::from_usize(n).unwrap());
-        let null_buffer = Buffer::from_slice_ref(&[0b101]);
+        let null_buffer = Buffer::from_slice_ref([0b101]);
         let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
             Field::new("item", DataType::UInt8, false),
         ));
@@ -557,7 +571,7 @@ mod tests {
         let array_data = ArrayData::builder(data_type)
             .len(2)
             .offset(1)
-            .add_buffer(Buffer::from_slice_ref(&offsets))
+            .add_buffer(Buffer::from_slice_ref(offsets))
             .null_bit_buffer(Some(null_buffer))
             .add_child_data(child_data)
             .build()
@@ -589,7 +603,7 @@ mod tests {
         let child_data = ArrayData::builder(DataType::UInt8)
             .len(10)
             .add_buffer(Buffer::from(&values[..]))
-            .null_bit_buffer(Some(Buffer::from_slice_ref(&[0b1010101010])))
+            .null_bit_buffer(Some(Buffer::from_slice_ref([0b1010101010])))
             .build()
             .unwrap();
 
@@ -601,7 +615,7 @@ mod tests {
         // [None, Some(b"Parquet")]
         let array_data = ArrayData::builder(data_type)
             .len(2)
-            .add_buffer(Buffer::from_slice_ref(&offsets))
+            .add_buffer(Buffer::from_slice_ref(offsets))
             .add_child_data(child_data)
             .build()
             .unwrap();
@@ -636,7 +650,7 @@ mod tests {
 
         let array_data = ArrayData::builder(data_type)
             .len(2)
-            .add_buffer(Buffer::from_slice_ref(&offsets))
+            .add_buffer(Buffer::from_slice_ref(offsets))
             .add_child_data(child_data)
             .build()
             .unwrap();

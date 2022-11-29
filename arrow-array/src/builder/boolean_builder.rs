@@ -18,6 +18,7 @@
 use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BooleanBufferBuilder};
 use crate::{ArrayRef, BooleanArray};
+use arrow_buffer::Buffer;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
@@ -154,6 +155,23 @@ impl BooleanBuilder {
         let array_data = unsafe { builder.build_unchecked() };
         BooleanArray::from(array_data)
     }
+
+    /// Builds the [BooleanArray] without resetting the builder.
+    pub fn finish_cloned(&self) -> BooleanArray {
+        let len = self.len();
+        let null_bit_buffer = self
+            .null_buffer_builder
+            .as_slice()
+            .map(Buffer::from_slice_ref);
+        let value_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
+        let builder = ArrayData::builder(DataType::Boolean)
+            .len(len)
+            .add_buffer(value_buffer)
+            .null_bit_buffer(null_bit_buffer);
+
+        let array_data = unsafe { builder.build_unchecked() };
+        BooleanArray::from(array_data)
+    }
 }
 
 impl ArrayBuilder for BooleanBuilder {
@@ -185,6 +203,11 @@ impl ArrayBuilder for BooleanBuilder {
     /// Builds the array and reset this builder.
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
+    }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> ArrayRef {
+        Arc::new(self.finish_cloned())
     }
 }
 
@@ -256,6 +279,28 @@ mod tests {
             .unwrap();
 
         let array = builder.finish();
+        assert_eq!(0, array.null_count());
+        assert!(array.data().null_buffer().is_none());
+    }
+
+    #[test]
+    fn test_boolean_array_builder_finish_cloned() {
+        let mut builder = BooleanArray::builder(16);
+        builder.append_option(Some(true));
+        builder.append_value(false);
+        builder.append_slice(&[true, false, true]);
+        let mut array = builder.finish_cloned();
+        assert_eq!(3, array.true_count());
+        assert_eq!(2, array.false_count());
+
+        builder
+            .append_values(&[false, false, true], &[true, true, true])
+            .unwrap();
+
+        array = builder.finish();
+        assert_eq!(4, array.true_count());
+        assert_eq!(4, array.false_count());
+
         assert_eq!(0, array.null_count());
         assert!(array.data().null_buffer().is_none());
     }

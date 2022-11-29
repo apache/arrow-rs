@@ -17,12 +17,9 @@
 
 //! Defines windowing functions, like `shift`ing
 
-use crate::array::{Array, ArrayRef};
-use crate::error::Result;
-use crate::{
-    array::{make_array, new_null_array},
-    compute::concat,
-};
+use crate::concat::concat;
+use arrow_array::{make_array, new_null_array, Array, ArrayRef};
+use arrow_schema::ArrowError;
 use num::abs;
 
 /// Shifts array by defined number of items (to left or right)
@@ -30,9 +27,8 @@ use num::abs;
 /// a negative value shifts the array to the left.
 /// # Examples
 /// ```
-/// use arrow::array::Int32Array;
-/// use arrow::error::Result;
-/// use arrow::compute::shift;
+/// # use arrow_array::Int32Array;
+/// # use arrow_select::window::shift;
 ///
 /// let a: Int32Array = vec![Some(1), None, Some(4)].into();
 ///
@@ -56,7 +52,7 @@ use num::abs;
 /// let expected: Int32Array = vec![None, None, None].into();
 /// assert_eq!(res.as_ref(), &expected);
 /// ```
-pub fn shift(array: &dyn Array, offset: i64) -> Result<ArrayRef> {
+pub fn shift(array: &dyn Array, offset: i64) -> Result<ArrayRef, ArrowError> {
     let value_len = array.len() as i64;
     if offset == 0 {
         Ok(make_array(array.data_ref().clone()))
@@ -86,7 +82,7 @@ pub fn shift(array: &dyn Array, offset: i64) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::{Float64Array, Int32Array, Int32DictionaryArray};
+    use arrow_array::{Float64Array, Int32Array, Int32DictionaryArray};
 
     #[test]
     fn test_shift_neg() {

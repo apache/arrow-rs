@@ -135,7 +135,11 @@ impl NullBufferBuilder {
         buf
     }
 
-    #[inline]
+    /// Returns the inner bitmap builder as slice
+    pub fn as_slice(&self) -> Option<&[u8]> {
+        Some(self.bitmap_builder.as_ref()?.as_slice())
+    }
+
     fn materialize_if_needed(&mut self) {
         if self.bitmap_builder.is_none() {
             self.materialize()
@@ -149,6 +153,10 @@ impl NullBufferBuilder {
             b.append_n(self.len, true);
             self.bitmap_builder = Some(b);
         }
+    }
+
+    pub fn as_slice_mut(&mut self) -> Option<&mut [u8]> {
+        self.bitmap_builder.as_mut().map(|b| b.as_slice_mut())
     }
 }
 
