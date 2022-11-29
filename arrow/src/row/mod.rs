@@ -212,6 +212,16 @@ mod variable;
 ///
 /// They are then encoded in the same manner as a signed integer.
 ///
+/// ## Fixed Length Bytes Encoding
+///
+/// Fixed length bytes are encoded in the same fashion as primitive types above.
+///
+/// For a fixed length array of length `n`:
+///
+/// A null is encoded as `0_u8` null sentinel followed by `n` `0_u8` bytes
+///
+/// A valid value is encoded as `1_u8` followed by the value bytes
+///
 /// ## Variable Length Bytes (including Strings) Encoding
 ///
 /// A null is encoded as a `0_u8`.
