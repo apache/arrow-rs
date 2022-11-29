@@ -42,7 +42,7 @@
 
 use core::cmp::min;
 use lazy_static::lazy_static;
-use regex::{Regex, RegexBuilder};
+use regex::{Regex, RegexBuilder, RegexSet};
 use std::collections::HashSet;
 use std::fmt;
 use std::fs::File;
@@ -61,6 +61,21 @@ use csv::{ByteRecord, StringRecord};
 use std::ops::Neg;
 
 lazy_static! {
+    static ref REGEX_SET: RegexSet = RegexSet::new([
+        r"^(true)$|^(false)$", //BOOLEAN
+        r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$", //DECIMAL
+        r"^-?(\d+)$", //INTEGER
+        r"^\d{4}-\d\d-\d\d$", //DATE32
+        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d$", //DATE64
+    ]).unwrap();
+    //The order should match with REGEX_SET
+    static ref MATCH_DATA_TYPE: Vec<DataType> = vec![
+        DataType::Boolean,
+        DataType::Float64,
+        DataType::Int64,
+        DataType::Date32,
+        DataType::Date64,
+    ];
     static ref PARSE_DECIMAL_RE: Regex =
         Regex::new(r"^-?(\d+\.?\d*|\d*\.?\d+)$").unwrap();
     static ref DECIMAL_RE: Regex =
@@ -79,27 +94,23 @@ lazy_static! {
 
 /// Infer the data type of a record
 fn infer_field_schema(string: &str, datetime_re: Option<Regex>) -> DataType {
-    let datetime_re = datetime_re.unwrap_or_else(|| DATETIME_RE.clone());
     // when quoting is enabled in the reader, these quotes aren't escaped, we default to
     // Utf8 for them
     if string.starts_with('"') {
         return DataType::Utf8;
     }
+    let matches = REGEX_SET.matches(string).into_iter().next();
     // match regex in a particular order
-    if BOOLEAN_RE.is_match(string) {
-        DataType::Boolean
-    } else if DECIMAL_RE.is_match(string) {
-        DataType::Float64
-    } else if INTEGER_RE.is_match(string) {
-        DataType::Int64
-    } else if DATE32_RE.is_match(string) {
-        DataType::Date32
-    } else if DATE64_RE.is_match(string) {
-        DataType::Date64
-    } else if datetime_re.is_match(string) {
-        DataType::Timestamp(TimeUnit::Nanosecond, None)
-    } else {
-        DataType::Utf8
+    match matches {
+        Some(ix) => MATCH_DATA_TYPE[ix].clone(),
+        None => {
+            let datetime_re = datetime_re.unwrap_or_else(|| DATETIME_RE.clone());
+            if datetime_re.is_match(string) {
+                DataType::Timestamp(TimeUnit::Nanosecond, None)
+            } else {
+                DataType::Utf8
+            }
+        }
     }
 }
 
