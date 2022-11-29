@@ -27,8 +27,7 @@ use crate::array::*;
 use crate::buffer::MutableBuffer;
 use crate::compute::kernels::arity::unary;
 use crate::compute::{
-    binary, binary_mut, binary_opt, try_binary, try_binary_mut, try_unary, try_unary_dyn,
-    unary_dyn,
+    binary, binary_opt, try_binary, try_unary, try_unary_dyn, unary_dyn,
 };
 use crate::datatypes::{
     ArrowNativeTypeOp, ArrowNumericType, DataType, Date32Type, Date64Type,
@@ -1625,7 +1624,7 @@ where
 mod tests {
     use super::*;
     use crate::array::Int32Array;
-    use crate::compute::{try_unary_mut, unary_mut};
+    use crate::compute::{binary_mut, try_binary_mut, try_unary_mut, unary_mut};
     use crate::datatypes::{Date64Type, Int32Type, Int8Type};
     use arrow_buffer::i256;
     use chrono::NaiveDate;
@@ -3148,7 +3147,6 @@ mod tests {
         assert_eq!(expected, wrapped);
 
         let a = Int32Array::from(vec![i32::MAX, i32::MIN]);
-        let b = Int32Array::from(vec![1, 1]);
         let overflow = try_unary_mut(a, |value| value.add_checked(1));
         let _ = overflow.unwrap().expect_err("overflow should be detected");
     }
