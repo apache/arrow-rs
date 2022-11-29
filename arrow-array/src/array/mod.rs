@@ -21,7 +21,7 @@ mod binary_array;
 
 use crate::types::*;
 use arrow_buffer::{Buffer, MutableBuffer, ToByteSlice};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;
 use std::sync::Arc;
@@ -702,14 +702,31 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
                 ],
             )
         }),
-        DataType::Struct(fields) => {
-            let fields: Vec<_> = fields
+        d @ DataType::Struct(fields) => {
+            let child_data = fields
                 .iter()
-                .map(|field| (field.clone(), new_null_array(field.data_type(), length)))
+                .map(|field| {
+                    // Nulls are encoded in the parent StructArray instead, otherwise this
+                    // method would panic if the child field is not nullable
+                    let data = new_null_array(field.data_type(), length)
+                        .data()
+                        .clone()
+                        .into_builder()
+                        .null_count(0)
+                        .null_bit_buffer(None);
+
+                    unsafe { data.build_unchecked() }
+                })
                 .collect();
 
             let null_buffer = MutableBuffer::new_null(length);
-            Arc::new(StructArray::from((fields, null_buffer.into())))
+            let builder = ArrayDataBuilder::new(d.clone())
+                .len(length)
+                .null_count(length)
+                .null_bit_buffer(Some(null_buffer.into()))
+                .child_data(child_data);
+
+            Arc::new(StructArray::from(unsafe { builder.build_unchecked() }))
         }
         DataType::Map(field, _keys_sorted) => {
             new_null_list_array::<i32>(data_type, field.data_type(), length)
@@ -916,7 +933,7 @@ mod tests {
     #[test]
     fn test_null_struct() {
         let struct_type =
-            DataType::Struct(vec![Field::new("data", DataType::Int64, true)]);
+            DataType::Struct(vec![Field::new("data", DataType::Int64, false)]);
         let array = new_null_array(&struct_type, 9);
 
         let a = array.as_any().downcast_ref::<StructArray>().unwrap();
