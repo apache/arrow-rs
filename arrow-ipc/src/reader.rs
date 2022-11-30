@@ -131,7 +131,7 @@ fn create_array(
             node_index = triple.1;
             buffer_index = triple.2;
 
-            create_list_array(list_node, data_type, &list_buffers, triple.0)
+            create_list_array(list_node, data_type, &list_buffers, triple.0)?
         }
         FixedSizeList(ref list_field, _) => {
             let list_node = nodes.get(node_index);
@@ -156,7 +156,7 @@ fn create_array(
             node_index = triple.1;
             buffer_index = triple.2;
 
-            create_list_array(list_node, data_type, &list_buffers, triple.0)
+            create_list_array(list_node, data_type, &list_buffers, triple.0)?
         }
         Struct(struct_fields) => {
             let struct_node = nodes.get(node_index);
@@ -220,7 +220,7 @@ fn create_array(
                 data_type,
                 &index_buffers,
                 value_array.clone(),
-            )
+            )?
         }
         Union(fields, field_type_ids, mode) => {
             let union_node = nodes.get(node_index);
@@ -538,7 +538,7 @@ fn create_list_array(
     data_type: &DataType,
     buffers: &[Buffer],
     child_array: ArrayRef,
-) -> ArrayRef {
+) -> Result<ArrayRef, ArrowError> {
     let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
     let length = field_node.length() as usize;
     let child_data = child_array.into_data();
@@ -556,7 +556,7 @@ fn create_list_array(
 
         _ => unreachable!("Cannot create list or map array from {:?}", data_type),
     };
-    make_array(builder.build().unwrap())
+    Ok(make_array(builder.build()?))
 }
 
 /// Reads the correct number of buffers based on list type and null_count, and creates a
@@ -566,7 +566,7 @@ fn create_dictionary_array(
     data_type: &DataType,
     buffers: &[Buffer],
     value_array: ArrayRef,
-) -> ArrayRef {
+) -> Result<ArrayRef, ArrowError> {
     if let Dictionary(_, _) = *data_type {
         let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
         let builder = ArrayData::builder(data_type.clone())
@@ -575,7 +575,7 @@ fn create_dictionary_array(
             .add_child_data(value_array.into_data())
             .null_bit_buffer(null_buffer);
 
-        make_array(unsafe { builder.build_unchecked() })
+        Ok(make_array(builder.build()?))
     } else {
         unreachable!("Cannot create dictionary array from {:?}", data_type)
     }
