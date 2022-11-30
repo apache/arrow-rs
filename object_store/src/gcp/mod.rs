@@ -126,6 +126,12 @@ enum Error {
 
     #[snafu(display("Unable to use proxy url: {}", source))]
     ProxyUrl { source: reqwest::Error },
+
+    #[snafu(display("Already exists: {}", path))]
+    AlreadyExists {
+        source: crate::client::retry::Error,
+        path: String,
+    },
 }
 
 impl From<Error> for super::Error {
@@ -141,6 +147,10 @@ impl From<Error> for super::Error {
                     source: Box::new(source),
                 }
             }
+            Error::AlreadyExists { source, path } => Self::AlreadyExists {
+                source: Box::new(source),
+                path,
+            },
             _ => Self::Generic {
                 store: "GCS",
                 source: Box::new(err),
@@ -420,10 +430,25 @@ impl GoogleCloudStorageClient {
 
         builder
             .bearer_auth(token)
+            .header(header::CONTENT_LENGTH, 0)
             .send_retry(&self.retry_config)
             .await
-            .context(CopyRequestSnafu {
-                path: from.as_ref(),
+            .map_err(|err| {
+                if err
+                    .status()
+                    .map(|status| status == reqwest::StatusCode::PRECONDITION_FAILED)
+                    .unwrap_or_else(|| false)
+                {
+                    Error::AlreadyExists {
+                        source: err,
+                        path: to.to_string(),
+                    }
+                } else {
+                    Error::CopyRequest {
+                        source: err,
+                        path: from.to_string(),
+                    }
+                }
             })?;
 
         Ok(())
@@ -879,8 +904,8 @@ mod test {
 
     use crate::{
         tests::{
-            get_nonexistent_object, list_uses_directories_correctly, list_with_delimiter,
-            put_get_delete_list, rename_and_copy, stream_get,
+            copy_if_not_exists, get_nonexistent_object, list_uses_directories_correctly,
+            list_with_delimiter, put_get_delete_list, rename_and_copy, stream_get,
         },
         Error as ObjectStoreError, ObjectStore,
     };
@@ -944,6 +969,7 @@ mod test {
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
         if integration.client.base_url == default_gcs_base_url() {
             // Fake GCS server does not yet implement XML Multipart uploads
             // https://github.com/fsouza/fake-gcs-server/issues/852
