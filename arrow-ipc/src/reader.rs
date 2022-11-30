@@ -91,7 +91,7 @@ fn create_array(
                     read_buffer(buffers.get(buffer_index + 1), data, compression_codec)?,
                     read_buffer(buffers.get(buffer_index + 2), data, compression_codec)?,
                 ],
-            );
+            )?;
             node_index += 1;
             buffer_index += 3;
             array
@@ -104,7 +104,7 @@ fn create_array(
                     read_buffer(buffers.get(buffer_index), data, compression_codec)?,
                     read_buffer(buffers.get(buffer_index + 1), data, compression_codec)?,
                 ],
-            );
+            )?;
             node_index += 1;
             buffer_index += 2;
             array
@@ -305,7 +305,7 @@ fn create_array(
                     read_buffer(buffers.get(buffer_index), data, compression_codec)?,
                     read_buffer(buffers.get(buffer_index + 1), data, compression_codec)?,
                 ],
-            );
+            )?;
             node_index += 1;
             buffer_index += 2;
             array
@@ -397,7 +397,7 @@ fn create_primitive_array(
     field_node: &crate::FieldNode,
     data_type: &DataType,
     buffers: &[Buffer],
-) -> ArrayRef {
+) -> Result<ArrayRef, ArrowError> {
     let length = field_node.length() as usize;
     let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
     let array_data = match data_type {
@@ -407,8 +407,7 @@ fn create_primitive_array(
                 .len(length)
                 .buffers(buffers[1..3].to_vec())
                 .null_bit_buffer(null_buffer)
-                .build()
-                .unwrap()
+                .build()?
         }
         FixedSizeBinary(_) => {
             // read 2 buffers: null buffer (optional) and data buffer
@@ -416,8 +415,7 @@ fn create_primitive_array(
                 .len(length)
                 .add_buffer(buffers[1].clone())
                 .null_bit_buffer(null_buffer)
-                .build()
-                .unwrap()
+                .build()?
         }
         Int8
         | Int16
@@ -434,19 +432,16 @@ fn create_primitive_array(
                     .len(length)
                     .add_buffer(buffers[1].clone())
                     .null_bit_buffer(null_buffer)
-                    .build()
-                    .unwrap();
+                    .build()?;
                 let values = Arc::new(Int64Array::from(data)) as ArrayRef;
-                // this cast is infallible, the unwrap is safe
-                let casted = cast(&values, data_type).unwrap();
+                let casted = cast(&values, data_type)?;
                 casted.into_data()
             } else {
                 ArrayData::builder(data_type.clone())
                     .len(length)
                     .add_buffer(buffers[1].clone())
                     .null_bit_buffer(null_buffer)
-                    .build()
-                    .unwrap()
+                    .build()?
             }
         }
         Float32 => {
@@ -456,19 +451,16 @@ fn create_primitive_array(
                     .len(length)
                     .add_buffer(buffers[1].clone())
                     .null_bit_buffer(null_buffer)
-                    .build()
-                    .unwrap();
+                    .build()?;
                 let values = Arc::new(Float64Array::from(data)) as ArrayRef;
-                // this cast is infallible, the unwrap is safe
-                let casted = cast(&values, data_type).unwrap();
+                let casted = cast(&values, data_type)?;
                 casted.into_data()
             } else {
                 ArrayData::builder(data_type.clone())
                     .len(length)
                     .add_buffer(buffers[1].clone())
                     .null_bit_buffer(null_buffer)
-                    .build()
-                    .unwrap()
+                    .build()?
             }
         }
         Boolean
@@ -483,8 +475,7 @@ fn create_primitive_array(
             .len(length)
             .add_buffer(buffers[1].clone())
             .null_bit_buffer(null_buffer)
-            .build()
-            .unwrap(),
+            .build()?,
         Interval(IntervalUnit::MonthDayNano) | Decimal128(_, _) => {
             let buffer = get_aligned_buffer::<i128>(&buffers[1], length);
 
@@ -493,8 +484,7 @@ fn create_primitive_array(
                 .len(length)
                 .add_buffer(buffer)
                 .null_bit_buffer(null_buffer)
-                .build()
-                .unwrap()
+                .build()?
         }
         Decimal256(_, _) => {
             let buffer = get_aligned_buffer::<i256>(&buffers[1], length);
@@ -504,13 +494,12 @@ fn create_primitive_array(
                 .len(length)
                 .add_buffer(buffer)
                 .null_bit_buffer(null_buffer)
-                .build()
-                .unwrap()
+                .build()?
         }
         t => unreachable!("Data type {:?} either unsupported or not primitive", t),
     };
 
-    make_array(array_data)
+    Ok(make_array(array_data))
 }
 
 /// Checks if given `Buffer` is properly aligned with `T`.
