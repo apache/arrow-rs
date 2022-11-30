@@ -37,9 +37,16 @@ pub const EMPTY_SENTINEL: u8 = 1;
 pub const NON_EMPTY_SENTINEL: u8 = 2;
 
 /// Returns the length of the encoded representation of a byte array, including the null byte
+#[inline]
 pub fn encoded_len(a: Option<&[u8]>) -> usize {
+    padded_length(a.map(|x| x.len()))
+}
+
+/// Returns the padded length of the encoded length of the given length
+#[inline]
+pub fn padded_length(a: Option<usize>) -> usize {
     match a {
-        Some(a) => 1 + ceil(a.len(), BLOCK_SIZE) * (BLOCK_SIZE + 1),
+        Some(a) => 1 + ceil(a, BLOCK_SIZE) * (BLOCK_SIZE + 1),
         None => 1,
     }
 }
@@ -61,59 +68,62 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
     opts: SortOptions,
 ) {
     for (offset, maybe_val) in out.offsets.iter_mut().skip(1).zip(i) {
-        match maybe_val {
-            Some(val) if val.is_empty() => {
-                out.buffer[*offset] = match opts.descending {
-                    true => !EMPTY_SENTINEL,
-                    false => EMPTY_SENTINEL,
-                };
-                *offset += 1;
+        *offset += encode_one(&mut out.buffer[*offset..], maybe_val, opts);
+    }
+}
+
+pub fn encode_one(out: &mut [u8], val: Option<&[u8]>, opts: SortOptions) -> usize {
+    match val {
+        Some(val) if val.is_empty() => {
+            out[0] = match opts.descending {
+                true => !EMPTY_SENTINEL,
+                false => EMPTY_SENTINEL,
+            };
+            1
+        }
+        Some(val) => {
+            let block_count = ceil(val.len(), BLOCK_SIZE);
+            let end_offset = 1 + block_count * (BLOCK_SIZE + 1);
+            let to_write = &mut out[..end_offset];
+
+            // Write `2_u8` to demarcate as non-empty, non-null string
+            to_write[0] = NON_EMPTY_SENTINEL;
+
+            let chunks = val.chunks_exact(BLOCK_SIZE);
+            let remainder = chunks.remainder();
+            for (input, output) in chunks
+                .clone()
+                .zip(to_write[1..].chunks_exact_mut(BLOCK_SIZE + 1))
+            {
+                let input: &[u8; BLOCK_SIZE] = input.try_into().unwrap();
+                let out_block: &mut [u8; BLOCK_SIZE] =
+                    (&mut output[..BLOCK_SIZE]).try_into().unwrap();
+
+                *out_block = *input;
+
+                // Indicate that there are further blocks to follow
+                output[BLOCK_SIZE] = BLOCK_CONTINUATION;
             }
-            Some(val) => {
-                let block_count = ceil(val.len(), BLOCK_SIZE);
-                let end_offset = *offset + 1 + block_count * (BLOCK_SIZE + 1);
-                let to_write = &mut out.buffer[*offset..end_offset];
 
-                // Write `2_u8` to demarcate as non-empty, non-null string
-                to_write[0] = NON_EMPTY_SENTINEL;
-
-                let chunks = val.chunks_exact(BLOCK_SIZE);
-                let remainder = chunks.remainder();
-                for (input, output) in chunks
-                    .clone()
-                    .zip(to_write[1..].chunks_exact_mut(BLOCK_SIZE + 1))
-                {
-                    let input: &[u8; BLOCK_SIZE] = input.try_into().unwrap();
-                    let out_block: &mut [u8; BLOCK_SIZE] =
-                        (&mut output[..BLOCK_SIZE]).try_into().unwrap();
-
-                    *out_block = *input;
-
-                    // Indicate that there are further blocks to follow
-                    output[BLOCK_SIZE] = BLOCK_CONTINUATION;
-                }
-
-                if !remainder.is_empty() {
-                    let start_offset = 1 + (block_count - 1) * (BLOCK_SIZE + 1);
-                    to_write[start_offset..start_offset + remainder.len()]
-                        .copy_from_slice(remainder);
-                    *to_write.last_mut().unwrap() = remainder.len() as u8;
-                } else {
-                    // We must overwrite the continuation marker written by the loop above
-                    *to_write.last_mut().unwrap() = BLOCK_SIZE as u8;
-                }
-
-                *offset = end_offset;
-
-                if opts.descending {
-                    // Invert bits
-                    to_write.iter_mut().for_each(|v| *v = !*v)
-                }
+            if !remainder.is_empty() {
+                let start_offset = 1 + (block_count - 1) * (BLOCK_SIZE + 1);
+                to_write[start_offset..start_offset + remainder.len()]
+                    .copy_from_slice(remainder);
+                *to_write.last_mut().unwrap() = remainder.len() as u8;
+            } else {
+                // We must overwrite the continuation marker written by the loop above
+                *to_write.last_mut().unwrap() = BLOCK_SIZE as u8;
             }
-            None => {
-                out.buffer[*offset] = null_sentinel(opts);
-                *offset += 1;
+
+            if opts.descending {
+                // Invert bits
+                to_write.iter_mut().for_each(|v| *v = !*v)
             }
+            end_offset
+        }
+        None => {
+            out[0] = null_sentinel(opts);
+            1
         }
     }
 }

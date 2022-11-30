@@ -147,6 +147,7 @@ use crate::{downcast_dictionary_array, downcast_primitive_array};
 mod dictionary;
 mod fixed;
 mod interner;
+mod list;
 mod variable;
 
 /// Converts [`ArrayRef`] columns into a [row-oriented](self) format.
@@ -343,6 +344,54 @@ mod variable;
 /// └───────┴───────────────┴───────┴─────────┴───────┘
 /// ```
 ///
+/// ## List Encoding
+///
+/// Lists are encoded by first encoding all child elements to the row format.
+///
+/// A "canonical byte array" is then constructed by concatenating the row
+/// encodings of all their elements into a single binary array, followed
+/// by the lengths of each encoded row, and the number of elements, encoded
+/// as big endian `u32`.
+///
+/// This canonical byte array is then encoded using the variable length byte
+/// encoding described above.
+///
+/// _The lengths are not strictly necessary but greatly simplify decode, they
+/// may be removed in a future iteration_.
+///
+/// For example given:
+///
+/// ```text
+/// [1_u8, 2_u8, 3_u8]
+/// [1_u8, null]
+/// []
+/// null
+/// ```
+///
+/// The elements would be converted to:
+///
+/// ```text
+///     ┌──┬──┐     ┌──┬──┐     ┌──┬──┐     ┌──┬──┐        ┌──┬──┐
+///  1  │01│01│  2  │01│02│  3  │01│02│  1  │01│01│  null  │00│00│
+///     └──┴──┘     └──┴──┘     └──┴──┘     └──┴──┘        └──┴──┘
+///```
+///
+/// Which would be grouped into the following canonical byte arrays:
+///
+/// ```text
+///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
+///  [1_u8, 2_u8, 3_u8]     │01│01│01│02│01│03│00│00│00│02│00│00│00│02│00│00│00│02│00│00│00│03│
+///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
+///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
+///  [1_u8, null]           │01│01│00│00│00│00│00│02│00│00│00│02│00│00│00│02│
+///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
+///```
+///
+/// With `[]` represented by an empty byte array, and `null` a null byte array.
+///
+/// These byte arrays will then be encoded using the variable length byte encoding
+/// described above.
+///
 /// # Ordering
 ///
 /// ## Float Ordering
@@ -381,6 +430,8 @@ enum Codec {
     /// A row converter for the child fields
     /// and the encoding of a row containing only nulls
     Struct(RowConverter, OwnedRow),
+    /// A row converter for the child field
+    List(RowConverter),
 }
 
 impl Codec {
@@ -388,6 +439,20 @@ impl Codec {
         match &sort_field.data_type {
             DataType::Dictionary(_, _) => Ok(Self::Dictionary(Default::default())),
             d if !d.is_nested() => Ok(Self::Stateless),
+            DataType::List(f) | DataType::LargeList(f) => {
+                // The encoded contents will be inverted if descending is set to true
+                // As such we set `descending` to false and negate nulls first if it
+                // it set to true
+                let options = SortOptions {
+                    descending: false,
+                    nulls_first: sort_field.options.nulls_first
+                        != sort_field.options.descending,
+                };
+
+                let field = SortField::new_with_options(f.data_type().clone(), options);
+                let converter = RowConverter::new(vec![field])?;
+                Ok(Self::List(converter))
+            }
             DataType::Struct(f) => {
                 let sort_fields = f
                     .iter()
@@ -441,6 +506,15 @@ impl Codec {
                 let rows = converter.convert_columns(v.columns())?;
                 Ok(Encoder::Struct(rows, null.row()))
             }
+            Codec::List(converter) => {
+                let values = match array.data_type() {
+                    DataType::List(_) => as_list_array(array).values(),
+                    DataType::LargeList(_) => as_large_list_array(array).values(),
+                    _ => unreachable!(),
+                };
+                let rows = converter.convert_columns(&[values])?;
+                Ok(Encoder::List(rows))
+            }
         }
     }
 
@@ -449,6 +523,7 @@ impl Codec {
             Codec::Stateless => 0,
             Codec::Dictionary(interner) => interner.size(),
             Codec::Struct(converter, nulls) => converter.size() + nulls.data.len(),
+            Codec::List(converter) => converter.size(),
         }
     }
 }
@@ -459,12 +534,14 @@ enum Encoder<'a> {
     Stateless,
     /// The mapping from dictionary keys to normalized keys
     Dictionary(Vec<Option<&'a [u8]>>),
-    /// The row encoding of the child array and the encoding of a null row
+    /// The row encoding of the child arrays and the encoding of a null row
     ///
     /// It is necessary to encode to a temporary [`Rows`] to avoid serializing
     /// values that are masked by a null in the parent StructArray, otherwise
     /// this would establish an ordering between semantically null values
     Struct(Rows, Row<'a>),
+    /// The row encoding of the child array
+    List(Rows),
 }
 
 /// Configure the data type and sort order for a given column
@@ -521,6 +598,9 @@ impl RowConverter {
     fn supports_datatype(d: &DataType) -> bool {
         match d {
             _ if !d.is_nested() => true,
+            DataType::List(f) | DataType::LargeList(f) | DataType::Map(f, _) => {
+                Self::supports_datatype(f.data_type())
+            }
             DataType::Struct(f) => {
                 f.iter().all(|x| Self::supports_datatype(x.data_type()))
             }
@@ -571,7 +651,7 @@ impl RowConverter {
             columns.iter().zip(self.fields.iter()).zip(encoders)
         {
             // We encode a column at a time to minimise dispatch overheads
-            encode_column(&mut rows, column, field.options, &encoder)
+            encode_column(&mut rows, column.as_ref(), field.options, &encoder)
         }
 
         if cfg!(debug_assertions) {
@@ -975,6 +1055,15 @@ fn new_empty_rows(cols: &[ArrayRef], encoders: &[Encoder], config: RowConfig) ->
                     }
                 });
             }
+            Encoder::List(rows) => match array.data_type() {
+                DataType::List(_) => {
+                    list::compute_lengths(&mut lengths, rows, as_list_array(array))
+                }
+                DataType::LargeList(_) => {
+                    list::compute_lengths(&mut lengths, rows, as_large_list_array(array))
+                }
+                _ => unreachable!(),
+            },
         }
     }
 
@@ -1014,7 +1103,7 @@ fn new_empty_rows(cols: &[ArrayRef], encoders: &[Encoder], config: RowConfig) ->
 /// Encodes a column to the provided [`Rows`] incrementing the offsets as it progresses
 fn encode_column(
     out: &mut Rows,
-    column: &ArrayRef,
+    column: &dyn Array,
     opts: SortOptions,
     encoder: &Encoder<'_>,
 ) {
@@ -1056,7 +1145,7 @@ fn encode_column(
             }
         }
         Encoder::Struct(rows, null) => {
-            let array = as_struct_array(column.as_ref());
+            let array = as_struct_array(column);
             let null_sentinel = null_sentinel(opts);
             out.offsets
                 .iter_mut()
@@ -1073,6 +1162,13 @@ fn encode_column(
                     *offset = end_offset;
                 })
         }
+        Encoder::List(rows) => match column.data_type() {
+            DataType::List(_) => list::encode(out, rows, opts, as_list_array(column)),
+            DataType::LargeList(_) => {
+                list::encode(out, rows, opts, as_large_list_array(column))
+            }
+            _ => unreachable!(),
+        },
     }
 }
 
@@ -1165,6 +1261,15 @@ unsafe fn decode_column(
 
             Arc::new(StructArray::from(builder.build_unchecked()))
         }
+        Codec::List(converter) => match &field.data_type {
+            DataType::List(_) => {
+                Arc::new(list::decode::<i32>(converter, rows, field, validate_utf8)?)
+            }
+            DataType::LargeList(_) => {
+                Arc::new(list::decode::<i64>(converter, rows, field, validate_utf8)?)
+            }
+            _ => unreachable!(),
+        },
     };
     Ok(array)
 }
@@ -1173,7 +1278,9 @@ unsafe fn decode_column(
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::builder::FixedSizeBinaryBuilder;
+    use arrow_array::builder::{
+        FixedSizeBinaryBuilder, GenericListBuilder, Int32Builder,
+    };
     use rand::distributions::uniform::SampleUniform;
     use rand::distributions::{Distribution, Standard};
     use rand::{thread_rng, Rng};
@@ -1542,6 +1649,24 @@ mod tests {
 
         let cols = converter.convert_rows(&rows_c).unwrap();
         assert_eq!(&cols[0], &a);
+
+        let mut converter = RowConverter::new(vec![SortField::new_with_options(
+            a.data_type().clone(),
+            SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        )])
+        .unwrap();
+
+        let rows_c = converter.convert_columns(&[Arc::clone(&a)]).unwrap();
+        assert!(rows_c.row(3) < rows_c.row(5));
+        assert!(rows_c.row(2) > rows_c.row(1));
+        assert!(rows_c.row(0) > rows_c.row(1));
+        assert!(rows_c.row(3) < rows_c.row(0));
+
+        let cols = converter.convert_rows(&rows_c).unwrap();
+        assert_eq!(&cols[0], &a);
     }
 
     #[test]
@@ -1669,6 +1794,200 @@ mod tests {
 
         let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
         let _ = converter.convert_rows(&rows);
+    }
+
+    fn test_single_list<O: OffsetSizeTrait>() {
+        let mut builder = GenericListBuilder::<O, _>::new(Int32Builder::new());
+        builder.values().append_value(32);
+        builder.values().append_value(52);
+        builder.values().append_value(32);
+        builder.append(true);
+        builder.values().append_value(32);
+        builder.values().append_value(52);
+        builder.values().append_value(12);
+        builder.append(true);
+        builder.values().append_value(32);
+        builder.values().append_value(52);
+        builder.append(true);
+        builder.values().append_value(32); // MASKED
+        builder.values().append_value(52); // MASKED
+        builder.append(false);
+        builder.values().append_value(32);
+        builder.values().append_null();
+        builder.append(true);
+        builder.append(true);
+
+        let list = Arc::new(builder.finish()) as ArrayRef;
+        let d = list.data_type().clone();
+
+        let mut converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+        assert!(rows.row(0) > rows.row(1)); // [32, 52, 32] > [32, 52, 12]
+        assert!(rows.row(2) < rows.row(1)); // [32, 42] < [32, 52, 12]
+        assert!(rows.row(3) < rows.row(2)); // null < [32, 42]
+        assert!(rows.row(4) < rows.row(2)); // [32, null] < [32, 42]
+        assert!(rows.row(5) < rows.row(2)); // [] < [32, 42]
+        assert!(rows.row(3) < rows.row(5)); // null < []
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].data().validate_full().unwrap();
+        assert_eq!(&back[0], &list);
+
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let field = SortField::new_with_options(d.clone(), options);
+        let mut converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) > rows.row(1)); // [32, 52, 32] > [32, 52, 12]
+        assert!(rows.row(2) < rows.row(1)); // [32, 42] < [32, 52, 12]
+        assert!(rows.row(3) > rows.row(2)); // null > [32, 42]
+        assert!(rows.row(4) > rows.row(2)); // [32, null] > [32, 42]
+        assert!(rows.row(5) < rows.row(2)); // [] < [32, 42]
+        assert!(rows.row(3) > rows.row(5)); // null > []
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].data().validate_full().unwrap();
+        assert_eq!(&back[0], &list);
+
+        let options = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let field = SortField::new_with_options(d.clone(), options);
+        let mut converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) < rows.row(1)); // [32, 52, 32] < [32, 52, 12]
+        assert!(rows.row(2) > rows.row(1)); // [32, 42] > [32, 52, 12]
+        assert!(rows.row(3) > rows.row(2)); // null > [32, 42]
+        assert!(rows.row(4) > rows.row(2)); // [32, null] > [32, 42]
+        assert!(rows.row(5) > rows.row(2)); // [] > [32, 42]
+        assert!(rows.row(3) > rows.row(5)); // null > []
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].data().validate_full().unwrap();
+        assert_eq!(&back[0], &list);
+
+        let options = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let field = SortField::new_with_options(d.clone(), options);
+        let mut converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) < rows.row(1)); // [32, 52, 32] < [32, 52, 12]
+        assert!(rows.row(2) > rows.row(1)); // [32, 42] > [32, 52, 12]
+        assert!(rows.row(3) < rows.row(2)); // null < [32, 42]
+        assert!(rows.row(4) < rows.row(2)); // [32, null] < [32, 42]
+        assert!(rows.row(5) > rows.row(2)); // [] > [32, 42]
+        assert!(rows.row(3) < rows.row(5)); // null < []
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].data().validate_full().unwrap();
+        assert_eq!(&back[0], &list);
+    }
+
+    fn test_nested_list<O: OffsetSizeTrait>() {
+        let mut builder = GenericListBuilder::<O, _>::new(
+            GenericListBuilder::<O, _>::new(Int32Builder::new()),
+        );
+
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.values().values().append_value(1);
+        builder.values().values().append_null();
+        builder.values().append(true);
+        builder.append(true);
+
+        builder.values().values().append_value(1);
+        builder.values().values().append_null();
+        builder.values().append(true);
+        builder.values().values().append_value(1);
+        builder.values().values().append_null();
+        builder.values().append(true);
+        builder.append(true);
+
+        builder.values().values().append_value(1);
+        builder.values().values().append_null();
+        builder.values().append(true);
+        builder.values().append(false);
+        builder.append(true);
+        builder.append(false);
+
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.append(true);
+
+        let list = Arc::new(builder.finish()) as ArrayRef;
+        let d = list.data_type().clone();
+
+        // [
+        //   [[1, 2], [1, null]],
+        //   [[1, null], [1, null]],
+        //   [[1, null], null]
+        //   null
+        //   [[1, 2]]
+        // ]
+        let options = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+        let field = SortField::new_with_options(d.clone(), options);
+        let mut converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) > rows.row(1));
+        assert!(rows.row(1) > rows.row(2));
+        assert!(rows.row(2) > rows.row(3));
+        assert!(rows.row(4) < rows.row(0));
+        assert!(rows.row(4) > rows.row(1));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].data().validate_full().unwrap();
+        assert_eq!(&back[0], &list);
+
+        let options = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let field = SortField::new_with_options(d.clone(), options);
+        let mut converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) > rows.row(1));
+        assert!(rows.row(1) > rows.row(2));
+        assert!(rows.row(2) > rows.row(3));
+        assert!(rows.row(4) > rows.row(0));
+        assert!(rows.row(4) > rows.row(1));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].data().validate_full().unwrap();
+        assert_eq!(&back[0], &list);
+    }
+
+    #[test]
+    fn test_list() {
+        test_single_list::<i32>();
+        test_nested_list::<i32>();
+    }
+
+    #[test]
+    fn test_large_list() {
+        test_single_list::<i64>();
+        test_nested_list::<i64>();
     }
 
     fn generate_primitive_array<K>(len: usize, valid_percent: f64) -> PrimitiveArray<K>
