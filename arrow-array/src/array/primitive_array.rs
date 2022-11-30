@@ -1151,6 +1151,14 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
         })
     }
 
+    /// Validates the Decimal Array, if the value of slot is overflow for the specified precision, and
+    /// will be casted to Null
+    pub fn null_if_overflow_precision(&self, precision: u8) -> Self {
+        self.unary_opt::<_, T>(|v| {
+            (T::validate_decimal_precision(v, precision).is_ok()).then_some(v)
+        })
+    }
+
     /// Returns [`Self::value`] formatted as a string
     pub fn value_as_string(&self, row: usize) -> String {
         T::format_decimal(self.value(row), self.precision(), self.scale())
@@ -2053,6 +2061,15 @@ mod tests {
         Decimal128Array::from_iter_values([12345, 456])
             .with_precision_and_scale(4, 10)
             .unwrap();
+    }
+
+    #[test]
+    fn test_decimal_array_set_null_if_overflow_with_precision() {
+        let array =
+            Decimal128Array::from(vec![Some(123456), Some(123), None, Some(123456)]);
+        let result = array.null_if_overflow_precision(5);
+        let expected = Decimal128Array::from(vec![None, Some(123), None, None]);
+        assert_eq!(result, expected);
     }
 
     #[test]
