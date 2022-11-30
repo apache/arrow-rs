@@ -46,9 +46,9 @@ Setup environment
 
 ```
 export TEST_INTEGRATION=1
-export AWS_DEFAULT_REGION=us-east-1
-export AWS_ACCESS_KEY_ID=test
-export AWS_SECRET_ACCESS_KEY=test
+export OBJECT_STORE_AWS_DEFAULT_REGION=us-east-1
+export OBJECT_STORE_AWS_ACCESS_KEY_ID=test
+export OBJECT_STORE_AWS_SECRET_ACCESS_KEY=test
 export AWS_ENDPOINT=http://128.0.0.1:4566
 export OBJECT_STORE_BUCKET=test-bucket
 ```

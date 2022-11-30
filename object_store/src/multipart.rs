@@ -81,7 +81,7 @@ where
             current_buffer: Vec::new(),
             // TODO: Should self vary by provider?
             // TODO: Should we automatically increase then when part index gets large?
-            min_part_size: 5_000_000,
+            min_part_size: 6_000_000,
             current_part_idx: 0,
             completion_task: None,
         }
