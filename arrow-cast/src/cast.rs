@@ -84,6 +84,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal256(_, _)) |
         // decimal to unsigned numeric
         (Decimal128(_, _), UInt8 | UInt16 | UInt32 | UInt64) |
+        (Decimal256(_, _), UInt8 | UInt16 | UInt32 | UInt64) |
         // decimal to signed numeric
         (Decimal128(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64) |
         (Decimal256(_, _), Null | Int8 | Int16 | Int32 | Int64)
@@ -702,6 +703,30 @@ pub fn cast_with_options(
         (Decimal256(_, scale), _) => {
             // cast decimal to other type
             match to_type {
+                UInt8 => cast_decimal_to_integer::<Decimal256Type, UInt8Type>(
+                    array,
+                    i256::from_i128(10_i128),
+                    *scale,
+                    cast_options,
+                ),
+                UInt16 => cast_decimal_to_integer::<Decimal256Type, UInt16Type>(
+                    array,
+                    i256::from_i128(10_i128),
+                    *scale,
+                    cast_options,
+                ),
+                UInt32 => cast_decimal_to_integer::<Decimal256Type, UInt32Type>(
+                    array,
+                    i256::from_i128(10_i128),
+                    *scale,
+                    cast_options,
+                ),
+                UInt64 => cast_decimal_to_integer::<Decimal256Type, UInt64Type>(
+                    array,
+                    i256::from_i128(10_i128),
+                    *scale,
+                    cast_options,
+                ),
                 Int8 => cast_decimal_to_integer::<Decimal256Type, Int8Type>(
                     array,
                     i256::from_i128(10_i128),
@@ -4065,9 +4090,6 @@ mod tests {
 
     #[test]
     fn test_cast_decimal256_to_numeric() {
-        let decimal_type = DataType::Decimal256(38, 2);
-        // negative test
-        assert!(!can_cast_types(&decimal_type, &DataType::UInt8));
         let value_array: Vec<Option<i256>> = vec![
             Some(i256::from_i128(125)),
             Some(i256::from_i128(225)),
@@ -4077,6 +4099,34 @@ mod tests {
         ];
         let decimal_array = create_decimal256_array(value_array, 38, 2).unwrap();
         let array = Arc::new(decimal_array) as ArrayRef;
+        // u8
+        generate_cast_test_case!(
+            &array,
+            UInt8Array,
+            &DataType::UInt8,
+            vec![Some(1_u8), Some(2_u8), Some(3_u8), None, Some(5_u8)]
+        );
+        // u16
+        generate_cast_test_case!(
+            &array,
+            UInt16Array,
+            &DataType::UInt16,
+            vec![Some(1_u16), Some(2_u16), Some(3_u16), None, Some(5_u16)]
+        );
+        // u32
+        generate_cast_test_case!(
+            &array,
+            UInt32Array,
+            &DataType::UInt32,
+            vec![Some(1_u32), Some(2_u32), Some(3_u32), None, Some(5_u32)]
+        );
+        // u64
+        generate_cast_test_case!(
+            &array,
+            UInt64Array,
+            &DataType::UInt64,
+            vec![Some(1_u64), Some(2_u64), Some(3_u64), None, Some(5_u64)]
+        );
         // i8
         generate_cast_test_case!(
             &array,
