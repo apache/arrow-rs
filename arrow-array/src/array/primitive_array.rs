@@ -1153,7 +1153,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
 
     /// Validates the Decimal Array, if the value of slot is overflow for the specified precision, and
     /// will be casted to Null
-    pub fn null_if_overflow_precision(self, precision: u8) -> Self {
+    pub fn null_if_overflow_precision(&self, precision: u8) -> Self {
         self.unary_opt::<_, T>(|v| {
             (T::validate_decimal_precision(v, precision).is_ok()).then_some(v)
         })
