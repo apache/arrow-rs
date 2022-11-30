@@ -203,10 +203,10 @@ pub type DurationMicrosecondArray = PrimitiveArray<DurationMicrosecondType>;
 pub type DurationNanosecondArray = PrimitiveArray<DurationNanosecondType>;
 
 /// An array where each element is a 128-bits decimal with precision in [1, 38] and
-/// scale in [-38, 38].
+/// scale less or equal to 38.
 pub type Decimal128Array = PrimitiveArray<Decimal128Type>;
 /// An array where each element is a 256-bits decimal with precision in [1, 76] and
-/// scale in [-76, 76].
+/// scale less or equal to 76.
 pub type Decimal256Array = PrimitiveArray<Decimal256Type>;
 
 /// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
