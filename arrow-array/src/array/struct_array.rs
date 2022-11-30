@@ -227,13 +227,6 @@ impl From<Vec<(Field, ArrayRef)>> for StructArray {
                     field_value.data().data_type(),
                     "the field data types must match the array data in a StructArray"
                 );
-                // Check nullability of child arrays
-                if !field_type.is_nullable() {
-                    assert!(
-                        field_value.null_count() == 0,
-                        "non-nullable field cannot have null values"
-                    );
-                }
             },
         );
 
@@ -241,6 +234,10 @@ impl From<Vec<(Field, ArrayRef)>> for StructArray {
             .child_data(field_values.into_iter().map(|a| a.into_data()).collect())
             .len(length);
         let array_data = unsafe { array_data.build_unchecked() };
+
+        // We must validate nullability
+        array_data.validate_nulls().unwrap();
+
         Self::from(array_data)
     }
 }
@@ -283,13 +280,6 @@ impl From<(Vec<(Field, ArrayRef)>, Buffer)> for StructArray {
                     field_value.data().data_type(),
                     "the field data types must match the array data in a StructArray"
                 );
-                // Check nullability of child arrays
-                if !field_type.is_nullable() {
-                    assert!(
-                        field_value.null_count() == 0,
-                        "non-nullable field cannot have null values"
-                    );
-                }
             },
         );
 
@@ -298,6 +288,10 @@ impl From<(Vec<(Field, ArrayRef)>, Buffer)> for StructArray {
             .child_data(field_values.into_iter().map(|a| a.into_data()).collect())
             .len(length);
         let array_data = unsafe { array_data.build_unchecked() };
+
+        // We must validate nullability
+        array_data.validate_nulls().unwrap();
+
         Self::from(array_data)
     }
 }

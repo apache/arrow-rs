@@ -1127,36 +1127,11 @@ unsafe fn decode_column(
             }
         }
         Codec::Struct(converter, _) => {
-            let child_fields = match &field.data_type {
-                DataType::Struct(f) => f,
-                _ => unreachable!(),
-            };
-
             let (null_count, nulls) = fixed::decode_nulls(rows);
             rows.iter_mut().for_each(|row| *row = &row[1..]);
             let children = converter.convert_raw(rows, validate_utf8)?;
 
-            let child_data = child_fields
-                .iter()
-                .zip(&children)
-                .map(|(f, c)| {
-                    let data = c.data().clone();
-                    match f.is_nullable() {
-                        true => data,
-                        false => {
-                            assert_eq!(data.null_count(), null_count);
-                            // Need to strip out null buffer if any as this is created
-                            // as an artifact of the row encoding process that encodes
-                            // nulls from the parent struct array in the children
-                            data.into_builder()
-                                .null_count(0)
-                                .null_bit_buffer(None)
-                                .build_unchecked()
-                        }
-                    }
-                })
-                .collect();
-
+            let child_data = children.iter().map(|c| c.data().clone()).collect();
             let builder = ArrayDataBuilder::new(field.data_type.clone())
                 .len(rows.len())
                 .null_count(null_count)
@@ -1585,11 +1560,8 @@ mod tests {
         let back = converter.convert_rows(&r2).unwrap();
         assert_eq!(back.len(), 1);
         assert_eq!(&back[0], &s2);
-        let back_s = as_struct_array(&back[0]);
-        for c in back_s.columns() {
-            // Children should not contain nulls
-            assert_eq!(c.null_count(), 0);
-        }
+
+        back[0].data().validate_full().unwrap();
     }
 
     #[test]
@@ -1858,6 +1830,7 @@ mod tests {
 
             let back = converter.convert_rows(&rows).unwrap();
             for (actual, expected) in back.iter().zip(&arrays) {
+                actual.data().validate_full().unwrap();
                 assert_eq!(actual, expected)
             }
         }

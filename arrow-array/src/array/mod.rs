@@ -916,7 +916,7 @@ mod tests {
     #[test]
     fn test_null_struct() {
         let struct_type =
-            DataType::Struct(vec![Field::new("data", DataType::Int64, true)]);
+            DataType::Struct(vec![Field::new("data", DataType::Int64, false)]);
         let array = new_null_array(&struct_type, 9);
 
         let a = array.as_any().downcast_ref::<StructArray>().unwrap();
