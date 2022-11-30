@@ -43,7 +43,6 @@ use half::f16;
 use std::sync::Arc;
 
 #[test]
-#[cfg(feature = "chrono-tz")]
 fn test_cast_timestamp_to_string() {
     let a = TimestampMillisecondArray::from(vec![
         Some(864000000005),
@@ -63,7 +62,6 @@ fn test_cast_timestamp_to_string() {
 
 #[test]
 #[cfg_attr(miri, ignore)] // running forever
-#[cfg(feature = "chrono-tz")]
 fn test_can_cast_types() {
     // this function attempts to ensure that can_cast_types stays
     // in sync with cast.  It simply tries all combinations of
@@ -97,7 +95,6 @@ fn test_can_cast_types() {
 }
 
 /// Create instances of arrays with varying types for cast tests
-#[cfg(feature = "chrono-tz")]
 fn get_arrays_of_all_types() -> Vec<ArrayRef> {
     let tz_name = String::from("America/New_York");
     let binary_data: Vec<&[u8]> = vec![b"foo", b"bar"];
@@ -190,7 +187,6 @@ fn get_arrays_of_all_types() -> Vec<ArrayRef> {
     ]
 }
 
-#[cfg(feature = "chrono-tz")]
 fn make_fixed_size_list_array() -> FixedSizeListArray {
     // Construct a value array
     let value_data = ArrayData::builder(DataType::Int32)
@@ -210,7 +206,6 @@ fn make_fixed_size_list_array() -> FixedSizeListArray {
     FixedSizeListArray::from(list_data)
 }
 
-#[cfg(feature = "chrono-tz")]
 fn make_fixed_size_binary_array() -> FixedSizeBinaryArray {
     let values: [u8; 15] = *b"hellotherearrow";
 
@@ -270,7 +265,6 @@ fn make_large_list_array() -> LargeListArray {
     LargeListArray::from(list_data)
 }
 
-#[cfg(feature = "chrono-tz")]
 fn make_union_array() -> UnionArray {
     let mut builder = UnionBuilder::with_capacity_dense(7);
     builder.append::<Int32Type>("a", 1).unwrap();
@@ -279,7 +273,6 @@ fn make_union_array() -> UnionArray {
 }
 
 /// Creates a dictionary with primitive dictionary values, and keys of type K
-#[cfg(feature = "chrono-tz")]
 fn make_dictionary_primitive<K: ArrowDictionaryKeyType>() -> ArrayRef {
     // Pick Int32 arbitrarily for dictionary values
     let mut b: PrimitiveDictionaryBuilder<K, Int32Type> =
@@ -290,7 +283,6 @@ fn make_dictionary_primitive<K: ArrowDictionaryKeyType>() -> ArrayRef {
 }
 
 /// Creates a dictionary with utf8 values, and keys of type K
-#[cfg(feature = "chrono-tz")]
 fn make_dictionary_utf8<K: ArrowDictionaryKeyType>() -> ArrayRef {
     // Pick Int32 arbitrarily for dictionary values
     let mut b: StringDictionaryBuilder<K> = StringDictionaryBuilder::new();
@@ -311,7 +303,6 @@ fn create_decimal_array(
 }
 
 // Get a selection of datatypes to try and cast to
-#[cfg(feature = "chrono-tz")]
 fn get_all_types() -> Vec<DataType> {
     use DataType::*;
     let tz_name = String::from("America/New_York");
@@ -382,7 +373,6 @@ fn get_all_types() -> Vec<DataType> {
 }
 
 #[test]
-#[cfg(feature = "chrono-tz")]
 fn test_timestamp_cast_utf8() {
     let array: PrimitiveArray<TimestampMicrosecondType> =
         vec![Some(37800000000), None, Some(86339000000)].into();
