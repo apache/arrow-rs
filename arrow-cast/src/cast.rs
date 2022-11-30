@@ -3684,6 +3684,43 @@ mod tests {
 
     #[test]
     #[cfg(not(feature = "force_validate"))]
+    #[should_panic(
+        expected = "5789604461865809771178549250434395392663499233282028201972879200395656481997 cannot be casted to 128-bit integer for Decimal128"
+    )]
+    fn test_cast_decimal_to_decimal_round_with_error() {
+        // decimal256 to decimal128 overflow
+        let array = vec![
+            Some(i256::from_i128(1123454)),
+            Some(i256::from_i128(2123456)),
+            Some(i256::from_i128(-3123453)),
+            Some(i256::from_i128(-3123456)),
+            None,
+            Some(i256::MAX),
+            Some(i256::MIN),
+        ];
+        let input_decimal_array = create_decimal256_array(array, 76, 4).unwrap();
+        let array = Arc::new(input_decimal_array) as ArrayRef;
+        let input_type = DataType::Decimal256(76, 4);
+        let output_type = DataType::Decimal128(20, 3);
+        assert!(can_cast_types(&input_type, &output_type));
+        generate_cast_test_case!(
+            &array,
+            Decimal128Array,
+            &output_type,
+            vec![
+                Some(112345_i128),
+                Some(212346_i128),
+                Some(-312345_i128),
+                Some(-312346_i128),
+                None,
+                None,
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_cast_decimal_to_decimal_round() {
         let array = vec![
             Some(1123454),
@@ -3768,34 +3805,6 @@ mod tests {
                 Some(212346_i128),
                 Some(-312345_i128),
                 Some(-312346_i128),
-                None
-            ]
-        );
-
-        // decimal256 to decimal128 overflow
-        let array = vec![
-            Some(i256::from_i128(1123454)),
-            Some(i256::from_i128(2123456)),
-            Some(i256::from_i128(-3123453)),
-            Some(i256::from_i128(-3123456)),
-            None,
-            Some(i256::MAX),
-            Some(i256::MIN),
-        ];
-        let input_decimal_array = create_decimal256_array(array, 76, 4).unwrap();
-        let array = Arc::new(input_decimal_array) as ArrayRef;
-        assert!(can_cast_types(&input_type, &output_type));
-        generate_cast_test_case!(
-            &array,
-            Decimal128Array,
-            &output_type,
-            vec![
-                Some(112345_i128),
-                Some(212346_i128),
-                Some(-312345_i128),
-                Some(-312346_i128),
-                None,
-                None,
                 None
             ]
         );
