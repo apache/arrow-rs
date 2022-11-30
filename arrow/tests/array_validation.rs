@@ -753,40 +753,6 @@ fn test_validate_list_negative_offsets() {
     .unwrap();
 }
 
-#[test]
-#[should_panic(expected = "Value at position 1 out of bounds: -1 (should be in [0, 1])")]
-/// test that children are validated recursively (aka bugs in child data of struct also are flagged)
-fn test_validate_recursive() {
-    // Form invalid dictionary array
-    let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
-    // -1 is not a valid index
-    let keys: Int32Array = [Some(1), Some(-1), Some(1)].into_iter().collect();
-
-    let dict_data_type = DataType::Dictionary(
-        Box::new(keys.data_type().clone()),
-        Box::new(values.data_type().clone()),
-    );
-
-    // purposely create an invalid child data
-    let dict_data = unsafe {
-        ArrayData::new_unchecked(
-            dict_data_type,
-            2,
-            None,
-            None,
-            0,
-            vec![keys.data().buffers()[0].clone()],
-            vec![values.into_data()],
-        )
-    };
-
-    // Now, try and create a struct with this invalid child data (and expect an error)
-    let data_type =
-        DataType::Struct(vec![Field::new("d", dict_data.data_type().clone(), true)]);
-
-    ArrayData::try_new(data_type, 1, None, 0, vec![], vec![dict_data]).unwrap();
-}
-
 /// returns a buffer initialized with some constant value for tests
 fn make_i32_buffer(n: usize) -> Buffer {
     Buffer::from_slice_ref(&vec![42i32; n])

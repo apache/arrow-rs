@@ -983,19 +983,6 @@ impl ArrayData {
 
         self.validate_values()?;
 
-        // validate all children recursively
-        self.child_data
-            .iter()
-            .enumerate()
-            .try_for_each(|(i, child_data)| {
-                child_data.validate_full().map_err(|e| {
-                    ArrowError::InvalidArgumentError(format!(
-                        "{} child #{} invalid: {}",
-                        self.data_type, i, e
-                    ))
-                })
-            })?;
-
         Ok(())
     }
 
