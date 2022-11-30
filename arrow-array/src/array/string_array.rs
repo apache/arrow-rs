@@ -609,7 +609,7 @@ mod tests {
 
         let offsets = [0, 5, 10].map(|n| O::from_usize(n).unwrap());
         let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
-            Field::new("item", DataType::UInt8, false),
+            Field::new("item", DataType::UInt8, true),
         ));
 
         // [None, Some(b"Parquet")]
