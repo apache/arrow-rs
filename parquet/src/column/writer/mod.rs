@@ -601,7 +601,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 
     /// Update the column index and offset index when adding the data page
-    fn update_column_offset_index(&mut self, page_statistics: &Option<Statistics>) {
+    fn update_column_offset_index(&mut self, page_statistics: Option<&Statistics>) {
         // update the column index
         let null_page = (self.page_metrics.num_buffered_rows as u64)
             == self.page_metrics.num_page_nulls;
@@ -664,7 +664,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         };
 
         // update column and offset index
-        self.update_column_offset_index(&page_statistics);
+        self.update_column_offset_index(page_statistics.as_ref());
 
         let compressed_page = match self.props.writer_version() {
             WriterVersion::PARQUET_1_0 => {

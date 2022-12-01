@@ -377,7 +377,7 @@ impl IpcDataGenerator {
                 offset,
                 array.len(),
                 array.null_count(),
-                &compression_codec,
+                compression_codec,
                 write_options,
             )?;
         }
@@ -452,7 +452,7 @@ impl IpcDataGenerator {
             0,
             array_data.len(),
             array_data.null_count(),
-            &compression_codec,
+            compression_codec,
             write_options,
         )?;
 
@@ -1058,7 +1058,7 @@ fn write_array_data(
     offset: i64,
     num_rows: usize,
     null_count: usize,
-    compression_codec: &Option<CompressionCodec>,
+    compression_codec: Option<CompressionCodec>,
     write_options: &IpcWriteOptions,
 ) -> Result<i64, ArrowError> {
     let mut offset = offset;
@@ -1234,7 +1234,7 @@ fn write_buffer(
     buffers: &mut Vec<crate::Buffer>, // output buffer descriptors
     arrow_data: &mut Vec<u8>,         // output stream
     offset: i64,                      // current output stream offset
-    compression_codec: &Option<CompressionCodec>,
+    compression_codec: Option<CompressionCodec>,
 ) -> Result<i64, ArrowError> {
     let len: i64 = match compression_codec {
         Some(compressor) => compressor.compress_to_vec(buffer, arrow_data)?,

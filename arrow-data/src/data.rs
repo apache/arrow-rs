@@ -287,7 +287,7 @@ impl ArrayData {
     /// # Safety
     ///
     /// The input values *must* form a valid Arrow array for
-    /// `data_type`, or undefined behavior can results.
+    /// `data_type`, or undefined behavior can result.
     ///
     /// Note: This is a low level API and most users of the arrow
     /// crate should create arrays using the methods in the `array`
@@ -319,19 +319,20 @@ impl ArrayData {
 
         // Provide a force_validate mode
         #[cfg(feature = "force_validate")]
-        new_self.validate_full().unwrap();
+        new_self.validate_data().unwrap();
         new_self
     }
 
-    /// Create a new ArrayData, validating that the provided buffers
-    /// form a valid Arrow array of the specified data type.
+    /// Create a new ArrayData, validating that the provided buffers form a valid
+    /// Arrow array of the specified data type.
     ///
     /// If the number of nulls in `null_bit_buffer` is 0 then the null_bit_buffer
     /// is set to `None`.
     ///
-    /// Note: This is a low level API and most users of the arrow
-    /// crate should create arrays using the methods in the `array`
-    /// module.
+    /// Internally this calls through to [`Self::validate_data`]
+    ///
+    /// Note: This is a low level API and most users of the arrow crate should create
+    /// arrays using the builders found in [arrow_array](https://docs.rs/arrow-array)
     pub fn try_new(
         data_type: DataType,
         len: usize,
@@ -367,7 +368,10 @@ impl ArrayData {
         };
 
         // As the data is not trusted, do a full validation of its contents
-        new_self.validate_full()?;
+        // We don't need to validate children as we can assume that the
+        // [`ArrayData`] in `child_data` have already been validated through
+        // a call to `ArrayData::try_new` or created using unsafe
+        new_self.validate_data()?;
         Ok(new_self)
     }
 
@@ -618,7 +622,7 @@ impl ArrayData {
     /// contents of the buffers (e.g. that all offsets for UTF8 arrays
     /// are within the bounds of the values buffer).
     ///
-    /// See [ArrayData::validate_full] to validate fully the offset content
+    /// See [ArrayData::validate_data] to validate fully the offset content
     /// and the validity of utf8 data
     pub fn validate(&self) -> Result<(), ArrowError> {
         // Need at least this mich space in each buffer
@@ -955,7 +959,7 @@ impl ArrayData {
         Ok(values_data)
     }
 
-    /// "expensive" validation that ensures:
+    /// Validate that the data contained within this [`ArrayData`] is valid
     ///
     /// 1. Null count is correct
     /// 2. All offsets are valid
@@ -968,15 +972,22 @@ impl ArrayData {
     /// * [`Self::validate_nulls`]
     /// * [`Self::validate_values`]
     ///
-    /// And then for each child [`ArrayData`] calls [`ArrayData::validate_full`]
-    ///
-    pub fn validate_full(&self) -> Result<(), ArrowError> {
-        // Check all buffer sizes prior to looking at them more deeply in this function
+    /// Note: this does not recurse into children, for a recursive variant
+    /// see [`Self::validate_full`]
+    pub fn validate_data(&self) -> Result<(), ArrowError> {
         self.validate()?;
 
         self.validate_nulls()?;
         self.validate_values()?;
+        Ok(())
+    }
 
+    /// Performs a full recursive validation of this [`ArrayData`] and all its children
+    ///
+    /// This is equivalent to calling [`Self::validate_data`] on this [`ArrayData`]
+    /// and all its children recursively
+    pub fn validate_full(&self) -> Result<(), ArrowError> {
+        self.validate_data()?;
         // validate all children recursively
         self.child_data
             .iter()
@@ -989,10 +1000,14 @@ impl ArrayData {
                     ))
                 })
             })?;
-
         Ok(())
     }
 
+    /// Validates the values stored within this [`ArrayData`] are valid
+    /// without recursing into child [`ArrayData`]
+    ///
+    /// Does not (yet) check
+    /// 1. Union type_ids are valid see [#85](https://github.com/apache/arrow-rs/issues/85)
     /// Validates the the null count is correct and that any
     /// nullability requirements of its children are correct
     pub fn validate_nulls(&self) -> Result<(), ArrowError> {

@@ -26,40 +26,32 @@ use std::sync::Arc;
 
 /// Creates a new `MapBuilder`
 /// ```
-/// use arrow_array::builder::{MapBuilder, Int32Builder, StringBuilder};
-/// use arrow_array::{StringArray, Int32Array};
-/// use std::sync::Arc;
+/// # use arrow_array::builder::{Int32Builder, MapBuilder, StringBuilder};
+/// # use arrow_array::{Int32Array, StringArray};
 ///
 /// let string_builder = StringBuilder::new();
 /// let int_builder = Int32Builder::with_capacity(4);
 ///
+/// // Construct `[{"joe": 1}, {"blogs": 2, "foo": 4}, {}, null]`
 /// let mut builder = MapBuilder::new(None, string_builder, int_builder);
 ///
-/// let string_builder = builder.keys();
-/// string_builder.append_value("joe");
-/// string_builder.append_value("n1");
-/// string_builder.append_value("n2");
-/// string_builder.append_value("mark");
+/// builder.keys().append_value("joe");
+/// builder.values().append_value(1);
+/// builder.append(true).unwrap();
 ///
-/// let int_builder = builder.values();
-/// int_builder.append_value(1);
-/// int_builder.append_value(2);
-/// int_builder.append_null();
-/// int_builder.append_value(4);
-///
+/// builder.keys().append_value("blogs");
+/// builder.values().append_value(2);
+/// builder.keys().append_value("foo");
+/// builder.values().append_value(4);
+/// builder.append(true).unwrap();
 /// builder.append(true).unwrap();
 /// builder.append(false).unwrap();
-/// builder.append(true).unwrap();
 ///
-/// let arr = builder.finish();
-/// assert_eq!(
-///     *arr.values(),
-///     Int32Array::from(vec![Some(1), Some(2), None, Some(4)])
-/// );
-/// assert_eq!(
-///     *arr.keys(),
-///     StringArray::from(vec![Some("joe"), Some("n1"), Some("n2"), Some("mark")])
-/// );
+/// let array = builder.finish();
+/// assert_eq!(array.value_offsets(), &[0, 1, 3, 3, 3]);
+/// assert_eq!(*array.values(), Int32Array::from(vec![1, 2, 4]));
+/// assert_eq!(*array.keys(), StringArray::from(vec!["joe", "blogs", "foo"]));
+///
 /// ```
 #[derive(Debug)]
 pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
@@ -91,7 +83,6 @@ impl Default for MapFieldNames {
     }
 }
 
-#[allow(dead_code)]
 impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     /// Creates a new `MapBuilder`
     pub fn new(
@@ -262,69 +253,5 @@ impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
 
     fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
         self
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow_buffer::Buffer;
-    use arrow_data::Bitmap;
-
-    use crate::builder::{Int32Builder, StringBuilder};
-
-    // TODO: add a test that finishes building, after designing a spec-compliant
-    // way of inserting values to the map.
-    // A map's values shouldn't be repeated within a slot
-
-    #[test]
-    fn test_map_array_builder() {
-        let string_builder = StringBuilder::new();
-        let int_builder = Int32Builder::with_capacity(4);
-
-        let mut builder = MapBuilder::new(None, string_builder, int_builder);
-
-        let string_builder = builder.keys();
-        string_builder.append_value("joe");
-        string_builder.append_value("n1");
-        string_builder.append_value("n2");
-        string_builder.append_value("mark");
-
-        let int_builder = builder.values();
-        int_builder.append_value(1);
-        int_builder.append_value(2);
-        int_builder.append_null();
-        int_builder.append_value(4);
-
-        builder.append(true).unwrap();
-        builder.append(false).unwrap();
-        builder.append(true).unwrap();
-
-        let arr = builder.finish();
-
-        let map_data = arr.data();
-        assert_eq!(3, map_data.len());
-        assert_eq!(1, map_data.null_count());
-        assert_eq!(
-            Some(&Bitmap::from(Buffer::from(&[5_u8]))),
-            map_data.null_bitmap()
-        );
-
-        let expected_string_data = ArrayData::builder(DataType::Utf8)
-            .len(4)
-            .add_buffer(Buffer::from_slice_ref([0, 3, 5, 7, 11]))
-            .add_buffer(Buffer::from_slice_ref(b"joen1n2mark"))
-            .build()
-            .unwrap();
-
-        let expected_int_data = ArrayData::builder(DataType::Int32)
-            .len(4)
-            .null_bit_buffer(Some(Buffer::from_slice_ref([11_u8])))
-            .add_buffer(Buffer::from_slice_ref([1, 2, 0, 4]))
-            .build()
-            .unwrap();
-
-        assert_eq!(&expected_string_data, arr.keys().data());
-        assert_eq!(&expected_int_data, arr.values().data());
     }
 }
