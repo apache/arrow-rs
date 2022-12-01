@@ -1567,7 +1567,8 @@ mod tests {
 
         let expected_data = match opts.row_selections {
             Some((selections, row_count)) => {
-                let mut without_skip_data = gen_expected_data::<T>(&def_levels, &values);
+                let mut without_skip_data =
+                    gen_expected_data::<T>(def_levels.as_ref(), &values);
 
                 let mut skip_data: Vec<Option<T::T>> = vec![];
                 let dequeue: VecDeque<RowSelector> = selections.clone().into();
@@ -1585,7 +1586,7 @@ mod tests {
             }
             None => {
                 //get flatten table data
-                let expected_data = gen_expected_data::<T>(&def_levels, &values);
+                let expected_data = gen_expected_data::<T>(def_levels.as_ref(), &values);
                 assert_eq!(expected_data.len(), opts.num_rows * opts.num_row_groups);
                 expected_data
             }
