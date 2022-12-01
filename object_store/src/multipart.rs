@@ -123,7 +123,8 @@ where
 
         // If adding buf to pending buffer would trigger send, check
         // whether we have capacity for another task.
-        let enough_to_send = (buf.len() + self.current_buffer.len()) >= self.min_part_size;
+        let enough_to_send =
+            (buf.len() + self.current_buffer.len()) >= self.min_part_size;
         if enough_to_send && self.tasks.len() < self.max_concurrency {
             // If we do, copy into the buffer and submit the task, and return ready.
             self.current_buffer.extend_from_slice(buf);
