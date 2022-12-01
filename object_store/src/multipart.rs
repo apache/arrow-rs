@@ -81,7 +81,11 @@ where
             current_buffer: Vec::new(),
             // TODO: Should self vary by provider?
             // TODO: Should we automatically increase then when part index gets large?
-            min_part_size: 5_000_000,
+
+            // Minimum size of 5 MiB
+            // https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
+            // https://cloud.google.com/storage/quotas#requests
+            min_part_size: 5_242_880,
             current_part_idx: 0,
             completion_task: None,
         }
@@ -113,13 +117,14 @@ where
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
-    ) -> std::task::Poll<Result<usize, io::Error>> {
+    ) -> Poll<Result<usize, io::Error>> {
         // Poll current tasks
         self.as_mut().poll_tasks(cx)?;
 
         // If adding buf to pending buffer would trigger send, check
         // whether we have capacity for another task.
-        let enough_to_send = (buf.len() + self.current_buffer.len()) > self.min_part_size;
+        let enough_to_send =
+            (buf.len() + self.current_buffer.len()) >= self.min_part_size;
         if enough_to_send && self.tasks.len() < self.max_concurrency {
             // If we do, copy into the buffer and submit the task, and return ready.
             self.current_buffer.extend_from_slice(buf);
@@ -149,7 +154,7 @@ where
     fn poll_flush(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), io::Error>> {
         // Poll current tasks
         self.as_mut().poll_tasks(cx)?;
 
@@ -177,7 +182,7 @@ where
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), io::Error>> {
         // First, poll flush
         match self.as_mut().poll_flush(cx) {
             Poll::Pending => return Poll::Pending,

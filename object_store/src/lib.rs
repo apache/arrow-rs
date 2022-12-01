@@ -769,7 +769,8 @@ mod tests {
         assert_eq!(bytes_expected, bytes_written);
 
         // Can overwrite some storage
-        let data = get_vec_of_bytes(5_000, 5);
+        // Sizes carefully chosen to exactly hit min limit of 5 MiB
+        let data = get_vec_of_bytes(242_880, 22);
         let bytes_expected = data.concat();
         let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
         for chunk in &data {
