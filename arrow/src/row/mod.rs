@@ -1879,7 +1879,7 @@ mod tests {
             descending: true,
             nulls_first: true,
         };
-        let field = SortField::new_with_options(d.clone(), options);
+        let field = SortField::new_with_options(d, options);
         let mut converter = RowConverter::new(vec![field]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
 
@@ -1962,7 +1962,7 @@ mod tests {
             descending: true,
             nulls_first: true,
         };
-        let field = SortField::new_with_options(d.clone(), options);
+        let field = SortField::new_with_options(d, options);
         let mut converter = RowConverter::new(vec![field]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
 
