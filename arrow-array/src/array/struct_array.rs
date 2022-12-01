@@ -172,7 +172,7 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
                     child_null_buffer.bit_slice(child_datum_offset, child_datum_len)
                 });
             } else if null.is_some() {
-                // when one of the fields has no nulls, them there is no null in the array
+                // when one of the fields has no nulls, then there is no null in the array
                 null = None;
             }
         }
@@ -212,20 +212,30 @@ impl From<Vec<(Field, ArrayRef)>> for StructArray {
     fn from(v: Vec<(Field, ArrayRef)>) -> Self {
         let (field_types, field_values): (Vec<_>, Vec<_>) = v.into_iter().unzip();
 
-        // Check the length of the child arrays
-        let length = field_values[0].len();
-        for i in 1..field_values.len() {
-            assert_eq!(
-                length,
-                field_values[i].len(),
-                "all child arrays of a StructArray must have the same length"
-            );
-            assert_eq!(
-                field_types[i].data_type(),
-                field_values[i].data().data_type(),
-                "the field data types must match the array data in a StructArray"
-            )
-        }
+        let length = field_values.get(0).map(|a| a.len()).unwrap_or(0);
+        field_types.iter().zip(field_values.iter()).for_each(
+            |(field_type, field_value)| {
+                // Check the length of the child arrays
+                assert_eq!(
+                    length,
+                    field_value.len(),
+                    "all child arrays of a StructArray must have the same length"
+                );
+                // Check data types of child arrays
+                assert_eq!(
+                    field_type.data_type(),
+                    field_value.data().data_type(),
+                    "the field data types must match the array data in a StructArray"
+                );
+                // Check nullability of child arrays
+                if !field_type.is_nullable() {
+                    assert!(
+                        field_value.null_count() == 0,
+                        "non-nullable field cannot have null values"
+                    );
+                }
+            },
+        );
 
         let array_data = ArrayData::builder(DataType::Struct(field_types))
             .child_data(field_values.into_iter().map(|a| a.into_data()).collect())
@@ -258,20 +268,30 @@ impl From<(Vec<(Field, ArrayRef)>, Buffer)> for StructArray {
     fn from(pair: (Vec<(Field, ArrayRef)>, Buffer)) -> Self {
         let (field_types, field_values): (Vec<_>, Vec<_>) = pair.0.into_iter().unzip();
 
-        // Check the length of the child arrays
-        let length = field_values[0].len();
-        for i in 1..field_values.len() {
-            assert_eq!(
-                length,
-                field_values[i].len(),
-                "all child arrays of a StructArray must have the same length"
-            );
-            assert_eq!(
-                field_types[i].data_type(),
-                field_values[i].data().data_type(),
-                "the field data types must match the array data in a StructArray"
-            )
-        }
+        let length = field_values.get(0).map(|a| a.len()).unwrap_or(0);
+        field_types.iter().zip(field_values.iter()).for_each(
+            |(field_type, field_value)| {
+                // Check the length of the child arrays
+                assert_eq!(
+                    length,
+                    field_value.len(),
+                    "all child arrays of a StructArray must have the same length"
+                );
+                // Check data types of child arrays
+                assert_eq!(
+                    field_type.data_type(),
+                    field_value.data().data_type(),
+                    "the field data types must match the array data in a StructArray"
+                );
+                // Check nullability of child arrays
+                if !field_type.is_nullable() {
+                    assert!(
+                        field_value.null_count() == 0,
+                        "non-nullable field cannot have null values"
+                    );
+                }
+            },
+        );
 
         let array_data = ArrayData::builder(DataType::Struct(field_types))
             .null_bit_buffer(Some(pair.1))
@@ -408,7 +428,19 @@ mod tests {
     #[should_panic(
         expected = "the field data types must match the array data in a StructArray"
     )]
-    fn test_struct_array_from_mismatched_types() {
+    fn test_struct_array_from_mismatched_types_single() {
+        drop(StructArray::from(vec![(
+            Field::new("b", DataType::Int16, false),
+            Arc::new(BooleanArray::from(vec![false, false, true, true]))
+                as Arc<dyn Array>,
+        )]));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "the field data types must match the array data in a StructArray"
+    )]
+    fn test_struct_array_from_mismatched_types_multiple() {
         drop(StructArray::from(vec![
             (
                 Field::new("b", DataType::Int16, false),
@@ -527,5 +559,20 @@ mod tests {
                 Arc::new(Float64Array::from(vec![2.2, 3.3])),
             ),
         ]));
+    }
+
+    #[test]
+    fn test_struct_array_from_empty() {
+        let sa = StructArray::from(vec![]);
+        assert!(sa.is_empty())
+    }
+
+    #[test]
+    #[should_panic(expected = "non-nullable field cannot have null values")]
+    fn test_struct_array_from_mismatched_nullability() {
+        drop(StructArray::from(vec![(
+            Field::new("c", DataType::Int32, false),
+            Arc::new(Int32Array::from(vec![Some(42), None, Some(19)])) as ArrayRef,
+        )]));
     }
 }

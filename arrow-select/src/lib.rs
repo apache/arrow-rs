@@ -20,4 +20,7 @@
 pub mod concat;
 pub mod filter;
 pub mod interleave;
+pub mod nullif;
 pub mod take;
+pub mod window;
+pub mod zip;

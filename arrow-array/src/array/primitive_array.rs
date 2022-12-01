@@ -203,10 +203,10 @@ pub type DurationMicrosecondArray = PrimitiveArray<DurationMicrosecondType>;
 pub type DurationNanosecondArray = PrimitiveArray<DurationNanosecondType>;
 
 /// An array where each element is a 128-bits decimal with precision in [1, 38] and
-/// scale in [-38, 38].
+/// scale less or equal to 38.
 pub type Decimal128Array = PrimitiveArray<Decimal128Type>;
 /// An array where each element is a 256-bits decimal with precision in [1, 76] and
-/// scale in [-76, 76].
+/// scale less or equal to 76.
 pub type Decimal256Array = PrimitiveArray<Decimal256Type>;
 
 /// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
@@ -503,6 +503,44 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         Ok(unsafe {
             build_primitive_array(len, buffer.finish(), null_count, null_buffer)
         })
+    }
+
+    /// Applies an unary and fallible function to all valid values in a mutable primitive array.
+    /// Mutable primitive array means that the buffer is not shared with other arrays.
+    /// As a result, this mutates the buffer directly without allocating new buffer.
+    ///
+    /// This is unlike [`Self::unary_mut`] which will apply an infallible function to all rows
+    /// regardless of validity, in many cases this will be significantly faster and should
+    /// be preferred if `op` is infallible.
+    ///
+    /// This returns an `Err` when the input array is shared buffer with other
+    /// array. In the case, returned `Err` wraps input array. If the function
+    /// encounters an error during applying on values. In the case, this returns an `Err` within
+    /// an `Ok` which wraps the actual error.
+    ///
+    /// Note: LLVM is currently unable to effectively vectorize fallible operations
+    pub fn try_unary_mut<F, E>(
+        self,
+        op: F,
+    ) -> Result<Result<PrimitiveArray<T>, E>, PrimitiveArray<T>>
+    where
+        F: Fn(T::Native) -> Result<T::Native, E>,
+    {
+        let len = self.len();
+        let null_count = self.null_count();
+        let mut builder = self.into_builder()?;
+
+        let (slice, null_buffer) = builder.slices_mut();
+
+        match try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+            unsafe { *slice.get_unchecked_mut(idx) = op(*slice.get_unchecked(idx))? };
+            Ok::<_, E>(())
+        }) {
+            Ok(_) => {}
+            Err(err) => return Ok(Err(err)),
+        };
+
+        Ok(Ok(builder.finish()))
     }
 
     /// Applies a unary and nullable function to all valid values in a primitive array
@@ -1083,13 +1121,6 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
                 T::MAX_SCALE
             )));
         }
-        if scale < -T::MAX_SCALE {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "scale {} is smaller than min {}",
-                scale,
-                -Decimal128Type::MAX_SCALE
-            )));
-        }
         if scale > 0 && scale as u8 > precision {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "scale {} is greater than precision {}",
@@ -1110,6 +1141,14 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
             } else {
                 Ok(())
             }
+        })
+    }
+
+    /// Validates the Decimal Array, if the value of slot is overflow for the specified precision, and
+    /// will be casted to Null
+    pub fn null_if_overflow_precision(&self, precision: u8) -> Self {
+        self.unary_opt::<_, T>(|v| {
+            (T::validate_decimal_precision(v, precision).is_ok()).then_some(v)
         })
     }
 
@@ -2015,6 +2054,15 @@ mod tests {
         Decimal128Array::from_iter_values([12345, 456])
             .with_precision_and_scale(4, 10)
             .unwrap();
+    }
+
+    #[test]
+    fn test_decimal_array_set_null_if_overflow_with_precision() {
+        let array =
+            Decimal128Array::from(vec![Some(123456), Some(123), None, Some(123456)]);
+        let result = array.null_if_overflow_precision(5);
+        let expected = Decimal128Array::from(vec![None, Some(123), None, None]);
+        assert_eq!(result, expected);
     }
 
     #[test]

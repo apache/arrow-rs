@@ -20,11 +20,11 @@
 //! depend on dynamic casting of `Array`.
 
 use crate::data::ArrayData;
+use arrow_buffer::i256;
 use arrow_schema::{DataType, IntervalUnit};
 use half::f16;
 
 mod boolean;
-mod decimal;
 mod dictionary;
 mod fixed_binary;
 mod fixed_list;
@@ -40,7 +40,6 @@ mod variable_size;
 // For this reason, they are not exposed and are instead used
 // to build the generic functions below (`equal_range` and `equal`).
 use boolean::boolean_equal;
-use decimal::decimal_equal;
 use dictionary::dictionary_equal;
 use fixed_binary::fixed_binary_equal;
 use fixed_list::fixed_list_equal;
@@ -74,6 +73,12 @@ fn equal_values(
         DataType::Int64 => primitive_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Float32 => primitive_equal::<f32>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Float64 => primitive_equal::<f64>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Decimal128(_, _) => {
+            primitive_equal::<i128>(lhs, rhs, lhs_start, rhs_start, len)
+        }
+        DataType::Decimal256(_, _) => {
+            primitive_equal::<i256>(lhs, rhs, lhs_start, rhs_start, len)
+        }
         DataType::Date32
         | DataType::Time32(_)
         | DataType::Interval(IntervalUnit::YearMonth) => {
@@ -97,9 +102,6 @@ fn equal_values(
         }
         DataType::FixedSizeBinary(_) => {
             fixed_binary_equal(lhs, rhs, lhs_start, rhs_start, len)
-        }
-        DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
-            decimal_equal(lhs, rhs, lhs_start, rhs_start, len)
         }
         DataType::List(_) => list_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::LargeList(_) => list_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),

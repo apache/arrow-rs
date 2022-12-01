@@ -31,9 +31,7 @@ pub mod regexp;
 pub mod sort;
 pub mod substring;
 pub mod temporal;
-pub mod window;
-pub mod zip;
 
 pub use arrow_cast::cast;
 pub use arrow_cast::parse as cast_utils;
-pub use arrow_select::{concat, filter, interleave, take};
+pub use arrow_select::{concat, filter, interleave, take, window, zip};

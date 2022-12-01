@@ -42,7 +42,7 @@
 
 use core::cmp::min;
 use lazy_static::lazy_static;
-use regex::{Regex, RegexBuilder};
+use regex::{Regex, RegexSet};
 use std::collections::HashSet;
 use std::fmt;
 use std::fs::File;
@@ -61,41 +61,46 @@ use csv::{ByteRecord, StringRecord};
 use std::ops::Neg;
 
 lazy_static! {
+    static ref REGEX_SET: RegexSet = RegexSet::new([
+        r"(?i)^(true)$|^(false)$(?-i)", //BOOLEAN
+        r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$", //DECIMAL
+        r"^-?(\d+)$", //INTEGER
+        r"^\d{4}-\d\d-\d\d$", //DATE32
+        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d$", //DATE64
+    ]).unwrap();
+    //The order should match with REGEX_SET
+    static ref MATCH_DATA_TYPE: Vec<DataType> = vec![
+        DataType::Boolean,
+        DataType::Float64,
+        DataType::Int64,
+        DataType::Date32,
+        DataType::Date64,
+    ];
     static ref PARSE_DECIMAL_RE: Regex =
         Regex::new(r"^-?(\d+\.?\d*|\d*\.?\d+)$").unwrap();
-    static ref DECIMAL_RE: Regex =
-        Regex::new(r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$").unwrap();
-    static ref INTEGER_RE: Regex = Regex::new(r"^-?(\d+)$").unwrap();
-    static ref BOOLEAN_RE: Regex = RegexBuilder::new(r"^(true)$|^(false)$")
-        .case_insensitive(true)
-        .build()
-        .unwrap();
-    static ref DATE_RE: Regex = Regex::new(r"^\d{4}-\d\d-\d\d$").unwrap();
     static ref DATETIME_RE: Regex =
-        Regex::new(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$").unwrap();
+        Regex::new(r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,9}$").unwrap();
 }
 
 /// Infer the data type of a record
 fn infer_field_schema(string: &str, datetime_re: Option<Regex>) -> DataType {
-    let datetime_re = datetime_re.unwrap_or_else(|| DATETIME_RE.clone());
     // when quoting is enabled in the reader, these quotes aren't escaped, we default to
     // Utf8 for them
     if string.starts_with('"') {
         return DataType::Utf8;
     }
+    let matches = REGEX_SET.matches(string).into_iter().next();
     // match regex in a particular order
-    if BOOLEAN_RE.is_match(string) {
-        DataType::Boolean
-    } else if DECIMAL_RE.is_match(string) {
-        DataType::Float64
-    } else if INTEGER_RE.is_match(string) {
-        DataType::Int64
-    } else if datetime_re.is_match(string) {
-        DataType::Date64
-    } else if DATE_RE.is_match(string) {
-        DataType::Date32
-    } else {
-        DataType::Utf8
+    match matches {
+        Some(ix) => MATCH_DATA_TYPE[ix].clone(),
+        None => {
+            let datetime_re = datetime_re.unwrap_or_else(|| DATETIME_RE.clone());
+            if datetime_re.is_match(string) {
+                DataType::Timestamp(TimeUnit::Nanosecond, None)
+            } else {
+                DataType::Utf8
+            }
+        }
     }
 }
 
@@ -1584,16 +1589,16 @@ mod tests {
         assert_eq!(infer_field_schema(".2", None), DataType::Float64);
         assert_eq!(infer_field_schema("2.", None), DataType::Float64);
         assert_eq!(infer_field_schema("true", None), DataType::Boolean);
+        assert_eq!(infer_field_schema("trUe", None), DataType::Boolean);
         assert_eq!(infer_field_schema("false", None), DataType::Boolean);
         assert_eq!(infer_field_schema("2020-11-08", None), DataType::Date32);
         assert_eq!(
             infer_field_schema("2020-11-08T14:20:01", None),
             DataType::Date64
         );
-        // to be inferred as a date64 this needs a custom datetime_re
         assert_eq!(
             infer_field_schema("2020-11-08 14:20:01", None),
-            DataType::Utf8
+            DataType::Date64
         );
         let reg = Regex::new(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$").ok();
         assert_eq!(
@@ -1602,6 +1607,14 @@ mod tests {
         );
         assert_eq!(infer_field_schema("-5.13", None), DataType::Float64);
         assert_eq!(infer_field_schema("0.1300", None), DataType::Float64);
+        assert_eq!(
+            infer_field_schema("2021-12-19 13:12:30.921", None),
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+        assert_eq!(
+            infer_field_schema("2021-12-19T13:12:30.123456789", None),
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
     }
 
     #[test]

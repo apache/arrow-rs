@@ -168,6 +168,11 @@ impl BooleanBufferBuilder {
         self.buffer.as_slice()
     }
 
+    /// Returns the packed bits
+    pub fn as_slice_mut(&mut self) -> &mut [u8] {
+        self.buffer.as_slice_mut()
+    }
+
     /// Creates a [`Buffer`]
     #[inline]
     pub fn finish(&mut self) -> Buffer {

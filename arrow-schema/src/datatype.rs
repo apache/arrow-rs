@@ -190,6 +190,13 @@ pub enum DataType {
     /// * scale is the number of digits past the decimal
     ///
     /// For example the number 123.45 has precision 5 and scale 2.
+    ///
+    /// In certain situations, scale could be negative number. For
+    /// negative scale, it is the number of padding 0 to the right
+    /// of the digits.
+    ///
+    /// For example the number 12300 could be treated as a decimal
+    /// has precision 3 and scale -2.
     Decimal128(u8, i8),
     /// Exact 256-bit width decimal value with precision and scale
     ///
@@ -197,6 +204,13 @@ pub enum DataType {
     /// * scale is the number of digits past the decimal
     ///
     /// For example the number 123.45 has precision 5 and scale 2.
+    ///
+    /// In certain situations, scale could be negative number. For
+    /// negative scale, it is the number of padding 0 to the right
+    /// of the digits.
+    ///
+    /// For example the number 12300 could be treated as a decimal
+    /// has precision 3 and scale -2.
     Decimal256(u8, i8),
     /// A Map is a logical nested type that is represented as
     ///
