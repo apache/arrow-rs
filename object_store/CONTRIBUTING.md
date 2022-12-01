@@ -95,13 +95,13 @@ To test the GCS integration, we use [Fake GCS Server](https://github.com/fsouza/
 Startup the fake server:
 
 ```shell
-docker run -p 4443:4443 fsouza/fake-gcs-server
+docker run -p 4443:4443 fsouza/fake-gcs-server -scheme http
 ```
 
 Configure the account:
 ```shell
-curl --insecure -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "https://localhost:4443/storage/v1/b"
-echo '{"gcs_base_url": "https://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": ""}' > /tmp/gcs.json
+curl -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "http://localhost:4443/storage/v1/b"
+echo '{"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": ""}' > /tmp/gcs.json
 ```
 
 Now run the tests:
