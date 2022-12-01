@@ -149,21 +149,37 @@ pub enum DataType {
     /// days can differ in length during day light savings time transitions).
     Interval(IntervalUnit),
     /// Opaque binary data of variable length.
+    ///
+    /// A single Binary array can store up to [`i32::MAX`] bytes
+    /// of binary data in total
     Binary,
     /// Opaque binary data of fixed size.
     /// Enum parameter specifies the number of bytes per value.
     FixedSizeBinary(i32),
     /// Opaque binary data of variable length and 64-bit offsets.
+    ///
+    /// A single LargeBinary array can store up to [`i64::MAX`] bytes
+    /// of binary data in total
     LargeBinary,
-    /// A variable-length string in Unicode with UTF-8 encoding.
+    /// A variable-length string in Unicode with UTF-8 encoding
+    ///
+    /// A single Utf8 array can store up to [`i32::MAX`] bytes
+    /// of string data in total
     Utf8,
     /// A variable-length string in Unicode with UFT-8 encoding and 64-bit offsets.
+    ///
+    /// A single LargeUtf8 array can store up to [`i64::MAX`] bytes
+    /// of string data in total
     LargeUtf8,
     /// A list of some logical data type with variable length.
+    ///
+    /// A single List array can store up to [`i32::MAX`] elements in total
     List(Box<Field>),
     /// A list of some logical data type with fixed length.
     FixedSizeList(Box<Field>, i32),
     /// A list of some logical data type with variable length and 64-bit offsets.
+    ///
+    /// A single LargeList array can store up to [`i64::MAX`] elements in total
     LargeList(Box<Field>),
     /// A nested datatype that contains a number of sub-fields.
     Struct(Vec<Field>),
