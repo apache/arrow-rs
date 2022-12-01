@@ -1654,7 +1654,7 @@ mod tests {
     }
 
     fn gen_expected_data<T: DataType>(
-        def_levels: &Option<Vec<Vec<i16>>>,
+        def_levels: Option<&Vec<Vec<i16>>>,
         values: &[Vec<T::T>],
     ) -> Vec<Option<T::T>> {
         let data: Vec<Option<T::T>> = match def_levels {

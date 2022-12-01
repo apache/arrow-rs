@@ -1053,16 +1053,16 @@ pub fn cast_with_options(
             Float32 => cast_numeric_to_string::<Float32Type, i32>(array),
             Float64 => cast_numeric_to_string::<Float64Type, i32>(array),
             Timestamp(TimeUnit::Nanosecond, tz) => {
-                cast_timestamp_to_string::<TimestampNanosecondType, i32>(array, tz)
+                cast_timestamp_to_string::<TimestampNanosecondType, i32>(array, tz.as_ref())
             }
             Timestamp(TimeUnit::Microsecond, tz) => {
-                cast_timestamp_to_string::<TimestampMicrosecondType, i32>(array, tz)
+                cast_timestamp_to_string::<TimestampMicrosecondType, i32>(array, tz.as_ref())
             }
             Timestamp(TimeUnit::Millisecond, tz) => {
-                cast_timestamp_to_string::<TimestampMillisecondType, i32>(array, tz)
+                cast_timestamp_to_string::<TimestampMillisecondType, i32>(array, tz.as_ref())
             }
             Timestamp(TimeUnit::Second, tz) => {
-                cast_timestamp_to_string::<TimestampSecondType, i32>(array, tz)
+                cast_timestamp_to_string::<TimestampSecondType, i32>(array, tz.as_ref())
             }
             Date32 => cast_date32_to_string::<i32>(array),
             Date64 => cast_date64_to_string::<i32>(array),
@@ -1107,16 +1107,16 @@ pub fn cast_with_options(
             Float32 => cast_numeric_to_string::<Float32Type, i64>(array),
             Float64 => cast_numeric_to_string::<Float64Type, i64>(array),
             Timestamp(TimeUnit::Nanosecond, tz) => {
-                cast_timestamp_to_string::<TimestampNanosecondType, i64>(array, tz)
+                cast_timestamp_to_string::<TimestampNanosecondType, i64>(array, tz.as_ref())
             }
             Timestamp(TimeUnit::Microsecond, tz) => {
-                cast_timestamp_to_string::<TimestampMicrosecondType, i64>(array, tz)
+                cast_timestamp_to_string::<TimestampMicrosecondType, i64>(array, tz.as_ref())
             }
             Timestamp(TimeUnit::Millisecond, tz) => {
-                cast_timestamp_to_string::<TimestampMillisecondType, i64>(array, tz)
+                cast_timestamp_to_string::<TimestampMillisecondType, i64>(array, tz.as_ref())
             }
             Timestamp(TimeUnit::Second, tz) => {
-                cast_timestamp_to_string::<TimestampSecondType, i64>(array, tz)
+                cast_timestamp_to_string::<TimestampSecondType, i64>(array, tz.as_ref())
             }
             Date32 => cast_date32_to_string::<i64>(array),
             Date64 => cast_date64_to_string::<i64>(array),
@@ -2472,7 +2472,7 @@ where
 /// Cast timestamp types to Utf8/LargeUtf8
 fn cast_timestamp_to_string<T, OffsetSize>(
     array: &ArrayRef,
-    tz: &Option<String>,
+    tz: Option<&String>,
 ) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowTemporalType + ArrowPrimitiveType,
