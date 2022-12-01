@@ -103,7 +103,7 @@ fn encode_one(
                     .as_ref()
                     .len()
                     .try_into()
-                    .expect("lists with elements larger than u32::MAX not supported");
+                    .expect("ListArray or LargeListArray containing a list of more than u32::MAX items is not supported");
                 temporary.extend_from_slice(&len.to_be_bytes());
             }
             let row_count: u32 = (range.end - range.start)
