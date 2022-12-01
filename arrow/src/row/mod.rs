@@ -1962,7 +1962,7 @@ mod tests {
             descending: true,
             nulls_first: true,
         };
-        let field = SortField::new_with_options(d, options);
+        let field = SortField::new_with_options(d.clone(), options);
         let mut converter = RowConverter::new(vec![field]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
 
@@ -1971,6 +1971,25 @@ mod tests {
         assert!(rows.row(2) > rows.row(3));
         assert!(rows.row(4) > rows.row(0));
         assert!(rows.row(4) > rows.row(1));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].data().validate_full().unwrap();
+        assert_eq!(&back[0], &list);
+
+        let options = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let field = SortField::new_with_options(d, options);
+        let mut converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) < rows.row(1));
+        assert!(rows.row(1) < rows.row(2));
+        assert!(rows.row(2) < rows.row(3));
+        assert!(rows.row(4) > rows.row(0));
+        assert!(rows.row(4) < rows.row(1));
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
