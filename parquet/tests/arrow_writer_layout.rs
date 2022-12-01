@@ -81,7 +81,7 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
     for (row_group, row_group_layout) in meta.row_groups().iter().zip(&layout.row_groups)
     {
         // Check against offset index
-        let offset_index = row_group.page_offset_index().as_ref().unwrap();
+        let offset_index = row_group.page_offset_index().unwrap();
         assert_eq!(offset_index.len(), row_group_layout.columns.len());
 
         for (column_index, column_layout) in

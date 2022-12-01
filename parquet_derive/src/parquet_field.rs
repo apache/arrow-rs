@@ -672,8 +672,8 @@ mod test {
         let struct_def: proc_macro2::TokenStream = quote! {
           struct StringBorrower<'a> {
             optional_str: Option<&'a str>,
-            optional_string: &Option<String>,
-            optional_dumb_int: &Option<&i32>,
+            optional_string: Option<&String>,
+            optional_dumb_int: Option<&i32>,
           }
         };
 
