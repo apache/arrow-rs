@@ -123,9 +123,6 @@ enum Error {
 
     #[snafu(display("GCP credential error: {}", source))]
     Credential { source: credential::Error },
-
-    #[snafu(display("Unable to use proxy url: {}", source))]
-    ProxyUrl { source: reqwest::Error },
 }
 
 impl From<Error> for super::Error {
@@ -1058,18 +1055,17 @@ mod test {
             .build();
         assert!(dbg!(gcs).is_ok());
 
-        let gcs = GoogleCloudStorageBuilder::new()
+        let err = GoogleCloudStorageBuilder::new()
             .with_service_account_path(service_account_path.to_str().unwrap())
             .with_bucket_name("foo")
             .with_proxy_url("asdf://example.com")
-            .build();
+            .build()
+            .unwrap_err()
+            .to_string();
 
-        assert!(match gcs {
-            Err(ObjectStoreError::Generic { source, .. }) => matches!(
-                source.downcast_ref(),
-                Some(crate::gcp::Error::ProxyUrl { .. })
-            ),
-            _ => false,
-        })
+        assert_eq!(
+            "Generic client error: builder error: unknown proxy scheme",
+            err
+        );
     }
 }

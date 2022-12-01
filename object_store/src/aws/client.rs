@@ -89,9 +89,6 @@ pub(crate) enum Error {
 
     #[snafu(display("Got invalid multipart response: {}", source))]
     InvalidMultipartResponse { source: quick_xml::de::DeError },
-
-    #[snafu(display("Unable to use proxy url: {}", source))]
-    ProxyUrl { source: reqwest::Error },
 }
 
 impl From<Error> for crate::Error {

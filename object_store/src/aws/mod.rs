@@ -119,9 +119,6 @@ enum Error {
 
     #[snafu(display("Error reading token file: {}", source))]
     ReadTokenFile { source: std::io::Error },
-
-    #[snafu(display("Unable to use proxy url: {}", source))]
-    ProxyUrl { source: reqwest::Error },
 }
 
 impl From<Error> for super::Error {
@@ -932,21 +929,20 @@ mod tests {
 
         assert!(s3.is_ok());
 
-        let s3 = AmazonS3Builder::new()
+        let err = AmazonS3Builder::new()
             .with_access_key_id("access_key_id")
             .with_secret_access_key("secret_access_key")
             .with_region("region")
             .with_bucket_name("bucket_name")
             .with_allow_http(true)
             .with_proxy_url("asdf://example.com")
-            .build();
+            .build()
+            .unwrap_err()
+            .to_string();
 
-        assert!(match s3 {
-            Err(crate::Error::Generic { source, .. }) => matches!(
-                source.downcast_ref(),
-                Some(crate::aws::Error::ProxyUrl { .. })
-            ),
-            _ => false,
-        })
+        assert_eq!(
+            "Generic client error: builder error: unknown proxy scheme",
+            err
+        );
     }
 }

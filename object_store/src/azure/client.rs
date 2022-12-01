@@ -85,9 +85,6 @@ pub(crate) enum Error {
     Authorization {
         source: crate::azure::credential::Error,
     },
-
-    #[snafu(display("Unable to use proxy url: {}", source))]
-    ProxyUrl { source: reqwest::Error },
 }
 
 impl From<Error> for crate::Error {
