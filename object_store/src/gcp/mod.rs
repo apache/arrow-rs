@@ -739,12 +739,23 @@ fn reader_credentials_file(
 ///  .with_bucket_name(BUCKET_NAME)
 ///  .build();
 /// ```
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct GoogleCloudStorageBuilder {
     bucket_name: Option<String>,
     service_account_path: Option<String>,
     retry_config: RetryConfig,
     client_options: ClientOptions,
+}
+
+impl Default for GoogleCloudStorageBuilder {
+    fn default() -> Self {
+        Self {
+            bucket_name: None,
+            service_account_path: None,
+            retry_config: Default::default(),
+            client_options: ClientOptions::new().with_allow_http(true),
+        }
+    }
 }
 
 impl GoogleCloudStorageBuilder {
