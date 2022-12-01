@@ -49,7 +49,7 @@ docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$CHANGELOG_GITHUB_TOKEN" -v "$(pw
     --cache-file=.githubchangeloggenerator.cache \
     --cache-log=.githubchangeloggenerator.cache.log \
     --http-cache \
-    --max-issues=300 \
+    --max-issues=400 \
     --exclude-tags-regex "^\d+\.\d+\.\d+$" \
     --since-tag ${SINCE_TAG} \
     --future-release ${FUTURE_RELEASE}
