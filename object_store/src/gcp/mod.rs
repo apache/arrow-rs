@@ -969,8 +969,10 @@ mod test {
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
-        copy_if_not_exists(&integration).await;
         if integration.client.base_url == default_gcs_base_url() {
+            // Fake GCS server doesn't currently honor ifGenerationMatch
+            // https://github.com/fsouza/fake-gcs-server/issues/994
+            copy_if_not_exists(&integration).await;
             // Fake GCS server does not yet implement XML Multipart uploads
             // https://github.com/fsouza/fake-gcs-server/issues/852
             stream_get(&integration).await;
