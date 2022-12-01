@@ -197,6 +197,9 @@ use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use tokio::io::AsyncWrite;
 
+#[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
+pub use client::ClientOptions;
+
 /// An alias for a dynamically dispatched object store implementation.
 pub type DynObjectStore = dyn ObjectStore;
 

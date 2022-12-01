@@ -23,3 +23,53 @@ pub mod mock_server;
 pub mod pagination;
 pub mod retry;
 pub mod token;
+
+use reqwest::{Client, ClientBuilder, Proxy};
+
+fn map_client_error(e: reqwest::Error) -> super::Error {
+    super::Error::Generic {
+        store: "client",
+        source: Box::new(e),
+    }
+}
+
+/// HTTP client configuration for remote object stores
+#[derive(Debug, Clone, Default)]
+pub struct ClientOptions {
+    proxy_url: Option<String>,
+    allow_http: bool,
+}
+
+impl ClientOptions {
+    /// Create a new [`ClientOptions`] with default values
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Sets what protocol is allowed. If `allow_http` is :
+    /// * false (default):  Only HTTPS are allowed
+    /// * true:  HTTP and HTTPS are allowed
+    pub fn with_allow_http(mut self, allow_http: bool) -> Self {
+        self.allow_http = allow_http;
+        self
+    }
+
+    /// Set an HTTP proxy to use for requests
+    pub fn with_proxy_url(mut self, proxy_url: impl Into<String>) -> Self {
+        self.proxy_url = Some(proxy_url.into());
+        self
+    }
+
+    pub(crate) fn client(&self) -> super::Result<Client> {
+        let mut builder = ClientBuilder::new();
+        if let Some(proxy) = &self.proxy_url {
+            let proxy = Proxy::all(proxy).map_err(map_client_error)?;
+            builder = builder.proxy(proxy);
+        }
+
+        builder
+            .https_only(!self.allow_http)
+            .build()
+            .map_err(map_client_error)
+    }
+}

@@ -23,7 +23,8 @@ use crate::multipart::UploadPart;
 use crate::path::DELIMITER;
 use crate::util::{format_http_range, format_prefix};
 use crate::{
-    BoxStream, ListResult, MultipartId, ObjectMeta, Path, Result, RetryConfig, StreamExt,
+    BoxStream, ClientOptions, ListResult, MultipartId, ObjectMeta, Path, Result,
+    RetryConfig, StreamExt,
 };
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
@@ -203,8 +204,7 @@ pub struct S3Config {
     pub bucket_endpoint: String,
     pub credentials: Box<dyn CredentialProvider>,
     pub retry_config: RetryConfig,
-    pub allow_http: bool,
-    pub proxy_url: Option<String>,
+    pub client_options: ClientOptions,
 }
 
 impl S3Config {
@@ -221,18 +221,7 @@ pub(crate) struct S3Client {
 
 impl S3Client {
     pub fn new(config: S3Config) -> Result<Self> {
-        let builder = reqwest::ClientBuilder::new().https_only(!config.allow_http);
-        let client = match &config.proxy_url {
-            Some(ref url) => {
-                let pr = reqwest::Proxy::all(url)
-                    .map_err(|source| Error::ProxyUrl { source })?;
-                builder.proxy(pr)
-            }
-            _ => builder,
-        }
-        .build()
-        .unwrap();
-
+        let client = config.client_options.client()?;
         Ok(Self { config, client })
     }
 

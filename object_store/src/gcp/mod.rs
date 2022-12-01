@@ -41,7 +41,6 @@ use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
 use reqwest::header::RANGE;
-use reqwest::Proxy;
 use reqwest::{header, Client, Method, Response, StatusCode};
 use snafu::{ResultExt, Snafu};
 use tokio::io::AsyncWrite;
@@ -53,7 +52,8 @@ use crate::{
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::{Path, DELIMITER},
     util::{format_http_range, format_prefix},
-    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result, RetryConfig,
+    ClientOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
+    RetryConfig,
 };
 
 use credential::OAuthProvider;
@@ -743,9 +743,8 @@ fn reader_credentials_file(
 pub struct GoogleCloudStorageBuilder {
     bucket_name: Option<String>,
     service_account_path: Option<String>,
-    client: Option<Client>,
     retry_config: RetryConfig,
-    proxy_url: Option<String>,
+    client_options: ClientOptions,
 }
 
 impl GoogleCloudStorageBuilder {
@@ -787,9 +786,15 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
-    /// Set proxy url used for connection
+    /// Set the proxy_url to be used by the underlying client
     pub fn with_proxy_url(mut self, proxy_url: impl Into<String>) -> Self {
-        self.proxy_url = Some(proxy_url.into());
+        self.client_options = self.client_options.with_proxy_url(proxy_url);
+        self
+    }
+
+    /// Sets the client options, overriding any already set
+    pub fn with_client_options(mut self, options: ClientOptions) -> Self {
+        self.client_options = options;
         self
     }
 
@@ -799,27 +804,15 @@ impl GoogleCloudStorageBuilder {
         let Self {
             bucket_name,
             service_account_path,
-            client,
             retry_config,
-            proxy_url,
+            client_options,
         } = self;
 
         let bucket_name = bucket_name.ok_or(Error::MissingBucketName {})?;
         let service_account_path =
             service_account_path.ok_or(Error::MissingServiceAccountPath)?;
 
-        let client = match (proxy_url, client) {
-            (_, Some(client)) => client,
-            (Some(url), None) => {
-                let pr = Proxy::all(&url).map_err(|source| Error::ProxyUrl { source })?;
-                Client::builder()
-                    .proxy(pr)
-                    .build()
-                    .map_err(|source| Error::ProxyUrl { source })?
-            }
-            (None, None) => Client::new(),
-        };
-
+        let client = client_options.client()?;
         let credentials = reader_credentials_file(service_account_path)?;
 
         // TODO: https://cloud.google.com/storage/docs/authentication#oauth-scopes
