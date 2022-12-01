@@ -2149,8 +2149,8 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
                     .try_unary::<_, Decimal128Type, _>(|v| {
                         // cast to smaller scale, need to round the result
                         // the div must be gt_eq 10, we don't need to check the overflow for the `div`/`mod` operation
-                        let d = v / div;
-                        let r = v % div;
+                        let d = v.wrapping_div(div);
+                        let r = v.wrapping_rem(div);
                         if v >= 0 && r >= half {
                             d.checked_add(1)
                         } else if v < 0 && r <= neg_half {
@@ -2189,8 +2189,8 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
                     .try_unary::<_, Decimal256Type, _>(|v| {
                         // the div must be gt_eq 10, we don't need to check the overflow for the `div`/`mod` operation
                         let v = i256::from_i128(v);
-                        let d = v / div;
-                        let r = v % div;
+                        let d = v.wrapping_div(div);
+                        let r = v.wrapping_rem(div);
                         if v >= i256::ZERO && r >= half {
                             d.checked_add(i256::ONE)
                         } else if v < i256::ZERO && r <= neg_half {
@@ -2229,8 +2229,8 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
                 array
                     .try_unary::<_, Decimal128Type, _>(|v| {
                         // the div must be gt_eq 10, we don't need to check the overflow for the `div`/`mod` operation
-                        let d = v / div;
-                        let r = v % div;
+                        let d = v.wrapping_div(div);
+                        let r = v.wrapping_rem(div);
                         if v >= i256::ZERO && r >= half {
                             d.checked_add(i256::ONE)
                         } else if v < i256::ZERO && r <= neg_half {
@@ -2259,8 +2259,8 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
                 array
                     .try_unary::<_, Decimal256Type, _>(|v| {
                         // the div must be gt_eq 10, we don't need to check the overflow for the `div`/`mod` operation
-                        let d = v / div;
-                        let r = v % div;
+                        let d = v.wrapping_div(div);
+                        let r = v.wrapping_rem(div);
                         if v >= i256::ZERO && r >= half {
                             d.checked_add(i256::ONE)
                         } else if v < i256::ZERO && r <= neg_half {
