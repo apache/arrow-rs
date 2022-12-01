@@ -769,7 +769,7 @@ mod tests {
         assert_eq!(bytes_expected, bytes_written);
 
         // Can overwrite some storage
-        let data = get_vec_of_bytes(5_123_000, 5);
+        let data = get_vec_of_bytes(1_123_000, 5);
         let bytes_expected = data.concat();
         let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
         for chunk in &data {
