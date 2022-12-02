@@ -430,7 +430,6 @@ impl GoogleCloudStorageClient {
 
         builder
             .bearer_auth(token)
-            .header(header::CONTENT_LENGTH, 0)
             .send_retry(&self.retry_config)
             .await
             .map_err(|err| {
