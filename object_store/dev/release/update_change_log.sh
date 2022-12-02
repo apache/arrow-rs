@@ -29,8 +29,8 @@
 
 set -e
 
-SINCE_TAG="object_store_0.5.0"
-FUTURE_RELEASE="object_store_0.5.1"
+SINCE_TAG="object_store_0.5.1"
+FUTURE_RELEASE="object_store_0.5.2"
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
@@ -49,8 +49,8 @@ docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$CHANGELOG_GITHUB_TOKEN" -v "$(pw
     --cache-file=.githubchangeloggenerator.cache \
     --cache-log=.githubchangeloggenerator.cache.log \
     --http-cache \
-    --max-issues=300 \
-    --exclude-tags-regex "^\d+\.\d+\.\d+$" \
+    --max-issues=600 \
+    --exclude-tags-regex "(^\d+\.\d+\.\d+$)|(rc)" \
     --since-tag ${SINCE_TAG} \
     --future-release ${FUTURE_RELEASE}
 
