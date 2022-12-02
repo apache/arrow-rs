@@ -22,7 +22,6 @@ use arrow_buffer::bit_chunk_iterator::BitChunks;
 use arrow_buffer::bit_util::{ceil, get_bit, set_bit};
 use arrow_buffer::buffer::buffer_bin_and;
 use arrow_buffer::Buffer;
-use arrow_schema::ArrowError;
 
 /// Sets all bits on `write_data` in the range `[offset_write..offset_write+len]` to be equal to the
 /// bits in `data` in the range `[offset_read..offset_read+len]`
@@ -72,8 +71,8 @@ pub fn set_bits(
 pub fn combine_option_bitmap(
     arrays: &[&ArrayData],
     len_in_bits: usize,
-) -> Result<Option<Buffer>, ArrowError> {
-    arrays
+) -> Option<Buffer> {
+    let (buffer, offset) = arrays
         .iter()
         .map(|array| (array.null_buffer().cloned(), array.offset()))
         .reduce(|acc, buffer_and_offset| match (acc, buffer_and_offset) {
@@ -91,15 +90,9 @@ pub fn combine_option_bitmap(
                 )),
                 0,
             ),
-        })
-        .map_or(
-            Err(ArrowError::ComputeError(
-                "Arrays must not be empty".to_string(),
-            )),
-            |(buffer, offset)| {
-                Ok(buffer.map(|buffer| buffer.bit_slice(offset, len_in_bits)))
-            },
-        )
+        })?;
+
+    Some(buffer?.bit_slice(offset, len_in_bits))
 }
 
 #[cfg(test)]
@@ -293,38 +286,34 @@ mod tests {
             make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b10110101])));
         let some_other_bitmap =
             make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b11010111])));
-        assert_eq!(
-            combine_option_bitmap(&[], 8).unwrap_err().to_string(),
-            "Compute error: Arrays must not be empty",
-        );
+        assert_eq!(None, combine_option_bitmap(&[], 8));
         assert_eq!(
             Some(Buffer::from([0b01001010])),
-            combine_option_bitmap(&[&some_bitmap], 8).unwrap()
+            combine_option_bitmap(&[&some_bitmap], 8)
         );
         assert_eq!(
             None,
-            combine_option_bitmap(&[&none_bitmap, &none_bitmap], 8).unwrap()
+            combine_option_bitmap(&[&none_bitmap, &none_bitmap], 8)
         );
         assert_eq!(
             Some(Buffer::from([0b01001010])),
-            combine_option_bitmap(&[&some_bitmap, &none_bitmap], 8).unwrap()
+            combine_option_bitmap(&[&some_bitmap, &none_bitmap], 8)
         );
         assert_eq!(
             Some(Buffer::from([0b11010111])),
-            combine_option_bitmap(&[&none_bitmap, &some_other_bitmap], 8).unwrap()
+            combine_option_bitmap(&[&none_bitmap, &some_other_bitmap], 8)
         );
         assert_eq!(
             Some(Buffer::from([0b01001010])),
-            combine_option_bitmap(&[&some_bitmap, &some_bitmap], 8,).unwrap()
+            combine_option_bitmap(&[&some_bitmap, &some_bitmap], 8,)
         );
         assert_eq!(
             Some(Buffer::from([0b0])),
-            combine_option_bitmap(&[&some_bitmap, &inverse_bitmap], 8,).unwrap()
+            combine_option_bitmap(&[&some_bitmap, &inverse_bitmap], 8,)
         );
         assert_eq!(
             Some(Buffer::from([0b01000010])),
             combine_option_bitmap(&[&some_bitmap, &some_other_bitmap, &none_bitmap], 8,)
-                .unwrap()
         );
         assert_eq!(
             Some(Buffer::from([0b00001001])),
@@ -336,7 +325,6 @@ mod tests {
                 ],
                 5,
             )
-            .unwrap()
         );
     }
 
@@ -351,27 +339,27 @@ mod tests {
             make_data_with_null_bit_buffer(8, 2, Some(Buffer::from([0b10101000, 0b10])));
         assert_eq!(
             Some(Buffer::from([0b10101010])),
-            combine_option_bitmap(&[&bitmap1], 8).unwrap()
+            combine_option_bitmap(&[&bitmap1], 8)
         );
         assert_eq!(
             Some(Buffer::from([0b10101010])),
-            combine_option_bitmap(&[&bitmap2], 8).unwrap()
+            combine_option_bitmap(&[&bitmap2], 8)
         );
         assert_eq!(
             Some(Buffer::from([0b10101010])),
-            combine_option_bitmap(&[&bitmap1, &none_bitmap], 8).unwrap()
+            combine_option_bitmap(&[&bitmap1, &none_bitmap], 8)
         );
         assert_eq!(
             Some(Buffer::from([0b10101010])),
-            combine_option_bitmap(&[&none_bitmap, &bitmap2], 8).unwrap()
+            combine_option_bitmap(&[&none_bitmap, &bitmap2], 8)
         );
         assert_eq!(
             Some(Buffer::from([0b10101010])),
-            combine_option_bitmap(&[&bitmap0, &bitmap1], 8).unwrap()
+            combine_option_bitmap(&[&bitmap0, &bitmap1], 8)
         );
         assert_eq!(
             Some(Buffer::from([0b10101010])),
-            combine_option_bitmap(&[&bitmap1, &bitmap2], 8).unwrap()
+            combine_option_bitmap(&[&bitmap1, &bitmap2], 8)
         );
     }
 
@@ -382,25 +370,22 @@ mod tests {
             make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b01001010])));
         let inverse_bitmap =
             make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b10110101])));
+        assert_eq!(None, compare_option_bitmap(&none_bitmap, &none_bitmap, 8));
         assert_eq!(
-            None,
-            compare_option_bitmap(&none_bitmap, &none_bitmap, 8).unwrap()
+            Some(Buffer::from([0b01001010])),
+            compare_option_bitmap(&some_bitmap, &none_bitmap, 8)
         );
         assert_eq!(
             Some(Buffer::from([0b01001010])),
-            compare_option_bitmap(&some_bitmap, &none_bitmap, 8).unwrap()
+            compare_option_bitmap(&none_bitmap, &some_bitmap, 8)
         );
         assert_eq!(
             Some(Buffer::from([0b01001010])),
-            compare_option_bitmap(&none_bitmap, &some_bitmap, 8,).unwrap()
-        );
-        assert_eq!(
-            Some(Buffer::from([0b01001010])),
-            compare_option_bitmap(&some_bitmap, &some_bitmap, 8,).unwrap()
+            compare_option_bitmap(&some_bitmap, &some_bitmap, 8)
         );
         assert_eq!(
             Some(Buffer::from([0b11111111])),
-            compare_option_bitmap(&some_bitmap, &inverse_bitmap, 8,).unwrap()
+            compare_option_bitmap(&some_bitmap, &inverse_bitmap, 8)
         );
     }
 }

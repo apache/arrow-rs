@@ -45,7 +45,7 @@ pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
         )));
     }
 
-    let output_bitmap = combine_option_bitmap(&[left.data(), right.data()], left.len())?;
+    let output_bitmap = combine_option_bitmap(&[left.data(), right.data()], left.len());
 
     let left_offsets = left.value_offsets();
     let right_offsets = right.value_offsets();
@@ -111,7 +111,7 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
             .collect::<Vec<_>>()
             .as_slice(),
         size,
-    )?;
+    );
 
     let data_values = arrays
         .iter()

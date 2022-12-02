@@ -108,7 +108,7 @@ pub(crate) fn build_null_buffer_for_and_or(
     len_in_bits: usize,
 ) -> Option<Buffer> {
     // `arrays` are not empty, so safely do `unwrap` directly.
-    combine_option_bitmap(&[left_data, right_data], len_in_bits).unwrap()
+    combine_option_bitmap(&[left_data, right_data], len_in_bits)
 }
 
 /// Updates null buffer based on data buffer and null buffer of the operand at other side

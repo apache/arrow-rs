@@ -313,7 +313,7 @@ where
     let null_bit_buffer = arrow_data::bit_mask::combine_option_bitmap(
         &[left.data_ref(), right.data_ref()],
         left.len(),
-    )?;
+    );
 
     let lanes = T::lanes();
     let buffer_size = left.len() * std::mem::size_of::<T::Native>();
@@ -655,7 +655,7 @@ where
     let null_bit_buffer = arrow_data::bit_mask::combine_option_bitmap(
         &[left.data_ref(), right.data_ref()],
         left.len(),
-    )?;
+    );
 
     // Safety justification: Since the inputs are valid Arrow arrays, all values are
     // valid indexes into the dictionary (which is verified during construction)

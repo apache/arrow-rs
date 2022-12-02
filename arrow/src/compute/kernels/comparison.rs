@@ -111,7 +111,7 @@ where
     }
 
     let null_bit_buffer =
-        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
+        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len());
 
     let mut result = BooleanBufferBuilder::new(left.len());
     for i in 0..left.len() {
@@ -1125,7 +1125,7 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
         ));
     }
     let null_bit_buffer =
-        combine_option_bitmap(&[array.data_ref(), regex_array.data_ref()], array.len())?;
+        combine_option_bitmap(&[array.data_ref(), regex_array.data_ref()], array.len());
 
     let mut patterns: HashMap<String, Regex> = HashMap::new();
     let mut result = BooleanBufferBuilder::new(array.len());
@@ -2247,7 +2247,7 @@ where
     }
 
     let null_bit_buffer =
-        combine_option_bitmap(&[left.data_ref(), right.data_ref()], len)?;
+        combine_option_bitmap(&[left.data_ref(), right.data_ref()], len);
 
     // we process the data in chunks so that each iteration results in one u64 of comparison result bits
     const CHUNK_SIZE: usize = 64;
@@ -3654,7 +3654,7 @@ where
     let num_bytes = bit_util::ceil(left_len, 8);
 
     let not_both_null_bit_buffer =
-        match combine_option_bitmap(&[left.data_ref(), right.data_ref()], left_len)? {
+        match combine_option_bitmap(&[left.data_ref(), right.data_ref()], left_len) {
             Some(buff) => buff,
             None => new_all_set_buffer(num_bytes),
         };
@@ -3711,7 +3711,7 @@ where
     let num_bytes = bit_util::ceil(left_len, 8);
 
     let not_both_null_bit_buffer =
-        match combine_option_bitmap(&[left.data_ref(), right.data_ref()], left_len)? {
+        match combine_option_bitmap(&[left.data_ref(), right.data_ref()], left_len) {
             Some(buff) => buff,
             None => new_all_set_buffer(num_bytes),
         };

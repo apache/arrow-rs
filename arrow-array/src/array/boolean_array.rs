@@ -240,7 +240,7 @@ impl BooleanArray {
         }
 
         let null_bit_buffer =
-            combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
+            combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len());
 
         let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
             // SAFETY: i in range 0..len
