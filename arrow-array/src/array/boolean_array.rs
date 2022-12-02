@@ -182,12 +182,12 @@ impl BooleanArray {
     /// # use arrow_array::{BooleanArray, Int32Array};
     ///
     /// let array = Int32Array::from(vec![1, 2, 3, 4, 5]);
-    /// let r = BooleanArray::from_unary(&array, |x| x > 2).unwrap();
+    /// let r = BooleanArray::from_unary(&array, |x| x > 2);
     /// assert_eq!(&r, &BooleanArray::from(vec![false, false, true, true, true]));
     /// ```
-    pub fn from_unary<T: ArrayAccessor, F>(left: T, op: F) -> Result<Self, ArrowError>
+    pub fn from_unary<T: ArrayAccessor, F>(left: T, mut op: F) -> Self
     where
-        F: Fn(T::Item) -> bool,
+        F: FnMut(T::Item) -> bool,
     {
         let null_bit_buffer = left
             .data()
@@ -210,7 +210,7 @@ impl BooleanArray {
                 vec![],
             )
         };
-        Ok(Self::from(data))
+        Self::from(data)
     }
 
     /// Create a [`BooleanArray`] by evaluating the binary operation for
@@ -227,10 +227,10 @@ impl BooleanArray {
     pub fn from_binary<T: ArrayAccessor, S: ArrayAccessor, F>(
         left: T,
         right: S,
-        op: F,
+        mut op: F,
     ) -> Result<Self, ArrowError>
     where
-        F: Fn(T::Item, S::Item) -> bool,
+        F: FnMut(T::Item, S::Item) -> bool,
     {
         if left.len() != right.len() {
             return Err(ArrowError::ComputeError(

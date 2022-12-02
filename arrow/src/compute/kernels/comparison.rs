@@ -55,7 +55,7 @@ fn compare_op_scalar<T: ArrayAccessor, F>(left: T, op: F) -> Result<BooleanArray
 where
     F: Fn(T::Item) -> bool,
 {
-    BooleanArray::from_unary(left, op)
+    Ok(BooleanArray::from_unary(left, op))
 }
 
 /// Evaluate `op(left, right)` for [`PrimitiveArray`]s using a specified
