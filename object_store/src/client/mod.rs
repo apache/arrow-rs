@@ -25,6 +25,7 @@ pub mod retry;
 pub mod token;
 
 use reqwest::{Client, ClientBuilder, Proxy};
+use std::time::Duration;
 
 fn map_client_error(e: reqwest::Error) -> super::Error {
     super::Error::Generic {
@@ -38,6 +39,15 @@ fn map_client_error(e: reqwest::Error) -> super::Error {
 pub struct ClientOptions {
     proxy_url: Option<String>,
     allow_http: bool,
+    timeout: Option<Duration>,
+    connect_timeout: Option<Duration>,
+    pool_idle_timeout: Option<Duration>,
+    pool_max_idle_per_host: Option<usize>,
+    http2_keep_alive_interval: Option<Duration>,
+    http2_keep_alive_timeout: Option<Duration>,
+    http2_keep_alive_while_idle: bool,
+    http1_only: bool,
+    http2_only: bool,
 }
 
 impl ClientOptions {
@@ -54,17 +64,129 @@ impl ClientOptions {
         self
     }
 
+    /// Only use http1 connections
+    pub fn with_http1_only(mut self) -> Self {
+        self.http1_only = true;
+        self
+    }
+
+    /// Only use http2 connections
+    pub fn with_http2_only(mut self) -> Self {
+        self.http2_only = true;
+        self
+    }
+
     /// Set an HTTP proxy to use for requests
     pub fn with_proxy_url(mut self, proxy_url: impl Into<String>) -> Self {
         self.proxy_url = Some(proxy_url.into());
         self
     }
 
+    /// Set a request timeout
+    ///
+    /// The timeout is applied from when the request starts connecting until the
+    /// response body has finished
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// Set a timeout for only the connect phase of a Client
+    pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = Some(timeout);
+        self
+    }
+
+    /// Set the pool max idle timeout
+    ///
+    /// This is the length of time an idle connection will be kept alive
+    ///
+    /// Default is 90 seconds
+    pub fn with_pool_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.pool_idle_timeout = Some(timeout);
+        self
+    }
+
+    /// Set the maximum number of idle connections per host
+    ///
+    /// Default is no limit
+    pub fn with_pool_max_idle_per_host(mut self, max: usize) -> Self {
+        self.pool_max_idle_per_host = Some(max);
+        self
+    }
+
+    /// Sets an interval for HTTP2 Ping frames should be sent to keep a connection alive.
+    ///
+    /// Default is disabled
+    pub fn with_http2_keep_alive_interval(mut self, interval: Duration) -> Self {
+        self.http2_keep_alive_interval = Some(interval);
+        self
+    }
+
+    /// Sets a timeout for receiving an acknowledgement of the keep-alive ping.
+    ///
+    /// If the ping is not acknowledged within the timeout, the connection will be closed.
+    /// Does nothing if http2_keep_alive_interval is disabled.
+    ///
+    /// Default is disabled
+    pub fn with_http2_keep_alive_timeout(mut self, interval: Duration) -> Self {
+        self.http2_keep_alive_timeout = Some(interval);
+        self
+    }
+
+    /// Enable HTTP2 keep alive pings for idle connections
+    ///
+    /// If disabled, keep-alive pings are only sent while there are open request/response
+    /// streams. If enabled, pings are also sent when no streams are active
+    ///
+    /// Default is disabled
+    pub fn with_http2_keep_alive_while_idle(mut self) -> Self {
+        self.http2_keep_alive_while_idle = true;
+        self
+    }
+
     pub(crate) fn client(&self) -> super::Result<Client> {
         let mut builder = ClientBuilder::new();
+
         if let Some(proxy) = &self.proxy_url {
             let proxy = Proxy::all(proxy).map_err(map_client_error)?;
             builder = builder.proxy(proxy);
+        }
+
+        if let Some(timeout) = self.timeout {
+            builder = builder.timeout(timeout)
+        }
+
+        if let Some(timeout) = self.connect_timeout {
+            builder = builder.connect_timeout(timeout)
+        }
+
+        if let Some(timeout) = self.pool_idle_timeout {
+            builder = builder.pool_idle_timeout(timeout)
+        }
+
+        if let Some(max) = self.pool_max_idle_per_host {
+            builder = builder.pool_max_idle_per_host(max)
+        }
+
+        if let Some(interval) = self.http2_keep_alive_interval {
+            builder = builder.http2_keep_alive_interval(interval)
+        }
+
+        if let Some(interval) = self.http2_keep_alive_timeout {
+            builder = builder.http2_keep_alive_timeout(interval)
+        }
+
+        if self.http2_keep_alive_while_idle {
+            builder = builder.http2_keep_alive_while_idle(true)
+        }
+
+        if self.http1_only {
+            builder = builder.http1_only()
+        }
+
+        if self.http2_only {
+            builder = builder.http2_prior_knowledge()
         }
 
         builder
