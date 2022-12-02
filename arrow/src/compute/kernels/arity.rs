@@ -22,12 +22,12 @@ use crate::array::{
     PrimitiveArray,
 };
 use crate::buffer::Buffer;
-use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{ArrowNumericType, ArrowPrimitiveType};
 use crate::downcast_dictionary_array;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_iterator::try_for_each_valid_idx;
 use arrow_buffer::MutableBuffer;
+use arrow_data::bit_mask::combine_option_bitmap;
 use std::sync::Arc;
 
 #[inline]
@@ -215,7 +215,7 @@ where
         return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
 
-    let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
+    let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len);
     let null_count = null_buffer
         .as_ref()
         .map(|x| len - x.count_set_bits_offset(0, len))
@@ -275,7 +275,7 @@ where
 
     let len = a.len();
 
-    let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
+    let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len);
     let null_count = null_buffer
         .as_ref()
         .map(|x| len - x.count_set_bits_offset(0, len))
@@ -333,7 +333,7 @@ where
     if a.null_count() == 0 && b.null_count() == 0 {
         try_binary_no_nulls(len, a, b, op)
     } else {
-        let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
+        let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len);
 
         let null_count = null_buffer
             .as_ref()
@@ -401,7 +401,7 @@ where
     if a.null_count() == 0 && b.null_count() == 0 {
         try_binary_no_nulls_mut(len, a, b, op)
     } else {
-        let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len).unwrap();
+        let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len);
         let null_count = null_buffer
             .as_ref()
             .map(|x| len - x.count_set_bits_offset(0, len))

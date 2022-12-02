@@ -25,12 +25,12 @@
 
 use crate::array::*;
 use crate::buffer::{buffer_unary_not, Buffer, MutableBuffer};
-use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::*;
 #[allow(unused_imports)]
 use crate::downcast_dictionary_array;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
+use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_select::take::take;
 use num::ToPrimitive;
 use regex::Regex;
@@ -53,26 +53,7 @@ where
         ));
     }
 
-    let null_bit_buffer =
-        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
-
-    let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
-        // SAFETY: i in range 0..len
-        op(left.value_unchecked(i), right.value_unchecked(i))
-    });
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![Buffer::from(buffer)],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
+    Ok(BooleanArray::from_binary(left, right, op))
 }
 
 /// Helper function to perform boolean lambda function on values from array accessor, this
@@ -81,28 +62,7 @@ fn compare_op_scalar<T: ArrayAccessor, F>(left: T, op: F) -> Result<BooleanArray
 where
     F: Fn(T::Item) -> bool,
 {
-    let null_bit_buffer = left
-        .data()
-        .null_buffer()
-        .map(|b| b.bit_slice(left.offset(), left.len()));
-
-    let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
-        // SAFETY: i in range 0..len
-        op(left.value_unchecked(i))
-    });
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![Buffer::from(buffer)],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
+    Ok(BooleanArray::from_unary(left, op))
 }
 
 /// Evaluate `op(left, right)` for [`PrimitiveArray`]s using a specified
@@ -158,7 +118,7 @@ where
     }
 
     let null_bit_buffer =
-        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
+        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len());
 
     let mut result = BooleanBufferBuilder::new(left.len());
     for i in 0..left.len() {
@@ -1172,7 +1132,7 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
         ));
     }
     let null_bit_buffer =
-        combine_option_bitmap(&[array.data_ref(), regex_array.data_ref()], array.len())?;
+        combine_option_bitmap(&[array.data_ref(), regex_array.data_ref()], array.len());
 
     let mut patterns: HashMap<String, Regex> = HashMap::new();
     let mut result = BooleanBufferBuilder::new(array.len());
@@ -2294,7 +2254,7 @@ where
     }
 
     let null_bit_buffer =
-        combine_option_bitmap(&[left.data_ref(), right.data_ref()], len)?;
+        combine_option_bitmap(&[left.data_ref(), right.data_ref()], len);
 
     // we process the data in chunks so that each iteration results in one u64 of comparison result bits
     const CHUNK_SIZE: usize = 64;
@@ -3701,7 +3661,7 @@ where
     let num_bytes = bit_util::ceil(left_len, 8);
 
     let not_both_null_bit_buffer =
-        match combine_option_bitmap(&[left.data_ref(), right.data_ref()], left_len)? {
+        match combine_option_bitmap(&[left.data_ref(), right.data_ref()], left_len) {
             Some(buff) => buff,
             None => new_all_set_buffer(num_bytes),
         };
@@ -3758,7 +3718,7 @@ where
     let num_bytes = bit_util::ceil(left_len, 8);
 
     let not_both_null_bit_buffer =
-        match combine_option_bitmap(&[left.data_ref(), right.data_ref()], left_len)? {
+        match combine_option_bitmap(&[left.data_ref(), right.data_ref()], left_len) {
             Some(buff) => buff,
             None => new_all_set_buffer(num_bytes),
         };
