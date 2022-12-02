@@ -2641,26 +2641,15 @@ where
         //     The iterator is trustedLen because it comes from an `StringArray`.
         Ok(unsafe { PrimitiveArray::<T>::from_trusted_len_iter(iter) })
     } else {
-        let vec = from
-            .iter()
-            .map(|v| {
-                v.map(|v| {
-                    lexical_core::parse(v.as_bytes()).map_err(|_| {
-                        ArrowError::CastError(format!(
-                            "Cannot cast string '{}' to value of {:?} type",
-                            v,
-                            T::DATA_TYPE,
-                        ))
-                    })
-                })
-                .transpose()
+        PrimitiveArray::try_from_unary(from, |v| {
+            lexical_core::parse(v.as_bytes()).map_err(|_| {
+                ArrowError::CastError(format!(
+                    "Cannot cast string '{}' to value of {:?} type",
+                    v,
+                    T::DATA_TYPE,
+                ))
             })
-            .collect::<Result<Vec<_>, _>>()?;
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        Ok(unsafe { PrimitiveArray::<T>::from_trusted_len_iter(vec.iter()) })
+        })
     }
 }
 
@@ -2690,29 +2679,17 @@ fn cast_string_to_date32<Offset: OffsetSizeTrait>(
         //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { Date32Array::from_trusted_len_iter(iter) }
     } else {
-        let vec = string_array
-            .iter()
-            .map(|v| {
-                v.map(|v| {
-                    v.parse::<chrono::NaiveDate>()
-                        .map(|date| date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
-                        .map_err(|_| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
-                                DataType::Date32
-                            ))
-                        })
+        Date32Array::try_from_unary(string_array, |v| {
+            v.parse::<chrono::NaiveDate>()
+                .map(|date| date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
+                .map_err(|_| {
+                    ArrowError::CastError(format!(
+                        "Cannot cast string '{}' to value of {:?} type",
+                        v,
+                        DataType::Date32
+                    ))
                 })
-                .transpose()
-            })
-            .collect::<Result<Vec<Option<i32>>, _>>()?;
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Date32Array::from_trusted_len_iter(vec.iter()) }
+        })?
     };
 
     Ok(Arc::new(array) as ArrayRef)
@@ -2743,29 +2720,17 @@ fn cast_string_to_date64<Offset: OffsetSizeTrait>(
         //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { Date64Array::from_trusted_len_iter(iter) }
     } else {
-        let vec = string_array
-            .iter()
-            .map(|v| {
-                v.map(|v| {
-                    v.parse::<chrono::NaiveDateTime>()
-                        .map(|datetime| datetime.timestamp_millis())
-                        .map_err(|_| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
-                                DataType::Date64
-                            ))
-                        })
+        Date64Array::try_from_unary(string_array, |v| {
+            v.parse::<NaiveDateTime>()
+                .map(|datetime| datetime.timestamp_millis())
+                .map_err(|_| {
+                    ArrowError::CastError(format!(
+                        "Cannot cast string '{}' to value of {:?} type",
+                        v,
+                        DataType::Date64
+                    ))
                 })
-                .transpose()
-            })
-            .collect::<Result<Vec<Option<i64>>, _>>()?;
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Date64Array::from_trusted_len_iter(vec.iter()) }
+        })?
     };
 
     Ok(Arc::new(array) as ArrayRef)
@@ -2803,33 +2768,20 @@ fn cast_string_to_time32second<Offset: OffsetSizeTrait>(
         //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { Time32SecondArray::from_trusted_len_iter(iter) }
     } else {
-        let vec = string_array
-            .iter()
-            .map(|v| {
-                v.map(|v| {
-                    v.parse::<chrono::NaiveTime>()
-                        .map(|time| {
-                            (time.num_seconds_from_midnight()
-                                + time.nanosecond() / NANOS_PER_SEC)
-                                as i32
-                        })
-                        .map_err(|_| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
-                                DataType::Time32(TimeUnit::Second)
-                            ))
-                        })
+        Time32SecondArray::try_from_unary(string_array, |v| {
+            v.parse::<NaiveTime>()
+                .map(|time| {
+                    (time.num_seconds_from_midnight() + time.nanosecond() / NANOS_PER_SEC)
+                        as i32
                 })
-                .transpose()
-            })
-            .collect::<Result<Vec<Option<i32>>, _>>()?;
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Time32SecondArray::from_trusted_len_iter(vec.iter()) }
+                .map_err(|_| {
+                    ArrowError::CastError(format!(
+                        "Cannot cast string '{}' to value of {:?} type",
+                        v,
+                        DataType::Time32(TimeUnit::Second)
+                    ))
+                })
+        })?
     };
 
     Ok(Arc::new(array) as ArrayRef)
@@ -2869,33 +2821,20 @@ fn cast_string_to_time32millisecond<Offset: OffsetSizeTrait>(
         //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { Time32MillisecondArray::from_trusted_len_iter(iter) }
     } else {
-        let vec = string_array
-            .iter()
-            .map(|v| {
-                v.map(|v| {
-                    v.parse::<chrono::NaiveTime>()
-                        .map(|time| {
-                            (time.num_seconds_from_midnight() * MILLIS_PER_SEC
-                                + time.nanosecond() / NANOS_PER_MILLI)
-                                as i32
-                        })
-                        .map_err(|_| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
-                                DataType::Time32(TimeUnit::Millisecond)
-                            ))
-                        })
+        Time32MillisecondArray::try_from_unary(string_array, |v| {
+            v.parse::<NaiveTime>()
+                .map(|time| {
+                    (time.num_seconds_from_midnight() * MILLIS_PER_SEC
+                        + time.nanosecond() / NANOS_PER_MILLI) as i32
                 })
-                .transpose()
-            })
-            .collect::<Result<Vec<Option<i32>>, _>>()?;
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Time32MillisecondArray::from_trusted_len_iter(vec.iter()) }
+                .map_err(|_| {
+                    ArrowError::CastError(format!(
+                        "Cannot cast string '{}' to value of {:?} type",
+                        v,
+                        DataType::Time32(TimeUnit::Millisecond)
+                    ))
+                })
+        })?
     };
 
     Ok(Arc::new(array) as ArrayRef)
@@ -2934,32 +2873,20 @@ fn cast_string_to_time64microsecond<Offset: OffsetSizeTrait>(
         //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { Time64MicrosecondArray::from_trusted_len_iter(iter) }
     } else {
-        let vec = string_array
-            .iter()
-            .map(|v| {
-                v.map(|v| {
-                    v.parse::<chrono::NaiveTime>()
-                        .map(|time| {
-                            time.num_seconds_from_midnight() as i64 * MICROS_PER_SEC
-                                + time.nanosecond() as i64 / NANOS_PER_MICRO
-                        })
-                        .map_err(|_| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
-                                DataType::Time64(TimeUnit::Microsecond)
-                            ))
-                        })
+        Time64MicrosecondArray::try_from_unary(string_array, |v| {
+            v.parse::<NaiveTime>()
+                .map(|time| {
+                    time.num_seconds_from_midnight() as i64 * MICROS_PER_SEC
+                        + time.nanosecond() as i64 / NANOS_PER_MICRO
                 })
-                .transpose()
-            })
-            .collect::<Result<Vec<Option<i64>>, _>>()?;
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Time64MicrosecondArray::from_trusted_len_iter(vec.iter()) }
+                .map_err(|_| {
+                    ArrowError::CastError(format!(
+                        "Cannot cast string '{}' to value of {:?} type",
+                        v,
+                        DataType::Time64(TimeUnit::Microsecond)
+                    ))
+                })
+        })?
     };
 
     Ok(Arc::new(array) as ArrayRef)
@@ -2996,32 +2923,20 @@ fn cast_string_to_time64nanosecond<Offset: OffsetSizeTrait>(
         //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { Time64NanosecondArray::from_trusted_len_iter(iter) }
     } else {
-        let vec = string_array
-            .iter()
-            .map(|v| {
-                v.map(|v| {
-                    v.parse::<chrono::NaiveTime>()
-                        .map(|time| {
-                            time.num_seconds_from_midnight() as i64 * NANOS_PER_SEC
-                                + time.nanosecond() as i64
-                        })
-                        .map_err(|_| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
-                                DataType::Time64(TimeUnit::Nanosecond)
-                            ))
-                        })
+        Time64NanosecondArray::try_from_unary(string_array, |v| {
+            v.parse::<NaiveTime>()
+                .map(|time| {
+                    time.num_seconds_from_midnight() as i64 * NANOS_PER_SEC
+                        + time.nanosecond() as i64
                 })
-                .transpose()
-            })
-            .collect::<Result<Vec<Option<i64>>, _>>()?;
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Time64NanosecondArray::from_trusted_len_iter(vec.iter()) }
+                .map_err(|_| {
+                    ArrowError::CastError(format!(
+                        "Cannot cast string '{}' to value of {:?} type",
+                        v,
+                        DataType::Time64(TimeUnit::Nanosecond)
+                    ))
+                })
+        })?
     };
 
     Ok(Arc::new(array) as ArrayRef)
