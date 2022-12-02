@@ -418,19 +418,36 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         O: ArrowPrimitiveType,
         F: Fn(T::Native) -> O::Native,
     {
-        let data = self.data();
-        let len = self.len();
-        let null_count = self.null_count();
+        PrimitiveArray::from_unary(self, op)
+    }
 
-        let null_buffer = data.null_buffer().map(|b| b.bit_slice(data.offset(), len));
-        let values = self.values().iter().map(|v| op(*v));
-        // JUSTIFICATION
-        //  Benefit
-        //      ~60% speedup
-        //  Soundness
-        //      `values` is an iterator with a known size because arrays are sized.
-        let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
-        unsafe { build_primitive_array(len, buffer, null_count, null_buffer) }
+    /// Creates a [`PrimitiveArray`] from the result of evaluating an unary and infallible
+    /// function `op` for every element in `array`.
+    ///
+    /// The provided function will be evaluated for all values, including those on null slots.
+    ///
+    /// ```
+    /// use arrow_array::{Int32Array, StringArray};
+    /// let array = StringArray::from(vec![Some("a"), Some("hello"), None]);
+    /// let c = Int32Array::from_unary(&array, |v| v.len() as i32);
+    /// assert_eq!(c, Int32Array::from(vec![Some(1), Some(5), None]));
+    /// ```
+    pub fn from_unary<A, F>(array: A, op: F) -> Self
+    where
+        A: ArrayAccessor,
+        F: Fn(A::Item) -> T::Native,
+    {
+        let data = array.data();
+        let null_buffer = data
+            .null_buffer()
+            .map(|b| b.bit_slice(data.offset(), data.len()));
+
+        unsafe {
+            let buffer = Buffer::from_trusted_len_iter(
+                (0..data.len()).map(|idx| op(array.value_unchecked(idx))),
+            );
+            build_primitive_array(data.len(), buffer, data.null_count(), null_buffer)
+        }
     }
 
     /// Applies an unary and infallible function to a mutable primitive array.
@@ -475,12 +492,29 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         O: ArrowPrimitiveType,
         F: Fn(T::Native) -> Result<O::Native, E>,
     {
-        let data = self.data();
-        let len = self.len();
-        let null_count = self.null_count();
+        PrimitiveArray::try_from_unary(self, op)
+    }
+
+    /// Creates a [`PrimitiveArray`] from the result of evaluating an fallible
+    /// function `op` for every valid element in `array`.
+    ///
+    /// ```
+    /// use arrow_array::{Int32Array, StringArray};
+    /// let array = StringArray::from(vec![Some("12"), Some("45"), None]);
+    /// let r = Int32Array::try_from_unary(&array, |v| v.parse()).unwrap();
+    /// assert_eq!(r, Int32Array::from(vec![Some(12), Some(45), None]));
+    /// ```
+    pub fn try_from_unary<A, F, E>(array: A, op: F) -> Result<Self, E>
+    where
+        A: ArrayAccessor,
+        F: Fn(A::Item) -> Result<T::Native, E>,
+    {
+        let data = array.data();
+        let len = array.len();
+        let null_count = array.null_count();
 
         if null_count == 0 {
-            let values = self.values().iter().map(|v| op(*v));
+            let values = (0..len).map(|idx| op(unsafe { array.value_unchecked(idx) }));
             // JUSTIFICATION
             //  Benefit
             //      ~60% speedup
@@ -491,12 +525,12 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         }
 
         let null_buffer = data.null_buffer().map(|b| b.bit_slice(data.offset(), len));
-        let mut buffer = BufferBuilder::<O::Native>::new(len);
+        let mut buffer = BufferBuilder::<T::Native>::new(len);
         buffer.append_n_zeroed(len);
         let slice = buffer.as_slice_mut();
 
         try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
-            unsafe { *slice.get_unchecked_mut(idx) = op(self.value_unchecked(idx))? };
+            unsafe { *slice.get_unchecked_mut(idx) = op(array.value_unchecked(idx))? };
             Ok::<_, E>(())
         })?;
 
