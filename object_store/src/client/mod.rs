@@ -24,6 +24,7 @@ pub mod pagination;
 pub mod retry;
 pub mod token;
 
+use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client, ClientBuilder, Proxy};
 use std::time::Duration;
 
@@ -34,9 +35,14 @@ fn map_client_error(e: reqwest::Error) -> super::Error {
     }
 }
 
+static DEFAULT_USER_AGENT: &str =
+    concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+
 /// HTTP client configuration for remote object stores
 #[derive(Debug, Clone, Default)]
 pub struct ClientOptions {
+    user_agent: Option<HeaderValue>,
+    default_headers: Option<HeaderMap>,
     proxy_url: Option<String>,
     allow_http: bool,
     timeout: Option<Duration>,
@@ -54,6 +60,20 @@ impl ClientOptions {
     /// Create a new [`ClientOptions`] with default values
     pub fn new() -> Self {
         Default::default()
+    }
+
+    /// Sets the User-Agent header to be used by this client
+    ///
+    /// Default is based on the version of this crate
+    pub fn with_user_agent(mut self, agent: HeaderValue) -> Self {
+        self.user_agent = Some(agent);
+        self
+    }
+
+    /// Sets the default headers for every request
+    pub fn with_default_headers(mut self, headers: HeaderMap) -> Self {
+        self.default_headers = Some(headers);
+        self
     }
 
     /// Sets what protocol is allowed. If `allow_http` is :
@@ -147,6 +167,15 @@ impl ClientOptions {
 
     pub(crate) fn client(&self) -> super::Result<Client> {
         let mut builder = ClientBuilder::new();
+
+        match &self.user_agent {
+            Some(user_agent) => builder = builder.user_agent(user_agent),
+            None => builder = builder.user_agent(DEFAULT_USER_AGENT),
+        }
+
+        if let Some(headers) = &self.default_headers {
+            builder = builder.default_headers(headers.clone())
+        }
 
         if let Some(proxy) = &self.proxy_url {
             let proxy = Proxy::all(proxy).map_err(map_client_error)?;
