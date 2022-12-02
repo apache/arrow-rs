@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::array::*;
-use crate::compute::util::combine_option_bitmap;
 use crate::error::{ArrowError, Result};
+use arrow_data::bit_mask::combine_option_bitmap;
 
 /// Returns the elementwise concatenation of a [`StringArray`].
 ///

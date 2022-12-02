@@ -25,12 +25,12 @@
 
 use crate::array::*;
 use crate::buffer::{buffer_unary_not, Buffer, MutableBuffer};
-use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::*;
 #[allow(unused_imports)]
 use crate::downcast_dictionary_array;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
+use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_select::take::take;
 use num::ToPrimitive;
 use regex::Regex;
@@ -46,33 +46,7 @@ fn compare_op<T: ArrayAccessor, S: ArrayAccessor, F>(
 where
     F: Fn(T::Item, S::Item) -> bool,
 {
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length"
-                .to_string(),
-        ));
-    }
-
-    let null_bit_buffer =
-        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
-
-    let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
-        // SAFETY: i in range 0..len
-        op(left.value_unchecked(i), right.value_unchecked(i))
-    });
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![Buffer::from(buffer)],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
+    BooleanArray::from_binary(left, right, op)
 }
 
 /// Helper function to perform boolean lambda function on values from array accessor, this
@@ -81,28 +55,7 @@ fn compare_op_scalar<T: ArrayAccessor, F>(left: T, op: F) -> Result<BooleanArray
 where
     F: Fn(T::Item) -> bool,
 {
-    let null_bit_buffer = left
-        .data()
-        .null_buffer()
-        .map(|b| b.bit_slice(left.offset(), left.len()));
-
-    let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
-        // SAFETY: i in range 0..len
-        op(left.value_unchecked(i))
-    });
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![Buffer::from(buffer)],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
+    BooleanArray::from_unary(left, op)
 }
 
 /// Evaluate `op(left, right)` for [`PrimitiveArray`]s using a specified

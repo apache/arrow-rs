@@ -310,7 +310,7 @@ where
     }
 
     // Create the combined `Bitmap`
-    let null_bit_buffer = crate::compute::util::combine_option_bitmap(
+    let null_bit_buffer = arrow_data::bit_mask::combine_option_bitmap(
         &[left.data_ref(), right.data_ref()],
         left.len(),
     )?;
@@ -652,7 +652,7 @@ where
         )));
     }
 
-    let null_bit_buffer = crate::compute::util::combine_option_bitmap(
+    let null_bit_buffer = arrow_data::bit_mask::combine_option_bitmap(
         &[left.data_ref(), right.data_ref()],
         left.len(),
     )?;

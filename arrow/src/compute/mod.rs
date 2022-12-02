@@ -19,8 +19,6 @@
 
 pub mod kernels;
 
-mod util;
-
 pub use self::kernels::aggregate::*;
 pub use self::kernels::arithmetic::*;
 pub use self::kernels::arity::*;

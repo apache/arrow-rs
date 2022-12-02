@@ -29,10 +29,10 @@ use crate::buffer::{
     bitwise_bin_op_helper, bitwise_quaternary_op_helper, buffer_bin_and, buffer_bin_or,
     buffer_unary_not, Buffer, MutableBuffer,
 };
-use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::DataType;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util::ceil;
+use arrow_data::bit_mask::combine_option_bitmap;
 
 /// Updates null buffer based on data buffer and null buffer of the operand at other side
 /// in boolean AND kernel with Kleene logic. In short, because for AND kernel, null AND false

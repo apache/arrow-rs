@@ -20,8 +20,9 @@ use crate::iterator::BooleanIter;
 use crate::raw_pointer::RawPtrBox;
 use crate::{print_long_array, Array, ArrayAccessor};
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
+use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayData;
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 
 /// Array of bools
@@ -172,6 +173,75 @@ impl BooleanArray {
         indexes: impl Iterator<Item = Option<usize>> + 'a,
     ) -> impl Iterator<Item = Option<bool>> + 'a {
         indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
+    }
+
+    /// Create a [`BooleanArray`] by applying evaluating the operation for
+    /// each element of the provided array
+    pub fn from_unary<T: ArrayAccessor, F>(left: T, op: F) -> Result<Self, ArrowError>
+    where
+        F: Fn(T::Item) -> bool,
+    {
+        let null_bit_buffer = left
+            .data()
+            .null_buffer()
+            .map(|b| b.bit_slice(left.offset(), left.len()));
+
+        let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
+            // SAFETY: i in range 0..len
+            op(left.value_unchecked(i))
+        });
+
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::Boolean,
+                left.len(),
+                None,
+                null_bit_buffer,
+                0,
+                vec![Buffer::from(buffer)],
+                vec![],
+            )
+        };
+        Ok(Self::from(data))
+    }
+
+    /// Create a [`BooleanArray`] by evaluating the binary operation for
+    /// each element of the provided arrays
+    pub fn from_binary<T: ArrayAccessor, S: ArrayAccessor, F>(
+        left: T,
+        right: S,
+        op: F,
+    ) -> Result<Self, ArrowError>
+    where
+        F: Fn(T::Item, S::Item) -> bool,
+    {
+        if left.len() != right.len() {
+            return Err(ArrowError::ComputeError(
+                "Cannot perform binary operation on arrays of different length"
+                    .to_string(),
+            ));
+        }
+
+        let null_bit_buffer =
+            combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
+
+        let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
+            // SAFETY: i in range 0..len
+            op(left.value_unchecked(i), right.value_unchecked(i))
+        });
+
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::Boolean,
+                left.len(),
+                None,
+                null_bit_buffer,
+                0,
+                vec![Buffer::from(buffer)],
+                vec![],
+            )
+        };
+        Ok(Self::from(data))
     }
 }
 

@@ -22,12 +22,12 @@ use crate::array::{
     PrimitiveArray,
 };
 use crate::buffer::Buffer;
-use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{ArrowNumericType, ArrowPrimitiveType};
 use crate::downcast_dictionary_array;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_iterator::try_for_each_valid_idx;
 use arrow_buffer::MutableBuffer;
+use arrow_data::bit_mask::combine_option_bitmap;
 use std::sync::Arc;
 
 #[inline]
