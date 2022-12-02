@@ -664,6 +664,7 @@ mod tests {
     async fn test_instance_metadata() {
         if env::var("TEST_INTEGRATION").is_err() {
             eprintln!("skipping AWS integration test");
+            return;
         }
 
         // For example https://github.com/aws/amazon-ec2-metadata-mock
