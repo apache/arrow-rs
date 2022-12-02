@@ -1624,7 +1624,7 @@ where
 mod tests {
     use super::*;
     use crate::array::Int32Array;
-    use crate::compute::{try_unary_mut, unary_mut};
+    use crate::compute::{binary_mut, try_binary_mut, try_unary_mut, unary_mut};
     use crate::datatypes::{Date64Type, Int32Type, Int8Type};
     use arrow_buffer::i256;
     use chrono::NaiveDate;
@@ -3098,6 +3098,35 @@ mod tests {
 
         assert_eq!(result.len(), 13);
         assert_eq!(result.null_count(), 13);
+    }
+
+    #[test]
+    fn test_primitive_array_add_mut_by_binary_mut() {
+        let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
+        let b = Int32Array::from(vec![Some(1), None, Some(3), None, Some(5)]);
+
+        let c = binary_mut(a, &b, |a, b| a.add_wrapping(b))
+            .unwrap()
+            .unwrap();
+        let expected = Int32Array::from(vec![Some(16), None, Some(12), None, Some(6)]);
+        assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn test_primitive_add_mut_wrapping_overflow_by_try_binary_mut() {
+        let a = Int32Array::from(vec![i32::MAX, i32::MIN]);
+        let b = Int32Array::from(vec![1, 1]);
+
+        let wrapped = binary_mut(a, &b, |a, b| a.add_wrapping(b))
+            .unwrap()
+            .unwrap();
+        let expected = Int32Array::from(vec![-2147483648, -2147483647]);
+        assert_eq!(expected, wrapped);
+
+        let a = Int32Array::from(vec![i32::MAX, i32::MIN]);
+        let b = Int32Array::from(vec![1, 1]);
+        let overflow = try_binary_mut(a, &b, |a, b| a.add_checked(b));
+        let _ = overflow.unwrap().expect_err("overflow should be detected");
     }
 
     #[test]

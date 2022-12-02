@@ -273,3 +273,7 @@ required-features = ["csv", "chrono-tz"]
 [[test]]
 name = "pyarrow"
 required-features = ["pyarrow"]
+
+[[test]]
+name = "array_cast"
+required-features = ["chrono-tz"]

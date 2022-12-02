@@ -36,7 +36,6 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
-use reqwest::{Client, Proxy};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -51,8 +50,8 @@ use crate::aws::credential::{
 };
 use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
 use crate::{
-    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path, Result,
-    RetryConfig, StreamExt,
+    ClientOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path,
+    Result, RetryConfig, StreamExt,
 };
 
 mod client;
@@ -120,9 +119,6 @@ enum Error {
 
     #[snafu(display("Error reading token file: {}", source))]
     ReadTokenFile { source: std::io::Error },
-
-    #[snafu(display("Unable to use proxy url: {}", source))]
-    ProxyUrl { source: reqwest::Error },
 }
 
 impl From<Error> for super::Error {
@@ -361,12 +357,11 @@ pub struct AmazonS3Builder {
     endpoint: Option<String>,
     token: Option<String>,
     retry_config: RetryConfig,
-    allow_http: bool,
     imdsv1_fallback: bool,
     virtual_hosted_style_request: bool,
     metadata_endpoint: Option<String>,
     profile: Option<String>,
-    proxy_url: Option<String>,
+    client_options: ClientOptions,
 }
 
 impl AmazonS3Builder {
@@ -431,7 +426,8 @@ impl AmazonS3Builder {
         }
 
         if let Ok(text) = std::env::var("AWS_ALLOW_HTTP") {
-            builder.allow_http = text == "true";
+            builder.client_options =
+                builder.client_options.with_allow_http(text == "true");
         }
 
         builder
@@ -487,7 +483,7 @@ impl AmazonS3Builder {
     /// * false (default):  Only HTTPS are allowed
     /// * true:  HTTP and HTTPS are allowed
     pub fn with_allow_http(mut self, allow_http: bool) -> Self {
-        self.allow_http = allow_http;
+        self.client_options = self.client_options.with_allow_http(allow_http);
         self
     }
 
@@ -543,7 +539,13 @@ impl AmazonS3Builder {
 
     /// Set the proxy_url to be used by the underlying client
     pub fn with_proxy_url(mut self, proxy_url: impl Into<String>) -> Self {
-        self.proxy_url = Some(proxy_url.into());
+        self.client_options = self.client_options.with_proxy_url(proxy_url);
+        self
+    }
+
+    /// Sets the client options, overriding any already set
+    pub fn with_client_options(mut self, options: ClientOptions) -> Self {
+        self.client_options = options;
         self
     }
 
@@ -571,14 +573,6 @@ impl AmazonS3Builder {
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
         let region = self.region.context(MissingRegionSnafu)?;
 
-        let clientbuilder = match self.proxy_url {
-            Some(ref url) => {
-                let pr: Proxy =
-                    Proxy::all(url).map_err(|source| Error::ProxyUrl { source })?;
-                Client::builder().proxy(pr)
-            }
-            None => Client::builder(),
-        };
         let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
             (Some(key_id), Some(secret_key), token) => {
                 info!("Using Static credential provider");
@@ -608,7 +602,11 @@ impl AmazonS3Builder {
                     let endpoint = format!("https://sts.{}.amazonaws.com", region);
 
                     // Disallow non-HTTPs requests
-                    let client = clientbuilder.https_only(true).build().unwrap();
+                    let client = self
+                        .client_options
+                        .clone()
+                        .with_allow_http(false)
+                        .client()?;
 
                     Box::new(WebIdentityProvider {
                         cache: Default::default(),
@@ -629,11 +627,12 @@ impl AmazonS3Builder {
                         info!("Using Instance credential provider");
 
                         // The instance metadata endpoint is access over HTTP
-                        let client = clientbuilder.https_only(false).build().unwrap();
+                        let client_options =
+                            self.client_options.clone().with_allow_http(true);
 
                         Box::new(InstanceCredentialProvider {
                             cache: Default::default(),
-                            client,
+                            client: client_options.client()?,
                             retry_config: self.retry_config.clone(),
                             imdsv1_fallback: self.imdsv1_fallback,
                             metadata_endpoint: self
@@ -670,11 +669,10 @@ impl AmazonS3Builder {
             bucket_endpoint,
             credentials,
             retry_config: self.retry_config,
-            allow_http: self.allow_http,
-            proxy_url: self.proxy_url,
+            client_options: self.client_options,
         };
 
-        let client = Arc::new(S3Client::new(config).unwrap());
+        let client = Arc::new(S3Client::new(config)?);
 
         Ok(AmazonS3 { client })
     }
@@ -931,21 +929,20 @@ mod tests {
 
         assert!(s3.is_ok());
 
-        let s3 = AmazonS3Builder::new()
+        let err = AmazonS3Builder::new()
             .with_access_key_id("access_key_id")
             .with_secret_access_key("secret_access_key")
             .with_region("region")
             .with_bucket_name("bucket_name")
             .with_allow_http(true)
             .with_proxy_url("asdf://example.com")
-            .build();
+            .build()
+            .unwrap_err()
+            .to_string();
 
-        assert!(match s3 {
-            Err(crate::Error::Generic { source, .. }) => matches!(
-                source.downcast_ref(),
-                Some(crate::aws::Error::ProxyUrl { .. })
-            ),
-            _ => false,
-        })
+        assert_eq!(
+            "Generic HTTP client error: builder error: unknown proxy scheme",
+            err
+        );
     }
 }

@@ -277,8 +277,8 @@ impl RowGroupMetaData {
     }
 
     /// Returns reference of page offset index of all column in this row group.
-    pub fn page_offset_index(&self) -> &Option<Vec<Vec<PageLocation>>> {
-        &self.page_offset_index
+    pub fn page_offset_index(&self) -> Option<&Vec<Vec<PageLocation>>> {
+        self.page_offset_index.as_ref()
     }
 
     /// Returns reference to a schema descriptor.

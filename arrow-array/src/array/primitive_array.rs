@@ -203,10 +203,10 @@ pub type DurationMicrosecondArray = PrimitiveArray<DurationMicrosecondType>;
 pub type DurationNanosecondArray = PrimitiveArray<DurationNanosecondType>;
 
 /// An array where each element is a 128-bits decimal with precision in [1, 38] and
-/// scale in [-38, 38].
+/// scale less or equal to 38.
 pub type Decimal128Array = PrimitiveArray<Decimal128Type>;
 /// An array where each element is a 256-bits decimal with precision in [1, 76] and
-/// scale in [-76, 76].
+/// scale less or equal to 76.
 pub type Decimal256Array = PrimitiveArray<Decimal256Type>;
 
 /// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
@@ -1121,13 +1121,6 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
                 T::MAX_SCALE
             )));
         }
-        if scale < -T::MAX_SCALE {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "scale {} is smaller than min {}",
-                scale,
-                -Decimal128Type::MAX_SCALE
-            )));
-        }
         if scale > 0 && scale as u8 > precision {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "scale {} is greater than precision {}",
@@ -1148,6 +1141,14 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
             } else {
                 Ok(())
             }
+        })
+    }
+
+    /// Validates the Decimal Array, if the value of slot is overflow for the specified precision, and
+    /// will be casted to Null
+    pub fn null_if_overflow_precision(&self, precision: u8) -> Self {
+        self.unary_opt::<_, T>(|v| {
+            (T::validate_decimal_precision(v, precision).is_ok()).then_some(v)
         })
     }
 
@@ -2053,6 +2054,15 @@ mod tests {
         Decimal128Array::from_iter_values([12345, 456])
             .with_precision_and_scale(4, 10)
             .unwrap();
+    }
+
+    #[test]
+    fn test_decimal_array_set_null_if_overflow_with_precision() {
+        let array =
+            Decimal128Array::from(vec![Some(123456), Some(123), None, Some(123456)]);
+        let result = array.null_if_overflow_precision(5);
+        let expected = Decimal128Array::from(vec![None, Some(123), None, None]);
+        assert_eq!(result, expected);
     }
 
     #[test]

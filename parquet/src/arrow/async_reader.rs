@@ -903,10 +903,8 @@ mod tests {
 
         // Check offset indexes are present for all columns
         for rg in metadata_with_index.row_groups() {
-            let page_locations = rg
-                .page_offset_index()
-                .as_ref()
-                .expect("expected page offset index");
+            let page_locations =
+                rg.page_offset_index().expect("expected page offset index");
             assert_eq!(page_locations.len(), rg.columns().len())
         }
 

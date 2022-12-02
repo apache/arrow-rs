@@ -30,7 +30,8 @@ use self::client::{BlockId, BlockList};
 use crate::{
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::Path,
-    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result, RetryConfig,
+    ClientOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
+    RetryConfig,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -359,8 +360,7 @@ pub struct MicrosoftAzureBuilder {
     authority_host: Option<String>,
     use_emulator: bool,
     retry_config: RetryConfig,
-    allow_http: bool,
-    proxy_url: Option<String>,
+    client_options: ClientOptions,
 }
 
 impl Debug for MicrosoftAzureBuilder {
@@ -480,10 +480,10 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Sets what protocol is allowed. If `allow_http` is :
-    /// * false (default):  Only HTTPS is allowed
+    /// * false (default):  Only HTTPS are allowed
     /// * true:  HTTP and HTTPS are allowed
     pub fn with_allow_http(mut self, allow_http: bool) -> Self {
-        self.allow_http = allow_http;
+        self.client_options = self.client_options.with_allow_http(allow_http);
         self
     }
 
@@ -503,7 +503,13 @@ impl MicrosoftAzureBuilder {
 
     /// Set the proxy_url to be used by the underlying client
     pub fn with_proxy_url(mut self, proxy_url: impl Into<String>) -> Self {
-        self.proxy_url = Some(proxy_url.into());
+        self.client_options = self.client_options.with_proxy_url(proxy_url);
+        self
+    }
+
+    /// Sets the client options, overriding any already set
+    pub fn with_client_options(mut self, options: ClientOptions) -> Self {
+        self.client_options = options;
         self
     }
 
@@ -521,14 +527,13 @@ impl MicrosoftAzureBuilder {
             sas_query_pairs,
             use_emulator,
             retry_config,
-            allow_http,
             authority_host,
-            proxy_url,
+            mut client_options,
         } = self;
 
         let container = container_name.ok_or(Error::MissingContainerName {})?;
 
-        let (is_emulator, allow_http, storage_url, auth, account) = if use_emulator {
+        let (is_emulator, storage_url, auth, account) = if use_emulator {
             let account_name =
                 account_name.unwrap_or_else(|| EMULATOR_ACCOUNT.to_string());
             // Allow overriding defaults. Values taken from
@@ -537,7 +542,9 @@ impl MicrosoftAzureBuilder {
             let account_key =
                 access_key.unwrap_or_else(|| EMULATOR_ACCOUNT_KEY.to_string());
             let credential = credential::CredentialProvider::AccessKey(account_key);
-            (true, true, url, credential, account_name)
+
+            client_options = client_options.with_allow_http(true);
+            (true, url, credential, account_name)
         } else {
             let account_name = account_name.ok_or(Error::MissingAccount {})?;
             let account_url = format!("https://{}.blob.core.windows.net", &account_name);
@@ -564,18 +571,17 @@ impl MicrosoftAzureBuilder {
             } else {
                 Err(Error::MissingCredentials {})
             }?;
-            (false, allow_http, url, credential, account_name)
+            (false, url, credential, account_name)
         };
 
         let config = client::AzureConfig {
             account,
-            allow_http,
             retry_config,
             service: storage_url,
             container,
             credentials: auth,
             is_emulator,
-            proxy_url,
+            client_options,
         };
 
         let client = Arc::new(client::AzureClient::new(config)?);
