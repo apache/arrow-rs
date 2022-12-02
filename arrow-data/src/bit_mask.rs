@@ -98,7 +98,6 @@ pub fn combine_option_bitmap(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_buffer::buffer::buffer_bin_or;
     use arrow_schema::DataType;
     use std::sync::Arc;
 

@@ -22,7 +22,7 @@ use crate::{print_long_array, Array, ArrayAccessor};
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::DataType;
 use std::any::Any;
 
 /// Array of bools
@@ -224,20 +224,20 @@ impl BooleanArray {
     /// let r = BooleanArray::from_binary(&a, &b, |a, b| a == b).unwrap();
     /// assert_eq!(&r, &BooleanArray::from(vec![true, true, false, false, true]));
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// This function panics if left and right are not the same length
+    ///
     pub fn from_binary<T: ArrayAccessor, S: ArrayAccessor, F>(
         left: T,
         right: S,
         mut op: F,
-    ) -> Result<Self, ArrowError>
+    ) -> Self
     where
         F: FnMut(T::Item, S::Item) -> bool,
     {
-        if left.len() != right.len() {
-            return Err(ArrowError::ComputeError(
-                "Cannot perform binary operation on arrays of different length"
-                    .to_string(),
-            ));
-        }
+        assert_eq!(left.len(), right.len());
 
         let null_bit_buffer =
             combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len());
@@ -258,7 +258,7 @@ impl BooleanArray {
                 vec![],
             )
         };
-        Ok(Self::from(data))
+        Self::from(data)
     }
 }
 

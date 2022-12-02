@@ -46,7 +46,14 @@ fn compare_op<T: ArrayAccessor, S: ArrayAccessor, F>(
 where
     F: Fn(T::Item, S::Item) -> bool,
 {
-    BooleanArray::from_binary(left, right, op)
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform comparison operation on arrays of different length"
+                .to_string(),
+        ));
+    }
+
+    Ok(BooleanArray::from_binary(left, right, op))
 }
 
 /// Helper function to perform boolean lambda function on values from array accessor, this
