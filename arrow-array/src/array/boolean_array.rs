@@ -175,8 +175,16 @@ impl BooleanArray {
         indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
     }
 
-    /// Create a [`BooleanArray`] by applying evaluating the operation for
+    /// Create a [`BooleanArray`] by evaluating the operation for
     /// each element of the provided array
+    ///
+    /// ```
+    /// # use arrow_array::{BooleanArray, Int32Array};
+    ///
+    /// let array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    /// let r = BooleanArray::from_unary(&array, |x| x > 2).unwrap();
+    /// assert_eq!(&r, &BooleanArray::from(vec![false, false, true, true, true]));
+    /// ```
     pub fn from_unary<T: ArrayAccessor, F>(left: T, op: F) -> Result<Self, ArrowError>
     where
         F: Fn(T::Item) -> bool,
@@ -207,6 +215,15 @@ impl BooleanArray {
 
     /// Create a [`BooleanArray`] by evaluating the binary operation for
     /// each element of the provided arrays
+    ///
+    /// ```
+    /// # use arrow_array::{BooleanArray, Int32Array};
+    ///
+    /// let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    /// let b = Int32Array::from(vec![1, 2, 0, 2, 5]);
+    /// let r = BooleanArray::from_binary(&a, &b, |a, b| a == b).unwrap();
+    /// assert_eq!(&r, &BooleanArray::from(vec![true, true, false, false, true]));
+    /// ```
     pub fn from_binary<T: ArrayAccessor, S: ArrayAccessor, F>(
         left: T,
         right: S,
