@@ -224,39 +224,6 @@ mod tests {
         assert_eq!(result, expected_null_count);
     }
 
-    /// Compares the null bitmaps of two arrays using a bitwise `or` operation.
-    ///
-    /// This function is useful when implementing operations on higher level arrays.
-    pub(super) fn compare_option_bitmap(
-        left_data: &ArrayData,
-        right_data: &ArrayData,
-        len_in_bits: usize,
-    ) -> Result<Option<Buffer>, ArrowError> {
-        let left_offset_in_bits = left_data.offset();
-        let right_offset_in_bits = right_data.offset();
-
-        let left = left_data.null_buffer();
-        let right = right_data.null_buffer();
-
-        match left {
-            None => match right {
-                None => Ok(None),
-                Some(r) => Ok(Some(r.bit_slice(right_offset_in_bits, len_in_bits))),
-            },
-            Some(l) => match right {
-                None => Ok(Some(l.bit_slice(left_offset_in_bits, len_in_bits))),
-
-                Some(r) => Ok(Some(buffer_bin_or(
-                    l,
-                    left_offset_in_bits,
-                    r,
-                    right_offset_in_bits,
-                    len_in_bits,
-                ))),
-            },
-        }
-    }
-
     fn make_data_with_null_bit_buffer(
         len: usize,
         offset: usize,
@@ -360,32 +327,6 @@ mod tests {
         assert_eq!(
             Some(Buffer::from([0b10101010])),
             combine_option_bitmap(&[&bitmap1, &bitmap2], 8)
-        );
-    }
-
-    #[test]
-    fn test_compare_option_bitmap() {
-        let none_bitmap = make_data_with_null_bit_buffer(8, 0, None);
-        let some_bitmap =
-            make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b01001010])));
-        let inverse_bitmap =
-            make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b10110101])));
-        assert_eq!(None, compare_option_bitmap(&none_bitmap, &none_bitmap, 8));
-        assert_eq!(
-            Some(Buffer::from([0b01001010])),
-            compare_option_bitmap(&some_bitmap, &none_bitmap, 8)
-        );
-        assert_eq!(
-            Some(Buffer::from([0b01001010])),
-            compare_option_bitmap(&none_bitmap, &some_bitmap, 8)
-        );
-        assert_eq!(
-            Some(Buffer::from([0b01001010])),
-            compare_option_bitmap(&some_bitmap, &some_bitmap, 8)
-        );
-        assert_eq!(
-            Some(Buffer::from([0b11111111])),
-            compare_option_bitmap(&some_bitmap, &inverse_bitmap, 8)
         );
     }
 }
