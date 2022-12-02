@@ -221,7 +221,7 @@ impl BooleanArray {
     ///
     /// let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
     /// let b = Int32Array::from(vec![1, 2, 0, 2, 5]);
-    /// let r = BooleanArray::from_binary(&a, &b, |a, b| a == b).unwrap();
+    /// let r = BooleanArray::from_binary(&a, &b, |a, b| a == b);
     /// assert_eq!(&r, &BooleanArray::from(vec![true, true, false, false, true]));
     /// ```
     ///
