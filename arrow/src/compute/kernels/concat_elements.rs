@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::array::*;
-use crate::compute::util::combine_option_bitmap;
 use crate::error::{ArrowError, Result};
+use arrow_data::bit_mask::combine_option_bitmap;
 
 /// Returns the elementwise concatenation of a [`StringArray`].
 ///
@@ -45,7 +45,7 @@ pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
         )));
     }
 
-    let output_bitmap = combine_option_bitmap(&[left.data(), right.data()], left.len())?;
+    let output_bitmap = combine_option_bitmap(&[left.data(), right.data()], left.len());
 
     let left_offsets = left.value_offsets();
     let right_offsets = right.value_offsets();
@@ -111,7 +111,7 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
             .collect::<Vec<_>>()
             .as_slice(),
         size,
-    )?;
+    );
 
     let data_values = arrays
         .iter()

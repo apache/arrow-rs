@@ -41,7 +41,6 @@ use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
 use reqwest::header::RANGE;
-use reqwest::Proxy;
 use reqwest::{header, Client, Method, Response, StatusCode};
 use snafu::{ResultExt, Snafu};
 use tokio::io::AsyncWrite;
@@ -53,7 +52,8 @@ use crate::{
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::{Path, DELIMITER},
     util::{format_http_range, format_prefix},
-    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result, RetryConfig,
+    ClientOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
+    RetryConfig,
 };
 
 use credential::OAuthProvider;
@@ -124,8 +124,11 @@ enum Error {
     #[snafu(display("GCP credential error: {}", source))]
     Credential { source: credential::Error },
 
-    #[snafu(display("Unable to use proxy url: {}", source))]
-    ProxyUrl { source: reqwest::Error },
+    #[snafu(display("Already exists: {}", path))]
+    AlreadyExists {
+        source: crate::client::retry::Error,
+        path: String,
+    },
 }
 
 impl From<Error> for super::Error {
@@ -141,6 +144,10 @@ impl From<Error> for super::Error {
                     source: Box::new(source),
                 }
             }
+            Error::AlreadyExists { source, path } => Self::AlreadyExists {
+                source: Box::new(source),
+                path,
+            },
             _ => Self::Generic {
                 store: "GCS",
                 source: Box::new(err),
@@ -422,8 +429,22 @@ impl GoogleCloudStorageClient {
             .bearer_auth(token)
             .send_retry(&self.retry_config)
             .await
-            .context(CopyRequestSnafu {
-                path: from.as_ref(),
+            .map_err(|err| {
+                if err
+                    .status()
+                    .map(|status| status == reqwest::StatusCode::PRECONDITION_FAILED)
+                    .unwrap_or_else(|| false)
+                {
+                    Error::AlreadyExists {
+                        source: err,
+                        path: to.to_string(),
+                    }
+                } else {
+                    Error::CopyRequest {
+                        source: err,
+                        path: from.to_string(),
+                    }
+                }
             })?;
 
         Ok(())
@@ -739,13 +760,23 @@ fn reader_credentials_file(
 ///  .with_bucket_name(BUCKET_NAME)
 ///  .build();
 /// ```
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct GoogleCloudStorageBuilder {
     bucket_name: Option<String>,
     service_account_path: Option<String>,
-    client: Option<Client>,
     retry_config: RetryConfig,
-    proxy_url: Option<String>,
+    client_options: ClientOptions,
+}
+
+impl Default for GoogleCloudStorageBuilder {
+    fn default() -> Self {
+        Self {
+            bucket_name: None,
+            service_account_path: None,
+            retry_config: Default::default(),
+            client_options: ClientOptions::new().with_allow_http(true),
+        }
+    }
 }
 
 impl GoogleCloudStorageBuilder {
@@ -787,9 +818,15 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
-    /// Set proxy url used for connection
+    /// Set the proxy_url to be used by the underlying client
     pub fn with_proxy_url(mut self, proxy_url: impl Into<String>) -> Self {
-        self.proxy_url = Some(proxy_url.into());
+        self.client_options = self.client_options.with_proxy_url(proxy_url);
+        self
+    }
+
+    /// Sets the client options, overriding any already set
+    pub fn with_client_options(mut self, options: ClientOptions) -> Self {
+        self.client_options = options;
         self
     }
 
@@ -799,27 +836,15 @@ impl GoogleCloudStorageBuilder {
         let Self {
             bucket_name,
             service_account_path,
-            client,
             retry_config,
-            proxy_url,
+            client_options,
         } = self;
 
         let bucket_name = bucket_name.ok_or(Error::MissingBucketName {})?;
         let service_account_path =
             service_account_path.ok_or(Error::MissingServiceAccountPath)?;
 
-        let client = match (proxy_url, client) {
-            (_, Some(client)) => client,
-            (Some(url), None) => {
-                let pr = Proxy::all(&url).map_err(|source| Error::ProxyUrl { source })?;
-                Client::builder()
-                    .proxy(pr)
-                    .build()
-                    .map_err(|source| Error::ProxyUrl { source })?
-            }
-            (None, None) => Client::new(),
-        };
-
+        let client = client_options.client()?;
         let credentials = reader_credentials_file(service_account_path)?;
 
         // TODO: https://cloud.google.com/storage/docs/authentication#oauth-scopes
@@ -879,8 +904,8 @@ mod test {
 
     use crate::{
         tests::{
-            get_nonexistent_object, list_uses_directories_correctly, list_with_delimiter,
-            put_get_delete_list, rename_and_copy, stream_get,
+            copy_if_not_exists, get_nonexistent_object, list_uses_directories_correctly,
+            list_with_delimiter, put_get_delete_list, rename_and_copy, stream_get,
         },
         Error as ObjectStoreError, ObjectStore,
     };
@@ -945,6 +970,9 @@ mod test {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         if integration.client.base_url == default_gcs_base_url() {
+            // Fake GCS server doesn't currently honor ifGenerationMatch
+            // https://github.com/fsouza/fake-gcs-server/issues/994
+            copy_if_not_exists(&integration).await;
             // Fake GCS server does not yet implement XML Multipart uploads
             // https://github.com/fsouza/fake-gcs-server/issues/852
             stream_get(&integration).await;
@@ -1054,18 +1082,17 @@ mod test {
             .build();
         assert!(dbg!(gcs).is_ok());
 
-        let gcs = GoogleCloudStorageBuilder::new()
+        let err = GoogleCloudStorageBuilder::new()
             .with_service_account_path(service_account_path.to_str().unwrap())
             .with_bucket_name("foo")
             .with_proxy_url("asdf://example.com")
-            .build();
+            .build()
+            .unwrap_err()
+            .to_string();
 
-        assert!(match gcs {
-            Err(ObjectStoreError::Generic { source, .. }) => matches!(
-                source.downcast_ref(),
-                Some(crate::gcp::Error::ProxyUrl { .. })
-            ),
-            _ => false,
-        })
+        assert_eq!(
+            "Generic HTTP client error: builder error: unknown proxy scheme",
+            err
+        );
     }
 }

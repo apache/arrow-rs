@@ -20,6 +20,7 @@ use crate::iterator::BooleanIter;
 use crate::raw_pointer::RawPtrBox;
 use crate::{print_long_array, Array, ArrayAccessor};
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
+use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 use std::any::Any;
@@ -172,6 +173,92 @@ impl BooleanArray {
         indexes: impl Iterator<Item = Option<usize>> + 'a,
     ) -> impl Iterator<Item = Option<bool>> + 'a {
         indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
+    }
+
+    /// Create a [`BooleanArray`] by evaluating the operation for
+    /// each element of the provided array
+    ///
+    /// ```
+    /// # use arrow_array::{BooleanArray, Int32Array};
+    ///
+    /// let array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    /// let r = BooleanArray::from_unary(&array, |x| x > 2);
+    /// assert_eq!(&r, &BooleanArray::from(vec![false, false, true, true, true]));
+    /// ```
+    pub fn from_unary<T: ArrayAccessor, F>(left: T, mut op: F) -> Self
+    where
+        F: FnMut(T::Item) -> bool,
+    {
+        let null_bit_buffer = left
+            .data()
+            .null_buffer()
+            .map(|b| b.bit_slice(left.offset(), left.len()));
+
+        let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
+            // SAFETY: i in range 0..len
+            op(left.value_unchecked(i))
+        });
+
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::Boolean,
+                left.len(),
+                None,
+                null_bit_buffer,
+                0,
+                vec![Buffer::from(buffer)],
+                vec![],
+            )
+        };
+        Self::from(data)
+    }
+
+    /// Create a [`BooleanArray`] by evaluating the binary operation for
+    /// each element of the provided arrays
+    ///
+    /// ```
+    /// # use arrow_array::{BooleanArray, Int32Array};
+    ///
+    /// let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    /// let b = Int32Array::from(vec![1, 2, 0, 2, 5]);
+    /// let r = BooleanArray::from_binary(&a, &b, |a, b| a == b);
+    /// assert_eq!(&r, &BooleanArray::from(vec![true, true, false, false, true]));
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This function panics if left and right are not the same length
+    ///
+    pub fn from_binary<T: ArrayAccessor, S: ArrayAccessor, F>(
+        left: T,
+        right: S,
+        mut op: F,
+    ) -> Self
+    where
+        F: FnMut(T::Item, S::Item) -> bool,
+    {
+        assert_eq!(left.len(), right.len());
+
+        let null_bit_buffer =
+            combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len());
+
+        let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
+            // SAFETY: i in range 0..len
+            op(left.value_unchecked(i), right.value_unchecked(i))
+        });
+
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::Boolean,
+                left.len(),
+                None,
+                null_bit_buffer,
+                0,
+                vec![Buffer::from(buffer)],
+                vec![],
+            )
+        };
+        Self::from(data)
     }
 }
 
