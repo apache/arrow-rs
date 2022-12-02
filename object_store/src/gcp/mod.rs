@@ -1064,7 +1064,7 @@ mod test {
             .to_string();
 
         assert_eq!(
-            "Generic client error: builder error: unknown proxy scheme",
+            "Generic HTTP client error: builder error: unknown proxy scheme",
             err
         );
     }

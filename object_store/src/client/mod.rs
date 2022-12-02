@@ -28,7 +28,7 @@ use reqwest::{Client, ClientBuilder, Proxy};
 
 fn map_client_error(e: reqwest::Error) -> super::Error {
     super::Error::Generic {
-        store: "client",
+        store: "HTTP client",
         source: Box::new(e),
     }
 }
