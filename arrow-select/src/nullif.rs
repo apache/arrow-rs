@@ -39,6 +39,10 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     let len = left_data.len();
     let left_offset = left_data.offset();
 
+    if len == 0 {
+        return Ok(make_array(left_data.clone()))
+    }
+
     // left=0 (null)   right=null       output bitmap=null
     // left=0          right=1          output bitmap=null
     // left=1 (set)    right=null       output bitmap=set   (passthrough)
@@ -119,6 +123,7 @@ mod tests {
     use arrow_array::cast::{as_boolean_array, as_primitive_array, as_string_array};
     use arrow_array::types::Int32Type;
     use arrow_array::{Int32Array, StringArray, StructArray};
+    use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
 
     #[test]
@@ -450,5 +455,13 @@ mod tests {
 
         let expected = Int32Array::from(vec![Some(15), Some(7), None, Some(1), Some(9)]);
         assert_eq!(res, &expected);
+    }
+
+    #[test]
+    fn nullif_empty() {
+        let a = Int32Array::from(ArrayData::new_empty(&DataType::Int32));
+        let mask = BooleanArray::from(ArrayData::new_empty(&DataType::Boolean));
+        let res = nullif(&a, &mask).unwrap();
+        assert_eq!(res.as_ref(), &a);
     }
 }
