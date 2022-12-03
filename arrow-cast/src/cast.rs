@@ -658,6 +658,34 @@ pub fn cast_with_options(
             | Map(_, _)
             | Dictionary(_, _),
         ) => Ok(new_null_array(to_type, array.len())),
+        (Dictionary(index_type, _), _) => match **index_type {
+            Int8 => dictionary_cast::<Int8Type>(array, to_type, cast_options),
+            Int16 => dictionary_cast::<Int16Type>(array, to_type, cast_options),
+            Int32 => dictionary_cast::<Int32Type>(array, to_type, cast_options),
+            Int64 => dictionary_cast::<Int64Type>(array, to_type, cast_options),
+            UInt8 => dictionary_cast::<UInt8Type>(array, to_type, cast_options),
+            UInt16 => dictionary_cast::<UInt16Type>(array, to_type, cast_options),
+            UInt32 => dictionary_cast::<UInt32Type>(array, to_type, cast_options),
+            UInt64 => dictionary_cast::<UInt64Type>(array, to_type, cast_options),
+            _ => Err(ArrowError::CastError(format!(
+                "Casting from dictionary type {:?} to {:?} not supported",
+                from_type, to_type,
+            ))),
+        },
+        (_, Dictionary(index_type, value_type)) => match **index_type {
+            Int8 => cast_to_dictionary::<Int8Type>(array, value_type, cast_options),
+            Int16 => cast_to_dictionary::<Int16Type>(array, value_type, cast_options),
+            Int32 => cast_to_dictionary::<Int32Type>(array, value_type, cast_options),
+            Int64 => cast_to_dictionary::<Int64Type>(array, value_type, cast_options),
+            UInt8 => cast_to_dictionary::<UInt8Type>(array, value_type, cast_options),
+            UInt16 => cast_to_dictionary::<UInt16Type>(array, value_type, cast_options),
+            UInt32 => cast_to_dictionary::<UInt32Type>(array, value_type, cast_options),
+            UInt64 => cast_to_dictionary::<UInt64Type>(array, value_type, cast_options),
+            _ => Err(ArrowError::CastError(format!(
+                "Casting from type {:?} to dictionary type {:?} not supported",
+                from_type, to_type,
+            ))),
+        },
         (List(_), List(ref to)) => {
             cast_list_inner::<i32>(array, to, to_type, cast_options)
         }
@@ -685,26 +713,6 @@ pub fn cast_with_options(
         (List(_) | LargeList(_), _) => match to_type {
             Utf8 => cast_list_to_string!(array, i32),
             LargeUtf8 => cast_list_to_string!(array, i64),
-            Dictionary(index_type, value_type) => match **index_type {
-                Int8 => cast_to_dictionary::<Int8Type>(array, value_type, cast_options),
-                Int16 => cast_to_dictionary::<Int16Type>(array, value_type, cast_options),
-                Int32 => cast_to_dictionary::<Int32Type>(array, value_type, cast_options),
-                Int64 => cast_to_dictionary::<Int64Type>(array, value_type, cast_options),
-                UInt8 => cast_to_dictionary::<UInt8Type>(array, value_type, cast_options),
-                UInt16 => {
-                    cast_to_dictionary::<UInt16Type>(array, value_type, cast_options)
-                }
-                UInt32 => {
-                    cast_to_dictionary::<UInt32Type>(array, value_type, cast_options)
-                }
-                UInt64 => {
-                    cast_to_dictionary::<UInt64Type>(array, value_type, cast_options)
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Casting from type {:?} to dictionary type {:?} not supported",
-                    from_type, to_type,
-                ))),
-            },
             _ => Err(ArrowError::CastError(
                 "Cannot cast list to non-list data types".to_string(),
             )),
@@ -784,36 +792,6 @@ pub fn cast_with_options(
                 Float64 => {
                     cast_decimal_to_float!(array, scale, Float64Builder, f64)
                 }
-                Dictionary(index_type, value_type) => match **index_type {
-                    Int8 => {
-                        cast_to_dictionary::<Int8Type>(array, value_type, cast_options)
-                    }
-                    Int16 => {
-                        cast_to_dictionary::<Int16Type>(array, value_type, cast_options)
-                    }
-                    Int32 => {
-                        cast_to_dictionary::<Int32Type>(array, value_type, cast_options)
-                    }
-                    Int64 => {
-                        cast_to_dictionary::<Int64Type>(array, value_type, cast_options)
-                    }
-                    UInt8 => {
-                        cast_to_dictionary::<UInt8Type>(array, value_type, cast_options)
-                    }
-                    UInt16 => {
-                        cast_to_dictionary::<UInt16Type>(array, value_type, cast_options)
-                    }
-                    UInt32 => {
-                        cast_to_dictionary::<UInt32Type>(array, value_type, cast_options)
-                    }
-                    UInt64 => {
-                        cast_to_dictionary::<UInt64Type>(array, value_type, cast_options)
-                    }
-                    _ => Err(ArrowError::CastError(format!(
-                        "Casting from type {:?} to dictionary type {:?} not supported",
-                        from_type, to_type,
-                    ))),
-                },
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {:?} to {:?} not supported",
@@ -872,36 +850,6 @@ pub fn cast_with_options(
                     *scale,
                     cast_options,
                 ),
-                Dictionary(index_type, value_type) => match **index_type {
-                    Int8 => {
-                        cast_to_dictionary::<Int8Type>(array, value_type, cast_options)
-                    }
-                    Int16 => {
-                        cast_to_dictionary::<Int16Type>(array, value_type, cast_options)
-                    }
-                    Int32 => {
-                        cast_to_dictionary::<Int32Type>(array, value_type, cast_options)
-                    }
-                    Int64 => {
-                        cast_to_dictionary::<Int64Type>(array, value_type, cast_options)
-                    }
-                    UInt8 => {
-                        cast_to_dictionary::<UInt8Type>(array, value_type, cast_options)
-                    }
-                    UInt16 => {
-                        cast_to_dictionary::<UInt16Type>(array, value_type, cast_options)
-                    }
-                    UInt32 => {
-                        cast_to_dictionary::<UInt32Type>(array, value_type, cast_options)
-                    }
-                    UInt64 => {
-                        cast_to_dictionary::<UInt64Type>(array, value_type, cast_options)
-                    }
-                    _ => Err(ArrowError::CastError(format!(
-                        "Casting from type {:?} to dictionary type {:?} not supported",
-                        from_type, to_type,
-                    ))),
-                },
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {:?} to {:?} not supported",
@@ -980,20 +928,6 @@ pub fn cast_with_options(
                     *scale,
                     cast_options,
                 ),
-                Dictionary(index_type, _) => match **index_type {
-                    Int8 => dictionary_cast::<Int8Type>(array, to_type, cast_options),
-                    Int16 => dictionary_cast::<Int16Type>(array, to_type, cast_options),
-                    Int32 => dictionary_cast::<Int32Type>(array, to_type, cast_options),
-                    Int64 => dictionary_cast::<Int64Type>(array, to_type, cast_options),
-                    UInt8 => dictionary_cast::<UInt8Type>(array, to_type, cast_options),
-                    UInt16 => dictionary_cast::<UInt16Type>(array, to_type, cast_options),
-                    UInt32 => dictionary_cast::<UInt32Type>(array, to_type, cast_options),
-                    UInt64 => dictionary_cast::<UInt64Type>(array, to_type, cast_options),
-                    _ => Err(ArrowError::CastError(format!(
-                        "Casting from dictionary type {:?} to {:?} not supported",
-                        from_type, to_type,
-                    ))),
-                },
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {:?} to {:?} not supported",
@@ -1045,20 +979,6 @@ pub fn cast_with_options(
                     *scale,
                     cast_options,
                 ),
-                Dictionary(index_type, _) => match **index_type {
-                    Int8 => dictionary_cast::<Int8Type>(array, to_type, cast_options),
-                    Int16 => dictionary_cast::<Int16Type>(array, to_type, cast_options),
-                    Int32 => dictionary_cast::<Int32Type>(array, to_type, cast_options),
-                    Int64 => dictionary_cast::<Int64Type>(array, to_type, cast_options),
-                    UInt8 => dictionary_cast::<UInt8Type>(array, to_type, cast_options),
-                    UInt16 => dictionary_cast::<UInt16Type>(array, to_type, cast_options),
-                    UInt32 => dictionary_cast::<UInt32Type>(array, to_type, cast_options),
-                    UInt64 => dictionary_cast::<UInt64Type>(array, to_type, cast_options),
-                    _ => Err(ArrowError::CastError(format!(
-                        "Casting from dictionary type {:?} to {:?} not supported",
-                        from_type, to_type,
-                    ))),
-                },
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {:?} to {:?} not supported",
@@ -1072,34 +992,6 @@ pub fn cast_with_options(
         (_, Struct(_)) => Err(ArrowError::CastError(
             "Cannot cast to struct from other types".to_string(),
         )),
-        (Dictionary(index_type, _), _) => match **index_type {
-            Int8 => dictionary_cast::<Int8Type>(array, to_type, cast_options),
-            Int16 => dictionary_cast::<Int16Type>(array, to_type, cast_options),
-            Int32 => dictionary_cast::<Int32Type>(array, to_type, cast_options),
-            Int64 => dictionary_cast::<Int64Type>(array, to_type, cast_options),
-            UInt8 => dictionary_cast::<UInt8Type>(array, to_type, cast_options),
-            UInt16 => dictionary_cast::<UInt16Type>(array, to_type, cast_options),
-            UInt32 => dictionary_cast::<UInt32Type>(array, to_type, cast_options),
-            UInt64 => dictionary_cast::<UInt64Type>(array, to_type, cast_options),
-            _ => Err(ArrowError::CastError(format!(
-                "Casting from dictionary type {:?} to {:?} not supported",
-                from_type, to_type,
-            ))),
-        },
-        (_, Dictionary(index_type, value_type)) => match **index_type {
-            Int8 => cast_to_dictionary::<Int8Type>(array, value_type, cast_options),
-            Int16 => cast_to_dictionary::<Int16Type>(array, value_type, cast_options),
-            Int32 => cast_to_dictionary::<Int32Type>(array, value_type, cast_options),
-            Int64 => cast_to_dictionary::<Int64Type>(array, value_type, cast_options),
-            UInt8 => cast_to_dictionary::<UInt8Type>(array, value_type, cast_options),
-            UInt16 => cast_to_dictionary::<UInt16Type>(array, value_type, cast_options),
-            UInt32 => cast_to_dictionary::<UInt32Type>(array, value_type, cast_options),
-            UInt64 => cast_to_dictionary::<UInt64Type>(array, value_type, cast_options),
-            _ => Err(ArrowError::CastError(format!(
-                "Casting from type {:?} to dictionary type {:?} not supported",
-                from_type, to_type,
-            ))),
-        },
         (_, Boolean) => match from_type {
             UInt8 => cast_numeric_to_bool::<UInt8Type>(array),
             UInt16 => cast_numeric_to_bool::<UInt16Type>(array),
