@@ -328,7 +328,7 @@ where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<M>,
     M: ArrowNativeTypeOp,
 {
-    let mul_or_div: M = base.pow_checked(scale.unsigned_abs() as u32).map_err(|_| {
+    let scale_factor = base.pow_checked(scale.unsigned_abs() as u32).map_err(|_| {
         ArrowError::CastError(format!(
             "Cannot cast to {:?}({}, {}). The scale causes overflow.",
             D::PREFIX,
@@ -337,29 +337,19 @@ where
         ))
     })?;
 
-    if scale < 0 {
-        if cast_options.safe {
-            array
-                .unary_opt::<_, D>(|v| v.as_().div_checked(mul_or_div).ok())
-                .with_precision_and_scale(precision, scale)
-                .map(|a| Arc::new(a) as ArrayRef)
-        } else {
-            array
-                .try_unary::<_, D, _>(|v| v.as_().div_checked(mul_or_div))
-                .and_then(|a| a.with_precision_and_scale(precision, scale))
-                .map(|a| Arc::new(a) as ArrayRef)
+    let array = if scale < 0 {
+        match cast_options.safe {
+            true => array.unary_opt::<_, D>(|v| v.as_().div_checked(scale_factor).ok()),
+            false => array.try_unary::<_, D, _>(|v| v.as_().div_checked(scale_factor))?,
         }
-    } else if cast_options.safe {
-        array
-            .unary_opt::<_, D>(|v| v.as_().mul_checked(mul_or_div).ok())
-            .with_precision_and_scale(precision, scale)
-            .map(|a| Arc::new(a) as ArrayRef)
     } else {
-        array
-            .try_unary::<_, D, _>(|v| v.as_().mul_checked(mul_or_div))
-            .and_then(|a| a.with_precision_and_scale(precision, scale))
-            .map(|a| Arc::new(a) as ArrayRef)
-    }
+        match cast_options.safe {
+            true => array.unary_opt::<_, D>(|v| v.as_().mul_checked(scale_factor).ok()),
+            false => array.try_unary::<_, D, _>(|v| v.as_().mul_checked(scale_factor))?,
+        }
+    };
+
+    Ok(Arc::new(array.with_precision_and_scale(precision, scale)?))
 }
 
 fn cast_floating_point_to_decimal128<T: ArrowPrimitiveType>(
@@ -381,22 +371,17 @@ where
     } else {
         array
             .try_unary::<_, Decimal128Type, _>(|v| {
-                mul.mul_checked(v.as_()).and_then(|value| {
-                    let mul_v = value.round();
-                    let integer: i128 = mul_v.to_i128().ok_or_else(|| {
-                        ArrowError::CastError(format!(
-                            "Cannot cast to {}({}, {}). Overflowing on {:?}",
-                            Decimal128Type::PREFIX,
-                            precision,
-                            scale,
-                            v
-                        ))
-                    })?;
-
-                    Ok(integer)
+                (mul * v.as_()).round().to_i128().ok_or_else(|| {
+                    ArrowError::CastError(format!(
+                        "Cannot cast to {}({}, {}). Overflowing on {:?}",
+                        Decimal128Type::PREFIX,
+                        precision,
+                        scale,
+                        v
+                    ))
                 })
-            })
-            .and_then(|a| a.with_precision_and_scale(precision, scale))
+            })?
+            .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
     }
 }
@@ -429,8 +414,8 @@ where
                         v
                     ))
                 })
-            })
-            .and_then(|a| a.with_precision_and_scale(precision, scale))
+            })?
+            .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
     }
 }
@@ -625,16 +610,40 @@ pub fn cast_with_options(
     }
     match (from_type, to_type) {
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
-            cast_decimal_to_decimal_with_option::<16, 16>(array, s1, p2, s2, cast_options)
+            cast_decimal_to_decimal::<Decimal128Type, Decimal128Type>(
+                as_primitive_array(array),
+                *s1,
+                *p2,
+                *s2,
+                cast_options,
+            )
         }
         (Decimal256(_, s1), Decimal256(p2, s2)) => {
-            cast_decimal_to_decimal_with_option::<32, 32>(array, s1, p2, s2, cast_options)
+            cast_decimal_to_decimal::<Decimal256Type, Decimal256Type>(
+                as_primitive_array(array),
+                *s1,
+                *p2,
+                *s2,
+                cast_options,
+            )
         }
         (Decimal128(_, s1), Decimal256(p2, s2)) => {
-            cast_decimal_to_decimal_with_option::<16, 32>(array, s1, p2, s2, cast_options)
+            cast_decimal_to_decimal::<Decimal128Type, Decimal256Type>(
+                as_primitive_array(array),
+                *s1,
+                *p2,
+                *s2,
+                cast_options,
+            )
         }
         (Decimal256(_, s1), Decimal128(p2, s2)) => {
-            cast_decimal_to_decimal_with_option::<32, 16>(array, s1, p2, s2, cast_options)
+            cast_decimal_to_decimal::<Decimal256Type, Decimal128Type>(
+                as_primitive_array(array),
+                *s1,
+                *p2,
+                *s2,
+                cast_options,
+            )
         }
         (Decimal128(_, scale), _) => {
             // cast decimal to other type
@@ -1960,471 +1969,110 @@ const fn time_unit_multiple(unit: &TimeUnit) -> i64 {
     }
 }
 
-/// Cast one type of decimal array to another type of decimal array
-fn cast_decimal_to_decimal_with_option<
-    const BYTE_WIDTH1: usize,
-    const BYTE_WIDTH2: usize,
->(
-    array: &ArrayRef,
-    input_scale: &i8,
-    output_precision: &u8,
-    output_scale: &i8,
+/// A utility trait that provides checked conversions between
+/// decimal types inspired by [`NumCast`]
+trait DecimalCast: Sized {
+    fn to_i128(self) -> Option<i128>;
+
+    fn to_i256(self) -> Option<i256>;
+
+    fn from_decimal<T: DecimalCast>(n: T) -> Option<Self>;
+}
+
+impl DecimalCast for i128 {
+    fn to_i128(self) -> Option<i128> {
+        Some(self)
+    }
+
+    fn to_i256(self) -> Option<i256> {
+        Some(i256::from_i128(self))
+    }
+
+    fn from_decimal<T: DecimalCast>(n: T) -> Option<Self> {
+        n.to_i128()
+    }
+}
+
+impl DecimalCast for i256 {
+    fn to_i128(self) -> Option<i128> {
+        self.to_i128()
+    }
+
+    fn to_i256(self) -> Option<i256> {
+        Some(self)
+    }
+
+    fn from_decimal<T: DecimalCast>(n: T) -> Option<Self> {
+        n.to_i256()
+    }
+}
+
+fn cast_decimal_to_decimal<I, O>(
+    array: &PrimitiveArray<I>,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
     cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
-    if cast_options.safe {
-        cast_decimal_to_decimal_safe::<BYTE_WIDTH1, BYTE_WIDTH2>(
-            array,
-            input_scale,
+) -> Result<ArrayRef, ArrowError>
+where
+    I: DecimalType,
+    O: DecimalType,
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    let error = |x| {
+        ArrowError::CastError(format!(
+            "Cannot cast to {}({}, {}). Overflowing on {:?}",
+            O::PREFIX,
             output_precision,
             output_scale,
-        )
-    } else {
-        cast_decimal_to_decimal::<BYTE_WIDTH1, BYTE_WIDTH2>(
-            array,
-            input_scale,
-            output_precision,
-            output_scale,
-        )
-    }
-}
+            x
+        ))
+    };
 
-/// Cast one type of decimal array to another type of decimal array. Returning NULLs for
-/// the array values when cast failures happen.
-fn cast_decimal_to_decimal_safe<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
-    array: &ArrayRef,
-    input_scale: &i8,
-    output_precision: &u8,
-    output_scale: &i8,
-) -> Result<ArrayRef, ArrowError> {
-    if input_scale > output_scale {
-        // For example, input_scale is 4 and output_scale is 3;
-        // Original value is 11234_i128, and will be cast to 1123_i128.
-        let div = 10_i128.pow((input_scale - output_scale) as u32);
-        let half = div / 2;
-        let neg_half = half.wrapping_neg();
-        if BYTE_WIDTH1 == 16 {
-            let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
-            if BYTE_WIDTH2 == 16 {
-                // rounding the result
-                let iter = array.iter().map(|v| {
-                    v.map(|v| {
-                        // the div must be gt_eq 10, we don't need to check the overflow for the `div`/`mod` operation
-                        let d = v.wrapping_div(div);
-                        let r = v.wrapping_rem(div);
-                        if v >= 0 && r >= half {
-                            d.wrapping_add(1)
-                        } else if v < 0 && r <= neg_half {
-                            d.wrapping_sub(1)
-                        } else {
-                            d
-                        }
-                    })
-                });
-                let casted_array = unsafe {
-                    PrimitiveArray::<Decimal128Type>::from_trusted_len_iter(iter)
-                };
-                casted_array
-                    .with_precision_and_scale(*output_precision, *output_scale)
-                    .map(|a| Arc::new(a) as ArrayRef)
-            } else {
-                let iter = array.iter().map(|v| {
-                    v.map(|v| {
-                        let d = v.wrapping_div(div);
-                        let r = v.wrapping_rem(div);
-                        i256::from_i128(if v >= 0 && r >= half {
-                            d.wrapping_add(1)
-                        } else if v < 0 && r <= neg_half {
-                            d.wrapping_sub(1)
-                        } else {
-                            d
-                        })
-                    })
-                });
-                let casted_array = unsafe {
-                    PrimitiveArray::<Decimal256Type>::from_trusted_len_iter(iter)
-                };
-                casted_array
-                    .with_precision_and_scale(*output_precision, *output_scale)
-                    .map(|a| Arc::new(a) as ArrayRef)
-            }
-        } else {
-            let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
-            let div = i256::from_i128(div);
-            let half = div / i256::from_i128(2);
-            let neg_half = half.wrapping_neg();
-            if BYTE_WIDTH2 == 16 {
-                let iter = array.iter().map(|v| {
-                    v.and_then(|v| {
-                        let d = v.wrapping_div(div);
-                        let r = v.wrapping_rem(div);
-                        if v >= i256::ZERO && r >= half {
-                            d.wrapping_add(i256::ONE)
-                        } else if v < i256::ZERO && r <= neg_half {
-                            d.wrapping_sub(i256::ONE)
-                        } else {
-                            d
-                        }
-                        .to_i128()
-                    })
-                });
-                let casted_array = unsafe {
-                    PrimitiveArray::<Decimal128Type>::from_trusted_len_iter(iter)
-                };
-                casted_array
-                    .with_precision_and_scale(*output_precision, *output_scale)
-                    .map(|a| Arc::new(a) as ArrayRef)
-            } else {
-                let iter = array.iter().map(|v| {
-                    v.map(|v| {
-                        let d = v.wrapping_div(div);
-                        let r = v.wrapping_rem(div);
-                        if v >= i256::ZERO && r >= half {
-                            d.wrapping_add(i256::ONE)
-                        } else if v < i256::ZERO && r <= neg_half {
-                            d.wrapping_sub(i256::ONE)
-                        } else {
-                            d
-                        }
-                    })
-                });
-                let casted_array = unsafe {
-                    PrimitiveArray::<Decimal256Type>::from_trusted_len_iter(iter)
-                };
-                casted_array
-                    .with_precision_and_scale(*output_precision, *output_scale)
-                    .map(|a| Arc::new(a) as ArrayRef)
-            }
+    let array: PrimitiveArray<O> = if input_scale > output_scale {
+        let div = I::Native::from_decimal(10_i128)
+            .unwrap()
+            .pow_checked((input_scale - output_scale) as u32)?;
+
+        let half = div.div_wrapping(I::Native::from_usize(2).unwrap());
+        let half_neg = half.neg_wrapping();
+
+        let f = |x: I::Native| {
+            // div is >= 10 and so this cannot overflow
+            let div = x.div_wrapping(div);
+            let rem = x.mod_wrapping(div);
+
+            // Round result
+            let adjusted = match x >= I::Native::ZERO {
+                true if rem >= half => div.add_wrapping(I::Native::ONE),
+                false if rem <= half_neg => div.sub_wrapping(I::Native::ONE),
+                _ => div,
+            };
+            O::Native::from_decimal(adjusted)
+        };
+
+        match cast_options.safe {
+            true => array.unary_opt(f),
+            false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
         }
     } else {
-        // For example, input_scale is 3 and output_scale is 4;
-        // Original value is 1123_i128, and will be cast to 11230_i128.
-        let mul = 10_i128.pow((output_scale - input_scale) as u32);
-        if BYTE_WIDTH1 == 16 {
-            let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
-            if BYTE_WIDTH2 == 16 {
-                let iter = array
-                    .iter()
-                    .map(|v| v.and_then(|v| v.mul_checked(mul).ok()));
-                let casted_array = unsafe {
-                    PrimitiveArray::<Decimal128Type>::from_trusted_len_iter(iter)
-                };
-                casted_array
-                    .with_precision_and_scale(*output_precision, *output_scale)
-                    .map(|a| Arc::new(a) as ArrayRef)
-            } else {
-                let iter = array.iter().map(|v| {
-                    v.and_then(|v| v.mul_checked(mul).ok().map(i256::from_i128))
-                });
-                let casted_array = unsafe {
-                    PrimitiveArray::<Decimal256Type>::from_trusted_len_iter(iter)
-                };
-                casted_array
-                    .with_precision_and_scale(*output_precision, *output_scale)
-                    .map(|a| Arc::new(a) as ArrayRef)
-            }
-        } else {
-            let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
-            let mul = i256::from_i128(mul);
-            if BYTE_WIDTH2 == 16 {
-                let iter = array.iter().map(|v| {
-                    v.and_then(|v| v.mul_checked(mul).ok().and_then(|v| v.to_i128()))
-                });
-                let casted_array = unsafe {
-                    PrimitiveArray::<Decimal128Type>::from_trusted_len_iter(iter)
-                };
-                casted_array
-                    .with_precision_and_scale(*output_precision, *output_scale)
-                    .map(|a| Arc::new(a) as ArrayRef)
-            } else {
-                let iter = array
-                    .iter()
-                    .map(|v| v.and_then(|v| v.mul_checked(mul).ok()));
-                let casted_array = unsafe {
-                    PrimitiveArray::<Decimal256Type>::from_trusted_len_iter(iter)
-                };
-                casted_array
-                    .with_precision_and_scale(*output_precision, *output_scale)
-                    .map(|a| Arc::new(a) as ArrayRef)
-            }
+        let mul = O::Native::from_decimal(10_i128)
+            .unwrap()
+            .pow_checked((output_scale - input_scale) as u32)?;
+
+        let f = |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
+
+        match cast_options.safe {
+            true => array.unary_opt(f),
+            false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
         }
-    }
-}
+    };
 
-/// Cast one type of decimal array to another type of decimal array. Returning `Err` if
-/// cast failure happens.
-fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
-    array: &ArrayRef,
-    input_scale: &i8,
-    output_precision: &u8,
-    output_scale: &i8,
-) -> Result<ArrayRef, ArrowError> {
-    if input_scale > output_scale {
-        // For example, input_scale is 4 and output_scale is 3;
-        // Original value is 11234_i128, and will be cast to 1123_i128.
-        if BYTE_WIDTH1 == 16 {
-            let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
-            if BYTE_WIDTH2 == 16 {
-                // the div must be greater or equal than 10
-                let div = 10_i128
-                    .pow_checked((input_scale - output_scale) as u32)
-                    .map_err(|_| {
-                        ArrowError::CastError(format!(
-                            "Cannot cast. The scale {} causes overflow.",
-                            *output_scale,
-                        ))
-                    })?;
-                let half = div / 2;
-                let neg_half = -half;
-
-                array
-                    .try_unary::<_, Decimal128Type, _>(|v| {
-                        // cast to smaller scale, need to round the result
-                        // the div must be gt_eq 10, we don't need to check the overflow for the `div`/`mod` operation
-                        let d = v.wrapping_div(div);
-                        let r = v.wrapping_rem(div);
-                        if v >= 0 && r >= half {
-                            d.checked_add(1)
-                        } else if v < 0 && r <= neg_half {
-                            d.checked_sub(1)
-                        } else {
-                            Some(d)
-                        }
-                        .ok_or_else(|| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast to {:?}({}, {}). Overflowing on {:?}",
-                                Decimal128Type::PREFIX,
-                                *output_precision,
-                                *output_scale,
-                                v
-                            ))
-                        })
-                    })
-                    .and_then(|a| {
-                        a.with_precision_and_scale(*output_precision, *output_scale)
-                    })
-                    .map(|a| Arc::new(a) as ArrayRef)
-            } else {
-                let div = i256::from_i128(10_i128)
-                    .pow_checked((input_scale - output_scale) as u32)
-                    .map_err(|_| {
-                        ArrowError::CastError(format!(
-                            "Cannot cast. The scale {} causes overflow.",
-                            *output_scale,
-                        ))
-                    })?;
-
-                let half = div / i256::from_i128(2_i128);
-                let neg_half = -half;
-
-                array
-                    .try_unary::<_, Decimal256Type, _>(|v| {
-                        // the div must be gt_eq 10, we don't need to check the overflow for the `div`/`mod` operation
-                        let v = i256::from_i128(v);
-                        let d = v.wrapping_div(div);
-                        let r = v.wrapping_rem(div);
-                        if v >= i256::ZERO && r >= half {
-                            d.checked_add(i256::ONE)
-                        } else if v < i256::ZERO && r <= neg_half {
-                            d.checked_sub(i256::ONE)
-                        } else {
-                            Some(d)
-                        }
-                        .ok_or_else(|| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast to {:?}({}, {}). Overflowing on {:?}",
-                                Decimal256Type::PREFIX,
-                                *output_precision,
-                                *output_scale,
-                                v
-                            ))
-                        })
-                    })
-                    .and_then(|a| {
-                        a.with_precision_and_scale(*output_precision, *output_scale)
-                    })
-                    .map(|a| Arc::new(a) as ArrayRef)
-            }
-        } else {
-            let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
-            let div = i256::from_i128(10_i128)
-                .pow_checked((input_scale - output_scale) as u32)
-                .map_err(|_| {
-                    ArrowError::CastError(format!(
-                        "Cannot cast. The scale {} causes overflow.",
-                        *output_scale,
-                    ))
-                })?;
-            let half = div / i256::from_i128(2_i128);
-            let neg_half = -half;
-            if BYTE_WIDTH2 == 16 {
-                array
-                    .try_unary::<_, Decimal128Type, _>(|v| {
-                        // the div must be gt_eq 10, we don't need to check the overflow for the `div`/`mod` operation
-                        let d = v.wrapping_div(div);
-                        let r = v.wrapping_rem(div);
-                        if v >= i256::ZERO && r >= half {
-                            d.checked_add(i256::ONE)
-                        } else if v < i256::ZERO && r <= neg_half {
-                            d.checked_sub(i256::ONE)
-                        } else {
-                            Some(d)
-                        }.ok_or_else(|| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast to {:?}({}, {}). Overflowing on {:?}",
-                                Decimal128Type::PREFIX,
-                                *output_precision,
-                                *output_scale,
-                                v
-                            ))
-                        }).and_then(|v| v.to_i128().ok_or_else(|| {
-                            ArrowError::InvalidArgumentError(
-                                format!("{:?} cannot be casted to 128-bit integer for Decimal128", v),
-                            )
-                        }))
-                    })
-                    .and_then(|a| {
-                        a.with_precision_and_scale(*output_precision, *output_scale)
-                    })
-                    .map(|a| Arc::new(a) as ArrayRef)
-            } else {
-                array
-                    .try_unary::<_, Decimal256Type, _>(|v| {
-                        // the div must be gt_eq 10, we don't need to check the overflow for the `div`/`mod` operation
-                        let d = v.wrapping_div(div);
-                        let r = v.wrapping_rem(div);
-                        if v >= i256::ZERO && r >= half {
-                            d.checked_add(i256::ONE)
-                        } else if v < i256::ZERO && r <= neg_half {
-                            d.checked_sub(i256::ONE)
-                        } else {
-                            Some(d)
-                        }
-                        .ok_or_else(|| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast to {:?}({}, {}). Overflowing on {:?}",
-                                Decimal256Type::PREFIX,
-                                *output_precision,
-                                *output_scale,
-                                v
-                            ))
-                        })
-                    })
-                    .and_then(|a| {
-                        a.with_precision_and_scale(*output_precision, *output_scale)
-                    })
-                    .map(|a| Arc::new(a) as ArrayRef)
-            }
-        }
-    } else {
-        // For example, input_scale is 3 and output_scale is 4;
-        // Original value is 1123_i128, and will be cast to 11230_i128.
-        if BYTE_WIDTH1 == 16 {
-            let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
-
-            if BYTE_WIDTH2 == 16 {
-                let mul = 10_i128
-                    .pow_checked((output_scale - input_scale) as u32)
-                    .map_err(|_| {
-                        ArrowError::CastError(format!(
-                            "Cannot cast. The scale {} causes overflow.",
-                            *output_scale,
-                        ))
-                    })?;
-
-                array
-                    .try_unary::<_, Decimal128Type, _>(|v| {
-                        v.checked_mul(mul).ok_or_else(|| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast to {:?}({}, {}). Overflowing on {:?}",
-                                Decimal128Type::PREFIX,
-                                *output_precision,
-                                *output_scale,
-                                v
-                            ))
-                        })
-                    })
-                    .and_then(|a| {
-                        a.with_precision_and_scale(*output_precision, *output_scale)
-                    })
-                    .map(|a| Arc::new(a) as ArrayRef)
-            } else {
-                let mul = i256::from_i128(10_i128)
-                    .pow_checked((output_scale - input_scale) as u32)
-                    .map_err(|_| {
-                        ArrowError::CastError(format!(
-                            "Cannot cast. The scale {} causes overflow.",
-                            *output_scale,
-                        ))
-                    })?;
-
-                array
-                    .try_unary::<_, Decimal256Type, _>(|v| {
-                        i256::from_i128(v).checked_mul(mul).ok_or_else(|| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast to {:?}({}, {}). Overflowing on {:?}",
-                                Decimal256Type::PREFIX,
-                                *output_precision,
-                                *output_scale,
-                                v
-                            ))
-                        })
-                    })
-                    .and_then(|a| {
-                        a.with_precision_and_scale(*output_precision, *output_scale)
-                    })
-                    .map(|a| Arc::new(a) as ArrayRef)
-            }
-        } else {
-            let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
-            let mul = i256::from_i128(10_i128)
-                .pow_checked((output_scale - input_scale) as u32)
-                .map_err(|_| {
-                    ArrowError::CastError(format!(
-                        "Cannot cast. The scale {} causes overflow.",
-                        *output_scale,
-                    ))
-                })?;
-            if BYTE_WIDTH2 == 16 {
-                array
-                    .try_unary::<_, Decimal128Type, _>(|v| {
-                        v.checked_mul(mul).ok_or_else(|| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast to {:?}({}, {}). Overflowing on {:?}",
-                                Decimal128Type::PREFIX,
-                                *output_precision,
-                                *output_scale,
-                                v
-                            ))
-                        }).and_then(|v| v.to_i128().ok_or_else(|| {
-                            ArrowError::InvalidArgumentError(
-                                format!("{:?} cannot be casted to 128-bit integer for Decimal128", v),
-                            )
-                        }))
-                    })
-                    .and_then(|a| {
-                        a.with_precision_and_scale(*output_precision, *output_scale)
-                    })
-                    .map(|a| Arc::new(a) as ArrayRef)
-            } else {
-                array
-                    .try_unary::<_, Decimal256Type, _>(|v| {
-                        v.checked_mul(mul).ok_or_else(|| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast to {:?}({}, {}). Overflowing on {:?}",
-                                Decimal256Type::PREFIX,
-                                *output_precision,
-                                *output_scale,
-                                v
-                            ))
-                        })
-                    })
-                    .and_then(|a| {
-                        a.with_precision_and_scale(*output_precision, *output_scale)
-                    })
-                    .map(|a| Arc::new(a) as ArrayRef)
-            }
-        }
-    }
+    Ok(Arc::new(array.with_precision_and_scale(
+        output_precision,
+        output_scale,
+    )?))
 }
 
 /// Convert Array into a PrimitiveArray of type, and apply numeric cast
@@ -3718,7 +3366,7 @@ mod tests {
     #[test]
     #[cfg(not(feature = "force_validate"))]
     #[should_panic(
-        expected = "5789604461865809771178549250434395392663499233282028201972879200395656481997 cannot be casted to 128-bit integer for Decimal128"
+        expected = "Cannot cast to Decimal128(20, 3). Overflowing on 57896044618658097711785492504343953926634992332820282019728792003956564819967"
     )]
     fn test_cast_decimal_to_decimal_round_with_error() {
         // decimal256 to decimal128 overflow
@@ -3886,7 +3534,7 @@ mod tests {
         let array = Arc::new(input_decimal_array) as ArrayRef;
         let result =
             cast_with_options(&array, &output_type, &CastOptions { safe: false });
-        assert_eq!("Cast error: Cannot cast to \"Decimal128\"(38, 38). Overflowing on 170141183460469231731687303715884105727",
+        assert_eq!("Cast error: Cannot cast to Decimal128(38, 38). Overflowing on 170141183460469231731687303715884105727",
                    result.unwrap_err().to_string());
     }
 
@@ -3901,7 +3549,7 @@ mod tests {
         let array = Arc::new(input_decimal_array) as ArrayRef;
         let result =
             cast_with_options(&array, &output_type, &CastOptions { safe: false });
-        assert_eq!("Cast error: Cannot cast to \"Decimal256\"(76, 76). Overflowing on 170141183460469231731687303715884105727",
+        assert_eq!("Cast error: Cannot cast to Decimal256(76, 76). Overflowing on 170141183460469231731687303715884105727",
                    result.unwrap_err().to_string());
     }
 
@@ -3936,7 +3584,7 @@ mod tests {
         let array = Arc::new(input_decimal_array) as ArrayRef;
         let result =
             cast_with_options(&array, &output_type, &CastOptions { safe: false });
-        assert_eq!("Invalid argument error: 17014118346046923173168730371588410572700 cannot be casted to 128-bit integer for Decimal128",
+        assert_eq!("Cast error: Cannot cast to Decimal128(38, 7). Overflowing on 170141183460469231731687303715884105727",
                    result.unwrap_err().to_string());
     }
 
@@ -3950,7 +3598,7 @@ mod tests {
         let array = Arc::new(input_decimal_array) as ArrayRef;
         let result =
             cast_with_options(&array, &output_type, &CastOptions { safe: false });
-        assert_eq!("Cast error: Cannot cast to \"Decimal256\"(76, 55). Overflowing on 170141183460469231731687303715884105727",
+        assert_eq!("Cast error: Cannot cast to Decimal256(76, 55). Overflowing on 170141183460469231731687303715884105727",
                    result.unwrap_err().to_string());
     }
 
