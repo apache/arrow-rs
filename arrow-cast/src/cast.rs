@@ -3311,6 +3311,7 @@ mod tests {
             for (i, x) in $OUTPUT_VALUES.iter().enumerate() {
                 match x {
                     Some(x) => {
+                        assert!(!result_array.is_null(i));
                         assert_eq!(result_array.value(i), *x);
                     }
                     None => {
@@ -6963,5 +6964,26 @@ mod tests {
         let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
 
         assert_eq!("1300", decimal_arr.value_as_string(0));
+    }
+
+    #[test]
+    fn test_cast_decimal128_to_decimal256_negative() {
+        let input_type = DataType::Decimal128(10, 3);
+        let output_type = DataType::Decimal256(10, 5);
+        assert!(can_cast_types(&input_type, &output_type));
+        let array = vec![Some(i128::MAX), Some(i128::MIN)];
+        let input_decimal_array = create_decimal_array(array, 10, 3).unwrap();
+        let array = Arc::new(input_decimal_array) as ArrayRef;
+
+        let hundred = i256::from_i128(100);
+        generate_cast_test_case!(
+            &array,
+            Decimal256Array,
+            &output_type,
+            vec![
+                Some(i256::from_i128(i128::MAX).mul_wrapping(hundred)),
+                Some(i256::from_i128(i128::MIN).mul_wrapping(hundred))
+            ]
+        );
     }
 }
