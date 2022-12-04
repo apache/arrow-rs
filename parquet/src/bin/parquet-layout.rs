@@ -53,6 +53,7 @@ struct ParquetFile {
 #[derive(Serialize, Debug)]
 struct RowGroup {
     columns: Vec<ColumnChunk>,
+    row_count: i64,
 }
 
 #[derive(Serialize, Debug)]
@@ -144,7 +145,10 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            Ok(RowGroup { columns })
+            Ok(RowGroup {
+                columns,
+                row_count: row_group.num_rows(),
+            })
         })
         .collect::<Result<Vec<_>>>()?;
 
