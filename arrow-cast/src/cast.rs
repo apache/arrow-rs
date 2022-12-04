@@ -2044,14 +2044,14 @@ where
 
         let f = |x: I::Native| {
             // div is >= 10 and so this cannot overflow
-            let div = x.div_wrapping(div);
-            let rem = x.mod_wrapping(div);
+            let d = x.div_wrapping(div);
+            let r = x.mod_wrapping(div);
 
             // Round result
             let adjusted = match x >= I::Native::ZERO {
-                true if rem >= half => div.add_wrapping(I::Native::ONE),
-                false if rem <= half_neg => div.sub_wrapping(I::Native::ONE),
-                _ => div,
+                true if r >= half => d.add_wrapping(I::Native::ONE),
+                false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
+                _ => d,
             };
             O::Native::from_decimal(adjusted)
         };
