@@ -915,6 +915,8 @@ mod tests {
 
     #[test]
     fn test_null_struct() {
+        // It is possible to create a null struct containing a non-nullable child
+        // see https://github.com/apache/arrow-rs/pull/3244 for details
         let struct_type =
             DataType::Struct(vec![Field::new("data", DataType::Int64, false)]);
         let array = new_null_array(&struct_type, 9);

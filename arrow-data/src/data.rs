@@ -1040,6 +1040,8 @@ impl ArrayData {
                             let mut buffer =
                                 MutableBuffer::new_null(element_len * self.len);
 
+                            // Expand each bit within `null_mask` into `element_len`
+                            // bits, constructing the implicit mask of the child elements
                             for i in 0..self.len {
                                 if !bit_util::get_bit(nulls.as_ref(), self.offset + i) {
                                     continue;
