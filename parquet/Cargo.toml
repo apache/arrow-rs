@@ -51,6 +51,7 @@ num = { version = "0.4", default-features = false }
 num-bigint = { version = "0.4", default-features = false }
 base64 = { version = "0.13", default-features = false, features = ["std"], optional = true }
 clap = { version = "4", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 seq-macro = { version = "0.3", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
@@ -81,7 +82,7 @@ default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
 # Enable arrow reader/writer APIs
 arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-cast", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
 # Enable CLI tools
-cli = ["json", "base64", "clap", "arrow-csv"]
+cli = ["json", "base64", "clap", "arrow-csv", "serde"]
 # Enable JSON APIs
 json = ["serde_json", "base64"]
 # Enable internal testing APIs
@@ -123,6 +124,10 @@ required-features = ["arrow", "cli"]
 
 [[bin]]
 name = "parquet-show-bloom-filter"
+required-features = ["cli"]
+
+[[bin]]
+name = "parquet-layout"
 required-features = ["cli"]
 
 [[bench]]
