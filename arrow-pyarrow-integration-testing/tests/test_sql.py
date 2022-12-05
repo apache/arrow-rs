@@ -201,11 +201,15 @@ def test_time32_python():
     del expected
 
 
-def test_empty_array_python():
+@pytest.mark.parametrize("datatype", _supported_pyarrow_types, ids=str)
+def test_empty_array_python(datatype):
     """
     Python -> Rust -> Python
     """
-    a = pa.array([], pa.int32())
+    if datatype == pa.float16():
+        pytest.skip("Float 16 is not implemented in Rust")
+
+    a = pa.array([], datatype)
     b = rust.round_trip_array(a)
     b.validate(full=True)
     assert a.to_pylist() == b.to_pylist()
