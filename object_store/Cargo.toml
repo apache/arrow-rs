@@ -51,15 +51,13 @@ rand = { version = "0.8", default-features = false, features = ["std", "std_rng"
 reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"], optional = true }
 ring = { version = "0.16", default-features = false, features = ["std"], optional = true }
 rustls-pemfile = { version = "1.0", default-features = false, optional = true }
-# Fix for wasm32-unknown-unknown (see https://docs.rs/getrandom/latest/getrandom/#webassembly-support)
-getrandom = { version = "0.2", features = ["js"], optional = true }
 
 # AWS Profile support
 aws-types = { version = "0.51", optional = true }
 aws-config = { version = "0.51", optional = true }
 
 [features]
-cloud = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "base64", "rand", "ring", "getrandom"]
+cloud = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "base64", "rand", "ring"]
 azure = ["cloud"]
 gcp = ["cloud", "rustls-pemfile"]
 aws = ["cloud"]
