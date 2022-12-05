@@ -227,13 +227,6 @@ impl From<Vec<(Field, ArrayRef)>> for StructArray {
                     field_value.data().data_type(),
                     "the field data types must match the array data in a StructArray"
                 );
-                // Check nullability of child arrays
-                if !field_type.is_nullable() {
-                    assert!(
-                        field_value.null_count() == 0,
-                        "non-nullable field cannot have null values"
-                    );
-                }
             },
         );
 
@@ -241,6 +234,10 @@ impl From<Vec<(Field, ArrayRef)>> for StructArray {
             .child_data(field_values.into_iter().map(|a| a.into_data()).collect())
             .len(length);
         let array_data = unsafe { array_data.build_unchecked() };
+
+        // We must validate nullability
+        array_data.validate_nulls().unwrap();
+
         Self::from(array_data)
     }
 }
@@ -283,13 +280,6 @@ impl From<(Vec<(Field, ArrayRef)>, Buffer)> for StructArray {
                     field_value.data().data_type(),
                     "the field data types must match the array data in a StructArray"
                 );
-                // Check nullability of child arrays
-                if !field_type.is_nullable() {
-                    assert!(
-                        field_value.null_count() == 0,
-                        "non-nullable field cannot have null values"
-                    );
-                }
             },
         );
 
@@ -298,6 +288,10 @@ impl From<(Vec<(Field, ArrayRef)>, Buffer)> for StructArray {
             .child_data(field_values.into_iter().map(|a| a.into_data()).collect())
             .len(length);
         let array_data = unsafe { array_data.build_unchecked() };
+
+        // We must validate nullability
+        array_data.validate_nulls().unwrap();
+
         Self::from(array_data)
     }
 }
@@ -470,8 +464,8 @@ mod tests {
             .unwrap();
 
         let field_types = vec![
-            Field::new("a", DataType::Boolean, false),
-            Field::new("b", DataType::Int32, false),
+            Field::new("a", DataType::Boolean, true),
+            Field::new("b", DataType::Int32, true),
         ];
         let struct_array_data = ArrayData::builder(DataType::Struct(field_types))
             .len(5)
@@ -568,7 +562,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "non-nullable field cannot have null values")]
+    #[should_panic(
+        expected = "non-nullable child of type Int32 contains nulls not present in parent Struct"
+    )]
     fn test_struct_array_from_mismatched_nullability() {
         drop(StructArray::from(vec![(
             Field::new("c", DataType::Int32, false),

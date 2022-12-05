@@ -1603,7 +1603,7 @@ mod tests {
             let list_data_type = DataType::$list_data_type(Box::new(Field::new(
                 "item",
                 DataType::Int32,
-                false,
+                true,
             )));
             let list_data = ArrayData::builder(list_data_type.clone())
                 .len(4)
@@ -1676,7 +1676,7 @@ mod tests {
             let list_data_type = DataType::$list_data_type(Box::new(Field::new(
                 "item",
                 DataType::Int32,
-                false,
+                true,
             )));
             let list_data = ArrayData::builder(list_data_type.clone())
                 .len(4)
