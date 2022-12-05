@@ -493,7 +493,7 @@ async fn web_identity(
             ("RoleArn", role_arn),
             ("RoleSessionName", session_name),
             ("Version", "2011-06-15"),
-            ("WebIdentityToken", token),
+            ("WebIdentityToken", &token),
         ])
         .send_retry(retry_config)
         .await?
