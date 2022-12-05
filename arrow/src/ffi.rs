@@ -578,7 +578,7 @@ unsafe fn create_buffer(
     index: usize,
     len: usize,
 ) -> Option<Buffer> {
-    if array.buffers.is_null() {
+    if array.buffers.is_null() || array.n_buffers == 0 {
         return None;
     }
     let buffers = array.buffers as *mut *const u8;
