@@ -161,6 +161,13 @@ def test_primitive_rust():
     """
     Rust -> Python -> Rust
     """
+    a = rust.create_int32_array([1, 2, 3])
+    a.validate(full=True)
+    assert a == pa.array([1, 2, 3], type=pa.int32())
+
+    a = rust.create_int32_array([None, None])
+    a.validate(full=True)
+    assert a == pa.array([None, None], type=pa.int32())
 
     def double(array):
         array = array.to_pylist()
@@ -192,6 +199,34 @@ def test_time32_python():
     del a
     del b
     del expected
+
+
+def test_empty_array_python():
+    """
+    Python -> Rust -> Python
+    """
+    a = pa.array([], pa.int32())
+    b = rust.round_trip_array(a)
+    b.validate(full=True)
+    assert a.to_pylist() == b.to_pylist()
+    assert a.type == b.type
+    del a
+    del b
+
+
+def test_empty_array_rust():
+    """
+    Python -> Rust -> Python
+    """
+    data = []
+    a = pa.array(data, type=pa.int32())
+    b = rust.create_int32_array(data)
+    b.validate(full=True)
+    assert a.to_pylist() == b.to_pylist()
+    assert a.type == b.type
+    del a
+    del b
+
 
 def test_binary_array():
     """
