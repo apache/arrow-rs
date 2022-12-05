@@ -161,13 +161,6 @@ def test_primitive_rust():
     """
     Rust -> Python -> Rust
     """
-    a = rust.create_int32_array([1, 2, 3])
-    a.validate(full=True)
-    assert a == pa.array([1, 2, 3], type=pa.int32())
-
-    a = rust.create_int32_array([None, None])
-    a.validate(full=True)
-    assert a == pa.array([None, None], type=pa.int32())
 
     def double(array):
         array = array.to_pylist()
@@ -218,13 +211,13 @@ def test_empty_array_python(datatype):
     del b
 
 
-def test_empty_array_rust():
+@pytest.mark.parametrize("datatype", _supported_pyarrow_types, ids=str)
+def test_empty_array_rust(datatype):
     """
-    Python -> Rust -> Python
+    Rust -> Python
     """
-    data = []
-    a = pa.array(data, type=pa.int32())
-    b = rust.create_int32_array(data)
+    a = pa.array([], type=datatype)
+    b = rust.make_empty_array(datatype)
     b.validate(full=True)
     assert a.to_pylist() == b.to_pylist()
     assert a.type == b.type
