@@ -483,7 +483,7 @@ async fn web_identity(
     endpoint: &str,
 ) -> Result<TemporaryToken<Arc<AwsCredential>>, StdError> {
     let token = std::fs::read_to_string(token_path)
-        .map_err(|e| format!("Failed to read token file: {}", e))?;
+        .map_err(|e| format!("Failed to read token file '{}': {}", token_path, e))?;
 
     let bytes = client
         .request(Method::POST, endpoint)
