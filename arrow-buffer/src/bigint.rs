@@ -16,7 +16,7 @@
 // under the License.
 
 use num::cast::AsPrimitive;
-use num::{BigInt, FromPrimitive, ToPrimitive};
+use num::{BigInt, FromPrimitive, Num, ToPrimitive};
 use std::cmp::Ordering;
 
 /// A signed 256-bit integer
@@ -100,6 +100,19 @@ impl i256 {
 
     pub const fn from_i128(v: i128) -> Self {
         Self::from_parts(v as u128, v >> 127)
+    }
+
+    /// Create an integer value from its representation as string.
+    #[inline]
+    pub fn from_string(value_str: &str) -> Option<Self> {
+        let numbers = BigInt::from_str_radix(value_str, 10).unwrap();
+        let (integer, overflow) = Self::from_bigint_with_overflow(numbers);
+
+        if overflow {
+            None
+        } else {
+            Some(integer)
+        }
     }
 
     /// Create an optional i256 from the provided `f64`. Returning `None`
