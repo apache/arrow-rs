@@ -493,6 +493,10 @@ define_as_primitive!(i8);
 define_as_primitive!(i16);
 define_as_primitive!(i32);
 define_as_primitive!(i64);
+define_as_primitive!(u8);
+define_as_primitive!(u16);
+define_as_primitive!(u32);
+define_as_primitive!(u64);
 
 impl ToPrimitive for i256 {
     fn to_i64(&self) -> Option<i64> {
