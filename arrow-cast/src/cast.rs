@@ -2837,7 +2837,7 @@ where
     T::Native: DecimalCast + ArrowNativeTypeOp,
 {
     let value_str = value_str.trim();
-    let parts: Vec<&str> = value_str.split(".").collect();
+    let parts: Vec<&str> = value_str.split('.').collect();
     if parts.len() > 2 {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Invalid decimal format: {:?}",
@@ -2873,7 +2873,7 @@ where
             _ => d,
         };
 
-        let integers = if integers.len() > 0 {
+        let integers = if !integers.is_empty() {
             i256::from_string(integers)
                 .ok_or_else(|| {
                     ArrowError::InvalidArgumentError(format!(
@@ -2904,13 +2904,13 @@ where
         ))
     })?;
 
-    Ok(T::Native::from_decimal(value).ok_or_else(|| {
+    T::Native::from_decimal(value).ok_or_else(|| {
         ArrowError::InvalidArgumentError(format!(
             "Cannot convert {} to {}",
             value_str,
             T::PREFIX
         ))
-    })?)
+    })
 }
 
 fn string_to_decimal_cast<T, Offset: OffsetSizeTrait>(
