@@ -429,6 +429,7 @@ struct ByteArrayEncoder {
     dict_encoder: Option<DictEncoder>,
     min_value: Option<ByteArray>,
     max_value: Option<ByteArray>,
+    bloom_filter: Option<Sbbf>,
 }
 
 impl ColumnValueEncoder for ByteArrayEncoder {
@@ -453,8 +454,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     }
 
     fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
-        // TODO FIX ME need to handle bloom filter in arrow writer
-        None
+        self.bloom_filter.take()
     }
 
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self>
@@ -467,11 +467,17 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 
         let fallback = FallbackEncoder::new(descr, props)?;
 
+        let bloom_filter = props
+            .bloom_filter_properties(descr.path())
+            .map(|props| Sbbf::new_with_ndv_fpp(props.ndv, props.fpp))
+            .transpose()?;
+
         Ok(Self {
             fallback,
             dict_encoder: dictionary,
             min_value: None,
             max_value: None,
+            bloom_filter,
         })
     }
 
@@ -543,7 +549,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 fn encode<T>(values: T, indices: &[usize], encoder: &mut ByteArrayEncoder)
 where
     T: ArrayAccessor + Copy,
-    T::Item: Copy + Ord + AsRef<[u8]>,
+    T::Item: Copy + Ord + AsRef<[u8]> + AsBytes,
 {
     if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
         if encoder.min_value.as_ref().map_or(true, |m| m > &min) {
@@ -552,6 +558,13 @@ where
 
         if encoder.max_value.as_ref().map_or(true, |m| m < &max) {
             encoder.max_value = Some(max);
+        }
+    }
+
+    // encode the values into bloom filter if enabled
+    if let Some(bloom_filter) = &mut encoder.bloom_filter {
+        for idx in 0..values.len() {
+            bloom_filter.insert(&values.value(idx));
         }
     }
 

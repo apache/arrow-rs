@@ -622,7 +622,8 @@ mod tests {
     use crate::basic::Encoding;
     use crate::file::metadata::ParquetMetaData;
     use crate::file::page_index::index_reader::read_pages_locations;
-    use crate::file::properties::WriterVersion;
+    use crate::file::properties::{ReaderProperties, WriterVersion};
+    use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::{
         reader::{FileReader, SerializedFileReader},
         statistics::Statistics,
@@ -1269,6 +1270,7 @@ mod tests {
                             .set_dictionary_enabled(dictionary_size != 0)
                             .set_dictionary_pagesize_limit(dictionary_size.max(1))
                             .set_encoding(*encoding)
+                            .set_bloom_filter_enabled(true)
                             .build();
 
                         files.push(roundtrip_opts(&expected_batch, props))
@@ -1279,14 +1281,14 @@ mod tests {
         files
     }
 
-    fn values_required<A, I>(iter: I)
+    fn values_required<A, I>(iter: I) -> Vec<File>
     where
         A: From<Vec<I::Item>> + Array + 'static,
         I: IntoIterator,
     {
         let raw_values: Vec<_> = iter.into_iter().collect();
         let values = Arc::new(A::from(raw_values));
-        one_column_roundtrip(values, false);
+        one_column_roundtrip(values, false)
     }
 
     fn values_optional<A, I>(iter: I)
@@ -1310,6 +1312,57 @@ mod tests {
     {
         values_required::<A, I>(iter.clone());
         values_optional::<A, I>(iter);
+    }
+
+    fn check_bloom_filter<T: AsBytes>(
+        files: Vec<File>,
+        file_column: String,
+        negative_values: Vec<T>,
+    ) {
+        files.into_iter().for_each(|file| {
+            let file_reader = SerializedFileReader::new_with_options(
+                file,
+                ReadOptionsBuilder::new()
+                    .with_reader_properties(
+                        ReaderProperties::builder()
+                            .set_read_bloom_filter(true)
+                            .build(),
+                    )
+                    .build(),
+            )
+            .expect("Unable to open file as Parquet");
+            let metadata = file_reader.metadata();
+            for (ri, row_group) in metadata.row_groups().iter().enumerate() {
+                if let Some((column_index, _)) = row_group
+                    .columns()
+                    .iter()
+                    .enumerate()
+                    .find(|(_, column)| column.column_path().string() == file_column)
+                {
+                    let row_group_reader = file_reader
+                        .get_row_group(ri)
+                        .expect("Unable to read row group");
+                    if let Some(sbbf) =
+                        row_group_reader.get_column_bloom_filter(column_index)
+                    {
+                        negative_values.iter().for_each(|value| {
+                            assert!(
+                                !sbbf.check(value),
+                                "{}",
+                                format!(
+                                    "Value {:?} should not be in bloom filter",
+                                    value.as_bytes()
+                                )
+                            );
+                        });
+                    } else {
+                        panic!("No bloom filter for column named {} found", file_column);
+                    }
+                } else {
+                    panic!("No column named {} found", file_column);
+                }
+            }
+        });
     }
 
     #[test]
@@ -1526,6 +1579,27 @@ mod tests {
 
         // BinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
         values_required::<BinaryArray, _>(many_vecs_iter);
+    }
+
+    #[test]
+    fn i32_column_bloom_filter() {
+        let positive_values: Vec<i32> = (0..SMALL_SIZE as i32).collect();
+        let files = values_required::<Int32Array, _>(positive_values);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            (SMALL_SIZE as i32 + 1..SMALL_SIZE as i32 + 10).collect(),
+        );
+    }
+
+    #[test]
+    fn binary_column_bloom_filter() {
+        let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
+        let many_vecs: Vec<_> = std::iter::repeat(one_vec).take(SMALL_SIZE).collect();
+        let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
+
+        let files = values_required::<BinaryArray, _>(many_vecs_iter);
+        check_bloom_filter(files, "col".to_string(), vec![vec![(SMALL_SIZE + 1) as u8]]);
     }
 
     #[test]
