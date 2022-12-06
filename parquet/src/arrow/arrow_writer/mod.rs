@@ -1317,6 +1317,7 @@ mod tests {
     fn check_bloom_filter<T: AsBytes>(
         files: Vec<File>,
         file_column: String,
+        positive_values: Vec<T>,
         negative_values: Vec<T>,
     ) {
         files.into_iter().for_each(|file| {
@@ -1345,6 +1346,18 @@ mod tests {
                     if let Some(sbbf) =
                         row_group_reader.get_column_bloom_filter(column_index)
                     {
+                        if row_group.num_rows() >= positive_values.len() as i64 {
+                            positive_values.iter().for_each(|value| {
+                                assert!(
+                                    sbbf.check(value),
+                                    "{}",
+                                    format!(
+                                        "Value {:?} should be in bloom filter",
+                                        value.as_bytes()
+                                    )
+                                );
+                            });
+                        }
                         negative_values.iter().for_each(|value| {
                             assert!(
                                 !sbbf.check(value),
@@ -1588,6 +1601,7 @@ mod tests {
         check_bloom_filter(
             files,
             "col".to_string(),
+            (0..SMALL_SIZE as i32).collect(),
             (SMALL_SIZE as i32 + 1..SMALL_SIZE as i32 + 10).collect(),
         );
     }
@@ -1599,7 +1613,12 @@ mod tests {
         let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
 
         let files = values_required::<BinaryArray, _>(many_vecs_iter);
-        check_bloom_filter(files, "col".to_string(), vec![vec![(SMALL_SIZE + 1) as u8]]);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            many_vecs,
+            vec![vec![(SMALL_SIZE + 1) as u8]],
+        );
     }
 
     #[test]
