@@ -105,7 +105,7 @@ impl i256 {
     /// Create an integer value from its representation as string.
     #[inline]
     pub fn from_string(value_str: &str) -> Option<Self> {
-        let numbers = BigInt::from_str_radix(value_str, 10).unwrap();
+        let numbers = BigInt::from_str_radix(value_str, 10).ok()?;
         let (integer, overflow) = Self::from_bigint_with_overflow(numbers);
 
         if overflow {
