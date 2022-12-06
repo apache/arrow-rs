@@ -28,6 +28,12 @@ readme = "README.md"
 edition = "2021"
 rust-version = "1.62"
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
+
 [dependencies]
 arrow-array = { version = "28.0.0", path = "../arrow-array", default-features = false, optional = true }
 arrow-buffer = { version = "28.0.0", path = "../arrow-buffer", default-features = false, optional = true }
@@ -38,7 +44,6 @@ arrow-schema = { version = "28.0.0", path = "../arrow-schema", default-features 
 arrow-select = { version = "28.0.0", path = "../arrow-select", default-features = false, optional = true }
 arrow-ipc = { version = "28.0.0", path = "../arrow-ipc", default-features = false, optional = true }
 
-ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
 snap = { version = "1.0", default-features = false, optional = true }
@@ -51,6 +56,7 @@ num = { version = "0.4", default-features = false }
 num-bigint = { version = "0.4", default-features = false }
 base64 = { version = "0.13", default-features = false, features = ["std"], optional = true }
 clap = { version = "4", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 seq-macro = { version = "0.3", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
@@ -81,7 +87,7 @@ default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
 # Enable arrow reader/writer APIs
 arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-cast", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
 # Enable CLI tools
-cli = ["json", "base64", "clap", "arrow-csv"]
+cli = ["json", "base64", "clap", "arrow-csv", "serde"]
 # Enable JSON APIs
 json = ["serde_json", "base64"]
 # Enable internal testing APIs
@@ -123,6 +129,10 @@ required-features = ["arrow", "cli"]
 
 [[bin]]
 name = "parquet-show-bloom-filter"
+required-features = ["cli"]
+
+[[bin]]
+name = "parquet-layout"
 required-features = ["cli"]
 
 [[bench]]

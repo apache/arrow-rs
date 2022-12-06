@@ -158,8 +158,8 @@ mod tests {
             .unwrap();
 
         let field_types = vec![
-            Field::new("a", DataType::Boolean, false),
-            Field::new("b", DataType::Int32, false),
+            Field::new("a", DataType::Boolean, true),
+            Field::new("b", DataType::Int32, true),
         ];
         let struct_array_data = ArrayData::builder(DataType::Struct(field_types))
             .len(5)

@@ -608,8 +608,11 @@ mod tests {
             .unwrap();
 
         let offsets = [0, 5, 10].map(|n| O::from_usize(n).unwrap());
+
+        // It is possible to create a null struct containing a non-nullable child
+        // see https://github.com/apache/arrow-rs/pull/3244 for details
         let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
-            Field::new("item", DataType::UInt8, false),
+            Field::new("item", DataType::UInt8, true),
         ));
 
         // [None, Some(b"Parquet")]

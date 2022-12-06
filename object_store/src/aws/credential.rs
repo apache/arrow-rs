@@ -341,7 +341,7 @@ impl CredentialProvider for InstanceCredentialProvider {
 #[derive(Debug)]
 pub struct WebIdentityProvider {
     pub cache: TokenCache<Arc<AwsCredential>>,
-    pub token: String,
+    pub token_path: String,
     pub role_arn: String,
     pub session_name: String,
     pub endpoint: String,
@@ -355,7 +355,7 @@ impl CredentialProvider for WebIdentityProvider {
             web_identity(
                 &self.client,
                 &self.retry_config,
-                &self.token,
+                &self.token_path,
                 &self.role_arn,
                 &self.session_name,
                 &self.endpoint,
@@ -477,11 +477,14 @@ impl From<AssumeRoleCredentials> for AwsCredential {
 async fn web_identity(
     client: &Client,
     retry_config: &RetryConfig,
-    token: &str,
+    token_path: &str,
     role_arn: &str,
     session_name: &str,
     endpoint: &str,
 ) -> Result<TemporaryToken<Arc<AwsCredential>>, StdError> {
+    let token = std::fs::read_to_string(token_path)
+        .map_err(|e| format!("Failed to read token file '{}': {}", token_path, e))?;
+
     let bytes = client
         .request(Method::POST, endpoint)
         .query(&[
@@ -490,7 +493,7 @@ async fn web_identity(
             ("RoleArn", role_arn),
             ("RoleSessionName", session_name),
             ("Version", "2011-06-15"),
-            ("WebIdentityToken", token),
+            ("WebIdentityToken", &token),
         ])
         .send_retry(retry_config)
         .await?

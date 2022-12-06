@@ -116,9 +116,6 @@ enum Error {
 
     #[snafu(display("Received header containing non-ASCII data"))]
     BadHeader { source: reqwest::header::ToStrError },
-
-    #[snafu(display("Error reading token file: {}", source))]
-    ReadTokenFile { source: std::io::Error },
 }
 
 impl From<Error> for super::Error {
@@ -588,13 +585,11 @@ impl AmazonS3Builder {
             (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
             // TODO: Replace with `AmazonS3Builder::credentials_from_env`
             _ => match (
-                std::env::var_os("AWS_WEB_IDENTITY_TOKEN_FILE"),
+                std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE"),
                 std::env::var("AWS_ROLE_ARN"),
             ) {
-                (Some(token_file), Ok(role_arn)) => {
+                (Ok(token_path), Ok(role_arn)) => {
                     info!("Using WebIdentity credential provider");
-                    let token = std::fs::read_to_string(token_file)
-                        .context(ReadTokenFileSnafu)?;
 
                     let session_name = std::env::var("AWS_ROLE_SESSION_NAME")
                         .unwrap_or_else(|_| "WebIdentitySession".to_string());
@@ -610,7 +605,7 @@ impl AmazonS3Builder {
 
                     Box::new(WebIdentityProvider {
                         cache: Default::default(),
-                        token,
+                        token_path,
                         session_name,
                         role_arn,
                         endpoint,

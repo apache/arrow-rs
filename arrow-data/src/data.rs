@@ -19,6 +19,7 @@
 //! common attributes and operations for Arrow array.
 
 use crate::{bit_iterator::BitSliceIterator, bitmap::Bitmap};
+use arrow_buffer::bit_chunk_iterator::BitChunks;
 use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
 use half::f16;
@@ -975,6 +976,7 @@ impl ArrayData {
     /// see [`Self::validate_full`]
     pub fn validate_data(&self) -> Result<(), ArrowError> {
         self.validate()?;
+
         self.validate_nulls()?;
         self.validate_values()?;
         Ok(())
@@ -1001,7 +1003,13 @@ impl ArrayData {
         Ok(())
     }
 
-    /// Validates the the null count is correct
+    /// Validates the values stored within this [`ArrayData`] are valid
+    /// without recursing into child [`ArrayData`]
+    ///
+    /// Does not (yet) check
+    /// 1. Union type_ids are valid see [#85](https://github.com/apache/arrow-rs/issues/85)
+    /// Validates the the null count is correct and that any
+    /// nullability requirements of its children are correct
     pub fn validate_nulls(&self) -> Result<(), ArrowError> {
         let nulls = self.null_buffer();
 
@@ -1012,7 +1020,100 @@ impl ArrayData {
                 self.null_count, actual_null_count
             )));
         }
+
+        // In general non-nullable children should not contain nulls, however, for certain
+        // types, such as StructArray and FixedSizeList, nulls in the parent take up
+        // space in the child. As such we permit nulls in the children in the corresponding
+        // positions for such types
+        match &self.data_type {
+            DataType::List(f) | DataType::LargeList(f) | DataType::Map(f, _) => {
+                if !f.is_nullable() {
+                    self.validate_non_nullable(None, 0, &self.child_data[0])?
+                }
+            }
+            DataType::FixedSizeList(field, len) => {
+                let child = &self.child_data[0];
+                if !field.is_nullable() {
+                    match nulls {
+                        Some(nulls) => {
+                            let element_len = *len as usize;
+                            let mut buffer =
+                                MutableBuffer::new_null(element_len * self.len);
+
+                            // Expand each bit within `null_mask` into `element_len`
+                            // bits, constructing the implicit mask of the child elements
+                            for i in 0..self.len {
+                                if !bit_util::get_bit(nulls.as_ref(), self.offset + i) {
+                                    continue;
+                                }
+                                for j in 0..element_len {
+                                    bit_util::set_bit(
+                                        buffer.as_mut(),
+                                        i * element_len + j,
+                                    )
+                                }
+                            }
+                            let mask = buffer.into();
+                            self.validate_non_nullable(Some(&mask), 0, child)?;
+                        }
+                        None => self.validate_non_nullable(None, 0, child)?,
+                    }
+                }
+            }
+            DataType::Struct(fields) => {
+                for (field, child) in fields.iter().zip(&self.child_data) {
+                    if !field.is_nullable() {
+                        self.validate_non_nullable(nulls, self.offset, child)?
+                    }
+                }
+            }
+            _ => {}
+        }
+
         Ok(())
+    }
+
+    /// Verifies that `child` contains no nulls not present in `mask`
+    fn validate_non_nullable(
+        &self,
+        mask: Option<&Buffer>,
+        offset: usize,
+        data: &ArrayData,
+    ) -> Result<(), ArrowError> {
+        let mask = match mask {
+            Some(mask) => mask.as_ref(),
+            None => return match data.null_count {
+                0 => Ok(()),
+                _ => Err(ArrowError::InvalidArgumentError(format!(
+                    "non-nullable child of type {} contains nulls not present in parent {}",
+                    data.data_type(),
+                    self.data_type
+                ))),
+            },
+        };
+
+        match data.null_buffer() {
+            Some(nulls) => {
+                let mask = BitChunks::new(mask, offset, data.len);
+                let nulls = BitChunks::new(nulls.as_ref(), data.offset, data.len);
+                mask
+                    .iter()
+                    .zip(nulls.iter())
+                    .chain(std::iter::once((
+                        mask.remainder_bits(),
+                        nulls.remainder_bits(),
+                    ))).try_for_each(|(m, c)| {
+                    if (m & !c) != 0 {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "non-nullable child of type {} contains nulls not present in parent",
+                            data.data_type()
+                        )))
+                    }
+                    Ok(())
+                })
+            }
+            None => Ok(()),
+        }
     }
 
     /// Validates the values stored within this [`ArrayData`] are valid
