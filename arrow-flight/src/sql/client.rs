@@ -326,7 +326,6 @@ impl FlightSqlServiceClient {
 #[derive(Debug, Clone)]
 pub struct PreparedStatement<T> {
     flight_client: Arc<Mutex<FlightServiceClient<T>>>,
-    is_closed: bool,
     parameter_binding: Option<RecordBatch>,
     handle: Vec<u8>,
     dataset_schema: Schema,
@@ -342,7 +341,6 @@ impl PreparedStatement<Channel> {
     ) -> Self {
         PreparedStatement {
             flight_client: client,
-            is_closed: false,
             parameter_binding: None,
             handle,
             dataset_schema,
@@ -352,9 +350,6 @@ impl PreparedStatement<Channel> {
 
     /// Executes the prepared statement query on the server.
     pub async fn execute(&mut self) -> Result<FlightInfo, ArrowError> {
-        if self.is_closed() {
-            return Err(ArrowError::IoError("Statement already closed.".to_string()));
-        }
         let cmd = CommandPreparedStatementQuery {
             prepared_statement_handle: self.handle.clone(),
         };
@@ -370,9 +365,6 @@ impl PreparedStatement<Channel> {
 
     /// Executes the prepared statement update query on the server.
     pub async fn execute_update(&mut self) -> Result<i64, ArrowError> {
-        if self.is_closed() {
-            return Err(ArrowError::IoError("Statement already closed.".to_string()));
-        }
         let cmd = CommandPreparedStatementQuery {
             prepared_statement_handle: self.handle.clone(),
         };
@@ -398,17 +390,17 @@ impl PreparedStatement<Channel> {
     }
 
     /// Retrieve the parameter schema from the query.
-    pub async fn parameter_schema(&self) -> Result<&Schema, ArrowError> {
+    pub fn parameter_schema(&self) -> Result<&Schema, ArrowError> {
         Ok(&self.parameter_schema)
     }
 
     /// Retrieve the ResultSet schema from the query.
-    pub async fn dataset_schema(&self) -> Result<&Schema, ArrowError> {
+    pub fn dataset_schema(&self) -> Result<&Schema, ArrowError> {
         Ok(&self.dataset_schema)
     }
 
     /// Set a RecordBatch that contains the parameters that will be bind.
-    pub async fn set_parameters(
+    pub fn set_parameters(
         &mut self,
         parameter_binding: RecordBatch,
     ) -> Result<(), ArrowError> {
@@ -418,10 +410,7 @@ impl PreparedStatement<Channel> {
 
     /// Close the prepared statement, so that this PreparedStatement can not used
     /// anymore and server can free up any resources.
-    pub async fn close(&mut self) -> Result<(), ArrowError> {
-        if self.is_closed() {
-            return Err(ArrowError::IoError("Statement already closed.".to_string()));
-        }
+    pub async fn close(mut self) -> Result<(), ArrowError> {
         let cmd = ActionClosePreparedStatementRequest {
             prepared_statement_handle: self.handle.clone(),
         };
@@ -434,13 +423,7 @@ impl PreparedStatement<Channel> {
             .do_action(action)
             .await
             .map_err(status_to_arrow_error)?;
-        self.is_closed = true;
         Ok(())
-    }
-
-    /// Check if the prepared statement is closed.
-    pub fn is_closed(&self) -> bool {
-        self.is_closed
     }
 
     fn mut_client(
