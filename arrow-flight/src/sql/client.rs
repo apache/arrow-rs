@@ -54,6 +54,8 @@ pub struct FlightSqlServiceClient {
 }
 
 /// A FlightSql protocol client that can run queries against FlightSql servers
+/// This client is in the "experimental" stage. It is not guaranteed to follow the spec in all instances.
+/// Github issues are welcomed.
 impl FlightSqlServiceClient {
     /// Creates a new FlightSql Client that connects via TCP to a server
     pub async fn new_with_ep(host: &str, port: u16) -> Result<Self, ArrowError> {
