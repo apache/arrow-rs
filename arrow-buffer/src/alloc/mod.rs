@@ -28,9 +28,18 @@ mod alignment;
 
 pub use alignment::ALIGNMENT;
 
+/// Returns an aligned non null pointer similar to [`NonNull::dangling`]
+///
+/// Note that the pointer value may potentially represent a valid pointer, which means
+/// this must not be used as a "not yet initialized" sentinel value.
+///
+/// Types that lazily allocate must track initialization by some other means.
 #[inline]
-unsafe fn null_pointer() -> NonNull<u8> {
-    NonNull::new_unchecked(ALIGNMENT as *mut u8)
+fn dangling() -> NonNull<u8> {
+    // SAFETY: ALIGNMENT is a non-zero usize which is then casted
+    // to a *mut T. Therefore, `ptr` is not null and the conditions for
+    // calling new_unchecked() are respected.
+    unsafe { NonNull::new_unchecked(ALIGNMENT as *mut u8) }
 }
 
 /// Allocates a cache-aligned memory region of `size` bytes with uninitialized values.
@@ -39,7 +48,7 @@ unsafe fn null_pointer() -> NonNull<u8> {
 pub fn allocate_aligned(size: usize) -> NonNull<u8> {
     unsafe {
         if size == 0 {
-            null_pointer()
+            dangling()
         } else {
             let layout = Layout::from_size_align_unchecked(size, ALIGNMENT);
             let raw_ptr = std::alloc::alloc(layout);
@@ -54,7 +63,7 @@ pub fn allocate_aligned(size: usize) -> NonNull<u8> {
 pub fn allocate_aligned_zeroed(size: usize) -> NonNull<u8> {
     unsafe {
         if size == 0 {
-            null_pointer()
+            dangling()
         } else {
             let layout = Layout::from_size_align_unchecked(size, ALIGNMENT);
             let raw_ptr = std::alloc::alloc_zeroed(layout);
@@ -72,7 +81,7 @@ pub fn allocate_aligned_zeroed(size: usize) -> NonNull<u8> {
 ///
 /// * size must be the same size that was used to allocate that block of memory,
 pub unsafe fn free_aligned(ptr: NonNull<u8>, size: usize) {
-    if ptr != null_pointer() {
+    if size != 0 {
         std::alloc::dealloc(
             ptr.as_ptr() as *mut u8,
             Layout::from_size_align_unchecked(size, ALIGNMENT),
@@ -96,13 +105,13 @@ pub unsafe fn reallocate(
     old_size: usize,
     new_size: usize,
 ) -> NonNull<u8> {
-    if ptr == null_pointer() {
+    if old_size == 0 {
         return allocate_aligned(new_size);
     }
 
     if new_size == 0 {
         free_aligned(ptr, old_size);
-        return null_pointer();
+        return dangling();
     }
 
     let raw_ptr = std::alloc::realloc(
