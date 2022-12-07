@@ -66,10 +66,8 @@ impl std::fmt::Display for ParquetError {
 impl std::error::Error for ParquetError {
     fn cause(&self) -> Option<&dyn ::std::error::Error> {
         match self {
-            ParquetError::External(cause) => {
-                Some(&**cause)
-            }
-            _ => None
+            ParquetError::External(cause) => Some(&**cause),
+            _ => None,
         }
     }
 }
