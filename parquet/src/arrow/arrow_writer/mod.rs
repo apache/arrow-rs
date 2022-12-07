@@ -515,8 +515,8 @@ fn write_leaf(
     Ok(written as i64)
 }
 
-fn write_primitive<T: DataType>(
-    writer: &mut ColumnWriterImpl<'_, T>,
+fn write_primitive<'a, T: DataType>(
+    writer: &mut ColumnWriterImpl<'a, T>,
     values: &[T::T],
     levels: LevelInfo,
 ) -> Result<usize> {

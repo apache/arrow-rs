@@ -972,7 +972,11 @@ pub(crate) struct LexicographicalComparator<'a> {
 
 impl LexicographicalComparator<'_> {
     /// lexicographically compare values at the wrapped columns with given indices.
-    pub(crate) fn compare<'b>(&self, a_idx: &'b usize, b_idx: &'b usize) -> Ordering {
+    pub(crate) fn compare<'a, 'b>(
+        &'a self,
+        a_idx: &'b usize,
+        b_idx: &'b usize,
+    ) -> Ordering {
         for (data, comparator, sort_option) in &self.compare_items {
             match (data.is_valid(*a_idx), data.is_valid(*b_idx)) {
                 (true, true) => {

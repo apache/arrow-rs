@@ -146,7 +146,7 @@ fn infer_file_schema_with_csv_options<R: Read + Seek>(
     mut reader: R,
     roptions: ReaderOptions,
 ) -> Result<(Schema, usize), ArrowError> {
-    let saved_offset = reader.stream_position()?;
+    let saved_offset = reader.seek(SeekFrom::Current(0))?;
 
     let (schema, records_count) =
         infer_reader_schema_with_csv_options(&mut reader, roptions)?;

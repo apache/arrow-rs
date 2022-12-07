@@ -372,9 +372,11 @@ impl GetResult {
                         }
                     })?;
 
-                    file.rewind().map_err(|source| local::Error::Seek {
-                        source,
-                        path: path.clone(),
+                    file.seek(SeekFrom::Start(0)).map_err(|source| {
+                        local::Error::Seek {
+                            source,
+                            path: path.clone(),
+                        }
                     })?;
 
                     let mut buffer = Vec::with_capacity(len as usize);

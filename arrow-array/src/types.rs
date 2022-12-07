@@ -483,7 +483,7 @@ impl Date64Type {
     /// * `i` - The Date64Type to convert
     pub fn to_naive_date(i: <Date64Type as ArrowPrimitiveType>::Native) -> NaiveDate {
         let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-        epoch.add(Duration::milliseconds(i))
+        epoch.add(Duration::milliseconds(i as i64))
     }
 
     /// Converts a chrono::NaiveDate into an arrow Date64Type

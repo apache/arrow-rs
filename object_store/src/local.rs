@@ -396,7 +396,7 @@ impl ObjectStore for LocalFileSystem {
             None => self.config.root.to_file_path().unwrap(),
         };
 
-        let walkdir = WalkDir::new(root_path)
+        let walkdir = WalkDir::new(&root_path)
             // Don't include the root directory itself
             .min_depth(1)
             .follow_links(true);
@@ -748,7 +748,7 @@ impl AsyncWrite for LocalUpload {
                     self.inner_state = LocalUploadState::Complete;
                     file.sync_all()?;
                     std::mem::drop(file);
-                    std::fs::rename(staging_path, &self.dest)?;
+                    std::fs::rename(&staging_path, &self.dest)?;
                     Poll::Ready(Ok(()))
                 }
                 _ => {

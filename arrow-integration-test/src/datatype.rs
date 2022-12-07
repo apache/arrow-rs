@@ -152,7 +152,7 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
             },
             Some(s) if s == "int" => match map.get("isSigned") {
                 Some(&Value::Bool(true)) => match map.get("bitWidth") {
-                    Some(Value::Number(n)) => match n.as_u64() {
+                    Some(&Value::Number(ref n)) => match n.as_u64() {
                         Some(8) => Ok(DataType::Int8),
                         Some(16) => Ok(DataType::Int16),
                         Some(32) => Ok(DataType::Int32),
@@ -166,7 +166,7 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                     )),
                 },
                 Some(&Value::Bool(false)) => match map.get("bitWidth") {
-                    Some(Value::Number(n)) => match n.as_u64() {
+                    Some(&Value::Number(ref n)) => match n.as_u64() {
                         Some(8) => Ok(DataType::UInt8),
                         Some(16) => Ok(DataType::UInt16),
                         Some(32) => Ok(DataType::UInt32),

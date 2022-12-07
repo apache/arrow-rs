@@ -565,7 +565,7 @@ pub(crate) fn get_fb_field_type<'a>(
         },
         FixedSizeBinary(len) => {
             let mut builder = crate::FixedSizeBinaryBuilder::new(fbb);
-            builder.add_byteWidth(*len);
+            builder.add_byteWidth(*len as i32);
             FBFieldType {
                 type_type: crate::Type::FixedSizeBinary,
                 type_: builder.finish().as_union_value(),
@@ -684,7 +684,7 @@ pub(crate) fn get_fb_field_type<'a>(
         FixedSizeList(ref list_type, len) => {
             let child = build_field(fbb, list_type);
             let mut builder = crate::FixedSizeListBuilder::new(fbb);
-            builder.add_listSize(*len);
+            builder.add_listSize(*len as i32);
             FBFieldType {
                 type_type: crate::Type::FixedSizeList,
                 type_: builder.finish().as_union_value(),

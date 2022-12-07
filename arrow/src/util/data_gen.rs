@@ -194,7 +194,7 @@ fn create_random_list_array(
 
     // Create list's child data
     let child_array =
-        create_random_array(list_field, child_len, null_density, true_density)?;
+        create_random_array(list_field, child_len as usize, null_density, true_density)?;
     let child_data = child_array.data();
     // Create list's null buffers, if it is nullable
     let null_buffer = match field.is_nullable() {

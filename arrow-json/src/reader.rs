@@ -46,7 +46,7 @@
 //! let batch = json.next().unwrap().unwrap();
 //! ```
 
-use std::io::{BufRead, BufReader, Read, Seek};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use indexmap::map::IndexMap as HashMap;
@@ -275,7 +275,7 @@ pub fn infer_json_schema_from_seekable<R: Read + Seek>(
 ) -> Result<Schema, ArrowError> {
     let schema = infer_json_schema(reader, max_read_records);
     // return the reader seek back to the start
-    reader.rewind()?;
+    reader.seek(SeekFrom::Start(0))?;
 
     schema
 }
@@ -1762,7 +1762,7 @@ mod tests {
     use arrow_schema::DataType::{Dictionary, List};
     use flate2::read::GzDecoder;
     use std::fs::File;
-    use std::io::{Cursor, SeekFrom};
+    use std::io::Cursor;
 
     #[test]
     fn test_json_basic() {
