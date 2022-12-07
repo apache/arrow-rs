@@ -38,20 +38,25 @@ pub enum ParquetError {
     /// Arrow error.
     /// Returned when reading into arrow or writing from arrow.
     ArrowError(String),
+    /// Errors originating from outside Parquet core codebase
+    External(Box<dyn std::error::Error + Send + Sync>),
     IndexOutOfBound(usize, usize),
 }
 
 impl std::fmt::Display for ParquetError {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match *self {
-            ParquetError::General(ref message) => {
+        match self {
+            ParquetError::General(message) => {
                 write!(fmt, "Parquet error: {}", message)
             }
-            ParquetError::NYI(ref message) => write!(fmt, "NYI: {}", message),
-            ParquetError::EOF(ref message) => write!(fmt, "EOF: {}", message),
+            ParquetError::NYI(message) => write!(fmt, "NYI: {}", message),
+            ParquetError::EOF(message) => write!(fmt, "EOF: {}", message),
             #[cfg(feature = "arrow")]
-            ParquetError::ArrowError(ref message) => write!(fmt, "Arrow: {}", message),
-            ParquetError::IndexOutOfBound(ref index, ref bound) => {
+            ParquetError::ArrowError(message) => write!(fmt, "Arrow: {}", message),
+            ParquetError::External(err) => {
+                write!(fmt, "ParquetError({})", err)
+            }
+            ParquetError::IndexOutOfBound(index, bound) => {
                 write!(fmt, "Index {} out of bound: {}", index, bound)
             }
         }
@@ -60,7 +65,12 @@ impl std::fmt::Display for ParquetError {
 
 impl std::error::Error for ParquetError {
     fn cause(&self) -> Option<&dyn ::std::error::Error> {
-        None
+        match self {
+            ParquetError::External(cause) => {
+                Some(cause)
+            }
+            _ => None
+        }
     }
 }
 
