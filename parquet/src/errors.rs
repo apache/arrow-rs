@@ -22,7 +22,7 @@ use std::{cell, io, result, str};
 #[cfg(feature = "arrow")]
 use arrow_schema::ArrowError;
 
-#[derive(Debug, PartialEq, Clone, Eq)]
+#[derive(Debug)]
 pub enum ParquetError {
     /// General Parquet error.
     /// Returned when code violates normal workflow of working with Parquet files.
@@ -67,7 +67,7 @@ impl std::error::Error for ParquetError {
     fn cause(&self) -> Option<&dyn ::std::error::Error> {
         match self {
             ParquetError::External(cause) => {
-                Some(cause)
+                Some(&**cause)
             }
             _ => None
         }
