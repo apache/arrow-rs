@@ -657,14 +657,20 @@ pub trait ArrowArrayRef {
 
                 let len = self.buffer_len(index)?;
 
-                Ok(unsafe {
+                match unsafe {
                     create_buffer(self.owner().clone(), self.array(), index, len)
+                } {
+                    Some(buf) => Ok(buf),
+                    None if len == 0 => {
+                        // Null data buffer, which Rust doesn't allow. So create
+                        // an empty buffer.
+                        Ok(MutableBuffer::new(0).into())
+                    }
+                    None => Err(ArrowError::CDataInterface(format!(
+                        "The external buffer at position {} is null.",
+                        index - 1
+                    ))),
                 }
-                .unwrap_or_else(|| {
-                    // Null data buffer, which Rust doesn't allow. So create
-                    // an empty buffer.
-                    MutableBuffer::new(0).into()
-                }))
             })
             .collect()
     }
