@@ -462,12 +462,18 @@ impl FFI_ArrowArray {
     /// This method releases `buffers`. Consumers of this struct *must* call `release` before
     /// releasing this struct, or contents in `buffers` leak.
     pub fn new(data: &ArrayData) -> Self {
-        // * insert the null buffer at the start
-        // * make all others `Option<Buffer>`.
-        let buffers = iter::once(data.null_buffer().cloned())
-            .chain(data.buffers().iter().map(|b| Some(b.clone())))
-            .collect::<Vec<_>>();
         let data_layout = layout(data.data_type());
+
+        let buffers = if data_layout.can_contain_null_mask {
+            // * insert the null buffer at the start
+            // * make all others `Option<Buffer>`.
+            iter::once(data.null_buffer().cloned())
+                .chain(data.buffers().iter().map(|b| Some(b.clone())))
+                .collect::<Vec<_>>()
+        } else {
+            data.buffers().iter().map(|b| Some(b.clone())).collect()
+        };
+
         // `n_buffers` is the number of buffers by the spec.
         let n_buffers = {
             data_layout.buffers.len() + {
@@ -616,8 +622,15 @@ pub trait ArrowArrayRef {
         let len = self.array().len();
         let offset = self.array().offset();
         let null_count = self.array().null_count();
-        let buffers = self.buffers()?;
-        let null_bit_buffer = self.null_bit_buffer();
+
+        let data_layout = layout(&data_type);
+        let buffers = self.buffers(data_layout.can_contain_null_mask)?;
+
+        let null_bit_buffer = if data_layout.can_contain_null_mask {
+            self.null_bit_buffer()
+        } else {
+            None
+        };
 
         let mut child_data: Vec<ArrayData> = (0..self.array().n_children as usize)
             .map(|i| {
@@ -649,11 +662,16 @@ pub trait ArrowArrayRef {
     }
 
     /// returns all buffers, as organized by Rust (i.e. null buffer is skipped)
-    fn buffers(&self) -> Result<Vec<Buffer>> {
-        (0..self.array().n_buffers - 1)
+    fn buffers(&self, can_contain_null_mask: bool) -> Result<Vec<Buffer>> {
+        let buffer_begin = if can_contain_null_mask {
+            // + 1: skip null buffer
+            1
+        } else {
+            0
+        };
+        (buffer_begin..self.array().n_buffers)
             .map(|index| {
-                // + 1: skip null buffer
-                let index = (index + 1) as usize;
+                let index = index as usize;
 
                 let len = self.buffer_len(index)?;
 
@@ -661,7 +679,7 @@ pub trait ArrowArrayRef {
                     .ok_or_else(|| {
                         ArrowError::CDataInterface(format!(
                             "The external buffer at position {} is null.",
-                            index - 1
+                            index
                         ))
                     })
             })
