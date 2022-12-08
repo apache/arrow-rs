@@ -41,29 +41,35 @@ pub fn schema_to_fb_offset<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
     schema: &Schema,
 ) -> WIPOffset<crate::Schema<'a>> {
-    let mut fields = vec![];
-    for field in schema.fields() {
-        let fb_field = build_field(fbb, field);
-        fields.push(fb_field);
-    }
-
-    let mut custom_metadata = vec![];
-    for (k, v) in schema.metadata() {
-        let fb_key_name = fbb.create_string(k.as_str());
-        let fb_val_name = fbb.create_string(v.as_str());
-
-        let mut kv_builder = crate::KeyValueBuilder::new(fbb);
-        kv_builder.add_key(fb_key_name);
-        kv_builder.add_value(fb_val_name);
-        custom_metadata.push(kv_builder.finish());
-    }
-
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| build_field(fbb, field))
+        .collect::<Vec<_>>();
     let fb_field_list = fbb.create_vector(&fields);
-    let fb_metadata_list = fbb.create_vector(&custom_metadata);
+
+    let fb_metadata_list = if !schema.metadata().is_empty() {
+        let custom_metadata = schema
+            .metadata()
+            .iter()
+            .map(|(k, v)| {
+                let fb_key_name = fbb.create_string(k);
+                let fb_val_name = fbb.create_string(v);
+
+                let mut kv_builder = crate::KeyValueBuilder::new(fbb);
+                kv_builder.add_key(fb_key_name);
+                kv_builder.add_value(fb_val_name);
+                kv_builder.finish()
+            })
+            .collect::<Vec<_>>();
+        Some(fbb.create_vector(&custom_metadata))
+    } else {
+        None
+    };
 
     let mut builder = crate::SchemaBuilder::new(fbb);
     builder.add_fields(fb_field_list);
-    if !custom_metadata.is_empty() {
+    if let Some(fb_metadata_list) = fb_metadata_list {
         builder.add_custom_metadata(fb_metadata_list);
     }
     builder.finish()
@@ -1064,7 +1070,7 @@ mod tests {
         let ipc2 = crate::root_as_message(&bytes).unwrap();
         let schema2 = ipc2.header_as_schema().unwrap();
 
-        // can't compare schema directly as though is same message, the underlying bytes seem to differ
+        // can't compare schema directly as it compares the underlying bytes, which can differ
         assert!(schema.custom_metadata().is_none());
         assert!(schema2.custom_metadata().is_none());
         assert_eq!(schema.endianness(), schema2.endianness());
