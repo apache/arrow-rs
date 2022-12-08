@@ -158,6 +158,10 @@ impl<W: Write> Writer<W> {
                     let c = col.as_any().downcast_ref::<BooleanArray>().unwrap();
                     c.value(row_index).to_string()
                 }
+                DataType::Binary => {
+                    let c = col.as_any().downcast_ref::<BinaryArray>().unwrap();
+                    c.value(row_index).escape_ascii().to_string()
+                }
                 DataType::Utf8 => {
                     let c = col.as_any().downcast_ref::<StringArray>().unwrap();
                     c.value(row_index).to_owned()
