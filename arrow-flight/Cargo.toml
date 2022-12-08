@@ -38,7 +38,6 @@ prost = { version = "0.11", default-features = false }
 prost-types = { version = "0.11.0", default-features = false, optional = true }
 prost-derive = { version = "0.11", default-features = false }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "rt-multi-thread"] }
-tokio-stream = { version = "0.1", features = ["net"] }
 futures = { version = "0.3", default-features = false, features = ["alloc"]}
 
 [features]
@@ -48,6 +47,7 @@ flight-sql-experimental = ["prost-types"]
 [dev-dependencies]
 arrow = { version = "28.0.0", path = "../arrow", features = ["prettyprint"] }
 tempfile = "3.3"
+tokio-stream = { version = "0.1", features = ["net"] }
 tower = "0.4.13"
 
 [build-dependencies]
