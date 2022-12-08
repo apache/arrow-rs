@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow_array::builder::BufferBuilder;
-use arrow_array::{Array, GenericStringArray, OffsetSizeTrait};
+use arrow_array::*;
 use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::ArrowError;

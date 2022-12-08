@@ -19,7 +19,7 @@
 //! expression of a \[Large\]StringArray
 
 use arrow_array::builder::{BooleanBufferBuilder, GenericStringBuilder, ListBuilder};
-use arrow_array::{Array, ArrayRef, BooleanArray, GenericStringArray, OffsetSizeTrait};
+use arrow_array::*;
 use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
