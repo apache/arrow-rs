@@ -589,11 +589,7 @@ make_float_numeric_type!(Float64Type, f64x8);
 
 #[cfg(all(test, feature = "simd"))]
 mod tests {
-    use crate::datatypes::{
-        ArrowNumericType, Float32Type, Float64Type, Int32Type, Int64Type, Int8Type,
-        IntervalMonthDayNanoType, UInt16Type,
-    };
-    use packed_simd::*;
+    use super::*;
     use FromCast;
 
     /// calculate the expected mask by iterating over all bits
