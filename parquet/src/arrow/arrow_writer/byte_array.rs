@@ -549,7 +549,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 fn encode<T>(values: T, indices: &[usize], encoder: &mut ByteArrayEncoder)
 where
     T: ArrayAccessor + Copy,
-    T::Item: Copy + Ord + AsRef<[u8]> + AsBytes,
+    T::Item: Copy + Ord + AsRef<[u8]>,
 {
     if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
         if encoder.min_value.as_ref().map_or(true, |m| m > &min) {
@@ -563,8 +563,9 @@ where
 
     // encode the values into bloom filter if enabled
     if let Some(bloom_filter) = &mut encoder.bloom_filter {
-        for idx in 0..values.len() {
-            bloom_filter.insert(&values.value(idx));
+        let valid = indices.iter().cloned();
+        for idx in valid {
+            bloom_filter.insert(values.value(idx).as_ref());
         }
     }
 

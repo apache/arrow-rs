@@ -1291,7 +1291,7 @@ mod tests {
         one_column_roundtrip(values, false)
     }
 
-    fn values_optional<A, I>(iter: I)
+    fn values_optional<A, I>(iter: I) -> Vec<File>
     where
         A: From<Vec<Option<I::Item>>> + Array + 'static,
         I: IntoIterator,
@@ -1302,7 +1302,7 @@ mod tests {
             .map(|(i, v)| if i % 2 == 0 { None } else { Some(v) })
             .collect();
         let optional_values = Arc::new(A::from(optional_raw_values));
-        one_column_roundtrip(optional_values, true);
+        one_column_roundtrip(optional_values, true)
     }
 
     fn required_and_optional<A, I>(iter: I)
@@ -1320,7 +1320,7 @@ mod tests {
         positive_values: Vec<T>,
         negative_values: Vec<T>,
     ) {
-        files.into_iter().for_each(|file| {
+        files.into_iter().take(1).for_each(|file| {
             let file_reader = SerializedFileReader::new_with_options(
                 file,
                 ReadOptionsBuilder::new()
@@ -1333,6 +1333,9 @@ mod tests {
             )
             .expect("Unable to open file as Parquet");
             let metadata = file_reader.metadata();
+
+            // Gets bloom filters from all row groups.
+            let mut bloom_filters: Vec<_> = vec![];
             for (ri, row_group) in metadata.row_groups().iter().enumerate() {
                 if let Some((column_index, _)) = row_group
                     .columns()
@@ -1346,28 +1349,7 @@ mod tests {
                     if let Some(sbbf) =
                         row_group_reader.get_column_bloom_filter(column_index)
                     {
-                        if row_group.num_rows() >= positive_values.len() as i64 {
-                            positive_values.iter().for_each(|value| {
-                                assert!(
-                                    sbbf.check(value),
-                                    "{}",
-                                    format!(
-                                        "Value {:?} should be in bloom filter",
-                                        value.as_bytes()
-                                    )
-                                );
-                            });
-                        }
-                        negative_values.iter().for_each(|value| {
-                            assert!(
-                                !sbbf.check(value),
-                                "{}",
-                                format!(
-                                    "Value {:?} should not be in bloom filter",
-                                    value.as_bytes()
-                                )
-                            );
-                        });
+                        bloom_filters.push(sbbf.clone());
                     } else {
                         panic!("No bloom filter for column named {} found", file_column);
                     }
@@ -1375,6 +1357,24 @@ mod tests {
                     panic!("No column named {} found", file_column);
                 }
             }
+
+            positive_values.iter().for_each(|value| {
+                let found = bloom_filters.iter().find(|sbbf| sbbf.check(value));
+                assert!(
+                    found.is_some(),
+                    "{}",
+                    format!("Value {:?} should be in bloom filter", value.as_bytes())
+                );
+            });
+
+            negative_values.iter().for_each(|value| {
+                let found = bloom_filters.iter().find(|sbbf| sbbf.check(value));
+                assert!(
+                    found.is_none(),
+                    "{}",
+                    format!("Value {:?} should not be in bloom filter", value.as_bytes())
+                );
+            });
         });
     }
 
@@ -1619,6 +1619,23 @@ mod tests {
             many_vecs,
             vec![vec![(SMALL_SIZE + 1) as u8]],
         );
+    }
+
+    #[test]
+    fn empty_string_null_column_bloom_filter() {
+        let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
+        let raw_strs = raw_values.iter().map(|s| s.as_str());
+
+        let files = values_optional::<StringArray, _>(raw_strs);
+
+        let optional_raw_values: Vec<_> = raw_values
+            .iter()
+            .enumerate()
+            .map(|(i, v)| if i % 2 == 0 { None } else { Some(v.as_str()) })
+            .flatten()
+            .collect();
+        // For null slots, empty string should not be in bloom filter.
+        check_bloom_filter(files, "col".to_string(), optional_raw_values, vec![""]);
     }
 
     #[test]

@@ -448,12 +448,6 @@ impl AsBytes for [u8] {
     }
 }
 
-impl AsBytes for &[u8] {
-    fn as_bytes(&self) -> &[u8] {
-        self
-    }
-}
-
 macro_rules! gen_as_bytes {
     ($source_ty:ident) => {
         impl AsBytes for $source_ty {
