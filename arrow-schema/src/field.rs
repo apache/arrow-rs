@@ -112,9 +112,9 @@ impl Hash for Field {
 
 impl Field {
     /// Creates a new field
-    pub fn new(name: &str, data_type: DataType, nullable: bool) -> Self {
+    pub fn new(name: impl Into<String>, data_type: DataType, nullable: bool) -> Self {
         Field {
-            name: name.to_string(),
+            name: name.into(),
             data_type,
             nullable,
             dict_id: 0,
@@ -125,14 +125,14 @@ impl Field {
 
     /// Creates a new field that has additional dictionary information
     pub fn new_dict(
-        name: &str,
+        name: impl Into<String>,
         data_type: DataType,
         nullable: bool,
         dict_id: i64,
         dict_is_ordered: bool,
     ) -> Self {
         Field {
-            name: name.to_string(),
+            name: name.into(),
             data_type,
             nullable,
             dict_id,
@@ -484,6 +484,20 @@ mod test {
     use super::*;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
+
+    #[test]
+    fn test_new_with_string() {
+        // Fields should allow owned Strings to support reuse
+        let s = String::from("c1");
+        Field::new(s, DataType::Int64, false);
+    }
+
+    #[test]
+    fn test_new_dict_with_string() {
+        // Fields should allow owned Strings to support reuse
+        let s = String::from("c1");
+        Field::new_dict(s, DataType::Int64, false, 4, false);
+    }
 
     #[test]
     fn test_merge_incompatible_types() {
