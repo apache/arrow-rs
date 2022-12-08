@@ -36,6 +36,7 @@ on:
       - arrow-ipc/**
       - arrow-csv/**
       - arrow-json/**
+      - arrow-string/**
       - parquet/**
       - .github/**
 
@@ -123,7 +124,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        rust: [stable]
+        rust: [ stable ]
     steps:
       - uses: actions/checkout@v3
       - name: Setup Python

@@ -19,14 +19,12 @@
 //! Supported array types:
 //! [GenericStringArray], [GenericBinaryArray], [FixedSizeBinaryArray], [DictionaryArray]
 
-use crate::array::DictionaryArray;
-use crate::buffer::MutableBuffer;
-use crate::datatypes::*;
-use crate::{array::*, buffer::Buffer};
-use crate::{
-    datatypes::DataType,
-    error::{ArrowError, Result},
-};
+use arrow_array::builder::BufferBuilder;
+use arrow_array::types::*;
+use arrow_array::*;
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
+use arrow_data::ArrayData;
+use arrow_schema::{ArrowError, DataType};
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -45,8 +43,8 @@ use std::sync::Arc;
 ///
 /// # Basic usage
 /// ```
-/// # use arrow::array::StringArray;
-/// # use arrow::compute::kernels::substring::substring;
+/// # use arrow_array::StringArray;
+/// # use arrow_string::substring::substring;
 /// let array = StringArray::from(vec![Some("arrow"), None, Some("rust")]);
 /// let result = substring(&array, 1, Some(4)).unwrap();
 /// let result = result.as_any().downcast_ref::<StringArray>().unwrap();
@@ -61,13 +59,17 @@ use std::sync::Arc;
 ///
 /// ## Example of trying to get an invalid utf-8 format substring
 /// ```
-/// # use arrow::array::StringArray;
-/// # use arrow::compute::kernels::substring::substring;
+/// # use arrow_array::StringArray;
+/// # use arrow_string::substring::substring;
 /// let array = StringArray::from(vec![Some("E=mc²")]);
 /// let error = substring(&array, 0, Some(5)).unwrap_err().to_string();
 /// assert!(error.contains("invalid utf-8 boundary"));
 /// ```
-pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<ArrayRef> {
+pub fn substring(
+    array: &dyn Array,
+    start: i64,
+    length: Option<u64>,
+) -> Result<ArrayRef, ArrowError> {
     macro_rules! substring_dict {
         ($kt: ident, $($t: ident: $gt: ident), *) => {
             match $kt.as_ref() {
@@ -171,8 +173,8 @@ pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<A
 ///
 /// # Basic usage
 /// ```
-/// # use arrow::array::StringArray;
-/// # use arrow::compute::kernels::substring::substring_by_char;
+/// # use arrow_array::StringArray;
+/// # use arrow_string::substring::substring_by_char;
 /// let array = StringArray::from(vec![Some("arrow"), None, Some("Γ ⊢x:T")]);
 /// let result = substring_by_char(&array, 1, Some(4)).unwrap();
 /// assert_eq!(result, StringArray::from(vec![Some("rrow"), None, Some(" ⊢x:")]));
@@ -181,7 +183,7 @@ pub fn substring_by_char<OffsetSize: OffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     start: i64,
     length: Option<u64>,
-) -> Result<GenericStringArray<OffsetSize>> {
+) -> Result<GenericStringArray<OffsetSize>, ArrowError> {
     let mut vals = BufferBuilder::<u8>::new({
         let offsets = array.value_offsets();
         (offsets[array.len()] - offsets[0]).to_usize().unwrap()
@@ -251,7 +253,7 @@ fn binary_substring<OffsetSize: OffsetSizeTrait>(
     array: &GenericBinaryArray<OffsetSize>,
     start: OffsetSize,
     length: Option<OffsetSize>,
-) -> Result<ArrayRef> {
+) -> Result<ArrayRef, ArrowError> {
     let offsets = array.value_offsets();
     let data = array.value_data();
     let zero = OffsetSize::zero();
@@ -312,7 +314,7 @@ fn fixed_size_binary_substring(
     old_len: i32,
     start: i32,
     length: Option<i32>,
-) -> Result<ArrayRef> {
+) -> Result<ArrayRef, ArrowError> {
     let new_start = if start >= 0 {
         start.min(old_len)
     } else {
@@ -361,7 +363,7 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     start: OffsetSize,
     length: Option<OffsetSize>,
-) -> Result<ArrayRef> {
+) -> Result<ArrayRef, ArrowError> {
     let offsets = array.value_offsets();
     let data = array.value_data();
     let zero = OffsetSize::zero();
@@ -391,21 +393,23 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
     let mut len_so_far = zero;
     new_offsets.push(zero);
 
-    offsets.windows(2).try_for_each(|pair| -> Result<()> {
-        let new_start = match start.cmp(&zero) {
-            Ordering::Greater => check_char_boundary((pair[0] + start).min(pair[1]))?,
-            Ordering::Equal => pair[0],
-            Ordering::Less => check_char_boundary((pair[1] + start).max(pair[0]))?,
-        };
-        let new_end = match length {
-            Some(length) => check_char_boundary((length + new_start).min(pair[1]))?,
-            None => pair[1],
-        };
-        len_so_far += new_end - new_start;
-        new_starts_ends.push((new_start, new_end));
-        new_offsets.push(len_so_far);
-        Ok(())
-    })?;
+    offsets
+        .windows(2)
+        .try_for_each(|pair| -> Result<(), ArrowError> {
+            let new_start = match start.cmp(&zero) {
+                Ordering::Greater => check_char_boundary((pair[0] + start).min(pair[1]))?,
+                Ordering::Equal => pair[0],
+                Ordering::Less => check_char_boundary((pair[1] + start).max(pair[0]))?,
+            };
+            let new_end = match length {
+                Some(length) => check_char_boundary((length + new_start).min(pair[1]))?,
+                None => pair[1],
+            };
+            len_so_far += new_end - new_start;
+            new_starts_ends.push((new_start, new_end));
+            new_offsets.push(len_so_far);
+            Ok(())
+        })?;
 
     // concatenate substrings into a buffer
     let mut new_values = MutableBuffer::new(new_offsets.last().unwrap().as_usize());
@@ -439,7 +443,6 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datatypes::*;
 
     /// A helper macro to generate test cases.
     /// # Arguments

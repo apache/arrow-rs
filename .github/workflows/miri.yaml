@@ -24,17 +24,18 @@ on:
       - master
   pull_request:
     paths:
-      - arrow/**
+      - .github/**
       - arrow-array/**
       - arrow-buffer/**
       - arrow-cast/**
+      - arrow-csv/**
       - arrow-data/**
+      - arrow-ipc/**
+      - arrow-json/**
       - arrow-schema/**
       - arrow-select/**
-      - arrow-ipc/**
-      - arrow-csv/**
-      - arrow-json/**
-      - .github/**
+      - arrow-string/**
+      - arrow/**
 
 jobs:
   miri-checks:

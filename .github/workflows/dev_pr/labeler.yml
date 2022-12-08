@@ -16,16 +16,17 @@
 # under the License.
 
 arrow:
-  - arrow/**/*
   - arrow-array/**/*
   - arrow-buffer/**/*
   - arrow-cast/**/*
+  - arrow-csv/**/*
   - arrow-data/**/*
+  - arrow-ipc/**/*
+  - arrow-json/**/*
   - arrow-schema/**/*
   - arrow-select/**/*
-  - arrow-ipc/**/*
-  - arrow-csv/**/*
-  - arrow-json/**/*
+  - arrow-string/**/*
+  - arrow/**/*
 
 arrow-flight:
   - arrow-flight/**/*

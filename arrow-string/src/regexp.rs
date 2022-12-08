@@ -18,22 +18,154 @@
 //! Defines kernel to extract substrings based on a regular
 //! expression of a \[Large\]StringArray
 
-use crate::array::{
-    ArrayRef, GenericStringArray, GenericStringBuilder, ListBuilder, OffsetSizeTrait,
-};
-use crate::error::{ArrowError, Result};
+use arrow_array::builder::{BooleanBufferBuilder, GenericStringBuilder, ListBuilder};
+use arrow_array::{Array, ArrayRef, BooleanArray, GenericStringArray, OffsetSizeTrait};
+use arrow_data::bit_mask::combine_option_bitmap;
+use arrow_data::ArrayData;
+use arrow_schema::{ArrowError, DataType};
+use regex::Regex;
 use std::collections::HashMap;
-
 use std::sync::Arc;
 
-use regex::Regex;
+/// Perform SQL `array ~ regex_array` operation on [`StringArray`] / [`LargeStringArray`].
+/// If `regex_array` element has an empty value, the corresponding result value is always true.
+///
+/// `flags_array` are optional [`StringArray`] / [`LargeStringArray`] flag, which allow
+/// special search modes, such as case insensitive and multi-line mode.
+/// See the documentation [here](https://docs.rs/regex/1.5.4/regex/#grouping-and-flags)
+/// for more information.
+pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
+    array: &GenericStringArray<OffsetSize>,
+    regex_array: &GenericStringArray<OffsetSize>,
+    flags_array: Option<&GenericStringArray<OffsetSize>>,
+) -> Result<BooleanArray, ArrowError> {
+    if array.len() != regex_array.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform comparison operation on arrays of different length"
+                .to_string(),
+        ));
+    }
+    let null_bit_buffer =
+        combine_option_bitmap(&[array.data_ref(), regex_array.data_ref()], array.len());
+
+    let mut patterns: HashMap<String, Regex> = HashMap::new();
+    let mut result = BooleanBufferBuilder::new(array.len());
+
+    let complete_pattern = match flags_array {
+        Some(flags) => Box::new(regex_array.iter().zip(flags.iter()).map(
+            |(pattern, flags)| {
+                pattern.map(|pattern| match flags {
+                    Some(flag) => format!("(?{}){}", flag, pattern),
+                    None => pattern.to_string(),
+                })
+            },
+        )) as Box<dyn Iterator<Item = Option<String>>>,
+        None => Box::new(
+            regex_array
+                .iter()
+                .map(|pattern| pattern.map(|pattern| pattern.to_string())),
+        ),
+    };
+
+    array
+        .iter()
+        .zip(complete_pattern)
+        .map(|(value, pattern)| {
+            match (value, pattern) {
+                // Required for Postgres compatibility:
+                // SELECT 'foobarbequebaz' ~ ''); = true
+                (Some(_), Some(pattern)) if pattern == *"" => {
+                    result.append(true);
+                }
+                (Some(value), Some(pattern)) => {
+                    let existing_pattern = patterns.get(&pattern);
+                    let re = match existing_pattern {
+                        Some(re) => re.clone(),
+                        None => {
+                            let re = Regex::new(pattern.as_str()).map_err(|e| {
+                                ArrowError::ComputeError(format!(
+                                    "Regular expression did not compile: {:?}",
+                                    e
+                                ))
+                            })?;
+                            patterns.insert(pattern, re.clone());
+                            re
+                        }
+                    };
+                    result.append(re.is_match(value));
+                }
+                _ => result.append(false),
+            }
+            Ok(())
+        })
+        .collect::<Result<Vec<()>, ArrowError>>()?;
+
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            array.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![result.finish()],
+            vec![],
+        )
+    };
+    Ok(BooleanArray::from(data))
+}
+
+/// Perform SQL `array ~ regex_array` operation on [`StringArray`] /
+/// [`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`regexp_is_match_utf8`] for more details.
+pub fn regexp_is_match_utf8_scalar<OffsetSize: OffsetSizeTrait>(
+    array: &GenericStringArray<OffsetSize>,
+    regex: &str,
+    flag: Option<&str>,
+) -> Result<BooleanArray, ArrowError> {
+    let null_bit_buffer = array.data().null_buffer().cloned();
+    let mut result = BooleanBufferBuilder::new(array.len());
+
+    let pattern = match flag {
+        Some(flag) => format!("(?{}){}", flag, regex),
+        None => regex.to_string(),
+    };
+    if pattern.is_empty() {
+        result.append_n(array.len(), true);
+    } else {
+        let re = Regex::new(pattern.as_str()).map_err(|e| {
+            ArrowError::ComputeError(format!(
+                "Regular expression did not compile: {:?}",
+                e
+            ))
+        })?;
+        for i in 0..array.len() {
+            let value = array.value(i);
+            result.append(re.is_match(value));
+        }
+    }
+
+    let buffer = result.finish();
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            array.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![buffer],
+            vec![],
+        )
+    };
+    Ok(BooleanArray::from(data))
+}
 
 /// Extract all groups matched by a regular expression for a given String array.
 pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     regex_array: &GenericStringArray<OffsetSize>,
     flags_array: Option<&GenericStringArray<OffsetSize>>,
-) -> Result<ArrayRef> {
+) -> Result<ArrayRef, ArrowError> {
     let mut patterns: HashMap<String, Regex> = HashMap::new();
     let builder: GenericStringBuilder<OffsetSize> =
         GenericStringBuilder::with_capacity(0, 0);
@@ -94,14 +226,14 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
             }
             Ok(())
         })
-        .collect::<Result<Vec<()>>>()?;
+        .collect::<Result<Vec<()>, ArrowError>>()?;
     Ok(Arc::new(list_builder.finish()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::{ListArray, StringArray};
+    use arrow_array::{ListArray, StringArray};
 
     #[test]
     fn match_single_group() {
@@ -117,7 +249,7 @@ mod tests {
         let mut pattern_values = vec![r".*-(\d*)-.*"; 4];
         pattern_values.push(r"(bar)(bequ1e)");
         pattern_values.push("");
-        let pattern = StringArray::from(pattern_values);
+        let pattern = GenericStringArray::<i32>::from(pattern_values);
         let actual = regexp_match(&array, &pattern, None).unwrap();
         let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new();
         let mut expected_builder = ListBuilder::new(elem_builder);
