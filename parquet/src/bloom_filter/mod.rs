@@ -261,7 +261,7 @@ impl Sbbf {
     }
 
     /// Insert an [AsBytes] value into the filter
-    pub fn insert<T: AsBytes>(&mut self, value: &T) {
+    pub fn insert<T: AsBytes + ?Sized>(&mut self, value: &T) {
         self.insert_hash(hash_as_bytes(value));
     }
 
