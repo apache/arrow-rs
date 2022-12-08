@@ -168,6 +168,51 @@ fn add_benchmark(c: &mut Criterion) {
         })
     });
 
+    let arr_a = create_primitive_array_with_seed::<Int32Type>(size, 0.0, 42);
+    let arr_b = create_primitive_array_with_seed::<Int32Type>(size, 0.0, 43);
+
+    c.bench_function("eq Int32", |b| b.iter(|| bench_eq(&arr_a, &arr_b)));
+    c.bench_function("eq scalar Int32", |b| {
+        b.iter(|| {
+            eq_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
+        })
+    });
+
+    c.bench_function("neq Int32", |b| b.iter(|| bench_neq(&arr_a, &arr_b)));
+    c.bench_function("neq scalar Int32", |b| {
+        b.iter(|| {
+            neq_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
+        })
+    });
+
+    c.bench_function("lt Int32", |b| b.iter(|| bench_lt(&arr_a, &arr_b)));
+    c.bench_function("lt scalar Int32", |b| {
+        b.iter(|| {
+            lt_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
+        })
+    });
+
+    c.bench_function("lt_eq Int32", |b| b.iter(|| bench_lt_eq(&arr_a, &arr_b)));
+    c.bench_function("lt_eq scalar Int32", |b| {
+        b.iter(|| {
+            lt_eq_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
+        })
+    });
+
+    c.bench_function("gt Int32", |b| b.iter(|| bench_gt(&arr_a, &arr_b)));
+    c.bench_function("gt scalar Int32", |b| {
+        b.iter(|| {
+            gt_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
+        })
+    });
+
+    c.bench_function("gt_eq Int32", |b| b.iter(|| bench_gt_eq(&arr_a, &arr_b)));
+    c.bench_function("gt_eq scalar Int32", |b| {
+        b.iter(|| {
+            gt_eq_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
+        })
+    });
+
     c.bench_function("eq MonthDayNano", |b| {
         b.iter(|| bench_eq(&arr_month_day_nano_a, &arr_month_day_nano_b))
     });
