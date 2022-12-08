@@ -663,12 +663,8 @@ pub trait ArrowArrayRef {
 
     /// returns all buffers, as organized by Rust (i.e. null buffer is skipped)
     fn buffers(&self, can_contain_null_mask: bool) -> Result<Vec<Buffer>> {
-        let buffer_begin = if can_contain_null_mask {
-            // + 1: skip null buffer
-            1
-        } else {
-            0
-        };
+        // + 1: skip null buffer
+        let buffer_begin = can_contain_null_mask as i64;
         (buffer_begin..self.array().n_buffers)
             .map(|index| {
                 let index = index as usize;
