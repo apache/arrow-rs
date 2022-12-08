@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow"
-version = "28.0.0"
+version = "29.0.0"
 description = "Rust implementation of Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -45,15 +45,15 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
-arrow-array = { version = "28.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "28.0.0", path = "../arrow-buffer" }
-arrow-cast = { version = "28.0.0", path = "../arrow-cast" }
-arrow-csv = { version = "28.0.0", path = "../arrow-csv", optional = true }
-arrow-data = { version = "28.0.0", path = "../arrow-data" }
-arrow-ipc = { version = "28.0.0", path = "../arrow-ipc", optional = true }
-arrow-json = { version = "28.0.0", path = "../arrow-json", optional = true }
-arrow-schema = { version = "28.0.0", path = "../arrow-schema" }
-arrow-select = { version = "28.0.0", path = "../arrow-select" }
+arrow-array = { version = "29.0.0", path = "../arrow-array" }
+arrow-buffer = { version = "29.0.0", path = "../arrow-buffer" }
+arrow-cast = { version = "29.0.0", path = "../arrow-cast" }
+arrow-csv = { version = "29.0.0", path = "../arrow-csv", optional = true }
+arrow-data = { version = "29.0.0", path = "../arrow-data" }
+arrow-ipc = { version = "29.0.0", path = "../arrow-ipc", optional = true }
+arrow-json = { version = "29.0.0", path = "../arrow-json", optional = true }
+arrow-schema = { version = "29.0.0", path = "../arrow-schema" }
+arrow-select = { version = "29.0.0", path = "../arrow-select" }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
