@@ -20,6 +20,7 @@
 
 use std::sync::Arc;
 
+use arrow::array::new_empty_array;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
@@ -68,6 +69,13 @@ fn double_py(lambda: &PyAny, py: Python) -> PyResult<bool> {
     let array = make_array(ArrayData::from_pyarrow(pyarray)?);
 
     Ok(array == expected)
+}
+
+#[pyfunction]
+fn make_empty_array(datatype: PyArrowType<DataType>, py: Python) -> PyResult<PyObject> {
+    let array = new_empty_array(&datatype.0);
+
+    array.data().to_pyarrow(py)
 }
 
 /// Returns the substring
@@ -134,6 +142,7 @@ fn round_trip_record_batch_reader(
 fn arrow_pyarrow_integration_testing(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(double))?;
     m.add_wrapped(wrap_pyfunction!(double_py))?;
+    m.add_wrapped(wrap_pyfunction!(make_empty_array))?;
     m.add_wrapped(wrap_pyfunction!(substring))?;
     m.add_wrapped(wrap_pyfunction!(concatenate))?;
     m.add_wrapped(wrap_pyfunction!(round_trip_type))?;

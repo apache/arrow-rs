@@ -123,7 +123,7 @@ use std::{
 use bitflags::bitflags;
 
 use crate::array::{layout, ArrayData};
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, MutableBuffer};
 use crate::datatypes::DataType;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
@@ -584,7 +584,7 @@ unsafe fn create_buffer(
     index: usize,
     len: usize,
 ) -> Option<Buffer> {
-    if array.buffers.is_null() {
+    if array.buffers.is_null() || array.n_buffers == 0 {
         return None;
     }
     let buffers = array.buffers as *mut *const u8;
@@ -675,13 +675,20 @@ pub trait ArrowArrayRef {
 
                 let len = self.buffer_len(index)?;
 
-                unsafe { create_buffer(self.owner().clone(), self.array(), index, len) }
-                    .ok_or_else(|| {
-                        ArrowError::CDataInterface(format!(
-                            "The external buffer at position {} is null.",
-                            index
-                        ))
-                    })
+                match unsafe {
+                    create_buffer(self.owner().clone(), self.array(), index, len)
+                } {
+                    Some(buf) => Ok(buf),
+                    None if len == 0 => {
+                        // Null data buffer, which Rust doesn't allow. So create
+                        // an empty buffer.
+                        Ok(MutableBuffer::new(0).into())
+                    }
+                    None => Err(ArrowError::CDataInterface(format!(
+                        "The external buffer at position {} is null.",
+                        index
+                    ))),
+                }
             })
             .collect()
     }
