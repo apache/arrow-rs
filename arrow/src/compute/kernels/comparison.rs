@@ -3575,24 +3575,6 @@ mod tests {
         };
     }
 
-    macro_rules! test_dict_utf8 {
-        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
-            #[test]
-            #[cfg(feature = "dyn_cmp_dict")]
-            fn $test_name() {
-                let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
-                let right: DictionaryArray<Int8Type> = $right.into_iter().collect();
-                let res = $op(&left, &right).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(v, expected[i]);
-                }
-            }
-        };
-    }
-
     #[test]
     fn test_utf8_eq_scalar_on_slice() {
         let a = StringArray::from(
