@@ -35,7 +35,7 @@ pub use alignment::ALIGNMENT;
 ///
 /// Types that lazily allocate must track initialization by some other means.
 #[inline]
-fn dangling() -> NonNull<u8> {
+fn dangling_ptr() -> NonNull<u8> {
     // SAFETY: ALIGNMENT is a non-zero usize which is then casted
     // to a *mut T. Therefore, `ptr` is not null and the conditions for
     // calling new_unchecked() are respected.
@@ -48,7 +48,7 @@ fn dangling() -> NonNull<u8> {
 pub fn allocate_aligned(size: usize) -> NonNull<u8> {
     unsafe {
         if size == 0 {
-            dangling()
+            dangling_ptr()
         } else {
             let layout = Layout::from_size_align_unchecked(size, ALIGNMENT);
             let raw_ptr = std::alloc::alloc(layout);
@@ -63,7 +63,7 @@ pub fn allocate_aligned(size: usize) -> NonNull<u8> {
 pub fn allocate_aligned_zeroed(size: usize) -> NonNull<u8> {
     unsafe {
         if size == 0 {
-            dangling()
+            dangling_ptr()
         } else {
             let layout = Layout::from_size_align_unchecked(size, ALIGNMENT);
             let raw_ptr = std::alloc::alloc_zeroed(layout);
@@ -111,7 +111,7 @@ pub unsafe fn reallocate(
 
     if new_size == 0 {
         free_aligned(ptr, old_size);
-        return dangling();
+        return dangling_ptr();
     }
 
     let raw_ptr = std::alloc::realloc(
