@@ -58,7 +58,7 @@ pub struct FlightSqlServiceClient {
 /// Github issues are welcomed.
 impl FlightSqlServiceClient {
     /// Creates a new FlightSql Client that connects via TCP to a server
-    pub async fn new_with_ep(host: &str, port: u16) -> Result<Self, ArrowError> {
+    pub async fn new_with_endpoint(host: &str, port: u16) -> Result<Self, ArrowError> {
         let addr = format!("http://{}:{}", host, port);
         let endpoint = Endpoint::new(addr)
             .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
@@ -69,10 +69,9 @@ impl FlightSqlServiceClient {
             .http2_keep_alive_interval(Duration::from_secs(300))
             .keep_alive_timeout(Duration::from_secs(20))
             .keep_alive_while_idle(true);
-        let channel = endpoint
-            .connect()
-            .await
-            .map_err(|_| ArrowError::IoError("Cannot connect to endpoint".to_string()))?;
+        let channel = endpoint.connect().await.map_err(|e| {
+            ArrowError::IoError(format!("Cannot connect to endpoint: {}", e))
+        })?;
         Ok(Self::new(channel))
     }
 
@@ -114,6 +113,7 @@ impl FlightSqlServiceClient {
     }
 
     /// Perform a `handshake` with the server, passing credentials and establishing a session
+    /// Returns arbitrary auth/handshake info binary blob
     pub async fn handshake(
         &mut self,
         username: &str,
@@ -159,7 +159,7 @@ impl FlightSqlServiceClient {
         Ok(resp.payload.clone())
     }
 
-    /// Execute a update query on the server.
+    /// Execute a update query on the server, and return the number of records affected
     pub async fn execute_update(&mut self, query: String) -> Result<i64, ArrowError> {
         let cmd = CommandStatementUpdate { query };
         let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
@@ -183,13 +183,13 @@ impl FlightSqlServiceClient {
         Ok(result.record_count)
     }
 
-    /// Request a list of catalogs.
+    /// Request a list of catalogs as tabular FlightInfo results
     pub async fn get_catalogs(&mut self) -> Result<FlightInfo, ArrowError> {
         self.get_flight_info_for_command(CommandGetCatalogs {})
             .await
     }
 
-    /// Request a list of database schemas.
+    /// Request a list of database schemas as tabular FlightInfo results
     pub async fn get_db_schemas(
         &mut self,
         request: CommandGetDbSchemas,
@@ -197,8 +197,7 @@ impl FlightSqlServiceClient {
         self.get_flight_info_for_command(request).await
     }
 
-    /// Given a flight ticket and schema, request to be sent the
-    /// stream. Returns record batch stream reader
+    /// Given a flight ticket, request to be sent the stream. Returns record batch stream reader
     pub async fn do_get(
         &mut self,
         ticket: Ticket,

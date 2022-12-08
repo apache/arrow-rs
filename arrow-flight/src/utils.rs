@@ -17,7 +17,7 @@
 
 //! Utilities to assist with reading and writing Arrow data as Flight messages
 
-use crate::{FlightData, FlightInfo, IpcMessage, SchemaAsIpc, SchemaResult};
+use crate::{FlightData, IpcMessage, SchemaAsIpc, SchemaResult};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -25,7 +25,7 @@ use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::Buffer;
 use arrow_ipc::convert::fb_to_schema;
 use arrow_ipc::{
-    reader, root_as_message, size_prefixed_root_as_message, writer,
+    reader, root_as_message, writer,
     writer::IpcWriteOptions,
 };
 use arrow_schema::{ArrowError, Schema, SchemaRef};
@@ -163,18 +163,4 @@ pub fn batches_to_flight_data(
     stream.extend(flight_data.into_iter());
     let flight_data: Vec<_> = stream.into_iter().collect();
     Ok(flight_data)
-}
-
-/// Extract and convert an Arrow `Schema` from `FlightInfo`
-pub fn arrow_schema_from_flight_info(fi: &FlightInfo) -> Result<Schema, ArrowError> {
-    let ipc_message = size_prefixed_root_as_message(&fi.schema[4..])
-        .map_err(|e| ArrowError::ComputeError(format!("{:?}", e)))?;
-
-    let ipc_schema = ipc_message
-        .header_as_schema()
-        .ok_or_else(|| ArrowError::ComputeError("failed to get schema...".to_string()))?;
-
-    let arrow_schema = fb_to_schema(ipc_schema);
-
-    Ok(arrow_schema)
 }
