@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::*;
-use crate::error::{ArrowError, Result};
+use arrow_array::builder::BufferBuilder;
+use arrow_array::*;
 use arrow_data::bit_mask::combine_option_bitmap;
+use arrow_data::ArrayDataBuilder;
+use arrow_schema::ArrowError;
 
 /// Returns the elementwise concatenation of a [`StringArray`].
 ///
@@ -36,7 +38,7 @@ use arrow_data::bit_mask::combine_option_bitmap;
 pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
     left: &GenericStringArray<Offset>,
     right: &GenericStringArray<Offset>,
-) -> Result<GenericStringArray<Offset>> {
+) -> Result<GenericStringArray<Offset>, ArrowError> {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(format!(
             "Arrays must have the same length: {} != {}",
@@ -89,7 +91,7 @@ pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
 /// An error will be returned if the [`StringArray`] are of different lengths
 pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
     arrays: &[&GenericStringArray<Offset>],
-) -> Result<GenericStringArray<Offset>> {
+) -> Result<GenericStringArray<Offset>, ArrowError> {
     if arrays.is_empty() {
         return Err(ArrowError::ComputeError(
             "concat requires input of at least one array".to_string(),
@@ -158,6 +160,7 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::StringArray;
     #[test]
     fn test_string_concat() {
         let left = [Some("foo"), Some("bar"), None]

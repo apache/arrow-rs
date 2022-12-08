@@ -39,6 +39,7 @@
 //! * [`arrow-json`][arrow_json] - read/write JSON to arrow format
 //! * [`arrow-schema`][arrow_schema] - the logical types for arrow arrays
 //! * [`arrow-select`][arrow_select] - selection kernels for arrow arrays
+//! * [`arrow-string`][arrow_string] - string kernels for arrow arrays
 //!
 //! _This list is likely to grow as further functionality is split out from the top-level crate_
 //!
