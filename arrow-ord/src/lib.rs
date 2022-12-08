@@ -15,27 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Statically typed implementations of Arrow Arrays
-//!
-//! **See [arrow_array] for examples and usage instructions**
+//! Arrow ordering kernels
 
-#[cfg(feature = "ffi")]
-mod ffi;
-
-// --------------------- Array & ArrayData ---------------------
-pub use arrow_array::array::*;
-pub use arrow_array::builder::*;
-pub use arrow_array::cast::*;
-pub use arrow_array::iterator::*;
-pub use arrow_data::{
-    layout, ArrayData, ArrayDataBuilder, ArrayDataRef, BufferSpec, DataTypeLayout,
-};
-
-pub use arrow_data::transform::{Capacities, MutableArrayData};
-
-#[cfg(feature = "ffi")]
-pub use self::ffi::{export_array_into_raw, make_array_from_raw};
-
-// --------------------- Array's values comparison ---------------------
-
-pub use arrow_ord::ord::{build_compare, DynComparator};
+pub mod comparison;
+pub mod ord;
+pub mod partition;
+pub mod sort;

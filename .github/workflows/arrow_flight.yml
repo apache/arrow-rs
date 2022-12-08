@@ -35,7 +35,6 @@ on:
       - arrow-ipc/**
       - arrow-schema/**
       - arrow-select/**
-      - arrow-string/**
       - .github/**
 
 jobs:

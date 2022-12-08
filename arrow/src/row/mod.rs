@@ -1264,13 +1264,13 @@ mod tests {
 
     use arrow_array::NullArray;
     use arrow_buffer::Buffer;
+    use arrow_ord::sort::{LexicographicalComparator, SortColumn, SortOptions};
 
     use crate::array::{
         BinaryArray, BooleanArray, DictionaryArray, Float32Array, GenericStringArray,
         Int16Array, Int32Array, OffsetSizeTrait, PrimitiveArray,
         PrimitiveDictionaryBuilder, StringArray,
     };
-    use crate::compute::{LexicographicalComparator, SortColumn};
     use crate::util::display::array_value_to_string;
 
     use super::*;
@@ -2154,7 +2154,7 @@ mod tests {
                     let row_i = rows.row(i);
                     let row_j = rows.row(j);
                     let row_cmp = row_i.cmp(&row_j);
-                    let lex_cmp = comparator.compare(&i, &j);
+                    let lex_cmp = comparator.compare(i, j);
                     assert_eq!(
                         row_cmp,
                         lex_cmp,

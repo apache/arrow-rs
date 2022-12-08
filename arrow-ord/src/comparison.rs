@@ -23,19 +23,15 @@
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 //!
 
-pub use arrow_string::like::*;
-pub use arrow_string::regexp::{regexp_is_match_utf8, regexp_is_match_utf8_scalar};
-
-use crate::array::*;
-use crate::buffer::{buffer_unary_not, Buffer, MutableBuffer};
-use crate::datatypes::*;
-#[allow(unused_imports)]
-use crate::downcast_dictionary_array;
-use crate::error::{ArrowError, Result};
-use crate::util::bit_util;
+use arrow_array::cast::*;
+use arrow_array::types::*;
+use arrow_array::*;
+use arrow_buffer::buffer::buffer_unary_not;
+use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_data::bit_mask::combine_option_bitmap;
+use arrow_data::ArrayData;
+use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use arrow_select::take::take;
-use num::ToPrimitive;
 
 /// Helper function to perform boolean lambda function on values from two array accessors, this
 /// version does not attempt to use SIMD.
@@ -43,7 +39,7 @@ fn compare_op<T: ArrayAccessor, S: ArrayAccessor, F>(
     left: T,
     right: S,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     F: Fn(T::Item, S::Item) -> bool,
 {
@@ -59,7 +55,10 @@ where
 
 /// Helper function to perform boolean lambda function on values from array accessor, this
 /// version does not attempt to use SIMD.
-fn compare_op_scalar<T: ArrayAccessor, F>(left: T, op: F) -> Result<BooleanArray>
+fn compare_op_scalar<T: ArrayAccessor, F>(
+    left: T,
+    op: F,
+) -> Result<BooleanArray, ArrowError>
 where
     F: Fn(T::Item) -> bool,
 {
@@ -72,9 +71,9 @@ pub fn no_simd_compare_op<T, F>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    T: ArrowNumericType,
+    T: ArrowPrimitiveType,
     F: Fn(T::Native, T::Native) -> bool,
 {
     compare_op(left, right, op)
@@ -86,9 +85,9 @@ pub fn no_simd_compare_op_scalar<T, F>(
     left: &PrimitiveArray<T>,
     right: T::Native,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    T: ArrowNumericType,
+    T: ArrowPrimitiveType,
     F: Fn(T::Native, T::Native) -> bool,
 {
     compare_op_scalar(left, |l| op(l, right))
@@ -98,13 +97,13 @@ where
 pub fn eq_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a == b)
 }
 
 fn utf8_empty<OffsetSize: OffsetSizeTrait, const EQ: bool>(
     left: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     let null_bit_buffer = left
         .data()
         .null_buffer()
@@ -140,7 +139,7 @@ fn utf8_empty<OffsetSize: OffsetSizeTrait, const EQ: bool>(
 pub fn eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     if right.is_empty() {
         return utf8_empty::<_, true>(left);
     }
@@ -148,37 +147,58 @@ pub fn eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 }
 
 /// Perform `left == right` operation on [`BooleanArray`]
-pub fn eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn eq_bool(
+    left: &BooleanArray,
+    right: &BooleanArray,
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| !(a ^ b))
 }
 
 /// Perform `left != right` operation on [`BooleanArray`]
-pub fn neq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn neq_bool(
+    left: &BooleanArray,
+    right: &BooleanArray,
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| (a ^ b))
 }
 
 /// Perform `left < right` operation on [`BooleanArray`]
-pub fn lt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn lt_bool(
+    left: &BooleanArray,
+    right: &BooleanArray,
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| ((!a) & b))
 }
 
 /// Perform `left <= right` operation on [`BooleanArray`]
-pub fn lt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn lt_eq_bool(
+    left: &BooleanArray,
+    right: &BooleanArray,
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| !(a & (!b)))
 }
 
 /// Perform `left > right` operation on [`BooleanArray`]
-pub fn gt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn gt_bool(
+    left: &BooleanArray,
+    right: &BooleanArray,
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| (a & (!b)))
 }
 
 /// Perform `left >= right` operation on [`BooleanArray`]
-pub fn gt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn gt_eq_bool(
+    left: &BooleanArray,
+    right: &BooleanArray,
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| !((!a) & b))
 }
 
 /// Perform `left == right` operation on [`BooleanArray`] and a scalar
-pub fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+pub fn eq_bool_scalar(
+    left: &BooleanArray,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     let len = left.len();
     let left_offset = left.offset();
 
@@ -207,27 +227,42 @@ pub fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> 
 }
 
 /// Perform `left < right` operation on [`BooleanArray`] and a scalar
-pub fn lt_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+pub fn lt_bool_scalar(
+    left: &BooleanArray,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a: bool| !a & right)
 }
 
 /// Perform `left <= right` operation on [`BooleanArray`] and a scalar
-pub fn lt_eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+pub fn lt_eq_bool_scalar(
+    left: &BooleanArray,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a <= right)
 }
 
 /// Perform `left > right` operation on [`BooleanArray`] and a scalar
-pub fn gt_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+pub fn gt_bool_scalar(
+    left: &BooleanArray,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a: bool| a & !right)
 }
 
 /// Perform `left >= right` operation on [`BooleanArray`] and a scalar
-pub fn gt_eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+pub fn gt_eq_bool_scalar(
+    left: &BooleanArray,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a >= right)
 }
 
 /// Perform `left != right` operation on [`BooleanArray`] and a scalar
-pub fn neq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+pub fn neq_bool_scalar(
+    left: &BooleanArray,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     eq_bool_scalar(left, !right)
 }
 
@@ -235,7 +270,7 @@ pub fn neq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray>
 pub fn eq_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a == b)
 }
 
@@ -243,7 +278,7 @@ pub fn eq_binary<OffsetSize: OffsetSizeTrait>(
 pub fn eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a == right)
 }
 
@@ -251,7 +286,7 @@ pub fn eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn neq_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a != b)
 }
 
@@ -259,7 +294,7 @@ pub fn neq_binary<OffsetSize: OffsetSizeTrait>(
 pub fn neq_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a != right)
 }
 
@@ -267,7 +302,7 @@ pub fn neq_binary_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn lt_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a < b)
 }
 
@@ -275,7 +310,7 @@ pub fn lt_binary<OffsetSize: OffsetSizeTrait>(
 pub fn lt_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a < right)
 }
 
@@ -283,7 +318,7 @@ pub fn lt_binary_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn lt_eq_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a <= b)
 }
 
@@ -291,7 +326,7 @@ pub fn lt_eq_binary<OffsetSize: OffsetSizeTrait>(
 pub fn lt_eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a <= right)
 }
 
@@ -299,7 +334,7 @@ pub fn lt_eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn gt_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a > b)
 }
 
@@ -307,7 +342,7 @@ pub fn gt_binary<OffsetSize: OffsetSizeTrait>(
 pub fn gt_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a > right)
 }
 
@@ -315,7 +350,7 @@ pub fn gt_binary_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn gt_eq_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a >= b)
 }
 
@@ -323,7 +358,7 @@ pub fn gt_eq_binary<OffsetSize: OffsetSizeTrait>(
 pub fn gt_eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a >= right)
 }
 
@@ -331,7 +366,7 @@ pub fn gt_eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn neq_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a != b)
 }
 
@@ -339,7 +374,7 @@ pub fn neq_utf8<OffsetSize: OffsetSizeTrait>(
 pub fn neq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     if right.is_empty() {
         return utf8_empty::<_, false>(left);
     }
@@ -350,7 +385,7 @@ pub fn neq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn lt_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a < b)
 }
 
@@ -358,7 +393,7 @@ pub fn lt_utf8<OffsetSize: OffsetSizeTrait>(
 pub fn lt_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a < right)
 }
 
@@ -366,7 +401,7 @@ pub fn lt_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn lt_eq_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a <= b)
 }
 
@@ -374,7 +409,7 @@ pub fn lt_eq_utf8<OffsetSize: OffsetSizeTrait>(
 pub fn lt_eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a <= right)
 }
 
@@ -382,7 +417,7 @@ pub fn lt_eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn gt_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a > b)
 }
 
@@ -390,7 +425,7 @@ pub fn gt_utf8<OffsetSize: OffsetSizeTrait>(
 pub fn gt_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a > right)
 }
 
@@ -398,7 +433,7 @@ pub fn gt_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn gt_eq_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a >= b)
 }
 
@@ -406,12 +441,16 @@ pub fn gt_eq_utf8<OffsetSize: OffsetSizeTrait>(
 pub fn gt_eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a >= right)
 }
 
 // Avoids creating a closure for each combination of `$RIGHT` and `$TY`
-fn try_to_type_result<T>(value: Option<T>, right: &str, ty: &str) -> Result<T> {
+fn try_to_type_result<T>(
+    value: Option<T>,
+    right: &str,
+    ty: &str,
+) -> Result<T, ArrowError> {
     value.ok_or_else(|| {
         ArrowError::ComputeError(format!("Could not convert {} with {}", right, ty,))
     })
@@ -590,7 +629,7 @@ macro_rules! dyn_compare_utf8_scalar {
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
+pub fn eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
     T: num::ToPrimitive + std::fmt::Debug,
 {
@@ -609,7 +648,7 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn lt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
+pub fn lt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
     T: num::ToPrimitive + std::fmt::Debug,
 {
@@ -628,7 +667,7 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn lt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
+pub fn lt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
     T: num::ToPrimitive + std::fmt::Debug,
 {
@@ -647,7 +686,7 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn gt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
+pub fn gt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
     T: num::ToPrimitive + std::fmt::Debug,
 {
@@ -666,7 +705,7 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn gt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
+pub fn gt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
     T: num::ToPrimitive + std::fmt::Debug,
 {
@@ -685,7 +724,7 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn neq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
+pub fn neq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
     T: num::ToPrimitive + std::fmt::Debug,
 {
@@ -699,7 +738,10 @@ where
 
 /// Perform `left == right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
-pub fn eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+pub fn eq_dyn_binary_scalar(
+    left: &dyn Array,
+    right: &[u8],
+) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Binary => {
             let left = as_generic_binary_array::<i32>(left);
@@ -717,7 +759,10 @@ pub fn eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArr
 
 /// Perform `left != right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
-pub fn neq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+pub fn neq_dyn_binary_scalar(
+    left: &dyn Array,
+    right: &[u8],
+) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Binary => {
             let left = as_generic_binary_array::<i32>(left);
@@ -736,7 +781,10 @@ pub fn neq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanAr
 
 /// Perform `left < right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
-pub fn lt_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+pub fn lt_dyn_binary_scalar(
+    left: &dyn Array,
+    right: &[u8],
+) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Binary => {
             let left = as_generic_binary_array::<i32>(left);
@@ -754,7 +802,10 @@ pub fn lt_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArr
 
 /// Perform `left <= right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
-pub fn lt_eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+pub fn lt_eq_dyn_binary_scalar(
+    left: &dyn Array,
+    right: &[u8],
+) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Binary => {
             let left = as_generic_binary_array::<i32>(left);
@@ -773,7 +824,10 @@ pub fn lt_eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<Boolean
 
 /// Perform `left > right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
-pub fn gt_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+pub fn gt_dyn_binary_scalar(
+    left: &dyn Array,
+    right: &[u8],
+) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Binary => {
             let left = as_generic_binary_array::<i32>(left);
@@ -791,7 +845,10 @@ pub fn gt_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArr
 
 /// Perform `left >= right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
-pub fn gt_eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+pub fn gt_eq_dyn_binary_scalar(
+    left: &dyn Array,
+    right: &[u8],
+) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Binary => {
             let left = as_generic_binary_array::<i32>(left);
@@ -810,7 +867,10 @@ pub fn gt_eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<Boolean
 
 /// Perform `left == right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+pub fn eq_dyn_utf8_scalar(
+    left: &dyn Array,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
@@ -837,7 +897,10 @@ pub fn eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray>
 
 /// Perform `left < right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn lt_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+pub fn lt_dyn_utf8_scalar(
+    left: &dyn Array,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
@@ -864,7 +927,10 @@ pub fn lt_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray>
 
 /// Perform `left >= right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn gt_eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+pub fn gt_eq_dyn_utf8_scalar(
+    left: &dyn Array,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
@@ -891,7 +957,10 @@ pub fn gt_eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArr
 
 /// Perform `left <= right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn lt_eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+pub fn lt_eq_dyn_utf8_scalar(
+    left: &dyn Array,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
@@ -918,7 +987,10 @@ pub fn lt_eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArr
 
 /// Perform `left > right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn gt_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+pub fn gt_dyn_utf8_scalar(
+    left: &dyn Array,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
@@ -945,7 +1017,10 @@ pub fn gt_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray>
 
 /// Perform `left != right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn neq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+pub fn neq_dyn_utf8_scalar(
+    left: &dyn Array,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
@@ -972,7 +1047,10 @@ pub fn neq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray
 
 /// Perform `left == right` operation on an array and a numeric scalar
 /// value.
-pub fn eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray> {
+pub fn eq_dyn_bool_scalar(
+    left: &dyn Array,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Boolean => {
             let left = as_boolean_array(left);
@@ -987,7 +1065,10 @@ pub fn eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray>
 
 /// Perform `left < right` operation on an array and a numeric scalar
 /// value. Supports BooleanArrays.
-pub fn lt_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray> {
+pub fn lt_dyn_bool_scalar(
+    left: &dyn Array,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Boolean => {
             let left = as_boolean_array(left);
@@ -1002,7 +1083,10 @@ pub fn lt_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray>
 
 /// Perform `left > right` operation on an array and a numeric scalar
 /// value. Supports BooleanArrays.
-pub fn gt_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray> {
+pub fn gt_dyn_bool_scalar(
+    left: &dyn Array,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Boolean => {
             let left = as_boolean_array(left);
@@ -1017,7 +1101,10 @@ pub fn gt_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray>
 
 /// Perform `left <= right` operation on an array and a numeric scalar
 /// value. Supports BooleanArrays.
-pub fn lt_eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray> {
+pub fn lt_eq_dyn_bool_scalar(
+    left: &dyn Array,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Boolean => {
             let left = as_boolean_array(left);
@@ -1032,7 +1119,10 @@ pub fn lt_eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArr
 
 /// Perform `left >= right` operation on an array and a numeric scalar
 /// value. Supports BooleanArrays.
-pub fn gt_eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray> {
+pub fn gt_eq_dyn_bool_scalar(
+    left: &dyn Array,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Boolean => {
             let left = as_boolean_array(left);
@@ -1047,7 +1137,10 @@ pub fn gt_eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArr
 
 /// Perform `left != right` operation on an array and a numeric scalar
 /// value. Supports BooleanArrays.
-pub fn neq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray> {
+pub fn neq_dyn_bool_scalar(
+    left: &dyn Array,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Boolean => {
             let left = as_boolean_array(left);
@@ -1067,10 +1160,10 @@ pub fn neq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray
 fn unpack_dict_comparison<K>(
     dict: &DictionaryArray<K>,
     dict_comparison: BooleanArray,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
-    K::Native: ToPrimitive,
+    K: ArrowPrimitiveType,
+    K::Native: num::ToPrimitive,
 {
     // TODO: Use take_boolean (#2967)
     let array = take(&dict_comparison, dict.keys(), None)?;
@@ -1085,7 +1178,7 @@ fn simd_compare_op<T, SI, SC>(
     right: &PrimitiveArray<T>,
     simd_op: SI,
     scalar_op: SC,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     SI: Fn(T::Simd, T::Simd) -> T::SimdMask,
@@ -1185,7 +1278,7 @@ fn simd_compare_op_scalar<T, SI, SC>(
     right: T::Native,
     simd_op: SI,
     scalar_op: SC,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     SI: Fn(T::Simd, T::Simd) -> T::SimdMask,
@@ -1271,11 +1364,11 @@ where
     Ok(BooleanArray::from(data))
 }
 
-fn cmp_primitive_array<T: ArrowNumericType, F>(
+fn cmp_primitive_array<T: ArrowPrimitiveType, F>(
     left: &dyn Array,
     right: &dyn Array,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     F: Fn(T::Native, T::Native) -> bool,
 {
@@ -1836,10 +1929,10 @@ fn cmp_dict_primitive<K, T, F>(
     left: &DictionaryArray<K>,
     right: &dyn Array,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
-    T: ArrowNumericType + Sync + Send,
+    K: ArrowPrimitiveType,
+    T: ArrowPrimitiveType + Sync + Send,
     F: Fn(T::Native, T::Native) -> bool,
 {
     compare_op(
@@ -1856,9 +1949,9 @@ fn cmp_dict_string_array<K, OffsetSize: OffsetSizeTrait, F>(
     left: &DictionaryArray<K>,
     right: &dyn Array,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowPrimitiveType,
     F: Fn(&str, &str) -> bool,
 {
     compare_op(
@@ -1879,9 +1972,9 @@ fn cmp_dict_boolean_array<K, F>(
     left: &DictionaryArray<K>,
     right: &dyn Array,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowPrimitiveType,
     F: Fn(bool, bool) -> bool,
 {
     compare_op(
@@ -1898,9 +1991,9 @@ fn cmp_dict_binary_array<K, OffsetSize: OffsetSizeTrait, F>(
     left: &DictionaryArray<K>,
     right: &dyn Array,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowPrimitiveType,
     F: Fn(&[u8], &[u8]) -> bool,
 {
     compare_op(
@@ -1922,10 +2015,10 @@ pub fn cmp_dict<K, T, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
-    T: ArrowNumericType + Sync + Send,
+    K: ArrowPrimitiveType,
+    T: ArrowPrimitiveType + Sync + Send,
     F: Fn(T::Native, T::Native) -> bool,
 {
     compare_op(
@@ -1942,9 +2035,9 @@ pub fn cmp_dict_bool<K, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowPrimitiveType,
     F: Fn(bool, bool) -> bool,
 {
     compare_op(
@@ -1961,9 +2054,9 @@ pub fn cmp_dict_utf8<K, OffsetSize: OffsetSizeTrait, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowPrimitiveType,
     F: Fn(&str, &str) -> bool,
 {
     compare_op(
@@ -1983,9 +2076,9 @@ pub fn cmp_dict_binary<K, OffsetSize: OffsetSizeTrait, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowPrimitiveType,
     F: Fn(&[u8], &[u8]) -> bool,
 {
     compare_op(
@@ -2009,14 +2102,14 @@ where
 ///
 /// # Example
 /// ```
-/// use arrow::array::{StringArray, BooleanArray};
-/// use arrow::compute::eq_dyn;
+/// use arrow_array::{StringArray, BooleanArray};
+/// use arrow_ord::comparison::eq_dyn;
 /// let array1 = StringArray::from(vec![Some("foo"), None, Some("bar")]);
 /// let array2 = StringArray::from(vec![Some("foo"), None, Some("baz")]);
 /// let result = eq_dyn(&array1, &array2).unwrap();
 /// assert_eq!(BooleanArray::from(vec![Some(true), None, Some(false)]), result);
 /// ```
-pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -2052,8 +2145,8 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// # Example
 /// ```
-/// use arrow::array::{BinaryArray, BooleanArray};
-/// use arrow::compute::neq_dyn;
+/// use arrow_array::{BinaryArray, BooleanArray};
+/// use arrow_ord::comparison::neq_dyn;
 /// let values1: Vec<Option<&[u8]>> = vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36])];
 /// let values2: Vec<Option<&[u8]>> = vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36, 0x00])];
 /// let array1 = BinaryArray::from(values1);
@@ -2061,7 +2154,7 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// let result = neq_dyn(&array1, &array2).unwrap();
 /// assert_eq!(BooleanArray::from(vec![Some(false), None, Some(true)]), result);
 /// ```
-pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -2097,16 +2190,16 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// # Example
 /// ```
-/// use arrow::array::{PrimitiveArray, BooleanArray};
-/// use arrow::datatypes::Int32Type;
-/// use arrow::compute::lt_dyn;
+/// use arrow_array::{PrimitiveArray, BooleanArray};
+/// use arrow_array::types::Int32Type;
+/// use arrow_ord::comparison::lt_dyn;
 /// let array1: PrimitiveArray<Int32Type> = PrimitiveArray::from(vec![Some(0), Some(1), Some(2)]);
 /// let array2: PrimitiveArray<Int32Type> = PrimitiveArray::from(vec![Some(1), Some(1), None]);
 /// let result = lt_dyn(&array1, &array2).unwrap();
 /// assert_eq!(BooleanArray::from(vec![Some(true), Some(false), None]), result);
 /// ```
 #[allow(clippy::bool_comparison)]
-pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -2142,15 +2235,18 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// # Example
 /// ```
-/// use arrow::array::{PrimitiveArray, BooleanArray};
-/// use arrow::datatypes::Date32Type;
-/// use arrow::compute::lt_eq_dyn;
+/// use arrow_array::{PrimitiveArray, BooleanArray};
+/// use arrow_array::types::Date32Type;
+/// use arrow_ord::comparison::lt_eq_dyn;
 /// let array1: PrimitiveArray<Date32Type> = vec![Some(12356), Some(13548), Some(-365), Some(365)].into();
 /// let array2: PrimitiveArray<Date32Type> = vec![Some(12355), Some(13548), Some(-364), None].into();
 /// let result = lt_eq_dyn(&array1, &array2).unwrap();
 /// assert_eq!(BooleanArray::from(vec![Some(false), Some(true), Some(true), None]), result);
 /// ```
-pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+pub fn lt_eq_dyn(
+    left: &dyn Array,
+    right: &dyn Array,
+) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -2186,15 +2282,15 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// # Example
 /// ```
-/// use arrow::array::BooleanArray;
-/// use arrow::compute::gt_dyn;
+/// use arrow_array::BooleanArray;
+/// use arrow_ord::comparison::gt_dyn;
 /// let array1 = BooleanArray::from(vec![Some(true), Some(false), None]);
 /// let array2 = BooleanArray::from(vec![Some(false), Some(true), None]);
 /// let result = gt_dyn(&array1, &array2).unwrap();
 /// assert_eq!(BooleanArray::from(vec![Some(true), Some(false), None]), result);
 /// ```
 #[allow(clippy::bool_comparison)]
-pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -2230,14 +2326,17 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// # Example
 /// ```
-/// use arrow::array::{BooleanArray, StringArray};
-/// use arrow::compute::gt_eq_dyn;
+/// use arrow_array::{BooleanArray, StringArray};
+/// use arrow_ord::comparison::gt_eq_dyn;
 /// let array1 = StringArray::from(vec![Some(""), Some("aaa"), None]);
 /// let array2 = StringArray::from(vec![Some(" "), Some("aa"), None]);
 /// let result = gt_eq_dyn(&array1, &array2).unwrap();
 /// assert_eq!(BooleanArray::from(vec![Some(false), Some(true), None]), result);
 /// ```
-pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+pub fn gt_eq_dyn(
+    left: &dyn Array,
+    right: &dyn Array,
+) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -2268,7 +2367,10 @@ pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn eq<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
+pub fn eq<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -2285,7 +2387,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn eq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
+pub fn eq_scalar<T>(
+    left: &PrimitiveArray<T>,
+    right: T::Native,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -2297,7 +2402,10 @@ where
 }
 
 /// Applies an unary and infallible comparison function to a primitive array.
-pub fn unary_cmp<T, F>(left: &PrimitiveArray<T>, op: F) -> Result<BooleanArray>
+pub fn unary_cmp<T, F>(
+    left: &PrimitiveArray<T>,
+    op: F,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     F: Fn(T::Native) -> bool,
@@ -2311,7 +2419,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn neq<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
+pub fn neq<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -2328,7 +2439,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn neq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
+pub fn neq_scalar<T>(
+    left: &PrimitiveArray<T>,
+    right: T::Native,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -2346,7 +2460,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn lt<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
+pub fn lt<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -2364,7 +2481,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn lt_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
+pub fn lt_scalar<T>(
+    left: &PrimitiveArray<T>,
+    right: T::Native,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -2385,7 +2505,7 @@ where
 pub fn lt_eq<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -2403,7 +2523,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn lt_eq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
+pub fn lt_eq_scalar<T>(
+    left: &PrimitiveArray<T>,
+    right: T::Native,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -2421,7 +2544,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn gt<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
+pub fn gt<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -2439,7 +2565,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn gt_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
+pub fn gt_scalar<T>(
+    left: &PrimitiveArray<T>,
+    right: T::Native,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -2460,7 +2589,7 @@ where
 pub fn gt_eq<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -2478,7 +2607,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn gt_eq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
+pub fn gt_eq_scalar<T>(
+    left: &PrimitiveArray<T>,
+    right: T::Native,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -2493,7 +2625,7 @@ where
 pub fn contains<T, OffsetSize>(
     left: &PrimitiveArray<T>,
     right: &GenericListArray<OffsetSize>,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     OffsetSize: OffsetSizeTrait,
@@ -2551,7 +2683,7 @@ where
 pub fn contains_utf8<OffsetSize>(
     left: &GenericStringArray<OffsetSize>,
     right: &ListArray,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     OffsetSize: OffsetSizeTrait,
 {
@@ -2620,12 +2752,12 @@ fn new_all_set_buffer(len: usize) -> Buffer {
 #[rustfmt::skip::macros(vec)]
 #[cfg(test)]
 mod tests {
-    use arrow_buffer::i256;
-    use std::sync::Arc;
-
     use super::*;
-    use crate::datatypes::Int8Type;
-    use crate::{array::Int32Array, array::Int64Array, datatypes::Field};
+    use arrow_array::builder::{
+        ListBuilder, PrimitiveDictionaryBuilder, StringBuilder, StringDictionaryBuilder,
+    };
+    use arrow_buffer::i256;
+    use arrow_schema::Field;
 
     /// Evaluate `KERNEL` with two vectors as inputs and assert against the expected output.
     /// `A_VEC` and `B_VEC` can be of type `Vec<T>` or `Vec<Option<T>>` where `T` is the native
@@ -3639,82 +3771,6 @@ mod tests {
         };
     }
 
-    macro_rules! test_flag_utf8 {
-        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
-            #[test]
-            fn $test_name() {
-                let left = StringArray::from($left);
-                let right = StringArray::from($right);
-                let res = $op(&left, &right, None).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(v, expected[i]);
-                }
-            }
-        };
-        ($test_name:ident, $left:expr, $right:expr, $flag:expr, $op:expr, $expected:expr) => {
-            #[test]
-            fn $test_name() {
-                let left = StringArray::from($left);
-                let right = StringArray::from($right);
-                let flag = Some(StringArray::from($flag));
-                let res = $op(&left, &right, flag.as_ref()).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(v, expected[i]);
-                }
-            }
-        };
-    }
-
-    macro_rules! test_flag_utf8_scalar {
-        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
-            #[test]
-            fn $test_name() {
-                let left = StringArray::from($left);
-                let res = $op(&left, $right, None).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(
-                        v,
-                        expected[i],
-                        "unexpected result when comparing {} at position {} to {} ",
-                        left.value(i),
-                        i,
-                        $right
-                    );
-                }
-            }
-        };
-        ($test_name:ident, $left:expr, $right:expr, $flag:expr, $op:expr, $expected:expr) => {
-            #[test]
-            fn $test_name() {
-                let left = StringArray::from($left);
-                let flag = Some($flag);
-                let res = $op(&left, $right, flag).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(
-                        v,
-                        expected[i],
-                        "unexpected result when comparing {} at position {} to {} ",
-                        left.value(i),
-                        i,
-                        $right
-                    );
-                }
-            }
-        };
-    }
-
     test_utf8!(
         test_utf8_array_eq,
         vec!["arrow", "arrow", "arrow", "arrow"],
@@ -3804,44 +3860,6 @@ mod tests {
         gt_eq_utf8_scalar,
         vec![false, false, true, true]
     );
-    test_flag_utf8!(
-        test_utf8_array_regexp_is_match,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
-        vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
-        regexp_is_match_utf8,
-        vec![true, false, true, false, false, true]
-    );
-    test_flag_utf8!(
-        test_utf8_array_regexp_is_match_insensitive,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
-        vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
-        vec!["i"; 6],
-        regexp_is_match_utf8,
-        vec![true, true, true, true, false, true]
-    );
-
-    test_flag_utf8_scalar!(
-        test_utf8_array_regexp_is_match_scalar,
-        vec!["arrow", "ARROW", "parquet", "PARQUET"],
-        "^ar",
-        regexp_is_match_utf8_scalar,
-        vec![true, false, false, false]
-    );
-    test_flag_utf8_scalar!(
-        test_utf8_array_regexp_is_match_empty_scalar,
-        vec!["arrow", "ARROW", "parquet", "PARQUET"],
-        "",
-        regexp_is_match_utf8_scalar,
-        vec![true, true, true, true]
-    );
-    test_flag_utf8_scalar!(
-        test_utf8_array_regexp_is_match_insensitive_scalar,
-        vec!["arrow", "ARROW", "parquet", "PARQUET"],
-        "^ar",
-        "i",
-        regexp_is_match_utf8_scalar,
-        vec![true, true, false, false]
-    );
 
     #[test]
     fn test_eq_dyn_scalar() {
@@ -3881,8 +3899,7 @@ mod tests {
         );
         assert_eq!(eq_dyn_scalar(&array, 8).unwrap(), expected);
 
-        let array: ArrayRef = Arc::new(array);
-        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        let array = array.unary::<_, Float64Type>(|x| x as f64);
         assert_eq!(eq_dyn_scalar(&array, 8).unwrap(), expected);
     }
 
@@ -3924,8 +3941,7 @@ mod tests {
         );
         assert_eq!(lt_dyn_scalar(&array, 8).unwrap(), expected);
 
-        let array: ArrayRef = Arc::new(array);
-        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        let array = array.unary::<_, Float64Type>(|x| x as f64);
         assert_eq!(lt_dyn_scalar(&array, 8).unwrap(), expected);
     }
 
@@ -3967,8 +3983,7 @@ mod tests {
         );
         assert_eq!(lt_eq_dyn_scalar(&array, 8).unwrap(), expected);
 
-        let array: ArrayRef = Arc::new(array);
-        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        let array = array.unary::<_, Float64Type>(|x| x as f64);
         assert_eq!(lt_eq_dyn_scalar(&array, 8).unwrap(), expected);
     }
 
@@ -4010,8 +4025,7 @@ mod tests {
         );
         assert_eq!(gt_dyn_scalar(&array, 8).unwrap(), expected);
 
-        let array: ArrayRef = Arc::new(array);
-        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        let array = array.unary::<_, Float64Type>(|x| x as f64);
         assert_eq!(gt_dyn_scalar(&array, 8).unwrap(), expected);
     }
 
@@ -4053,8 +4067,7 @@ mod tests {
         );
         assert_eq!(gt_eq_dyn_scalar(&array, 8).unwrap(), expected);
 
-        let array: ArrayRef = Arc::new(array);
-        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        let array = array.unary::<_, Float64Type>(|x| x as f64);
         assert_eq!(gt_eq_dyn_scalar(&array, 8).unwrap(), expected);
     }
 
@@ -4096,8 +4109,7 @@ mod tests {
         );
         assert_eq!(neq_dyn_scalar(&array, 8).unwrap(), expected);
 
-        let array: ArrayRef = Arc::new(array);
-        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        let array = array.unary::<_, Float64Type>(|x| x as f64);
         assert_eq!(neq_dyn_scalar(&array, 8).unwrap(), expected);
     }
 
@@ -4433,8 +4445,6 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_neq_dyn_fixed_size_binary() {
-        use crate::array::FixedSizeBinaryArray;
-
         let values1: Vec<Option<&[u8]>> =
             vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36, 0x01])];
         let values2: Vec<Option<&[u8]>> =
