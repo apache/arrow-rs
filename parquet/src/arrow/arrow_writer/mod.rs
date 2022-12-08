@@ -1631,8 +1631,7 @@ mod tests {
         let optional_raw_values: Vec<_> = raw_values
             .iter()
             .enumerate()
-            .map(|(i, v)| if i % 2 == 0 { None } else { Some(v.as_str()) })
-            .flatten()
+            .filter_map(|(i, v)| if i % 2 == 0 { None } else { Some(v.as_str()) })
             .collect();
         // For null slots, empty string should not be in bloom filter.
         check_bloom_filter(files, "col".to_string(), optional_raw_values, vec![""]);
