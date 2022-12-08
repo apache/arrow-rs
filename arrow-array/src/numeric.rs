@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::*;
+use crate::types::*;
+use crate::ArrowPrimitiveType;
 #[cfg(feature = "simd")]
 use packed_simd::*;
 #[cfg(feature = "simd")]
@@ -106,9 +107,11 @@ where
     /// Writes a SIMD result back to a slice
     fn write(simd_result: Self::Simd, slice: &mut [Self::Native]);
 
+    /// Performs a SIMD unary operation
     fn unary_op<F: Fn(Self::Simd) -> Self::Simd>(a: Self::Simd, op: F) -> Self::Simd;
 }
 
+/// A subtype of primitive type that represents numeric values.
 #[cfg(not(feature = "simd"))]
 pub trait ArrowNumericType: ArrowPrimitiveType {}
 
@@ -468,7 +471,7 @@ impl ArrowNumericType for Decimal256Type {}
 
 #[cfg(feature = "simd")]
 impl ArrowNumericType for Decimal256Type {
-    type Simd = i256;
+    type Simd = arrow_buffer::i256;
     type SimdMask = bool;
 
     fn lanes() -> usize {
@@ -555,11 +558,14 @@ impl ArrowNumericType for Decimal256Type {
     }
 }
 
+/// A subtype of primitive type that represents numeric float values
 #[cfg(feature = "simd")]
 pub trait ArrowFloatNumericType: ArrowNumericType {
+    /// SIMD version of pow
     fn pow(base: Self::Simd, raise: Self::Simd) -> Self::Simd;
 }
 
+/// A subtype of primitive type that represents numeric float values
 #[cfg(not(feature = "simd"))]
 pub trait ArrowFloatNumericType: ArrowNumericType {}
 

@@ -33,6 +33,7 @@ on:
       - arrow-data/**
       - arrow-flight/**
       - arrow-ipc/**
+      - arrow-ord/**
       - arrow-schema/**
       - arrow-select/**
       - arrow-string/**

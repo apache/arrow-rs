@@ -286,4 +286,119 @@ mod tests {
         let result = actual.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(&expected, result);
     }
+
+    macro_rules! test_flag_utf8 {
+        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
+            #[test]
+            fn $test_name() {
+                let left = StringArray::from($left);
+                let right = StringArray::from($right);
+                let res = $op(&left, &right, None).unwrap();
+                let expected = $expected;
+                assert_eq!(expected.len(), res.len());
+                for i in 0..res.len() {
+                    let v = res.value(i);
+                    assert_eq!(v, expected[i]);
+                }
+            }
+        };
+        ($test_name:ident, $left:expr, $right:expr, $flag:expr, $op:expr, $expected:expr) => {
+            #[test]
+            fn $test_name() {
+                let left = StringArray::from($left);
+                let right = StringArray::from($right);
+                let flag = Some(StringArray::from($flag));
+                let res = $op(&left, &right, flag.as_ref()).unwrap();
+                let expected = $expected;
+                assert_eq!(expected.len(), res.len());
+                for i in 0..res.len() {
+                    let v = res.value(i);
+                    assert_eq!(v, expected[i]);
+                }
+            }
+        };
+    }
+
+    macro_rules! test_flag_utf8_scalar {
+        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
+            #[test]
+            fn $test_name() {
+                let left = StringArray::from($left);
+                let res = $op(&left, $right, None).unwrap();
+                let expected = $expected;
+                assert_eq!(expected.len(), res.len());
+                for i in 0..res.len() {
+                    let v = res.value(i);
+                    assert_eq!(
+                        v,
+                        expected[i],
+                        "unexpected result when comparing {} at position {} to {} ",
+                        left.value(i),
+                        i,
+                        $right
+                    );
+                }
+            }
+        };
+        ($test_name:ident, $left:expr, $right:expr, $flag:expr, $op:expr, $expected:expr) => {
+            #[test]
+            fn $test_name() {
+                let left = StringArray::from($left);
+                let flag = Some($flag);
+                let res = $op(&left, $right, flag).unwrap();
+                let expected = $expected;
+                assert_eq!(expected.len(), res.len());
+                for i in 0..res.len() {
+                    let v = res.value(i);
+                    assert_eq!(
+                        v,
+                        expected[i],
+                        "unexpected result when comparing {} at position {} to {} ",
+                        left.value(i),
+                        i,
+                        $right
+                    );
+                }
+            }
+        };
+    }
+
+    test_flag_utf8!(
+        test_utf8_array_regexp_is_match,
+        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
+        vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
+        regexp_is_match_utf8,
+        vec![true, false, true, false, false, true]
+    );
+    test_flag_utf8!(
+        test_utf8_array_regexp_is_match_insensitive,
+        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
+        vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
+        vec!["i"; 6],
+        regexp_is_match_utf8,
+        vec![true, true, true, true, false, true]
+    );
+
+    test_flag_utf8_scalar!(
+        test_utf8_array_regexp_is_match_scalar,
+        vec!["arrow", "ARROW", "parquet", "PARQUET"],
+        "^ar",
+        regexp_is_match_utf8_scalar,
+        vec![true, false, false, false]
+    );
+    test_flag_utf8_scalar!(
+        test_utf8_array_regexp_is_match_empty_scalar,
+        vec!["arrow", "ARROW", "parquet", "PARQUET"],
+        "",
+        regexp_is_match_utf8_scalar,
+        vec![true, true, true, true]
+    );
+    test_flag_utf8_scalar!(
+        test_utf8_array_regexp_is_match_insensitive_scalar,
+        vec!["arrow", "ARROW", "parquet", "PARQUET"],
+        "^ar",
+        "i",
+        regexp_is_match_utf8_scalar,
+        vec![true, true, false, false]
+    );
 }

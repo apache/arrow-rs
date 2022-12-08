@@ -28,6 +28,7 @@ members = [
     "arrow-integration-testing",
     "arrow-ipc",
     "arrow-json",
+    "arrow-ord",
     "arrow-schema",
     "arrow-select",
     "arrow-string",

@@ -33,6 +33,7 @@ on:
       - arrow-integration-test/**
       - arrow-integration-testing/**
       - arrow-ipc/**
+      - arrow-ord/**
       - arrow-json/**
       - arrow-pyarrow-integration-testing/**
       - arrow-schema/**

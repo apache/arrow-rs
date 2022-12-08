@@ -17,14 +17,12 @@
 
 //! Contains functions and function factories to compare arrays.
 
-use std::cmp::Ordering;
-
-use crate::array::*;
-use crate::datatypes::TimeUnit;
-use crate::datatypes::*;
-use crate::error::{ArrowError, Result};
-
+use arrow_array::types::*;
+use arrow_array::*;
+use arrow_buffer::ArrowNativeType;
+use arrow_schema::{ArrowError, DataType};
 use num::Float;
+use std::cmp::Ordering;
 
 /// Compare the values at two arbitrary indices in two arrays.
 pub type DynComparator = Box<dyn Fn(usize, usize) -> Ordering + Send + Sync>;
@@ -130,7 +128,7 @@ fn cmp_dict_primitive<VT>(
     key_type: &DataType,
     left: &dyn Array,
     right: &dyn Array,
-) -> Result<DynComparator>
+) -> Result<DynComparator, ArrowError>
 where
     VT: ArrowPrimitiveType,
     VT::Native: Ord,
@@ -160,25 +158,24 @@ where
 /// The arrays' types must be equal.
 /// # Example
 /// ```
-/// use arrow::array::{build_compare, Int32Array};
+/// use arrow_array::Int32Array;
+/// use arrow_ord::ord::build_compare;
 ///
-/// # fn main() -> arrow::error::Result<()> {
 /// let array1 = Int32Array::from(vec![1, 2]);
 /// let array2 = Int32Array::from(vec![3, 4]);
 ///
-/// let cmp = build_compare(&array1, &array2)?;
+/// let cmp = build_compare(&array1, &array2).unwrap();
 ///
 /// // 1 (index 0 of array1) is smaller than 4 (index 1 of array2)
 /// assert_eq!(std::cmp::Ordering::Less, (cmp)(0, 1));
-/// # Ok(())
-/// # }
 /// ```
 // This is a factory of comparisons.
 // The lifetime 'a enforces that we cannot use the closure beyond any of the array's lifetime.
-pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparator> {
-    use DataType::*;
-    use IntervalUnit::*;
-    use TimeUnit::*;
+pub fn build_compare(
+    left: &dyn Array,
+    right: &dyn Array,
+) -> Result<DynComparator, ArrowError> {
+    use arrow_schema::{DataType::*, IntervalUnit::*, TimeUnit::*};
     Ok(match (left.data_type(), right.data_type()) {
         (a, b) if a != b => {
             return Err(ArrowError::InvalidArgumentError(
@@ -315,130 +312,119 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::array::{FixedSizeBinaryArray, Float64Array, Int32Array};
-    use crate::error::Result;
+    use arrow_array::{FixedSizeBinaryArray, Float64Array, Int32Array};
     use std::cmp::Ordering;
 
     #[test]
-    fn test_fixed_size_binary() -> Result<()> {
+    fn test_fixed_size_binary() {
         let items = vec![vec![1u8], vec![2u8]];
         let array = FixedSizeBinaryArray::try_from_iter(items.into_iter()).unwrap();
 
-        let cmp = build_compare(&array, &array)?;
+        let cmp = build_compare(&array, &array).unwrap();
 
         assert_eq!(Ordering::Less, (cmp)(0, 1));
-        Ok(())
     }
 
     #[test]
-    fn test_fixed_size_binary_fixed_size_binary() -> Result<()> {
+    fn test_fixed_size_binary_fixed_size_binary() {
         let items = vec![vec![1u8]];
         let array1 = FixedSizeBinaryArray::try_from_iter(items.into_iter()).unwrap();
         let items = vec![vec![2u8]];
         let array2 = FixedSizeBinaryArray::try_from_iter(items.into_iter()).unwrap();
 
-        let cmp = build_compare(&array1, &array2)?;
+        let cmp = build_compare(&array1, &array2).unwrap();
 
         assert_eq!(Ordering::Less, (cmp)(0, 0));
-        Ok(())
     }
 
     #[test]
-    fn test_i32() -> Result<()> {
+    fn test_i32() {
         let array = Int32Array::from(vec![1, 2]);
 
-        let cmp = build_compare(&array, &array)?;
+        let cmp = build_compare(&array, &array).unwrap();
 
         assert_eq!(Ordering::Less, (cmp)(0, 1));
-        Ok(())
     }
 
     #[test]
-    fn test_i32_i32() -> Result<()> {
+    fn test_i32_i32() {
         let array1 = Int32Array::from(vec![1]);
         let array2 = Int32Array::from(vec![2]);
 
-        let cmp = build_compare(&array1, &array2)?;
+        let cmp = build_compare(&array1, &array2).unwrap();
 
         assert_eq!(Ordering::Less, (cmp)(0, 0));
-        Ok(())
     }
 
     #[test]
-    fn test_f64() -> Result<()> {
+    fn test_f64() {
         let array = Float64Array::from(vec![1.0, 2.0]);
 
-        let cmp = build_compare(&array, &array)?;
+        let cmp = build_compare(&array, &array).unwrap();
 
         assert_eq!(Ordering::Less, (cmp)(0, 1));
-        Ok(())
     }
 
     #[test]
-    fn test_f64_nan() -> Result<()> {
+    fn test_f64_nan() {
         let array = Float64Array::from(vec![1.0, f64::NAN]);
 
-        let cmp = build_compare(&array, &array)?;
+        let cmp = build_compare(&array, &array).unwrap();
 
         assert_eq!(Ordering::Less, (cmp)(0, 1));
-        Ok(())
     }
 
     #[test]
-    fn test_f64_zeros() -> Result<()> {
+    fn test_f64_zeros() {
         let array = Float64Array::from(vec![-0.0, 0.0]);
 
-        let cmp = build_compare(&array, &array)?;
+        let cmp = build_compare(&array, &array).unwrap();
 
         assert_eq!(Ordering::Equal, (cmp)(0, 1));
         assert_eq!(Ordering::Equal, (cmp)(1, 0));
-        Ok(())
     }
 
     #[test]
-    fn test_decimal() -> Result<()> {
+    fn test_decimal() {
         let array = vec![Some(5_i128), Some(2_i128), Some(3_i128)]
             .into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap();
 
-        let cmp = build_compare(&array, &array)?;
+        let cmp = build_compare(&array, &array).unwrap();
         assert_eq!(Ordering::Less, (cmp)(1, 0));
         assert_eq!(Ordering::Greater, (cmp)(0, 2));
-        Ok(())
     }
 
     #[test]
-    fn test_dict() -> Result<()> {
+    fn test_dict() {
         let data = vec!["a", "b", "c", "a", "a", "c", "c"];
         let array = data.into_iter().collect::<DictionaryArray<Int16Type>>();
 
-        let cmp = build_compare(&array, &array)?;
+        let cmp = build_compare(&array, &array).unwrap();
 
         assert_eq!(Ordering::Less, (cmp)(0, 1));
         assert_eq!(Ordering::Equal, (cmp)(3, 4));
         assert_eq!(Ordering::Greater, (cmp)(2, 3));
-        Ok(())
     }
 
     #[test]
-    fn test_multiple_dict() -> Result<()> {
+    fn test_multiple_dict() {
         let d1 = vec!["a", "b", "c", "d"];
         let a1 = d1.into_iter().collect::<DictionaryArray<Int16Type>>();
         let d2 = vec!["e", "f", "g", "a"];
         let a2 = d2.into_iter().collect::<DictionaryArray<Int16Type>>();
 
-        let cmp = build_compare(&a1, &a2)?;
+        let cmp = build_compare(&a1, &a2).unwrap();
 
         assert_eq!(Ordering::Less, (cmp)(0, 0));
         assert_eq!(Ordering::Equal, (cmp)(0, 3));
         assert_eq!(Ordering::Greater, (cmp)(1, 3));
-        Ok(())
     }
 
     #[test]
-    fn test_primitive_dict() -> Result<()> {
+    fn test_primitive_dict() {
         let values = Int32Array::from(vec![1_i32, 0, 2, 5]);
         let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
         let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
@@ -447,13 +433,12 @@ pub mod tests {
         let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
         let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
 
-        let cmp = build_compare(&array1, &array2)?;
+        let cmp = build_compare(&array1, &array2).unwrap();
 
         assert_eq!(Ordering::Less, (cmp)(0, 0));
         assert_eq!(Ordering::Less, (cmp)(0, 3));
         assert_eq!(Ordering::Equal, (cmp)(3, 3));
         assert_eq!(Ordering::Greater, (cmp)(3, 1));
         assert_eq!(Ordering::Greater, (cmp)(3, 2));
-        Ok(())
     }
 }

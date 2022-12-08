@@ -16,9 +16,9 @@
 # under the License.
 
 [package]
-name = "arrow-array"
+name = "arrow-ord"
 version = "28.0.0"
-description = "Array abstractions for Apache Arrow"
+description = "Ordering kernels for arrow arrays"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -33,32 +33,21 @@ edition = "2021"
 rust-version = "1.62"
 
 [lib]
-name = "arrow_array"
+name = "arrow_ord"
 path = "src/lib.rs"
 bench = false
 
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-
 [dependencies]
+arrow-array = { version = "28.0.0", path = "../arrow-array" }
 arrow-buffer = { version = "28.0.0", path = "../arrow-buffer" }
-arrow-schema = { version = "28.0.0", path = "../arrow-schema" }
 arrow-data = { version = "28.0.0", path = "../arrow-data" }
-chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
-chrono-tz = { version = "0.8", optional = true }
+arrow-schema = { version = "28.0.0", path = "../arrow-schema" }
+arrow-select = { version = "28.0.0", path = "../arrow-select" }
 num = { version = "0.4", default-features = false, features = ["std"] }
-half = { version = "2.1", default-features = false, features = ["num-traits"] }
-hashbrown = { version = "0.13", default-features = false }
-packed_simd = { version = "0.3", default-features = false, optional = true, package = "packed_simd_2" }
-
-[features]
-simd = ["packed_simd"]
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 
-[build-dependencies]
+[features]
+dyn_cmp_dict = []
+simd = ["arrow-array/simd"]
