@@ -52,10 +52,10 @@ arrow-csv = { version = "28.0.0", path = "../arrow-csv", optional = true }
 arrow-data = { version = "28.0.0", path = "../arrow-data" }
 arrow-ipc = { version = "28.0.0", path = "../arrow-ipc", optional = true }
 arrow-json = { version = "28.0.0", path = "../arrow-json", optional = true }
+arrow-ord = { version = "28.0.0", path = "../arrow-ord" }
 arrow-schema = { version = "28.0.0", path = "../arrow-schema" }
 arrow-select = { version = "28.0.0", path = "../arrow-select" }
 arrow-string = { version = "28.0.0", path = "../arrow-string" }
-arrow-ord = { version = "28.0.0", path = "../arrow-ord" }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
