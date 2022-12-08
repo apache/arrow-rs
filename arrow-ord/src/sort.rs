@@ -941,7 +941,7 @@ pub fn lexsort_to_indices(
     let lexicographical_comparator = LexicographicalComparator::try_new(columns)?;
     // uint32 can be sorted unstably
     sort_unstable_by(&mut value_indices, len, |a, b| {
-        lexicographical_comparator.compare(a, b)
+        lexicographical_comparator.compare(*a, *b)
     });
 
     Ok(UInt32Array::from_iter_values(
@@ -966,21 +966,17 @@ type LexicographicalCompareItem<'a> = (
 
 /// A lexicographical comparator that wraps given array data (columns) and can lexicographically compare data
 /// at given two indices. The lifetime is the same at the data wrapped.
-pub(crate) struct LexicographicalComparator<'a> {
+pub struct LexicographicalComparator<'a> {
     compare_items: Vec<LexicographicalCompareItem<'a>>,
 }
 
 impl LexicographicalComparator<'_> {
     /// lexicographically compare values at the wrapped columns with given indices.
-    pub(crate) fn compare<'a, 'b>(
-        &'a self,
-        a_idx: &'b usize,
-        b_idx: &'b usize,
-    ) -> Ordering {
+    pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
         for (data, comparator, sort_option) in &self.compare_items {
-            match (data.is_valid(*a_idx), data.is_valid(*b_idx)) {
+            match (data.is_valid(a_idx), data.is_valid(b_idx)) {
                 (true, true) => {
-                    match (comparator)(*a_idx, *b_idx) {
+                    match (comparator)(a_idx, b_idx) {
                         // equal, move on to next column
                         Ordering::Equal => continue,
                         order => {
@@ -1016,7 +1012,7 @@ impl LexicographicalComparator<'_> {
 
     /// Create a new lex comparator that will wrap the given sort columns and give comparison
     /// results with two indices.
-    pub(crate) fn try_new(
+    pub fn try_new(
         columns: &[SortColumn],
     ) -> Result<LexicographicalComparator<'_>, ArrowError> {
         let compare_items = columns

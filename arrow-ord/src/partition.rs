@@ -90,7 +90,7 @@ fn exponential_search_next_partition_point(
     let target = start;
     let mut bound = 1;
     while bound + start < end
-        && comparator.compare(&(bound + start), &target) != Ordering::Greater
+        && comparator.compare(bound + start, target) != Ordering::Greater
     {
         bound *= 2;
     }
@@ -101,7 +101,7 @@ fn exponential_search_next_partition_point(
     // note here we have right = min(end, start + bound + 1) because (start + bound) might
     // actually be considered and must be included.
     partition_point(start + bound / 2, end.min(start + bound + 1), |idx| {
-        comparator.compare(&idx, &target) != Ordering::Greater
+        comparator.compare(idx, target) != Ordering::Greater
     })
 }
 
