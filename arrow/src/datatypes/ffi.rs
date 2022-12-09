@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_schema::UnionMode;
 use std::convert::TryFrom;
 
 use crate::datatypes::DataType::Map;
@@ -134,6 +135,50 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                             }
                         }
                     }
+                    // DenseUnion
+                    ["+ud", extra] => {
+                        let type_ids = extra.split(',').map(|t| t.parse::<i8>().map_err(|_| {
+                            ArrowError::CDataInterface(
+                                "The Union type requires an integer type id".to_string(),
+                            )
+                        })).collect::<Result<Vec<_>>>()?;
+                        let mut fields = Vec::with_capacity(type_ids.len());
+                        for idx in 0..c_schema.n_children {
+                            let c_child = c_schema.child(idx as usize);
+                            let field = Field::try_from(c_child)?;
+                            fields.push(field);
+                        }
+
+                        if fields.len() != type_ids.len() {
+                            return Err(ArrowError::CDataInterface(
+                                "The Union type requires same number of fields and type ids".to_string(),
+                            ));
+                        }
+
+                        DataType::Union(fields, type_ids, UnionMode::Dense)
+                    }
+                    // SparseUnion
+                    ["+us", extra] => {
+                        let type_ids = extra.split(',').map(|t| t.parse::<i8>().map_err(|_| {
+                            ArrowError::CDataInterface(
+                                "The Union type requires an integer type id".to_string(),
+                            )
+                        })).collect::<Result<Vec<_>>>()?;
+                        let mut fields = Vec::with_capacity(type_ids.len());
+                        for idx in 0..c_schema.n_children {
+                            let c_child = c_schema.child(idx as usize);
+                            let field = Field::try_from(c_child)?;
+                            fields.push(field);
+                        }
+
+                        if fields.len() != type_ids.len() {
+                            return Err(ArrowError::CDataInterface(
+                                "The Union type requires same number of fields and type ids".to_string(),
+                            ));
+                        }
+
+                        DataType::Union(fields, type_ids, UnionMode::Sparse)
+                    }
 
                     // Timestamps in format "tts:" and "tts:America/New_York" for no timezones and timezones resp.
                     ["tss", ""] => DataType::Timestamp(TimeUnit::Second, None),
@@ -211,6 +256,10 @@ impl TryFrom<&DataType> for FFI_ArrowSchema {
             | DataType::Map(child, _) => {
                 vec![FFI_ArrowSchema::try_from(child.as_ref())?]
             }
+            DataType::Union(fields, _, _) => fields
+                .iter()
+                .map(FFI_ArrowSchema::try_from)
+                .collect::<Result<Vec<_>>>()?,
             DataType::Struct(fields) => fields
                 .iter()
                 .map(FFI_ArrowSchema::try_from)
@@ -279,6 +328,13 @@ fn get_format_string(dtype: &DataType) -> Result<String> {
         DataType::Struct(_) => Ok("+s".to_string()),
         DataType::Map(_, _) => Ok("+m".to_string()),
         DataType::Dictionary(key_data_type, _) => get_format_string(key_data_type),
+        DataType::Union(_, type_ids, mode) => {
+            let formats = type_ids.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+            match mode {
+                UnionMode::Dense => Ok(format!("{}:{}", "+ud", formats.join(","))),
+                UnionMode::Sparse => Ok(format!("{}:{}", "+us", formats.join(","))),
+            }
+        }
         other => Err(ArrowError::CDataInterface(format!(
             "The datatype \"{:?}\" is still not supported in Rust implementation",
             other
