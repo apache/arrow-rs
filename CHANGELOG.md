@@ -63,6 +63,9 @@
 
 **Merged pull requests:**
 
+- Use BufWriter when writing bloom filters and limit tests \(\#3318\) [\#3319](https://github.com/apache/arrow-rs/pull/3319) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
+- Use take for dictionary like comparisons [\#3313](https://github.com/apache/arrow-rs/pull/3313) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Update versions to  29.0.0 and update CHANGELOG [\#3315](https://github.com/apache/arrow-rs/pull/3315) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([alamb](https://github.com/alamb))
 - refactor: Merge similar functions `ilike_scalar` and `nilike_scalar` [\#3303](https://github.com/apache/arrow-rs/pull/3303) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([askoa](https://github.com/askoa))
 - Split out arrow-ord \(\#2594\) [\#3299](https://github.com/apache/arrow-rs/pull/3299) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 - Split out arrow-string \(\#2594\) [\#3295](https://github.com/apache/arrow-rs/pull/3295) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
