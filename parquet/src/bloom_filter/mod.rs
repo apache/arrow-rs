@@ -28,7 +28,7 @@ use crate::format::{
 };
 use bytes::{Buf, Bytes};
 use std::hash::Hasher;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::sync::Arc;
 use thrift::protocol::{
     TCompactInputProtocol, TCompactOutputProtocol, TOutputProtocol, TSerializable,
@@ -177,7 +177,9 @@ impl Sbbf {
     }
 
     /// Write the bloom filter data (header and then bitset) to the output
-    pub(crate) fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
+    pub(crate) fn write<W: Write>(&self, writer: W) -> Result<(), ParquetError> {
+        // Use a BufWriter to avoid costs of writing individual blocks
+        let mut writer = BufWriter::new(writer);
         let mut protocol = TCompactOutputProtocol::new(&mut writer);
         let header = self.header();
         header.write_to_out_protocol(&mut protocol).map_err(|e| {
@@ -185,6 +187,7 @@ impl Sbbf {
         })?;
         protocol.flush()?;
         self.write_bitset(&mut writer)?;
+        writer.flush()?;
         Ok(())
     }
 

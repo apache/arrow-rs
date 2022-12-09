@@ -630,7 +630,7 @@ struct ColumnProperties {
     statistics_enabled: Option<EnabledStatistics>,
     max_statistics_size: Option<usize>,
     /// bloom filter related properties
-    bloom_filter_properies: Option<BloomFilterProperties>,
+    bloom_filter_properties: Option<BloomFilterProperties>,
 }
 
 impl ColumnProperties {
@@ -674,10 +674,10 @@ impl ColumnProperties {
     /// otherwise it is a no-op.
     /// If `value` is `false`, resets bloom filter properties to `None`.
     fn set_bloom_filter_enabled(&mut self, value: bool) {
-        if value && self.bloom_filter_properies.is_none() {
-            self.bloom_filter_properies = Some(Default::default())
+        if value && self.bloom_filter_properties.is_none() {
+            self.bloom_filter_properties = Some(Default::default())
         } else if !value {
-            self.bloom_filter_properies = None
+            self.bloom_filter_properties = None
         }
     }
 
@@ -694,7 +694,7 @@ impl ColumnProperties {
             value
         );
 
-        self.bloom_filter_properies
+        self.bloom_filter_properties
             .get_or_insert_with(Default::default)
             .fpp = value;
     }
@@ -702,7 +702,7 @@ impl ColumnProperties {
     /// Sets the number of distinct (unique) values for bloom filter for this column, and implicitly
     /// enables bloom filter if not previously enabled.
     fn set_bloom_filter_ndv(&mut self, value: u64) {
-        self.bloom_filter_properies
+        self.bloom_filter_properties
             .get_or_insert_with(Default::default)
             .ndv = value;
     }
@@ -737,7 +737,7 @@ impl ColumnProperties {
 
     /// Returns the bloom filter properties, or `None` if not enabled
     fn bloom_filter_properties(&self) -> Option<&BloomFilterProperties> {
-        self.bloom_filter_properies.as_ref()
+        self.bloom_filter_properties.as_ref()
     }
 }
 

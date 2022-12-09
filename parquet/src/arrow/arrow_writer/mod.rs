@@ -1225,16 +1225,44 @@ mod tests {
         file
     }
 
+    struct RoundTripOptions {
+        values: ArrayRef,
+        schema: SchemaRef,
+        bloom_filter: bool,
+    }
+
+    impl RoundTripOptions {
+        fn new(values: ArrayRef, nullable: bool) -> Self {
+            let data_type = values.data_type().clone();
+            let schema = Schema::new(vec![Field::new("col", data_type, nullable)]);
+            Self {
+                values,
+                schema: Arc::new(schema),
+                bloom_filter: false,
+            }
+        }
+    }
+
     fn one_column_roundtrip(values: ArrayRef, nullable: bool) -> Vec<File> {
-        let data_type = values.data_type().clone();
-        let schema = Schema::new(vec![Field::new("col", data_type, nullable)]);
-        one_column_roundtrip_with_schema(values, Arc::new(schema))
+        one_column_roundtrip_with_options(RoundTripOptions::new(values, nullable))
     }
 
     fn one_column_roundtrip_with_schema(
         values: ArrayRef,
         schema: SchemaRef,
     ) -> Vec<File> {
+        let mut options = RoundTripOptions::new(values, false);
+        options.schema = schema;
+        one_column_roundtrip_with_options(options)
+    }
+
+    fn one_column_roundtrip_with_options(options: RoundTripOptions) -> Vec<File> {
+        let RoundTripOptions {
+            values,
+            schema,
+            bloom_filter,
+        } = options;
+
         let encodings = match values.data_type() {
             DataType::Utf8
             | DataType::LargeUtf8
@@ -1270,7 +1298,7 @@ mod tests {
                             .set_dictionary_enabled(dictionary_size != 0)
                             .set_dictionary_pagesize_limit(dictionary_size.max(1))
                             .set_encoding(*encoding)
-                            .set_bloom_filter_enabled(true)
+                            .set_bloom_filter_enabled(bloom_filter)
                             .build();
 
                         files.push(roundtrip_opts(&expected_batch, props))
@@ -1596,8 +1624,11 @@ mod tests {
 
     #[test]
     fn i32_column_bloom_filter() {
-        let positive_values: Vec<i32> = (0..SMALL_SIZE as i32).collect();
-        let files = values_required::<Int32Array, _>(positive_values);
+        let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
+        let mut options = RoundTripOptions::new(array, false);
+        options.bloom_filter = true;
+
+        let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(
             files,
             "col".to_string(),
@@ -1612,7 +1643,11 @@ mod tests {
         let many_vecs: Vec<_> = std::iter::repeat(one_vec).take(SMALL_SIZE).collect();
         let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
 
-        let files = values_required::<BinaryArray, _>(many_vecs_iter);
+        let array = Arc::new(BinaryArray::from_iter_values(many_vecs_iter));
+        let mut options = RoundTripOptions::new(array, false);
+        options.bloom_filter = true;
+
+        let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(
             files,
             "col".to_string(),
@@ -1626,7 +1661,11 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
         let raw_strs = raw_values.iter().map(|s| s.as_str());
 
-        let files = values_optional::<StringArray, _>(raw_strs);
+        let array = Arc::new(StringArray::from_iter_values(raw_strs));
+        let mut options = RoundTripOptions::new(array, false);
+        options.bloom_filter = true;
+
+        let files = one_column_roundtrip_with_options(options);
 
         let optional_raw_values: Vec<_> = raw_values
             .iter()
