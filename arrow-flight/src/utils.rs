@@ -19,10 +19,12 @@
 
 use crate::{FlightData, IpcMessage, SchemaAsIpc, SchemaResult};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::Buffer;
-use arrow_ipc::{reader, writer, writer::IpcWriteOptions};
+use arrow_ipc::convert::fb_to_schema;
+use arrow_ipc::{reader, root_as_message, writer, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
 
 /// Convert a `RecordBatch` to a vector of `FlightData` representing the bytes of the dictionaries
@@ -42,6 +44,32 @@ pub fn flight_data_from_arrow_batch(
     let flight_batch = encoded_batch.into();
 
     (flight_dictionaries, flight_batch)
+}
+
+/// Convert a slice of wire protocol `FlightData`s into a vector of `RecordBatch`es
+pub fn flight_data_to_batches(
+    flight_data: &[FlightData],
+) -> Result<Vec<RecordBatch>, ArrowError> {
+    let schema = flight_data.get(0).ok_or_else(|| {
+        ArrowError::CastError("Need at least one FlightData for schema".to_string())
+    })?;
+    let message = root_as_message(&schema.data_header[..])
+        .map_err(|_| ArrowError::CastError("Cannot get root as message".to_string()))?;
+
+    let ipc_schema: arrow_ipc::Schema = message.header_as_schema().ok_or_else(|| {
+        ArrowError::CastError("Cannot get header as Schema".to_string())
+    })?;
+    let schema = fb_to_schema(ipc_schema);
+    let schema = Arc::new(schema);
+
+    let mut batches = vec![];
+    let dictionaries_by_id = HashMap::new();
+    for datum in flight_data[1..].iter() {
+        let batch =
+            flight_data_to_arrow_batch(datum, schema.clone(), &dictionaries_by_id)?;
+        batches.push(batch);
+    }
+    Ok(batches)
 }
 
 /// Convert `FlightData` (with supplied schema and dictionaries) to an arrow `RecordBatch`.
@@ -110,4 +138,26 @@ pub fn ipc_message_from_arrow_schema(
     let message = SchemaAsIpc::new(schema, options).try_into()?;
     let IpcMessage(vals) = message;
     Ok(vals)
+}
+
+/// Convert `RecordBatch`es to wire protocol `FlightData`s
+pub fn batches_to_flight_data(
+    schema: Schema,
+    batches: Vec<RecordBatch>,
+) -> Result<Vec<FlightData>, ArrowError> {
+    let options = IpcWriteOptions::default();
+    let schema_flight_data: FlightData = SchemaAsIpc::new(&schema, &options).into();
+    let mut dictionaries = vec![];
+    let mut flight_data = vec![];
+    for batch in batches.iter() {
+        let (flight_dictionaries, flight_datum) =
+            flight_data_from_arrow_batch(batch, &options);
+        dictionaries.extend(flight_dictionaries);
+        flight_data.push(flight_datum);
+    }
+    let mut stream = vec![schema_flight_data];
+    stream.extend(dictionaries.into_iter());
+    stream.extend(flight_data.into_iter());
+    let flight_data: Vec<_> = stream.into_iter().collect();
+    Ok(flight_data)
 }
