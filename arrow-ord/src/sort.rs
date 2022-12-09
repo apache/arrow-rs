@@ -17,14 +17,15 @@
 
 //! Defines sort kernel for `ArrayRef`
 
-use crate::array::*;
-use crate::buffer::MutableBuffer;
-use crate::compute::take;
-use crate::datatypes::*;
-use crate::downcast_dictionary_array;
-use crate::error::{ArrowError, Result};
+use crate::ord::{build_compare, DynComparator};
+use arrow_array::cast::*;
+use arrow_array::types::*;
+use arrow_array::*;
+use arrow_buffer::{ArrowNativeType, MutableBuffer};
+use arrow_data::ArrayData;
+use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
+use arrow_select::take::take;
 use std::cmp::Ordering;
-use TimeUnit::*;
 
 /// Sort the `ArrayRef` using `SortOptions`.
 ///
@@ -41,18 +42,17 @@ use TimeUnit::*;
 /// # Example
 /// ```rust
 /// # use std::sync::Arc;
-/// # use arrow::array::{Int32Array, ArrayRef};
-/// # use arrow::error::Result;
-/// # use arrow::compute::kernels::sort::sort;
-/// # fn main() -> Result<()> {
+/// # use arrow_array::{Int32Array, ArrayRef};
+/// # use arrow_ord::sort::sort;
 /// let array: ArrayRef = Arc::new(Int32Array::from(vec![5, 4, 3, 2, 1]));
 /// let sorted_array = sort(&array, None).unwrap();
 /// let sorted_array = sorted_array.as_any().downcast_ref::<Int32Array>().unwrap();
 /// assert_eq!(sorted_array, &Int32Array::from(vec![1, 2, 3, 4, 5]));
-/// # Ok(())
-/// # }
 /// ```
-pub fn sort(values: &ArrayRef, options: Option<SortOptions>) -> Result<ArrayRef> {
+pub fn sort(
+    values: &ArrayRef,
+    options: Option<SortOptions>,
+) -> Result<ArrayRef, ArrowError> {
     let indices = sort_to_indices(values, options, None)?;
     take(values.as_ref(), &indices, None)
 }
@@ -69,10 +69,8 @@ pub fn sort(values: &ArrayRef, options: Option<SortOptions>) -> Result<ArrayRef>
 /// # Example
 /// ```rust
 /// # use std::sync::Arc;
-/// # use arrow::array::{Int32Array, ArrayRef};
-/// # use arrow::error::Result;
-/// # use arrow::compute::kernels::sort::{sort_limit, SortOptions};
-/// # fn main() -> Result<()> {
+/// # use arrow_array::{Int32Array, ArrayRef};
+/// # use arrow_ord::sort::{sort_limit, SortOptions};
 /// let array: ArrayRef = Arc::new(Int32Array::from(vec![5, 4, 3, 2, 1]));
 ///
 /// // Find the the top 2 items
@@ -88,14 +86,12 @@ pub fn sort(values: &ArrayRef, options: Option<SortOptions>) -> Result<ArrayRef>
 /// let sorted_array = sort_limit(&array, options, Some(2)).unwrap();
 /// let sorted_array = sorted_array.as_any().downcast_ref::<Int32Array>().unwrap();
 /// assert_eq!(sorted_array, &Int32Array::from(vec![5, 4]));
-/// # Ok(())
-/// # }
 /// ```
 pub fn sort_limit(
     values: &ArrayRef,
     options: Option<SortOptions>,
     limit: Option<usize>,
-) -> Result<ArrayRef> {
+) -> Result<ArrayRef, ArrowError> {
     let indices = sort_to_indices(values, options, limit)?;
     take(values.as_ref(), &indices, None)
 }
@@ -139,7 +135,7 @@ pub fn sort_to_indices(
     values: &ArrayRef,
     options: Option<SortOptions>,
     limit: Option<usize>,
-) -> Result<UInt32Array> {
+) -> Result<UInt32Array, ArrowError> {
     let options = options.unwrap_or_default();
 
     let (v, n) = partition_validity(values);
@@ -198,32 +194,32 @@ pub fn sort_to_indices(
         DataType::Date64 => {
             sort_primitive::<Date64Type, _>(values, v, n, cmp, &options, limit)
         }
-        DataType::Time32(Second) => {
+        DataType::Time32(TimeUnit::Second) => {
             sort_primitive::<Time32SecondType, _>(values, v, n, cmp, &options, limit)
         }
-        DataType::Time32(Millisecond) => {
+        DataType::Time32(TimeUnit::Millisecond) => {
             sort_primitive::<Time32MillisecondType, _>(values, v, n, cmp, &options, limit)
         }
-        DataType::Time64(Microsecond) => {
+        DataType::Time64(TimeUnit::Microsecond) => {
             sort_primitive::<Time64MicrosecondType, _>(values, v, n, cmp, &options, limit)
         }
-        DataType::Time64(Nanosecond) => {
+        DataType::Time64(TimeUnit::Nanosecond) => {
             sort_primitive::<Time64NanosecondType, _>(values, v, n, cmp, &options, limit)
         }
-        DataType::Timestamp(Second, _) => {
+        DataType::Timestamp(TimeUnit::Second, _) => {
             sort_primitive::<TimestampSecondType, _>(values, v, n, cmp, &options, limit)
         }
-        DataType::Timestamp(Millisecond, _) => {
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
             sort_primitive::<TimestampMillisecondType, _>(
                 values, v, n, cmp, &options, limit,
             )
         }
-        DataType::Timestamp(Microsecond, _) => {
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
             sort_primitive::<TimestampMicrosecondType, _>(
                 values, v, n, cmp, &options, limit,
             )
         }
-        DataType::Timestamp(Nanosecond, _) => {
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
             sort_primitive::<TimestampNanosecondType, _>(
                 values, v, n, cmp, &options, limit,
             )
@@ -857,11 +853,12 @@ pub struct SortColumn {
 /// Example:
 ///
 /// ```
-/// use std::convert::From;
-/// use std::sync::Arc;
-/// use arrow::array::{ArrayRef, StringArray, PrimitiveArray, as_primitive_array};
-/// use arrow::compute::kernels::sort::{SortColumn, SortOptions, lexsort};
-/// use arrow::datatypes::Int64Type;
+/// # use std::convert::From;
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, StringArray, PrimitiveArray};
+/// # use arrow_array::types::Int64Type;
+/// # use arrow_array::cast::as_primitive_array;
+/// # use arrow_ord::sort::{SortColumn, SortOptions, lexsort};
 ///
 /// let sorted_columns = lexsort(&vec![
 ///     SortColumn {
@@ -893,10 +890,13 @@ pub struct SortColumn {
 /// assert!(sorted_columns[0].is_null(0));
 /// ```
 ///
-/// Note: for multi-column sorts without a limit, using the [row format][crate::row]
+/// Note: for multi-column sorts without a limit, using the [row format](https://docs.rs/arrow/latest/arrow/row/)
 /// may be significantly faster
 ///
-pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<ArrayRef>> {
+pub fn lexsort(
+    columns: &[SortColumn],
+    limit: Option<usize>,
+) -> Result<Vec<ArrayRef>, ArrowError> {
     let indices = lexsort_to_indices(columns, limit)?;
     columns
         .iter()
@@ -907,12 +907,12 @@ pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<Array
 /// Sort elements lexicographically from a list of `ArrayRef` into an unsigned integer
 /// (`UInt32Array`) of indices.
 ///
-/// Note: for multi-column sorts without a limit, using the [row format][crate::row]
+/// Note: for multi-column sorts without a limit, using the [row format](https://docs.rs/arrow/latest/arrow/row/)
 /// may be significantly faster
 pub fn lexsort_to_indices(
     columns: &[SortColumn],
     limit: Option<usize>,
-) -> Result<UInt32Array> {
+) -> Result<UInt32Array, ArrowError> {
     if columns.is_empty() {
         return Err(ArrowError::InvalidArgumentError(
             "Sort requires at least one column".to_string(),
@@ -941,7 +941,7 @@ pub fn lexsort_to_indices(
     let lexicographical_comparator = LexicographicalComparator::try_new(columns)?;
     // uint32 can be sorted unstably
     sort_unstable_by(&mut value_indices, len, |a, b| {
-        lexicographical_comparator.compare(a, b)
+        lexicographical_comparator.compare(*a, *b)
     });
 
     Ok(UInt32Array::from_iter_values(
@@ -966,21 +966,17 @@ type LexicographicalCompareItem<'a> = (
 
 /// A lexicographical comparator that wraps given array data (columns) and can lexicographically compare data
 /// at given two indices. The lifetime is the same at the data wrapped.
-pub(crate) struct LexicographicalComparator<'a> {
+pub struct LexicographicalComparator<'a> {
     compare_items: Vec<LexicographicalCompareItem<'a>>,
 }
 
 impl LexicographicalComparator<'_> {
     /// lexicographically compare values at the wrapped columns with given indices.
-    pub(crate) fn compare<'a, 'b>(
-        &'a self,
-        a_idx: &'b usize,
-        b_idx: &'b usize,
-    ) -> Ordering {
+    pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
         for (data, comparator, sort_option) in &self.compare_items {
-            match (data.is_valid(*a_idx), data.is_valid(*b_idx)) {
+            match (data.is_valid(a_idx), data.is_valid(b_idx)) {
                 (true, true) => {
-                    match (comparator)(*a_idx, *b_idx) {
+                    match (comparator)(a_idx, b_idx) {
                         // equal, move on to next column
                         Ordering::Equal => continue,
                         order => {
@@ -1016,9 +1012,9 @@ impl LexicographicalComparator<'_> {
 
     /// Create a new lex comparator that will wrap the given sort columns and give comparison
     /// results with two indices.
-    pub(crate) fn try_new(
+    pub fn try_new(
         columns: &[SortColumn],
-    ) -> Result<LexicographicalComparator<'_>> {
+    ) -> Result<LexicographicalComparator<'_>, ArrowError> {
         let compare_items = columns
             .iter()
             .map(|column| {
@@ -1032,7 +1028,7 @@ impl LexicographicalComparator<'_> {
                     column.options.unwrap_or_default(),
                 ))
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, ArrowError>>()?;
         Ok(LexicographicalComparator { compare_items })
     }
 }

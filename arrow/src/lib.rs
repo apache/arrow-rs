@@ -36,9 +36,12 @@
 //! * [`arrow-cast`][arrow_cast] - cast kernels for arrow arrays
 //! * [`arrow-csv`][arrow_csv] - read/write CSV to arrow format
 //! * [`arrow-data`][arrow_data] - the underlying data of arrow arrays
+//! * [`arrow-ipc`][arrow_ipc] - read/write IPC to arrow format
 //! * [`arrow-json`][arrow_json] - read/write JSON to arrow format
+//! * [`arrow-ord`][arrow_ord] - ordering kernels for arrow arrays
 //! * [`arrow-schema`][arrow_schema] - the logical types for arrow arrays
 //! * [`arrow-select`][arrow_select] - selection kernels for arrow arrays
+//! * [`arrow-string`][arrow_string] - string kernels for arrow arrays
 //!
 //! _This list is likely to grow as further functionality is split out from the top-level crate_
 //!

@@ -58,63 +58,63 @@ impl FlightService for FlightServiceImpl {
         &self,
         _request: Request<Streaming<HandshakeRequest>>,
     ) -> Result<Response<Self::HandshakeStream>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented("Implement handshake"))
     }
 
     async fn list_flights(
         &self,
         _request: Request<Criteria>,
     ) -> Result<Response<Self::ListFlightsStream>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented("Implement list_flights"))
     }
 
     async fn get_flight_info(
         &self,
         _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented("Implement get_flight_info"))
     }
 
     async fn get_schema(
         &self,
         _request: Request<FlightDescriptor>,
     ) -> Result<Response<SchemaResult>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented("Implement get_schema"))
     }
 
     async fn do_get(
         &self,
         _request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented("Implement do_get"))
     }
 
     async fn do_put(
         &self,
         _request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoPutStream>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented("Implement do_put"))
     }
 
     async fn do_action(
         &self,
         _request: Request<Action>,
     ) -> Result<Response<Self::DoActionStream>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented("Implement do_action"))
     }
 
     async fn list_actions(
         &self,
         _request: Request<Empty>,
     ) -> Result<Response<Self::ListActionsStream>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented("Implement list_actions"))
     }
 
     async fn do_exchange(
         &self,
         _request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoExchangeStream>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented("Implement do_exchange"))
     }
 }
 

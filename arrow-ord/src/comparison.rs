@@ -23,18 +23,15 @@
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 //!
 
-use crate::array::*;
-use crate::buffer::{buffer_unary_not, Buffer, MutableBuffer};
-use crate::datatypes::*;
-#[allow(unused_imports)]
-use crate::downcast_dictionary_array;
-use crate::error::{ArrowError, Result};
-use crate::util::bit_util;
+use arrow_array::cast::*;
+use arrow_array::types::*;
+use arrow_array::*;
+use arrow_buffer::buffer::buffer_unary_not;
+use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_data::bit_mask::combine_option_bitmap;
+use arrow_data::ArrayData;
+use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use arrow_select::take::take;
-use num::ToPrimitive;
-use regex::Regex;
-use std::collections::HashMap;
 
 /// Helper function to perform boolean lambda function on values from two array accessors, this
 /// version does not attempt to use SIMD.
@@ -42,7 +39,7 @@ fn compare_op<T: ArrayAccessor, S: ArrayAccessor, F>(
     left: T,
     right: S,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     F: Fn(T::Item, S::Item) -> bool,
 {
@@ -58,7 +55,10 @@ where
 
 /// Helper function to perform boolean lambda function on values from array accessor, this
 /// version does not attempt to use SIMD.
-fn compare_op_scalar<T: ArrayAccessor, F>(left: T, op: F) -> Result<BooleanArray>
+fn compare_op_scalar<T: ArrayAccessor, F>(
+    left: T,
+    op: F,
+) -> Result<BooleanArray, ArrowError>
 where
     F: Fn(T::Item) -> bool,
 {
@@ -71,9 +71,9 @@ pub fn no_simd_compare_op<T, F>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    T: ArrowNumericType,
+    T: ArrowPrimitiveType,
     F: Fn(T::Native, T::Native) -> bool,
 {
     compare_op(left, right, op)
@@ -85,1178 +85,25 @@ pub fn no_simd_compare_op_scalar<T, F>(
     left: &PrimitiveArray<T>,
     right: T::Native,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    T: ArrowNumericType,
+    T: ArrowPrimitiveType,
     F: Fn(T::Native, T::Native) -> bool,
 {
     compare_op_scalar(left, |l| op(l, right))
-}
-
-fn is_like_pattern(c: char) -> bool {
-    c == '%' || c == '_'
-}
-
-/// Evaluate regex `op(left)` matching `right` on [`StringArray`] / [`LargeStringArray`]
-///
-/// If `negate_regex` is true, the regex expression will be negated. (for example, with `not like`)
-fn regex_like<'a, S: ArrayAccessor<Item = &'a str>, F>(
-    left: S,
-    right: S,
-    negate_regex: bool,
-    op: F,
-) -> Result<BooleanArray>
-where
-    F: Fn(&str) -> Result<Regex>,
-{
-    let mut map = HashMap::new();
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length"
-                .to_string(),
-        ));
-    }
-
-    let null_bit_buffer =
-        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len());
-
-    let mut result = BooleanBufferBuilder::new(left.len());
-    for i in 0..left.len() {
-        let haystack = left.value(i);
-        let pat = right.value(i);
-        let re = if let Some(ref regex) = map.get(pat) {
-            regex
-        } else {
-            let re_pattern = replace_like_wildcards(pat)?;
-            let re = op(&re_pattern)?;
-            map.insert(pat, re);
-            map.get(pat).unwrap()
-        };
-
-        result.append(if negate_regex {
-            !re.is_match(haystack)
-        } else {
-            re.is_match(haystack)
-        });
-    }
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![result.finish()],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
-}
-
-/// Perform SQL `left LIKE right` operation on [`StringArray`] / [`LargeStringArray`].
-///
-/// There are two wildcards supported with the LIKE operator:
-///
-/// 1. `%` - The percent sign represents zero, one, or multiple characters
-/// 2. `_` - The underscore represents a single character
-///
-/// For example:
-/// ```
-/// use arrow::array::{StringArray, BooleanArray};
-/// use arrow::compute::like_utf8;
-///
-/// let strings = StringArray::from(vec!["Arrow", "Arrow", "Arrow", "Ar"]);
-/// let patterns = StringArray::from(vec!["A%", "B%", "A.", "A_"]);
-///
-/// let result = like_utf8(&strings, &patterns).unwrap();
-/// assert_eq!(result, BooleanArray::from(vec![true, false, false, true]));
-/// ```
-pub fn like_utf8<OffsetSize: OffsetSizeTrait>(
-    left: &GenericStringArray<OffsetSize>,
-    right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
-    regex_like(left, right, false, |re_pattern| {
-        Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
-            ArrowError::ComputeError(format!(
-                "Unable to build regex from LIKE pattern: {}",
-                e
-            ))
-        })
-    })
-}
-
-/// Perform SQL `left LIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`], or [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`].
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn like_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    match (left.data_type(), right.data_type()) {
-        (DataType::Utf8, DataType::Utf8)  => {
-            let left = as_string_array(left);
-            let right = as_string_array(right);
-            like_utf8(left, right)
-        }
-        (DataType::LargeUtf8, DataType::LargeUtf8) => {
-            let left = as_largestring_array(left);
-            let right = as_largestring_array(right);
-            like_utf8(left, right)
-        }
-        #[cfg(feature = "dyn_cmp_dict")]
-        (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
-            downcast_dictionary_array!(
-                left => {
-                    let right = as_dictionary_array(right);
-                    like_dict(left, right)
-                }
-                t => Err(ArrowError::ComputeError(format!(
-                    "Should be DictionaryArray but got: {}", t
-                )))
-            )
-        }
-        _ => {
-            Err(ArrowError::ComputeError(
-                "like_dyn only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values".to_string(),
-            ))
-        }
-    }
-}
-
-/// Perform SQL `left LIKE right` operation on on [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`].
-///
-/// See the documentation on [`like_utf8`] for more details.
-#[cfg(feature = "dyn_cmp_dict")]
-fn like_dict<K: ArrowNumericType>(
-    left: &DictionaryArray<K>,
-    right: &DictionaryArray<K>,
-) -> Result<BooleanArray> {
-    match (left.value_type(), right.value_type()) {
-        (DataType::Utf8, DataType::Utf8) => {
-            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
-            let right = right.downcast_dict::<GenericStringArray<i32>>().unwrap();
-
-            regex_like(left, right, false, |re_pattern| {
-                Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
-                    ArrowError::ComputeError(format!(
-                        "Unable to build regex from LIKE pattern: {}",
-                        e
-                    ))
-                })
-            })
-        }
-        (DataType::LargeUtf8, DataType::LargeUtf8) => {
-            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
-            let right = right.downcast_dict::<GenericStringArray<i64>>().unwrap();
-
-            regex_like(left, right, false, |re_pattern| {
-                Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
-                    ArrowError::ComputeError(format!(
-                        "Unable to build regex from LIKE pattern: {}",
-                        e
-                    ))
-                })
-            })
-        }
-        _ => Err(ArrowError::ComputeError(
-            "like_dict only supports DictionaryArray with Utf8 or LargeUtf8 values"
-                .to_string(),
-        )),
-    }
-}
-
-#[inline]
-fn like_scalar_op<'a, F: Fn(bool) -> bool, L: ArrayAccessor<Item = &'a str>>(
-    left: L,
-    right: &str,
-    op: F,
-) -> Result<BooleanArray> {
-    if !right.contains(is_like_pattern) {
-        // fast path, can use equals
-        compare_op_scalar(left, |item| op(item == right))
-    } else if right.ends_with('%')
-        && !right.ends_with("\\%")
-        && !right[..right.len() - 1].contains(is_like_pattern)
-    {
-        // fast path, can use starts_with
-        let starts_with = &right[..right.len() - 1];
-
-        compare_op_scalar(left, |item| op(item.starts_with(starts_with)))
-    } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
-        // fast path, can use ends_with
-        let ends_with = &right[1..];
-
-        compare_op_scalar(left, |item| op(item.ends_with(ends_with)))
-    } else if right.starts_with('%')
-        && right.ends_with('%')
-        && !right.ends_with("\\%")
-        && !right[1..right.len() - 1].contains(is_like_pattern)
-    {
-        let contains = &right[1..right.len() - 1];
-
-        compare_op_scalar(left, |item| op(item.contains(contains)))
-    } else {
-        let re_pattern = replace_like_wildcards(right)?;
-        let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
-            ArrowError::ComputeError(format!(
-                "Unable to build regex from LIKE pattern: {}",
-                e
-            ))
-        })?;
-
-        compare_op_scalar(left, |item| op(re.is_match(item)))
-    }
-}
-
-#[inline]
-fn like_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
-    left: L,
-    right: &str,
-) -> Result<BooleanArray> {
-    like_scalar_op(left, right, |x| x)
-}
-
-/// Perform SQL `left LIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`], or [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn like_utf8_scalar_dyn(left: &dyn Array, right: &str) -> Result<BooleanArray> {
-    match left.data_type() {
-        DataType::Utf8 => {
-            let left = as_string_array(left);
-            like_scalar(left, right)
-        }
-        DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
-            like_scalar(left, right)
-        }
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                left => {
-                    like_dict_scalar(left, right)
-                }
-                t => Err(ArrowError::ComputeError(format!(
-                    "Should be DictionaryArray but got: {}", t
-                )))
-            )
-        }
-        _ => {
-            Err(ArrowError::ComputeError(
-                "like_utf8_scalar_dyn only supports Utf8, LargeUtf8 or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
-            ))
-        }
-    }
-}
-
-/// Perform SQL `left LIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
-    left: &GenericStringArray<OffsetSize>,
-    right: &str,
-) -> Result<BooleanArray> {
-    like_scalar(left, right)
-}
-
-/// Perform SQL `left LIKE right` operation on [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`like_utf8`] for more details.
-fn like_dict_scalar<K: ArrowNumericType>(
-    left: &DictionaryArray<K>,
-    right: &str,
-) -> Result<BooleanArray> {
-    match left.value_type() {
-        DataType::Utf8 => {
-            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
-            like_scalar(left, right)
-        }
-        DataType::LargeUtf8 => {
-            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
-            like_scalar(left, right)
-        }
-        _ => {
-            Err(ArrowError::ComputeError(
-                "like_dict_scalar only supports DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
-            ))
-        }
-    }
-}
-
-/// Transforms a like `pattern` to a regex compatible pattern. To achieve that, it does:
-///
-/// 1. Replace like wildcards for regex expressions as the pattern will be evaluated using regex match: `%` => `.*` and `_` => `.`
-/// 2. Escape regex meta characters to match them and not be evaluated as regex special chars. For example: `.` => `\\.`
-/// 3. Replace escaped like wildcards removing the escape characters to be able to match it as a regex. For example: `\\%` => `%`
-fn replace_like_wildcards(pattern: &str) -> Result<String> {
-    let mut result = String::new();
-    let pattern = String::from(pattern);
-    let mut chars_iter = pattern.chars().peekable();
-    while let Some(c) = chars_iter.next() {
-        if c == '\\' {
-            let next = chars_iter.peek();
-            match next {
-                Some(next) if is_like_pattern(*next) => {
-                    result.push(*next);
-                    // Skipping the next char as it is already appended
-                    chars_iter.next();
-                }
-                _ => {
-                    result.push('\\');
-                    result.push('\\');
-                }
-            }
-        } else if regex_syntax::is_meta_character(c) {
-            result.push('\\');
-            result.push(c);
-        } else if c == '%' {
-            result.push_str(".*");
-        } else if c == '_' {
-            result.push('.');
-        } else {
-            result.push(c);
-        }
-    }
-    Ok(result)
-}
-
-/// Perform SQL `left NOT LIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`].
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn nlike_utf8<OffsetSize: OffsetSizeTrait>(
-    left: &GenericStringArray<OffsetSize>,
-    right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
-    regex_like(left, right, true, |re_pattern| {
-        Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
-            ArrowError::ComputeError(format!(
-                "Unable to build regex from LIKE pattern: {}",
-                e
-            ))
-        })
-    })
-}
-
-/// Perform SQL `left NOT LIKE right` operation on on [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`].
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn nlike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    match (left.data_type(), right.data_type()) {
-        (DataType::Utf8, DataType::Utf8)  => {
-            let left = as_string_array(left);
-            let right = as_string_array(right);
-            nlike_utf8(left, right)
-        }
-        (DataType::LargeUtf8, DataType::LargeUtf8) => {
-            let left = as_largestring_array(left);
-            let right = as_largestring_array(right);
-            nlike_utf8(left, right)
-        }
-        #[cfg(feature = "dyn_cmp_dict")]
-        (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
-            downcast_dictionary_array!(
-                left => {
-                    let right = as_dictionary_array(right);
-                    nlike_dict(left, right)
-                }
-                t => Err(ArrowError::ComputeError(format!(
-                    "Should be DictionaryArray but got: {}", t
-                )))
-            )
-        }
-        _ => {
-            Err(ArrowError::ComputeError(
-                "nlike_dyn only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values".to_string(),
-            ))
-        }
-    }
-}
-
-/// Perform SQL `left NOT LIKE right` operation on on [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`].
-///
-/// See the documentation on [`like_utf8`] for more details.
-#[cfg(feature = "dyn_cmp_dict")]
-fn nlike_dict<K: ArrowNumericType>(
-    left: &DictionaryArray<K>,
-    right: &DictionaryArray<K>,
-) -> Result<BooleanArray> {
-    match (left.value_type(), right.value_type()) {
-        (DataType::Utf8, DataType::Utf8) => {
-            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
-            let right = right.downcast_dict::<GenericStringArray<i32>>().unwrap();
-
-            regex_like(left, right, true, |re_pattern| {
-                Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
-                    ArrowError::ComputeError(format!(
-                        "Unable to build regex from LIKE pattern: {}",
-                        e
-                    ))
-                })
-            })
-        }
-        (DataType::LargeUtf8, DataType::LargeUtf8) => {
-            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
-            let right = right.downcast_dict::<GenericStringArray<i64>>().unwrap();
-
-            regex_like(left, right, true, |re_pattern| {
-                Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
-                    ArrowError::ComputeError(format!(
-                        "Unable to build regex from LIKE pattern: {}",
-                        e
-                    ))
-                })
-            })
-        }
-        _ => Err(ArrowError::ComputeError(
-            "nlike_dict only supports DictionaryArray with Utf8 or LargeUtf8 values"
-                .to_string(),
-        )),
-    }
-}
-
-#[inline]
-fn nlike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
-    left: L,
-    right: &str,
-) -> Result<BooleanArray> {
-    like_scalar_op(left, right, |x| !x)
-}
-
-/// Perform SQL `left NOT LIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`], or [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn nlike_utf8_scalar_dyn(left: &dyn Array, right: &str) -> Result<BooleanArray> {
-    match left.data_type() {
-        DataType::Utf8 => {
-            let left = as_string_array(left);
-            nlike_scalar(left, right)
-        }
-        DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
-            nlike_scalar(left, right)
-        }
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                left => {
-                    nlike_dict_scalar(left, right)
-                }
-                t => Err(ArrowError::ComputeError(format!(
-                    "Should be DictionaryArray but got: {}", t
-                )))
-            )
-        }
-        _ => {
-            Err(ArrowError::ComputeError(
-                "nlike_utf8_scalar_dyn only supports Utf8, LargeUtf8 or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
-            ))
-        }
-    }
-}
-
-/// Perform SQL `left NOT LIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn nlike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
-    left: &GenericStringArray<OffsetSize>,
-    right: &str,
-) -> Result<BooleanArray> {
-    nlike_scalar(left, right)
-}
-
-/// Perform SQL `left NOT LIKE right` operation on [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`like_utf8`] for more details.
-fn nlike_dict_scalar<K: ArrowNumericType>(
-    left: &DictionaryArray<K>,
-    right: &str,
-) -> Result<BooleanArray> {
-    match left.value_type() {
-        DataType::Utf8 => {
-            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
-            nlike_scalar(left, right)
-        }
-        DataType::LargeUtf8 => {
-            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
-            nlike_scalar(left, right)
-        }
-        _ => {
-            Err(ArrowError::ComputeError(
-                "nlike_dict_scalar only supports DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
-            ))
-        }
-    }
-}
-
-/// Perform SQL `left ILIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`].
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn ilike_utf8<OffsetSize: OffsetSizeTrait>(
-    left: &GenericStringArray<OffsetSize>,
-    right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
-    regex_like(left, right, false, |re_pattern| {
-        Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
-            ArrowError::ComputeError(format!(
-                "Unable to build regex from ILIKE pattern: {}",
-                e
-            ))
-        })
-    })
-}
-
-/// Perform SQL `left ILIKE right` operation on on [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`].
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn ilike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    match (left.data_type(), right.data_type()) {
-        (DataType::Utf8, DataType::Utf8)  => {
-            let left = as_string_array(left);
-            let right = as_string_array(right);
-            ilike_utf8(left, right)
-        }
-        (DataType::LargeUtf8, DataType::LargeUtf8) => {
-            let left = as_largestring_array(left);
-            let right = as_largestring_array(right);
-            ilike_utf8(left, right)
-        }
-        #[cfg(feature = "dyn_cmp_dict")]
-        (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
-            downcast_dictionary_array!(
-                left => {
-                    let right = as_dictionary_array(right);
-                    ilike_dict(left, right)
-                }
-                t => Err(ArrowError::ComputeError(format!(
-                    "Should be DictionaryArray but got: {}", t
-                )))
-            )
-        }
-        _ => {
-            Err(ArrowError::ComputeError(
-                "ilike_dyn only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values".to_string(),
-            ))
-        }
-    }
-}
-
-/// Perform SQL `left ILIKE right` operation on on [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`].
-///
-/// See the documentation on [`like_utf8`] for more details.
-#[cfg(feature = "dyn_cmp_dict")]
-fn ilike_dict<K: ArrowNumericType>(
-    left: &DictionaryArray<K>,
-    right: &DictionaryArray<K>,
-) -> Result<BooleanArray> {
-    match (left.value_type(), right.value_type()) {
-        (DataType::Utf8, DataType::Utf8) => {
-            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
-            let right = right.downcast_dict::<GenericStringArray<i32>>().unwrap();
-
-            regex_like(left, right, false, |re_pattern| {
-                Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
-                    ArrowError::ComputeError(format!(
-                        "Unable to build regex from ILIKE pattern: {}",
-                        e
-                    ))
-                })
-            })
-        }
-        (DataType::LargeUtf8, DataType::LargeUtf8) => {
-            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
-            let right = right.downcast_dict::<GenericStringArray<i64>>().unwrap();
-
-            regex_like(left, right, false, |re_pattern| {
-                Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
-                    ArrowError::ComputeError(format!(
-                        "Unable to build regex from ILIKE pattern: {}",
-                        e
-                    ))
-                })
-            })
-        }
-        _ => Err(ArrowError::ComputeError(
-            "ilike_dict only supports DictionaryArray with Utf8 or LargeUtf8 values"
-                .to_string(),
-        )),
-    }
-}
-
-#[inline]
-fn ilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
-    left: L,
-    right: &str,
-) -> Result<BooleanArray> {
-    let null_bit_buffer = left.data().null_buffer().cloned();
-    let bytes = bit_util::ceil(left.len(), 8);
-    let mut bool_buf = MutableBuffer::from_len_zeroed(bytes);
-    let bool_slice = bool_buf.as_slice_mut();
-
-    if !right.contains(is_like_pattern) {
-        // fast path, can use equals
-        let right_uppercase = right.to_uppercase();
-        for i in 0..left.len() {
-            unsafe {
-                if left.value_unchecked(i).to_uppercase() == right_uppercase {
-                    bit_util::set_bit(bool_slice, i);
-                }
-            }
-        }
-    } else if right.ends_with('%')
-        && !right.ends_with("\\%")
-        && !right[..right.len() - 1].contains(is_like_pattern)
-    {
-        // fast path, can use starts_with
-        let start_str = &right[..right.len() - 1].to_uppercase();
-        for i in 0..left.len() {
-            unsafe {
-                if left
-                    .value_unchecked(i)
-                    .to_uppercase()
-                    .starts_with(start_str)
-                {
-                    bit_util::set_bit(bool_slice, i);
-                }
-            }
-        }
-    } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
-        // fast path, can use ends_with
-        let ends_str = &right[1..].to_uppercase();
-
-        for i in 0..left.len() {
-            unsafe {
-                if left.value_unchecked(i).to_uppercase().ends_with(ends_str) {
-                    bit_util::set_bit(bool_slice, i);
-                }
-            }
-        }
-    } else if right.starts_with('%')
-        && right.ends_with('%')
-        && !right[1..right.len() - 1].contains(is_like_pattern)
-    {
-        // fast path, can use contains
-        let contains = &right[1..right.len() - 1].to_uppercase();
-        for i in 0..left.len() {
-            unsafe {
-                if left.value_unchecked(i).to_uppercase().contains(contains) {
-                    bit_util::set_bit(bool_slice, i);
-                }
-            }
-        }
-    } else {
-        let re_pattern = replace_like_wildcards(right)?;
-        let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
-            ArrowError::ComputeError(format!(
-                "Unable to build regex from ILIKE pattern: {}",
-                e
-            ))
-        })?;
-
-        for i in 0..left.len() {
-            let haystack = unsafe { left.value_unchecked(i) };
-            if re.is_match(haystack) {
-                bit_util::set_bit(bool_slice, i);
-            }
-        }
-    };
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![bool_buf.into()],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
-}
-
-/// Perform SQL `left ILIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`], or [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn ilike_utf8_scalar_dyn(left: &dyn Array, right: &str) -> Result<BooleanArray> {
-    match left.data_type() {
-        DataType::Utf8 => {
-            let left = as_string_array(left);
-            ilike_scalar(left, right)
-        }
-        DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
-            ilike_scalar(left, right)
-        }
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                left => {
-                    ilike_dict_scalar(left, right)
-                }
-                t => Err(ArrowError::ComputeError(format!(
-                    "Should be DictionaryArray but got: {}", t
-                )))
-            )
-        }
-        _ => {
-            Err(ArrowError::ComputeError(
-                "ilike_utf8_scalar_dyn only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values".to_string(),
-            ))
-        }
-    }
-}
-
-/// Perform SQL `left ILIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
-    left: &GenericStringArray<OffsetSize>,
-    right: &str,
-) -> Result<BooleanArray> {
-    ilike_scalar(left, right)
-}
-
-/// Perform SQL `left ILIKE right` operation on [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`like_utf8`] for more details.
-fn ilike_dict_scalar<K: ArrowNumericType>(
-    left: &DictionaryArray<K>,
-    right: &str,
-) -> Result<BooleanArray> {
-    match left.value_type() {
-        DataType::Utf8 => {
-            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
-            ilike_scalar(left, right)
-        }
-        DataType::LargeUtf8 => {
-            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
-            ilike_scalar(left, right)
-        }
-        _ => {
-            Err(ArrowError::ComputeError(
-                "ilike_dict_scalar only supports DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
-            ))
-        }
-    }
-}
-
-/// Perform SQL `left NOT ILIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`].
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn nilike_utf8<OffsetSize: OffsetSizeTrait>(
-    left: &GenericStringArray<OffsetSize>,
-    right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
-    regex_like(left, right, true, |re_pattern| {
-        Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
-            ArrowError::ComputeError(format!(
-                "Unable to build regex from ILIKE pattern: {}",
-                e
-            ))
-        })
-    })
-}
-
-/// Perform SQL `left NOT ILIKE right` operation on on [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`].
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn nilike_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    match (left.data_type(), right.data_type()) {
-        (DataType::Utf8, DataType::Utf8)  => {
-            let left = as_string_array(left);
-            let right = as_string_array(right);
-            nilike_utf8(left, right)
-        }
-        (DataType::LargeUtf8, DataType::LargeUtf8) => {
-            let left = as_largestring_array(left);
-            let right = as_largestring_array(right);
-            nilike_utf8(left, right)
-        }
-        #[cfg(feature = "dyn_cmp_dict")]
-        (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
-            downcast_dictionary_array!(
-                left => {
-                    let right = as_dictionary_array(right);
-                    nilike_dict(left, right)
-                }
-                t => Err(ArrowError::ComputeError(format!(
-                    "Should be DictionaryArray but got: {}", t
-                )))
-            )
-        }
-        _ => {
-            Err(ArrowError::ComputeError(
-                "nilike_dyn only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values".to_string(),
-            ))
-        }
-    }
-}
-
-/// Perform SQL `left NOT ILIKE right` operation on on [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`].
-///
-/// See the documentation on [`like_utf8`] for more details.
-#[cfg(feature = "dyn_cmp_dict")]
-fn nilike_dict<K: ArrowNumericType>(
-    left: &DictionaryArray<K>,
-    right: &DictionaryArray<K>,
-) -> Result<BooleanArray> {
-    match (left.value_type(), right.value_type()) {
-        (DataType::Utf8, DataType::Utf8) => {
-            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
-            let right = right.downcast_dict::<GenericStringArray<i32>>().unwrap();
-
-            regex_like(left, right, true, |re_pattern| {
-                Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
-                    ArrowError::ComputeError(format!(
-                        "Unable to build regex from ILIKE pattern: {}",
-                        e
-                    ))
-                })
-            })
-        }
-        (DataType::LargeUtf8, DataType::LargeUtf8) => {
-            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
-            let right = right.downcast_dict::<GenericStringArray<i64>>().unwrap();
-
-            regex_like(left, right, true, |re_pattern| {
-                Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
-                    ArrowError::ComputeError(format!(
-                        "Unable to build regex from ILIKE pattern: {}",
-                        e
-                    ))
-                })
-            })
-        }
-        _ => Err(ArrowError::ComputeError(
-            "nilike_dict only supports DictionaryArray with Utf8 or LargeUtf8 values"
-                .to_string(),
-        )),
-    }
-}
-
-#[inline]
-fn nilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
-    left: L,
-    right: &str,
-) -> Result<BooleanArray> {
-    let null_bit_buffer = left.data().null_buffer().cloned();
-    let bytes = bit_util::ceil(left.len(), 8);
-    let mut bool_buf = MutableBuffer::from_len_zeroed(bytes);
-    let bool_slice = bool_buf.as_slice_mut();
-
-    if !right.contains(is_like_pattern) {
-        // fast path, can use equals
-        let right_uppercase = right.to_uppercase();
-        for i in 0..left.len() {
-            unsafe {
-                if left.value_unchecked(i).to_uppercase() != right_uppercase {
-                    bit_util::set_bit(bool_slice, i);
-                }
-            }
-        }
-    } else if right.ends_with('%')
-        && !right.ends_with("\\%")
-        && !right[..right.len() - 1].contains(is_like_pattern)
-    {
-        // fast path, can use starts_with
-        let start_str = &right[..right.len() - 1].to_uppercase();
-        for i in 0..left.len() {
-            unsafe {
-                if !(left
-                    .value_unchecked(i)
-                    .to_uppercase()
-                    .starts_with(start_str))
-                {
-                    bit_util::set_bit(bool_slice, i);
-                }
-            }
-        }
-    } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
-        // fast path, can use ends_with
-        let ends_str = &right[1..].to_uppercase();
-
-        for i in 0..left.len() {
-            unsafe {
-                if !(left.value_unchecked(i).to_uppercase().ends_with(ends_str)) {
-                    bit_util::set_bit(bool_slice, i);
-                }
-            }
-        }
-    } else if right.starts_with('%')
-        && right.ends_with('%')
-        && !right[1..right.len() - 1].contains(is_like_pattern)
-    {
-        // fast path, can use contains
-        let contains = &right[1..right.len() - 1].to_uppercase();
-        for i in 0..left.len() {
-            unsafe {
-                if !(left.value_unchecked(i).to_uppercase().contains(contains)) {
-                    bit_util::set_bit(bool_slice, i);
-                }
-            }
-        }
-    } else {
-        let re_pattern = replace_like_wildcards(right)?;
-        let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
-            ArrowError::ComputeError(format!(
-                "Unable to build regex from ILIKE pattern: {}",
-                e
-            ))
-        })?;
-
-        for i in 0..left.len() {
-            let haystack = unsafe { left.value_unchecked(i) };
-            if !re.is_match(haystack) {
-                bit_util::set_bit(bool_slice, i);
-            }
-        }
-    };
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![bool_buf.into()],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
-}
-
-/// Perform SQL `left NOT ILIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`], or [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn nilike_utf8_scalar_dyn(left: &dyn Array, right: &str) -> Result<BooleanArray> {
-    match left.data_type() {
-        DataType::Utf8 => {
-            let left = as_string_array(left);
-            nilike_scalar(left, right)
-        }
-        DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
-            nilike_scalar(left, right)
-        }
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                left => {
-                    nilike_dict_scalar(left, right)
-                }
-                t => Err(ArrowError::ComputeError(format!(
-                    "Should be DictionaryArray but got: {}", t
-                )))
-            )
-        }
-        _ => {
-            Err(ArrowError::ComputeError(
-                "nilike_utf8_scalar_dyn only supports Utf8, LargeUtf8 or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
-            ))
-        }
-    }
-}
-
-/// Perform SQL `left NOT ILIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
-    left: &GenericStringArray<OffsetSize>,
-    right: &str,
-) -> Result<BooleanArray> {
-    nilike_scalar(left, right)
-}
-
-/// Perform SQL `left NOT ILIKE right` operation on [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`like_utf8`] for more details.
-fn nilike_dict_scalar<K: ArrowNumericType>(
-    left: &DictionaryArray<K>,
-    right: &str,
-) -> Result<BooleanArray> {
-    match left.value_type() {
-        DataType::Utf8 => {
-            let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
-            nilike_scalar(left, right)
-        }
-        DataType::LargeUtf8 => {
-            let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
-            nilike_scalar(left, right)
-        }
-        _ => {
-            Err(ArrowError::ComputeError(
-                "nilike_dict_scalar only supports DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
-            ))
-        }
-    }
-}
-
-/// Perform SQL `array ~ regex_array` operation on [`StringArray`] / [`LargeStringArray`].
-/// If `regex_array` element has an empty value, the corresponding result value is always true.
-///
-/// `flags_array` are optional [`StringArray`] / [`LargeStringArray`] flag, which allow
-/// special search modes, such as case insensitive and multi-line mode.
-/// See the documentation [here](https://docs.rs/regex/1.5.4/regex/#grouping-and-flags)
-/// for more information.
-pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
-    array: &GenericStringArray<OffsetSize>,
-    regex_array: &GenericStringArray<OffsetSize>,
-    flags_array: Option<&GenericStringArray<OffsetSize>>,
-) -> Result<BooleanArray> {
-    if array.len() != regex_array.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length"
-                .to_string(),
-        ));
-    }
-    let null_bit_buffer =
-        combine_option_bitmap(&[array.data_ref(), regex_array.data_ref()], array.len());
-
-    let mut patterns: HashMap<String, Regex> = HashMap::new();
-    let mut result = BooleanBufferBuilder::new(array.len());
-
-    let complete_pattern = match flags_array {
-        Some(flags) => Box::new(regex_array.iter().zip(flags.iter()).map(
-            |(pattern, flags)| {
-                pattern.map(|pattern| match flags {
-                    Some(flag) => format!("(?{}){}", flag, pattern),
-                    None => pattern.to_string(),
-                })
-            },
-        )) as Box<dyn Iterator<Item = Option<String>>>,
-        None => Box::new(
-            regex_array
-                .iter()
-                .map(|pattern| pattern.map(|pattern| pattern.to_string())),
-        ),
-    };
-
-    array
-        .iter()
-        .zip(complete_pattern)
-        .map(|(value, pattern)| {
-            match (value, pattern) {
-                // Required for Postgres compatibility:
-                // SELECT 'foobarbequebaz' ~ ''); = true
-                (Some(_), Some(pattern)) if pattern == *"" => {
-                    result.append(true);
-                }
-                (Some(value), Some(pattern)) => {
-                    let existing_pattern = patterns.get(&pattern);
-                    let re = match existing_pattern {
-                        Some(re) => re.clone(),
-                        None => {
-                            let re = Regex::new(pattern.as_str()).map_err(|e| {
-                                ArrowError::ComputeError(format!(
-                                    "Regular expression did not compile: {:?}",
-                                    e
-                                ))
-                            })?;
-                            patterns.insert(pattern, re.clone());
-                            re
-                        }
-                    };
-                    result.append(re.is_match(value));
-                }
-                _ => result.append(false),
-            }
-            Ok(())
-        })
-        .collect::<Result<Vec<()>>>()?;
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            array.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![result.finish()],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
-}
-
-/// Perform SQL `array ~ regex_array` operation on [`StringArray`] /
-/// [`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`regexp_is_match_utf8`] for more details.
-pub fn regexp_is_match_utf8_scalar<OffsetSize: OffsetSizeTrait>(
-    array: &GenericStringArray<OffsetSize>,
-    regex: &str,
-    flag: Option<&str>,
-) -> Result<BooleanArray> {
-    let null_bit_buffer = array.data().null_buffer().cloned();
-    let mut result = BooleanBufferBuilder::new(array.len());
-
-    let pattern = match flag {
-        Some(flag) => format!("(?{}){}", flag, regex),
-        None => regex.to_string(),
-    };
-    if pattern.is_empty() {
-        result.append_n(array.len(), true);
-    } else {
-        let re = Regex::new(pattern.as_str()).map_err(|e| {
-            ArrowError::ComputeError(format!(
-                "Regular expression did not compile: {:?}",
-                e
-            ))
-        })?;
-        for i in 0..array.len() {
-            let value = array.value(i);
-            result.append(re.is_match(value));
-        }
-    }
-
-    let buffer = result.finish();
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            array.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![buffer],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
 }
 
 /// Perform `left == right` operation on [`StringArray`] / [`LargeStringArray`].
 pub fn eq_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a == b)
 }
 
 fn utf8_empty<OffsetSize: OffsetSizeTrait, const EQ: bool>(
     left: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     let null_bit_buffer = left
         .data()
         .null_buffer()
@@ -1292,7 +139,7 @@ fn utf8_empty<OffsetSize: OffsetSizeTrait, const EQ: bool>(
 pub fn eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     if right.is_empty() {
         return utf8_empty::<_, true>(left);
     }
@@ -1300,37 +147,58 @@ pub fn eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 }
 
 /// Perform `left == right` operation on [`BooleanArray`]
-pub fn eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn eq_bool(
+    left: &BooleanArray,
+    right: &BooleanArray,
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| !(a ^ b))
 }
 
 /// Perform `left != right` operation on [`BooleanArray`]
-pub fn neq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn neq_bool(
+    left: &BooleanArray,
+    right: &BooleanArray,
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| (a ^ b))
 }
 
 /// Perform `left < right` operation on [`BooleanArray`]
-pub fn lt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn lt_bool(
+    left: &BooleanArray,
+    right: &BooleanArray,
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| ((!a) & b))
 }
 
 /// Perform `left <= right` operation on [`BooleanArray`]
-pub fn lt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn lt_eq_bool(
+    left: &BooleanArray,
+    right: &BooleanArray,
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| !(a & (!b)))
 }
 
 /// Perform `left > right` operation on [`BooleanArray`]
-pub fn gt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn gt_bool(
+    left: &BooleanArray,
+    right: &BooleanArray,
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| (a & (!b)))
 }
 
 /// Perform `left >= right` operation on [`BooleanArray`]
-pub fn gt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn gt_eq_bool(
+    left: &BooleanArray,
+    right: &BooleanArray,
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| !((!a) & b))
 }
 
 /// Perform `left == right` operation on [`BooleanArray`] and a scalar
-pub fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+pub fn eq_bool_scalar(
+    left: &BooleanArray,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     let len = left.len();
     let left_offset = left.offset();
 
@@ -1359,27 +227,42 @@ pub fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> 
 }
 
 /// Perform `left < right` operation on [`BooleanArray`] and a scalar
-pub fn lt_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+pub fn lt_bool_scalar(
+    left: &BooleanArray,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a: bool| !a & right)
 }
 
 /// Perform `left <= right` operation on [`BooleanArray`] and a scalar
-pub fn lt_eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+pub fn lt_eq_bool_scalar(
+    left: &BooleanArray,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a <= right)
 }
 
 /// Perform `left > right` operation on [`BooleanArray`] and a scalar
-pub fn gt_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+pub fn gt_bool_scalar(
+    left: &BooleanArray,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a: bool| a & !right)
 }
 
 /// Perform `left >= right` operation on [`BooleanArray`] and a scalar
-pub fn gt_eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+pub fn gt_eq_bool_scalar(
+    left: &BooleanArray,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a >= right)
 }
 
 /// Perform `left != right` operation on [`BooleanArray`] and a scalar
-pub fn neq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+pub fn neq_bool_scalar(
+    left: &BooleanArray,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     eq_bool_scalar(left, !right)
 }
 
@@ -1387,7 +270,7 @@ pub fn neq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray>
 pub fn eq_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a == b)
 }
 
@@ -1395,7 +278,7 @@ pub fn eq_binary<OffsetSize: OffsetSizeTrait>(
 pub fn eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a == right)
 }
 
@@ -1403,7 +286,7 @@ pub fn eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn neq_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a != b)
 }
 
@@ -1411,7 +294,7 @@ pub fn neq_binary<OffsetSize: OffsetSizeTrait>(
 pub fn neq_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a != right)
 }
 
@@ -1419,7 +302,7 @@ pub fn neq_binary_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn lt_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a < b)
 }
 
@@ -1427,7 +310,7 @@ pub fn lt_binary<OffsetSize: OffsetSizeTrait>(
 pub fn lt_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a < right)
 }
 
@@ -1435,7 +318,7 @@ pub fn lt_binary_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn lt_eq_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a <= b)
 }
 
@@ -1443,7 +326,7 @@ pub fn lt_eq_binary<OffsetSize: OffsetSizeTrait>(
 pub fn lt_eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a <= right)
 }
 
@@ -1451,7 +334,7 @@ pub fn lt_eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn gt_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a > b)
 }
 
@@ -1459,7 +342,7 @@ pub fn gt_binary<OffsetSize: OffsetSizeTrait>(
 pub fn gt_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a > right)
 }
 
@@ -1467,7 +350,7 @@ pub fn gt_binary_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn gt_eq_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a >= b)
 }
 
@@ -1475,7 +358,7 @@ pub fn gt_eq_binary<OffsetSize: OffsetSizeTrait>(
 pub fn gt_eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a >= right)
 }
 
@@ -1483,7 +366,7 @@ pub fn gt_eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn neq_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a != b)
 }
 
@@ -1491,7 +374,7 @@ pub fn neq_utf8<OffsetSize: OffsetSizeTrait>(
 pub fn neq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     if right.is_empty() {
         return utf8_empty::<_, false>(left);
     }
@@ -1502,7 +385,7 @@ pub fn neq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn lt_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a < b)
 }
 
@@ -1510,7 +393,7 @@ pub fn lt_utf8<OffsetSize: OffsetSizeTrait>(
 pub fn lt_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a < right)
 }
 
@@ -1518,7 +401,7 @@ pub fn lt_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn lt_eq_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a <= b)
 }
 
@@ -1526,7 +409,7 @@ pub fn lt_eq_utf8<OffsetSize: OffsetSizeTrait>(
 pub fn lt_eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a <= right)
 }
 
@@ -1534,7 +417,7 @@ pub fn lt_eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn gt_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a > b)
 }
 
@@ -1542,7 +425,7 @@ pub fn gt_utf8<OffsetSize: OffsetSizeTrait>(
 pub fn gt_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a > right)
 }
 
@@ -1550,7 +433,7 @@ pub fn gt_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn gt_eq_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op(left, right, |a, b| a >= b)
 }
 
@@ -1558,12 +441,16 @@ pub fn gt_eq_utf8<OffsetSize: OffsetSizeTrait>(
 pub fn gt_eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
-) -> Result<BooleanArray> {
+) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a >= right)
 }
 
 // Avoids creating a closure for each combination of `$RIGHT` and `$TY`
-fn try_to_type_result<T>(value: Option<T>, right: &str, ty: &str) -> Result<T> {
+fn try_to_type_result<T>(
+    value: Option<T>,
+    right: &str,
+    ty: &str,
+) -> Result<T, ArrowError> {
     value.ok_or_else(|| {
         ArrowError::ComputeError(format!("Could not convert {} with {}", right, ty,))
     })
@@ -1742,7 +629,7 @@ macro_rules! dyn_compare_utf8_scalar {
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
+pub fn eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
     T: num::ToPrimitive + std::fmt::Debug,
 {
@@ -1761,7 +648,7 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn lt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
+pub fn lt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
     T: num::ToPrimitive + std::fmt::Debug,
 {
@@ -1780,7 +667,7 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn lt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
+pub fn lt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
     T: num::ToPrimitive + std::fmt::Debug,
 {
@@ -1799,7 +686,7 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn gt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
+pub fn gt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
     T: num::ToPrimitive + std::fmt::Debug,
 {
@@ -1818,7 +705,7 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn gt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
+pub fn gt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
     T: num::ToPrimitive + std::fmt::Debug,
 {
@@ -1837,7 +724,7 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn neq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
+pub fn neq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
     T: num::ToPrimitive + std::fmt::Debug,
 {
@@ -1851,7 +738,10 @@ where
 
 /// Perform `left == right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
-pub fn eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+pub fn eq_dyn_binary_scalar(
+    left: &dyn Array,
+    right: &[u8],
+) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Binary => {
             let left = as_generic_binary_array::<i32>(left);
@@ -1869,7 +759,10 @@ pub fn eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArr
 
 /// Perform `left != right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
-pub fn neq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+pub fn neq_dyn_binary_scalar(
+    left: &dyn Array,
+    right: &[u8],
+) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Binary => {
             let left = as_generic_binary_array::<i32>(left);
@@ -1888,7 +781,10 @@ pub fn neq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanAr
 
 /// Perform `left < right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
-pub fn lt_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+pub fn lt_dyn_binary_scalar(
+    left: &dyn Array,
+    right: &[u8],
+) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Binary => {
             let left = as_generic_binary_array::<i32>(left);
@@ -1906,7 +802,10 @@ pub fn lt_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArr
 
 /// Perform `left <= right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
-pub fn lt_eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+pub fn lt_eq_dyn_binary_scalar(
+    left: &dyn Array,
+    right: &[u8],
+) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Binary => {
             let left = as_generic_binary_array::<i32>(left);
@@ -1925,7 +824,10 @@ pub fn lt_eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<Boolean
 
 /// Perform `left > right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
-pub fn gt_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+pub fn gt_dyn_binary_scalar(
+    left: &dyn Array,
+    right: &[u8],
+) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Binary => {
             let left = as_generic_binary_array::<i32>(left);
@@ -1943,7 +845,10 @@ pub fn gt_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArr
 
 /// Perform `left >= right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
-pub fn gt_eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+pub fn gt_eq_dyn_binary_scalar(
+    left: &dyn Array,
+    right: &[u8],
+) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Binary => {
             let left = as_generic_binary_array::<i32>(left);
@@ -1962,7 +867,10 @@ pub fn gt_eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<Boolean
 
 /// Perform `left == right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+pub fn eq_dyn_utf8_scalar(
+    left: &dyn Array,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
@@ -1989,7 +897,10 @@ pub fn eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray>
 
 /// Perform `left < right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn lt_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+pub fn lt_dyn_utf8_scalar(
+    left: &dyn Array,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
@@ -2016,7 +927,10 @@ pub fn lt_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray>
 
 /// Perform `left >= right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn gt_eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+pub fn gt_eq_dyn_utf8_scalar(
+    left: &dyn Array,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
@@ -2043,7 +957,10 @@ pub fn gt_eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArr
 
 /// Perform `left <= right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn lt_eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+pub fn lt_eq_dyn_utf8_scalar(
+    left: &dyn Array,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
@@ -2070,7 +987,10 @@ pub fn lt_eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArr
 
 /// Perform `left > right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn gt_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+pub fn gt_dyn_utf8_scalar(
+    left: &dyn Array,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
@@ -2097,7 +1017,10 @@ pub fn gt_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray>
 
 /// Perform `left != right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn neq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
+pub fn neq_dyn_utf8_scalar(
+    left: &dyn Array,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
@@ -2124,7 +1047,10 @@ pub fn neq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray
 
 /// Perform `left == right` operation on an array and a numeric scalar
 /// value.
-pub fn eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray> {
+pub fn eq_dyn_bool_scalar(
+    left: &dyn Array,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Boolean => {
             let left = as_boolean_array(left);
@@ -2139,7 +1065,10 @@ pub fn eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray>
 
 /// Perform `left < right` operation on an array and a numeric scalar
 /// value. Supports BooleanArrays.
-pub fn lt_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray> {
+pub fn lt_dyn_bool_scalar(
+    left: &dyn Array,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Boolean => {
             let left = as_boolean_array(left);
@@ -2154,7 +1083,10 @@ pub fn lt_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray>
 
 /// Perform `left > right` operation on an array and a numeric scalar
 /// value. Supports BooleanArrays.
-pub fn gt_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray> {
+pub fn gt_dyn_bool_scalar(
+    left: &dyn Array,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Boolean => {
             let left = as_boolean_array(left);
@@ -2169,7 +1101,10 @@ pub fn gt_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray>
 
 /// Perform `left <= right` operation on an array and a numeric scalar
 /// value. Supports BooleanArrays.
-pub fn lt_eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray> {
+pub fn lt_eq_dyn_bool_scalar(
+    left: &dyn Array,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Boolean => {
             let left = as_boolean_array(left);
@@ -2184,7 +1119,10 @@ pub fn lt_eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArr
 
 /// Perform `left >= right` operation on an array and a numeric scalar
 /// value. Supports BooleanArrays.
-pub fn gt_eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray> {
+pub fn gt_eq_dyn_bool_scalar(
+    left: &dyn Array,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Boolean => {
             let left = as_boolean_array(left);
@@ -2199,7 +1137,10 @@ pub fn gt_eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArr
 
 /// Perform `left != right` operation on an array and a numeric scalar
 /// value. Supports BooleanArrays.
-pub fn neq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray> {
+pub fn neq_dyn_bool_scalar(
+    left: &dyn Array,
+    right: bool,
+) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
         DataType::Boolean => {
             let left = as_boolean_array(left);
@@ -2219,10 +1160,10 @@ pub fn neq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray
 fn unpack_dict_comparison<K>(
     dict: &DictionaryArray<K>,
     dict_comparison: BooleanArray,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
-    K::Native: ToPrimitive,
+    K: ArrowPrimitiveType,
+    K::Native: num::ToPrimitive,
 {
     // TODO: Use take_boolean (#2967)
     let array = take(&dict_comparison, dict.keys(), None)?;
@@ -2237,7 +1178,7 @@ fn simd_compare_op<T, SI, SC>(
     right: &PrimitiveArray<T>,
     simd_op: SI,
     scalar_op: SC,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     SI: Fn(T::Simd, T::Simd) -> T::SimdMask,
@@ -2337,7 +1278,7 @@ fn simd_compare_op_scalar<T, SI, SC>(
     right: T::Native,
     simd_op: SI,
     scalar_op: SC,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     SI: Fn(T::Simd, T::Simd) -> T::SimdMask,
@@ -2423,11 +1364,11 @@ where
     Ok(BooleanArray::from(data))
 }
 
-fn cmp_primitive_array<T: ArrowNumericType, F>(
+fn cmp_primitive_array<T: ArrowPrimitiveType, F>(
     left: &dyn Array,
     right: &dyn Array,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     F: Fn(T::Native, T::Native) -> bool,
 {
@@ -2988,10 +1929,10 @@ fn cmp_dict_primitive<K, T, F>(
     left: &DictionaryArray<K>,
     right: &dyn Array,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
-    T: ArrowNumericType + Sync + Send,
+    K: ArrowPrimitiveType,
+    T: ArrowPrimitiveType + Sync + Send,
     F: Fn(T::Native, T::Native) -> bool,
 {
     compare_op(
@@ -3008,9 +1949,9 @@ fn cmp_dict_string_array<K, OffsetSize: OffsetSizeTrait, F>(
     left: &DictionaryArray<K>,
     right: &dyn Array,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowPrimitiveType,
     F: Fn(&str, &str) -> bool,
 {
     compare_op(
@@ -3031,9 +1972,9 @@ fn cmp_dict_boolean_array<K, F>(
     left: &DictionaryArray<K>,
     right: &dyn Array,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowPrimitiveType,
     F: Fn(bool, bool) -> bool,
 {
     compare_op(
@@ -3050,9 +1991,9 @@ fn cmp_dict_binary_array<K, OffsetSize: OffsetSizeTrait, F>(
     left: &DictionaryArray<K>,
     right: &dyn Array,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowPrimitiveType,
     F: Fn(&[u8], &[u8]) -> bool,
 {
     compare_op(
@@ -3074,10 +2015,10 @@ pub fn cmp_dict<K, T, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
-    T: ArrowNumericType + Sync + Send,
+    K: ArrowPrimitiveType,
+    T: ArrowPrimitiveType + Sync + Send,
     F: Fn(T::Native, T::Native) -> bool,
 {
     compare_op(
@@ -3094,9 +2035,9 @@ pub fn cmp_dict_bool<K, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowPrimitiveType,
     F: Fn(bool, bool) -> bool,
 {
     compare_op(
@@ -3113,9 +2054,9 @@ pub fn cmp_dict_utf8<K, OffsetSize: OffsetSizeTrait, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowPrimitiveType,
     F: Fn(&str, &str) -> bool,
 {
     compare_op(
@@ -3135,9 +2076,9 @@ pub fn cmp_dict_binary<K, OffsetSize: OffsetSizeTrait, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
     op: F,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowPrimitiveType,
     F: Fn(&[u8], &[u8]) -> bool,
 {
     compare_op(
@@ -3161,14 +2102,14 @@ where
 ///
 /// # Example
 /// ```
-/// use arrow::array::{StringArray, BooleanArray};
-/// use arrow::compute::eq_dyn;
+/// use arrow_array::{StringArray, BooleanArray};
+/// use arrow_ord::comparison::eq_dyn;
 /// let array1 = StringArray::from(vec![Some("foo"), None, Some("bar")]);
 /// let array2 = StringArray::from(vec![Some("foo"), None, Some("baz")]);
 /// let result = eq_dyn(&array1, &array2).unwrap();
 /// assert_eq!(BooleanArray::from(vec![Some(true), None, Some(false)]), result);
 /// ```
-pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -3204,8 +2145,8 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// # Example
 /// ```
-/// use arrow::array::{BinaryArray, BooleanArray};
-/// use arrow::compute::neq_dyn;
+/// use arrow_array::{BinaryArray, BooleanArray};
+/// use arrow_ord::comparison::neq_dyn;
 /// let values1: Vec<Option<&[u8]>> = vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36])];
 /// let values2: Vec<Option<&[u8]>> = vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36, 0x00])];
 /// let array1 = BinaryArray::from(values1);
@@ -3213,7 +2154,7 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// let result = neq_dyn(&array1, &array2).unwrap();
 /// assert_eq!(BooleanArray::from(vec![Some(false), None, Some(true)]), result);
 /// ```
-pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -3249,16 +2190,16 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// # Example
 /// ```
-/// use arrow::array::{PrimitiveArray, BooleanArray};
-/// use arrow::datatypes::Int32Type;
-/// use arrow::compute::lt_dyn;
+/// use arrow_array::{PrimitiveArray, BooleanArray};
+/// use arrow_array::types::Int32Type;
+/// use arrow_ord::comparison::lt_dyn;
 /// let array1: PrimitiveArray<Int32Type> = PrimitiveArray::from(vec![Some(0), Some(1), Some(2)]);
 /// let array2: PrimitiveArray<Int32Type> = PrimitiveArray::from(vec![Some(1), Some(1), None]);
 /// let result = lt_dyn(&array1, &array2).unwrap();
 /// assert_eq!(BooleanArray::from(vec![Some(true), Some(false), None]), result);
 /// ```
 #[allow(clippy::bool_comparison)]
-pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -3294,15 +2235,18 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// # Example
 /// ```
-/// use arrow::array::{PrimitiveArray, BooleanArray};
-/// use arrow::datatypes::Date32Type;
-/// use arrow::compute::lt_eq_dyn;
+/// use arrow_array::{PrimitiveArray, BooleanArray};
+/// use arrow_array::types::Date32Type;
+/// use arrow_ord::comparison::lt_eq_dyn;
 /// let array1: PrimitiveArray<Date32Type> = vec![Some(12356), Some(13548), Some(-365), Some(365)].into();
 /// let array2: PrimitiveArray<Date32Type> = vec![Some(12355), Some(13548), Some(-364), None].into();
 /// let result = lt_eq_dyn(&array1, &array2).unwrap();
 /// assert_eq!(BooleanArray::from(vec![Some(false), Some(true), Some(true), None]), result);
 /// ```
-pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+pub fn lt_eq_dyn(
+    left: &dyn Array,
+    right: &dyn Array,
+) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -3338,15 +2282,15 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// # Example
 /// ```
-/// use arrow::array::BooleanArray;
-/// use arrow::compute::gt_dyn;
+/// use arrow_array::BooleanArray;
+/// use arrow_ord::comparison::gt_dyn;
 /// let array1 = BooleanArray::from(vec![Some(true), Some(false), None]);
 /// let array2 = BooleanArray::from(vec![Some(false), Some(true), None]);
 /// let result = gt_dyn(&array1, &array2).unwrap();
 /// assert_eq!(BooleanArray::from(vec![Some(true), Some(false), None]), result);
 /// ```
 #[allow(clippy::bool_comparison)]
-pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -3382,14 +2326,17 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// # Example
 /// ```
-/// use arrow::array::{BooleanArray, StringArray};
-/// use arrow::compute::gt_eq_dyn;
+/// use arrow_array::{BooleanArray, StringArray};
+/// use arrow_ord::comparison::gt_eq_dyn;
 /// let array1 = StringArray::from(vec![Some(""), Some("aaa"), None]);
 /// let array2 = StringArray::from(vec![Some(" "), Some("aa"), None]);
 /// let result = gt_eq_dyn(&array1, &array2).unwrap();
 /// assert_eq!(BooleanArray::from(vec![Some(false), Some(true), None]), result);
 /// ```
-pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+pub fn gt_eq_dyn(
+    left: &dyn Array,
+    right: &dyn Array,
+) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _)
             if matches!(right.data_type(), DataType::Dictionary(_, _)) =>
@@ -3420,7 +2367,10 @@ pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn eq<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
+pub fn eq<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -3437,7 +2387,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn eq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
+pub fn eq_scalar<T>(
+    left: &PrimitiveArray<T>,
+    right: T::Native,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -3449,7 +2402,10 @@ where
 }
 
 /// Applies an unary and infallible comparison function to a primitive array.
-pub fn unary_cmp<T, F>(left: &PrimitiveArray<T>, op: F) -> Result<BooleanArray>
+pub fn unary_cmp<T, F>(
+    left: &PrimitiveArray<T>,
+    op: F,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     F: Fn(T::Native) -> bool,
@@ -3463,7 +2419,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn neq<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
+pub fn neq<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -3480,7 +2439,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn neq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
+pub fn neq_scalar<T>(
+    left: &PrimitiveArray<T>,
+    right: T::Native,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -3498,7 +2460,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn lt<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
+pub fn lt<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -3516,7 +2481,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn lt_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
+pub fn lt_scalar<T>(
+    left: &PrimitiveArray<T>,
+    right: T::Native,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -3537,7 +2505,7 @@ where
 pub fn lt_eq<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -3555,7 +2523,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn lt_eq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
+pub fn lt_eq_scalar<T>(
+    left: &PrimitiveArray<T>,
+    right: T::Native,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -3573,7 +2544,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn gt<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
+pub fn gt<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -3591,7 +2565,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn gt_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
+pub fn gt_scalar<T>(
+    left: &PrimitiveArray<T>,
+    right: T::Native,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -3612,7 +2589,7 @@ where
 pub fn gt_eq<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -3630,7 +2607,10 @@ where
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
-pub fn gt_eq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray>
+pub fn gt_eq_scalar<T>(
+    left: &PrimitiveArray<T>,
+    right: T::Native,
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -3645,7 +2625,7 @@ where
 pub fn contains<T, OffsetSize>(
     left: &PrimitiveArray<T>,
     right: &GenericListArray<OffsetSize>,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     OffsetSize: OffsetSizeTrait,
@@ -3703,7 +2683,7 @@ where
 pub fn contains_utf8<OffsetSize>(
     left: &GenericStringArray<OffsetSize>,
     right: &ListArray,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     OffsetSize: OffsetSizeTrait,
 {
@@ -3772,12 +2752,12 @@ fn new_all_set_buffer(len: usize) -> Buffer {
 #[rustfmt::skip::macros(vec)]
 #[cfg(test)]
 mod tests {
-    use arrow_buffer::i256;
-    use std::sync::Arc;
-
     use super::*;
-    use crate::datatypes::Int8Type;
-    use crate::{array::Int32Array, array::Int64Array, datatypes::Field};
+    use arrow_array::builder::{
+        ListBuilder, PrimitiveDictionaryBuilder, StringBuilder, StringDictionaryBuilder,
+    };
+    use arrow_buffer::i256;
+    use arrow_schema::Field;
 
     /// Evaluate `KERNEL` with two vectors as inputs and assert against the expected output.
     /// `A_VEC` and `B_VEC` can be of type `Vec<T>` or `Vec<Option<T>>` where `T` is the native
@@ -4727,24 +3707,6 @@ mod tests {
         };
     }
 
-    macro_rules! test_dict_utf8 {
-        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
-            #[test]
-            #[cfg(feature = "dyn_cmp_dict")]
-            fn $test_name() {
-                let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
-                let right: DictionaryArray<Int8Type> = $right.into_iter().collect();
-                let res = $op(&left, &right).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(v, expected[i]);
-                }
-            }
-        };
-    }
-
     #[test]
     fn test_utf8_eq_scalar_on_slice() {
         let a = StringArray::from(
@@ -4809,242 +3771,6 @@ mod tests {
         };
     }
 
-    macro_rules! test_flag_utf8 {
-        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
-            #[test]
-            fn $test_name() {
-                let left = StringArray::from($left);
-                let right = StringArray::from($right);
-                let res = $op(&left, &right, None).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(v, expected[i]);
-                }
-            }
-        };
-        ($test_name:ident, $left:expr, $right:expr, $flag:expr, $op:expr, $expected:expr) => {
-            #[test]
-            fn $test_name() {
-                let left = StringArray::from($left);
-                let right = StringArray::from($right);
-                let flag = Some(StringArray::from($flag));
-                let res = $op(&left, &right, flag.as_ref()).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(v, expected[i]);
-                }
-            }
-        };
-    }
-
-    macro_rules! test_flag_utf8_scalar {
-        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
-            #[test]
-            fn $test_name() {
-                let left = StringArray::from($left);
-                let res = $op(&left, $right, None).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(
-                        v,
-                        expected[i],
-                        "unexpected result when comparing {} at position {} to {} ",
-                        left.value(i),
-                        i,
-                        $right
-                    );
-                }
-            }
-        };
-        ($test_name:ident, $left:expr, $right:expr, $flag:expr, $op:expr, $expected:expr) => {
-            #[test]
-            fn $test_name() {
-                let left = StringArray::from($left);
-                let flag = Some($flag);
-                let res = $op(&left, $right, flag).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(
-                        v,
-                        expected[i],
-                        "unexpected result when comparing {} at position {} to {} ",
-                        left.value(i),
-                        i,
-                        $right
-                    );
-                }
-            }
-        };
-    }
-
-    test_utf8!(
-        test_utf8_array_like,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow", "arrow"],
-        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_", ".*"],
-        like_utf8,
-        vec![true, true, true, false, false, true, false, false]
-    );
-
-    test_dict_utf8!(
-        test_utf8_array_like_dict,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow", "arrow"],
-        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_", ".*"],
-        like_dyn,
-        vec![true, true, true, false, false, true, false, false]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_like_scalar_escape_testing,
-        test_utf8_array_like_scalar_dyn_escape_testing,
-        vec!["varchar(255)", "int(255)", "varchar", "int"],
-        "%(%)%",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
-        vec![true, true, false, false]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_like_scalar_escape_regex,
-        test_utf8_array_like_scalar_dyn_escape_regex,
-        vec![".*", "a", "*"],
-        ".*",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
-        vec![true, false, false]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_like_scalar_escape_regex_dot,
-        test_utf8_array_like_scalar_dyn_escape_regex_dot,
-        vec![".", "a", "*"],
-        ".",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
-        vec![true, false, false]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_like_scalar,
-        test_utf8_array_like_scalar_dyn,
-        vec!["arrow", "parquet", "datafusion", "flight"],
-        "%ar%",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
-        vec![true, true, false, false]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_like_scalar_start,
-        test_utf8_array_like_scalar_dyn_start,
-        vec!["arrow", "parrow", "arrows", "arr"],
-        "arrow%",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
-        vec![true, false, true, false]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_like_scalar_end,
-        test_utf8_array_like_scalar_dyn_end,
-        vec!["arrow", "parrow", "arrows", "arr"],
-        "%arrow",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
-        vec![true, true, false, false]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_like_scalar_equals,
-        test_utf8_array_like_scalar_dyn_equals,
-        vec!["arrow", "parrow", "arrows", "arr"],
-        "arrow",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
-        vec![true, false, false, false]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_like_scalar_one,
-        test_utf8_array_like_scalar_dyn_one,
-        vec!["arrow", "arrows", "parrow", "arr"],
-        "arrow_",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
-        vec![false, true, false, false]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_scalar_like_escape,
-        test_utf8_scalar_like_dyn_escape,
-        vec!["a%", "a\\x"],
-        "a\\%",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
-        vec![true, false]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_scalar_like_escape_contains,
-        test_utf8_scalar_like_dyn_escape_contains,
-        vec!["ba%", "ba\\x"],
-        "%a\\%",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
-        vec![true, false]
-    );
-
-    test_utf8!(
-        test_utf8_scalar_ilike_regex,
-        vec!["%%%"],
-        vec![r#"\%_\%"#],
-        ilike_utf8,
-        vec![true]
-    );
-
-    test_dict_utf8!(
-        test_utf8_scalar_ilike_regex_dict,
-        vec!["%%%"],
-        vec![r#"\%_\%"#],
-        ilike_dyn,
-        vec![true]
-    );
-
-    #[test]
-    fn test_replace_like_wildcards() {
-        let a_eq = "_%";
-        let expected = "..*";
-        assert_eq!(replace_like_wildcards(a_eq).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_replace_like_wildcards_leave_like_meta_chars() {
-        let a_eq = "\\%\\_";
-        let expected = "%_";
-        assert_eq!(replace_like_wildcards(a_eq).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_replace_like_wildcards_with_multiple_escape_chars() {
-        let a_eq = "\\\\%";
-        let expected = "\\\\%";
-        assert_eq!(replace_like_wildcards(a_eq).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_replace_like_wildcards_escape_regex_meta_char() {
-        let a_eq = ".";
-        let expected = "\\.";
-        assert_eq!(replace_like_wildcards(a_eq).unwrap(), expected);
-    }
-
     test_utf8!(
         test_utf8_array_eq,
         vec!["arrow", "arrow", "arrow", "arrow"],
@@ -5058,253 +3784,6 @@ mod tests {
         "arrow",
         eq_utf8_scalar,
         vec![true, false, false, false]
-    );
-
-    test_utf8!(
-        test_utf8_array_nlike,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow"],
-        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_"],
-        nlike_utf8,
-        vec![false, false, false, true, true, false, true]
-    );
-
-    test_dict_utf8!(
-        test_utf8_array_nlike_dict,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow"],
-        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_"],
-        nlike_dyn,
-        vec![false, false, false, true, true, false, true]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_nlike_escape_testing,
-        test_utf8_array_nlike_escape_dyn_testing_dyn,
-        vec!["varchar(255)", "int(255)", "varchar", "int"],
-        "%(%)%",
-        nlike_utf8_scalar,
-        nlike_utf8_scalar_dyn,
-        vec![false, false, true, true]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_nlike_scalar_escape_regex,
-        test_utf8_array_nlike_scalar_dyn_escape_regex,
-        vec![".*", "a", "*"],
-        ".*",
-        nlike_utf8_scalar,
-        nlike_utf8_scalar_dyn,
-        vec![false, true, true]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_nlike_scalar_escape_regex_dot,
-        test_utf8_array_nlike_scalar_dyn_escape_regex_dot,
-        vec![".", "a", "*"],
-        ".",
-        nlike_utf8_scalar,
-        nlike_utf8_scalar_dyn,
-        vec![false, true, true]
-    );
-    test_utf8_scalar!(
-        test_utf8_array_nlike_scalar,
-        test_utf8_array_nlike_scalar_dyn,
-        vec!["arrow", "parquet", "datafusion", "flight"],
-        "%ar%",
-        nlike_utf8_scalar,
-        nlike_utf8_scalar_dyn,
-        vec![false, false, true, true]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_nlike_scalar_start,
-        test_utf8_array_nlike_scalar_dyn_start,
-        vec!["arrow", "parrow", "arrows", "arr"],
-        "arrow%",
-        nlike_utf8_scalar,
-        nlike_utf8_scalar_dyn,
-        vec![false, true, false, true]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_nlike_scalar_end,
-        test_utf8_array_nlike_scalar_dyn_end,
-        vec!["arrow", "parrow", "arrows", "arr"],
-        "%arrow",
-        nlike_utf8_scalar,
-        nlike_utf8_scalar_dyn,
-        vec![false, false, true, true]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_nlike_scalar_equals,
-        test_utf8_array_nlike_scalar_dyn_equals,
-        vec!["arrow", "parrow", "arrows", "arr"],
-        "arrow",
-        nlike_utf8_scalar,
-        nlike_utf8_scalar_dyn,
-        vec![false, true, true, true]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_nlike_scalar_one,
-        test_utf8_array_nlike_scalar_dyn_one,
-        vec!["arrow", "arrows", "parrow", "arr"],
-        "arrow_",
-        nlike_utf8_scalar,
-        nlike_utf8_scalar_dyn,
-        vec![true, false, true, true]
-    );
-
-    test_utf8!(
-        test_utf8_array_ilike,
-        vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
-        vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
-        ilike_utf8,
-        vec![true, true, true, false, false, true, false]
-    );
-
-    test_dict_utf8!(
-        test_utf8_array_ilike_dict,
-        vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
-        vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
-        ilike_dyn,
-        vec![true, true, true, false, false, true, false]
-    );
-
-    test_utf8_scalar!(
-        ilike_utf8_scalar_escape_testing,
-        ilike_utf8_scalar_escape_dyn_testing,
-        vec!["varchar(255)", "int(255)", "varchar", "int"],
-        "%(%)%",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
-        vec![true, true, false, false]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_ilike_scalar,
-        test_utf8_array_ilike_dyn_scalar,
-        vec!["arrow", "parquet", "datafusion", "flight"],
-        "%AR%",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
-        vec![true, true, false, false]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_ilike_scalar_start,
-        test_utf8_array_ilike_scalar_dyn_start,
-        vec!["arrow", "parrow", "arrows", "ARR"],
-        "aRRow%",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
-        vec![true, false, true, false]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_ilike_scalar_end,
-        test_utf8_array_ilike_scalar_dyn_end,
-        vec!["ArroW", "parrow", "ARRowS", "arr"],
-        "%arrow",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
-        vec![true, true, false, false]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_ilike_scalar_equals,
-        test_utf8_array_ilike_scalar_dyn_equals,
-        vec!["arrow", "parrow", "arrows", "arr"],
-        "Arrow",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
-        vec![true, false, false, false]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_ilike_scalar_one,
-        test_utf8_array_ilike_scalar_dyn_one,
-        vec!["arrow", "arrows", "parrow", "arr"],
-        "arrow_",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
-        vec![false, true, false, false]
-    );
-
-    test_utf8!(
-        test_utf8_array_nilike,
-        vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
-        vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
-        nilike_utf8,
-        vec![false, false, false, true, true, false, true]
-    );
-
-    test_dict_utf8!(
-        test_utf8_array_nilike_dict,
-        vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
-        vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
-        nilike_dyn,
-        vec![false, false, false, true, true, false, true]
-    );
-
-    test_utf8_scalar!(
-        nilike_utf8_scalar_escape_testing,
-        nilike_utf8_scalar_escape_dyn_testing,
-        vec!["varchar(255)", "int(255)", "varchar", "int"],
-        "%(%)%",
-        nilike_utf8_scalar,
-        nilike_utf8_scalar_dyn,
-        vec![false, false, true, true]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_nilike_scalar,
-        test_utf8_array_nilike_dyn_scalar,
-        vec!["arrow", "parquet", "datafusion", "flight"],
-        "%AR%",
-        nilike_utf8_scalar,
-        nilike_utf8_scalar_dyn,
-        vec![false, false, true, true]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_nilike_scalar_start,
-        test_utf8_array_nilike_scalar_dyn_start,
-        vec!["arrow", "parrow", "arrows", "ARR"],
-        "aRRow%",
-        nilike_utf8_scalar,
-        nilike_utf8_scalar_dyn,
-        vec![false, true, false, true]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_nilike_scalar_end,
-        test_utf8_array_nilike_scalar_dyn_end,
-        vec!["ArroW", "parrow", "ARRowS", "arr"],
-        "%arrow",
-        nilike_utf8_scalar,
-        nilike_utf8_scalar_dyn,
-        vec![false, false, true, true]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_nilike_scalar_equals,
-        test_utf8_array_nilike_scalar_dyn_equals,
-        vec!["arRow", "parrow", "arrows", "arr"],
-        "Arrow",
-        nilike_utf8_scalar,
-        nilike_utf8_scalar_dyn,
-        vec![false, true, true, true]
-    );
-
-    test_utf8_scalar!(
-        test_utf8_array_nilike_scalar_one,
-        test_utf8_array_nilike_scalar_dyn_one,
-        vec!["arrow", "arrows", "parrow", "arr"],
-        "arrow_",
-        nilike_utf8_scalar,
-        nilike_utf8_scalar_dyn,
-        vec![true, false, true, true]
     );
 
     test_utf8!(
@@ -5381,44 +3860,6 @@ mod tests {
         gt_eq_utf8_scalar,
         vec![false, false, true, true]
     );
-    test_flag_utf8!(
-        test_utf8_array_regexp_is_match,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
-        vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
-        regexp_is_match_utf8,
-        vec![true, false, true, false, false, true]
-    );
-    test_flag_utf8!(
-        test_utf8_array_regexp_is_match_insensitive,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
-        vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
-        vec!["i"; 6],
-        regexp_is_match_utf8,
-        vec![true, true, true, true, false, true]
-    );
-
-    test_flag_utf8_scalar!(
-        test_utf8_array_regexp_is_match_scalar,
-        vec!["arrow", "ARROW", "parquet", "PARQUET"],
-        "^ar",
-        regexp_is_match_utf8_scalar,
-        vec![true, false, false, false]
-    );
-    test_flag_utf8_scalar!(
-        test_utf8_array_regexp_is_match_empty_scalar,
-        vec!["arrow", "ARROW", "parquet", "PARQUET"],
-        "",
-        regexp_is_match_utf8_scalar,
-        vec![true, true, true, true]
-    );
-    test_flag_utf8_scalar!(
-        test_utf8_array_regexp_is_match_insensitive_scalar,
-        vec!["arrow", "ARROW", "parquet", "PARQUET"],
-        "^ar",
-        "i",
-        regexp_is_match_utf8_scalar,
-        vec![true, true, false, false]
-    );
 
     #[test]
     fn test_eq_dyn_scalar() {
@@ -5458,8 +3899,7 @@ mod tests {
         );
         assert_eq!(eq_dyn_scalar(&array, 8).unwrap(), expected);
 
-        let array: ArrayRef = Arc::new(array);
-        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        let array = array.unary::<_, Float64Type>(|x| x as f64);
         assert_eq!(eq_dyn_scalar(&array, 8).unwrap(), expected);
     }
 
@@ -5501,8 +3941,7 @@ mod tests {
         );
         assert_eq!(lt_dyn_scalar(&array, 8).unwrap(), expected);
 
-        let array: ArrayRef = Arc::new(array);
-        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        let array = array.unary::<_, Float64Type>(|x| x as f64);
         assert_eq!(lt_dyn_scalar(&array, 8).unwrap(), expected);
     }
 
@@ -5544,8 +3983,7 @@ mod tests {
         );
         assert_eq!(lt_eq_dyn_scalar(&array, 8).unwrap(), expected);
 
-        let array: ArrayRef = Arc::new(array);
-        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        let array = array.unary::<_, Float64Type>(|x| x as f64);
         assert_eq!(lt_eq_dyn_scalar(&array, 8).unwrap(), expected);
     }
 
@@ -5587,8 +4025,7 @@ mod tests {
         );
         assert_eq!(gt_dyn_scalar(&array, 8).unwrap(), expected);
 
-        let array: ArrayRef = Arc::new(array);
-        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        let array = array.unary::<_, Float64Type>(|x| x as f64);
         assert_eq!(gt_dyn_scalar(&array, 8).unwrap(), expected);
     }
 
@@ -5630,8 +4067,7 @@ mod tests {
         );
         assert_eq!(gt_eq_dyn_scalar(&array, 8).unwrap(), expected);
 
-        let array: ArrayRef = Arc::new(array);
-        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        let array = array.unary::<_, Float64Type>(|x| x as f64);
         assert_eq!(gt_eq_dyn_scalar(&array, 8).unwrap(), expected);
     }
 
@@ -5673,8 +4109,7 @@ mod tests {
         );
         assert_eq!(neq_dyn_scalar(&array, 8).unwrap(), expected);
 
-        let array: ArrayRef = Arc::new(array);
-        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        let array = array.unary::<_, Float64Type>(|x| x as f64);
         assert_eq!(neq_dyn_scalar(&array, 8).unwrap(), expected);
     }
 
@@ -6010,8 +4445,6 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_neq_dyn_fixed_size_binary() {
-        use crate::array::FixedSizeBinaryArray;
-
         let values1: Vec<Option<&[u8]>> =
             vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36, 0x01])];
         let values2: Vec<Option<&[u8]>> =
@@ -6668,86 +5101,6 @@ mod tests {
     }
 
     #[test]
-    fn test_dict_like_kernels() {
-        let data =
-            vec![Some("Earth"), Some("Fire"), Some("Water"), Some("Air"), None, Some("Air")];
-
-        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
-
-        let dict_arrayref = Arc::new(dict_array.clone()) as ArrayRef;
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "Air").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_arrayref, "Air").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "Wa%").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(false), Some(true), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_arrayref, "Wa%").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(false), Some(true), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "%r").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(false), Some(true), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_arrayref, "%r").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(false), Some(true), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "%i%").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_arrayref, "%i%").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "%a%r%").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_arrayref, "%a%r%").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
-            ),
-        );
-    }
-
-    #[test]
     #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_to_utf8_array() {
         let test1 = vec!["a", "a", "b", "c"];
@@ -6956,246 +5309,6 @@ mod tests {
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, Some(true), Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_dict_nlike_kernels() {
-        let data =
-            vec![Some("Earth"), Some("Fire"), Some("Water"), Some("Air"), None, Some("Air")];
-
-        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
-
-        let dict_arrayref = Arc::new(dict_array.clone()) as ArrayRef;
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "Air").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_arrayref, "Air").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "Wa%").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(true), Some(false), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_arrayref, "Wa%").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(true), Some(false), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "%r").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_arrayref, "%r").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "%i%").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_arrayref, "%i%").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "%a%r%").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_arrayref, "%a%r%").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
-            ),
-        );
-    }
-
-    #[test]
-    fn test_dict_ilike_kernels() {
-        let data =
-            vec![Some("Earth"), Some("Fire"), Some("Water"), Some("Air"), None, Some("Air")];
-
-        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
-
-        let dict_arrayref = Arc::new(dict_array.clone()) as ArrayRef;
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "air").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_arrayref, "air").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "wa%").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(false), Some(true), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_arrayref, "wa%").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(false), Some(true), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "%R").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(false), Some(true), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_arrayref, "%R").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(false), Some(true), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "%I%").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_arrayref, "%I%").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "%A%r%").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_arrayref, "%A%r%").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(true), None, Some(true)]
-            ),
-        );
-    }
-
-    #[test]
-    fn test_dict_nilike_kernels() {
-        let data =
-            vec![Some("Earth"), Some("Fire"), Some("Water"), Some("Air"), None, Some("Air")];
-
-        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
-
-        let dict_arrayref = Arc::new(dict_array.clone()) as ArrayRef;
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "air").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_arrayref, "air").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "wa%").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(true), Some(false), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_arrayref, "wa%").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(true), Some(false), Some(true), None, Some(true)]
-            ),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "%R").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_arrayref, "%R").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "%I%").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_arrayref, "%I%").unwrap(),
-            BooleanArray::from(
-                vec![Some(true), Some(false), Some(true), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "%A%r%").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(false), None, Some(false)]
-            ),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_arrayref, "%A%r%").unwrap(),
-            BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), Some(false), None, Some(false)]
-            ),
         );
     }
 

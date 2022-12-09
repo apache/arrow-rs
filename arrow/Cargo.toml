@@ -45,22 +45,22 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
-arrow-array = { version = "29.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "29.0.0", path = "../arrow-buffer" }
-arrow-cast = { version = "29.0.0", path = "../arrow-cast" }
-arrow-csv = { version = "29.0.0", path = "../arrow-csv", optional = true }
-arrow-data = { version = "29.0.0", path = "../arrow-data" }
-arrow-ipc = { version = "29.0.0", path = "../arrow-ipc", optional = true }
-arrow-json = { version = "29.0.0", path = "../arrow-json", optional = true }
-arrow-schema = { version = "29.0.0", path = "../arrow-schema" }
-arrow-select = { version = "29.0.0", path = "../arrow-select" }
+arrow-array = { version = "28.0.0", path = "../arrow-array" }
+arrow-buffer = { version = "28.0.0", path = "../arrow-buffer" }
+arrow-cast = { version = "28.0.0", path = "../arrow-cast" }
+arrow-csv = { version = "28.0.0", path = "../arrow-csv", optional = true }
+arrow-data = { version = "28.0.0", path = "../arrow-data" }
+arrow-ipc = { version = "28.0.0", path = "../arrow-ipc", optional = true }
+arrow-json = { version = "28.0.0", path = "../arrow-json", optional = true }
+arrow-ord = { version = "28.0.0", path = "../arrow-ord" }
+arrow-schema = { version = "28.0.0", path = "../arrow-schema" }
+arrow-select = { version = "28.0.0", path = "../arrow-select" }
+arrow-string = { version = "28.0.0", path = "../arrow-string" }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 hashbrown = { version = "0.13", default-features = false }
 regex = { version = "1.7.0", default-features = false, features = ["std", "unicode", "perf"] }
-regex-syntax = { version = "0.6.27", default-features = false, features = ["unicode"] }
-packed_simd = { version = "0.3", default-features = false, optional = true, package = "packed_simd_2" }
 chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
 comfy-table = { version = "6.0", optional = true, default-features = false }
 pyo3 = { version = "0.17", default-features = false, optional = true }
@@ -76,7 +76,7 @@ ipc_compression = ["ipc", "arrow-ipc/lz4", "arrow-ipc/zstd"]
 csv = ["arrow-csv"]
 ipc = ["arrow-ipc"]
 json = ["arrow-json"]
-simd = ["packed_simd"]
+simd = ["arrow-array/simd", "arrow-ord/simd"]
 prettyprint = ["comfy-table"]
 # The test utils feature enables code used in benchmarks and tests but
 # not the core arrow code itself. Be aware that `rand` must be kept as
@@ -92,7 +92,7 @@ force_validate = ["arrow-data/force_validate"]
 ffi = ["bitflags"]
 # Enable dyn-comparison of dictionary arrays with other arrays
 # Note: this does not impact comparison against scalars
-dyn_cmp_dict = []
+dyn_cmp_dict = ["arrow-string/dyn_cmp_dict", "arrow-ord/dyn_cmp_dict"]
 # Enable dyn-arithmetic kernels for dictionary arrays
 # Note: this does not impact arithmetic with scalars
 dyn_arith_dict = []

@@ -170,6 +170,9 @@ pub use record_batch::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 mod arithmetic;
 pub use arithmetic::ArrowNativeTypeOp;
 
+mod numeric;
+pub use numeric::*;
+
 pub mod builder;
 pub mod cast;
 mod delta;

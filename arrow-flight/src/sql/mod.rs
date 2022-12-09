@@ -58,6 +58,7 @@ pub use gen::SupportedSqlGrammar;
 pub use gen::TicketStatementQuery;
 pub use gen::UpdateDeleteRules;
 
+pub mod client;
 pub mod server;
 
 /// ProstMessageExt are useful utility methods for prost::Message types
