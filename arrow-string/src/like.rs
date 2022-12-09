@@ -485,7 +485,10 @@ fn nlike_dict_scalar<K: ArrowPrimitiveType>(
 /// Perform SQL `left ILIKE right` operation on [`StringArray`] /
 /// [`LargeStringArray`].
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// Case insensitive version of [`like_utf8`]
+///
+/// Note: this only implements loose matching as defined by the Unicode standard. For example,
+/// the `ﬀ` ligature is not equivalent to `FF` and `ß` is not equivalent to `SS`
 pub fn ilike_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
@@ -542,7 +545,7 @@ pub fn ilike_dyn(
 /// Perform SQL `left ILIKE right` operation on on [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`].
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 #[cfg(feature = "dyn_cmp_dict")]
 fn ilike_dict<K: ArrowPrimitiveType>(
     left: &DictionaryArray<K>,
@@ -641,7 +644,7 @@ fn ilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
 /// [`LargeStringArray`], or [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`] and a scalar.
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 pub fn ilike_utf8_scalar_dyn(
     left: &dyn Array,
     right: &str,
@@ -676,7 +679,7 @@ pub fn ilike_utf8_scalar_dyn(
 /// Perform SQL `left ILIKE right` operation on [`StringArray`] /
 /// [`LargeStringArray`] and a scalar.
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
@@ -687,7 +690,7 @@ pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 /// Perform SQL `left ILIKE right` operation on [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`] and a scalar.
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 fn ilike_dict_scalar<K: ArrowPrimitiveType>(
     left: &DictionaryArray<K>,
     right: &str,
@@ -712,7 +715,7 @@ fn ilike_dict_scalar<K: ArrowPrimitiveType>(
 /// Perform SQL `left NOT ILIKE right` operation on [`StringArray`] /
 /// [`LargeStringArray`].
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 pub fn nilike_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
@@ -730,7 +733,7 @@ pub fn nilike_utf8<OffsetSize: OffsetSizeTrait>(
 /// Perform SQL `left NOT ILIKE right` operation on on [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`].
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 pub fn nilike_dyn(
     left: &dyn Array,
     right: &dyn Array,
@@ -769,7 +772,7 @@ pub fn nilike_dyn(
 /// Perform SQL `left NOT ILIKE right` operation on on [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`].
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 #[cfg(feature = "dyn_cmp_dict")]
 fn nilike_dict<K: ArrowPrimitiveType>(
     left: &DictionaryArray<K>,
@@ -821,7 +824,7 @@ fn nilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
 /// [`LargeStringArray`], or [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`] and a scalar.
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 pub fn nilike_utf8_scalar_dyn(
     left: &dyn Array,
     right: &str,
@@ -856,7 +859,7 @@ pub fn nilike_utf8_scalar_dyn(
 /// Perform SQL `left NOT ILIKE right` operation on [`StringArray`] /
 /// [`LargeStringArray`] and a scalar.
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
@@ -867,7 +870,7 @@ pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 /// Perform SQL `left NOT ILIKE right` operation on [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`] and a scalar.
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 fn nilike_dict_scalar<K: ArrowPrimitiveType>(
     left: &DictionaryArray<K>,
     right: &str,
@@ -1352,6 +1355,95 @@ mod tests {
         ilike_utf8_scalar,
         ilike_utf8_scalar_dyn,
         vec![true, false, false, false]
+    );
+
+    // We only implement loose matching
+    test_utf8_scalar!(
+        test_utf8_array_ilike_unicode,
+        test_utf8_array_ilike_unicode_dyn,
+        vec!["FFooß", "FFooSS", "FFooss", "FFooS", "FFoos", "ﬀooSS", "ﬀooß"],
+        "FFooSS",
+        ilike_utf8_scalar,
+        ilike_utf8_scalar_dyn,
+        vec![false, true, true, false, false, false, false]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_ilike_unicode_starts,
+        test_utf8_array_ilike_unicode_start_dyn,
+        vec![
+            "FFooßsdlkdf",
+            "FFooSSsdlkdf",
+            "FFoosssdlkdf",
+            "FFooS",
+            "FFoos",
+            "ﬀooSS",
+            "ﬀooß",
+            "FfoosSsdfd",
+        ],
+        "FFooSS%",
+        ilike_utf8_scalar,
+        ilike_utf8_scalar_dyn,
+        vec![false, true, true, false, false, false, false, true]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_ilike_unicode_ends,
+        test_utf8_array_ilike_unicode_ends_dyn,
+        vec![
+            "sdlkdfFFooß",
+            "sdlkdfFFooSS",
+            "sdlkdfFFooss",
+            "FFooS",
+            "FFoos",
+            "ﬀooSS",
+            "ﬀooß",
+            "h😃klFfoosS",
+        ],
+        "%FFooSS",
+        ilike_utf8_scalar,
+        ilike_utf8_scalar_dyn,
+        vec![false, true, true, false, false, false, false, true]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_ilike_unicode_contains,
+        test_utf8_array_ilike_unicode_contains_dyn,
+        vec![
+            "sdlkdfFooßsdfs",
+            "sdlkdfFooSSdggs",
+            "sdlkdfFoosssdsd",
+            "FooS",
+            "Foos",
+            "ﬀooSS",
+            "ﬀooß",
+            "😃sadlksffoosSsh😃klF",
+            "😱slgffoosSsh😃klF",
+        ],
+        "%FFooSS%",
+        ilike_utf8_scalar,
+        ilike_utf8_scalar_dyn,
+        vec![false, true, true, false, false, false, false, true, true]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_ilike_unicode_complex,
+        test_utf8_array_ilike_unicode_complex_dyn,
+        vec![
+            "sdlkdfFooßsdfs",
+            "sdlkdfFooSSdggs",
+            "sdlkdfFoosssdsd",
+            "FooS",
+            "Foos",
+            "ﬀooSS",
+            "ﬀooß",
+            "😃sadlksffofsSsh😃klF",
+            "😱slgffoesSsh😃klF",
+        ],
+        "%FF__SS%",
+        ilike_utf8_scalar,
+        ilike_utf8_scalar_dyn,
+        vec![false, true, true, false, false, false, false, true, true]
     );
 
     test_utf8_scalar!(
