@@ -87,10 +87,6 @@ _supported_pyarrow_types = [
     ),
     pa.dictionary(pa.int8(), pa.string()),
     pa.map_(pa.string(), pa.int32()),
-]
-
-_unsupported_pyarrow_types = [
-    pa.decimal256(76, 38),
     pa.union(
         [pa.field("a", pa.binary(10)), pa.field("b", pa.string())],
         mode=pa.lib.UnionMode_DENSE,
@@ -111,6 +107,10 @@ _unsupported_pyarrow_types = [
         ],
         mode=pa.lib.UnionMode_SPARSE,
     ),
+]
+
+_unsupported_pyarrow_types = [
+    pa.decimal256(76, 38),
 ]
 
 
@@ -202,6 +202,9 @@ def test_empty_array_python(datatype):
     if datatype == pa.float16():
         pytest.skip("Float 16 is not implemented in Rust")
 
+    if type(datatype) is pa.lib.DenseUnionType or type(datatype) is pa.lib.SparseUnionType:
+        pytest.skip("Union is not implemented in Python")
+
     a = pa.array([], datatype)
     b = rust.round_trip_array(a)
     b.validate(full=True)
@@ -216,6 +219,9 @@ def test_empty_array_rust(datatype):
     """
     Rust -> Python
     """
+    if type(datatype) is pa.lib.DenseUnionType or type(datatype) is pa.lib.SparseUnionType:
+        pytest.skip("Union is not implemented in Python")
+
     a = pa.array([], type=datatype)
     b = rust.make_empty_array(datatype)
     b.validate(full=True)
