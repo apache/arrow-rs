@@ -25,8 +25,8 @@
 
 set -e
 
-FUTURE_RELEASE="23.0.0"
-ISSUE_NUMBER=2665
+FUTURE_RELEASE="29.0.0"
+ISSUE_NUMBER=3216
 
 TITLE="Update version to \`$FUTURE_RELEASE\` and update \`CHANGELOG\`"
 BODY="# Which issue does this PR close?\n\nCloses #$ISSUE_NUMBER.\n\n# Rationale for this change\nPrepare for biweekly release\n\n# What changes are included in this PR?\n\n# Are there any user-facing changes?\nYes"
