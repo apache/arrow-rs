@@ -543,13 +543,13 @@ fn ilike_dict<K: ArrowPrimitiveType>(
 }
 
 #[inline]
-fn ilike_scalar_op<'a, F: Fn(bool) -> bool, L: ArrayAccessor<Item = &'a str>>(
-    left: L,
+fn ilike_scalar_op<O: OffsetSizeTrait, F: Fn(bool) -> bool>(
+    left: &GenericStringArray<O>,
     right: &str,
     op: F,
 ) -> Result<BooleanArray, ArrowError> {
-    // If not ASCII faster to use case insensitive regex than allocating using to_uppercase
-    if right.is_ascii() {
+    // If not ASCII faster to use case insensitive regex than using to_uppercase
+    if right.is_ascii() && left.is_ascii() {
         if !right.contains(is_like_pattern) {
             return Ok(BooleanArray::from_unary(left, |item| {
                 op(item.eq_ignore_ascii_case(right))
@@ -590,8 +590,8 @@ fn ilike_scalar_op<'a, F: Fn(bool) -> bool, L: ArrayAccessor<Item = &'a str>>(
 }
 
 #[inline]
-fn ilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
-    left: L,
+fn ilike_scalar<O: OffsetSizeTrait>(
+    left: &GenericStringArray<O>,
     right: &str,
 ) -> Result<BooleanArray, ArrowError> {
     ilike_scalar_op(left, right, |x| x)
@@ -748,8 +748,8 @@ fn nilike_dict<K: ArrowPrimitiveType>(
 }
 
 #[inline]
-fn nilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
-    left: L,
+fn nilike_scalar<O: OffsetSizeTrait>(
+    left: &GenericStringArray<O>,
     right: &str,
 ) -> Result<BooleanArray, ArrowError> {
     ilike_scalar_op(left, right, |x| !x)
