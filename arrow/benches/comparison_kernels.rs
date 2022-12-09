@@ -326,7 +326,7 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| eq_dyn_utf8_scalar(&dict_arr_a, "test"))
     });
 
-    c.bench_function("eq_dyn_utf8_scalar scalar dictionary[10] string[4])", |b| {
+    c.bench_function("gt_eq_dyn_utf8_scalar scalar dictionary[10] string[4])", |b| {
         b.iter(|| gt_eq_dyn_utf8_scalar(&dict_arr_a, "test"))
     });
 
