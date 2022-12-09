@@ -590,11 +590,17 @@ fn ilike_scalar_op<'a, F: Fn(bool) -> bool, L: ArrayAccessor<Item = &'a str>>(
 ) -> Result<BooleanArray, ArrowError> {
     if !right.contains(is_like_pattern) {
         // fast path, can use equals
-        let right_uppercase = right.to_uppercase();
-
-        Ok(BooleanArray::from_unary(left, |item| {
-            op(item.to_uppercase() == right_uppercase)
-        }))
+        if right.is_ascii() {
+            // This avoids additional allocations
+            Ok(BooleanArray::from_unary(left, |item| {
+                op(item.eq_ignore_ascii_case(right))
+            }))
+        } else {
+            let right_uppercase = right.to_uppercase();
+            Ok(BooleanArray::from_unary(left, |item| {
+                op(item.to_uppercase() == right_uppercase)
+            }))
+        }
     } else if right.ends_with('%')
         && !right.ends_with("\\%")
         && !right[..right.len() - 1].contains(is_like_pattern)
