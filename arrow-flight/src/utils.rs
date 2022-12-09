@@ -24,10 +24,7 @@ use std::sync::Arc;
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::Buffer;
 use arrow_ipc::convert::fb_to_schema;
-use arrow_ipc::{
-    reader, root_as_message, writer,
-    writer::IpcWriteOptions,
-};
+use arrow_ipc::{reader, root_as_message, writer, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
 
 /// Convert a `RecordBatch` to a vector of `FlightData` representing the bytes of the dictionaries
