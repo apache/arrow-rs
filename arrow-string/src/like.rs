@@ -18,7 +18,6 @@
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::*;
-use arrow_buffer::{bit_util, MutableBuffer};
 use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayData;
 use arrow_schema::*;
@@ -584,66 +583,44 @@ fn ilike_dict<K: ArrowPrimitiveType>(
 }
 
 #[inline]
-fn ilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
+fn ilike_scalar_op<'a, F: Fn(bool) -> bool, L: ArrayAccessor<Item = &'a str>>(
     left: L,
     right: &str,
+    op: F,
 ) -> Result<BooleanArray, ArrowError> {
-    let null_bit_buffer = left.data().null_buffer().cloned();
-    let bytes = bit_util::ceil(left.len(), 8);
-    let mut bool_buf = MutableBuffer::from_len_zeroed(bytes);
-    let bool_slice = bool_buf.as_slice_mut();
-
     if !right.contains(is_like_pattern) {
         // fast path, can use equals
         let right_uppercase = right.to_uppercase();
-        for i in 0..left.len() {
-            unsafe {
-                if left.value_unchecked(i).to_uppercase() == right_uppercase {
-                    bit_util::set_bit(bool_slice, i);
-                }
-            }
-        }
+
+        Ok(BooleanArray::from_unary(left, |item| {
+            op(item.to_uppercase() == right_uppercase)
+        }))
     } else if right.ends_with('%')
         && !right.ends_with("\\%")
         && !right[..right.len() - 1].contains(is_like_pattern)
     {
         // fast path, can use starts_with
         let start_str = &right[..right.len() - 1].to_uppercase();
-        for i in 0..left.len() {
-            unsafe {
-                if left
-                    .value_unchecked(i)
-                    .to_uppercase()
-                    .starts_with(start_str)
-                {
-                    bit_util::set_bit(bool_slice, i);
-                }
-            }
-        }
+        Ok(BooleanArray::from_unary(left, |item| {
+            op(item.to_uppercase().starts_with(start_str))
+        }))
     } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
         // fast path, can use ends_with
         let ends_str = &right[1..].to_uppercase();
 
-        for i in 0..left.len() {
-            unsafe {
-                if left.value_unchecked(i).to_uppercase().ends_with(ends_str) {
-                    bit_util::set_bit(bool_slice, i);
-                }
-            }
-        }
+        Ok(BooleanArray::from_unary(left, |item| {
+            op(item.to_uppercase().ends_with(ends_str))
+        }))
     } else if right.starts_with('%')
         && right.ends_with('%')
+        && !right.ends_with("\\%")
         && !right[1..right.len() - 1].contains(is_like_pattern)
     {
         // fast path, can use contains
         let contains = &right[1..right.len() - 1].to_uppercase();
-        for i in 0..left.len() {
-            unsafe {
-                if left.value_unchecked(i).to_uppercase().contains(contains) {
-                    bit_util::set_bit(bool_slice, i);
-                }
-            }
-        }
+        Ok(BooleanArray::from_unary(left, |item| {
+            op(item.to_uppercase().contains(contains))
+        }))
     } else {
         let re_pattern = replace_like_wildcards(right)?;
         let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
@@ -653,26 +630,16 @@ fn ilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
             ))
         })?;
 
-        for i in 0..left.len() {
-            let haystack = unsafe { left.value_unchecked(i) };
-            if re.is_match(haystack) {
-                bit_util::set_bit(bool_slice, i);
-            }
-        }
-    };
+        Ok(BooleanArray::from_unary(left, |item| op(re.is_match(item))))
+    }
+}
 
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![bool_buf.into()],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
+#[inline]
+fn ilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
+    left: L,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
+    ilike_scalar_op(left, right, |x| x)
 }
 
 /// Perform SQL `left ILIKE right` operation on [`StringArray`] /
@@ -852,91 +819,7 @@ fn nilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
     left: L,
     right: &str,
 ) -> Result<BooleanArray, ArrowError> {
-    let null_bit_buffer = left.data().null_buffer().cloned();
-    let bytes = bit_util::ceil(left.len(), 8);
-    let mut bool_buf = MutableBuffer::from_len_zeroed(bytes);
-    let bool_slice = bool_buf.as_slice_mut();
-
-    if !right.contains(is_like_pattern) {
-        // fast path, can use equals
-        let right_uppercase = right.to_uppercase();
-        for i in 0..left.len() {
-            unsafe {
-                if left.value_unchecked(i).to_uppercase() != right_uppercase {
-                    bit_util::set_bit(bool_slice, i);
-                }
-            }
-        }
-    } else if right.ends_with('%')
-        && !right.ends_with("\\%")
-        && !right[..right.len() - 1].contains(is_like_pattern)
-    {
-        // fast path, can use starts_with
-        let start_str = &right[..right.len() - 1].to_uppercase();
-        for i in 0..left.len() {
-            unsafe {
-                if !(left
-                    .value_unchecked(i)
-                    .to_uppercase()
-                    .starts_with(start_str))
-                {
-                    bit_util::set_bit(bool_slice, i);
-                }
-            }
-        }
-    } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
-        // fast path, can use ends_with
-        let ends_str = &right[1..].to_uppercase();
-
-        for i in 0..left.len() {
-            unsafe {
-                if !(left.value_unchecked(i).to_uppercase().ends_with(ends_str)) {
-                    bit_util::set_bit(bool_slice, i);
-                }
-            }
-        }
-    } else if right.starts_with('%')
-        && right.ends_with('%')
-        && !right[1..right.len() - 1].contains(is_like_pattern)
-    {
-        // fast path, can use contains
-        let contains = &right[1..right.len() - 1].to_uppercase();
-        for i in 0..left.len() {
-            unsafe {
-                if !(left.value_unchecked(i).to_uppercase().contains(contains)) {
-                    bit_util::set_bit(bool_slice, i);
-                }
-            }
-        }
-    } else {
-        let re_pattern = replace_like_wildcards(right)?;
-        let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
-            ArrowError::ComputeError(format!(
-                "Unable to build regex from ILIKE pattern: {}",
-                e
-            ))
-        })?;
-
-        for i in 0..left.len() {
-            let haystack = unsafe { left.value_unchecked(i) };
-            if !re.is_match(haystack) {
-                bit_util::set_bit(bool_slice, i);
-            }
-        }
-    };
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![bool_buf.into()],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
+    ilike_scalar_op(left, right, |x| !x)
 }
 
 /// Perform SQL `left NOT ILIKE right` operation on [`StringArray`] /
