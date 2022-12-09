@@ -417,7 +417,7 @@ where
     Ok((buffer, nulls))
 }
 
-/// `take` implementation for all primitive arrays
+/// `take` implementation for [`PrimitiveArray`]
 ///
 /// This checks if an `indices` slot is populated, and gets the value from `values`
 ///  as the populated index.
@@ -426,7 +426,7 @@ where
 ///     values:  [1, 2, 3, null, 5]
 ///     indices: [0, null, 4, 3]
 /// The result is: [1 (slot 0), null (null slot), 5 (slot 4), null (slot 3)]
-fn take_primitive<T, I>(
+pub fn take_primitive<T, I>(
     values: &PrimitiveArray<T>,
     indices: &PrimitiveArray<I>,
 ) -> Result<PrimitiveArray<T>, ArrowError>
@@ -529,8 +529,8 @@ where
     Ok(output_buffer.into())
 }
 
-/// `take` implementation for boolean arrays
-fn take_boolean<IndexType>(
+/// `take` implementation for [`BooleanArray`]
+pub fn take_boolean<IndexType>(
     values: &BooleanArray,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<BooleanArray, ArrowError>
@@ -563,8 +563,8 @@ where
     Ok(BooleanArray::from(data))
 }
 
-/// `take` implementation for string arrays
-fn take_bytes<T, IndexType>(
+/// `take` implementation for [`GenericByteArray`]
+pub fn take_bytes<T, IndexType>(
     array: &GenericByteArray<T>,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericByteArray<T>, ArrowError>
@@ -672,12 +672,12 @@ where
     Ok(GenericByteArray::from(array_data))
 }
 
-/// `take` implementation for list arrays
+/// `take` implementation for [`GenericListArray`]
 ///
 /// Calculates the index and indexed offset for the inner array,
 /// applying `take` on the inner array, then reconstructing a list array
 /// with the indexed offsets
-fn take_list<IndexType, OffsetType>(
+pub fn take_list<IndexType, OffsetType>(
     values: &GenericListArray<OffsetType::Native>,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericListArray<OffsetType::Native>, ArrowError>
@@ -724,12 +724,12 @@ where
     Ok(GenericListArray::<OffsetType::Native>::from(list_data))
 }
 
-/// `take` implementation for `FixedSizeListArray`
+/// `take` implementation for [`FixedSizeListArray`]
 ///
 /// Calculates the index and indexed offset for the inner array,
 /// applying `take` on the inner array, then reconstructing a list array
 /// with the indexed offsets
-fn take_fixed_size_list<IndexType>(
+pub fn take_fixed_size_list<IndexType>(
     values: &FixedSizeListArray,
     indices: &PrimitiveArray<IndexType>,
     length: <UInt32Type as ArrowPrimitiveType>::Native,
@@ -766,7 +766,8 @@ where
     Ok(FixedSizeListArray::from(list_data))
 }
 
-fn take_fixed_size_binary<IndexType>(
+/// `take` implementation for [`FixedSizeBinaryArray`]
+pub fn take_fixed_size_binary<IndexType>(
     values: &FixedSizeBinaryArray,
     indices: &PrimitiveArray<IndexType>,
     size: i32,
@@ -793,11 +794,11 @@ where
     FixedSizeBinaryArray::try_from_sparse_iter_with_size(array_iter, size)
 }
 
-/// `take` implementation for dictionary arrays
+/// `take` implementation for [`DictionaryArray`]
 ///
 /// applies `take` to the keys of the dictionary array and returns a new dictionary array
 /// with the same dictionary values and reordered keys
-fn take_dict<T, I>(
+pub fn take_dict<T, I>(
     values: &DictionaryArray<T>,
     indices: &PrimitiveArray<I>,
 ) -> Result<DictionaryArray<T>, ArrowError>
