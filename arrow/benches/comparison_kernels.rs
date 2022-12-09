@@ -314,11 +314,28 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "xx$"))
     });
 
-    let dict_arr_a = create_string_dict_array::<Int32Type>(size, 0.0, 4);
-    let dict_arr_b = create_string_dict_array::<Int32Type>(size, 0.0, 4);
+    let strings = create_string_array::<i32>(20, 0.);
+    let dict_arr_a = create_dict_from_values::<Int32Type>(size, 0., &strings);
+    let dict_arr_b = create_dict_from_values::<Int32Type>(size, 0., &strings);
 
-    c.bench_function("dict eq string", |b| {
+    c.bench_function("eq dictionary[10] string[4])", |b| {
         b.iter(|| bench_dict_eq(&dict_arr_a, &dict_arr_b))
+    });
+
+    c.bench_function("eq_dyn_utf8_scalar dictionary[10] string[4])", |b| {
+        b.iter(|| eq_dyn_utf8_scalar(&dict_arr_a, "test"))
+    });
+
+    c.bench_function("eq_dyn_utf8_scalar scalar dictionary[10] string[4])", |b| {
+        b.iter(|| gt_eq_dyn_utf8_scalar(&dict_arr_a, "test"))
+    });
+
+    c.bench_function("like_utf8_scalar_dyn dictionary[10] string[4])", |b| {
+        b.iter(|| like_utf8_scalar_dyn(&dict_arr_a, "test"))
+    });
+
+    c.bench_function("ilike_utf8_scalar_dyn dictionary[10] string[4])", |b| {
+        b.iter(|| ilike_utf8_scalar_dyn(&dict_arr_a, "test"))
     });
 }
 
