@@ -1361,69 +1361,74 @@ mod tests {
     test_utf8_scalar!(
         test_utf8_array_ilike_unicode,
         test_utf8_array_ilike_unicode_dyn,
-        vec!["FFooß", "FFooSS", "FFooss", "FFooS", "FFoos", "ﬀooSS", "ﬀooß"],
-        "FFooSS",
+        vec![
+            "FFkoß", "FFkoSS", "FFkoss", "FFkoS", "FFkos", "ﬀkoSS", "ﬀkoß", "FFKoSS"
+        ],
+        "FFkoSS",
         ilike_utf8_scalar,
         ilike_utf8_scalar_dyn,
-        vec![false, true, true, false, false, false, false]
+        vec![false, true, true, false, false, false, false, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_unicode_starts,
         test_utf8_array_ilike_unicode_start_dyn,
         vec![
-            "FFooßsdlkdf",
-            "FFooSSsdlkdf",
-            "FFoosssdlkdf",
-            "FFooS",
-            "FFoos",
-            "ﬀooSS",
-            "ﬀooß",
-            "FfoosSsdfd",
+            "FFkoßsdlkdf",
+            "FFkoSSsdlkdf",
+            "FFkosssdlkdf",
+            "FFkoS",
+            "FFkos",
+            "ﬀkoSS",
+            "ﬀkoß",
+            "FfkosSsdfd",
+            "FFKoSS",
         ],
-        "FFooSS%",
+        "FFkoSS%",
         ilike_utf8_scalar,
         ilike_utf8_scalar_dyn,
-        vec![false, true, true, false, false, false, false, true]
+        vec![false, true, true, false, false, false, false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_unicode_ends,
         test_utf8_array_ilike_unicode_ends_dyn,
         vec![
-            "sdlkdfFFooß",
-            "sdlkdfFFooSS",
-            "sdlkdfFFooss",
-            "FFooS",
-            "FFoos",
-            "ﬀooSS",
-            "ﬀooß",
-            "h😃klFfoosS",
+            "sdlkdfFFkoß",
+            "sdlkdfFFkoSS",
+            "sdlkdfFFkoss",
+            "FFkoS",
+            "FFkos",
+            "ﬀkoSS",
+            "ﬀkoß",
+            "h😃klFfkosS",
+            "FFKoSS",
         ],
-        "%FFooSS",
+        "%FFkoSS",
         ilike_utf8_scalar,
         ilike_utf8_scalar_dyn,
-        vec![false, true, true, false, false, false, false, true]
+        vec![false, true, true, false, false, false, false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_unicode_contains,
         test_utf8_array_ilike_unicode_contains_dyn,
         vec![
-            "sdlkdfFooßsdfs",
-            "sdlkdfFooSSdggs",
-            "sdlkdfFoosssdsd",
-            "FooS",
-            "Foos",
-            "ﬀooSS",
-            "ﬀooß",
-            "😃sadlksffoosSsh😃klF",
-            "😱slgffoosSsh😃klF",
+            "sdlkdfFkoßsdfs",
+            "sdlkdfFkoSSdggs",
+            "sdlkdfFkosssdsd",
+            "FkoS",
+            "Fkos",
+            "ﬀkoSS",
+            "ﬀkoß",
+            "😃sadlksffkosSsh😃klF",
+            "😱slgffkosSsh😃klF",
+            "FFKoSS",
         ],
-        "%FFooSS%",
+        "%FFkoSS%",
         ilike_utf8_scalar,
         ilike_utf8_scalar_dyn,
-        vec![false, true, true, false, false, false, false, true, true]
+        vec![false, true, true, false, false, false, false, true, true, true]
     );
 
     test_utf8_scalar!(
@@ -1439,11 +1444,12 @@ mod tests {
             "ﬀooß",
             "😃sadlksffofsSsh😃klF",
             "😱slgffoesSsh😃klF",
+            "FFKoSS",
         ],
         "%FF__SS%",
         ilike_utf8_scalar,
         ilike_utf8_scalar_dyn,
-        vec![false, true, true, false, false, false, false, true, true]
+        vec![false, true, true, false, false, false, false, true, true, true]
     );
 
     test_utf8_scalar!(
