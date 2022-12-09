@@ -442,7 +442,10 @@ pub fn nlike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 /// Perform SQL `left ILIKE right` operation on [`StringArray`] /
 /// [`LargeStringArray`].
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// Case insensitive version of [`like_utf8`]
+///
+/// Note: this only implements loose matching as defined by the Unicode standard. For example,
+/// the `ﬀ` ligature is not equivalent to `FF` and `ß` is not equivalent to `SS`
 pub fn ilike_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
@@ -499,7 +502,7 @@ pub fn ilike_dyn(
 /// Perform SQL `left ILIKE right` operation on on [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`].
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 #[cfg(feature = "dyn_cmp_dict")]
 fn ilike_dict<K: ArrowPrimitiveType>(
     left: &DictionaryArray<K>,
@@ -540,60 +543,55 @@ fn ilike_dict<K: ArrowPrimitiveType>(
 }
 
 #[inline]
-fn ilike_scalar_op<'a, F: Fn(bool) -> bool, L: ArrayAccessor<Item = &'a str>>(
-    left: L,
+fn ilike_scalar_op<O: OffsetSizeTrait, F: Fn(bool) -> bool>(
+    left: &GenericStringArray<O>,
     right: &str,
     op: F,
 ) -> Result<BooleanArray, ArrowError> {
-    if !right.contains(is_like_pattern) {
-        // fast path, can use equals
-        let right_uppercase = right.to_uppercase();
-
-        Ok(BooleanArray::from_unary(left, |item| {
-            op(item.to_uppercase() == right_uppercase)
-        }))
-    } else if right.ends_with('%')
-        && !right.ends_with("\\%")
-        && !right[..right.len() - 1].contains(is_like_pattern)
-    {
-        // fast path, can use starts_with
-        let start_str = &right[..right.len() - 1].to_uppercase();
-        Ok(BooleanArray::from_unary(left, |item| {
-            op(item.to_uppercase().starts_with(start_str))
-        }))
-    } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
-        // fast path, can use ends_with
-        let ends_str = &right[1..].to_uppercase();
-
-        Ok(BooleanArray::from_unary(left, |item| {
-            op(item.to_uppercase().ends_with(ends_str))
-        }))
-    } else if right.starts_with('%')
-        && right.ends_with('%')
-        && !right.ends_with("\\%")
-        && !right[1..right.len() - 1].contains(is_like_pattern)
-    {
-        // fast path, can use contains
-        let contains = &right[1..right.len() - 1].to_uppercase();
-        Ok(BooleanArray::from_unary(left, |item| {
-            op(item.to_uppercase().contains(contains))
-        }))
-    } else {
-        let re_pattern = replace_like_wildcards(right)?;
-        let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
-            ArrowError::ComputeError(format!(
-                "Unable to build regex from ILIKE pattern: {}",
-                e
-            ))
-        })?;
-
-        Ok(BooleanArray::from_unary(left, |item| op(re.is_match(item))))
+    // If not ASCII faster to use case insensitive regex than using to_uppercase
+    if right.is_ascii() && left.is_ascii() {
+        if !right.contains(is_like_pattern) {
+            return Ok(BooleanArray::from_unary(left, |item| {
+                op(item.eq_ignore_ascii_case(right))
+            }));
+        } else if right.ends_with('%')
+            && !right.ends_with("\\%")
+            && !right[..right.len() - 1].contains(is_like_pattern)
+        {
+            // fast path, can use starts_with
+            let start_str = &right[..right.len() - 1];
+            return Ok(BooleanArray::from_unary(left, |item| {
+                let end = item.len().min(start_str.len());
+                let result = item.is_char_boundary(end)
+                    && start_str.eq_ignore_ascii_case(&item[..end]);
+                op(result)
+            }));
+        } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
+            // fast path, can use ends_with
+            let ends_str = &right[1..];
+            return Ok(BooleanArray::from_unary(left, |item| {
+                let start = item.len().saturating_sub(ends_str.len());
+                let result = item.is_char_boundary(start)
+                    && ends_str.eq_ignore_ascii_case(&item[start..]);
+                op(result)
+            }));
+        }
     }
+
+    let re_pattern = replace_like_wildcards(right)?;
+    let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
+        ArrowError::ComputeError(format!(
+            "Unable to build regex from ILIKE pattern: {}",
+            e
+        ))
+    })?;
+
+    Ok(BooleanArray::from_unary(left, |item| op(re.is_match(item))))
 }
 
 #[inline]
-fn ilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
-    left: L,
+fn ilike_scalar<O: OffsetSizeTrait>(
+    left: &GenericStringArray<O>,
     right: &str,
 ) -> Result<BooleanArray, ArrowError> {
     ilike_scalar_op(left, right, |x| x)
@@ -603,7 +601,7 @@ fn ilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
 /// [`LargeStringArray`], or [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`] and a scalar.
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 pub fn ilike_utf8_scalar_dyn(
     left: &dyn Array,
     right: &str,
@@ -641,7 +639,7 @@ pub fn ilike_utf8_scalar_dyn(
 /// Perform SQL `left ILIKE right` operation on [`StringArray`] /
 /// [`LargeStringArray`] and a scalar.
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
@@ -652,7 +650,7 @@ pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 /// Perform SQL `left NOT ILIKE right` operation on [`StringArray`] /
 /// [`LargeStringArray`].
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 pub fn nilike_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
@@ -670,7 +668,7 @@ pub fn nilike_utf8<OffsetSize: OffsetSizeTrait>(
 /// Perform SQL `left NOT ILIKE right` operation on on [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`].
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 pub fn nilike_dyn(
     left: &dyn Array,
     right: &dyn Array,
@@ -709,7 +707,7 @@ pub fn nilike_dyn(
 /// Perform SQL `left NOT ILIKE right` operation on on [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`].
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 #[cfg(feature = "dyn_cmp_dict")]
 fn nilike_dict<K: ArrowPrimitiveType>(
     left: &DictionaryArray<K>,
@@ -750,8 +748,8 @@ fn nilike_dict<K: ArrowPrimitiveType>(
 }
 
 #[inline]
-fn nilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
-    left: L,
+fn nilike_scalar<O: OffsetSizeTrait>(
+    left: &GenericStringArray<O>,
     right: &str,
 ) -> Result<BooleanArray, ArrowError> {
     ilike_scalar_op(left, right, |x| !x)
@@ -761,7 +759,7 @@ fn nilike_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
 /// [`LargeStringArray`], or [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`] and a scalar.
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 pub fn nilike_utf8_scalar_dyn(
     left: &dyn Array,
     right: &str,
@@ -799,7 +797,7 @@ pub fn nilike_utf8_scalar_dyn(
 /// Perform SQL `left NOT ILIKE right` operation on [`StringArray`] /
 /// [`LargeStringArray`] and a scalar.
 ///
-/// See the documentation on [`like_utf8`] for more details.
+/// See the documentation on [`ilike_utf8`] for more details.
 pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
@@ -1270,6 +1268,101 @@ mod tests {
         ilike_utf8_scalar,
         ilike_utf8_scalar_dyn,
         vec![true, false, false, false]
+    );
+
+    // We only implement loose matching
+    test_utf8_scalar!(
+        test_utf8_array_ilike_unicode,
+        test_utf8_array_ilike_unicode_dyn,
+        vec![
+            "FFkoß", "FFkoSS", "FFkoss", "FFkoS", "FFkos", "ﬀkoSS", "ﬀkoß", "FFKoSS"
+        ],
+        "FFkoSS",
+        ilike_utf8_scalar,
+        ilike_utf8_scalar_dyn,
+        vec![false, true, true, false, false, false, false, true]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_ilike_unicode_starts,
+        test_utf8_array_ilike_unicode_start_dyn,
+        vec![
+            "FFkoßsdlkdf",
+            "FFkoSSsdlkdf",
+            "FFkosssdlkdf",
+            "FFkoS",
+            "FFkos",
+            "ﬀkoSS",
+            "ﬀkoß",
+            "FfkosSsdfd",
+            "FFKoSS",
+        ],
+        "FFkoSS%",
+        ilike_utf8_scalar,
+        ilike_utf8_scalar_dyn,
+        vec![false, true, true, false, false, false, false, true, true]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_ilike_unicode_ends,
+        test_utf8_array_ilike_unicode_ends_dyn,
+        vec![
+            "sdlkdfFFkoß",
+            "sdlkdfFFkoSS",
+            "sdlkdfFFkoss",
+            "FFkoS",
+            "FFkos",
+            "ﬀkoSS",
+            "ﬀkoß",
+            "h😃klFfkosS",
+            "FFKoSS",
+        ],
+        "%FFkoSS",
+        ilike_utf8_scalar,
+        ilike_utf8_scalar_dyn,
+        vec![false, true, true, false, false, false, false, true, true]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_ilike_unicode_contains,
+        test_utf8_array_ilike_unicode_contains_dyn,
+        vec![
+            "sdlkdfFkoßsdfs",
+            "sdlkdfFkoSSdggs",
+            "sdlkdfFkosssdsd",
+            "FkoS",
+            "Fkos",
+            "ﬀkoSS",
+            "ﬀkoß",
+            "😃sadlksffkosSsh😃klF",
+            "😱slgffkosSsh😃klF",
+            "FFKoSS",
+        ],
+        "%FFkoSS%",
+        ilike_utf8_scalar,
+        ilike_utf8_scalar_dyn,
+        vec![false, true, true, false, false, false, false, true, true, true]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_ilike_unicode_complex,
+        test_utf8_array_ilike_unicode_complex_dyn,
+        vec![
+            "sdlkdfFooßsdfs",
+            "sdlkdfFooSSdggs",
+            "sdlkdfFoosssdsd",
+            "FooS",
+            "Foos",
+            "ﬀooSS",
+            "ﬀooß",
+            "😃sadlksffofsSsh😃klF",
+            "😱slgffoesSsh😃klF",
+            "FFKoSS",
+        ],
+        "%FF__SS%",
+        ilike_utf8_scalar,
+        ilike_utf8_scalar_dyn,
+        vec![false, true, true, false, false, false, false, true, true, true]
     );
 
     test_utf8_scalar!(
