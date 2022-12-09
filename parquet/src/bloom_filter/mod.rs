@@ -30,6 +30,7 @@ use bytes::{Buf, Bytes};
 use std::hash::Hasher;
 use std::io::{BufWriter, Write};
 use std::sync::Arc;
+use std::{mem, slice};
 use thrift::protocol::{
     TCompactInputProtocol, TCompactOutputProtocol, TOutputProtocol, TSerializable,
 };
@@ -195,7 +196,10 @@ impl Sbbf {
     fn write_bitset<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
         for block in &self.0 {
             for word in block {
-                writer.write_all(&word.to_le_bytes()).map_err(|e| {
+                let pointer: *const u8 = (word as *const u32) as *const _;
+                let bytes: &[u8] =
+                    unsafe { slice::from_raw_parts(pointer, mem::size_of::<u32>()) };
+                writer.write_all(bytes).map_err(|e| {
                     ParquetError::General(format!(
                         "Could not write bloom filter bit set: {}",
                         e
