@@ -614,7 +614,7 @@ fn ilike_scalar_op<'a, F: Fn(bool) -> bool, L: ArrayAccessor<Item = &'a str>>(
                 let result = item.is_char_boundary(start)
                     && ends_str.eq_ignore_ascii_case(&item[start..]);
                 op(result)
-            }))
+            }));
         }
     }
 
