@@ -606,17 +606,36 @@ fn ilike_scalar_op<'a, F: Fn(bool) -> bool, L: ArrayAccessor<Item = &'a str>>(
         && !right[..right.len() - 1].contains(is_like_pattern)
     {
         // fast path, can use starts_with
-        let start_str = &right[..right.len() - 1].to_uppercase();
-        Ok(BooleanArray::from_unary(left, |item| {
-            op(item.to_uppercase().starts_with(start_str))
-        }))
+        if right.is_ascii() {
+            let start_str = &right[..right.len() - 1];
+            Ok(BooleanArray::from_unary(left, |item| {
+                let end = item.len().min(start_str.len());
+                let result = item.is_char_boundary(end)
+                    && start_str.eq_ignore_ascii_case(&item[..end]);
+                op(result)
+            }))
+        } else {
+            let start_str = &right[..right.len() - 1].to_uppercase();
+            Ok(BooleanArray::from_unary(left, |item| {
+                op(item.to_uppercase().starts_with(start_str))
+            }))
+        }
     } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
         // fast path, can use ends_with
-        let ends_str = &right[1..].to_uppercase();
-
-        Ok(BooleanArray::from_unary(left, |item| {
-            op(item.to_uppercase().ends_with(ends_str))
-        }))
+        if right.is_ascii() {
+            let ends_str = &right[1..];
+            Ok(BooleanArray::from_unary(left, |item| {
+                let start = item.len().saturating_sub(ends_str.len());
+                let result = item.is_char_boundary(start)
+                    && ends_str.eq_ignore_ascii_case(&item[start..]);
+                op(result)
+            }))
+        } else {
+            let ends_str = &right[1..].to_uppercase();
+            Ok(BooleanArray::from_unary(left, |item| {
+                op(item.to_uppercase().ends_with(ends_str))
+            }))
+        }
     } else if right.starts_with('%')
         && right.ends_with('%')
         && !right.ends_with("\\%")
