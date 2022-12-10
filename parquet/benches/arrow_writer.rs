@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::*;
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
+use parquet::file::properties::WriterProperties;
 use parquet::{arrow::ArrowWriter, errors::Result};
 
 fn create_primitive_bench_batch(
@@ -294,9 +295,26 @@ fn _create_nested_bench_batch(
 
 #[inline]
 fn write_batch(batch: &RecordBatch) -> Result<()> {
+    write_batch_with_option(batch, None)
+}
+
+#[inline]
+fn write_batch_enable_bloom_filter(batch: &RecordBatch) -> Result<()> {
+    let option = WriterProperties::builder()
+        .set_bloom_filter_enabled(true)
+        .build();
+
+    write_batch_with_option(batch, Some(option))
+}
+
+#[inline]
+fn write_batch_with_option(
+    batch: &RecordBatch,
+    props: Option<WriterProperties>,
+) -> Result<()> {
     // Write batch to an in-memory writer
     let buffer = vec![];
-    let mut writer = ArrowWriter::try_new(buffer, batch.schema(), None)?;
+    let mut writer = ArrowWriter::try_new(buffer, batch.schema(), props)?;
 
     writer.write(batch)?;
     writer.close()?;
@@ -317,6 +335,10 @@ fn bench_primitive_writer(c: &mut Criterion) {
         b.iter(|| write_batch(&batch).unwrap())
     });
 
+    group.bench_function("4096 values primitive with bloom filter", |b| {
+        b.iter(|| write_batch_enable_bloom_filter(&batch).unwrap())
+    });
+
     let batch = create_primitive_bench_batch_non_null(4096, 0.25, 0.75).unwrap();
     group.throughput(Throughput::Bytes(
         batch
@@ -327,6 +349,10 @@ fn bench_primitive_writer(c: &mut Criterion) {
     ));
     group.bench_function("4096 values primitive non-null", |b| {
         b.iter(|| write_batch(&batch).unwrap())
+    });
+
+    group.bench_function("4096 values primitive non-null with bloom filter", |b| {
+        b.iter(|| write_batch_enable_bloom_filter(&batch).unwrap())
     });
 
     let batch = create_bool_bench_batch(4096, 0.25, 0.75).unwrap();
@@ -365,6 +391,10 @@ fn bench_primitive_writer(c: &mut Criterion) {
         b.iter(|| write_batch(&batch).unwrap())
     });
 
+    group.bench_function("4096 values string with bloom filter", |b| {
+        b.iter(|| write_batch_enable_bloom_filter(&batch).unwrap())
+    });
+
     let batch = create_string_dictionary_bench_batch(4096, 0.25, 0.75).unwrap();
     group.throughput(Throughput::Bytes(
         batch
@@ -377,6 +407,10 @@ fn bench_primitive_writer(c: &mut Criterion) {
         b.iter(|| write_batch(&batch).unwrap())
     });
 
+    group.bench_function("4096 values string dictionary with bloom filter", |b| {
+        b.iter(|| write_batch_enable_bloom_filter(&batch).unwrap())
+    });
+
     let batch = create_string_bench_batch_non_null(4096, 0.25, 0.75).unwrap();
     group.throughput(Throughput::Bytes(
         batch
@@ -387,6 +421,10 @@ fn bench_primitive_writer(c: &mut Criterion) {
     ));
     group.bench_function("4096 values string non-null", |b| {
         b.iter(|| write_batch(&batch).unwrap())
+    });
+
+    group.bench_function("4096 values string non-null with bloom filter", |b| {
+        b.iter(|| write_batch_enable_bloom_filter(&batch).unwrap())
     });
 
     group.finish();
