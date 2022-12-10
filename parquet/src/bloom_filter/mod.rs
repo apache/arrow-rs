@@ -199,14 +199,63 @@ impl Sbbf {
                 let pointer: *const u8 = (word as *const u32) as *const _;
                 let bytes: &[u8] =
                     unsafe { slice::from_raw_parts(pointer, mem::size_of::<u32>()) };
-                writer.write_all(bytes).map_err(|e| {
-                    ParquetError::General(format!(
-                        "Could not write bloom filter bit set: {}",
-                        e
-                    ))
-                })?;
+                if cfg!(target_endian = "big") {
+                    Self::write_all_for_big_endian(&mut writer, bytes)?;
+                } else {
+                    writer.write_all(bytes).map_err(|e| {
+                        ParquetError::General(format!(
+                            "Could not write bloom filter bit set: {}",
+                            e
+                        ))
+                    })?;
+                }
             }
         }
+        Ok(())
+    }
+
+    fn write_all_for_big_endian<W: Write>(
+        writer: &mut W,
+        buf: &[u8],
+    ) -> Result<(), ParquetError> {
+        let a = &buf[3..4];
+        let b = &buf[2..3];
+        let c = &buf[1..2];
+        let d = &buf[0..1];
+
+        match writer.write(a) {
+            Ok(0) | Err(_) => {
+                return Err(ParquetError::General(
+                    "Could not write bloom filter bit set".to_string(),
+                ))
+            }
+            _ => {}
+        }
+        match writer.write(b) {
+            Ok(0) | Err(_) => {
+                return Err(ParquetError::General(
+                    "Could not write bloom filter bit set".to_string(),
+                ))
+            }
+            _ => {}
+        }
+        match writer.write(c) {
+            Ok(0) | Err(_) => {
+                return Err(ParquetError::General(
+                    "Could not write bloom filter bit set".to_string(),
+                ))
+            }
+            _ => {}
+        }
+        match writer.write(d) {
+            Ok(0) | Err(_) => {
+                return Err(ParquetError::General(
+                    "Could not write bloom filter bit set".to_string(),
+                ))
+            }
+            _ => {}
+        }
+
         Ok(())
     }
 
