@@ -7409,6 +7409,12 @@ mod tests {
         assert_eq!("1.26", decimal_arr.value_as_string(4));
         assert_eq!("12345.00", decimal_arr.value_as_string(5));
         assert_eq!("12345.00", decimal_arr.value_as_string(6));
+        assert_eq!("0.12", decimal_arr.value_as_string(7));
+        assert_eq!("12.23", decimal_arr.value_as_string(8));
+        assert!(decimal_arr.is_null(9));
+        assert_eq!("0.00", decimal_arr.value_as_string(10));
+        assert_eq!("0.00", decimal_arr.value_as_string(11));
+        assert!(decimal_arr.is_null(12));
 
         // Decimal256
         let output_type = DataType::Decimal256(76, 3);
@@ -7424,12 +7430,30 @@ mod tests {
         assert_eq!("1.263", decimal_arr.value_as_string(4));
         assert_eq!("12345.000", decimal_arr.value_as_string(5));
         assert_eq!("12345.000", decimal_arr.value_as_string(6));
+        assert_eq!("0.123", decimal_arr.value_as_string(7));
+        assert_eq!("12.234", decimal_arr.value_as_string(8));
+        assert!(decimal_arr.is_null(9));
+        assert_eq!("0.000", decimal_arr.value_as_string(10));
+        assert_eq!("0.000", decimal_arr.value_as_string(11));
+        assert!(decimal_arr.is_null(12));
     }
 
     #[test]
     fn test_cast_utf8_to_decimal() {
         let str_array = StringArray::from(vec![
-            "123.45", "1.2345", "0.12345", "0.1267", "1.263", "12345.0", "12345",
+            Some("123.45"),
+            Some("1.2345"),
+            Some("0.12345"),
+            Some("0.1267"),
+            Some("1.263"),
+            Some("12345.0"),
+            Some("12345"),
+            Some("000.123"),
+            Some("12.234000"),
+            None,
+            Some(""),
+            Some(" "),
+            None,
         ]);
         let array = Arc::new(str_array) as ArrayRef;
 
@@ -7439,11 +7463,57 @@ mod tests {
     #[test]
     fn test_cast_large_utf8_to_decimal() {
         let str_array = LargeStringArray::from(vec![
-            "123.45", "1.2345", "0.12345", "0.1267", "1.263", "12345.0", "12345",
+            Some("123.45"),
+            Some("1.2345"),
+            Some("0.12345"),
+            Some("0.1267"),
+            Some("1.263"),
+            Some("12345.0"),
+            Some("12345"),
+            Some("000.123"),
+            Some("12.234000"),
+            None,
+            Some(""),
+            Some(" "),
+            None,
         ]);
         let array = Arc::new(str_array) as ArrayRef;
 
         test_cast_string_to_decimal(array);
+    }
+
+    #[test]
+    fn test_cast_invalid_utf8_to_decimal() {
+        let str_array = StringArray::from(vec!["4.4.5", ". 0.123"]);
+        let array = Arc::new(str_array) as ArrayRef;
+
+        // Safe cast
+        let output_type = DataType::Decimal128(38, 2);
+        let casted_array = cast(&array, &output_type).unwrap();
+        assert!(casted_array.is_null(0));
+        assert!(casted_array.is_null(1));
+
+        let output_type = DataType::Decimal256(76, 2);
+        let casted_array = cast(&array, &output_type).unwrap();
+        assert!(casted_array.is_null(0));
+        assert!(casted_array.is_null(1));
+
+        // Non-safe cast
+        let output_type = DataType::Decimal128(38, 2);
+        let str_array = StringArray::from(vec!["4.4.5"]);
+        let array = Arc::new(str_array) as ArrayRef;
+        let option = CastOptions { safe: false };
+        let casted_err = cast_with_options(&array, &output_type, &option).unwrap_err();
+        assert!(casted_err
+            .to_string()
+            .contains("Cannot cast string '4.4.5' to value of Decimal128(38, 10) type"));
+
+        let str_array = StringArray::from(vec![". 0.123"]);
+        let array = Arc::new(str_array) as ArrayRef;
+        let casted_err = cast_with_options(&array, &output_type, &option).unwrap_err();
+        assert!(casted_err.to_string().contains(
+            "Cannot cast string '. 0.123' to value of Decimal128(38, 10) type"
+        ));
     }
 
     fn test_cast_string_to_decimal128_overflow(overflow_array: ArrayRef) {
