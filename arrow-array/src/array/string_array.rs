@@ -285,6 +285,7 @@ mod tests {
     use crate::builder::{ListBuilder, StringBuilder};
     use arrow_buffer::Buffer;
     use arrow_schema::Field;
+    use num::cast::AsPrimitive;
 
     #[test]
     fn test_string_array_from_u8_slice() {
@@ -696,5 +697,41 @@ mod tests {
         );
         assert_eq!(string.len(), 0);
         assert_eq!(string.value_offsets(), &[0]);
+    }
+
+    #[test]
+    fn test_into_builder() {
+        let array: StringArray = vec!["hello", "arrow"].into();
+
+        // Modify values
+        let mut builder = array.into_builder().unwrap();
+
+        let (offset_slice, value_slice, _) = builder.slices_mut();
+
+        assert_eq!(offset_slice, &[0, 5, 10]);
+
+        let expected_slice = "helloarrow".as_bytes();
+        assert_eq!(value_slice, expected_slice);
+
+        value_slice[0] = 'H'.as_();
+        value_slice[1] = 'E'.as_();
+        value_slice[2] = 'L'.as_();
+        value_slice[3] = 'L'.as_();
+        value_slice[4] = 'O'.as_();
+
+        let expected: StringArray = vec!["HELLO", "arrow"].into();
+        let array = builder.finish();
+        assert_eq!(expected, array);
+
+        // Modify offsets
+        let mut builder = array.into_builder().unwrap();
+
+        let (offset_slice, _, _) = builder.slices_mut();
+
+        offset_slice[1] = 7;
+
+        let expected: StringArray = vec!["HELLOar", "row"].into();
+        let array = builder.finish();
+        assert_eq!(expected, array);
     }
 }
