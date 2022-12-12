@@ -50,13 +50,8 @@ impl<T: ObjectStore> PrefixObjectStore<T> {
     }
 
     /// Create the full path from a path relative to prefix
-    fn full_path(&self, location: &Path) -> ObjectStoreResult<Path> {
-        let path: &str = location.as_ref();
-        let stripped = match self.prefix.as_ref() {
-            "" => path.to_string(),
-            p => format!("{}/{}", p, path),
-        };
-        Ok(Path::parse(stripped)?)
+    fn full_path(&self, location: &Path) -> Path {
+        self.prefix.parts().chain(location.parts()).collect()
     }
 
     /// Strip the constant prefix from a given path
@@ -69,13 +64,13 @@ impl<T: ObjectStore> PrefixObjectStore<T> {
 impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
     /// Save the provided bytes to the specified location.
     async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<()> {
-        let full_path = self.full_path(location)?;
+        let full_path = self.full_path(location);
         self.inner.put(&full_path, bytes).await
     }
 
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
-        let full_path = self.full_path(location)?;
+        let full_path = self.full_path(location);
         self.inner.get(&full_path).await
     }
 
@@ -86,13 +81,13 @@ impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
         location: &Path,
         range: Range<usize>,
     ) -> ObjectStoreResult<Bytes> {
-        let full_path = self.full_path(location)?;
+        let full_path = self.full_path(location);
         self.inner.get_range(&full_path, range).await
     }
 
     /// Return the metadata for the specified location
     async fn head(&self, location: &Path) -> ObjectStoreResult<ObjectMeta> {
-        let full_path = self.full_path(location)?;
+        let full_path = self.full_path(location);
         self.inner.head(&full_path).await.map(|meta| ObjectMeta {
             last_modified: meta.last_modified,
             size: meta.size,
@@ -102,7 +97,7 @@ impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
 
     /// Delete the object at the specified location.
     async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
-        let full_path = self.full_path(location)?;
+        let full_path = self.full_path(location);
         self.inner.delete(&full_path).await
     }
 
@@ -114,17 +109,16 @@ impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
         &self,
         prefix: Option<&Path>,
     ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
-        Ok(match &prefix.and_then(|p| self.full_path(p).ok()) {
-            Some(p) => self.inner.list(Some(p)),
-            None => self.inner.list(Some(&self.prefix)),
-        }
-        .await?
-        .map_ok(|meta| ObjectMeta {
-            last_modified: meta.last_modified,
-            size: meta.size,
-            location: self.strip_prefix(&meta.location).unwrap_or(meta.location),
-        })
-        .boxed())
+        Ok(self
+            .inner
+            .list(Some(&self.full_path(prefix.unwrap_or(&Path::from("/")))))
+            .await?
+            .map_ok(|meta| ObjectMeta {
+                last_modified: meta.last_modified,
+                size: meta.size,
+                location: self.strip_prefix(&meta.location).unwrap_or(meta.location),
+            })
+            .boxed())
     }
 
     /// List objects with the given prefix and an implementation specific
@@ -137,9 +131,10 @@ impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
         &self,
         prefix: Option<&Path>,
     ) -> ObjectStoreResult<ListResult> {
-        let prefix = prefix.and_then(|p| self.full_path(p).ok());
         self.inner
-            .list_with_delimiter(Some(&prefix.unwrap_or_else(|| self.prefix.clone())))
+            .list_with_delimiter(Some(
+                &self.full_path(prefix.unwrap_or(&Path::from("/"))),
+            ))
             .await
             .map(|lst| ListResult {
                 common_prefixes: lst
@@ -165,8 +160,8 @@ impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
     ///
     /// If there exists an object at the destination, it will be overwritten.
     async fn copy(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        let full_from = self.full_path(from)?;
-        let full_to = self.full_path(to)?;
+        let full_from = self.full_path(from);
+        let full_to = self.full_path(to);
         self.inner.copy(&full_from, &full_to).await
     }
 
@@ -174,8 +169,8 @@ impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
     ///
     /// Will return an error if the destination already has an object.
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        let full_from = self.full_path(from)?;
-        let full_to = self.full_path(to)?;
+        let full_from = self.full_path(from);
+        let full_to = self.full_path(to);
         self.inner.copy_if_not_exists(&full_from, &full_to).await
     }
 
@@ -187,8 +182,8 @@ impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
         from: &Path,
         to: &Path,
     ) -> ObjectStoreResult<()> {
-        let full_from = self.full_path(from)?;
-        let full_to = self.full_path(to)?;
+        let full_from = self.full_path(from);
+        let full_to = self.full_path(to);
         self.inner.rename_if_not_exists(&full_from, &full_to).await
     }
 
@@ -196,7 +191,7 @@ impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
         &self,
         location: &Path,
     ) -> ObjectStoreResult<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        let full_path = self.full_path(location)?;
+        let full_path = self.full_path(location);
         self.inner.put_multipart(&full_path).await
     }
 
@@ -205,7 +200,7 @@ impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
         location: &Path,
         multipart_id: &MultipartId,
     ) -> ObjectStoreResult<()> {
-        let full_path = self.full_path(location)?;
+        let full_path = self.full_path(location);
         self.inner.abort_multipart(&full_path, multipart_id).await
     }
 }
