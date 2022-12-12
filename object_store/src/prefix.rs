@@ -56,7 +56,7 @@ impl<T: ObjectStore> PrefixObjectStore<T> {
             "" => path.to_string(),
             p => format!("{}/{}", p, path),
         };
-        Ok(Path::parse(stripped.trim_end_matches(DELIMITER))?)
+        Ok(Path::parse(stripped)?)
     }
 
     /// Strip the constant prefix from a given path
@@ -150,18 +150,16 @@ impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
                 common_prefixes: lst
                     .common_prefixes
                     .iter()
-                    .map(|p| self.strip_prefix(p).unwrap_or_else(|| p.clone()))
+                    .filter_map(|p| self.strip_prefix(p))
                     .collect(),
                 objects: lst
                     .objects
                     .iter()
-                    .map(|meta| ObjectMeta {
+                    .filter_map(|meta| Some(ObjectMeta {
                         last_modified: meta.last_modified,
                         size: meta.size,
-                        location: self
-                            .strip_prefix(&meta.location)
-                            .unwrap_or_else(|| meta.location.clone()),
-                    })
+                        location: self.strip_prefix(&meta.location)?
+                    }))
                     .collect(),
             })
     }
