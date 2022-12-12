@@ -787,6 +787,34 @@ impl GoogleCloudStorageBuilder {
         Default::default()
     }
 
+    /// Create an instance of [`GoogleCloudStorageBuilder`] with values pre-populated from environment variables.
+    ///
+    /// Variables extracted from environment:
+    /// * GOOGLE_SERVICE_ACCOUNT: location of service account file
+    /// * SERVICE_ACCOUNT: (alias) location of service account file
+    ///
+    /// # Example
+    /// ```
+    /// use object_store::gcp::GoogleCloudStorageBuilder;
+    ///
+    /// let azure = GoogleCloudStorageBuilder::from_env()
+    ///     .with_bucket_name("foo")
+    ///     .build();
+    /// ```
+    pub fn from_env() -> Self {
+        let mut builder = Self::default();
+
+        if let Ok(service_account_path) = std::env::var("SERVICE_ACCOUNT") {
+            builder.service_account_path = Some(service_account_path);
+        }
+
+        if let Ok(service_account_path) = std::env::var("GOOGLE_SERVICE_ACCOUNT") {
+            builder.service_account_path = Some(service_account_path);
+        }
+
+        builder
+    }
+
     /// Parse available connection info form a well-known storage URL.
     ///
     /// The supported url schemes are:

@@ -380,7 +380,7 @@ impl MicrosoftAzureBuilder {
         Default::default()
     }
 
-    /// Create an instance of [MicrosoftAzureBuilder] with values pre-populated from environment variables.
+    /// Create an instance of [`MicrosoftAzureBuilder`] with values pre-populated from environment variables.
     ///
     /// Variables extracted from environment:
     /// * AZURE_STORAGE_ACCOUNT_NAME: storage account name
