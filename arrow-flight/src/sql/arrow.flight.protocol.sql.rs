@@ -18,6 +18,7 @@
 ///               int32_to_int32_list_map: map<key: int32, value: list<$data$: int32>>
 /// >
 /// where there is one row per requested piece of metadata information.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetSqlInfo {
     ///
@@ -98,6 +99,7 @@ pub struct CommandGetSqlInfo {
 ///                             is only relevant to be used by ODBC).
 /// >
 /// The returned data should be ordered by data_type and then by type_name.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetXdbcTypeInfo {
     ///
@@ -117,6 +119,7 @@ pub struct CommandGetXdbcTypeInfo {
 ///   catalog_name: utf8 not null
 /// >
 /// The returned data should be ordered by catalog_name.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetCatalogs {}
 ///
@@ -132,6 +135,7 @@ pub struct CommandGetCatalogs {}
 ///   db_schema_name: utf8 not null
 /// >
 /// The returned data should be ordered by catalog_name, then db_schema_name.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetDbSchemas {
     ///
@@ -176,6 +180,7 @@ pub struct CommandGetDbSchemas {
 ///   - ARROW:FLIGHT:SQL:IS_READ_ONLY      - "1" indicates if the column is read only, "0" otherwise.
 ///   - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
 /// The returned data should be ordered by catalog_name, db_schema_name, table_name, then table_type, followed by table_schema if requested.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetTables {
     ///
@@ -225,6 +230,7 @@ pub struct CommandGetTables {
 ///   table_type: utf8 not null
 /// >
 /// The returned data should be ordered by table_type.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetTableTypes {}
 ///
@@ -243,6 +249,7 @@ pub struct CommandGetTableTypes {}
 ///   key_sequence: int not null
 /// >
 /// The returned data should be ordered by catalog_name, db_schema_name, table_name, key_name, then key_sequence.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetPrimaryKeys {
     ///
@@ -286,6 +293,7 @@ pub struct CommandGetPrimaryKeys {
 /// >
 /// The returned data should be ordered by fk_catalog_name, fk_db_schema_name, fk_table_name, fk_key_name, then key_sequence.
 /// update_rule and delete_rule returns a byte that is equivalent to actions declared on UpdateDeleteRules enum.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetExportedKeys {
     ///
@@ -333,6 +341,7 @@ pub struct CommandGetExportedKeys {
 ///     - 2 = SET NULL
 ///     - 3 = NO ACTION
 ///     - 4 = SET DEFAULT
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetImportedKeys {
     ///
@@ -382,6 +391,7 @@ pub struct CommandGetImportedKeys {
 ///     - 2 = SET NULL
 ///     - 3 = NO ACTION
 ///     - 4 = SET DEFAULT
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetCrossReference {
     /// *
@@ -419,6 +429,7 @@ pub struct CommandGetCrossReference {
 }
 ///
 /// Request message for the "CreatePreparedStatement" action on a Flight SQL enabled backend.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionCreatePreparedStatementRequest {
     /// The valid SQL string to create a prepared statement for.
@@ -431,6 +442,7 @@ pub struct ActionCreatePreparedStatementRequest {
 /// The resultant PreparedStatement can be closed either:
 /// - Manually, through the "ClosePreparedStatement" action;
 /// - Automatically, by a server timeout.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionCreatePreparedStatementResult {
     /// Opaque handle for the prepared statement on the server.
@@ -448,6 +460,7 @@ pub struct ActionCreatePreparedStatementResult {
 ///
 /// Request message for the "ClosePreparedStatement" action on a Flight SQL enabled backend.
 /// Closes server resources associated with the prepared statement handle.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionClosePreparedStatementRequest {
     /// Opaque handle for the prepared statement on the server.
@@ -470,6 +483,7 @@ pub struct ActionClosePreparedStatementRequest {
 ///     - ARROW:FLIGHT:SQL:IS_READ_ONLY      - "1" indicates if the column is read only, "0" otherwise.
 ///     - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
 ///   - GetFlightInfo: execute the query.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandStatementQuery {
     /// The SQL syntax.
@@ -479,6 +493,7 @@ pub struct CommandStatementQuery {
 /// *
 /// Represents a ticket resulting from GetFlightInfo with a CommandStatementQuery.
 /// This should be used only once and treated as an opaque value, that is, clients should not attempt to parse this.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TicketStatementQuery {
     /// Unique identifier for the instance of the statement to execute.
@@ -502,6 +517,7 @@ pub struct TicketStatementQuery {
 ///     - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
 ///   - DoPut: bind parameter values. All of the bound parameter sets will be executed as a single atomic execution.
 ///   - GetFlightInfo: execute the prepared statement instance.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandPreparedStatementQuery {
     /// Opaque handle for the prepared statement on the server.
@@ -511,6 +527,7 @@ pub struct CommandPreparedStatementQuery {
 ///
 /// Represents a SQL update query. Used in the command member of FlightDescriptor
 /// for the the RPC call DoPut to cause the server to execute the included SQL update.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandStatementUpdate {
     /// The SQL syntax.
@@ -521,6 +538,7 @@ pub struct CommandStatementUpdate {
 /// Represents a SQL update query. Used in the command member of FlightDescriptor
 /// for the the RPC call DoPut to cause the server to execute the included
 /// prepared statement handle as an update.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandPreparedStatementUpdate {
     /// Opaque handle for the prepared statement on the server.
@@ -531,6 +549,7 @@ pub struct CommandPreparedStatementUpdate {
 /// Returned from the RPC call DoPut when a CommandStatementUpdate
 /// CommandPreparedStatementUpdate was in the request, containing
 /// results from the update.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DoPutUpdateResult {
     /// The number of records updated. A return value of -1 represents

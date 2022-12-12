@@ -2,6 +2,7 @@
 
 ///
 /// The request that a client provides to a server on handshake.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HandshakeRequest {
     ///
@@ -13,6 +14,7 @@ pub struct HandshakeRequest {
     #[prost(bytes = "vec", tag = "2")]
     pub payload: ::prost::alloc::vec::Vec<u8>,
 }
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HandshakeResponse {
     ///
@@ -26,6 +28,7 @@ pub struct HandshakeResponse {
 }
 ///
 /// A message for doing simple auth.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BasicAuth {
     #[prost(string, tag = "2")]
@@ -33,11 +36,13 @@ pub struct BasicAuth {
     #[prost(string, tag = "3")]
     pub password: ::prost::alloc::string::String,
 }
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Empty {}
 ///
 /// Describes an available action, including both the name used for execution
 /// along with a short description of the purpose of the action.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionType {
     #[prost(string, tag = "1")]
@@ -48,6 +53,7 @@ pub struct ActionType {
 ///
 /// A service specific expression that can be used to return a limited set
 /// of available Arrow Flight streams.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Criteria {
     #[prost(bytes = "vec", tag = "1")]
@@ -55,6 +61,7 @@ pub struct Criteria {
 }
 ///
 /// An opaque action specific for the service.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Action {
     #[prost(string, tag = "1")]
@@ -64,6 +71,7 @@ pub struct Action {
 }
 ///
 /// An opaque result returned after executing an action.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Result {
     #[prost(bytes = "vec", tag = "1")]
@@ -71,6 +79,7 @@ pub struct Result {
 }
 ///
 /// Wrap the result of a getSchema call
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SchemaResult {
     /// The schema of the dataset in its IPC form:
@@ -83,6 +92,7 @@ pub struct SchemaResult {
 ///
 /// The name or tag for a Flight. May be used as a way to retrieve or generate
 /// a flight or be used to expose a set of previously defined flights.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FlightDescriptor {
     #[prost(enumeration = "flight_descriptor::DescriptorType", tag = "1")]
@@ -143,6 +153,7 @@ pub mod flight_descriptor {
 ///
 /// The access coordinates for retrieval of a dataset. With a FlightInfo, a
 /// consumer is able to determine how to retrieve a dataset.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FlightInfo {
     /// The schema of the dataset in its IPC form:
@@ -175,6 +186,7 @@ pub struct FlightInfo {
 }
 ///
 /// A particular stream or split associated with a flight.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FlightEndpoint {
     ///
@@ -202,6 +214,7 @@ pub struct FlightEndpoint {
 ///
 /// A location where a Flight service will accept retrieval of a particular
 /// stream given a ticket.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Location {
     #[prost(string, tag = "1")]
@@ -213,6 +226,7 @@ pub struct Location {
 ///
 /// Tickets are meant to be single use. It is an error/application-defined
 /// behavior to reuse a ticket.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Ticket {
     #[prost(bytes = "vec", tag = "1")]
@@ -220,6 +234,7 @@ pub struct Ticket {
 }
 ///
 /// A batch of Arrow data as part of a stream of batches.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FlightData {
     ///
@@ -245,6 +260,7 @@ pub struct FlightData {
 }
 /// *
 /// The response message associated with the submission of a DoPut.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PutResult {
     #[prost(bytes = "vec", tag = "1")]
