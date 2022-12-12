@@ -44,7 +44,6 @@ use reqwest::header::RANGE;
 use reqwest::{header, Client, Method, Response, StatusCode};
 use snafu::{ResultExt, Snafu};
 use tokio::io::AsyncWrite;
-use tracing::warn;
 use url::Url;
 
 use crate::client::pagination::stream_paginated;
@@ -131,6 +130,18 @@ enum Error {
         source: crate::client::retry::Error,
         path: String,
     },
+
+    #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
+    UnableToParseUrl {
+        source: url::ParseError,
+        url: String,
+    },
+
+    #[snafu(display(
+        "Unknown url scheme cannot be parsed into storage location: {}",
+        scheme
+    ))]
+    UnknownUrlScheme { scheme: String },
 }
 
 impl From<Error> for super::Error {
@@ -768,6 +779,7 @@ pub struct GoogleCloudStorageBuilder {
     service_account_path: Option<String>,
     retry_config: RetryConfig,
     client_options: ClientOptions,
+    url_parse_error: Option<Error>,
 }
 
 impl Default for GoogleCloudStorageBuilder {
@@ -777,6 +789,7 @@ impl Default for GoogleCloudStorageBuilder {
             service_account_path: None,
             retry_config: Default::default(),
             client_options: ClientOptions::new().with_allow_http(true),
+            url_parse_error: None,
         }
     }
 }
@@ -834,19 +847,24 @@ impl GoogleCloudStorageBuilder {
     ///     .build();
     /// ```
     pub fn with_url(mut self, url: impl AsRef<str>) -> Self {
-        if let Ok(parsed) = Url::parse(url.as_ref()) {
-            match parsed.scheme() {
+        let maybe_parsed = Url::parse(url.as_ref());
+        match maybe_parsed {
+            Ok(parsed) => match parsed.scheme() {
                 "gs" => {
                     self.bucket_name = parsed.host_str().map(|host| host.to_owned());
                 }
                 other => {
-                    warn!(
-                        "Ignoring passed gcp url due to unrecognized url scheme: {other}"
-                    );
+                    self.url_parse_error = Some(Error::UnknownUrlScheme {
+                        scheme: other.into(),
+                    });
                 }
+            },
+            Err(err) => {
+                self.url_parse_error = Some(Error::UnableToParseUrl {
+                    source: err,
+                    url: url.as_ref().into(),
+                });
             }
-        } else {
-            warn!("Ignoring passed gcp url due to parsing error.");
         };
         self
     }
@@ -904,7 +922,12 @@ impl GoogleCloudStorageBuilder {
             service_account_path,
             retry_config,
             client_options,
+            url_parse_error,
         } = self;
+
+        if let Some(err) = url_parse_error {
+            return Err(err.into());
+        }
 
         let bucket_name = bucket_name.ok_or(Error::MissingBucketName {})?;
         let service_account_path =

@@ -41,7 +41,7 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
-use tracing::{info, warn};
+use tracing::info;
 use url::Url;
 
 use crate::aws::client::{S3Client, S3Config};
@@ -117,6 +117,18 @@ enum Error {
 
     #[snafu(display("Received header containing non-ASCII data"))]
     BadHeader { source: reqwest::header::ToStrError },
+
+    #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
+    UnableToParseUrl {
+        source: url::ParseError,
+        url: String,
+    },
+
+    #[snafu(display(
+        "Unknown url scheme cannot be parsed into storage location: {}",
+        scheme
+    ))]
+    UnknownUrlScheme { scheme: String },
 }
 
 impl From<Error> for super::Error {
@@ -360,6 +372,7 @@ pub struct AmazonS3Builder {
     metadata_endpoint: Option<String>,
     profile: Option<String>,
     client_options: ClientOptions,
+    url_parse_error: Option<Error>,
 }
 
 impl AmazonS3Builder {
@@ -453,8 +466,9 @@ impl AmazonS3Builder {
     ///     .build();
     /// ```
     pub fn with_url(mut self, url: impl AsRef<str>) -> Self {
-        if let Ok(parsed) = Url::parse(url.as_ref()) {
-            match parsed.scheme() {
+        let maybe_parsed = Url::parse(url.as_ref());
+        match maybe_parsed {
+            Ok(parsed) => match parsed.scheme() {
                 "s3" | "s3a" => {
                     self.bucket_name = parsed.host_str().map(|host| host.to_owned());
                 }
@@ -475,13 +489,17 @@ impl AmazonS3Builder {
                     }
                 }
                 other => {
-                    warn!(
-                        "Ignoring passed S3 url due to unrecognized url scheme: {other}"
-                    );
+                    self.url_parse_error = Some(Error::UnknownUrlScheme {
+                        scheme: other.into(),
+                    });
                 }
+            },
+            Err(err) => {
+                self.url_parse_error = Some(Error::UnableToParseUrl {
+                    source: err,
+                    url: url.as_ref().into(),
+                });
             }
-        } else {
-            warn!("Ignoring passed S3 url due to parsing error.");
         };
         self
     }
@@ -623,6 +641,10 @@ impl AmazonS3Builder {
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(self) -> Result<AmazonS3> {
+        if let Some(err) = self.url_parse_error {
+            return Err(err.into());
+        }
+
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
         let region = self.region.context(MissingRegionSnafu)?;
 

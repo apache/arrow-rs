@@ -44,7 +44,6 @@ use std::io;
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
-use tracing::warn;
 use url::Url;
 
 pub use credential::authority_hosts;
@@ -115,6 +114,12 @@ enum Error {
 
     #[snafu(display("Azure credential error: {}", source), context(false))]
     Credential { source: credential::Error },
+
+    #[snafu(display(
+        "Unknown url scheme cannot be parsed into storage location: {}",
+        scheme
+    ))]
+    UnknownUrlScheme { scheme: String },
 }
 
 impl From<Error> for super::Error {
@@ -362,6 +367,7 @@ pub struct MicrosoftAzureBuilder {
     use_emulator: bool,
     retry_config: RetryConfig,
     client_options: ClientOptions,
+    url_parse_error: Option<Error>,
 }
 
 impl Debug for MicrosoftAzureBuilder {
@@ -450,8 +456,9 @@ impl MicrosoftAzureBuilder {
     ///     .build();
     /// ```
     pub fn with_url(mut self, url: impl AsRef<str>) -> Self {
-        if let Ok(parsed) = Url::parse(url.as_ref()) {
-            match parsed.scheme() {
+        let maybe_parsed = Url::parse(url.as_ref());
+        match maybe_parsed {
+            Ok(parsed) => match parsed.scheme() {
                 "az" | "adl" | "azure" => {
                     self.container_name = parsed.host_str().map(|host| host.to_owned());
                 }
@@ -481,13 +488,17 @@ impl MicrosoftAzureBuilder {
                     }
                 }
                 other => {
-                    warn!(
-                        "Ignoring passed azure url due to unrecognized url scheme: {other}"
-                    );
+                    self.url_parse_error = Some(Error::UnknownUrlScheme {
+                        scheme: other.into(),
+                    });
                 }
+            },
+            Err(err) => {
+                self.url_parse_error = Some(Error::UnableToParseUrl {
+                    source: err,
+                    url: url.as_ref().into(),
+                });
             }
-        } else {
-            warn!("Ignoring passed azure url due to parsing error.");
         };
         self
     }
@@ -597,7 +608,12 @@ impl MicrosoftAzureBuilder {
             retry_config,
             authority_host,
             mut client_options,
+            url_parse_error,
         } = self;
+
+        if let Some(err) = url_parse_error {
+            return Err(err.into());
+        }
 
         let container = container_name.ok_or(Error::MissingContainerName {})?;
 
