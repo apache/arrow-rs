@@ -44,6 +44,7 @@ use reqwest::header::RANGE;
 use reqwest::{header, Client, Method, Response, StatusCode};
 use snafu::{ResultExt, Snafu};
 use tokio::io::AsyncWrite;
+use url::Url;
 
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
@@ -129,6 +130,18 @@ enum Error {
         source: crate::client::retry::Error,
         path: String,
     },
+
+    #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
+    UnableToParseUrl {
+        source: url::ParseError,
+        url: String,
+    },
+
+    #[snafu(display(
+        "Unknown url scheme cannot be parsed into storage location: {}",
+        scheme
+    ))]
+    UnknownUrlScheme { scheme: String },
 }
 
 impl From<Error> for super::Error {
@@ -766,6 +779,7 @@ pub struct GoogleCloudStorageBuilder {
     service_account_path: Option<String>,
     retry_config: RetryConfig,
     client_options: ClientOptions,
+    url_parse_error: Option<Error>,
 }
 
 impl Default for GoogleCloudStorageBuilder {
@@ -775,6 +789,7 @@ impl Default for GoogleCloudStorageBuilder {
             service_account_path: None,
             retry_config: Default::default(),
             client_options: ClientOptions::new().with_allow_http(true),
+            url_parse_error: None,
         }
     }
 }
@@ -783,6 +798,75 @@ impl GoogleCloudStorageBuilder {
     /// Create a new [`GoogleCloudStorageBuilder`] with default values.
     pub fn new() -> Self {
         Default::default()
+    }
+
+    /// Create an instance of [`GoogleCloudStorageBuilder`] with values pre-populated from environment variables.
+    ///
+    /// Variables extracted from environment:
+    /// * GOOGLE_SERVICE_ACCOUNT: location of service account file
+    /// * SERVICE_ACCOUNT: (alias) location of service account file
+    ///
+    /// # Example
+    /// ```
+    /// use object_store::gcp::GoogleCloudStorageBuilder;
+    ///
+    /// let azure = GoogleCloudStorageBuilder::from_env()
+    ///     .with_bucket_name("foo")
+    ///     .build();
+    /// ```
+    pub fn from_env() -> Self {
+        let mut builder = Self::default();
+
+        if let Ok(service_account_path) = std::env::var("SERVICE_ACCOUNT") {
+            builder.service_account_path = Some(service_account_path);
+        }
+
+        if let Ok(service_account_path) = std::env::var("GOOGLE_SERVICE_ACCOUNT") {
+            builder.service_account_path = Some(service_account_path);
+        }
+
+        builder
+    }
+
+    /// Parse available connection info form a well-known storage URL.
+    ///
+    /// The supported url schemes are:
+    ///
+    /// - `gs://<bucket>/<path>`
+    ///
+    /// Please note that this is a best effort implementation, and will not fail for malformed URLs,
+    /// but rather warn and ignore the passed url. The url also has no effect on how the
+    /// storage is accessed - e.g. which driver or protocol is used for reading from the location.
+    ///
+    /// # Example
+    /// ```
+    /// use object_store::gcp::GoogleCloudStorageBuilder;
+    ///
+    /// let gcs = GoogleCloudStorageBuilder::from_env()
+    ///     .with_url("gs://bucket/path")
+    ///     .build();
+    /// ```
+    pub fn with_url(mut self, url: impl AsRef<str>) -> Self {
+        let maybe_parsed = Url::parse(url.as_ref());
+        match maybe_parsed {
+            Ok(parsed) => match parsed.scheme() {
+                "gs" => {
+                    self.bucket_name = parsed.host_str().map(|host| host.to_owned());
+                }
+                other => {
+                    self.url_parse_error = Some(Error::UnknownUrlScheme {
+                        scheme: other.into(),
+                    });
+                }
+            },
+            Err(err) => {
+                self.url_parse_error = Some(Error::UnableToParseUrl {
+                    source: err,
+                    url: url.as_ref().into(),
+                });
+            }
+        };
+        self
     }
 
     /// Set the bucket name (required)
@@ -838,7 +922,12 @@ impl GoogleCloudStorageBuilder {
             service_account_path,
             retry_config,
             client_options,
+            url_parse_error,
         } = self;
+
+        if let Some(err) = url_parse_error {
+            return Err(err.into());
+        }
 
         let bucket_name = bucket_name.ok_or(Error::MissingBucketName {})?;
         let service_account_path =
@@ -1094,5 +1183,11 @@ mod test {
             "Generic HTTP client error: builder error: unknown proxy scheme",
             err
         );
+    }
+
+    #[test]
+    fn gcs_test_urls() {
+        let builder = GoogleCloudStorageBuilder::new().with_url("gs://bucket/path");
+        assert_eq!(builder.bucket_name, Some("bucket".to_string()))
     }
 }

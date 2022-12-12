@@ -42,6 +42,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
 use tracing::info;
+use url::Url;
 
 use crate::aws::client::{S3Client, S3Config};
 use crate::aws::credential::{
@@ -116,6 +117,18 @@ enum Error {
 
     #[snafu(display("Received header containing non-ASCII data"))]
     BadHeader { source: reqwest::header::ToStrError },
+
+    #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
+    UnableToParseUrl {
+        source: url::ParseError,
+        url: String,
+    },
+
+    #[snafu(display(
+        "Unknown url scheme cannot be parsed into storage location: {}",
+        scheme
+    ))]
+    UnknownUrlScheme { scheme: String },
 }
 
 impl From<Error> for super::Error {
@@ -359,6 +372,7 @@ pub struct AmazonS3Builder {
     metadata_endpoint: Option<String>,
     profile: Option<String>,
     client_options: ClientOptions,
+    url_parse_error: Option<Error>,
 }
 
 impl AmazonS3Builder {
@@ -428,6 +442,67 @@ impl AmazonS3Builder {
         }
 
         builder
+    }
+
+    /// Parse available connection info form a well-known storage URL.
+    ///
+    /// The supported url schemes are:
+    ///
+    /// - `s3://<bucket>/<path>`
+    /// - `s3a://<bucket>/<path>`
+    /// - `https://s3.<bucket>.amazonaws.com`
+    /// - `https://<bucket>.s3.<region>.amazonaws.com`
+    ///
+    /// Please note that this is a best effort implementation, and will not fail for malformed URLs,
+    /// but rather warn and ignore the passed url. The url also has no effect on how the
+    /// storage is accessed - e.g. which driver or protocol is used for reading from the location.
+    ///
+    /// # Example
+    /// ```
+    /// use object_store::aws::AmazonS3Builder;
+    ///
+    /// let s3 = AmazonS3Builder::from_env()
+    ///     .with_url("s3://bucket/path")
+    ///     .build();
+    /// ```
+    pub fn with_url(mut self, url: impl AsRef<str>) -> Self {
+        let maybe_parsed = Url::parse(url.as_ref());
+        match maybe_parsed {
+            Ok(parsed) => match parsed.scheme() {
+                "s3" | "s3a" => {
+                    self.bucket_name = parsed.host_str().map(|host| host.to_owned());
+                }
+                "https" => {
+                    if let Some(host) = parsed.host_str() {
+                        let parts = host.splitn(4, '.').collect::<Vec<&str>>();
+                        if parts.len() == 4 && parts[0] == "s3" && parts[2] == "amazonaws"
+                        {
+                            self.bucket_name = Some(parts[1].to_string());
+                        }
+                        if parts.len() == 4
+                            && parts[1] == "s3"
+                            && parts[3] == "amazonaws.com"
+                        {
+                            self.bucket_name = Some(parts[0].to_string());
+                            self.region = Some(parts[2].to_string());
+                            self.virtual_hosted_style_request = true;
+                        }
+                    }
+                }
+                other => {
+                    self.url_parse_error = Some(Error::UnknownUrlScheme {
+                        scheme: other.into(),
+                    });
+                }
+            },
+            Err(err) => {
+                self.url_parse_error = Some(Error::UnableToParseUrl {
+                    source: err,
+                    url: url.as_ref().into(),
+                });
+            }
+        };
+        self
     }
 
     /// Set the AWS Access Key (required)
@@ -567,6 +642,10 @@ impl AmazonS3Builder {
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(self) -> Result<AmazonS3> {
+        if let Some(err) = self.url_parse_error {
+            return Err(err.into());
+        }
+
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
         let region = self.region.context(MissingRegionSnafu)?;
 
@@ -642,8 +721,8 @@ impl AmazonS3Builder {
         let endpoint: String;
         let bucket_endpoint: String;
 
-        //If `endpoint` is provided then its assumed to be consistent with
-        // `virutal_hosted_style_request`. i.e. if `virtual_hosted_style_request` is true then
+        // If `endpoint` is provided then its assumed to be consistent with
+        // `virtual_hosted_style_request`. i.e. if `virtual_hosted_style_request` is true then
         // `endpoint` should have bucket name included.
         if self.virtual_hosted_style_request {
             endpoint = self.endpoint.unwrap_or_else(|| {
@@ -939,5 +1018,19 @@ mod tests {
             "Generic HTTP client error: builder error: unknown proxy scheme",
             err
         );
+    }
+
+    #[test]
+    fn s3_test_urls() {
+        let builder = AmazonS3Builder::new().with_url("s3://bucket/path");
+        assert_eq!(builder.bucket_name, Some("bucket".to_string()));
+
+        let builder = AmazonS3Builder::new().with_url("https://s3.bucket.amazonaws.com");
+        assert_eq!(builder.bucket_name, Some("bucket".to_string()));
+
+        let builder =
+            AmazonS3Builder::new().with_url("https://bucket.s3.region.amazonaws.com");
+        assert_eq!(builder.bucket_name, Some("bucket".to_string()));
+        assert_eq!(builder.region, Some("region".to_string()))
     }
 }
