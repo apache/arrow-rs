@@ -485,6 +485,7 @@ impl AmazonS3Builder {
                         {
                             self.bucket_name = Some(parts[0].to_string());
                             self.region = Some(parts[2].to_string());
+                            self.virtual_hosted_style_request = true;
                         }
                     }
                 }
