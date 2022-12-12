@@ -42,6 +42,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
 use tracing::info;
+use url::Url;
 
 use crate::aws::client::{S3Client, S3Config};
 use crate::aws::credential::{
@@ -430,6 +431,49 @@ impl AmazonS3Builder {
         builder
     }
 
+    /// Parse available connection info form a well-known storage URL.
+    ///
+    /// The supported url schemes are:
+    ///
+    /// - s3://<bucket>/<path>
+    /// - s3a://<bucket>/<path>
+    /// - https://s3.<bucket>.amazonaws.com
+    ///
+    /// Please not that this is a best effort implementation, and will not fail for malformed URLs,
+    /// but rather silently ignore the passed url. The url also has no effect on how the
+    /// storage is accessed - e.g. which driver or protocol is used for reading from the location.
+    ///
+    /// # Example
+    /// ```
+    /// use object_store::azure::MicrosoftAzureBuilder;
+    ///
+    /// let s3 = AmazonS3Builder::from_env()
+    ///     .with_url("s3://bucket/path")
+    ///     .build();
+    /// ```
+    pub fn with_url(mut self, url: impl AsRef<str>) -> Self {
+        if let Ok(parsed) = Url::parse(url.as_ref()) {
+            match parsed.scheme() {
+                "s3" | "s3a" => {
+                    self.bucket_name = parsed.host_str().map(|host| host.to_owned());
+                }
+                "https" => {
+                    if let Some(host) = parsed.host_str() {
+                        let parts = host.splitn(3, '.').collect::<Vec<&str>>();
+                        if parts.len() == 3
+                            && parts[0] == "s3"
+                            && parts[2] == "amazonaws.com"
+                        {
+                            self.bucket_name = Some(parts[1].to_string());
+                        }
+                    }
+                }
+                _ => (),
+            }
+        };
+        self
+    }
+
     /// Set the AWS Access Key (required)
     pub fn with_access_key_id(mut self, access_key_id: impl Into<String>) -> Self {
         self.access_key_id = Some(access_key_id.into());
@@ -642,8 +686,8 @@ impl AmazonS3Builder {
         let endpoint: String;
         let bucket_endpoint: String;
 
-        //If `endpoint` is provided then its assumed to be consistent with
-        // `virutal_hosted_style_request`. i.e. if `virtual_hosted_style_request` is true then
+        // If `endpoint` is provided then its assumed to be consistent with
+        // `virtual_hosted_style_request`. i.e. if `virtual_hosted_style_request` is true then
         // `endpoint` should have bucket name included.
         if self.virtual_hosted_style_request {
             endpoint = self.endpoint.unwrap_or_else(|| {
@@ -939,5 +983,14 @@ mod tests {
             "Generic HTTP client error: builder error: unknown proxy scheme",
             err
         );
+    }
+
+    #[test]
+    fn s3_test_urls() {
+        let builder = AmazonS3Builder::new().with_url("s3://bucket/path");
+        assert_eq!(builder.bucket_name, Some("bucket".to_string()));
+
+        let builder = AmazonS3Builder::new().with_url("https://s3.bucket.amazonaws.com");
+        assert_eq!(builder.bucket_name, Some("bucket".to_string()))
     }
 }
