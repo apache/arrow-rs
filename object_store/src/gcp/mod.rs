@@ -44,6 +44,8 @@ use reqwest::header::RANGE;
 use reqwest::{header, Client, Method, Response, StatusCode};
 use snafu::{ResultExt, Snafu};
 use tokio::io::AsyncWrite;
+use tracing::warn;
+use url::Url;
 
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
@@ -785,6 +787,42 @@ impl GoogleCloudStorageBuilder {
         Default::default()
     }
 
+    /// Parse available connection info form a well-known storage URL.
+    ///
+    /// The supported url schemes are:
+    ///
+    /// - gs://<bucket>/<path>
+    ///
+    /// Please not that this is a best effort implementation, and will not fail for malformed URLs,
+    /// but rather warn and ignore the passed url. The url also has no effect on how the
+    /// storage is accessed - e.g. which driver or protocol is used for reading from the location.
+    ///
+    /// # Example
+    /// ```
+    /// use object_store::gcp::GoogleCloudStorageBuilder;
+    ///
+    /// let gcs = GoogleCloudStorageBuilder::from_env()
+    ///     .with_url("gs://bucket/path")
+    ///     .build();
+    /// ```
+    pub fn with_url(mut self, url: impl AsRef<str>) -> Self {
+        if let Ok(parsed) = Url::parse(url.as_ref()) {
+            match parsed.scheme() {
+                "gs" => {
+                    self.bucket_name = parsed.host_str().map(|host| host.to_owned());
+                }
+                other => {
+                    warn!(
+                        "Ignoring passed gcp url due to unrecognized url scheme: {other}"
+                    );
+                }
+            }
+        } else {
+            warn!("Ignoring passed gcp url due to parsing error.");
+        };
+        self
+    }
+
     /// Set the bucket name (required)
     pub fn with_bucket_name(mut self, bucket_name: impl Into<String>) -> Self {
         self.bucket_name = Some(bucket_name.into());
@@ -1094,5 +1132,11 @@ mod test {
             "Generic HTTP client error: builder error: unknown proxy scheme",
             err
         );
+    }
+
+    #[test]
+    fn gcs_test_urls() {
+        let builder = GoogleCloudStorageBuilder::new().with_url("gs://bucket/path");
+        assert_eq!(builder.bucket_name, Some("bucket".to_string()))
     }
 }

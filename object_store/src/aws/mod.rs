@@ -41,7 +41,7 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
-use tracing::info;
+use tracing::{info, warn};
 use url::Url;
 
 use crate::aws::client::{S3Client, S3Config};
@@ -440,12 +440,12 @@ impl AmazonS3Builder {
     /// - https://s3.<bucket>.amazonaws.com
     ///
     /// Please not that this is a best effort implementation, and will not fail for malformed URLs,
-    /// but rather silently ignore the passed url. The url also has no effect on how the
+    /// but rather warn and ignore the passed url. The url also has no effect on how the
     /// storage is accessed - e.g. which driver or protocol is used for reading from the location.
     ///
     /// # Example
     /// ```
-    /// use object_store::azure::MicrosoftAzureBuilder;
+    /// use object_store::aws::AmazonS3Builder;
     ///
     /// let s3 = AmazonS3Builder::from_env()
     ///     .with_url("s3://bucket/path")
@@ -468,8 +468,14 @@ impl AmazonS3Builder {
                         }
                     }
                 }
-                _ => (),
+                other => {
+                    warn!(
+                        "Ignoring passed S3 url due to unrecognized url scheme: {other}"
+                    );
+                }
             }
+        } else {
+            warn!("Ignoring passed S3 url due to parsing error.");
         };
         self
     }

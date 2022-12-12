@@ -44,6 +44,7 @@ use std::io;
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
+use tracing::warn;
 use url::Url;
 
 pub use credential::authority_hosts;
@@ -437,7 +438,7 @@ impl MicrosoftAzureBuilder {
     /// - https://account.blob.core.windows.net
     ///
     /// Please not that this is a best effort implementation, and will not fail for malformed URLs,
-    /// but rather silently ignore the passed url. The url also has no effect on how the
+    /// but rather warn and ignore the passed url. The url also has no effect on how the
     /// storage is accessed - e.g. which driver or protocol is used for reading from the location.
     ///
     /// # Example
@@ -479,8 +480,14 @@ impl MicrosoftAzureBuilder {
                         }
                     }
                 }
-                _ => (),
+                other => {
+                    warn!(
+                        "Ignoring passed azure url due to unrecognized url scheme: {other}"
+                    );
+                }
             }
+        } else {
+            warn!("Ignoring passed azure url due to parsing error.");
         };
         self
     }
@@ -786,6 +793,9 @@ mod tests {
         assert_eq!(builder.container_name, Some("file_system".to_string()));
 
         let builder = MicrosoftAzureBuilder::new().with_url("abfs://container/path");
+        assert_eq!(builder.container_name, Some("container".to_string()));
+
+        let builder = MicrosoftAzureBuilder::new().with_url("az://container");
         assert_eq!(builder.container_name, Some("container".to_string()));
 
         let builder = MicrosoftAzureBuilder::new().with_url("az://container/path");
