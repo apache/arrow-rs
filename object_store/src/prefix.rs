@@ -21,7 +21,7 @@ use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use std::ops::Range;
 use tokio::io::AsyncWrite;
 
-use crate::path::{Path, DELIMITER};
+use crate::path::Path;
 use crate::{
     GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
     Result as ObjectStoreResult,
@@ -61,12 +61,7 @@ impl<T: ObjectStore> PrefixObjectStore<T> {
 
     /// Strip the constant prefix from a given path
     fn strip_prefix(&self, path: &Path) -> Option<Path> {
-        let path: &str = path.as_ref();
-        let stripped = match self.prefix.as_ref() {
-            "" => path,
-            p => path.strip_prefix(p)?.strip_prefix(DELIMITER)?,
-        };
-        Path::parse(stripped).ok()
+        Some(path.prefix_match(&self.prefix)?.collect())
     }
 }
 
@@ -119,17 +114,17 @@ impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
         &self,
         prefix: Option<&Path>,
     ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
-        let prefix = prefix.and_then(|p| self.full_path(p).ok());
-        Ok(self
-            .inner
-            .list(Some(&prefix.unwrap_or_else(|| self.prefix.clone())))
-            .await?
-            .map_ok(|meta| ObjectMeta {
-                last_modified: meta.last_modified,
-                size: meta.size,
-                location: self.strip_prefix(&meta.location).unwrap_or(meta.location),
-            })
-            .boxed())
+        Ok(match &prefix.and_then(|p| self.full_path(p).ok()) {
+            Some(p) => self.inner.list(Some(p)),
+            None => self.inner.list(Some(&self.prefix)),
+        }
+        .await?
+        .map_ok(|meta| ObjectMeta {
+            last_modified: meta.last_modified,
+            size: meta.size,
+            location: self.strip_prefix(&meta.location).unwrap_or(meta.location),
+        })
+        .boxed())
     }
 
     /// List objects with the given prefix and an implementation specific
@@ -155,11 +150,13 @@ impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
                 objects: lst
                     .objects
                     .iter()
-                    .filter_map(|meta| Some(ObjectMeta {
-                        last_modified: meta.last_modified,
-                        size: meta.size,
-                        location: self.strip_prefix(&meta.location)?
-                    }))
+                    .filter_map(|meta| {
+                        Some(ObjectMeta {
+                            last_modified: meta.last_modified,
+                            size: meta.size,
+                            location: self.strip_prefix(&meta.location)?,
+                        })
+                    })
                     .collect(),
             })
     }
