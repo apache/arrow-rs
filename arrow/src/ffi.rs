@@ -120,6 +120,7 @@ use std::{
     sync::Arc,
 };
 
+use arrow_schema::UnionMode;
 use bitflags::bitflags;
 
 use crate::array::{layout, ArrayData};
@@ -310,8 +311,6 @@ impl Drop for FFI_ArrowSchema {
 #[allow(clippy::manual_bits)]
 fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
     Ok(match (data_type, i) {
-        // the null buffer is bit sized
-        (_, 0) => 1,
         // primitive types first buffer's size is given by the native types
         (DataType::Boolean, 1) => 1,
         (DataType::UInt8, 1) => size_of::<u8>() * 8,
@@ -383,6 +382,30 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{:?}\" expects 3 buffers, but requested {}. Please verify that the C data interface is correctly implemented.",
                 data_type, i
+            )))
+        }
+        // type ids. UnionArray doesn't have null bitmap so buffer index begins with 0.
+        (DataType::Union(_, _, _), 0) => size_of::<i8>() * 8,
+        // Only DenseUnion has 2nd buffer
+        (DataType::Union(_, _, UnionMode::Dense), 1) => size_of::<i32>() * 8,
+        (DataType::Union(_, _, UnionMode::Sparse), _) => {
+            return Err(ArrowError::CDataInterface(format!(
+                "The datatype \"{:?}\" expects 1 buffer, but requested {}. Please verify that the C data interface is correctly implemented.",
+                data_type, i
+            )))
+        }
+        (DataType::Union(_, _, UnionMode::Dense), _) => {
+            return Err(ArrowError::CDataInterface(format!(
+                "The datatype \"{:?}\" expects 2 buffer, but requested {}. Please verify that the C data interface is correctly implemented.",
+                data_type, i
+            )))
+        }
+        (_, 0) => {
+            // We don't call this `bit_width` to compute buffer length for null buffer. If any types that don't have null buffer like
+            // UnionArray, they should be handled above.
+            return Err(ArrowError::CDataInterface(format!(
+                "The datatype \"{:?}\" doesn't expect buffer at index 0. Please verify that the C data interface is correctly implemented.",
+                data_type
             )))
         }
         _ => {
@@ -661,7 +684,8 @@ pub trait ArrowArrayRef {
         })
     }
 
-    /// returns all buffers, as organized by Rust (i.e. null buffer is skipped)
+    /// returns all buffers, as organized by Rust (i.e. null buffer is skipped if it's present
+    /// in the spec of the type)
     fn buffers(&self, can_contain_null_mask: bool) -> Result<Vec<Buffer>> {
         // + 1: skip null buffer
         let buffer_begin = can_contain_null_mask as i64;
@@ -690,9 +714,9 @@ pub trait ArrowArrayRef {
     }
 
     /// Returns the length, in bytes, of the buffer `i` (indexed according to the C data interface)
-    // Rust implementation uses fixed-sized buffers, which require knowledge of their `len`.
-    // for variable-sized buffers, such as the second buffer of a stringArray, we need
-    // to fetch offset buffer's len to build the second buffer.
+    /// Rust implementation uses fixed-sized buffers, which require knowledge of their `len`.
+    /// for variable-sized buffers, such as the second buffer of a stringArray, we need
+    /// to fetch offset buffer's len to build the second buffer.
     fn buffer_len(&self, i: usize) -> Result<usize> {
         // Special handling for dictionary type as we only care about the key type in the case.
         let t = self.data_type()?;
@@ -937,6 +961,9 @@ mod tests {
     };
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};
+    use arrow_array::builder::UnionBuilder;
+    use arrow_array::types::{Float64Type, Int32Type};
+    use arrow_array::{Float64Array, UnionArray};
     use std::convert::TryFrom;
 
     #[test]
@@ -1497,6 +1524,133 @@ mod tests {
         // perform some operation
         let array = array.as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(array, &map_array);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_union_sparse_array() -> Result<()> {
+        let mut builder = UnionBuilder::new_sparse();
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        builder.append::<Float64Type>("c", 3.0).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        let union = builder.build().unwrap();
+
+        // export it
+        let array = ArrowArray::try_from(union.data().clone())?;
+
+        // (simulate consumer) import it
+        let data = ArrayData::try_from(array)?;
+        let array = make_array(data);
+
+        let array = array.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        let expected_type_ids = vec![0_i8, 0, 1, 0];
+
+        // Check type ids
+        assert_eq!(
+            Buffer::from_slice_ref(&expected_type_ids),
+            array.data().buffers()[0]
+        );
+        for (i, id) in expected_type_ids.iter().enumerate() {
+            assert_eq!(id, &array.type_id(i));
+        }
+
+        // Check offsets, sparse union should only have a single buffer, i.e. no offsets
+        assert_eq!(array.data().buffers().len(), 1);
+
+        for i in 0..array.len() {
+            let slot = array.value(i);
+            match i {
+                0 => {
+                    let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
+                    assert!(!slot.is_null(0));
+                    assert_eq!(slot.len(), 1);
+                    let value = slot.value(0);
+                    assert_eq!(1_i32, value);
+                }
+                1 => assert!(slot.is_null(0)),
+                2 => {
+                    let slot = slot.as_any().downcast_ref::<Float64Array>().unwrap();
+                    assert!(!slot.is_null(0));
+                    assert_eq!(slot.len(), 1);
+                    let value = slot.value(0);
+                    assert_eq!(value, 3_f64);
+                }
+                3 => {
+                    let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
+                    assert!(!slot.is_null(0));
+                    assert_eq!(slot.len(), 1);
+                    let value = slot.value(0);
+                    assert_eq!(4_i32, value);
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_union_dense_array() -> Result<()> {
+        let mut builder = UnionBuilder::new_dense();
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        builder.append::<Float64Type>("c", 3.0).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        let union = builder.build().unwrap();
+
+        // export it
+        let array = ArrowArray::try_from(union.data().clone())?;
+
+        // (simulate consumer) import it
+        let data = ArrayData::try_from(array)?;
+        let array = make_array(data);
+
+        let array = array.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        let expected_type_ids = vec![0_i8, 0, 1, 0];
+
+        // Check type ids
+        assert_eq!(
+            Buffer::from_slice_ref(&expected_type_ids),
+            array.data().buffers()[0]
+        );
+        for (i, id) in expected_type_ids.iter().enumerate() {
+            assert_eq!(id, &array.type_id(i));
+        }
+
+        assert_eq!(array.data().buffers().len(), 2);
+
+        for i in 0..array.len() {
+            let slot = array.value(i);
+            match i {
+                0 => {
+                    let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
+                    assert!(!slot.is_null(0));
+                    assert_eq!(slot.len(), 1);
+                    let value = slot.value(0);
+                    assert_eq!(1_i32, value);
+                }
+                1 => assert!(slot.is_null(0)),
+                2 => {
+                    let slot = slot.as_any().downcast_ref::<Float64Array>().unwrap();
+                    assert!(!slot.is_null(0));
+                    assert_eq!(slot.len(), 1);
+                    let value = slot.value(0);
+                    assert_eq!(value, 3_f64);
+                }
+                3 => {
+                    let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
+                    assert!(!slot.is_null(0));
+                    assert_eq!(slot.len(), 1);
+                    let value = slot.value(0);
+                    assert_eq!(4_i32, value);
+                }
+                _ => unreachable!(),
+            }
+        }
 
         Ok(())
     }
