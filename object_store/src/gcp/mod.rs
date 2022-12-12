@@ -819,7 +819,7 @@ impl GoogleCloudStorageBuilder {
     ///
     /// The supported url schemes are:
     ///
-    /// - gs://<bucket>/<path>
+    /// - `gs://<bucket>/<path>`
     ///
     /// Please note that this is a best effort implementation, and will not fail for malformed URLs,
     /// but rather warn and ignore the passed url. The url also has no effect on how the

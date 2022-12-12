@@ -435,9 +435,9 @@ impl AmazonS3Builder {
     ///
     /// The supported url schemes are:
     ///
-    /// - s3://<bucket>/<path>
-    /// - s3a://<bucket>/<path>
-    /// - https://s3.<bucket>.amazonaws.com
+    /// - `s3://<bucket>/<path>`
+    /// - `s3a://<bucket>/<path>`
+    /// - `https://s3.<bucket>.amazonaws.com`
     ///
     /// Please note that this is a best effort implementation, and will not fail for malformed URLs,
     /// but rather warn and ignore the passed url. The url also has no effect on how the
