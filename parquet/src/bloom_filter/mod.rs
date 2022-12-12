@@ -28,7 +28,7 @@ use crate::format::{
 };
 use bytes::{Buf, Bytes};
 use std::hash::Hasher;
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use std::sync::Arc;
 use thrift::protocol::{
     TCompactInputProtocol, TCompactOutputProtocol, TOutputProtocol, TSerializable,
@@ -176,10 +176,10 @@ impl Sbbf {
         Self(data)
     }
 
-    /// Write the bloom filter data (header and then bitset) to the output
-    pub(crate) fn write<W: Write>(&self, writer: W) -> Result<(), ParquetError> {
-        // Use a BufWriter to avoid costs of writing individual blocks
-        let mut writer = BufWriter::new(writer);
+    /// Write the bloom filter data (header and then bitset) to the output. This doesn't
+    /// flush the writer in order to boost performance of bulk writing all blocks. Caller
+    /// must remember to flush the writer.
+    pub(crate) fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
         let mut protocol = TCompactOutputProtocol::new(&mut writer);
         let header = self.header();
         header.write_to_out_protocol(&mut protocol).map_err(|e| {
@@ -187,7 +187,6 @@ impl Sbbf {
         })?;
         protocol.flush()?;
         self.write_bitset(&mut writer)?;
-        writer.flush()?;
         Ok(())
     }
 
@@ -287,6 +286,10 @@ impl Sbbf {
         let block_index = self.hash_to_block_index(hash);
         let block = &self.0[block_index];
         block_check(block, hash as u32)
+    }
+
+    pub(crate) fn block_num(&self) -> usize {
+        self.0.len()
     }
 }
 
