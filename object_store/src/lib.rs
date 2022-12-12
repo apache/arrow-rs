@@ -170,6 +170,7 @@ pub mod limit;
 pub mod local;
 pub mod memory;
 pub mod path;
+pub mod prefix;
 pub mod throttle;
 
 #[cfg(any(feature = "gcp", feature = "aws", feature = "azure"))]
