@@ -439,7 +439,7 @@ impl AmazonS3Builder {
     /// - s3a://<bucket>/<path>
     /// - https://s3.<bucket>.amazonaws.com
     ///
-    /// Please not that this is a best effort implementation, and will not fail for malformed URLs,
+    /// Please note that this is a best effort implementation, and will not fail for malformed URLs,
     /// but rather warn and ignore the passed url. The url also has no effect on how the
     /// storage is accessed - e.g. which driver or protocol is used for reading from the location.
     ///

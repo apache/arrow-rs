@@ -821,7 +821,7 @@ impl GoogleCloudStorageBuilder {
     ///
     /// - gs://<bucket>/<path>
     ///
-    /// Please not that this is a best effort implementation, and will not fail for malformed URLs,
+    /// Please note that this is a best effort implementation, and will not fail for malformed URLs,
     /// but rather warn and ignore the passed url. The url also has no effect on how the
     /// storage is accessed - e.g. which driver or protocol is used for reading from the location.
     ///
