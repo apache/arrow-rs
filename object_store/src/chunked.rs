@@ -201,14 +201,14 @@ mod tests {
     #[tokio::test]
     async fn test_chunked_basic() {
         let location = Path::parse("test").unwrap();
-        let store = Arc::new(InMemory::new());
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         store
             .put(&location, Bytes::from(vec![0; 1001]))
             .await
             .unwrap();
 
         for chunk_size in [10, 20, 31] {
-            let store = ChunkedStore::new(store.clone(), chunk_size);
+            let store = ChunkedStore::new(Arc::clone(&store), chunk_size);
             let mut s = match store.get(&location).await.unwrap() {
                 GetResult::Stream(s) => s,
                 _ => unreachable!(),
@@ -234,7 +234,7 @@ mod tests {
         ];
 
         for integration in integrations {
-            let integration = ChunkedStore::new(Arc::clone(&integration), 100);
+            let integration = ChunkedStore::new(Arc::clone(integration), 100);
 
             put_get_delete_list(&integration).await;
             list_uses_directories_correctly(&integration).await;
