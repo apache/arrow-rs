@@ -21,6 +21,7 @@
 use crate::bloom_filter::Sbbf;
 use crate::format as parquet;
 use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
+use std::io::BufWriter;
 use std::{io::Write, sync::Arc};
 use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol, TSerializable};
 
@@ -225,23 +226,27 @@ impl<W: Write> SerializedFileWriter<W> {
         // iter row group
         // iter each column
         // write bloom filter to the file
+        let mut start_offset = self.buf.bytes_written();
+        let mut writer = BufWriter::new(&mut self.buf);
+
         for (row_group_idx, row_group) in row_groups.iter_mut().enumerate() {
             for (column_idx, column_chunk) in row_group.columns.iter_mut().enumerate() {
                 match &self.bloom_filters[row_group_idx][column_idx] {
                     Some(bloom_filter) => {
-                        let start_offset = self.buf.bytes_written();
-                        bloom_filter.write(&mut self.buf)?;
+                        bloom_filter.write(&mut writer)?;
                         // set offset and index for bloom filter
                         column_chunk
                             .meta_data
                             .as_mut()
                             .expect("can't have bloom filter without column metadata")
                             .bloom_filter_offset = Some(start_offset as i64);
+                        start_offset += bloom_filter.block_num() * 32;
                     }
                     None => {}
                 }
             }
         }
+        writer.flush()?;
         Ok(())
     }
 
