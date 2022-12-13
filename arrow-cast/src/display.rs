@@ -281,6 +281,29 @@ fn append_struct_field_string(
     Ok(())
 }
 
+fn append_map_field_string(
+    target: &mut String,
+    field_col: &Arc<dyn Array>,
+    row: usize,
+) -> Result<(), ArrowError> {
+    if field_col.is_null(row) {
+        target.push_str("null");
+    } else {
+        match field_col.data_type() {
+            DataType::Utf8 | DataType::LargeUtf8 => {
+                target.push('"');
+                target.push_str(array_value_to_string(field_col, row)?.as_str());
+                target.push('"');
+            }
+            _ => {
+                target.push_str(array_value_to_string(field_col, row)?.as_str());
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Get the value at the given row in an array as a String.
 ///
 /// Note this function is quite inefficient and is unlikely to be
@@ -430,6 +453,38 @@ pub fn array_value_to_string(
 
             Ok(s)
         }
+        DataType::Map(_, _) => {
+            let map_array =
+                column.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(
+                        "Repl error: could not convert column to map array.".to_string(),
+                    )
+                })?;
+            let map_entry = map_array.value(row);
+            let st = map_entry
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(
+                        "Repl error: could not convert map entry to struct array."
+                            .to_string(),
+                    )
+                })?;
+            let mut s = String::new();
+            s.push('{');
+            let entries_count = st.column(0).len();
+            for i in 0..entries_count {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                append_map_field_string(&mut s, st.column(0), i)?;
+                s.push_str(": ");
+                append_map_field_string(&mut s, st.column(1), i)?;
+            }
+            s.push('}');
+
+            Ok(s)
+        }
         DataType::Union(field_vec, type_ids, mode) => {
             union_to_string(column, row, field_vec, type_ids, mode)
         }
@@ -526,6 +581,28 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_map_arry_to_string() {
+        let keys = vec!["a", "b", "c", "d", "e", "f", "g", "h"];
+        let values_data = UInt32Array::from(vec![0u32, 10, 20, 30, 40, 50, 60, 70]);
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[a, b, c], [d, e, f], [g, h]]
+        let entry_offsets = [0, 3, 6, 8];
+
+        let map_array = MapArray::new_from_strings(
+            keys.clone().into_iter(),
+            &values_data,
+            &entry_offsets,
+        )
+        .unwrap();
+        let param = Arc::new(map_array) as ArrayRef;
+        assert_eq!(
+            "{\"d\": 30, \"e\": 40, \"f\": 50}",
+            array_value_to_string(&param, 1).unwrap()
+        );
+    }
 
     #[test]
     fn test_array_value_to_string_duration() {
