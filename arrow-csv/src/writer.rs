@@ -143,7 +143,7 @@ impl<W: Write> Writer<W> {
         for (col_index, item) in buffer.iter_mut().enumerate() {
             let col = &batch[col_index];
             if col.is_null(row_index) {
-                // write the configured empty value
+                // write the configured null value
                 *item = self.null_value.clone();
                 continue;
             }
