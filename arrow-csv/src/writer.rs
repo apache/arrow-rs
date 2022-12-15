@@ -77,6 +77,7 @@ const DEFAULT_DATE_FORMAT: &str = "%F";
 const DEFAULT_TIME_FORMAT: &str = "%T";
 const DEFAULT_TIMESTAMP_FORMAT: &str = "%FT%H:%M:%S.%9f";
 const DEFAULT_TIMESTAMP_TZ_FORMAT: &str = "%FT%H:%M:%S.%9f%:z";
+const DEFAULT_NULL_VALUE: &str = "";
 
 fn write_primitive_value<T>(array: &ArrayRef, i: usize) -> String
 where
@@ -108,6 +109,8 @@ pub struct Writer<W: Write> {
     time_format: String,
     /// Is the beginning-of-writer
     beginning: bool,
+    /// The value to represent null entries
+    null_value: String,
 }
 
 impl<W: Write> Writer<W> {
@@ -125,6 +128,7 @@ impl<W: Write> Writer<W> {
             timestamp_format: DEFAULT_TIMESTAMP_FORMAT.to_string(),
             timestamp_tz_format: DEFAULT_TIMESTAMP_TZ_FORMAT.to_string(),
             beginning: true,
+            null_value: DEFAULT_NULL_VALUE.to_string(),
         }
     }
 
@@ -139,8 +143,8 @@ impl<W: Write> Writer<W> {
         for (col_index, item) in buffer.iter_mut().enumerate() {
             let col = &batch[col_index];
             if col.is_null(row_index) {
-                // write an empty value
-                *item = "".to_string();
+                // write the configured null value
+                *item = self.null_value.clone();
                 continue;
             }
             let string = match col.data_type() {
@@ -340,6 +344,8 @@ pub struct WriterBuilder {
     timestamp_tz_format: Option<String>,
     /// Optional time format for time arrays
     time_format: Option<String>,
+    /// Optional value to represent null
+    null_value: Option<String>,
 }
 
 impl Default for WriterBuilder {
@@ -352,6 +358,7 @@ impl Default for WriterBuilder {
             time_format: Some(DEFAULT_TIME_FORMAT.to_string()),
             timestamp_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
             timestamp_tz_format: Some(DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
+            null_value: Some(DEFAULT_NULL_VALUE.to_string()),
         }
     }
 }
@@ -417,6 +424,12 @@ impl WriterBuilder {
         self
     }
 
+    /// Set the value to represent null in output
+    pub fn with_null(mut self, null_value: String) -> Self {
+        self.null_value = Some(null_value);
+        self
+    }
+
     /// Create a new `Writer`
     pub fn build<W: Write>(self, writer: W) -> Writer<W> {
         let delimiter = self.delimiter.unwrap_or(b',');
@@ -441,6 +454,9 @@ impl WriterBuilder {
                 .timestamp_tz_format
                 .unwrap_or_else(|| DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
             beginning: true,
+            null_value: self
+                .null_value
+                .unwrap_or_else(|| DEFAULT_NULL_VALUE.to_string()),
         }
     }
 }
@@ -570,6 +586,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         let builder = WriterBuilder::new()
             .has_headers(false)
             .with_delimiter(b'|')
+            .with_null("NULL".to_string())
             .with_time_format("%r".to_string());
         let mut writer = builder.build(&mut file);
         let batches = vec![&batch];
@@ -584,7 +601,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         file.read_to_end(&mut buffer).unwrap();
 
         assert_eq!(
-            "Lorem ipsum dolor sit amet|123.564532|3|true|12:20:34 AM\nconsectetur adipiscing elit||2|false|06:51:20 AM\nsed do eiusmod tempor|-556132.25|1||11:46:03 PM\n"
+            "Lorem ipsum dolor sit amet|123.564532|3|true|12:20:34 AM\nconsectetur adipiscing elit|NULL|2|false|06:51:20 AM\nsed do eiusmod tempor|-556132.25|1|NULL|11:46:03 PM\n"
             .to_string(),
             String::from_utf8(buffer).unwrap()
         );
