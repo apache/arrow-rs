@@ -460,7 +460,11 @@ fn try_to_type_result<T>(
 /// Type of expression is `Result<.., ArrowError>`
 macro_rules! try_to_type {
     ($RIGHT: expr, $TY: ident) => {
-        try_to_type_result($RIGHT.$TY(), stringify!($RIGHT), stringify!($TYPE))
+        try_to_type_result(
+            $RIGHT.$TY(),
+            &format!("{:?}", $RIGHT).to_string(),
+            stringify!($TY),
+        )
     };
 }
 
