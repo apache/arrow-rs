@@ -320,6 +320,13 @@ impl DataType {
         )
     }
 
+    /// Returns true if this type is decimal: (Decimal*).
+    #[inline]
+    pub fn is_decimal(&self) -> bool {
+        use DataType::*;
+        matches!(self, Decimal128(_, _) | Decimal256(_, _))
+    }
+
     /// Returns true if this type is temporal: (Date*, Time*, Duration, or Interval).
     #[inline]
     pub fn is_temporal(&self) -> bool {
