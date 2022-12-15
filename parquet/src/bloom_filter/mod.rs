@@ -141,7 +141,7 @@ fn chunk_read_bloom_filter_header_and_offset<R: ChunkReader>(
     offset: u64,
     reader: Arc<R>,
 ) -> Result<(BloomFilterHeader, u64), ParquetError> {
-    let buffer = reader.get_bytes(offset as u64, SBBF_HEADER_SIZE_ESTIMATE)?;
+    let buffer = reader.get_bytes(offset, SBBF_HEADER_SIZE_ESTIMATE)?;
     let (header, length) = read_bloom_filter_header_and_length(buffer)?;
     Ok((header, offset + length))
 }

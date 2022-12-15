@@ -1103,7 +1103,7 @@ fn from_thrift_helper(
             let mut fields = vec![];
             let mut next_index = index + 1;
             for _ in 0..n {
-                let child_result = from_thrift_helper(elements, next_index as usize)?;
+                let child_result = from_thrift_helper(elements, next_index)?;
                 next_index = child_result.0;
                 fields.push(child_result.1);
             }

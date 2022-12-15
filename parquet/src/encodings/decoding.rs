@@ -557,7 +557,7 @@ where
         self.mini_block_bit_widths.clear();
         self.bit_reader.get_aligned_bytes(
             &mut self.mini_block_bit_widths,
-            self.mini_blocks_per_block as usize,
+            self.mini_blocks_per_block,
         );
 
         let mut offset = self.bit_reader.get_byte_offset();

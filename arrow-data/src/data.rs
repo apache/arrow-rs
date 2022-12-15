@@ -1657,12 +1657,12 @@ mod tests {
 
     /// returns a buffer initialized with some constant value for tests
     fn make_i32_buffer(n: usize) -> Buffer {
-        Buffer::from_slice_ref(&vec![42i32; n])
+        Buffer::from_slice_ref(vec![42i32; n])
     }
 
     /// returns a buffer initialized with some constant value for tests
     fn make_f32_buffer(n: usize) -> Buffer {
-        Buffer::from_slice_ref(&vec![42f32; n])
+        Buffer::from_slice_ref(vec![42f32; n])
     }
 
     #[test]

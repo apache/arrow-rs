@@ -241,7 +241,7 @@ where
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
 pub fn year_dyn(array: &dyn Array) -> Result<ArrayRef> {
-    time_fraction_dyn(array, "year", |t| t.year() as i32)
+    time_fraction_dyn(array, "year", |t| t.year())
 }
 
 /// Extracts the years of a given temporal primitive array as an array of integers
@@ -250,7 +250,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    time_fraction_internal(array, "year", |t| t.year() as i32)
+    time_fraction_internal(array, "year", |t| t.year())
 }
 
 /// Extracts the quarter of a given temporal array as an array of integersa within
@@ -297,9 +297,7 @@ where
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
 pub fn num_days_from_monday_dyn(array: &dyn Array) -> Result<ArrayRef> {
-    time_fraction_dyn(array, "num_days_from_monday", |t| {
-        t.num_days_from_monday() as i32
-    })
+    time_fraction_dyn(array, "num_days_from_monday", |t| t.num_days_from_monday())
 }
 
 /// Extracts the day of week of a given temporal primitive array as an array of
@@ -313,9 +311,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    time_fraction_internal(array, "num_days_from_monday", |t| {
-        t.num_days_from_monday() as i32
-    })
+    time_fraction_internal(array, "num_days_from_monday", |t| t.num_days_from_monday())
 }
 
 /// Extracts the day of week of a given temporal array as an array of
@@ -328,9 +324,7 @@ where
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
 pub fn num_days_from_sunday_dyn(array: &dyn Array) -> Result<ArrayRef> {
-    time_fraction_dyn(array, "num_days_from_sunday", |t| {
-        t.num_days_from_sunday() as i32
-    })
+    time_fraction_dyn(array, "num_days_from_sunday", |t| t.num_days_from_sunday())
 }
 
 /// Extracts the day of week of a given temporal primitive array as an array of
@@ -344,9 +338,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    time_fraction_internal(array, "num_days_from_sunday", |t| {
-        t.num_days_from_sunday() as i32
-    })
+    time_fraction_internal(array, "num_days_from_sunday", |t| t.num_days_from_sunday())
 }
 
 /// Extracts the day of a given temporal array as an array of integers.
