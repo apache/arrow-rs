@@ -1162,7 +1162,7 @@ mod tests {
         ];
         for (prefix, target_precision) in file_variants {
             let path = format!("{}/{}_decimal.parquet", testdata, prefix);
-            let file = File::open(&path).unwrap();
+            let file = File::open(path).unwrap();
             let mut record_reader = ParquetRecordBatchReader::try_new(file, 32).unwrap();
 
             let batch = record_reader.next().unwrap().unwrap();
@@ -1777,7 +1777,7 @@ mod tests {
     fn test_read_maps() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{}/nested_maps.snappy.parquet", testdata);
-        let file = File::open(&path).unwrap();
+        let file = File::open(path).unwrap();
         let record_batch_reader = ParquetRecordBatchReader::try_new(file, 60).unwrap();
 
         for batch in record_batch_reader {
@@ -1969,7 +1969,7 @@ mod tests {
     fn test_read_null_list() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{}/null_list.parquet", testdata);
-        let file = File::open(&path).unwrap();
+        let file = File::open(path).unwrap();
         let mut record_batch_reader =
             ParquetRecordBatchReader::try_new(file, 60).unwrap();
 
@@ -1994,7 +1994,7 @@ mod tests {
     fn test_null_schema_inference() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{}/null_list.parquet", testdata);
-        let file = File::open(&path).unwrap();
+        let file = File::open(path).unwrap();
 
         let arrow_field = Field::new(
             "emptylist",
@@ -2085,7 +2085,7 @@ mod tests {
     fn test_empty_projection() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{}/alltypes_plain.parquet", testdata);
-        let file = File::open(&path).unwrap();
+        let file = File::open(path).unwrap();
 
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         let file_metadata = builder.metadata().file_metadata();
@@ -2260,7 +2260,7 @@ mod tests {
         let test_file = File::open(&path).unwrap();
 
         let mut serial_reader =
-            ParquetRecordBatchReader::try_new(File::open(path).unwrap(), 7300).unwrap();
+            ParquetRecordBatchReader::try_new(File::open(&path).unwrap(), 7300).unwrap();
         let data = serial_reader.next().unwrap().unwrap();
 
         let do_test = |batch_size: usize, selection_len: usize| {
@@ -2316,7 +2316,7 @@ mod tests {
         let testdata = arrow::util::test_util::parquet_test_data();
         // `alltypes_plain.parquet` only have 8 rows
         let path = format!("{}/alltypes_plain.parquet", testdata);
-        let test_file = File::open(&path).unwrap();
+        let test_file = File::open(path).unwrap();
 
         let builder = ParquetRecordBatchReaderBuilder::try_new(test_file).unwrap();
         let num_rows = builder.metadata.file_metadata().num_rows();
@@ -2395,7 +2395,7 @@ mod tests {
     fn test_read_lz4_raw() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{}/lz4_raw_compressed.parquet", testdata);
-        let file = File::open(&path).unwrap();
+        let file = File::open(path).unwrap();
 
         let batches = ParquetRecordBatchReader::try_new(file, 1024)
             .unwrap()
@@ -2439,7 +2439,7 @@ mod tests {
         ] {
             let testdata = arrow::util::test_util::parquet_test_data();
             let path = format!("{}/{}", testdata, file);
-            let file = File::open(&path).unwrap();
+            let file = File::open(path).unwrap();
             let expected_rows = 4;
 
             let batches = ParquetRecordBatchReader::try_new(file, expected_rows)
@@ -2471,7 +2471,7 @@ mod tests {
     fn test_read_lz4_hadoop_large() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{}/hadoop_lz4_compressed_larger.parquet", testdata);
-        let file = File::open(&path).unwrap();
+        let file = File::open(path).unwrap();
         let expected_rows = 10000;
 
         let batches = ParquetRecordBatchReader::try_new(file, expected_rows)
@@ -2497,7 +2497,7 @@ mod tests {
     fn test_read_nested_lists() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{}/nested_lists.snappy.parquet", testdata);
-        let file = File::open(&path).unwrap();
+        let file = File::open(path).unwrap();
 
         let f = file.try_clone().unwrap();
         let mut reader = ParquetRecordBatchReader::try_new(f, 60).unwrap();

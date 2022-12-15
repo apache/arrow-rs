@@ -918,12 +918,12 @@ mod tests {
     fn test_put_value_rand_numbers(total: usize, num_bits: usize) {
         assert!(num_bits < 64);
         let num_bytes = ceil(num_bits, 8);
-        let mut writer = BitWriter::new(num_bytes as usize * total);
+        let mut writer = BitWriter::new(num_bytes * total);
         let values: Vec<u64> = random_numbers::<u64>(total)
             .iter()
             .map(|v| v & ((1 << num_bits) - 1))
             .collect();
-        (0..total).for_each(|i| writer.put_value(values[i] as u64, num_bits));
+        (0..total).for_each(|i| writer.put_value(values[i], num_bits));
 
         let mut reader = BitReader::from(writer.consume());
         (0..total).for_each(|i| {
@@ -959,7 +959,7 @@ mod tests {
     {
         assert!(num_bits <= 64);
         let num_bytes = ceil(num_bits, 8);
-        let mut writer = BitWriter::new(num_bytes as usize * total);
+        let mut writer = BitWriter::new(num_bytes * total);
 
         let mask = match num_bits {
             64 => u64::MAX,
@@ -975,7 +975,7 @@ mod tests {
         let expected_values: Vec<T> =
             values.iter().map(|v| from_ne_slice(v.as_bytes())).collect();
 
-        (0..total).for_each(|i| writer.put_value(values[i] as u64, num_bits));
+        (0..total).for_each(|i| writer.put_value(values[i], num_bits));
 
         let buf = writer.consume();
         let mut reader = BitReader::from(buf);

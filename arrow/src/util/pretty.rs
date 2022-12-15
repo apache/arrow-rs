@@ -73,7 +73,7 @@ fn create_table(results: &[RecordBatch]) -> Result<Table> {
             let mut cells = Vec::new();
             for col in 0..batch.num_columns() {
                 let column = batch.column(col);
-                cells.push(Cell::new(&array_value_to_string(column, row)?));
+                cells.push(Cell::new(array_value_to_string(column, row)?));
             }
             table.add_row(cells);
         }
@@ -95,7 +95,7 @@ fn create_column(field: &str, columns: &[ArrayRef]) -> Result<Table> {
 
     for col in columns {
         for row in 0..col.len() {
-            let cells = vec![Cell::new(&array_value_to_string(col, row)?)];
+            let cells = vec![Cell::new(array_value_to_string(col, row)?)];
             table.add_row(cells);
         }
     }

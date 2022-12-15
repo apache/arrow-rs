@@ -224,7 +224,7 @@ mod tests {
         let v: Vec<i64> = (0..9).into_iter().collect();
         let value_data = ArrayData::builder(DataType::Int64)
             .len(9)
-            .add_buffer(Buffer::from_slice_ref(&v))
+            .add_buffer(Buffer::from_slice_ref(v))
             .build()?;
         let list_data_type =
             DataType::FixedSizeList(Box::new(Field::new("f", DataType::Int64, false)), 3);
@@ -249,7 +249,7 @@ mod tests {
         let v: Vec<i16> = (0..16).into_iter().collect();
         let value_data = ArrayData::builder(DataType::Int16)
             .len(16)
-            .add_buffer(Buffer::from_slice_ref(&v))
+            .add_buffer(Buffer::from_slice_ref(v))
             .build()?;
         let list_data_type =
             DataType::FixedSizeList(Box::new(Field::new("f", DataType::Int16, false)), 2);
@@ -269,11 +269,11 @@ mod tests {
         let v: Vec<i32> = (0..16).into_iter().collect();
         let value_data = ArrayData::builder(DataType::Int32)
             .len(16)
-            .add_buffer(Buffer::from_slice_ref(&v))
+            .add_buffer(Buffer::from_slice_ref(v))
             .build()?;
 
         let offsets: Vec<i32> = vec![0, 2, 4, 6, 8, 10, 12, 14, 16];
-        let value_offsets = Buffer::from_slice_ref(&offsets);
+        let value_offsets = Buffer::from_slice_ref(offsets);
         let inner_list_data_type =
             DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
         let inner_list_data = ArrayData::builder(inner_list_data_type.clone())

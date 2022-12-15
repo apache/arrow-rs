@@ -798,7 +798,7 @@ pub fn cast_with_options(
                 }
                 Float64 => {
                     cast_decimal_to_float::<Decimal128Type, Float64Type, _>(array, |x| {
-                        (x as f64 / 10_f64.powi(*scale as i32)) as f64
+                        x as f64 / 10_f64.powi(*scale as i32)
                     })
                 }
                 Null => Ok(new_null_array(to_type, array.len())),
@@ -866,7 +866,7 @@ pub fn cast_with_options(
                 }
                 Float64 => {
                     cast_decimal_to_float::<Decimal256Type, Float64Type, _>(array, |x| {
-                        (x.to_f64().unwrap() / 10_f64.powi(*scale as i32)) as f64
+                        x.to_f64().unwrap() / 10_f64.powi(*scale as i32)
                     })
                 }
                 Null => Ok(new_null_array(to_type, array.len())),
@@ -5946,8 +5946,7 @@ mod tests {
 
     #[test]
     fn test_cast_from_uint32() {
-        let u32_values: Vec<u32> =
-            vec![0, u8::MAX as u32, u16::MAX as u32, u32::MAX as u32];
+        let u32_values: Vec<u32> = vec![0, u8::MAX as u32, u16::MAX as u32, u32::MAX];
         let u32_array: ArrayRef = Arc::new(UInt32Array::from(u32_values));
 
         let f64_expected = vec!["0.0", "255.0", "65535.0", "4294967295.0"];
@@ -6013,7 +6012,7 @@ mod tests {
 
     #[test]
     fn test_cast_from_uint16() {
-        let u16_values: Vec<u16> = vec![0, u8::MAX as u16, u16::MAX as u16];
+        let u16_values: Vec<u16> = vec![0, u8::MAX as u16, u16::MAX];
         let u16_array: ArrayRef = Arc::new(UInt16Array::from(u16_values));
 
         let f64_expected = vec!["0.0", "255.0", "65535.0"];
@@ -6301,13 +6300,13 @@ mod tests {
     #[test]
     fn test_cast_from_int32() {
         let i32_values: Vec<i32> = vec![
-            i32::MIN as i32,
+            i32::MIN,
             i16::MIN as i32,
             i8::MIN as i32,
             0,
             i8::MAX as i32,
             i16::MAX as i32,
-            i32::MAX as i32,
+            i32::MAX,
         ];
         let i32_array: ArrayRef = Arc::new(Int32Array::from(i32_values));
 
@@ -6463,13 +6462,13 @@ mod tests {
     #[test]
     fn test_cast_from_date32() {
         let i32_values: Vec<i32> = vec![
-            i32::MIN as i32,
+            i32::MIN,
             i16::MIN as i32,
             i8::MIN as i32,
             0,
             i8::MAX as i32,
             i16::MAX as i32,
-            i32::MAX as i32,
+            i32::MAX,
         ];
         let date32_array: ArrayRef = Arc::new(Date32Array::from(i32_values));
 

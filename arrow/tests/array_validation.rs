@@ -427,7 +427,7 @@ fn check_utf8_validation<T: ArrowNativeType>(data_type: DataType) {
         .map(|&v| T::from_usize(v).unwrap())
         .collect();
 
-    let offsets_buffer = Buffer::from_slice_ref(&offsets);
+    let offsets_buffer = Buffer::from_slice_ref(offsets);
     ArrayData::try_new(
         data_type,
         2,
@@ -459,7 +459,7 @@ fn check_utf8_char_boundary<T: ArrowNativeType>(data_type: DataType) {
         .map(|&v| T::from_usize(v).unwrap())
         .collect();
 
-    let offsets_buffer = Buffer::from_slice_ref(&offsets);
+    let offsets_buffer = Buffer::from_slice_ref(offsets);
     ArrayData::try_new(
         data_type,
         2,
@@ -492,7 +492,7 @@ fn check_index_out_of_bounds_validation<T: ArrowNativeType>(data_type: DataType)
         .map(|&v| T::from_usize(v).unwrap())
         .collect();
 
-    let offsets_buffer = Buffer::from_slice_ref(&offsets);
+    let offsets_buffer = Buffer::from_slice_ref(offsets);
     ArrayData::try_new(
         data_type,
         4,
@@ -545,7 +545,7 @@ fn check_index_backwards_validation<T: ArrowNativeType>(data_type: DataType) {
         .map(|&v| T::from_usize(v).unwrap())
         .collect();
 
-    let offsets_buffer = Buffer::from_slice_ref(&offsets);
+    let offsets_buffer = Buffer::from_slice_ref(offsets);
     ArrayData::try_new(
         data_type,
         4,
@@ -697,7 +697,7 @@ fn check_list_offsets<T: ArrowNativeType>(data_type: DataType) {
         .iter()
         .map(|&v| T::from_usize(v).unwrap())
         .collect();
-    let offsets_buffer = Buffer::from_slice_ref(&offsets);
+    let offsets_buffer = Buffer::from_slice_ref(offsets);
 
     ArrayData::try_new(
         data_type,
@@ -740,7 +740,7 @@ fn test_validate_list_negative_offsets() {
 
     // -1 is an invalid offset any way you look at it
     let offsets: Vec<i32> = vec![0, 2, -1, 4];
-    let offsets_buffer = Buffer::from_slice_ref(&offsets);
+    let offsets_buffer = Buffer::from_slice_ref(offsets);
 
     ArrayData::try_new(
         data_type,
@@ -755,7 +755,7 @@ fn test_validate_list_negative_offsets() {
 
 /// returns a buffer initialized with some constant value for tests
 fn make_i32_buffer(n: usize) -> Buffer {
-    Buffer::from_slice_ref(&vec![42i32; n])
+    Buffer::from_slice_ref(vec![42i32; n])
 }
 
 #[test]

@@ -296,7 +296,7 @@ impl UnionBuilder {
 
             let arr_data_ref = unsafe { arr_data_builder.build_unchecked() };
             let array_ref = make_array(arr_data_ref);
-            children.push((type_id, (Field::new(&name, data_type, false), array_ref)))
+            children.push((type_id, (Field::new(name, data_type, false), array_ref)))
         }
 
         children.sort_by(|a, b| {

@@ -823,7 +823,7 @@ mod tests {
             values.push(i % 2);
         }
         let num_groups = bit_util::ceil(100, 8) as u8;
-        expected_buffer.push(((num_groups << 1) as u8) | 1);
+        expected_buffer.push((num_groups << 1) | 1);
         expected_buffer.resize(expected_buffer.len() + 100 / 8, 0b10101010);
 
         // For the last 4 0 and 1's, padded with 0.

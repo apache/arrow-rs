@@ -1360,6 +1360,6 @@ mod tests {
             .build()
             .unwrap();
         assert_ne!(1024, file_rows);
-        assert_eq!(stream.batch_size, file_rows as usize);
+        assert_eq!(stream.batch_size, file_rows);
     }
 }
