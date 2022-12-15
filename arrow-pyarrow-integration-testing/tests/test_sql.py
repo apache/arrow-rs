@@ -358,6 +358,35 @@ def test_dictionary_python():
     del a
     del b
 
+def test_dense_union_python():
+    """
+    Python -> Rust -> Python
+    """
+    xs = pa.array([5, 6, 7])
+    ys = pa.array([False, True])
+    types = pa.array([0, 1, 1, 0, 0], type=pa.int8())
+    offsets = pa.array([0, 0, 1, 1, 2], type=pa.int32())
+    a = pa.UnionArray.from_dense(types, offsets, [xs, ys])
+
+    b = rust.round_trip_array(a)
+    assert a == b
+    del a
+    del b
+
+def test_sparse_union_python():
+    """
+    Python -> Rust -> Python
+    """
+    xs = pa.array([5, 6, 7])
+    ys = pa.array([False, False, True])
+    types = pa.array([0, 1, 1], type=pa.int8())
+    a = pa.UnionArray.from_sparse(types, [xs, ys])
+
+    b = rust.round_trip_array(a)
+    assert a == b
+    del a
+    del b
+
 def test_record_batch_reader():
     """
     Python -> Rust -> Python
