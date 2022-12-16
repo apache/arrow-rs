@@ -153,11 +153,16 @@ pub fn batches_to_flight_data(
     let schema_flight_data: FlightData = SchemaAsIpc::new(&schema, &options).into();
     let mut dictionaries = vec![];
     let mut flight_data = vec![];
+
+    let data_gen = writer::IpcDataGenerator::default();
+    let mut dictionary_tracker = writer::DictionaryTracker::new(false);
+
     for batch in batches.iter() {
-        let (flight_dictionaries, flight_datum) =
-            flight_data_from_arrow_batch(batch, &options);
-        dictionaries.extend(flight_dictionaries);
-        flight_data.push(flight_datum);
+        let (encoded_dictionaries, encoded_batch) = data_gen
+            .encoded_batch(batch, &mut dictionary_tracker, &options)?;
+
+        dictionaries.extend(encoded_dictionaries.into_iter().map(Into::into));
+        flight_data.push(encoded_batch.into());
     }
     let mut stream = vec![schema_flight_data];
     stream.extend(dictionaries.into_iter());
