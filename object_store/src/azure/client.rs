@@ -407,7 +407,7 @@ impl TryFrom<ListResultInternal> for ListResult {
             .blob_prefix
             .unwrap_or_default()
             .into_iter()
-            .map(|x| Ok(Path::parse(&x.name)?))
+            .map(|x| Ok(Path::parse(x.name)?))
             .collect::<Result<_>>()?;
 
         let objects = value
