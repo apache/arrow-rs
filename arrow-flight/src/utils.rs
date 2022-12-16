@@ -28,6 +28,10 @@ use std::convert::TryInto;
 
 /// Convert a `RecordBatch` to a vector of `FlightData` representing the bytes of the dictionaries
 /// and a `FlightData` representing the bytes of the batch's values
+#[deprecated(
+    since = "30.0.0",
+    note = "Use IpcDataGenerator directly with DictionaryTracker to avoid re-sending dictionaries"
+)]
 pub fn flight_data_from_arrow_batch(
     batch: &RecordBatch,
     options: &IpcWriteOptions,
