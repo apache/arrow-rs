@@ -537,7 +537,7 @@ impl DictionaryTracker {
 
         // If a dictionary with this id was already emitted, check if it was the same.
         if let Some(last) = self.written.get(&dict_id) {
-            if last.data().child_data()[0] == *dict_values {
+            if ArrayData::ptr_eq(&last.data().child_data()[0], dict_values) {
                 // Same dictionary values => no need to emit it again
                 return Ok(false);
             } else if self.error_on_replacement {
