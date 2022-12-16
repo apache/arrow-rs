@@ -158,8 +158,8 @@ pub fn batches_to_flight_data(
     let mut dictionary_tracker = writer::DictionaryTracker::new(false);
 
     for batch in batches.iter() {
-        let (encoded_dictionaries, encoded_batch) = data_gen
-            .encoded_batch(batch, &mut dictionary_tracker, &options)?;
+        let (encoded_dictionaries, encoded_batch) =
+            data_gen.encoded_batch(batch, &mut dictionary_tracker, &options)?;
 
         dictionaries.extend(encoded_dictionaries.into_iter().map(Into::into));
         flight_data.push(encoded_batch.into());
