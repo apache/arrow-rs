@@ -316,6 +316,9 @@ impl IpcDataGenerator {
         Ok(())
     }
 
+    /// Encodes a batch to a number of [EncodedData] items (dictionary batches + the record batch).
+    /// The [DictionaryTracker] keeps track of dictionaries with new `dict_id`s  (so they are only sent once)
+    /// Make sure the [DictionaryTracker] is initialized at the start of the stream.
     pub fn encoded_batch(
         &self,
         batch: &RecordBatch,
