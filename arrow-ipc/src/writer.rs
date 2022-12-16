@@ -540,7 +540,13 @@ impl DictionaryTracker {
             if ArrayData::ptr_eq(&last.data().child_data()[0], dict_values) {
                 // Same dictionary values => no need to emit it again
                 return Ok(false);
-            } else if self.error_on_replacement {
+            }
+            if self.error_on_replacement {
+                // If error on replacement perform a logical comparison
+                if last.data().child_data()[0] == *dict_values {
+                    // Same dictionary values => no need to emit it again
+                    return Ok(false);
+                }
                 return Err(ArrowError::InvalidArgumentError(
                     "Dictionary replacement detected when writing IPC file format. \
                      Arrow IPC files only support a single dictionary for a given field \
