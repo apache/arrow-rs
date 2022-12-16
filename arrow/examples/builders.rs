@@ -34,22 +34,20 @@ fn main() {
     // u64, i8, i16, i32, i64, f32, f64)
 
     // Create a new builder with a capacity of 100
-    let mut primitive_array_builder = Int32Builder::new(100);
+    let mut primitive_array_builder = Int32Builder::with_capacity(100);
 
     // Append an individual primitive value
-    primitive_array_builder.append_value(55).unwrap();
+    primitive_array_builder.append_value(55);
 
     // Append a null value
-    primitive_array_builder.append_null().unwrap();
+    primitive_array_builder.append_null();
 
     // Append a slice of primitive values
-    primitive_array_builder.append_slice(&[39, 89, 12]).unwrap();
+    primitive_array_builder.append_slice(&[39, 89, 12]);
 
     // Append lots of values
-    primitive_array_builder.append_null().unwrap();
-    primitive_array_builder
-        .append_slice(&(25..50).collect::<Vec<i32>>())
-        .unwrap();
+    primitive_array_builder.append_null();
+    primitive_array_builder.append_slice(&(25..50).collect::<Vec<i32>>());
 
     // Build the `PrimitiveArray`
     let primitive_array = primitive_array_builder.finish();
@@ -81,8 +79,9 @@ fn main() {
         .len(3)
         .add_buffer(Buffer::from(offsets.to_byte_slice()))
         .add_buffer(Buffer::from(&values[..]))
-        .null_bit_buffer(Buffer::from([0b00000101]))
-        .build();
+        .null_bit_buffer(Some(Buffer::from([0b00000101])))
+        .build()
+        .unwrap();
     let binary_array = StringArray::from(array_data);
     println!("{:?}", binary_array);
 
@@ -92,7 +91,8 @@ fn main() {
     let value_data = ArrayData::builder(DataType::Int32)
         .len(8)
         .add_buffer(Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
-        .build();
+        .build()
+        .unwrap();
 
     // Construct a buffer for value offsets, for the nested array:
     //  [[0, 1, 2], [3, 4, 5], [6, 7]]
@@ -105,7 +105,8 @@ fn main() {
         .len(3)
         .add_buffer(value_offsets)
         .add_child_data(value_data)
-        .build();
+        .build()
+        .unwrap();
     let list_array = ListArray::from(list_data);
 
     println!("{:?}", list_array);

@@ -18,8 +18,10 @@
 //! Contains file reader API and provides methods to access file metadata, row group
 //! readers to read individual column chunks, or access record iterator.
 
+use bytes::Bytes;
 use std::{boxed::Box, io::Read, sync::Arc};
 
+use crate::bloom_filter::Sbbf;
 use crate::column::page::PageIterator;
 use crate::column::{page::PageReader, reader::ColumnReader};
 use crate::errors::{ParquetError, Result};
@@ -43,11 +45,27 @@ pub trait Length {
 /// The ChunkReader trait generates readers of chunks of a source.
 /// For a file system reader, each chunk might contain a clone of File bounded on a given range.
 /// For an object store reader, each read can be mapped to a range request.
-pub trait ChunkReader: Length {
-    type T: Read;
-    /// get a serialy readeable slice of the current reader
+pub trait ChunkReader: Length + Send + Sync {
+    type T: Read + Send;
+    /// Get a serially readable slice of the current reader
     /// This should fail if the slice exceeds the current bounds
     fn get_read(&self, start: u64, length: usize) -> Result<Self::T>;
+
+    /// Get a range as bytes
+    /// This should fail if the exact number of bytes cannot be read
+    fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
+        let mut buffer = Vec::with_capacity(length);
+        let read = self.get_read(start, length)?.read_to_end(&mut buffer)?;
+
+        if read != length {
+            return Err(eof_err!(
+                "Expected to read {} bytes, read only {}",
+                length,
+                read
+            ));
+        }
+        Ok(buffer.into())
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -55,7 +73,7 @@ pub trait ChunkReader: Length {
 
 /// Parquet file reader API. With this, user can get metadata information about the
 /// Parquet file, can get reader for each row group, and access record iterator.
-pub trait FileReader {
+pub trait FileReader: Send + Sync {
     /// Get metadata information about this file.
     fn metadata(&self) -> &ParquetMetaData;
 
@@ -76,7 +94,7 @@ pub trait FileReader {
 
 /// Parquet row group reader API. With this, user can get metadata information about the
 /// row group, as well as readers for each individual column chunk.
-pub trait RowGroupReader {
+pub trait RowGroupReader: Send + Sync {
     /// Get metadata information about this row group.
     fn metadata(&self) -> &RowGroupMetaData;
 
@@ -126,6 +144,10 @@ pub trait RowGroupReader {
         Ok(col_reader)
     }
 
+    /// Get bloom filter for the `i`th column chunk, if present and the reader was configured
+    /// to read bloom filters.
+    fn get_column_bloom_filter(&self, i: usize) -> Option<&Sbbf>;
+
     /// Get iterator of `Row`s from this row group.
     ///
     /// Projected schema can be a subset of or equal to the file schema, when it is None,
@@ -139,7 +161,7 @@ pub trait RowGroupReader {
 /// Implementation of page iterator for parquet file.
 pub struct FilePageIterator {
     column_index: usize,
-    row_group_indices: Box<dyn Iterator<Item = usize>>,
+    row_group_indices: Box<dyn Iterator<Item = usize> + Send>,
     file_reader: Arc<dyn FileReader>,
 }
 
@@ -156,7 +178,7 @@ impl FilePageIterator {
     /// Create page iterator from parquet file reader with only some row groups.
     pub fn with_row_groups(
         column_index: usize,
-        row_group_indices: Box<dyn Iterator<Item = usize>>,
+        row_group_indices: Box<dyn Iterator<Item = usize> + Send>,
         file_reader: Arc<dyn FileReader>,
     ) -> Result<Self> {
         // Check that column_index is valid

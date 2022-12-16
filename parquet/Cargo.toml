@@ -17,66 +17,133 @@
 
 [package]
 name = "parquet"
-version = "6.0.0-SNAPSHOT"
+version = "29.0.0"
 license = "Apache-2.0"
 description = "Apache Parquet implementation in Rust"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
-keywords = [ "arrow", "parquet", "hadoop" ]
+keywords = ["arrow", "parquet", "hadoop"]
 readme = "README.md"
-build = "build.rs"
-edition = "2018"
+edition = "2021"
+rust-version = "1.62"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
-# update note: pin `parquet-format` to specific version until it does not break at minor
-# version, see ARROW-11187.
-parquet-format = "~2.6.1"
-byteorder = "1"
-thrift = "0.13"
-snap = { version = "1.0", optional = true }
-brotli = { version = "3.3", optional = true }
-flate2 = { version = "1.0", optional = true }
-lz4 = { version = "1.23", optional = true }
-zstd = { version = "0.9", optional = true }
-chrono = "0.4"
-num-bigint = "0.4"
-arrow = { path = "../arrow", version = "6.0.0-SNAPSHOT", optional = true }
-base64 = { version = "0.13", optional = true }
-clap = { version = "2.33.3", optional = true }
-serde_json = { version = "1.0", features = ["preserve_order"], optional = true }
-rand = "0.8"
+arrow-array = { version = "29.0.0", path = "../arrow-array", default-features = false, optional = true }
+arrow-buffer = { version = "29.0.0", path = "../arrow-buffer", default-features = false, optional = true }
+arrow-cast = { version = "29.0.0", path = "../arrow-cast", default-features = false, optional = true }
+arrow-csv = { version = "29.0.0", path = "../arrow-csv", default-features = false, optional = true }
+arrow-data = { version = "29.0.0", path = "../arrow-data", default-features = false, optional = true }
+arrow-schema = { version = "29.0.0", path = "../arrow-schema", default-features = false, optional = true }
+arrow-select = { version = "29.0.0", path = "../arrow-select", default-features = false, optional = true }
+arrow-ipc = { version = "29.0.0", path = "../arrow-ipc", default-features = false, optional = true }
+
+bytes = { version = "1.1", default-features = false, features = ["std"] }
+thrift = { version = "0.17", default-features = false }
+snap = { version = "1.0", default-features = false, optional = true }
+brotli = { version = "3.3", default-features = false, features = ["std"], optional = true }
+flate2 = { version = "1.0", default-features = false, features = ["rust_backend"], optional = true }
+lz4 = { version = "1.23", default-features = false, optional = true }
+zstd = { version = "0.12.0", optional = true, default-features = false }
+chrono = { version = "0.4.23", default-features = false, features = ["alloc"] }
+num = { version = "0.4", default-features = false }
+num-bigint = { version = "0.4", default-features = false }
+base64 = { version = "0.20", default-features = false, features = ["std", ], optional = true }
+clap = { version = "4", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
+serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
+seq-macro = { version = "0.3", default-features = false }
+futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
+tokio = { version = "1.0", optional = true, default-features = false, features = ["macros", "rt", "io-util"] }
+hashbrown = { version = "0.13", default-features = false }
+twox-hash = { version = "1.6", default-features = false }
+paste = { version = "1.0" }
 
 [dev-dependencies]
-criterion = "0.3"
-rand = "0.8"
-snap = "1.0"
-brotli = "3.3"
-flate2 = "1.0"
-lz4 = "1.23"
-arrow = { path = "../arrow", version = "6.0.0-SNAPSHOT" }
-serde_json = { version = "1.0", features = ["preserve_order"] }
+base64 = { version = "0.20", default-features = false, features = ["std"] }
+criterion = { version = "0.4", default-features = false }
+snap = { version = "1.0", default-features = false }
+tempfile = { version = "3.0", default-features = false }
+brotli = { version = "3.3", default-features = false, features = ["std"] }
+flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
+lz4 = { version = "1.23", default-features = false }
+zstd = { version = "0.12", default-features = false }
+serde_json = { version = "1.0", features = ["std"], default-features = false }
+arrow = { path = "../arrow", version = "29.0.0", default-features = false, features = ["ipc", "test_utils", "prettyprint", "json"] }
+tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "io-util", "fs"] }
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+
+[package.metadata.docs.rs]
+all-features = true
 
 [features]
 default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
-cli = ["serde_json", "base64", "clap"]
+# Enable arrow reader/writer APIs
+arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-cast", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
+# Enable CLI tools
+cli = ["json", "base64", "clap", "arrow-csv", "serde"]
+# Enable JSON APIs
+json = ["serde_json", "base64"]
+# Enable internal testing APIs
+test_common = ["arrow/test_utils"]
+# Experimental, unstable functionality primarily used for testing
+experimental = []
+# Enable async APIs
+async = ["futures", "tokio"]
 
-[[ bin ]]
+[[example]]
+name = "read_parquet"
+required-features = ["arrow"]
+path = "./examples/read_parquet.rs"
+
+[[example]]
+name = "async_read_parquet"
+required-features = ["arrow", "async"]
+path = "./examples/async_read_parquet.rs"
+
+[[test]]
+name = "arrow_writer_layout"
+required-features = ["arrow"]
+
+[[bin]]
 name = "parquet-read"
 required-features = ["cli"]
 
-[[ bin ]]
+[[bin]]
 name = "parquet-schema"
 required-features = ["cli"]
 
-[[ bin ]]
+[[bin]]
 name = "parquet-rowcount"
+required-features = ["cli"]
+
+[[bin]]
+name = "parquet-fromcsv"
+required-features = ["arrow", "cli"]
+
+[[bin]]
+name = "parquet-show-bloom-filter"
+required-features = ["cli"]
+
+[[bin]]
+name = "parquet-layout"
 required-features = ["cli"]
 
 [[bench]]
 name = "arrow_writer"
+required-features = ["arrow"]
 harness = false
 
 [[bench]]
-name = "arrow_array_reader"
+name = "arrow_reader"
+required-features = ["arrow", "test_common", "experimental"]
 harness = false
+
+[lib]
+bench = false

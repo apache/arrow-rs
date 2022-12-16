@@ -25,6 +25,9 @@ use arrow::datatypes::*;
 use arrow::error::Result;
 use arrow::record_batch::*;
 
+#[cfg(feature = "prettyprint")]
+use arrow::util::pretty::print_batches;
+
 fn main() -> Result<()> {
     // define schema
     let schema = Schema::new(vec![
@@ -62,6 +65,8 @@ fn main() -> Result<()> {
     let batch =
         RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id), Arc::new(nested)])?;
 
+    print_batches(&[batch.clone()]).unwrap();
+
     process(&batch);
     Ok(())
 }
@@ -91,11 +96,14 @@ fn process(batch: &RecordBatch) {
         Field::new("sum", DataType::Float64, false),
     ]);
 
-    let _ = RecordBatch::try_new(
+    let projection = RecordBatch::try_new(
         Arc::new(projected_schema),
         vec![
             id.clone(), // NOTE: this is cloning the Arc not the array data
             Arc::new(Float64Array::from(nested_c.data().clone())),
         ],
-    );
+    )
+    .unwrap();
+
+    print_batches(&[projection]).unwrap();
 }

@@ -47,9 +47,7 @@ pub fn create_random_batch(
     RecordBatch::try_new_with_options(
         schema,
         columns,
-        &RecordBatchOptions {
-            match_field_names: false,
-        },
+        &RecordBatchOptions::new().with_match_field_names(false),
     )
 }
 
@@ -142,6 +140,17 @@ pub fn create_random_array(
                 })
                 .collect::<Result<Vec<(&str, ArrayRef)>>>()?,
         )?),
+        d @ Dictionary(_, value_type)
+            if crate::compute::can_cast_types(value_type, d) =>
+        {
+            let f = Field::new(
+                field.name(),
+                value_type.as_ref().clone(),
+                field.is_nullable(),
+            );
+            let v = create_random_array(&f, size, null_density, true_density)?;
+            crate::compute::cast(&v, d)?
+        }
         other => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Generating random arrays not yet implemented for {:?}",
@@ -185,22 +194,24 @@ fn create_random_list_array(
 
     // Create list's child data
     let child_array =
-        create_random_array(list_field, child_len as usize, null_density, true_density)?;
+        create_random_array(list_field, child_len, null_density, true_density)?;
     let child_data = child_array.data();
     // Create list's null buffers, if it is nullable
     let null_buffer = match field.is_nullable() {
         true => Some(create_random_null_buffer(size, null_density)),
         false => None,
     };
-    let list_data = ArrayData::new(
-        field.data_type().clone(),
-        size,
-        None,
-        null_buffer,
-        0,
-        vec![offsets],
-        vec![child_data.clone()],
-    );
+    let list_data = unsafe {
+        ArrayData::new_unchecked(
+            field.data_type().clone(),
+            size,
+            None,
+            null_buffer,
+            0,
+            vec![offsets],
+            vec![child_data.clone()],
+        )
+    };
     Ok(make_array(list_data))
 }
 

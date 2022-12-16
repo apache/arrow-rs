@@ -15,43 +15,76 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![allow(incomplete_features)]
-#![allow(dead_code)]
-#![allow(non_camel_case_types)]
-#![allow(
-    clippy::approx_constant,
-    clippy::cast_ptr_alignment,
-    clippy::float_cmp,
-    clippy::float_equality_without_abs,
-    clippy::from_over_into,
-    clippy::many_single_char_names,
-    clippy::needless_range_loop,
-    clippy::new_without_default,
-    clippy::or_fun_call,
-    clippy::same_item_push,
-    clippy::too_many_arguments,
-    clippy::transmute_ptr_to_ptr,
-    clippy::upper_case_acronyms,
-    clippy::vec_init_then_push
-)]
+//! This crate contains the official Native Rust implementation of
+//! [Apache Parquet](https://parquet.apache.org/), part of
+//! the [Apache Arrow](https://arrow.apache.org/) project.
+//!
+//! Please see the [parquet crates.io](https://crates.io/crates/parquet)
+//! page for feature flags and tips to improve performance.
+//!
+//! # Getting Started
+//! Start with some examples:
+//!
+//! 1. [mod@file] for reading and writing parquet files using the
+//! [ColumnReader](column::reader::ColumnReader) API.
+//!
+//! 2. [arrow] for reading and writing parquet files to Arrow
+//! `RecordBatch`es
+//!
+//! 3. [arrow::async_reader] for `async` reading and writing parquet
+//! files to Arrow `RecordBatch`es (requires the `async` feature).
+
+/// Defines a an item with an experimental public API
+///
+/// The module will not be documented, and will only be public if the
+/// experimental feature flag is enabled
+///
+/// Experimental components have no stability guarantees
+#[cfg(feature = "experimental")]
+macro_rules! experimental {
+    ($(#[$meta:meta])* $vis:vis mod $module:ident) => {
+        #[doc(hidden)]
+        $(#[$meta])*
+        pub mod $module;
+    }
+}
+
+#[cfg(not(feature = "experimental"))]
+macro_rules! experimental {
+    ($(#[$meta:meta])* $vis:vis mod $module:ident) => {
+        $(#[$meta])*
+        $vis mod $module;
+    }
+}
 
 #[macro_use]
 pub mod errors;
 pub mod basic;
+
+/// Automatically generated code for reading parquet thrift definition.
+// see parquet/CONTRIBUTING.md for instructions on regenerating
+#[allow(clippy::derivable_impls, clippy::match_single_binding)]
+pub mod format;
+
 #[macro_use]
 pub mod data_type;
 
 // Exported for external use, such as benchmarks
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
 pub use self::encodings::{decoding, encoding};
+
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
 pub use self::util::memory;
 
-#[macro_use]
-pub mod util;
-#[cfg(any(feature = "arrow", test))]
+experimental!(#[macro_use] mod util);
+#[cfg(feature = "arrow")]
 pub mod arrow;
 pub mod column;
-pub mod compression;
-mod encodings;
+experimental!(mod compression);
+experimental!(mod encodings);
+pub mod bloom_filter;
 pub mod file;
 pub mod record;
 pub mod schema;

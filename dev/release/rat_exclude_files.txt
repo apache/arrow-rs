@@ -3,13 +3,24 @@ testing/*
 target/*
 dev/release/rat_exclude_files.txt
 arrow/test/data/*
+arrow-csv/test/data/*
+arrow-json/test/data/*
 arrow/test/dependency/*
+arrow-integration-test/data/*
+parquet_derive/test/dependency/*
 .gitattributes
 **.gitignore
 .gitmodules
 Cargo.lock
 filtered_rat.txt
 rat.txt
+conbench/benchmarks.json
+conbench/requirements.txt
+conbench/requirements-test.txt
+conbench/.flake8
+conbench/.isort.cfg
 # auto-generated
 arrow-flight/src/arrow.flight.protocol.rs
+arrow-flight/src/sql/arrow.flight.protocol.sql.rs
 .github/*
+parquet/src/bin/parquet-fromcsv-help.txt

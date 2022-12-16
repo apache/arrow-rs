@@ -16,6 +16,16 @@
 # under the License.
 
 arrow:
+  - arrow-array/**/*
+  - arrow-buffer/**/*
+  - arrow-cast/**/*
+  - arrow-csv/**/*
+  - arrow-data/**/*
+  - arrow-ipc/**/*
+  - arrow-json/**/*
+  - arrow-schema/**/*
+  - arrow-select/**/*
+  - arrow-string/**/*
   - arrow/**/*
 
 arrow-flight:
@@ -26,3 +36,6 @@ parquet:
 
 parquet-derive:
   - parquet_derive/**/*
+
+object-store:
+  - object_store/**/*

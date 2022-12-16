@@ -17,54 +17,25 @@
 
 //! Defines aggregations over Arrow arrays.
 
+use arrow_data::bit_iterator::try_for_each_valid_idx;
+use arrow_schema::ArrowError;
 use multiversion::multiversion;
-use std::ops::Add;
+#[allow(unused_imports)]
+use std::ops::{Add, Deref};
 
 use crate::array::{
-    Array, BooleanArray, GenericStringArray, PrimitiveArray, StringOffsetSizeTrait,
+    as_primitive_array, Array, ArrayAccessor, ArrayIter, BooleanArray,
+    GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
-use crate::datatypes::{ArrowNativeType, ArrowNumericType};
+use crate::datatypes::{ArrowNativeType, ArrowNativeTypeOp, ArrowNumericType, DataType};
+use crate::error::Result;
+use crate::util::bit_iterator::BitIndexIterator;
 
 /// Generic test for NaN, the optimizer should be able to remove this for integer types.
 #[inline]
-fn is_nan<T: ArrowNativeType + PartialOrd + Copy>(a: T) -> bool {
+pub(crate) fn is_nan<T: ArrowNativeType + PartialOrd + Copy>(a: T) -> bool {
     #[allow(clippy::eq_op)]
     !(a == a)
-}
-
-/// Helper macro to perform min/max of strings
-fn min_max_string<T: StringOffsetSizeTrait, F: Fn(&str, &str) -> bool>(
-    array: &GenericStringArray<T>,
-    cmp: F,
-) -> Option<&str> {
-    let null_count = array.null_count();
-
-    if null_count == array.len() {
-        return None;
-    }
-    let data = array.data();
-    let mut n;
-    if null_count == 0 {
-        n = array.value(0);
-        for i in 1..data.len() {
-            let item = array.value(i);
-            if cmp(&n, item) {
-                n = item;
-            }
-        }
-    } else {
-        n = "";
-        let mut has_value = false;
-
-        for i in 0..data.len() {
-            let item = array.value(i);
-            if data.is_valid(i) && (!has_value || cmp(&n, item)) {
-                has_value = true;
-                n = item;
-            }
-        }
-    }
-    Some(n)
 }
 
 /// Returns the minimum value in the array, according to the natural order.
@@ -75,7 +46,7 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeType,
 {
-    min_max_helper(array, |a, b| (is_nan(*a) & !is_nan(*b)) || a > b)
+    min_max_helper::<T::Native, _, _>(array, |a, b| (is_nan(*a) & !is_nan(*b)) || a > b)
 }
 
 /// Returns the maximum value in the array, according to the natural order.
@@ -86,58 +57,7 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeType,
 {
-    min_max_helper(array, |a, b| (!is_nan(*a) & is_nan(*b)) || a < b)
-}
-
-/// Returns the maximum value in the string array, according to the natural order.
-pub fn max_string<T: StringOffsetSizeTrait>(
-    array: &GenericStringArray<T>,
-) -> Option<&str> {
-    min_max_string(array, |a, b| a < b)
-}
-
-/// Returns the minimum value in the string array, according to the natural order.
-pub fn min_string<T: StringOffsetSizeTrait>(
-    array: &GenericStringArray<T>,
-) -> Option<&str> {
-    min_max_string(array, |a, b| a > b)
-}
-
-/// Helper function to perform min/max lambda function on values from a numeric array.
-#[multiversion]
-#[clone(target = "x86_64+avx")]
-fn min_max_helper<T, F>(array: &PrimitiveArray<T>, cmp: F) -> Option<T::Native>
-where
-    T: ArrowNumericType,
-    F: Fn(&T::Native, &T::Native) -> bool,
-{
-    let null_count = array.null_count();
-
-    // Includes case array.len() == 0
-    if null_count == array.len() {
-        return None;
-    }
-
-    let data = array.data();
-    let m = array.values();
-    let mut n;
-
-    if null_count == 0 {
-        // optimized path for arrays without null values
-        n = m[1..]
-            .iter()
-            .fold(m[0], |max, item| if cmp(&max, item) { *item } else { max });
-    } else {
-        n = T::default_value();
-        let mut has_value = false;
-        for (i, item) in m.iter().enumerate() {
-            if data.is_valid(i) && (!has_value || cmp(&n, item)) {
-                has_value = true;
-                n = *item
-            }
-        }
-    }
-    Some(n)
+    min_max_helper::<T::Native, _, _>(array, |a, b| (!is_nan(*a) & is_nan(*b)) || a < b)
 }
 
 /// Returns the minimum value in the boolean array.
@@ -190,14 +110,186 @@ pub fn max_boolean(array: &BooleanArray) -> Option<bool> {
         .or(Some(false))
 }
 
+/// Helper to compute min/max of [`ArrayAccessor`].
+#[multiversion]
+#[clone(target = "x86_64+avx")]
+fn min_max_helper<T, A: ArrayAccessor<Item = T>, F>(array: A, cmp: F) -> Option<T>
+where
+    F: Fn(&T, &T) -> bool,
+{
+    let null_count = array.null_count();
+    if null_count == array.len() {
+        None
+    } else if null_count == 0 {
+        // JUSTIFICATION
+        //  Benefit:  ~8% speedup
+        //  Soundness: `i` is always within the array bounds
+        (0..array.len())
+            .map(|i| unsafe { array.value_unchecked(i) })
+            .reduce(|acc, item| if cmp(&acc, &item) { item } else { acc })
+    } else {
+        let null_buffer = array.data_ref().null_buffer().unwrap();
+        let iter = BitIndexIterator::new(null_buffer, array.offset(), array.len());
+        unsafe {
+            let idx = iter.reduce(|acc_idx, idx| {
+                let acc = array.value_unchecked(acc_idx);
+                let item = array.value_unchecked(idx);
+                if cmp(&acc, &item) {
+                    idx
+                } else {
+                    acc_idx
+                }
+            });
+            idx.map(|idx| array.value_unchecked(idx))
+        }
+    }
+}
+
+/// Returns the maximum value in the binary array, according to the natural order.
+pub fn max_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&[u8]> {
+    min_max_helper::<&[u8], _, _>(array, |a, b| *a < *b)
+}
+
+/// Returns the minimum value in the binary array, according to the natural order.
+pub fn min_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&[u8]> {
+    min_max_helper::<&[u8], _, _>(array, |a, b| *a > *b)
+}
+
+/// Returns the maximum value in the string array, according to the natural order.
+pub fn max_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&str> {
+    min_max_helper::<&str, _, _>(array, |a, b| *a < *b)
+}
+
+/// Returns the minimum value in the string array, according to the natural order.
+pub fn min_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&str> {
+    min_max_helper::<&str, _, _>(array, |a, b| *a > *b)
+}
+
 /// Returns the sum of values in the array.
 ///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `sum_array_checked` instead.
+pub fn sum_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    match array.data_type() {
+        DataType::Dictionary(_, _) => {
+            let null_count = array.null_count();
+
+            if null_count == array.len() {
+                return None;
+            }
+
+            let iter = ArrayIter::new(array);
+            let sum = iter
+                .into_iter()
+                .fold(T::default_value(), |accumulator, value| {
+                    if let Some(value) = value {
+                        accumulator.add_wrapping(value)
+                    } else {
+                        accumulator
+                    }
+                });
+
+            Some(sum)
+        }
+        _ => sum::<T>(as_primitive_array(&array)),
+    }
+}
+
+/// Returns the sum of values in the array.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `sum_array` instead.
+pub fn sum_array_checked<T, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+) -> Result<Option<T::Native>>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    match array.data_type() {
+        DataType::Dictionary(_, _) => {
+            let null_count = array.null_count();
+
+            if null_count == array.len() {
+                return Ok(None);
+            }
+
+            let iter = ArrayIter::new(array);
+            let sum =
+                iter.into_iter()
+                    .try_fold(T::default_value(), |accumulator, value| {
+                        if let Some(value) = value {
+                            accumulator.add_checked(value)
+                        } else {
+                            Ok(accumulator)
+                        }
+                    })?;
+
+            Ok(Some(sum))
+        }
+        _ => sum_checked::<T>(as_primitive_array(&array)),
+    }
+}
+
+/// Returns the min of values in the array of `ArrowNumericType` type, or dictionary
+/// array with value of `ArrowNumericType` type.
+pub fn min_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeType,
+{
+    min_max_array_helper::<T, A, _, _>(
+        array,
+        |a, b| (is_nan(*a) & !is_nan(*b)) || a > b,
+        min,
+    )
+}
+
+/// Returns the max of values in the array of `ArrowNumericType` type, or dictionary
+/// array with value of `ArrowNumericType` type.
+pub fn max_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeType,
+{
+    min_max_array_helper::<T, A, _, _>(
+        array,
+        |a, b| (!is_nan(*a) & is_nan(*b)) || a < b,
+        max,
+    )
+}
+
+fn min_max_array_helper<T, A: ArrayAccessor<Item = T::Native>, F, M>(
+    array: A,
+    cmp: F,
+    m: M,
+) -> Option<T::Native>
+where
+    T: ArrowNumericType,
+    F: Fn(&T::Native, &T::Native) -> bool,
+    M: Fn(&PrimitiveArray<T>) -> Option<T::Native>,
+{
+    match array.data_type() {
+        DataType::Dictionary(_, _) => min_max_helper::<T::Native, _, _>(array, cmp),
+        _ => m(as_primitive_array(&array)),
+    }
+}
+
+/// Returns the sum of values in the primitive array.
+///
 /// Returns `None` if the array is empty or only contains null values.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `sum_checked` instead.
 #[cfg(not(feature = "simd"))]
 pub fn sum<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
     T: ArrowNumericType,
-    T::Native: Add<Output = T::Native>,
+    T::Native: ArrowNativeTypeOp,
 {
     let null_count = array.null_count();
 
@@ -210,7 +302,7 @@ where
     match array.data().null_buffer() {
         None => {
             let sum = data.iter().fold(T::default_value(), |accumulator, value| {
-                accumulator + *value
+                accumulator.add_wrapping(*value)
             });
 
             Some(sum)
@@ -228,7 +320,7 @@ where
                     let mut index_mask = 1;
                     chunk.iter().for_each(|value| {
                         if (mask & index_mask) != 0 {
-                            sum = sum + *value;
+                            sum = sum.add_wrapping(*value);
                         }
                         index_mask <<= 1;
                     });
@@ -238,7 +330,7 @@ where
 
             remainder.iter().enumerate().for_each(|(i, value)| {
                 if remainder_bits & (1 << i) != 0 {
-                    sum = sum + *value;
+                    sum = sum.add_wrapping(*value);
                 }
             });
 
@@ -247,13 +339,60 @@ where
     }
 }
 
+/// Returns the sum of values in the primitive array.
+///
+/// Returns `Ok(None)` if the array is empty or only contains null values.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use `sum` instead.
+pub fn sum_checked<T>(array: &PrimitiveArray<T>) -> Result<Option<T::Native>>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    let null_count = array.null_count();
+
+    if null_count == array.len() {
+        return Ok(None);
+    }
+
+    let data: &[T::Native] = array.values();
+
+    match array.data().null_buffer() {
+        None => {
+            let sum = data
+                .iter()
+                .try_fold(T::default_value(), |accumulator, value| {
+                    accumulator.add_checked(*value)
+                })?;
+
+            Ok(Some(sum))
+        }
+        Some(buffer) => {
+            let mut sum = T::default_value();
+
+            try_for_each_valid_idx(
+                array.len(),
+                array.offset(),
+                null_count,
+                Some(buffer.deref()),
+                |idx| {
+                    unsafe { sum = sum.add_checked(array.value_unchecked(idx))? };
+                    Ok::<_, ArrowError>(())
+                },
+            )?;
+
+            Ok(Some(sum))
+        }
+    }
+}
+
 #[cfg(feature = "simd")]
 mod simd {
     use super::is_nan;
     use crate::array::{Array, PrimitiveArray};
-    use crate::datatypes::ArrowNumericType;
+    use crate::datatypes::{ArrowNativeTypeOp, ArrowNumericType};
     use std::marker::PhantomData;
-    use std::ops::Add;
 
     pub(super) trait SimdAggregate<T: ArrowNumericType> {
         type ScalarAccumulator;
@@ -294,7 +433,7 @@ mod simd {
 
     impl<T: ArrowNumericType> SimdAggregate<T> for SumAggregate<T>
     where
-        T::Native: Add<Output = T::Native>,
+        T::Native: ArrowNativeTypeOp,
     {
         type ScalarAccumulator = T::Native;
         type SimdAccumulator = T::Simd;
@@ -323,7 +462,7 @@ mod simd {
         }
 
         fn accumulate_scalar(accumulator: &mut T::Native, value: T::Native) {
-            *accumulator = *accumulator + value
+            *accumulator = accumulator.add_wrapping(value)
         }
 
         fn reduce(
@@ -589,13 +728,16 @@ mod simd {
     }
 }
 
-/// Returns the sum of values in the array.
+/// Returns the sum of values in the primitive array.
 ///
 /// Returns `None` if the array is empty or only contains null values.
+///
+/// This doesn't detect overflow in release mode by default. Once overflowing, the result will
+/// wrap around. For an overflow-checking variant, use `sum_checked` instead.
 #[cfg(feature = "simd")]
 pub fn sum<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
-    T::Native: Add<Output = T::Native>,
+    T::Native: ArrowNativeTypeOp,
 {
     use simd::*;
 
@@ -631,6 +773,8 @@ mod tests {
     use super::*;
     use crate::array::*;
     use crate::compute::add;
+    use crate::datatypes::{Float32Type, Int32Type, Int8Type};
+    use arrow_array::types::Float64Type;
 
     #[test]
     fn test_primitive_array_sum() {
@@ -641,7 +785,7 @@ mod tests {
     #[test]
     fn test_primitive_array_float_sum() {
         let a = Float64Array::from(vec![1.1, 2.2, 3.3, 4.4, 5.5]);
-        assert!(16.5 - sum(&a).unwrap() < f64::EPSILON);
+        assert_eq!(16.5, sum(&a).unwrap());
     }
 
     #[test]
@@ -900,10 +1044,44 @@ mod tests {
     }
 
     #[test]
+    fn test_binary_min_max_with_nulls() {
+        let a = BinaryArray::from(vec![
+            Some("b".as_bytes()),
+            None,
+            None,
+            Some(b"a"),
+            Some(b"c"),
+        ]);
+        assert_eq!(Some("a".as_bytes()), min_binary(&a));
+        assert_eq!(Some("c".as_bytes()), max_binary(&a));
+    }
+
+    #[test]
+    fn test_binary_min_max_no_null() {
+        let a = BinaryArray::from(vec![Some("b".as_bytes()), Some(b"a"), Some(b"c")]);
+        assert_eq!(Some("a".as_bytes()), min_binary(&a));
+        assert_eq!(Some("c".as_bytes()), max_binary(&a));
+    }
+
+    #[test]
+    fn test_binary_min_max_all_nulls() {
+        let a = BinaryArray::from(vec![None, None]);
+        assert_eq!(None, min_binary(&a));
+        assert_eq!(None, max_binary(&a));
+    }
+
+    #[test]
+    fn test_binary_min_max_1() {
+        let a = BinaryArray::from(vec![None, None, Some("b".as_bytes()), Some(b"a")]);
+        assert_eq!(Some("a".as_bytes()), min_binary(&a));
+        assert_eq!(Some("b".as_bytes()), max_binary(&a));
+    }
+
+    #[test]
     fn test_string_min_max_with_nulls() {
         let a = StringArray::from(vec![Some("b"), None, None, Some("a"), Some("c")]);
-        assert_eq!("a", min_string(&a).unwrap());
-        assert_eq!("c", max_string(&a).unwrap());
+        assert_eq!(Some("a"), min_string(&a));
+        assert_eq!(Some("c"), max_string(&a));
     }
 
     #[test]
@@ -974,5 +1152,181 @@ mod tests {
         let a = BooleanArray::from(vec![Some(true)]);
         assert_eq!(Some(true), min_boolean(&a));
         assert_eq!(Some(true), max_boolean(&a));
+    }
+
+    #[test]
+    fn test_sum_dyn() {
+        let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
+        let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
+
+        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert_eq!(39, sum_array::<Int8Type, _>(array).unwrap());
+
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        assert_eq!(15, sum_array::<Int32Type, _>(&a).unwrap());
+
+        let keys = Int8Array::from(vec![Some(2_i8), None, Some(4)]);
+        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert_eq!(26, sum_array::<Int8Type, _>(array).unwrap());
+
+        let keys = Int8Array::from(vec![None, None, None]);
+        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert!(sum_array::<Int8Type, _>(array).is_none());
+    }
+
+    #[test]
+    fn test_max_min_dyn() {
+        let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
+        let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
+
+        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert_eq!(14, max_array::<Int8Type, _>(array).unwrap());
+
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert_eq!(12, min_array::<Int8Type, _>(array).unwrap());
+
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        assert_eq!(5, max_array::<Int32Type, _>(&a).unwrap());
+        assert_eq!(1, min_array::<Int32Type, _>(&a).unwrap());
+
+        let keys = Int8Array::from(vec![Some(2_i8), None, Some(7)]);
+        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert_eq!(17, max_array::<Int8Type, _>(array).unwrap());
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert_eq!(12, min_array::<Int8Type, _>(array).unwrap());
+
+        let keys = Int8Array::from(vec![None, None, None]);
+        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert!(max_array::<Int8Type, _>(array).is_none());
+        let array = dict_array.downcast_dict::<Int8Array>().unwrap();
+        assert!(min_array::<Int8Type, _>(array).is_none());
+    }
+
+    #[test]
+    fn test_max_min_dyn_nan() {
+        let values = Float32Array::from(vec![5.0_f32, 2.0_f32, f32::NAN]);
+        let keys = Int8Array::from_iter_values([0_i8, 1, 2]);
+
+        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array = dict_array.downcast_dict::<Float32Array>().unwrap();
+        assert!(max_array::<Float32Type, _>(array).unwrap().is_nan());
+
+        let array = dict_array.downcast_dict::<Float32Array>().unwrap();
+        assert_eq!(2.0_f32, min_array::<Float32Type, _>(array).unwrap());
+    }
+
+    #[test]
+    fn test_min_max_sliced_primitive() {
+        let expected = Some(4.0);
+        let input: Float64Array = vec![None, Some(4.0)].into_iter().collect();
+        let actual = min(&input);
+        assert_eq!(actual, expected);
+        let actual = max(&input);
+        assert_eq!(actual, expected);
+
+        let sliced_input: Float64Array = vec![None, None, None, None, None, Some(4.0)]
+            .into_iter()
+            .collect();
+        let sliced_input = sliced_input.slice(4, 2);
+        let sliced_input = as_primitive_array::<Float64Type>(&sliced_input);
+
+        assert_eq!(sliced_input, &input);
+
+        let actual = min(sliced_input);
+        assert_eq!(actual, expected);
+        let actual = max(sliced_input);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_min_max_sliced_boolean() {
+        let expected = Some(true);
+        let input: BooleanArray = vec![None, Some(true)].into_iter().collect();
+        let actual = min_boolean(&input);
+        assert_eq!(actual, expected);
+        let actual = max_boolean(&input);
+        assert_eq!(actual, expected);
+
+        let sliced_input: BooleanArray = vec![None, None, None, None, None, Some(true)]
+            .into_iter()
+            .collect();
+        let sliced_input = sliced_input.slice(4, 2);
+        let sliced_input = as_boolean_array(&sliced_input);
+
+        assert_eq!(sliced_input, &input);
+
+        let actual = min_boolean(sliced_input);
+        assert_eq!(actual, expected);
+        let actual = max_boolean(sliced_input);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_min_max_sliced_string() {
+        let expected = Some("foo");
+        let input: StringArray = vec![None, Some("foo")].into_iter().collect();
+        let actual = min_string(&input);
+        assert_eq!(actual, expected);
+        let actual = max_string(&input);
+        assert_eq!(actual, expected);
+
+        let sliced_input: StringArray = vec![None, None, None, None, None, Some("foo")]
+            .into_iter()
+            .collect();
+        let sliced_input = sliced_input.slice(4, 2);
+        let sliced_input = as_string_array(&sliced_input);
+
+        assert_eq!(sliced_input, &input);
+
+        let actual = min_string(sliced_input);
+        assert_eq!(actual, expected);
+        let actual = max_string(sliced_input);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_min_max_sliced_binary() {
+        let expected: Option<&[u8]> = Some(&[5]);
+        let input: BinaryArray = vec![None, Some(&[5])].into_iter().collect();
+        let actual = min_binary(&input);
+        assert_eq!(actual, expected);
+        let actual = max_binary(&input);
+        assert_eq!(actual, expected);
+
+        let sliced_input: BinaryArray = vec![None, None, None, None, None, Some(&[5])]
+            .into_iter()
+            .collect();
+        let sliced_input = sliced_input.slice(4, 2);
+        let sliced_input = as_generic_binary_array::<i32>(&sliced_input);
+
+        assert_eq!(sliced_input, &input);
+
+        let actual = min_binary(sliced_input);
+        assert_eq!(actual, expected);
+        let actual = max_binary(sliced_input);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    #[cfg(not(feature = "simd"))]
+    fn test_sum_overflow() {
+        let a = Int32Array::from(vec![i32::MAX, 1]);
+
+        assert_eq!(sum(&a).unwrap(), -2147483648);
+        assert_eq!(sum_array::<Int32Type, _>(&a).unwrap(), -2147483648);
+    }
+
+    #[test]
+    fn test_sum_checked_overflow() {
+        let a = Int32Array::from(vec![i32::MAX, 1]);
+
+        sum_checked(&a).expect_err("overflow should be detected");
+        sum_array_checked::<Int32Type, _>(&a).expect_err("overflow should be detected");
     }
 }

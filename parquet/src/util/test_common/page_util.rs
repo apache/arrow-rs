@@ -16,22 +16,16 @@
 // under the License.
 
 use crate::basic::Encoding;
-use crate::column::page::PageReader;
 use crate::column::page::{Page, PageIterator};
+use crate::column::page::{PageMetadata, PageReader};
 use crate::data_type::DataType;
-use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
-use crate::encodings::levels::max_buffer_size;
+use crate::encodings::encoding::{get_encoder, Encoder};
 use crate::encodings::levels::LevelEncoder;
 use crate::errors::Result;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
 use crate::util::memory::ByteBufferPtr;
-use crate::util::memory::MemTracker;
-use crate::util::memory::MemTrackerPtr;
-use crate::util::test_common::random_numbers_range;
-use rand::distributions::uniform::SampleUniform;
-use std::collections::VecDeque;
+use std::iter::Peekable;
 use std::mem;
-use std::sync::Arc;
 
 pub trait DataPageBuilder {
     fn add_rep_levels(&mut self, max_level: i16, rep_levels: &[i16]);
@@ -48,9 +42,7 @@ pub trait DataPageBuilder {
 ///   - consume()
 /// in order to populate and obtain a data page.
 pub struct DataPageBuilderImpl {
-    desc: ColumnDescPtr,
     encoding: Option<Encoding>,
-    mem_tracker: MemTrackerPtr,
     num_values: u32,
     buffer: Vec<u8>,
     rep_levels_byte_len: u32,
@@ -62,11 +54,9 @@ impl DataPageBuilderImpl {
     // `num_values` is the number of non-null values to put in the data page.
     // `datapage_v2` flag is used to indicate if the generated data page should use V2
     // format or not.
-    pub fn new(desc: ColumnDescPtr, num_values: u32, datapage_v2: bool) -> Self {
+    pub fn new(_desc: ColumnDescPtr, num_values: u32, datapage_v2: bool) -> Self {
         DataPageBuilderImpl {
-            desc,
             encoding: None,
-            mem_tracker: Arc::new(MemTracker::new()),
             num_values,
             buffer: vec![],
             rep_levels_byte_len: 0,
@@ -80,10 +70,9 @@ impl DataPageBuilderImpl {
         if max_level <= 0 {
             return 0;
         }
-        let size = max_buffer_size(Encoding::RLE, max_level, levels.len());
-        let mut level_encoder = LevelEncoder::v1(Encoding::RLE, max_level, vec![0; size]);
-        level_encoder.put(levels).expect("put() should be OK");
-        let encoded_levels = level_encoder.consume().expect("consume() should be OK");
+        let mut level_encoder = LevelEncoder::v1(Encoding::RLE, max_level, levels.len());
+        level_encoder.put(levels);
+        let encoded_levels = level_encoder.consume();
         // Actual encoded bytes (without length offset)
         let encoded_bytes = &encoded_levels[mem::size_of::<i32>()..];
         if self.datapage_v2 {
@@ -105,11 +94,7 @@ impl DataPageBuilder for DataPageBuilderImpl {
     }
 
     fn add_def_levels(&mut self, max_levels: i16, def_levels: &[i16]) {
-        assert!(
-            self.num_values == def_levels.len() as u32,
-            "Must call `add_rep_levels() first!`"
-        );
-
+        self.num_values = def_levels.len() as u32;
         self.def_levels_byte_len = self.add_levels(max_levels, def_levels);
     }
 
@@ -122,8 +107,7 @@ impl DataPageBuilder for DataPageBuilderImpl {
         );
         self.encoding = Some(encoding);
         let mut encoder: Box<dyn Encoder<T>> =
-            get_encoder::<T>(self.desc.clone(), encoding, self.mem_tracker.clone())
-                .expect("get_encoder() should be OK");
+            get_encoder::<T>(encoding).expect("get_encoder() should be OK");
         encoder.put(values).expect("put() should be OK");
         let encoded_values = encoder
             .flush_buffer()
@@ -144,8 +128,8 @@ impl DataPageBuilder for DataPageBuilderImpl {
                 encoding: self.encoding.unwrap(),
                 num_nulls: 0, /* set to dummy value - don't need this when reading
                                * data page */
-                num_rows: self.num_values, /* also don't need this when reading
-                                            * data page */
+                num_rows: self.num_values, /* num_rows only needs in skip_records, now we not support skip REPEATED field,
+                                            * so we can assume num_values == num_rows */
                 def_levels_byte_len: self.def_levels_byte_len,
                 rep_levels_byte_len: self.rep_levels_byte_len,
                 is_compressed: false,
@@ -166,24 +150,50 @@ impl DataPageBuilder for DataPageBuilderImpl {
 
 /// A utility page reader which stores pages in memory.
 pub struct InMemoryPageReader<P: Iterator<Item = Page>> {
-    page_iter: P,
+    page_iter: Peekable<P>,
 }
 
 impl<P: Iterator<Item = Page>> InMemoryPageReader<P> {
     pub fn new(pages: impl IntoIterator<Item = Page, IntoIter = P>) -> Self {
         Self {
-            page_iter: pages.into_iter(),
+            page_iter: pages.into_iter().peekable(),
         }
     }
 }
 
-impl<P: Iterator<Item = Page>> PageReader for InMemoryPageReader<P> {
+impl<P: Iterator<Item = Page> + Send> PageReader for InMemoryPageReader<P> {
     fn get_next_page(&mut self) -> Result<Option<Page>> {
         Ok(self.page_iter.next())
     }
+
+    fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
+        if let Some(x) = self.page_iter.peek() {
+            match x {
+                Page::DataPage { num_values, .. } => Ok(Some(PageMetadata {
+                    num_rows: *num_values as usize,
+                    is_dict: false,
+                })),
+                Page::DataPageV2 { num_rows, .. } => Ok(Some(PageMetadata {
+                    num_rows: *num_rows as usize,
+                    is_dict: false,
+                })),
+                Page::DictionaryPage { .. } => Ok(Some(PageMetadata {
+                    num_rows: 0,
+                    is_dict: true,
+                })),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn skip_next_page(&mut self) -> Result<()> {
+        self.page_iter.next();
+        Ok(())
+    }
 }
 
-impl<P: Iterator<Item = Page>> Iterator for InMemoryPageReader<P> {
+impl<P: Iterator<Item = Page> + Send> Iterator for InMemoryPageReader<P> {
     type Item = Result<Page>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -223,98 +233,12 @@ impl<I: Iterator<Item = Vec<Page>>> Iterator for InMemoryPageIterator<I> {
     }
 }
 
-impl<I: Iterator<Item = Vec<Page>>> PageIterator for InMemoryPageIterator<I> {
+impl<I: Iterator<Item = Vec<Page>> + Send> PageIterator for InMemoryPageIterator<I> {
     fn schema(&mut self) -> Result<SchemaDescPtr> {
         Ok(self.schema.clone())
     }
 
     fn column_schema(&mut self) -> Result<ColumnDescPtr> {
         Ok(self.column_desc.clone())
-    }
-}
-
-pub fn make_pages<T: DataType>(
-    desc: ColumnDescPtr,
-    encoding: Encoding,
-    num_pages: usize,
-    levels_per_page: usize,
-    min: T::T,
-    max: T::T,
-    def_levels: &mut Vec<i16>,
-    rep_levels: &mut Vec<i16>,
-    values: &mut Vec<T::T>,
-    pages: &mut VecDeque<Page>,
-    use_v2: bool,
-) where
-    T::T: PartialOrd + SampleUniform + Copy,
-{
-    let mut num_values = 0;
-    let max_def_level = desc.max_def_level();
-    let max_rep_level = desc.max_rep_level();
-
-    let mem_tracker = Arc::new(MemTracker::new());
-    let mut dict_encoder = DictEncoder::<T>::new(desc.clone(), mem_tracker);
-
-    for i in 0..num_pages {
-        let mut num_values_cur_page = 0;
-        let level_range = i * levels_per_page..(i + 1) * levels_per_page;
-
-        if max_def_level > 0 {
-            random_numbers_range(levels_per_page, 0, max_def_level + 1, def_levels);
-            for dl in &def_levels[level_range.clone()] {
-                if *dl == max_def_level {
-                    num_values_cur_page += 1;
-                }
-            }
-        } else {
-            num_values_cur_page = levels_per_page;
-        }
-        if max_rep_level > 0 {
-            random_numbers_range(levels_per_page, 0, max_rep_level + 1, rep_levels);
-        }
-        random_numbers_range(num_values_cur_page, min, max, values);
-
-        // Generate the current page
-
-        let mut pb =
-            DataPageBuilderImpl::new(desc.clone(), num_values_cur_page as u32, use_v2);
-        if max_rep_level > 0 {
-            pb.add_rep_levels(max_rep_level, &rep_levels[level_range.clone()]);
-        }
-        if max_def_level > 0 {
-            pb.add_def_levels(max_def_level, &def_levels[level_range]);
-        }
-
-        let value_range = num_values..num_values + num_values_cur_page;
-        match encoding {
-            Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY => {
-                let _ = dict_encoder.put(&values[value_range.clone()]);
-                let indices = dict_encoder
-                    .write_indices()
-                    .expect("write_indices() should be OK");
-                pb.add_indices(indices);
-            }
-            Encoding::PLAIN => {
-                pb.add_values::<T>(encoding, &values[value_range]);
-            }
-            enc => panic!("Unexpected encoding {}", enc),
-        }
-
-        let data_page = pb.consume();
-        pages.push_back(data_page);
-        num_values += num_values_cur_page;
-    }
-
-    if encoding == Encoding::PLAIN_DICTIONARY || encoding == Encoding::RLE_DICTIONARY {
-        let dict = dict_encoder
-            .write_dict()
-            .expect("write_dict() should be OK");
-        let dict_page = Page::DictionaryPage {
-            buf: dict,
-            num_values: dict_encoder.num_entries() as u32,
-            encoding: Encoding::RLE_DICTIONARY,
-            is_sorted: false,
-        };
-        pages.push_front(dict_page);
     }
 }

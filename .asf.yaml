@@ -15,6 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# Documentation can be found here:
+# https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=127405038
+
 notifications:
   commits:      commits@arrow.apache.org
   issues:       github@arrow.apache.org
@@ -29,3 +32,10 @@ github:
     rebase: false
   features:
     issues: true
+  protected_branches:
+    master:
+      required_status_checks:
+        # require branches to be up-to-date before merging
+        strict: true
+        # don't require any jobs to pass
+        contexts: []

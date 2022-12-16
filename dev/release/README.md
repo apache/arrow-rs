@@ -19,45 +19,34 @@
 
 # Release Process
 
-## Branching
+## Overview
 
-Arrow maintains two branches: `active_release` and `master`.
+This file documents the release process for:
 
-- All new PRs are created and merged against `master`
-- All versions are created from the `active_release` branch
-- Once merged to master, changes are "cherry-picked" (via a hopefully soon to be automated process), to the `active_release` branch based on the judgement of the original PR author and maintainers.
+1. The "Rust Arrow Crates": `arrow`, `arrow-flight`, `parquet`, and `parquet-derive`.
+2. The `object_store` crate.
 
-- We do not merge breaking api changes, as defined in [Rust RFC 1105](https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md) to the `active_release` branch. Instead, they are merged to the `master` branch and included in the next major release.
+### The Rust Arrow Crates
 
-Please see the [original proposal](https://docs.google.com/document/d/1tMQ67iu8XyGGZuj--h9WQYB9inCk6c2sL_4xMTwENGc/edit?ts=60961758) document the rational of this change.
+The Rust Arrow Crates are interconnected (e.g. `parquet` has an optional dependency on `arrow`) so we increment and release all of them together. We try to release a new version of "Rust Arrow Crates" every two weeks. This cadence balances getting new features into the community without overwhelming downstream projects with too frequent changes or overly burdening maintainers.
 
-## Release Branching
+If any code has been merged to master that has a breaking API change, as defined in [Rust RFC 1105](https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md), the major version number incremented changed (e.g. `9.0.2` to `9.0.2`). Otherwise the new minor version incremented (e.g. `9.0.2` to `7.1.0`).
 
-We aim to release every other week from the `active_release` branch.
+### `object_store` crate
 
-Every other week, a maintainer proposes a minor (e.g. `4.1.0` to `4.2.0`) or patch (e.g `4.1.0` to `4.1.1`) release, depending on changes to the `active_release` in the previous 2 weeks, following the process below.
+At the time of writing, we release a new version of `object_store` on demand rather than on a regular schedule.
 
-If this release is approved by at least three PMC members, that tarball is uploaded to the official apache distribution sites, a new version from that tarball is released to crates.io later in the week.
-
-The overall Apache Arrow in general does synchronized major releases every three months. The Rust implementation aims to do its major releases in the same time frame.
+As we are still in an early phase, we use the 0.x version scheme. If any code has been merged to master that has a breaking API change, as defined in [Rust RFC 1105](https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md), the minor version number incremented changed (e.g. `0.3.0` to `0.4.0`). Otherwise the patch version is incremented (e.g. `0.3.0` to `0.3.1`).
 
 # Release Mechanics
 
-This directory contains the scripts used to manage an Apache Arrow Release.
-
-# Process Overview
+## Process Overview
 
 As part of the Apache governance model, official releases consist of
 signed source tarballs approved by the PMC.
 
 We then use the code in the approved source tarball to release to
 crates.io, the Rust ecosystem's package manager.
-
-## Branching
-
-# Release Preparation
-
-# Change Log
 
 We create a `CHANGELOG.md` so our users know what has been changed between releases.
 
@@ -67,62 +56,82 @@ The CHANGELOG is created automatically using
 This script creates a changelog using github issues and the
 labels associated with them.
 
-# Mechanics of creating a release
+## Prepare CHANGELOG and version:
 
-## Prepare the release branch and tags
+Now prepare a PR to update `CHANGELOG.md` and versions on `master` to reflect the planned release.
 
-First, ensure that `active_release` contains the content of the desired release. For minor and patch releases, no additional steps are needed.
+For the Rust Arrow crates, do this in the root of this repository. For example [#2323](https://github.com/apache/arrow-rs/pull/2323)
 
-To prepare for _a major release_, change `active release` to point at the latest `master` with commands such as:
-
-```
-git checkout active_release
-git fetch apache
-git reset --hard apache/master
-git push -f
-```
-
-### Update CHANGELOG.md + Version
-
-Now prepare a PR to update `CHANGELOG.md` and versions on `active_release` branch to reflect the planned release.
-
-See [#298](https://github.com/apache/arrow-rs/pull/298) for an example.
-
-Here are the commands that could be used to prepare the 5.1.0 release:
+For `object_store` the same process is done in the `object_store` directory. Examples TBD
 
 ```bash
-git checkout active_release
+git checkout master
 git pull
-git checkout -b make-release
+git checkout -b <RELEASE_BRANCH>
+
+# Update versions. Make sure to run it before the next step since we do not want CHANGELOG-old.md affected.
+sed -i '' -e 's/14.0.0/29.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
+git commit -a -m 'Update version'
+
+# Copy the content of CHANGELOG.md to the beginning of CHANGELOG-old.md
+
+# ensure your github token is available
+export ARROW_GITHUB_API_TOKEN=<TOKEN>
+
 
 # manully edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
-CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
+./dev/release/update_change_log.sh
+
+# run automated script to copy labels to issues based on referenced PRs
+# (NOTE 1:  this must be done by a committer / other who has
+# write access to the repository)
+#
+# NOTE 2: this must be done after creating the initial CHANGELOG file
+python dev/release/label_issues.py
+
 # review change log / edit issues and labels if needed, rerun
 git commit -a -m 'Create changelog'
 
-# update versions
-sed -i '' -e 's/5.0.0-SNAPSHOT/5.1.0/g' `find . -name 'Cargo.toml' -or -name '*.md'`
-git commit -a -m 'Update version'
+
+# Manully edit ./dev/release/update_change_log.sh to reflect the release version
+# Create the changelog
+CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
+# Review change log / edit issues and labels if needed, rerun
+git commit -a -m 'Create changelog'
+
+git push
+
+# File the release PR
+export BRANCH=<RELEASE_BRANCH> && export GITHUB_USERNAME=<USERNAME> && export GITHUB_TOKEN=<TOKEN> && ./file_release_pr.sh
 ```
 
 Note that when reviewing the change log, rather than editing the
 `CHANGELOG.md`, it is preferred to update the issues and their labels
 (e.g. add `invalid` label to exclude them from release notes)
 
+Merge this PR to `master` prior to the next step.
+
 ## Prepare release candidate tarball
 
-(Note you need to be a committer to run these scripts as they upload to the apache svn distribution servers)
+After you have merged the updates to the `CHANGELOG` and version,
+create a release candidate using the following steps. Note you need to
+be a committer to run these scripts as they upload to the apache `svn`
+distribution servers.
 
 ### Create git tag for the release:
 
 While the official release artifact is a signed tarball, we also tag the commit it was created for convenience and code archaeology.
 
-Using a string such as `4.0.1` as the `<version>`, create and push the tag thusly:
+For a Rust Arrow Crates release, use a string such as `4.0.1` as the `<version>`.
+
+For `object_store` releases, use a string such as `object_store_0.4.0` as the `<version>`.
+
+Create and push the tag thusly:
 
 ```shell
 git fetch apache
-git tag <version> apache/active_release
+git tag <version> apache/master
 # push tag to apache
 git push apache <version>
 ```
@@ -133,10 +142,18 @@ Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
 
 ### Create, sign, and upload tarball
 
-Run `create-tarball.sh` with the `<version>` tag and `<rc>` and you found in previous steps:
+Run `create-tarball.sh` with the `<version>` tag and `<rc>` and you found in previous steps.
+
+Rust Arrow Crates:
 
 ```shell
 ./dev/release/create-tarball.sh 4.1.0 2
+```
+
+`object_store`:
+
+```shell
+./object_store/dev/release/create-tarball.sh 4.1.0 2
 ```
 
 The `create-tarball.sh` script
@@ -150,7 +167,7 @@ The `create-tarball.sh` script
 
 ### Vote on Release Candidate tarball
 
-Send the email output from the script to dev@arrow.apache.org. The email should look like
+Send an email, based on the output from the script to dev@arrow.apache.org. The email should look like
 
 ```
 To: dev@arrow.apache.org
@@ -180,11 +197,11 @@ The vote will be open for at least 72 hours.
 [3]: https://github.com/apache/arrow-rs/blob/a5dd428f57e62db20a945e8b1895de91405958c4/CHANGELOG.md
 ```
 
-For the release to become "official" it needs at least three PMC members to vote +1 on it.
+For the release to become "official" it needs at least three Apache Arrow PMC members to vote +1 on it.
 
-#### Verifying Release Candidates
+## Verifying release candidates
 
-The `dev/release/verify-release-candidate.sh` is a script in this repository that can assist in the verification process. Run it like:
+The `dev/release/verify-release-candidate.sh` or `object_store/dev/release/verify-release-candidate.sh` are scripts in this repository that can assist in the verification process. Run it like:
 
 ```
 ./dev/release/verify-release-candidate.sh 4.1.0 2
@@ -198,8 +215,16 @@ If the release is not approved, fix whatever the problem is and try again with t
 
 Move tarball to the release location in SVN, e.g. https://dist.apache.org/repos/dist/release/arrow/arrow-4.1.0/, using the `release-tarball.sh` script:
 
+Rust Arrow Crates:
+
 ```shell
 ./dev/release/release-tarball.sh 4.1.0 2
+```
+
+`object_store`
+
+```shell
+./object_store/dev/release/release-tarball.sh 4.1.0 2
 ```
 
 Congratulations! The release is now offical!
@@ -224,47 +249,31 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (e.g. `version = "0.11.0"`) and then publish the crate with the
 following commands
 
+Rust Arrow Crates:
+
 ```shell
+(cd arrow-buffer && cargo publish)
+(cd arrow-schema && cargo publish)
+(cd arrow-data && cargo publish)
+(cd arrow-array && cargo publish)
+(cd arrow-select && cargo publish)
+(cd arrow-cast && cargo publish)
+(cd arrow-string && cargo publish)
+(cd arrow-ord && cargo publish)
+(cd arrow-ipc && cargo publish)
+(cd arrow-csv && cargo publish)
+(cd arrow-json && cargo publish)
+(cd arrow-ord && cargo publish)
+(cd arrow-string && cargo publish)
 (cd arrow && cargo publish)
 (cd arrow-flight && cargo publish)
 (cd parquet && cargo publish)
 (cd parquet_derive && cargo publish)
+(cd arrow-integration-test && cargo publish)
 ```
 
-# Backporting
-
-As of the time of writing, backporting to `active_release` done semi-manually.
-
-_Note_: Since minor releases will be automatically picked up by other CI systems, it is CRITICAL to only cherry pick commits that are API compatible -- that is that do not require any code changes in crates that rely on arrow. API changes are released with the next major version.
-
-Step 1: Pick the commit to cherry-pick.
-
-Step 2: Create cherry-pick PR to active_release
-
-Step 3a: If CI passes, merge cherry-pick PR
-
-Step 3b: If CI doesn't pass or some other changes are needed, the PR should be reviewed / approved as normal prior to merge
-
-For example, to backport `b2de5446cc1e45a0559fb39039d0545df1ac0d26` to active_release, you could use the following command
+`object_store`
 
 ```shell
-git clone git@github.com:apache/arrow-rs.git /tmp/arrow-rs
-
-ARROW_GITHUB_API_TOKEN=$ARROW_GITHUB_API_TOKEN CHECKOUT_ROOT=/tmp/arrow-rs CHERRY_PICK_SHA=b2de5446cc1e45a0559fb39039d0545df1ac0d26 python3 dev/release/cherry-pick-pr.py
+cargo publish
 ```
-
-## Labels
-
-There are two labels that help keep track of backporting:
-
-1. [`cherry-picked`](https://github.com/apache/arrow-rs/labels/cherry-picked) for PRs that have been cherry-picked/backported to `active_release`
-2. [`release-cherry-pick`](https://github.com/apache/arrow-rs/labels/release-cherry-pick) for the PRs that are the cherry pick
-
-You can find candidates to cherry pick using [this filter](https://github.com/apache/arrow-rs/pulls?q=is%3Apr+is%3Aclosed+-label%3Arelease-cherry-pick+-label%3Acherry-picked)
-
-## Rationale for creating PRs on cherry picked PRs:
-
-1. PRs are a natural place to run the CI tests to make sure there are no logical conflicts
-2. PRs offer a place for the original author / committers to comment and say it should/should not be backported.
-3. PRs offer a way to make cleanups / fixups and approve (if needed) for non cherry pick PRs
-4. There is an additional control / review when the candidate release is created

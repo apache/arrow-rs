@@ -15,46 +15,43 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Rust
+name: miri
 
+# trigger for all PRs that touch certain files and changes to master
 on:
-  # always trigger
   push:
+    branches:
+      - master
   pull_request:
+    paths:
+      - .github/**
+      - arrow-array/**
+      - arrow-buffer/**
+      - arrow-cast/**
+      - arrow-csv/**
+      - arrow-data/**
+      - arrow-ipc/**
+      - arrow-json/**
+      - arrow-schema/**
+      - arrow-select/**
+      - arrow-string/**
+      - arrow/**
 
 jobs:
-
   miri-checks:
     name: MIRI
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [nightly-2021-07-04]
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: true
-      - uses: actions/cache@v2
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-miri-${{ hashFiles('**/Cargo.lock') }}
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt clippy miri
+          rustup toolchain install nightly --component miri
+          rustup override set nightly
+          cargo miri setup
       - name: Run Miri Checks
         env:
           RUST_BACKTRACE: full
-          RUST_LOG: 'trace'
-        run: |
-          export MIRIFLAGS="-Zmiri-disable-isolation"
-          cargo miri setup
-          cargo clean
-          # Currently only the arrow crate is tested with miri
-          # IO related tests and some unsupported tests are skipped
-          cargo miri test -p arrow -- --skip csv --skip ipc --skip json
+          RUST_LOG: "trace"
+        run: bash .github/workflows/miri.sh

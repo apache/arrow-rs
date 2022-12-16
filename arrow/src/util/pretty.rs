@@ -19,40 +19,42 @@
 //! available unless `feature = "prettyprint"` is enabled.
 
 use crate::{array::ArrayRef, record_batch::RecordBatch};
-
-use prettytable::format;
-use prettytable::{Cell, Row, Table};
+use comfy_table::{Cell, Table};
+use std::fmt::Display;
 
 use crate::error::Result;
 
 use super::display::array_value_to_string;
 
 ///! Create a visual representation of record batches
-pub fn pretty_format_batches(results: &[RecordBatch]) -> Result<String> {
-    Ok(create_table(results)?.to_string())
+pub fn pretty_format_batches(results: &[RecordBatch]) -> Result<impl Display> {
+    create_table(results)
 }
 
 ///! Create a visual representation of columns
-pub fn pretty_format_columns(col_name: &str, results: &[ArrayRef]) -> Result<String> {
-    Ok(create_column(col_name, results)?.to_string())
+pub fn pretty_format_columns(
+    col_name: &str,
+    results: &[ArrayRef],
+) -> Result<impl Display> {
+    create_column(col_name, results)
 }
 
 ///! Prints a visual representation of record batches to stdout
 pub fn print_batches(results: &[RecordBatch]) -> Result<()> {
-    create_table(results)?.printstd();
+    println!("{}", create_table(results)?);
     Ok(())
 }
 
 ///! Prints a visual representation of a list of column to stdout
 pub fn print_columns(col_name: &str, results: &[ArrayRef]) -> Result<()> {
-    create_column(col_name, results)?.printstd();
+    println!("{}", create_column(col_name, results)?);
     Ok(())
 }
 
 ///! Convert a series of record batches into a table
 fn create_table(results: &[RecordBatch]) -> Result<Table> {
     let mut table = Table::new();
-    table.set_format(*format::consts::FORMAT_NO_LINESEP_WITH_TITLE);
+    table.load_preset("||--+-++|    ++++++");
 
     if results.is_empty() {
         return Ok(table);
@@ -62,18 +64,18 @@ fn create_table(results: &[RecordBatch]) -> Result<Table> {
 
     let mut header = Vec::new();
     for field in schema.fields() {
-        header.push(Cell::new(&field.name()));
+        header.push(Cell::new(field.name()));
     }
-    table.set_titles(Row::new(header));
+    table.set_header(header);
 
     for batch in results {
         for row in 0..batch.num_rows() {
             let mut cells = Vec::new();
             for col in 0..batch.num_columns() {
                 let column = batch.column(col);
-                cells.push(Cell::new(&array_value_to_string(&column, row)?));
+                cells.push(Cell::new(array_value_to_string(column, row)?));
             }
-            table.add_row(Row::new(cells));
+            table.add_row(cells);
         }
     }
 
@@ -82,19 +84,19 @@ fn create_table(results: &[RecordBatch]) -> Result<Table> {
 
 fn create_column(field: &str, columns: &[ArrayRef]) -> Result<Table> {
     let mut table = Table::new();
-    table.set_format(*format::consts::FORMAT_NO_LINESEP_WITH_TITLE);
+    table.load_preset("||--+-++|    ++++++");
 
     if columns.is_empty() {
         return Ok(table);
     }
 
     let header = vec![Cell::new(field)];
-    table.set_titles(Row::new(header));
+    table.set_header(header);
 
     for col in columns {
         for row in 0..col.len() {
-            let cells = vec![Cell::new(&array_value_to_string(&col, row)?)];
-            table.add_row(Row::new(cells));
+            let cells = vec![Cell::new(array_value_to_string(col, row)?)];
+            table.add_row(cells);
         }
     }
 
@@ -105,18 +107,23 @@ fn create_column(field: &str, columns: &[ArrayRef]) -> Result<Table> {
 mod tests {
     use crate::{
         array::{
-            self, new_null_array, Array, Date32Array, Date64Array, PrimitiveBuilder,
-            StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
-            Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-            Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-            TimestampNanosecondArray, TimestampSecondArray,
+            self, new_null_array, Array, Date32Array, Date64Array,
+            FixedSizeBinaryBuilder, Float16Array, Int32Array, StringArray,
+            StringDictionaryBuilder, StructArray, Time32MillisecondArray,
+            Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+            TimestampMicrosecondArray, TimestampMillisecondArray,
+            TimestampNanosecondArray, TimestampSecondArray, UnionArray, UnionBuilder,
         },
-        datatypes::{DataType, Field, Int32Type, Schema},
+        buffer::Buffer,
+        datatypes::{DataType, Field, Float64Type, Int32Type, Schema, UnionMode},
     };
 
     use super::*;
-    use crate::array::{DecimalBuilder, Int32Array};
+    use crate::array::{Decimal128Array, FixedSizeListBuilder};
+    use std::fmt::Write;
     use std::sync::Arc;
+
+    use half::f16;
 
     #[test]
     fn test_pretty_format_batches() -> Result<()> {
@@ -145,7 +152,7 @@ mod tests {
             ],
         )?;
 
-        let table = pretty_format_batches(&[batch])?;
+        let table = pretty_format_batches(&[batch])?.to_string();
 
         let expected = vec![
             "+---+-----+",
@@ -177,7 +184,7 @@ mod tests {
             Arc::new(array::StringArray::from(vec![Some("e"), None, Some("g")])),
         ];
 
-        let table = pretty_format_columns("a", &columns)?;
+        let table = pretty_format_columns("a", &columns)?.to_string();
 
         let expected = vec![
             "+---+", "| a |", "+---+", "| a |", "| b |", "|   |", "| d |", "| e |",
@@ -209,7 +216,7 @@ mod tests {
         // define data (null)
         let batch = RecordBatch::try_new(schema, arrays).unwrap();
 
-        let table = pretty_format_batches(&[batch]).unwrap();
+        let table = pretty_format_batches(&[batch]).unwrap().to_string();
 
         let expected = vec![
             "+---+---+---+",
@@ -234,18 +241,16 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
 
-        let keys_builder = PrimitiveBuilder::<Int32Type>::new(10);
-        let values_builder = StringBuilder::new(10);
-        let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
+        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
 
         builder.append("one")?;
-        builder.append_null()?;
+        builder.append_null();
         builder.append("three")?;
         let array = Arc::new(builder.finish());
 
         let batch = RecordBatch::try_new(schema, vec![array])?;
 
-        let table = pretty_format_batches(&[batch])?;
+        let table = pretty_format_batches(&[batch])?.to_string();
 
         let expected = vec![
             "+-------+",
@@ -264,14 +269,87 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_pretty_format_fixed_size_list() -> Result<()> {
+        // define a schema.
+        let field_type = DataType::FixedSizeList(
+            Box::new(Field::new("item", DataType::Int32, true)),
+            3,
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
+
+        let keys_builder = Int32Array::builder(3);
+        let mut builder = FixedSizeListBuilder::new(keys_builder, 3);
+
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
+        builder.values().append_slice(&[4, 5, 6]);
+        builder.append(false);
+        builder.values().append_slice(&[7, 8, 9]);
+        builder.append(true);
+
+        let array = Arc::new(builder.finish());
+
+        let batch = RecordBatch::try_new(schema, vec![array])?;
+        let table = pretty_format_batches(&[batch])?.to_string();
+        let expected = vec![
+            "+-----------+",
+            "| d1        |",
+            "+-----------+",
+            "| [1, 2, 3] |",
+            "|           |",
+            "| [7, 8, 9] |",
+            "+-----------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+
+        assert_eq!(expected, actual, "Actual result:\n{}", table);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pretty_format_fixed_size_binary() -> Result<()> {
+        // define a schema.
+        let field_type = DataType::FixedSizeBinary(3);
+        let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
+
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 3);
+
+        builder.append_value([1, 2, 3]).unwrap();
+        builder.append_null();
+        builder.append_value([7, 8, 9]).unwrap();
+
+        let array = Arc::new(builder.finish());
+
+        let batch = RecordBatch::try_new(schema, vec![array])?;
+        let table = pretty_format_batches(&[batch])?.to_string();
+        let expected = vec![
+            "+--------+",
+            "| d1     |",
+            "+--------+",
+            "| 010203 |",
+            "|        |",
+            "| 070809 |",
+            "+--------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+
+        assert_eq!(expected, actual, "Actual result:\n{}", table);
+
+        Ok(())
+    }
+
     /// Generate an array with type $ARRAYTYPE with a numeric value of
     /// $VALUE, and compare $EXPECTED_RESULT to the output of
     /// formatting that array with `pretty_format_batches`
     macro_rules! check_datetime {
         ($ARRAYTYPE:ident, $VALUE:expr, $EXPECTED_RESULT:expr) => {
             let mut builder = $ARRAYTYPE::builder(10);
-            builder.append_value($VALUE).unwrap();
-            builder.append_null().unwrap();
+            builder.append_value($VALUE);
+            builder.append_null();
             let array = builder.finish();
 
             let schema = Arc::new(Schema::new(vec![Field::new(
@@ -281,7 +359,38 @@ mod tests {
             )]));
             let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
 
-            let table = pretty_format_batches(&[batch]).expect("formatting batches");
+            let table = pretty_format_batches(&[batch])
+                .expect("formatting batches")
+                .to_string();
+
+            let expected = $EXPECTED_RESULT;
+            let actual: Vec<&str> = table.lines().collect();
+
+            assert_eq!(expected, actual, "Actual result:\n\n{:#?}\n\n", actual);
+        };
+    }
+
+    /// Generate an array with type $ARRAYTYPE with a numeric value of
+    /// $VALUE, and compare $EXPECTED_RESULT to the output of
+    /// formatting that array with `pretty_format_batches`
+    macro_rules! check_datetime_with_timezone {
+        ($ARRAYTYPE:ident, $VALUE:expr, $TZ_STRING:expr, $EXPECTED_RESULT:expr) => {
+            let mut builder = $ARRAYTYPE::builder(10);
+            builder.append_value($VALUE);
+            builder.append_null();
+            let array = builder.finish();
+            let array = array.with_timezone($TZ_STRING);
+
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "f",
+                array.data_type().clone(),
+                true,
+            )]));
+            let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+
+            let table = pretty_format_batches(&[batch])
+                .expect("formatting batches")
+                .to_string();
 
             let expected = $EXPECTED_RESULT;
             let actual: Vec<&str> = table.lines().collect();
@@ -291,12 +400,104 @@ mod tests {
     }
 
     #[test]
+    #[cfg(features = "chrono-tz")]
+    fn test_pretty_format_timestamp_second_with_utc_timezone() {
+        let expected = vec![
+            "+---------------------------+",
+            "| f                         |",
+            "+---------------------------+",
+            "| 1970-05-09T14:25:11+00:00 |",
+            "|                           |",
+            "+---------------------------+",
+        ];
+        check_datetime_with_timezone!(
+            TimestampSecondArray,
+            11111111,
+            "UTC".to_string(),
+            expected
+        );
+    }
+
+    #[test]
+    #[cfg(features = "chrono-tz")]
+    fn test_pretty_format_timestamp_second_with_non_utc_timezone() {
+        let expected = vec![
+            "+---------------------------+",
+            "| f                         |",
+            "+---------------------------+",
+            "| 1970-05-09T22:25:11+08:00 |",
+            "|                           |",
+            "+---------------------------+",
+        ];
+        check_datetime_with_timezone!(
+            TimestampSecondArray,
+            11111111,
+            "Asia/Taipei".to_string(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_pretty_format_timestamp_second_with_fixed_offset_timezone() {
+        let expected = vec![
+            "+---------------------------+",
+            "| f                         |",
+            "+---------------------------+",
+            "| 1970-05-09T22:25:11+08:00 |",
+            "|                           |",
+            "+---------------------------+",
+        ];
+        check_datetime_with_timezone!(
+            TimestampSecondArray,
+            11111111,
+            "+08:00".to_string(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_pretty_format_timestamp_second_with_incorrect_fixed_offset_timezone() {
+        let expected = vec![
+            "+-------------------------------------------------+",
+            "| f                                               |",
+            "+-------------------------------------------------+",
+            "| 1970-05-09T14:25:11 (Unknown Time Zone '08:00') |",
+            "|                                                 |",
+            "+-------------------------------------------------+",
+        ];
+        check_datetime_with_timezone!(
+            TimestampSecondArray,
+            11111111,
+            "08:00".to_string(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_pretty_format_timestamp_second_with_unknown_timezone() {
+        let expected = vec![
+            "+---------------------------------------------------+",
+            "| f                                                 |",
+            "+---------------------------------------------------+",
+            "| 1970-05-09T14:25:11 (Unknown Time Zone 'Unknown') |",
+            "|                                                   |",
+            "+---------------------------------------------------+",
+        ];
+        check_datetime_with_timezone!(
+            TimestampSecondArray,
+            11111111,
+            "Unknown".to_string(),
+            expected
+        );
+    }
+
+    #[test]
     fn test_pretty_format_timestamp_second() {
         let expected = vec![
             "+---------------------+",
             "| f                   |",
             "+---------------------+",
-            "| 1970-05-09 14:25:11 |",
+            "| 1970-05-09T14:25:11 |",
             "|                     |",
             "+---------------------+",
         ];
@@ -309,7 +510,7 @@ mod tests {
             "+-------------------------+",
             "| f                       |",
             "+-------------------------+",
-            "| 1970-01-01 03:05:11.111 |",
+            "| 1970-01-01T03:05:11.111 |",
             "|                         |",
             "+-------------------------+",
         ];
@@ -322,7 +523,7 @@ mod tests {
             "+----------------------------+",
             "| f                          |",
             "+----------------------------+",
-            "| 1970-01-01 00:00:11.111111 |",
+            "| 1970-01-01T00:00:11.111111 |",
             "|                            |",
             "+----------------------------+",
         ];
@@ -335,7 +536,7 @@ mod tests {
             "+-------------------------------+",
             "| f                             |",
             "+-------------------------------+",
-            "| 1970-01-01 00:00:00.011111111 |",
+            "| 1970-01-01T00:00:00.011111111 |",
             "|                               |",
             "+-------------------------------+",
         ];
@@ -435,17 +636,16 @@ mod tests {
 
     #[test]
     fn test_decimal_display() -> Result<()> {
-        let capacity = 10;
         let precision = 10;
         let scale = 2;
 
-        let mut builder = DecimalBuilder::new(capacity, precision, scale);
-        builder.append_value(101).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(200).unwrap();
-        builder.append_value(3040).unwrap();
+        let array = [Some(101), None, Some(200), Some(3040)]
+            .into_iter()
+            .collect::<Decimal128Array>()
+            .with_precision_and_scale(precision, scale)
+            .unwrap();
 
-        let dm = Arc::new(builder.finish()) as ArrayRef;
+        let dm = Arc::new(array) as ArrayRef;
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f",
@@ -455,7 +655,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(schema, vec![dm])?;
 
-        let table = pretty_format_batches(&[batch])?;
+        let table = pretty_format_batches(&[batch])?.to_string();
 
         let expected = vec![
             "+-------+",
@@ -476,17 +676,16 @@ mod tests {
 
     #[test]
     fn test_decimal_display_zero_scale() -> Result<()> {
-        let capacity = 10;
         let precision = 5;
         let scale = 0;
 
-        let mut builder = DecimalBuilder::new(capacity, precision, scale);
-        builder.append_value(101).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(200).unwrap();
-        builder.append_value(3040).unwrap();
+        let array = [Some(101), None, Some(200), Some(3040)]
+            .into_iter()
+            .collect::<Decimal128Array>()
+            .with_precision_and_scale(precision, scale)
+            .unwrap();
 
-        let dm = Arc::new(builder.finish()) as ArrayRef;
+        let dm = Arc::new(array) as ArrayRef;
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f",
@@ -496,7 +695,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(schema, vec![dm])?;
 
-        let table = pretty_format_batches(&[batch])?;
+        let table = pretty_format_batches(&[batch])?.to_string();
         let expected = vec![
             "+------+", "| f    |", "+------+", "| 101  |", "|      |", "| 200  |",
             "| 3040 |", "+------+",
@@ -514,7 +713,7 @@ mod tests {
             Field::new(
                 "c1",
                 DataType::Struct(vec![
-                    Field::new("c11", DataType::Int32, false),
+                    Field::new("c11", DataType::Int32, true),
                     Field::new(
                         "c12",
                         DataType::Struct(vec![Field::new("c121", DataType::Utf8, false)]),
@@ -528,7 +727,7 @@ mod tests {
 
         let c1 = StructArray::from(vec![
             (
-                Field::new("c11", DataType::Int32, false),
+                Field::new("c11", DataType::Int32, true),
                 Arc::new(Int32Array::from(vec![Some(1), None, Some(5)])) as ArrayRef,
             ),
             (
@@ -550,7 +749,7 @@ mod tests {
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)])
                 .unwrap();
 
-        let table = pretty_format_batches(&[batch])?;
+        let table = pretty_format_batches(&[batch])?.to_string();
         let expected = vec![
             r#"+-------------------------------------+----+"#,
             r#"| c1                                  | c2 |"#,
@@ -562,6 +761,312 @@ mod tests {
         ];
 
         let actual: Vec<&str> = table.lines().collect();
+        assert_eq!(expected, actual, "Actual result:\n{}", table);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pretty_format_dense_union() -> Result<()> {
+        let mut builder = UnionBuilder::new_dense();
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Float64Type>("b", 3.2234).unwrap();
+        builder.append_null::<Float64Type>("b").unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        let union = builder.build().unwrap();
+
+        let schema = Schema::new(vec![Field::new(
+            "Teamsters",
+            DataType::Union(
+                vec![
+                    Field::new("a", DataType::Int32, false),
+                    Field::new("b", DataType::Float64, false),
+                ],
+                vec![0, 1],
+                UnionMode::Dense,
+            ),
+            false,
+        )]);
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(union)]).unwrap();
+        let table = pretty_format_batches(&[batch])?.to_string();
+        let actual: Vec<&str> = table.lines().collect();
+        let expected = vec![
+            "+------------+",
+            "| Teamsters  |",
+            "+------------+",
+            "| {a=1}      |",
+            "| {b=3.2234} |",
+            "| {b=}       |",
+            "| {a=}       |",
+            "+------------+",
+        ];
+
+        assert_eq!(expected, actual);
+        Ok(())
+    }
+
+    #[test]
+    fn test_pretty_format_sparse_union() -> Result<()> {
+        let mut builder = UnionBuilder::new_sparse();
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Float64Type>("b", 3.2234).unwrap();
+        builder.append_null::<Float64Type>("b").unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        let union = builder.build().unwrap();
+
+        let schema = Schema::new(vec![Field::new(
+            "Teamsters",
+            DataType::Union(
+                vec![
+                    Field::new("a", DataType::Int32, false),
+                    Field::new("b", DataType::Float64, false),
+                ],
+                vec![0, 1],
+                UnionMode::Sparse,
+            ),
+            false,
+        )]);
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(union)]).unwrap();
+        let table = pretty_format_batches(&[batch])?.to_string();
+        let actual: Vec<&str> = table.lines().collect();
+        let expected = vec![
+            "+------------+",
+            "| Teamsters  |",
+            "+------------+",
+            "| {a=1}      |",
+            "| {b=3.2234} |",
+            "| {b=}       |",
+            "| {a=}       |",
+            "+------------+",
+        ];
+
+        assert_eq!(expected, actual);
+        Ok(())
+    }
+
+    #[test]
+    fn test_pretty_format_nested_union() -> Result<()> {
+        //Inner UnionArray
+        let mut builder = UnionBuilder::new_dense();
+        builder.append::<Int32Type>("b", 1).unwrap();
+        builder.append::<Float64Type>("c", 3.2234).unwrap();
+        builder.append_null::<Float64Type>("c").unwrap();
+        builder.append_null::<Int32Type>("b").unwrap();
+        builder.append_null::<Float64Type>("c").unwrap();
+        let inner = builder.build().unwrap();
+
+        let inner_field = Field::new(
+            "European Union",
+            DataType::Union(
+                vec![
+                    Field::new("b", DataType::Int32, false),
+                    Field::new("c", DataType::Float64, false),
+                ],
+                vec![0, 1],
+                UnionMode::Dense,
+            ),
+            false,
+        );
+
+        // Can't use UnionBuilder with non-primitive types, so manually build outer UnionArray
+        let a_array = Int32Array::from(vec![None, None, None, Some(1234), Some(23)]);
+        let type_ids = Buffer::from_slice_ref([1_i8, 1, 0, 0, 1]);
+
+        let children: Vec<(Field, Arc<dyn Array>)> = vec![
+            (Field::new("a", DataType::Int32, true), Arc::new(a_array)),
+            (inner_field.clone(), Arc::new(inner)),
+        ];
+
+        let outer = UnionArray::try_new(&[0, 1], type_ids, None, children).unwrap();
+
+        let schema = Schema::new(vec![Field::new(
+            "Teamsters",
+            DataType::Union(
+                vec![Field::new("a", DataType::Int32, true), inner_field],
+                vec![0, 1],
+                UnionMode::Sparse,
+            ),
+            false,
+        )]);
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(outer)]).unwrap();
+        let table = pretty_format_batches(&[batch])?.to_string();
+        let actual: Vec<&str> = table.lines().collect();
+        let expected = vec![
+            "+-----------------------------+",
+            "| Teamsters                   |",
+            "+-----------------------------+",
+            "| {European Union={b=1}}      |",
+            "| {European Union={c=3.2234}} |",
+            "| {a=}                        |",
+            "| {a=1234}                    |",
+            "| {European Union={c=}}       |",
+            "+-----------------------------+",
+        ];
+        assert_eq!(expected, actual);
+        Ok(())
+    }
+
+    #[test]
+    fn test_writing_formatted_batches() -> Result<()> {
+        // define a schema.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        // define data.
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(array::StringArray::from(vec![
+                    Some("a"),
+                    Some("b"),
+                    None,
+                    Some("d"),
+                ])),
+                Arc::new(array::Int32Array::from(vec![
+                    Some(1),
+                    None,
+                    Some(10),
+                    Some(100),
+                ])),
+            ],
+        )?;
+
+        let mut buf = String::new();
+        write!(&mut buf, "{}", pretty_format_batches(&[batch])?).unwrap();
+
+        let s = vec![
+            "+---+-----+",
+            "| a | b   |",
+            "+---+-----+",
+            "| a | 1   |",
+            "| b |     |",
+            "|   | 10  |",
+            "| d | 100 |",
+            "+---+-----+",
+        ];
+        let expected = s.join("\n");
+        assert_eq!(expected, buf);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_float16_display() -> Result<()> {
+        let values = vec![
+            Some(f16::from_f32(f32::NAN)),
+            Some(f16::from_f32(4.0)),
+            Some(f16::from_f32(f32::NEG_INFINITY)),
+        ];
+        let array = Arc::new(values.into_iter().collect::<Float16Array>()) as ArrayRef;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "f16",
+            array.data_type().clone(),
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(schema, vec![array])?;
+
+        let table = pretty_format_batches(&[batch])?.to_string();
+
+        let expected = vec![
+            "+------+", "| f16  |", "+------+", "| NaN  |", "| 4    |", "| -inf |",
+            "+------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+        assert_eq!(expected, actual, "Actual result:\n{}", table);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pretty_format_interval_day_time() -> Result<()> {
+        let arr = Arc::new(arrow_array::IntervalDayTimeArray::from(vec![
+            Some(1),
+            Some(10),
+            Some(100),
+        ]));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "IntervalDayTime",
+            arr.data_type().clone(),
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(schema, vec![arr])?;
+
+        let table = pretty_format_batches(&[batch])?.to_string();
+
+        let expected = vec![
+            "+-------------------------------------------------+",
+            "| IntervalDayTime                                 |",
+            "+-------------------------------------------------+",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.001 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.010 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.100 secs |",
+            "+-------------------------------------------------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+
+        assert_eq!(expected, actual, "Actual result:\n{}", table);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pretty_format_interval_month_day_nano_array() -> Result<()> {
+        let arr = Arc::new(arrow_array::IntervalMonthDayNanoArray::from(vec![
+            Some(1),
+            Some(10),
+            Some(100),
+            Some(1_000),
+            Some(10_000),
+            Some(100_000),
+            Some(1_000_000),
+            Some(10_000_000),
+            Some(100_000_000),
+            Some(1_000_000_000),
+        ]));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "IntervalMonthDayNano",
+            arr.data_type().clone(),
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(schema, vec![arr])?;
+
+        let table = pretty_format_batches(&[batch])?.to_string();
+
+        let expected = vec![
+            "+-------------------------------------------------------+",
+            "| IntervalMonthDayNano                                  |",
+            "+-------------------------------------------------------+",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000000001 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000000010 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000000100 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000001000 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000010000 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000100000 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.001000000 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.010000000 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.100000000 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs |",
+            "+-------------------------------------------------------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+
         assert_eq!(expected, actual, "Actual result:\n{}", table);
 
         Ok(())

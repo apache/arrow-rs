@@ -53,6 +53,17 @@ fi
 tag=$1
 rc=$2
 
+
+# mac tar doesn't have --delete, so use gnutar
+# e.g. brew install gtar
+if command -v gtar &> /dev/null
+then
+    echo "using gtar (gnu)tar"
+    tar=gtar
+else
+    tar=tar
+fi
+
 release_hash=$(cd "${SOURCE_TOP_DIR}" && git rev-list --max-count=1 ${tag})
 
 release=apache-arrow-rs-${tag}
@@ -86,7 +97,8 @@ The proposed release tarball and signatures are hosted at [2].
 The changelog is located at [3].
 
 Please download, verify checksums and signatures, run the unit tests,
-and vote on the release.
+and vote on the release. There is a script [4] that automates some of
+the verification.
 
 The vote will be open for at least 72 hours.
 
@@ -97,14 +109,23 @@ The vote will be open for at least 72 hours.
 [1]: https://github.com/apache/arrow-rs/tree/${release_hash}
 [2]: ${url}
 [3]: https://github.com/apache/arrow-rs/blob/${release_hash}/CHANGELOG.md
+[4]: https://github.com/apache/arrow-rs/blob/master/dev/release/verify-release-candidate.sh
 MAIL
 echo "---------------------------------------------------------"
 
 
+
 # create <tarball> containing the files in git at $release_hash
 # the files in the tarball are prefixed with {tag} (e.g. 4.0.1)
+# use --delete to filter out:
+# 1. `object_store` files
+# 2. Workspace `Cargo.toml` file (which refers to object_store)
 mkdir -p ${distdir}
-(cd "${SOURCE_TOP_DIR}" && git archive ${release_hash} --prefix ${release}/ | gzip > ${tarball})
+(cd "${SOURCE_TOP_DIR}" && \
+     git archive ${release_hash} --prefix ${release}/ \
+         | $tar --delete ${release}/'object_store' \
+         | $tar --delete ${release}/'Cargo.toml' \
+         | gzip > ${tarball})
 
 echo "Running rat license checker on ${tarball}"
 ${SOURCE_DIR}/run-rat.sh ${tarball}

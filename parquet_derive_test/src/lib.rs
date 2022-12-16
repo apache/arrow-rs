@@ -17,12 +17,7 @@
 
 #![allow(clippy::approx_constant)]
 
-extern crate parquet;
-
-#[macro_use]
-extern crate parquet_derive;
-
-use parquet::record::RecordWriter;
+use parquet_derive::ParquetRecordWriter;
 
 #[derive(ParquetRecordWriter)]
 struct ACompleteRecord<'a> {
@@ -46,20 +41,20 @@ struct ACompleteRecord<'a> {
     pub maybe_double: Option<f64>,
     pub borrowed_maybe_a_string: &'a Option<String>,
     pub borrowed_maybe_a_str: &'a Option<&'a str>,
+    pub now: chrono::NaiveDateTime,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use std::{env, fs, io::Write, sync::Arc};
+
     use parquet::{
-        file::{
-            properties::WriterProperties,
-            writer::{FileWriter, SerializedFileWriter},
-        },
+        file::{properties::WriterProperties, writer::SerializedFileWriter},
+        record::RecordWriter,
         schema::parser::parse_message_type,
     };
-    use std::{env, fs, io::Write, sync::Arc};
 
     #[test]
     fn test_parquet_derive_hello() {
@@ -88,7 +83,10 @@ mod tests {
             OPTIONAL DOUBLE          maybe_double;
             OPTIONAL BINARY          borrowed_maybe_a_string (STRING);
             OPTIONAL BINARY          borrowed_maybe_a_str (STRING);
+            REQUIRED INT64           now (TIMESTAMP_MILLIS);
         }";
+
+        let schema = Arc::new(parse_message_type(schema_str).unwrap());
 
         let a_str = "hello mother".to_owned();
         let a_borrowed_string = "cool news".to_owned();
@@ -116,9 +114,9 @@ mod tests {
             maybe_double: Some(std::f64::MAX),
             borrowed_maybe_a_string: &maybe_a_string,
             borrowed_maybe_a_str: &maybe_a_str,
+            now: chrono::Utc::now().naive_local(),
         }];
 
-        let schema = Arc::new(parse_message_type(schema_str).unwrap());
         let generated_schema = drs.as_slice().schema().unwrap();
 
         assert_eq!(&schema, &generated_schema);
@@ -129,7 +127,7 @@ mod tests {
 
         let mut row_group = writer.next_row_group().unwrap();
         drs.as_slice().write_to_row_group(&mut row_group).unwrap();
-        writer.close_row_group(row_group).unwrap();
+        row_group.close().unwrap();
         writer.close().unwrap();
     }
 

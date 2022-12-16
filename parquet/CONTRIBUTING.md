@@ -59,3 +59,13 @@ Run `cargo bench` for benchmarks.
 
 To build documentation, run `cargo doc --no-deps`.
 To compile and view in the browser, run `cargo doc --no-deps --open`.
+
+## Update Parquet Format
+
+To generate the parquet format (thrift definitions) code run from the repository root run
+
+```
+$ docker run -v $(pwd):/thrift/src -it archlinux pacman -Sy --noconfirm thrift  && wget https://raw.githubusercontent.com/apache/parquet-format/apache-parquet-format-2.9.0/src/main/thrift/parquet.thrift -O /tmp/parquet.thrift && thrift --gen rs /tmp/parquet.thrift && sed -i '/use thrift::server::TProcessor;/d' parquet.rs && mv parquet.rs parquet/src/format.rs
+```
+
+You may need to manually patch up doc comments that contain unescaped `[]`

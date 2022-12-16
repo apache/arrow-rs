@@ -1,0 +1,64 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[package]
+name = "arrow-array"
+version = "29.0.0"
+description = "Array abstractions for Apache Arrow"
+homepage = "https://github.com/apache/arrow-rs"
+repository = "https://github.com/apache/arrow-rs"
+authors = ["Apache Arrow <dev@arrow.apache.org>"]
+license = "Apache-2.0"
+keywords = ["arrow"]
+include = [
+    "benches/*.rs",
+    "src/**/*.rs",
+    "Cargo.toml",
+]
+edition = "2021"
+rust-version = "1.62"
+
+[lib]
+name = "arrow_array"
+path = "src/lib.rs"
+bench = false
+
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
+
+[dependencies]
+arrow-buffer = { version = "29.0.0", path = "../arrow-buffer" }
+arrow-schema = { version = "29.0.0", path = "../arrow-schema" }
+arrow-data = { version = "29.0.0", path = "../arrow-data" }
+chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
+chrono-tz = { version = "0.8", optional = true }
+num = { version = "0.4", default-features = false, features = ["std"] }
+half = { version = "2.1", default-features = false, features = ["num-traits"] }
+hashbrown = { version = "0.13", default-features = false }
+packed_simd = { version = "0.3", default-features = false, optional = true, package = "packed_simd_2" }
+
+[features]
+simd = ["packed_simd"]
+
+[dev-dependencies]
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+
+[build-dependencies]

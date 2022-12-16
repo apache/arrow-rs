@@ -19,51 +19,39 @@
 
 # Apache Parquet Official Native Rust Implementation
 
-[![Crates.io](https://img.shields.io/crates/v/parquet.svg)](https://crates.io/crates/parquet)
+[![crates.io](https://img.shields.io/crates/v/parquet.svg)](https://crates.io/crates/parquet)
+[![docs.rs](https://img.shields.io/docsrs/parquet.svg)](https://docs.rs/parquet/latest/parquet/)
 
 This crate contains the official Native Rust implementation of [Apache Parquet](https://parquet.apache.org/), which is part of the [Apache Arrow](https://arrow.apache.org/) project.
 
-## Example
+See [crate documentation](https://docs.rs/parquet/latest/parquet/) for examples and the full API.
 
-Example usage of reading data:
+## Rust Version Compatibility
 
-```rust
-use std::fs::File;
-use std::path::Path;
-use parquet::file::reader::{FileReader, SerializedFileReader};
+This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
 
-let file = File::open(&Path::new("/path/to/file")).unwrap();
-let reader = SerializedFileReader::new(file).unwrap();
-let mut iter = reader.get_row_iter(None).unwrap();
-while let Some(record) = iter.next() {
-    println!("{}", record);
-}
-```
+## Versioning / Releases
 
-See [crate documentation](https://docs.rs/crate/parquet) on available API.
+The arrow crate follows the [SemVer standard](https://doc.rust-lang.org/cargo/reference/semver.html) defined by Cargo and works well within the Rust crate ecosystem.
 
-## Upgrading from versions prior to 4.0
+However, for historical reasons, this crate uses versions with major numbers greater than `0.x` (e.g. `19.0.0`), unlike many other crates in the Rust ecosystem which spend extended time releasing versions `0.x` to signal planned ongoing API changes. Minor arrow releases contain only compatible changes, while major releases may contain breaking API changes.
 
-If you are upgrading from version 3.0 or previous of this crate, you
-likely need to change your code to use [`ConvertedType`] rather than
-[`LogicalType`] to preserve existing behaviour in your code.
+## Feature Flags
 
-Version 2.4.0 of the Parquet format introduced a `LogicalType` to replace the existing `ConvertedType`.
-This crate used `parquet::basic::LogicalType` to map to the `ConvertedType`, but this has been renamed to `parquet::basic::ConvertedType` from version 4.0 of this crate.
+The `parquet` crate provides the following features which may be enabled in your `Cargo.toml`:
 
-The `ConvertedType` is deprecated in the format, but is still written
-to preserve backward compatibility.
-It is preferred that `LogicalType` is used, as it supports nanosecond
-precision timestamps without using the deprecated `Int96` Parquet type.
+- `arrow` (default) - support for reading / writing [`arrow`](https://crates.io/crates/arrow) arrays to / from parquet
+- `async` - support `async` APIs for reading parquet
+- `json` - support for reading / writing `json` data to / from parquet
+- `brotli` (default) - support for parquet using `brotli` compression
+- `flate2` (default) - support for parquet using `gzip` compression
+- `lz4` (default) - support for parquet using `lz4` compression
+- `zstd` (default) - support for parquet using `zstd` compression
+- `snap` (default) - support for parquet using `snappy` compression
+- `cli` - parquet [CLI tools](https://github.com/apache/arrow-rs/tree/master/parquet/src/bin)
+- `experimental` - Experimental APIs which may change, even between minor releases
 
-## Supported Parquet Version
-
-- Parquet-format 2.6.0
-
-To update Parquet format to a newer version, check if [parquet-format](https://github.com/sunchao/parquet-format-rs)
-version is available. Then simply update version of `parquet-format` crate in Cargo.toml.
-
-## Features
+## Parquet Feature Status
 
 - [x] All encodings supported
 - [x] All compression codecs supported
@@ -71,13 +59,23 @@ version is available. Then simply update version of `parquet-format` crate in Ca
   - [x] Primitive column value readers
   - [x] Row record reader
   - [x] Arrow record reader
+  - [x] Async support (to Arrow)
 - [x] Statistics support
 - [x] Write support
   - [x] Primitive column value writers
   - [ ] Row record writer
   - [x] Arrow record writer
-- [ ] Predicate pushdown
-- [x] Parquet format 2.6.0 support
+  - [ ] Async support
+- [x] Predicate pushdown
+- [x] Parquet format 4.0.0 support
+
+## Support for `wasm32-unknown-unknown` target
+
+It's possible to build `parquet` for the `wasm32-unknown-unknown` target, however not all the compression features are currently unsupported due to issues with the upstream crates. In particular, the `zstd` and `lz4` features may have compilation issues. See issue [#180](https://github.com/apache/arrow-rs/issues/180).
+
+```
+cargo build -p parquet --target wasm32-unknown-unknown --no-default-features --features cli,snap,flate2,brotli
+```
 
 ## License
 

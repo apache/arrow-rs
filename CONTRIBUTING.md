@@ -17,7 +17,29 @@
   under the License.
 -->
 
+## Introduction
+
+We welcome and encourage contributions of all kinds, such as:
+
+1. Tickets with issue reports of feature requests
+2. Documentation improvements
+3. Code (PR or PR Review)
+
+In addition to submitting new PRs, we have a healthy tradition of community members helping review each other's PRs. Doing so is a great way to help the community as well as get more familiar with Rust and the relevant codebases.
+
 ## Developer's guide to Arrow Rust
+
+### Setting Up Your Build Environment
+
+Install the Rust tool chain:
+
+https://www.rust-lang.org/tools/install
+
+Also, make sure your Rust tool chain is up-to-date, because we always use the latest stable version of Rust to test this project.
+
+```bash
+rustup update stable
+```
 
 ### How to compile
 
@@ -56,7 +78,7 @@ git submodule update --init
 
 This populates data in two git submodules:
 
-- `../parquet_testing/data` (sourced from https://github.com/apache/parquet-testing.git)
+- `../parquet-testing/data` (sourced from https://github.com/apache/parquet-testing.git)
 - `../testing` (sourced from https://github.com/apache/arrow-testing)
 
 By default, `cargo test` will look for these directories at their

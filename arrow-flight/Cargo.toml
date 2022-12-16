@@ -18,31 +18,45 @@
 [package]
 name = "arrow-flight"
 description = "Apache Arrow Flight"
-version = "6.0.0-SNAPSHOT"
-edition = "2018"
+version = "29.0.0"
+edition = "2021"
+rust-version = "1.62"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 license = "Apache-2.0"
 
 [dependencies]
-arrow = { path = "../arrow", version = "6.0.0-SNAPSHOT" }
-base64 = "0.13"
-tonic = "0.5"
-bytes = "1"
-prost = "0.8"
-prost-derive = "0.8"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread"] }
-
-[dev-dependencies]
+arrow-array = { version = "29.0.0", path = "../arrow-array" }
+arrow-buffer = { version = "29.0.0", path = "../arrow-buffer" }
+arrow-ipc = { version = "29.0.0", path = "../arrow-ipc" }
+arrow-schema = { version = "29.0.0", path = "../arrow-schema" }
+base64 = { version = "0.20", default-features = false, features = ["std"] }
+tonic = { version = "0.8", default-features = false, features = ["transport", "codegen", "prost"] }
+bytes = { version = "1", default-features = false }
+prost = { version = "0.11", default-features = false }
+prost-types = { version = "0.11.0", default-features = false, optional = true }
+prost-derive = { version = "0.11", default-features = false }
+tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "rt-multi-thread"] }
 futures = { version = "0.3", default-features = false, features = ["alloc"]}
 
+[features]
+default = []
+flight-sql-experimental = ["prost-types"]
+
+[dev-dependencies]
+arrow = { version = "29.0.0", path = "../arrow", features = ["prettyprint"] }
+tempfile = "3.3"
+tokio-stream = { version = "0.1", features = ["net"] }
+tower = "0.4.13"
+
 [build-dependencies]
-tonic-build = "0.5"
 # Pin specific version of the tonic-build dependencies to avoid auto-generated
 # (and checked in) arrow.flight.protocol.rs from changing
-proc-macro2 = "=1.0.27"
+proc-macro2 = { version = "=1.0.47", default-features = false }
+prost-build = { version = "=0.11.4", default-features = false }
+tonic-build = { version = "=0.8.4", default-features = false, features = ["transport", "prost"] }
 
-#[lib]
-#name = "flight"
-#path = "src/lib.rs"
+[[example]]
+name = "flight_sql_server"
+required-features = ["flight-sql-experimental"]

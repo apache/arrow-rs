@@ -20,19 +20,20 @@
 pub mod aggregate;
 pub mod arithmetic;
 pub mod arity;
+pub mod bitwise;
 pub mod boolean;
-pub mod cast;
-pub mod cast_utils;
-pub mod comparison;
-pub mod concat;
-pub mod filter;
-pub mod length;
 pub mod limit;
-pub mod partition;
-pub mod regexp;
-pub mod sort;
-pub mod substring;
-pub mod take;
 pub mod temporal;
-pub mod window;
-pub mod zip;
+
+pub use arrow_cast::cast;
+pub use arrow_cast::parse as cast_utils;
+pub use arrow_ord::{partition, sort};
+pub use arrow_select::{concat, filter, interleave, take, window, zip};
+pub use arrow_string::{concat_elements, length, regexp, substring};
+
+/// Comparison kernels for `Array`s.
+pub mod comparison {
+    pub use arrow_ord::comparison::*;
+    pub use arrow_string::like::*;
+    pub use arrow_string::regexp::{regexp_is_match_utf8, regexp_is_match_utf8_scalar};
+}

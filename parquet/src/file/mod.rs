@@ -19,7 +19,7 @@
 //!
 //! Provides access to file and row group readers and writers, record API, metadata, etc.
 //!
-//! See [`reader::SerializedFileReader`](reader/struct.SerializedFileReader.html) or
+//! See [`serialized_reader::SerializedFileReader`](serialized_reader/struct.SerializedFileReader.html) or
 //! [`writer::SerializedFileWriter`](writer/struct.SerializedFileWriter.html) for a
 //! starting reference, [`metadata::ParquetMetaData`](metadata/index.html) for file
 //! metadata, and [`statistics`](statistics/index.html) for working with statistics.
@@ -32,7 +32,7 @@
 //! use parquet::{
 //!     file::{
 //!         properties::WriterProperties,
-//!         writer::{FileWriter, SerializedFileWriter},
+//!         writer::SerializedFileWriter,
 //!     },
 //!     schema::parser::parse_message_type,
 //! };
@@ -51,9 +51,9 @@
 //! let mut row_group_writer = writer.next_row_group().unwrap();
 //! while let Some(mut col_writer) = row_group_writer.next_column().unwrap() {
 //!     // ... write values to a column writer
-//!     row_group_writer.close_column(col_writer).unwrap();
+//!     col_writer.close().unwrap()
 //! }
-//! writer.close_row_group(row_group_writer).unwrap();
+//! row_group_writer.close().unwrap();
 //! writer.close().unwrap();
 //!
 //! let bytes = fs::read(&path).unwrap();
@@ -97,14 +97,14 @@
 //! ```
 pub mod footer;
 pub mod metadata;
+pub mod page_encoding_stats;
+pub mod page_index;
 pub mod properties;
 pub mod reader;
 pub mod serialized_reader;
 pub mod statistics;
 pub mod writer;
 
-const FOOTER_SIZE: usize = 8;
+/// The length of the parquet footer in bytes
+pub const FOOTER_SIZE: usize = 8;
 const PARQUET_MAGIC: [u8; 4] = [b'P', b'A', b'R', b'1'];
-
-/// The number of bytes read at the end of the parquet file on first read
-const DEFAULT_FOOTER_READ_SIZE: usize = 64 * 1024;

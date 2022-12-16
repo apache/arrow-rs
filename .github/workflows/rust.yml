@@ -15,366 +15,84 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Rust
+# workspace wide tests
+name: rust
 
+# trigger for all PRs and changes to master
 on:
-  # always trigger
   push:
+    branches:
+      - master
   pull_request:
 
 jobs:
 
-  # build the library, a compilation step used by multiple steps below
-  linux-build-lib:
-    name: Build Libraries on AMD64 Rust ${{ matrix.rust }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [stable]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
+  # Check workspace wide compile and test with default features for
+  # mac
+  macos:
+    name: Test on Mac
+    runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v2
-      - name: Cache Cargo
-        uses: actions/cache@v2
-        with:
-          # these represent dependencies downloaded by cargo
-          # and thus do not depend on the OS, arch nor rust version.
-          path: /github/home/.cargo
-          key: cargo-cache-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v2
-        with:
-          # these represent compiled steps of both dependencies and arrow
-          # and thus are specific for a particular OS, arch and rust version.
-          path: /github/home/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}-
-      - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt
-      - name: Build Workspace
-        run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cargo build
-
-  # test the crate
-  linux-test:
-    name: Test Workspace on AMD64 Rust ${{ matrix.rust }}
-    needs: [linux-build-lib]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [stable]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-        ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
-        PARQUET_TEST_DATA: /__w/arrow-rs/arrow-rs/parquet-testing/data
-    steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v2
-        with:
-          path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v2
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
+      - name: Install protoc with brew
+        run: brew install protobuf
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt
-      - name: Run tests
-        run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          # run tests on all workspace members with default feature list
-          cargo test
-          cd arrow
-          # re-run tests on arrow workspace with additional features
-          cargo test --features=prettyprint
-          # run test on arrow with minimal set of features
-          cargo test --no-default-features
-          cargo run --example builders
-          cargo run --example dynamic_types
-          cargo run --example read_csv
-          cargo run --example read_csv_infer_schema
-
-  # test the --features "simd" of the arrow crate. This requires nightly.
-  linux-test-simd:
-    name: Test SIMD on AMD64 Rust ${{ matrix.rust }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [nightly-2021-07-04]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-        ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v2
-        with:
-          path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v2
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
-      - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt
-      - name: Run tests
-        run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cd arrow
-          cargo test --features "simd"
-      - name: Check new project build with simd features
-        run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cd arrow/test/dependency/simd
-          cargo check
-
-  windows-and-macos:
-    name: Test on ${{ matrix.os }} Rust ${{ matrix.rust }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [windows-latest, macos-latest]
-        rust: [stable]
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      # TODO: this won't cache anything, which is expensive. Setup this action
-      # with a OS-dependent path.
-      - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt
+          rustup toolchain install stable --no-self-update
+          rustup default stable
       - name: Run tests
         shell: bash
         run: |
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           # do not produce debug symbols to keep memory usage down
           export RUSTFLAGS="-C debuginfo=0"
           cargo test
 
-  clippy:
-    name: Clippy
-    needs: [linux-build-lib]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [stable]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
+
+  # Check workspace wide compile and test with default features for
+  # windows
+  windows:
+    name: Test on Windows
+    runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v2
-        with:
-          path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v2
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
+      - name: Install protobuf compiler in /d/protoc
+        shell: bash
+        run: |
+          mkdir /d/protoc
+          cd /d/protoc
+          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/protoc-21.4-win64.zip
+          unzip protoc-21.4-win64.zip
+          export PATH=$PATH:/d/protoc/bin
+          protoc --version
+
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt clippy
-      - name: Run clippy
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+      - name: Run tests
+        shell: bash
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cargo clippy --all-targets --workspace -- -D warnings -A clippy::redundant_field_names
+          # do not produce debug symbols to keep memory usage down
+          export RUSTFLAGS="-C debuginfo=0"
+          export PATH=$PATH:/d/protoc/bin
+          cargo test
 
+
+  # Run cargo fmt for all crates
   lint:
-    name: Lint
+    name: Lint (cargo fmt)
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v2
-      - name: Setup toolchain
-        run: |
-          rustup toolchain install stable
-          rustup default stable
-          rustup component add rustfmt
+      - uses: actions/checkout@v3
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Setup rustfmt
+        run: rustup component add rustfmt
       - name: Run
         run: cargo fmt --all -- --check
-
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [stable]
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v2
-        with:
-          path: /home/runner/.cargo
-          # this key is not equal because the user is different than on a container (runner vs github)
-          key: cargo-coverage-cache-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v2
-        with:
-          path: /home/runner/target
-          # this key is not equal because coverage uses different compilation flags.
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-coverage-cache-${{ matrix.rust }}-
-      - name: Run coverage
-        run: |
-          export CARGO_HOME="/home/runner/.cargo"
-          export CARGO_TARGET_DIR="/home/runner/target"
-
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-
-          # 2020-11-15: There is a cargo-tarpaulin regression in 0.17.0
-          # see https://github.com/xd009642/tarpaulin/issues/618
-          cargo install --version 0.16.0 cargo-tarpaulin
-          cargo tarpaulin --out Xml
-      - name: Report coverage
-        continue-on-error: true
-        run: bash <(curl -s https://codecov.io/bash)
-
-  # test the arrow crate builds against wasm32 in stable rust
-  wasm32-build:
-    name: Build wasm32 on AMD64 Rust ${{ matrix.rust }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [nightly-2021-07-04]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-        ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
-        PARQUET_TEST_DATA: /__w/arrow/arrow/parquet-testing/data
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v2
-        with:
-          path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v2
-        with:
-          path: /github/home/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-wasm32-cache-${{ matrix.rust }}
-      - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup override set ${{ matrix.rust }}
-          rustup component add rustfmt
-          rustup target add wasm32-unknown-unknown
-      - name: Build arrow crate
-        run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cd arrow
-          cargo build --features=js --target wasm32-unknown-unknown
-
-  # test builds with various feature flags
-  default-build:
-    name: Arrow Feature Flag Builds ${{ matrix.rust }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [stable]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable debug symbol generation to speed up CI build and keep memory down
-        RUSTFLAGS: "-C debuginfo=0"
-    steps:
-      - uses: actions/checkout@v2
-      - name: Cache Cargo
-        uses: actions/cache@v2
-        with:
-          path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v2
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
-      - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup override set ${{ matrix.rust }}
-          rustup component add rustfmt
-      - name: Build with default features
-        run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cd arrow/test/dependency/default-features
-          cargo check
-      - name: Build with default-features=false
-        run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cd arrow/test/dependency/no-default-features
-          cargo check

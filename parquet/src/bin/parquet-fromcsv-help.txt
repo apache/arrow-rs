@@ -1,0 +1,70 @@
+
+Usage: parquet [OPTIONS] --schema <SCHEMA> --input-file <INPUT_FILE> --output-file <OUTPUT_FILE>
+
+Options:
+  -s, --schema <SCHEMA>
+          message schema for output Parquet
+
+  -i, --input-file <INPUT_FILE>
+          input CSV file
+
+  -o, --output-file <OUTPUT_FILE>
+          output Parquet file
+
+  -f, --input-format <INPUT_FORMAT>
+          input file format
+          
+          [default: csv]
+          [possible values: csv, tsv]
+
+  -b, --batch-size <BATCH_SIZE>
+          batch size
+          
+          [env: PARQUET_FROM_CSV_BATCHSIZE=]
+          [default: 1000]
+
+  -h, --has-header
+          has header
+
+  -d, --delimiter <DELIMITER>
+          field delimiter
+          
+          default value: when input_format==CSV: ',' when input_format==TSV: 'TAB'
+
+  -r, --record-terminator <RECORD_TERMINATOR>
+          record terminator
+          
+          [possible values: lf, crlf, cr]
+
+  -e, --escape-char <ESCAPE_CHAR>
+          escape character
+
+  -q, --quote-char <QUOTE_CHAR>
+          quote character
+
+  -D, --double-quote <DOUBLE_QUOTE>
+          double quote
+          
+          [possible values: true, false]
+
+  -c, --parquet-compression <PARQUET_COMPRESSION>
+          compression mode
+          
+          [default: SNAPPY]
+
+  -w, --writer-version <WRITER_VERSION>
+          writer version
+
+  -m, --max-row-group-size <MAX_ROW_GROUP_SIZE>
+          max row group size
+
+      --enable-bloom-filter <ENABLE_BLOOM_FILTER>
+          whether to enable bloom filter writing
+          
+          [possible values: true, false]
+
+      --help
+          display usage help
+
+  -V, --version
+          Print version information

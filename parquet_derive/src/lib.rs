@@ -25,7 +25,7 @@ extern crate quote;
 
 extern crate parquet;
 
-use syn::{parse_macro_input, Data, DataStruct, DeriveInput};
+use ::syn::{parse_macro_input, Data, DataStruct, DeriveInput};
 
 mod parquet_field;
 
@@ -40,9 +40,8 @@ mod parquet_field;
 /// Example:
 ///
 /// ```ignore
-/// use parquet;
-/// use parquet::record::RecordWriter;
-/// use parquet::schema::parser::parse_message_type;
+/// use parquet::file::properties::WriterProperties;
+/// use parquet::file::writer::SerializedFileWriter;
 ///
 /// use std::sync::Arc;
 //
@@ -85,10 +84,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
         Data::Union(_) => unimplemented!("Union currently is not supported"),
     };
 
-    let field_infos: Vec<_> = fields
-        .iter()
-        .map(|f: &syn::Field| parquet_field::Field::from(f))
-        .collect();
+    let field_infos: Vec<_> = fields.iter().map(parquet_field::Field::from).collect();
 
     let writer_snippets: Vec<proc_macro2::TokenStream> =
         field_infos.iter().map(|x| x.writer_snippet()).collect();
@@ -100,11 +96,13 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
         field_infos.iter().map(|x| x.parquet_type()).collect();
 
     (quote! {
-    impl#generics RecordWriter<#derived_for#generics> for &[#derived_for#generics] {
-      fn write_to_row_group(
+    impl #generics ::parquet::record::RecordWriter<#derived_for #generics> for &[#derived_for #generics] {
+      fn write_to_row_group<W: ::std::io::Write>(
         &self,
-        row_group_writer: &mut Box<parquet::file::writer::RowGroupWriter>
-      ) -> Result<(), parquet::errors::ParquetError> {
+        row_group_writer: &mut ::parquet::file::writer::SerializedRowGroupWriter<'_, W>
+      ) -> Result<(), ::parquet::errors::ParquetError> {
+        use ::parquet::column::writer::ColumnWriter;
+
         let mut row_group_writer = row_group_writer;
         let records = &self; // Used by all the writer snippets to be more clear
 
@@ -113,9 +111,9 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
               let mut some_column_writer = row_group_writer.next_column().unwrap();
               if let Some(mut column_writer) = some_column_writer {
                   #writer_snippets
-                  row_group_writer.close_column(column_writer)?;
+                  column_writer.close()?;
               } else {
-                  return Err(parquet::errors::ParquetError::General("Failed to get next column".into()))
+                  return Err(::parquet::errors::ParquetError::General("Failed to get next column".into()))
               }
           }
         );*
@@ -123,17 +121,16 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
         Ok(())
       }
 
-      fn schema(&self) -> Result<parquet::schema::types::TypePtr, parquet::errors::ParquetError> {
-        use parquet::schema::types::Type as ParquetType;
-        use parquet::schema::types::TypePtr;
-        use parquet::basic::LogicalType;
-        use parquet::basic::*;
+      fn schema(&self) -> Result<::parquet::schema::types::TypePtr, ::parquet::errors::ParquetError> {
+        use ::parquet::schema::types::Type as ParquetType;
+        use ::parquet::schema::types::TypePtr;
+        use ::parquet::basic::LogicalType;
 
-        let mut fields: Vec<TypePtr> = Vec::new();
+        let mut fields: ::std::vec::Vec<TypePtr> = ::std::vec::Vec::new();
         #(
           #field_types
         );*;
-        let group = parquet::schema::types::Type::group_type_builder("rust_schema")
+        let group = ParquetType::group_type_builder("rust_schema")
           .with_fields(&mut fields)
           .build()?;
         Ok(group.into())

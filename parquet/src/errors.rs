@@ -17,12 +17,12 @@
 
 //! Common Parquet errors and macros.
 
-use std::{cell, convert, io, result, str};
+use std::{cell, io, result, str};
 
-#[cfg(any(feature = "arrow", test))]
-use arrow::error::ArrowError;
+#[cfg(feature = "arrow")]
+use arrow_schema::ArrowError;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq)]
 pub enum ParquetError {
     /// General Parquet error.
     /// Returned when code violates normal workflow of working with Parquet files.
@@ -34,7 +34,7 @@ pub enum ParquetError {
     /// Returned when IO related failures occur, e.g. when there are not enough bytes to
     /// decode.
     EOF(String),
-    #[cfg(any(feature = "arrow", test))]
+    #[cfg(feature = "arrow")]
     /// Arrow error.
     /// Returned when reading into arrow or writing from arrow.
     ArrowError(String),
@@ -49,7 +49,7 @@ impl std::fmt::Display for ParquetError {
             }
             ParquetError::NYI(ref message) => write!(fmt, "NYI: {}", message),
             ParquetError::EOF(ref message) => write!(fmt, "EOF: {}", message),
-            #[cfg(any(feature = "arrow", test))]
+            #[cfg(feature = "arrow")]
             ParquetError::ArrowError(ref message) => write!(fmt, "Arrow: {}", message),
             ParquetError::IndexOutOfBound(ref index, ref bound) => {
                 write!(fmt, "Index {} out of bound: {}", index, bound)
@@ -95,7 +95,7 @@ impl From<str::Utf8Error> for ParquetError {
     }
 }
 
-#[cfg(any(feature = "arrow", test))]
+#[cfg(feature = "arrow")]
 impl From<ArrowError> for ParquetError {
     fn from(e: ArrowError) -> ParquetError {
         ParquetError::ArrowError(format!("underlying Arrow error: {}", e))
@@ -103,12 +103,12 @@ impl From<ArrowError> for ParquetError {
 }
 
 /// A specialized `Result` for Parquet errors.
-pub type Result<T> = result::Result<T, ParquetError>;
+pub type Result<T, E = ParquetError> = result::Result<T, E>;
 
 // ----------------------------------------------------------------------
 // Conversion from `ParquetError` to other types of `Error`s
 
-impl convert::From<ParquetError> for io::Error {
+impl From<ParquetError> for io::Error {
     fn from(e: ParquetError) -> Self {
         io::Error::new(io::ErrorKind::Other, e)
     }
@@ -135,12 +135,21 @@ macro_rules! eof_err {
     ($fmt:expr, $($args:expr),*) => (ParquetError::EOF(format!($fmt, $($args),*)));
 }
 
+#[cfg(feature = "arrow")]
+macro_rules! arrow_err {
+    ($fmt:expr) => (ParquetError::ArrowError($fmt.to_owned()));
+    ($fmt:expr, $($args:expr),*) => (ParquetError::ArrowError(format!($fmt, $($args),*)));
+    ($e:expr, $fmt:expr) => (ParquetError::ArrowError($fmt.to_owned(), $e));
+    ($e:ident, $fmt:expr, $($args:tt),*) => (
+        ParquetError::ArrowError(&format!($fmt, $($args),*), $e));
+}
+
 // ----------------------------------------------------------------------
 // Convert parquet error into other errors
 
-#[cfg(any(feature = "arrow", test))]
-impl Into<ArrowError> for ParquetError {
-    fn into(self) -> ArrowError {
-        ArrowError::ParquetError(format!("{}", self))
+#[cfg(feature = "arrow")]
+impl From<ParquetError> for ArrowError {
+    fn from(p: ParquetError) -> Self {
+        Self::ParquetError(format!("{}", p))
     }
 }

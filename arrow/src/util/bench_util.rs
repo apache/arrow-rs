@@ -20,6 +20,8 @@
 use crate::array::*;
 use crate::datatypes::*;
 use crate::util::test_util::seedable_rng;
+use arrow_buffer::Buffer;
+use rand::distributions::uniform::SampleUniform;
 use rand::Rng;
 use rand::SeedableRng;
 use rand::{
@@ -91,9 +93,18 @@ where
 }
 
 /// Creates an random (but fixed-seeded) array of a given size and null density
-pub fn create_string_array<Offset: StringOffsetSizeTrait>(
+pub fn create_string_array<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
+) -> GenericStringArray<Offset> {
+    create_string_array_with_len(size, null_density, 4)
+}
+
+/// Creates a random (but fixed-seeded) array of a given size, null density and length
+pub fn create_string_array_with_len<Offset: OffsetSizeTrait>(
+    size: usize,
+    null_density: f32,
+    str_len: usize,
 ) -> GenericStringArray<Offset> {
     let rng = &mut seedable_rng();
 
@@ -102,7 +113,7 @@ pub fn create_string_array<Offset: StringOffsetSizeTrait>(
             if rng.gen::<f32>() < null_density {
                 None
             } else {
-                let value = rng.sample_iter(&Alphanumeric).take(4).collect();
+                let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
                 let value = String::from_utf8(value).unwrap();
                 Some(value)
             }
@@ -110,8 +121,32 @@ pub fn create_string_array<Offset: StringOffsetSizeTrait>(
         .collect()
 }
 
+/// Creates an random (but fixed-seeded) array of a given size and null density
+/// consisting of random 4 character alphanumeric strings
+pub fn create_string_dict_array<K: ArrowDictionaryKeyType>(
+    size: usize,
+    null_density: f32,
+    str_len: usize,
+) -> DictionaryArray<K> {
+    let rng = &mut seedable_rng();
+
+    let data: Vec<_> = (0..size)
+        .map(|_| {
+            if rng.gen::<f32>() < null_density {
+                None
+            } else {
+                let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
+                let value = String::from_utf8(value).unwrap();
+                Some(value)
+            }
+        })
+        .collect();
+
+    data.iter().map(|x| x.as_deref()).collect()
+}
+
 /// Creates an random (but fixed-seeded) binary array of a given size and null density
-pub fn create_binary_array<Offset: BinaryOffsetSizeTrait>(
+pub fn create_binary_array<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
 ) -> GenericBinaryArray<Offset> {
@@ -141,16 +176,55 @@ pub fn create_fsb_array(
 ) -> FixedSizeBinaryArray {
     let rng = &mut seedable_rng();
 
-    FixedSizeBinaryArray::try_from_sparse_iter((0..size).map(|_| {
-        if rng.gen::<f32>() < null_density {
-            None
-        } else {
-            let value = rng
-                .sample_iter::<u8, _>(Standard)
-                .take(value_len)
-                .collect::<Vec<u8>>();
-            Some(value)
-        }
-    }))
+    FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+        (0..size).map(|_| {
+            if rng.gen::<f32>() < null_density {
+                None
+            } else {
+                let value = rng
+                    .sample_iter::<u8, _>(Standard)
+                    .take(value_len)
+                    .collect::<Vec<u8>>();
+                Some(value)
+            }
+        }),
+        value_len as i32,
+    )
     .unwrap()
+}
+
+/// Creates a random (but fixed-seeded) dictionary array of a given size and null density
+/// with the provided values array
+pub fn create_dict_from_values<K>(
+    size: usize,
+    null_density: f32,
+    values: &dyn Array,
+) -> DictionaryArray<K>
+where
+    K: ArrowDictionaryKeyType,
+    Standard: Distribution<K::Native>,
+    K::Native: SampleUniform,
+{
+    let mut rng = seedable_rng();
+    let data_type = DataType::Dictionary(
+        Box::new(K::DATA_TYPE),
+        Box::new(values.data_type().clone()),
+    );
+
+    let min_key = K::Native::from_usize(0).unwrap();
+    let max_key = K::Native::from_usize(values.len()).unwrap();
+    let keys: Buffer = (0..size).map(|_| rng.gen_range(min_key..max_key)).collect();
+
+    let nulls: Option<Buffer> = (null_density != 0.)
+        .then(|| (0..size).map(|_| rng.gen_bool(null_density as _)).collect());
+
+    let data = ArrayDataBuilder::new(data_type)
+        .len(size)
+        .null_bit_buffer(nulls)
+        .add_buffer(keys)
+        .add_child_data(values.data().clone())
+        .build()
+        .unwrap();
+
+    DictionaryArray::from(data)
 }

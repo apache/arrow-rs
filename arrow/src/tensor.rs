@@ -113,13 +113,13 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
                     ));
                 }
 
-                if strides != None {
+                if strides.is_some() {
                     return Err(ArrowError::InvalidArgumentError(
                         "expected None strides for tensor with no shape".to_string(),
                     ));
                 }
 
-                if names != None {
+                if names.is_some() {
                     return Err(ArrowError::InvalidArgumentError(
                         "expected None names for tensor with no shape".to_string(),
                     ));
@@ -196,7 +196,7 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
         names: Option<Vec<&'a str>>,
     ) -> Result<Self> {
         if let Some(ref s) = shape {
-            let strides = Some(compute_row_major_strides::<T>(&s)?);
+            let strides = Some(compute_row_major_strides::<T>(s)?);
 
             Self::try_new(buffer, shape, strides, names)
         } else {
@@ -213,7 +213,7 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
         names: Option<Vec<&'a str>>,
     ) -> Result<Self> {
         if let Some(ref s) = shape {
-            let strides = Some(compute_column_major_strides::<T>(&s)?);
+            let strides = Some(compute_column_major_strides::<T>(s)?);
 
             Self::try_new(buffer, shape, strides, names)
         } else {
@@ -258,7 +258,7 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
 
     /// The name of dimension i
     pub fn dim_name(&self, i: usize) -> Option<&'a str> {
-        self.names.as_ref().map(|ref names| names[i])
+        self.names.as_ref().map(|names| names[i])
     }
 
     /// The total number of elements in the `Tensor`
