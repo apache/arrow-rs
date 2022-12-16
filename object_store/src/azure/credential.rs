@@ -153,7 +153,7 @@ fn generate_authorization(
     key: &str,
 ) -> String {
     let str_to_sign = string_to_sign(h, u, method, account);
-    let auth = hmac_sha256(base64::decode(key).unwrap(), &str_to_sign);
+    let auth = hmac_sha256(base64::decode(key).unwrap(), str_to_sign);
     format!("SharedKey {}:{}", account, base64::encode(auth))
 }
 

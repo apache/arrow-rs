@@ -131,7 +131,7 @@ impl TryFrom<ListResponse> for ListResult {
         let common_prefixes = value
             .common_prefixes
             .into_iter()
-            .map(|x| Ok(Path::parse(&x.prefix)?))
+            .map(|x| Ok(Path::parse(x.prefix)?))
             .collect::<Result<_>>()?;
 
         let objects = value
