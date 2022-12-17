@@ -62,10 +62,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     let cols = vec![Arc::new(create_primitive_array::<Int64Type>(4096, 0.)) as ArrayRef];
     do_bench(c, "4096 i64(0)", cols);
 
-    let cols = vec![Arc::new(create_primitive_array::<Float32Type>(4096, 0.)) as ArrayRef];
+    let cols =
+        vec![Arc::new(create_primitive_array::<Float32Type>(4096, 0.)) as ArrayRef];
     do_bench(c, "4096 f32(0)", cols);
 
-    let cols = vec![Arc::new(create_primitive_array::<Float64Type>(4096, 0.)) as ArrayRef];
+    let cols =
+        vec![Arc::new(create_primitive_array::<Float64Type>(4096, 0.)) as ArrayRef];
     do_bench(c, "4096 f64(0)", cols);
 
     let cols =
