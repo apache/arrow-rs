@@ -20,6 +20,7 @@
 use crate::{FlightData, IpcMessage, SchemaAsIpc, SchemaResult};
 use std::collections::HashMap;
 use std::sync::Arc;
+use bytes::Bytes;
 
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::Buffer;
@@ -138,7 +139,7 @@ pub fn flight_data_from_arrow_schema(
 pub fn ipc_message_from_arrow_schema(
     schema: &Schema,
     options: &IpcWriteOptions,
-) -> Result<Vec<u8>, ArrowError> {
+) -> Result<Bytes, ArrowError> {
     let message = SchemaAsIpc::new(schema, options).try_into()?;
     let IpcMessage(vals) = message;
     Ok(vals)

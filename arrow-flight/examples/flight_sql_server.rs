@@ -23,18 +23,14 @@ use arrow_flight::{
     Location, SchemaAsIpc, Ticket,
 };
 use futures::{stream, Stream};
+use prost::Message;
 use prost_types::Any;
-use std::fs;
 use std::pin::Pin;
 use std::sync::Arc;
-use tempfile::NamedTempFile;
-use tokio::net::{UnixListener, UnixStream};
-use tokio_stream::wrappers::UnixListenerStream;
-use tonic::transport::{Endpoint, Server};
+use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
 
 use arrow_flight::flight_descriptor::DescriptorType;
-use arrow_flight::sql::client::FlightSqlServiceClient;
 use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
     flight_service_server::FlightService,
@@ -87,7 +83,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let authorization = request
             .metadata()
             .get("authorization")
-            .ok_or(Status::invalid_argument("authorization field not present"))?
+            .ok_or_else(|| Status::invalid_argument("authorization field not present"))?
             .to_str()
             .map_err(|e| status!("authorization not parsable", e))?;
         if !authorization.starts_with(basic) {
@@ -101,7 +97,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| status!("authorization not decodable", e))?;
         let str = String::from_utf8(bytes)
             .map_err(|e| status!("authorization not parsable", e))?;
-        let parts: Vec<_> = str.split(":").collect();
+        let parts: Vec<_> = str.split(':').collect();
         let (user, pass) = match parts.as_slice() {
             [user, pass] => (user, pass),
             _ => Err(Status::invalid_argument(
@@ -114,7 +110,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
         let result = HandshakeResponse {
             protocol_version: 0,
-            payload: "random_uuid_token".as_bytes().to_vec(),
+            payload: "random_uuid_token".into(),
         };
         let result = Ok(result);
         let output = futures::stream::iter(vec![result]);
@@ -156,7 +152,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         cmd: CommandPreparedStatementQuery,
         _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        let handle = String::from_utf8(cmd.prepared_statement_handle)
+        let handle = std::str::from_utf8(&cmd.prepared_statement_handle)
             .map_err(|e| status!("Unable to parse handle", e))?;
         let batch =
             Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
@@ -169,7 +165,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let fetch = FetchResults {
             handle: handle.to_string(),
         };
-        let buf = ::prost::Message::encode_to_vec(&fetch.as_any());
+        let buf = fetch.as_any().encode_to_vec().into();
         let ticket = Ticket { ticket: buf };
         let endpoint = FlightEndpoint {
             ticket: Some(ticket),
@@ -184,7 +180,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
         let flight_desc = FlightDescriptor {
             r#type: DescriptorType::Cmd.into(),
-            cmd: vec![],
+            cmd: Default::default(),
             path: vec![],
         };
         let info = FlightInfo {
@@ -430,9 +426,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| status!("Unable to serialize schema", e))?;
         let IpcMessage(schema_bytes) = message;
         let res = ActionCreatePreparedStatementResult {
-            prepared_statement_handle: handle.as_bytes().to_vec(),
+            prepared_statement_handle: handle.into(),
             dataset_schema: schema_bytes,
-            parameter_schema: vec![], // TODO: parameters
+            parameter_schema: Default::default(), // TODO: parameters
         };
         Ok(res)
     }

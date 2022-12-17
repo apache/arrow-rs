@@ -71,4 +71,4 @@ jobs:
       - name: Setup Clippy
         run: rustup component add clippy
       - name: Run clippy
-        run: cargo clippy -p arrow-flight --all-features -- -D warnings
+        run: cargo clippy -p arrow-flight --all-targets --all-features -- -D warnings
