@@ -62,6 +62,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     let cols = vec![Arc::new(create_primitive_array::<Int64Type>(4096, 0.)) as ArrayRef];
     do_bench(c, "4096 i64(0)", cols);
 
+    let cols = vec![Arc::new(create_primitive_array::<Float32Type>(4096, 0.)) as ArrayRef];
+    do_bench(c, "4096 f32(0)", cols);
+
+    let cols = vec![Arc::new(create_primitive_array::<Float64Type>(4096, 0.)) as ArrayRef];
+    do_bench(c, "4096 f64(0)", cols);
+
     let cols =
         vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 10)) as ArrayRef];
     do_bench(c, "4096 string(10, 0)", cols);
@@ -87,6 +93,18 @@ fn criterion_benchmark(c: &mut Criterion) {
     do_bench(
         c,
         "4096 string(20, 0.5), string(30, 0), string(100, 0), i64(0)",
+        cols,
+    );
+
+    let cols = vec![
+        Arc::new(create_string_array_with_len::<i32>(4096, 0.5, 20)) as ArrayRef,
+        Arc::new(create_string_array_with_len::<i32>(4096, 0., 30)) as ArrayRef,
+        Arc::new(create_primitive_array::<Float64Type>(4096, 0.)) as ArrayRef,
+        Arc::new(create_primitive_array::<Int64Type>(4096, 0.)) as ArrayRef,
+    ];
+    do_bench(
+        c,
+        "4096 string(20, 0.5), string(30, 0), f64(0), i64(0)",
         cols,
     );
 }
