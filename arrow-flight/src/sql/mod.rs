@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow_schema::ArrowError;
+use bytes::Bytes;
 use prost::Message;
 
 mod gen {
@@ -66,8 +67,8 @@ pub trait ProstMessageExt: prost::Message + Default {
     /// type_url for this Message
     fn type_url() -> &'static str;
 
-    /// Convert this Message to prost_types::Any
-    fn as_any(&self) -> prost_types::Any;
+    /// Convert this Message to [`Any`]
+    fn as_any(&self) -> Any;
 }
 
 macro_rules! prost_message_ext {
@@ -78,10 +79,10 @@ macro_rules! prost_message_ext {
                     concat!("type.googleapis.com/arrow.flight.protocol.sql.", stringify!($name))
                 }
 
-                fn as_any(&self) -> prost_types::Any {
-                    prost_types::Any {
+                fn as_any(&self) -> Any {
+                    Any {
                         type_url: <$name>::type_url().to_string(),
-                        value: self.encode_to_vec(),
+                        value: self.encode_to_vec().into(),
                     }
                 }
             }
@@ -111,30 +112,44 @@ prost_message_ext!(
     TicketStatementQuery,
 );
 
-/// ProstAnyExt are useful utility methods for prost_types::Any
-/// The API design is inspired by [rust-protobuf](https://github.com/stepancheg/rust-protobuf/blob/master/protobuf/src/well_known_types_util/any.rs)
-pub trait ProstAnyExt {
-    /// Check if `Any` contains a message of given type.
-    fn is<M: ProstMessageExt>(&self) -> bool;
-
-    /// Extract a message from this `Any`.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(None)` when message type mismatch
-    /// * `Err` when parse failed
-    fn unpack<M: ProstMessageExt>(&self) -> Result<Option<M>, ArrowError>;
-
-    /// Pack any message into `prost_types::Any` value.
-    fn pack<M: ProstMessageExt>(message: &M) -> Result<prost_types::Any, ArrowError>;
+/// An implementation of the protobuf [`Any`] message type
+///
+/// Encoded protobuf messages are not self-describing, nor contain any information
+/// on the schema of the encoded payload. Consequently to decode a protobuf a client
+/// must know the exact schema of the message.
+///
+/// This presents a problem for loosely typed APIs, where the exact message payloads
+/// are not enumerable, and therefore cannot be enumerated as variants in a [oneof].
+///
+/// One solution is [`Any`] where the encoded payload is paired with a `type_url`
+/// identifying the type of encoded message, and the resulting combination encoded.
+///
+/// Clients can then decode the outer [`Any`], inspect the `type_url` and if it is
+/// a type they recognise, proceed to decode the embedded message `value`
+///
+/// [`Any`]: https://developers.google.com/protocol-buffers/docs/proto3#any
+/// [oneof]: https://developers.google.com/protocol-buffers/docs/proto3#oneof
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Any {
+    /// A URL/resource name that uniquely identifies the type of the serialized
+    /// protocol buffer message. This string must contain at least
+    /// one "/" character. The last segment of the URL's path must represent
+    /// the fully qualified name of the type (as in
+    /// `path/google.protobuf.Duration`). The name should be in a canonical form
+    /// (e.g., leading "." is not accepted).
+    #[prost(string, tag = "1")]
+    pub type_url: ::prost::alloc::string::String,
+    /// Must be a valid serialized protocol buffer of the above specified type.
+    #[prost(bytes = "bytes", tag = "2")]
+    pub value: Bytes,
 }
 
-impl ProstAnyExt for prost_types::Any {
-    fn is<M: ProstMessageExt>(&self) -> bool {
+impl Any {
+    pub fn is<M: ProstMessageExt>(&self) -> bool {
         M::type_url() == self.type_url
     }
 
-    fn unpack<M: ProstMessageExt>(&self) -> Result<Option<M>, ArrowError> {
+    pub fn unpack<M: ProstMessageExt>(&self) -> Result<Option<M>, ArrowError> {
         if !self.is::<M>() {
             return Ok(None);
         }
@@ -144,7 +159,7 @@ impl ProstAnyExt for prost_types::Any {
         Ok(Some(m))
     }
 
-    fn pack<M: ProstMessageExt>(message: &M) -> Result<prost_types::Any, ArrowError> {
+    pub fn pack<M: ProstMessageExt>(message: &M) -> Result<Any, ArrowError> {
         Ok(message.as_any())
     }
 }
@@ -170,7 +185,7 @@ mod tests {
         let query = CommandStatementQuery {
             query: "select 1".to_string(),
         };
-        let any = prost_types::Any::pack(&query).unwrap();
+        let any = Any::pack(&query).unwrap();
         assert!(any.is::<CommandStatementQuery>());
         let unpack_query: CommandStatementQuery = any.unpack().unwrap().unwrap();
         assert_eq!(query, unpack_query);

@@ -23,11 +23,12 @@ use crate::flight_service_client::FlightServiceClient;
 use crate::sql::server::{CLOSE_PREPARED_STATEMENT, CREATE_PREPARED_STATEMENT};
 use crate::sql::{
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
-    ActionCreatePreparedStatementResult, CommandGetCatalogs, CommandGetCrossReference,
-    CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
-    CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
-    CommandPreparedStatementQuery, CommandStatementQuery, CommandStatementUpdate,
-    DoPutUpdateResult, ProstAnyExt, ProstMessageExt, SqlInfo,
+    ActionCreatePreparedStatementResult, Any, CommandGetCatalogs,
+    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
+    CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
+    CommandGetTableTypes, CommandGetTables, CommandPreparedStatementQuery,
+    CommandStatementQuery, CommandStatementUpdate, DoPutUpdateResult, ProstMessageExt,
+    SqlInfo,
 };
 use crate::{
     Action, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest,
@@ -177,8 +178,8 @@ impl FlightSqlServiceClient {
             .await
             .map_err(status_to_arrow_error)?
             .unwrap();
-        let any: prost_types::Any = prost::Message::decode(&*result.app_metadata)
-            .map_err(decode_error_to_arrow_error)?;
+        let any =
+            Any::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
         let result: DoPutUpdateResult = any.unpack()?.unwrap();
         Ok(result.record_count)
     }
@@ -298,8 +299,7 @@ impl FlightSqlServiceClient {
             .await
             .map_err(status_to_arrow_error)?
             .unwrap();
-        let any: prost_types::Any =
-            prost::Message::decode(&*result.body).map_err(decode_error_to_arrow_error)?;
+        let any = Any::decode(&*result.body).map_err(decode_error_to_arrow_error)?;
         let prepared_result: ActionCreatePreparedStatementResult = any.unpack()?.unwrap();
         let dataset_schema = match prepared_result.dataset_schema.len() {
             0 => Schema::empty(),
@@ -384,8 +384,8 @@ impl PreparedStatement<Channel> {
             .await
             .map_err(status_to_arrow_error)?
             .unwrap();
-        let any: prost_types::Any = Message::decode(&*result.app_metadata)
-            .map_err(decode_error_to_arrow_error)?;
+        let any =
+            Any::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
         let result: DoPutUpdateResult = any.unpack()?.unwrap();
         Ok(result.record_count)
     }

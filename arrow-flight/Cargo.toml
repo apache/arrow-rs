@@ -35,14 +35,13 @@ base64 = { version = "0.20", default-features = false, features = ["std"] }
 tonic = { version = "0.8", default-features = false, features = ["transport", "codegen", "prost"] }
 bytes = { version = "1", default-features = false }
 prost = { version = "0.11", default-features = false }
-prost-types = { version = "0.11.0", default-features = false, optional = true }
 prost-derive = { version = "0.11", default-features = false }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "rt-multi-thread"] }
-futures = { version = "0.3", default-features = false, features = ["alloc"]}
+futures = { version = "0.3", default-features = false, features = ["alloc"] }
 
 [features]
 default = []
-flight-sql-experimental = ["prost-types"]
+flight-sql-experimental = []
 
 [dev-dependencies]
 arrow = { version = "29.0.0", path = "../arrow", features = ["prettyprint"] }
