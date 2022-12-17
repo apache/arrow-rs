@@ -29,7 +29,9 @@ use crate::{
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use percent_encoding::{utf8_percent_encode, PercentEncode};
-use reqwest::{Client as ReqwestClient, Method, Response, StatusCode};
+use reqwest::{
+    header::CONTENT_TYPE, Client as ReqwestClient, Method, Response, StatusCode,
+};
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::ops::Range;
@@ -277,6 +279,10 @@ impl S3Client {
         let mut builder = self.client.request(Method::PUT, url);
         if let Some(bytes) = bytes {
             builder = builder.body(bytes)
+        }
+
+        if let Some(value) = self.config().client_options.get_content_type(path) {
+            builder = builder.header(CONTENT_TYPE, value);
         }
 
         let response = builder

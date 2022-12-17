@@ -26,7 +26,10 @@ pub mod token;
 
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client, ClientBuilder, Proxy};
+use std::collections::HashMap;
 use std::time::Duration;
+
+use crate::path::Path;
 
 fn map_client_error(e: reqwest::Error) -> super::Error {
     super::Error::Generic {
@@ -42,6 +45,8 @@ static DEFAULT_USER_AGENT: &str =
 #[derive(Debug, Clone, Default)]
 pub struct ClientOptions {
     user_agent: Option<HeaderValue>,
+    content_type_map: Option<HashMap<String, String>>,
+    default_content_type: Option<String>,
     default_headers: Option<HeaderMap>,
     proxy_url: Option<String>,
     allow_http: bool,
@@ -67,6 +72,24 @@ impl ClientOptions {
     /// Default is based on the version of this crate
     pub fn with_user_agent(mut self, agent: HeaderValue) -> Self {
         self.user_agent = Some(agent);
+        self
+    }
+
+    /// Set the default CONTENT_TYPE for uploads
+    pub fn with_default_content_type(mut self, mime: impl Into<String>) -> Self {
+        self.default_content_type = Some(mime.into());
+        self
+    }
+
+    /// Set the CONTENT_TYPE for a given file extension
+    pub fn with_content_type_for_suffix(
+        mut self,
+        extension: impl Into<String>,
+        mime: impl Into<String>,
+    ) -> Self {
+        self.content_type_map
+            .get_or_insert_with(HashMap::new)
+            .insert(extension.into(), mime.into());
         self
     }
 
@@ -163,6 +186,31 @@ impl ClientOptions {
     pub fn with_http2_keep_alive_while_idle(mut self) -> Self {
         self.http2_keep_alive_while_idle = true;
         self
+    }
+
+    /// Get the mime type for the file in `path` to be uploaded
+    ///
+    /// Gets the file extension from `path`, and returns the
+    /// mime type if it was defined initially through
+    /// `ClientOptions::with_content_type_for_suffix`
+    ///
+    /// Otherwise returns the default mime type if it was defined
+    /// earlier through `ClientOptions::with_default_content_type`
+    pub fn get_content_type(&self, path: &Path) -> Option<&str> {
+        match path
+            .as_ref()
+            .rsplit_once('.')
+            .map(|(_, extension)| extension)
+        {
+            Some(extension) => match self.content_type_map.as_ref() {
+                Some(types) => match types.get(extension) {
+                    Some(ct) => Some(ct.as_str()),
+                    None => self.default_content_type.as_deref(),
+                },
+                None => self.default_content_type.as_deref(),
+            },
+            None => self.default_content_type.as_deref(),
+        }
     }
 
     pub(crate) fn client(&self) -> super::Result<Client> {

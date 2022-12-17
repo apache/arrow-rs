@@ -28,6 +28,7 @@ use crate::{
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, TimeZone, Utc};
 use itertools::Itertools;
+use reqwest::header::CONTENT_TYPE;
 use reqwest::{
     header::{HeaderValue, CONTENT_LENGTH, IF_NONE_MATCH, RANGE},
     Client as ReqwestClient, Method, Response, StatusCode,
@@ -205,6 +206,10 @@ impl AzureClient {
             builder = builder.header(&BLOB_TYPE, "BlockBlob").query(query);
         } else {
             builder = builder.query(query);
+        }
+
+        if let Some(value) = self.config().client_options.get_content_type(path) {
+            builder = builder.header(CONTENT_TYPE, value);
         }
 
         if let Some(bytes) = bytes {
