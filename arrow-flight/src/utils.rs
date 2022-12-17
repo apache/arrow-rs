@@ -18,9 +18,9 @@
 //! Utilities to assist with reading and writing Arrow data as Flight messages
 
 use crate::{FlightData, IpcMessage, SchemaAsIpc, SchemaResult};
+use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
-use bytes::Bytes;
 
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::Buffer;
