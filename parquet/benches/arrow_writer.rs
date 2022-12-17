@@ -17,7 +17,10 @@
 
 #[macro_use]
 extern crate criterion;
+
 use criterion::{Criterion, Throughput};
+use std::env;
+use std::fs::File;
 
 extern crate arrow;
 extern crate parquet;
@@ -312,9 +315,9 @@ fn write_batch_with_option(
     batch: &RecordBatch,
     props: Option<WriterProperties>,
 ) -> Result<()> {
-    // Write batch to an in-memory writer
-    let buffer = vec![];
-    let mut writer = ArrowWriter::try_new(buffer, batch.schema(), props)?;
+    let path = env::temp_dir().join("arrow_writer.temp");
+    let file = File::create(path).unwrap();
+    let mut writer = ArrowWriter::try_new(file, batch.schema(), props)?;
 
     writer.write(batch)?;
     writer.close()?;
