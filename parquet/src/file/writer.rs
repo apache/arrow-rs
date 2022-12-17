@@ -45,16 +45,17 @@ use crate::schema::types::{
 
 /// A wrapper around a [`Write`] that keeps track of the number
 /// of bytes that have been written
-pub struct TrackedWrite<W> {
-    inner: W,
+pub struct TrackedWrite<W: Write> {
+    inner: BufWriter<W>,
     bytes_written: usize,
 }
 
 impl<W: Write> TrackedWrite<W> {
     /// Create a new [`TrackedWrite`] from a [`Write`]
     pub fn new(inner: W) -> Self {
+        let buf_write = BufWriter::new(inner);
         Self {
-            inner,
+            inner: buf_write,
             bytes_written: 0,
         }
     }
@@ -65,8 +66,13 @@ impl<W: Write> TrackedWrite<W> {
     }
 
     /// Returns the underlying writer.
-    pub fn into_inner(self) -> W {
-        self.inner
+    pub fn into_inner(self) -> Result<W> {
+        self.inner.into_inner().map_err(|err| {
+            ParquetError::General(format!(
+                "fail to get inner writer: {:?}",
+                err.to_string()
+            ))
+        })
     }
 }
 
@@ -226,27 +232,23 @@ impl<W: Write> SerializedFileWriter<W> {
         // iter row group
         // iter each column
         // write bloom filter to the file
-        let mut start_offset = self.buf.bytes_written();
-        let mut writer = BufWriter::new(&mut self.buf);
-
         for (row_group_idx, row_group) in row_groups.iter_mut().enumerate() {
             for (column_idx, column_chunk) in row_group.columns.iter_mut().enumerate() {
                 match &self.bloom_filters[row_group_idx][column_idx] {
                     Some(bloom_filter) => {
-                        bloom_filter.write(&mut writer)?;
+                        let start_offset = self.buf.bytes_written();
+                        bloom_filter.write(&mut self.buf)?;
                         // set offset and index for bloom filter
                         column_chunk
                             .meta_data
                             .as_mut()
                             .expect("can't have bloom filter without column metadata")
                             .bloom_filter_offset = Some(start_offset as i64);
-                        start_offset += bloom_filter.block_num() * 32;
                     }
                     None => {}
                 }
             }
         }
-        writer.flush()?;
         Ok(())
     }
 
@@ -336,7 +338,7 @@ impl<W: Write> SerializedFileWriter<W> {
         self.assert_previous_writer_closed()?;
         let _ = self.write_metadata()?;
 
-        Ok(self.buf.into_inner())
+        self.buf.into_inner()
     }
 }
 
@@ -558,7 +560,7 @@ impl<'a> SerializedColumnWriter<'a> {
 /// Writes and serializes pages and metadata into output stream.
 ///
 /// `SerializedPageWriter` should not be used after calling `close()`.
-pub struct SerializedPageWriter<'a, W> {
+pub struct SerializedPageWriter<'a, W: Write> {
     sink: &'a mut TrackedWrite<W>,
 }
 

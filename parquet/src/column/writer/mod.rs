@@ -1680,6 +1680,8 @@ mod tests {
         assert_eq!(stats.null_count(), 0);
         assert!(stats.distinct_count().is_none());
 
+        drop(write);
+
         let props = ReaderProperties::builder()
             .set_backward_compatible_lz4(false)
             .build();
@@ -1723,6 +1725,8 @@ mod tests {
 
         let r = writer.close().unwrap();
         assert!(r.metadata.statistics().is_none());
+
+        drop(write);
 
         let props = ReaderProperties::builder()
             .set_backward_compatible_lz4(false)
@@ -1842,8 +1846,8 @@ mod tests {
         // ARROW-5129: Test verifies that we add data page in case of dictionary encoding
         // and no fallback occurred so far.
         let mut file = tempfile::tempfile().unwrap();
-        let mut writer = TrackedWrite::new(&mut file);
-        let page_writer = Box::new(SerializedPageWriter::new(&mut writer));
+        let mut write = TrackedWrite::new(&mut file);
+        let page_writer = Box::new(SerializedPageWriter::new(&mut write));
         let props = Arc::new(
             WriterProperties::builder()
                 .set_data_pagesize_limit(10)
@@ -1854,6 +1858,8 @@ mod tests {
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 0, props);
         writer.write_batch(data, None, None).unwrap();
         let r = writer.close().unwrap();
+
+        drop(write);
 
         // Read pages and check the sequence
         let props = ReaderProperties::builder()
@@ -2196,8 +2202,8 @@ mod tests {
         rep_levels: Option<&[i16]>,
     ) {
         let mut file = tempfile::tempfile().unwrap();
-        let mut writer = TrackedWrite::new(&mut file);
-        let page_writer = Box::new(SerializedPageWriter::new(&mut writer));
+        let mut write = TrackedWrite::new(&mut file);
+        let page_writer = Box::new(SerializedPageWriter::new(&mut write));
 
         let max_def_level = match def_levels {
             Some(buf) => *buf.iter().max().unwrap_or(&0i16),
@@ -2227,6 +2233,8 @@ mod tests {
         let values_written = writer.write_batch(values, def_levels, rep_levels).unwrap();
         assert_eq!(values_written, values.len());
         let result = writer.close().unwrap();
+
+        drop(write);
 
         let props = ReaderProperties::builder()
             .set_backward_compatible_lz4(false)
