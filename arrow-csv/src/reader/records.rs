@@ -49,7 +49,7 @@ impl<R: BufRead> RecordReader<R> {
     }
 
     fn fill_buf(&mut self, to_read: usize) -> Result<(), ArrowError> {
-        // Reserve sufficient capacity in field_ends
+        // Reserve sufficient capacity in offsets
         self.offsets.resize(to_read * self.num_columns + 1, 0);
         self.num_rows = 0;
 
@@ -57,9 +57,13 @@ impl<R: BufRead> RecordReader<R> {
             return Ok(());
         }
 
+        // The current offset into `self.data`
         let mut output_offset = 0;
+        // The current offset into `input`
         let mut input_offset = 0;
+        // The current offset into `self.offsets`
         let mut field_offset = 1;
+        // The number of fields read for the current row
         let mut field_count = 0;
 
         'outer: loop {
@@ -86,8 +90,8 @@ impl<R: BufRead> RecordReader<R> {
                     output_offset += bytes_written;
 
                     match result {
-                        ReadRecordResult::End => break 'outer,
-                        ReadRecordResult::InputEmpty => break 'input,
+                        ReadRecordResult::End => break 'outer, // Reached end of file
+                        ReadRecordResult::InputEmpty => break 'input, // Input exhausted, need to read more
                         ReadRecordResult::OutputFull => break, // Need to allocate more capacity
                         ReadRecordResult::OutputEndsFull => {
                             return Err(ArrowError::CsvError(format!("incorrect number of fields, expected {} got more than {}", self.num_columns, field_count)))
@@ -100,10 +104,13 @@ impl<R: BufRead> RecordReader<R> {
                             field_count = 0;
 
                             if self.num_rows == to_read {
-                                break 'outer
+                                break 'outer // Read sufficient rows
                             }
 
                             if input.len() == input_offset {
+                                // Input exhausted, need to read more
+                                // Without this read_record will interpret the empty input
+                                // byte array as indicating the end of the file
                                 break 'input
                             }
                         }
@@ -115,6 +122,8 @@ impl<R: BufRead> RecordReader<R> {
         }
         self.reader.consume(input_offset);
 
+        // csv_core::Reader writes end offsets relative to the start of the row
+        // Therefore scan through and offset these based on the cumulative row offsets
         let mut row_offset = 0;
         self.offsets[1..]
             .chunks_mut(self.num_columns)
@@ -143,7 +152,10 @@ impl<R: BufRead> RecordReader<R> {
     pub fn read(&mut self, to_read: usize) -> Result<StringRecords<'_>, ArrowError> {
         self.fill_buf(to_read)?;
 
-        // Need to truncate fields to the actual number of rows read
+        // Need to slice fields to the actual number of rows read
+        //
+        // We intentionally avoid using `Vec::truncate` to avoid having
+        // to re-initialize the data again
         let num_fields = self.num_rows * self.num_columns;
         let last_offset = self.offsets[num_fields];
 
