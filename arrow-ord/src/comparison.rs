@@ -460,7 +460,7 @@ fn try_to_type_result<T>(
 /// Type of expression is `Result<.., ArrowError>`
 macro_rules! try_to_type {
     ($RIGHT: expr, $TY: ident) => {
-        try_to_type_result($RIGHT.$TY(), stringify!($RIGHT), stringify!($TYPE))
+        try_to_type_result($RIGHT.$TY(), &format!("{:?}", $RIGHT), stringify!($TY))
     };
 }
 
@@ -5826,5 +5826,23 @@ mod tests {
 
         let r = gt_eq_dyn(&a, &b).unwrap();
         assert_eq!(e, r);
+    }
+
+    #[derive(Debug)]
+    struct ToType {}
+
+    impl ToType {
+        fn to_i128(&self) -> Option<i128> {
+            None
+        }
+    }
+
+    #[test]
+    fn test_try_to_type() {
+        let a = ToType {};
+        let to_type = try_to_type!(a, to_i128).unwrap_err();
+        assert!(to_type
+            .to_string()
+            .contains("Could not convert ToType with to_i128"));
     }
 }

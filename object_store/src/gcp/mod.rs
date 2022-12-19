@@ -258,6 +258,7 @@ struct GoogleCloudStorageClient {
     bucket_name_encoded: String,
 
     retry_config: RetryConfig,
+    client_options: ClientOptions,
 
     // TODO: Hook this up in tests
     max_list_results: Option<String>,
@@ -328,10 +329,15 @@ impl GoogleCloudStorageClient {
             self.base_url, self.bucket_name_encoded
         );
 
+        let content_type = self
+            .client_options
+            .get_content_type(path)
+            .unwrap_or("application/octet-stream");
+
         self.client
             .request(Method::POST, url)
             .bearer_auth(token)
-            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .header(header::CONTENT_TYPE, content_type)
             .header(header::CONTENT_LENGTH, payload.len())
             .query(&[("uploadType", "media"), ("name", path.as_ref())])
             .body(payload)
@@ -347,11 +353,16 @@ impl GoogleCloudStorageClient {
         let token = self.get_token().await?;
         let url = format!("{}/{}/{}", self.base_url, self.bucket_name_encoded, path);
 
+        let content_type = self
+            .client_options
+            .get_content_type(path)
+            .unwrap_or("application/octet-stream");
+
         let response = self
             .client
             .request(Method::POST, &url)
             .bearer_auth(token)
-            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .header(header::CONTENT_TYPE, content_type)
             .header(header::CONTENT_LENGTH, "0")
             .query(&[("uploads", "")])
             .send_retry(&self.retry_config)
@@ -967,6 +978,7 @@ impl GoogleCloudStorageBuilder {
                 bucket_name,
                 bucket_name_encoded: encoded_bucket_name,
                 retry_config,
+                client_options,
                 max_list_results: None,
             }),
         })

@@ -17,14 +17,15 @@
 
 use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, RecordBatch};
-use arrow_flight::sql::{ActionCreatePreparedStatementResult, ProstMessageExt, SqlInfo};
+use arrow_flight::sql::{
+    ActionCreatePreparedStatementResult, Any, ProstMessageExt, SqlInfo,
+};
 use arrow_flight::{
     Action, FlightData, FlightEndpoint, HandshakeRequest, HandshakeResponse, IpcMessage,
     Location, SchemaAsIpc, Ticket,
 };
 use futures::{stream, Stream};
 use prost::Message;
-use prost_types::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use tonic::transport::Server;
@@ -120,7 +121,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_get_fallback(
         &self,
         _request: Request<Ticket>,
-        _message: prost_types::Any,
+        _message: Any,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let batch =
             Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
@@ -470,9 +471,9 @@ impl ProstMessageExt for FetchResults {
     }
 
     fn as_any(&self) -> Any {
-        prost_types::Any {
+        Any {
             type_url: FetchResults::type_url().to_string(),
-            value: ::prost::Message::encode_to_vec(self),
+            value: ::prost::Message::encode_to_vec(self).into(),
         }
     }
 }

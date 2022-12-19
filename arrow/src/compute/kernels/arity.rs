@@ -114,9 +114,12 @@ where
     T: ArrowPrimitiveType,
     F: Fn(T::Native) -> Result<T::Native>,
 {
-    if array.value_type() != T::DATA_TYPE {
+    if std::mem::discriminant(&array.value_type())
+        != std::mem::discriminant(&T::DATA_TYPE)
+    {
         return Err(ArrowError::CastError(format!(
-            "Cannot perform the unary operation on dictionary array of value type {}",
+            "Cannot perform the unary operation of type {} on dictionary array of value type {}",
+            T::DATA_TYPE,
             array.value_type()
         )));
     }
@@ -135,14 +138,15 @@ where
     downcast_dictionary_array! {
         array => unary_dict::<_, F, T>(array, op),
         t => {
-            if t == &T::DATA_TYPE {
+            if std::mem::discriminant(t) == std::mem::discriminant(&T::DATA_TYPE) {
                 Ok(Arc::new(unary::<T, F, T>(
                     array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap(),
                     op,
                 )))
             } else {
                 Err(ArrowError::NotYetImplemented(format!(
-                    "Cannot perform unary operation on array of type {}",
+                    "Cannot perform unary operation of type {} on array of type {}",
+                    T::DATA_TYPE,
                     t
                 )))
             }
@@ -166,14 +170,15 @@ where
             )))
         },
         t => {
-            if t == &T::DATA_TYPE {
+            if std::mem::discriminant(t) == std::mem::discriminant(&T::DATA_TYPE) {
                 Ok(Arc::new(try_unary::<T, F, T>(
                     array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap(),
                     op,
                 )?))
             } else {
                 Err(ArrowError::NotYetImplemented(format!(
-                    "Cannot perform unary operation on array of type {}",
+                    "Cannot perform unary operation of type {} on array of type {}",
+                    T::DATA_TYPE,
                     t
                 )))
             }

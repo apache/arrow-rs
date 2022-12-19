@@ -40,13 +40,14 @@
 //! let batch = csv.next().unwrap().unwrap();
 //! ```
 
-use core::cmp::min;
+mod records;
+
 use lazy_static::lazy_static;
 use regex::{Regex, RegexSet};
 use std::collections::HashSet;
 use std::fmt;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader as StdBufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use arrow_array::builder::Decimal128Builder;
@@ -56,8 +57,9 @@ use arrow_cast::parse::Parser;
 use arrow_schema::*;
 
 use crate::map_csv_error;
+use crate::reader::records::{RecordReader, StringRecords};
 use arrow_data::decimal::validate_decimal_precision;
-use csv::{ByteRecord, StringRecord};
+use csv::StringRecord;
 use std::ops::Neg;
 
 lazy_static! {
@@ -107,7 +109,7 @@ fn infer_field_schema(string: &str, datetime_re: Option<Regex>) -> DataType {
 /// This is a collection of options for csv reader when the builder pattern cannot be used
 /// and the parameters need to be passed around
 #[derive(Debug, Default, Clone)]
-pub struct ReaderOptions {
+struct ReaderOptions {
     has_header: bool,
     delimiter: Option<u8>,
     escape: Option<u8>,
@@ -177,11 +179,36 @@ pub fn infer_reader_schema<R: Read>(
     infer_reader_schema_with_csv_options(reader, roptions)
 }
 
+/// Creates a `csv::Reader`
+fn build_csv_reader<R: Read>(
+    reader: R,
+    has_header: bool,
+    delimiter: Option<u8>,
+    escape: Option<u8>,
+    quote: Option<u8>,
+    terminator: Option<u8>,
+) -> csv::Reader<R> {
+    let mut reader_builder = csv::ReaderBuilder::new();
+    reader_builder.has_headers(has_header);
+
+    if let Some(c) = delimiter {
+        reader_builder.delimiter(c);
+    }
+    reader_builder.escape(escape);
+    if let Some(c) = quote {
+        reader_builder.quote(c);
+    }
+    if let Some(t) = terminator {
+        reader_builder.terminator(csv::Terminator::Any(t));
+    }
+    reader_builder.from_reader(reader)
+}
+
 fn infer_reader_schema_with_csv_options<R: Read>(
     reader: R,
     roptions: ReaderOptions,
 ) -> Result<(Schema, usize), ArrowError> {
-    let mut csv_reader = Reader::build_csv_reader(
+    let mut csv_reader = build_csv_reader(
         reader,
         roptions.has_header,
         roptions.delimiter,
@@ -298,31 +325,34 @@ pub fn infer_schema_from_files(
 // optional bounds of the reader, of the form (min line, max line).
 type Bounds = Option<(usize, usize)>;
 
+/// CSV file reader using [`std::io::BufReader`]
+pub type Reader<R> = BufReader<StdBufReader<R>>;
+
 /// CSV file reader
-pub struct Reader<R: Read> {
+pub struct BufReader<R> {
     /// Explicit schema for the CSV file
     schema: SchemaRef,
     /// Optional projection for which columns to load (zero-based column indices)
     projection: Option<Vec<usize>>,
     /// File reader
-    reader: csv::Reader<R>,
+    reader: RecordReader<R>,
+    /// Rows to skip
+    to_skip: usize,
     /// Current line number
     line_number: usize,
-    /// Maximum number of rows to read
+    /// End line number
     end: usize,
     /// Number of records per batch
     batch_size: usize,
-    /// Vector that can hold the `StringRecord`s of the batches
-    batch_records: Vec<StringRecord>,
     /// datetime format used to parse datetime values, (format understood by chrono)
     ///
     /// For format refer to [chrono docs](https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html)
     datetime_format: Option<String>,
 }
 
-impl<R> fmt::Debug for Reader<R>
+impl<R> fmt::Debug for BufReader<R>
 where
-    R: Read,
+    R: BufRead,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Reader")
@@ -351,16 +381,23 @@ impl<R: Read> Reader<R> {
         projection: Option<Vec<usize>>,
         datetime_format: Option<String>,
     ) -> Self {
-        Self::from_reader(
-            reader,
-            schema,
-            has_header,
-            delimiter,
-            batch_size,
-            bounds,
-            projection,
-            datetime_format,
-        )
+        let mut builder = ReaderBuilder::new()
+            .has_header(has_header)
+            .with_batch_size(batch_size);
+
+        if let Some(delimiter) = delimiter {
+            builder = builder.with_delimiter(delimiter);
+        }
+        if let Some((start, end)) = bounds {
+            builder = builder.with_bounds(start, end);
+        }
+        if let Some(projection) = projection {
+            builder = builder.with_projection(projection)
+        }
+        if let Some(format) = datetime_format {
+            builder = builder.with_datetime_format(format)
+        }
+        builder.build_with_schema(StdBufReader::new(reader), schema)
     }
 
     /// Returns the schema of the reader, useful for getting the schema without reading
@@ -383,6 +420,7 @@ impl<R: Read> Reader<R> {
     /// This constructor allows you more flexibility in what records are processed by the
     /// csv reader.
     #[allow(clippy::too_many_arguments)]
+    #[deprecated(note = "Use Reader::new or ReaderBuilder")]
     pub fn from_reader(
         reader: R,
         schema: SchemaRef,
@@ -393,142 +431,57 @@ impl<R: Read> Reader<R> {
         projection: Option<Vec<usize>>,
         datetime_format: Option<String>,
     ) -> Self {
-        let csv_reader =
-            Self::build_csv_reader(reader, has_header, delimiter, None, None, None);
-        Self::from_csv_reader(
-            csv_reader,
+        Self::new(
+            reader,
             schema,
             has_header,
+            delimiter,
             batch_size,
             bounds,
             projection,
             datetime_format,
         )
     }
-
-    fn build_csv_reader(
-        reader: R,
-        has_header: bool,
-        delimiter: Option<u8>,
-        escape: Option<u8>,
-        quote: Option<u8>,
-        terminator: Option<u8>,
-    ) -> csv::Reader<R> {
-        let mut reader_builder = csv::ReaderBuilder::new();
-        reader_builder.has_headers(has_header);
-
-        if let Some(c) = delimiter {
-            reader_builder.delimiter(c);
-        }
-        reader_builder.escape(escape);
-        if let Some(c) = quote {
-            reader_builder.quote(c);
-        }
-        if let Some(t) = terminator {
-            reader_builder.terminator(csv::Terminator::Any(t));
-        }
-        reader_builder.from_reader(reader)
-    }
-
-    fn from_csv_reader(
-        mut csv_reader: csv::Reader<R>,
-        schema: SchemaRef,
-        has_header: bool,
-        batch_size: usize,
-        bounds: Bounds,
-        projection: Option<Vec<usize>>,
-        datetime_format: Option<String>,
-    ) -> Self {
-        let (start, end) = match bounds {
-            None => (0, usize::MAX),
-            Some((start, end)) => (start, end),
-        };
-
-        // First we will skip `start` rows
-        // note that this skips by iteration. This is because in general it is not possible
-        // to seek in CSV. However, skipping still saves the burden of creating arrow arrays,
-        // which is a slow operation that scales with the number of columns
-
-        let mut record = ByteRecord::new();
-        // Skip first start items
-        for _ in 0..start {
-            let res = csv_reader.read_byte_record(&mut record);
-            if !res.unwrap_or(false) {
-                break;
-            }
-        }
-
-        // Initialize batch_records with StringRecords so they
-        // can be reused across batches
-        let mut batch_records = Vec::with_capacity(batch_size);
-        batch_records.resize_with(batch_size, Default::default);
-
-        Self {
-            schema,
-            projection,
-            reader: csv_reader,
-            line_number: if has_header { start + 1 } else { start },
-            batch_size,
-            end,
-            batch_records,
-            datetime_format,
-        }
-    }
 }
 
-impl<R: Read> Iterator for Reader<R> {
+impl<R: BufRead> Iterator for BufReader<R> {
     type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let remaining = self.end - self.line_number;
-
-        let mut read_records = 0;
-        for i in 0..min(self.batch_size, remaining) {
-            match self.reader.read_record(&mut self.batch_records[i]) {
-                Ok(true) => {
-                    read_records += 1;
-                }
-                Ok(false) => break,
-                Err(e) => {
-                    return Some(Err(ArrowError::ParseError(format!(
-                        "Error parsing line {}: {:?}",
-                        self.line_number + i,
-                        e
-                    ))));
-                }
+        if self.to_skip != 0 {
+            if let Err(e) = self.reader.skip(std::mem::take(&mut self.to_skip)) {
+                return Some(Err(e));
             }
         }
 
-        // return early if no data was loaded
-        if read_records == 0 {
-            return None;
-        }
+        let remaining = self.end - self.line_number;
+        let to_read = self.batch_size.min(remaining);
 
-        let format: Option<&str> = match self.datetime_format {
-            Some(ref format) => Some(format.as_ref()),
-            _ => None,
+        let batch = match self.reader.read(to_read) {
+            Ok(b) if b.is_empty() => return None,
+            Ok(b) => b,
+            Err(e) => return Some(Err(e)),
         };
 
         // parse the batches into a RecordBatch
         let result = parse(
-            &self.batch_records[..read_records],
+            &batch,
             self.schema.fields(),
             Some(self.schema.metadata.clone()),
             self.projection.as_ref(),
             self.line_number,
-            format,
+            self.datetime_format.as_deref(),
         );
 
-        self.line_number += read_records;
+        self.line_number += batch.len();
 
         Some(result)
     }
 }
 
-/// parses a slice of [csv::StringRecord] into a
-/// [RecordBatch]
+/// Parses a slice of [`StringRecords`] into a [RecordBatch]
 fn parse(
-    rows: &[StringRecord],
+    rows: &StringRecords<'_>,
     fields: &[Field],
     metadata: Option<std::collections::HashMap<String, String>>,
     projection: Option<&Vec<usize>>,
@@ -624,7 +577,9 @@ fn parse(
                     )
                 }
                 DataType::Utf8 => Ok(Arc::new(
-                    rows.iter().map(|row| row.get(i)).collect::<StringArray>(),
+                    rows.iter()
+                        .map(|row| Some(row.get(i)))
+                        .collect::<StringArray>(),
                 ) as ArrayRef),
                 DataType::Dictionary(key_type, value_type)
                     if value_type.as_ref() == &DataType::Utf8 =>
@@ -723,34 +678,26 @@ fn parse_bool(string: &str) -> Option<bool> {
 // parse the column string to an Arrow Array
 fn build_decimal_array(
     _line_number: usize,
-    rows: &[StringRecord],
+    rows: &StringRecords<'_>,
     col_idx: usize,
     precision: u8,
     scale: i8,
 ) -> Result<ArrayRef, ArrowError> {
     let mut decimal_builder = Decimal128Builder::with_capacity(rows.len());
-    for row in rows {
-        let col_s = row.get(col_idx);
-        match col_s {
-            None => {
-                // No data for this row
-                decimal_builder.append_null();
-            }
-            Some(s) => {
-                if s.is_empty() {
-                    // append null
-                    decimal_builder.append_null();
-                } else {
-                    let decimal_value: Result<i128, _> =
-                        parse_decimal_with_parameter(s, precision, scale);
-                    match decimal_value {
-                        Ok(v) => {
-                            decimal_builder.append_value(v);
-                        }
-                        Err(e) => {
-                            return Err(e);
-                        }
-                    }
+    for row in rows.iter() {
+        let s = row.get(col_idx);
+        if s.is_empty() {
+            // append null
+            decimal_builder.append_null();
+        } else {
+            let decimal_value: Result<i128, _> =
+                parse_decimal_with_parameter(s, precision, scale);
+            match decimal_value {
+                Ok(v) => {
+                    decimal_builder.append_value(v);
+                }
+                Err(e) => {
+                    return Err(e);
                 }
             }
         }
@@ -878,35 +825,31 @@ fn parse_decimal(s: &str) -> Result<i128, ArrowError> {
 // parses a specific column (col_idx) into an Arrow Array.
 fn build_primitive_array<T: ArrowPrimitiveType + Parser>(
     line_number: usize,
-    rows: &[StringRecord],
+    rows: &StringRecords<'_>,
     col_idx: usize,
     format: Option<&str>,
 ) -> Result<ArrayRef, ArrowError> {
     rows.iter()
         .enumerate()
         .map(|(row_index, row)| {
-            match row.get(col_idx) {
-                Some(s) => {
-                    if s.is_empty() {
-                        return Ok(None);
-                    }
+            let s = row.get(col_idx);
+            if s.is_empty() {
+                return Ok(None);
+            }
 
-                    let parsed = match format {
-                        Some(format) => parse_formatted::<T>(s, format),
-                        _ => parse_item::<T>(s),
-                    };
-                    match parsed {
-                        Some(e) => Ok(Some(e)),
-                        None => Err(ArrowError::ParseError(format!(
-                            // TODO: we should surface the underlying error here.
-                            "Error while parsing value {} for column {} at line {}",
-                            s,
-                            col_idx,
-                            line_number + row_index
-                        ))),
-                    }
-                }
-                None => Ok(None),
+            let parsed = match format {
+                Some(format) => parse_formatted::<T>(s, format),
+                _ => parse_item::<T>(s),
+            };
+            match parsed {
+                Some(e) => Ok(Some(e)),
+                None => Err(ArrowError::ParseError(format!(
+                    // TODO: we should surface the underlying error here.
+                    "Error while parsing value {} for column {} at line {}",
+                    s,
+                    col_idx,
+                    line_number + row_index
+                ))),
             }
         })
         .collect::<Result<PrimitiveArray<T>, ArrowError>>()
@@ -916,31 +859,23 @@ fn build_primitive_array<T: ArrowPrimitiveType + Parser>(
 // parses a specific column (col_idx) into an Arrow Array.
 fn build_boolean_array(
     line_number: usize,
-    rows: &[StringRecord],
+    rows: &StringRecords<'_>,
     col_idx: usize,
 ) -> Result<ArrayRef, ArrowError> {
     rows.iter()
         .enumerate()
         .map(|(row_index, row)| {
-            match row.get(col_idx) {
-                Some(s) => {
-                    if s.is_empty() {
-                        return Ok(None);
-                    }
-
-                    let parsed = parse_bool(s);
-                    match parsed {
-                        Some(e) => Ok(Some(e)),
-                        None => Err(ArrowError::ParseError(format!(
-                            // TODO: we should surface the underlying error here.
-                            "Error while parsing value {} for column {} at line {}",
-                            s,
-                            col_idx,
-                            line_number + row_index
-                        ))),
-                    }
-                }
-                None => Ok(None),
+            let s = row.get(col_idx);
+            let parsed = parse_bool(s);
+            match parsed {
+                Some(e) => Ok(Some(e)),
+                None => Err(ArrowError::ParseError(format!(
+                    // TODO: we should surface the underlying error here.
+                    "Error while parsing value {} for column {} at line {}",
+                    s,
+                    col_idx,
+                    line_number + row_index
+                ))),
             }
         })
         .collect::<Result<BooleanArray, _>>()
@@ -1108,11 +1043,22 @@ impl ReaderBuilder {
         self
     }
 
-    /// Create a new `Reader` from the `ReaderBuilder`
-    pub fn build<R: Read + Seek>(self, mut reader: R) -> Result<Reader<R>, ArrowError> {
+    /// Create a new `Reader` from a non-buffered reader
+    ///
+    /// If `R: BufRead` consider using [`Self::build_buffered`] to avoid unnecessary additional
+    /// buffering, as internally this method wraps `reader` in [`std::io::BufReader`]
+    pub fn build<R: Read + Seek>(self, reader: R) -> Result<Reader<R>, ArrowError> {
+        self.build_buffered(StdBufReader::new(reader))
+    }
+
+    /// Create a new `BufReader` from a buffered reader
+    pub fn build_buffered<R: BufRead + Seek>(
+        mut self,
+        mut reader: R,
+    ) -> Result<BufReader<R>, ArrowError> {
         // check if schema should be inferred
         let delimiter = self.delimiter.unwrap_or(b',');
-        let schema = match self.schema {
+        let schema = match self.schema.take() {
             Some(schema) => schema,
             None => {
                 let roptions = ReaderOptions {
@@ -1122,7 +1068,7 @@ impl ReaderBuilder {
                     escape: self.escape,
                     quote: self.quote,
                     terminator: self.terminator,
-                    datetime_re: self.datetime_re,
+                    datetime_re: self.datetime_re.take(),
                 };
                 let (inferred_schema, _) =
                     infer_file_schema_with_csv_options(&mut reader, roptions)?;
@@ -1130,23 +1076,42 @@ impl ReaderBuilder {
                 Arc::new(inferred_schema)
             }
         };
-        let csv_reader = Reader::build_csv_reader(
-            reader,
-            self.has_header,
-            self.delimiter,
-            self.escape,
-            self.quote,
-            self.terminator,
-        );
-        Ok(Reader::from_csv_reader(
-            csv_reader,
+        Ok(self.build_with_schema(reader, schema))
+    }
+
+    fn build_with_schema<R: BufRead>(self, reader: R, schema: SchemaRef) -> BufReader<R> {
+        let mut reader_builder = csv_core::ReaderBuilder::new();
+        reader_builder.escape(self.escape);
+
+        if let Some(c) = self.delimiter {
+            reader_builder.delimiter(c);
+        }
+        if let Some(c) = self.quote {
+            reader_builder.quote(c);
+        }
+        if let Some(t) = self.terminator {
+            reader_builder.terminator(csv_core::Terminator::Any(t));
+        }
+        let delimiter = reader_builder.build();
+        let reader = RecordReader::new(reader, delimiter, schema.fields().len());
+
+        let header = self.has_header as usize;
+
+        let (start, end) = match self.bounds {
+            Some((start, end)) => (start + header, end + header),
+            None => (header, usize::MAX),
+        };
+
+        BufReader {
             schema,
-            self.has_header,
-            self.batch_size,
-            self.bounds,
-            self.projection.clone(),
-            self.datetime_format,
-        ))
+            projection: self.projection,
+            reader,
+            to_skip: start,
+            line_number: start,
+            end,
+            batch_size: self.batch_size,
+            datetime_format: self.datetime_format,
+        }
     }
 }
 
@@ -1285,7 +1250,7 @@ mod tests {
         let both_files = file_with_headers
             .chain(Cursor::new("\n".to_string()))
             .chain(file_without_headers);
-        let mut csv = Reader::from_reader(
+        let mut csv = Reader::new(
             both_files,
             Arc::new(schema),
             true,
@@ -1480,6 +1445,7 @@ mod tests {
             Field::new("c_int", DataType::UInt64, false),
             Field::new("c_float", DataType::Float32, true),
             Field::new("c_string", DataType::Utf8, false),
+            Field::new("c_bool", DataType::Boolean, false),
         ]);
 
         let file = File::open("test/data/null_test.csv").unwrap();
@@ -2073,5 +2039,32 @@ mod tests {
         assert_eq!(col1.len(), 10);
         let col1_arr = col1.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(col1_arr.value(5), "value5");
+    }
+
+    #[test]
+    fn test_header_bounds() {
+        let csv = "a,b\na,b\na,b\na,b\na,b\n";
+        let tests = [
+            (None, false, 5),
+            (None, true, 4),
+            (Some((0, 4)), false, 4),
+            (Some((1, 4)), false, 3),
+            (Some((0, 4)), true, 4),
+            (Some((1, 4)), true, 3),
+        ];
+
+        for (idx, (bounds, has_header, expected)) in tests.into_iter().enumerate() {
+            let mut reader = ReaderBuilder::new().has_header(has_header);
+            if let Some((start, end)) = bounds {
+                reader = reader.with_bounds(start, end);
+            }
+            let b = reader
+                .build(Cursor::new(csv.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert_eq!(b.num_rows(), expected, "{}", idx);
+        }
     }
 }

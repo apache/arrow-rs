@@ -202,6 +202,11 @@ harness = false
 required-features = ["csv"]
 
 [[bench]]
+name = "csv_reader"
+harness = false
+required-features = ["test_utils", "csv"]
+
+[[bench]]
 name = "json_reader"
 harness = false
 required-features = ["json"]

@@ -229,6 +229,27 @@ impl Path {
         }
     }
 
+    /// Returns the last path segment containing the filename stored in this [`Path`]
+    pub fn filename(&self) -> Option<&str> {
+        match self.raw.is_empty() {
+            true => None,
+            false => self.raw.split(DELIMITER).last(),
+        }
+    }
+
+    /// Returns the extension of the file stored in this [`Path`], if any
+    pub fn extension(&self) -> Option<&str> {
+        self.filename()
+            .and_then(|f| f.rsplit_once('.'))
+            .and_then(|(_, extension)| {
+                if extension.is_empty() {
+                    None
+                } else {
+                    Some(extension)
+                }
+            })
+    }
+
     /// Returns an iterator of the [`PathPart`] of this [`Path`] after `prefix`
     ///
     /// Returns `None` if the prefix does not match
@@ -550,5 +571,29 @@ mod tests {
         assert_eq!(a.raw, "foo bar/baz");
         assert_eq!(a.raw, b.raw);
         assert_eq!(b.raw, c.raw);
+    }
+
+    #[test]
+    fn filename_from_path() {
+        let a = Path::from("foo/bar");
+        let b = Path::from("foo/bar.baz");
+        let c = Path::from("foo.bar/baz");
+
+        assert_eq!(a.filename(), Some("bar"));
+        assert_eq!(b.filename(), Some("bar.baz"));
+        assert_eq!(c.filename(), Some("baz"));
+    }
+
+    #[test]
+    fn file_extension() {
+        let a = Path::from("foo/bar");
+        let b = Path::from("foo/bar.baz");
+        let c = Path::from("foo.bar/baz");
+        let d = Path::from("foo.bar/baz.qux");
+
+        assert_eq!(a.extension(), None);
+        assert_eq!(b.extension(), Some("baz"));
+        assert_eq!(c.extension(), None);
+        assert_eq!(d.extension(), Some("qux"));
     }
 }

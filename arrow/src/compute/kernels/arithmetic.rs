@@ -1633,7 +1633,7 @@ mod tests {
     use super::*;
     use crate::array::Int32Array;
     use crate::compute::{binary_mut, try_binary_mut, try_unary_mut, unary_mut};
-    use crate::datatypes::{Date64Type, Int32Type, Int8Type};
+    use crate::datatypes::{Date64Type, Decimal128Type, Int32Type, Int8Type};
     use arrow_buffer::i256;
     use chrono::NaiveDate;
     use half::f16;
@@ -3225,5 +3225,23 @@ mod tests {
             None,
         ])) as ArrayRef;
         assert_eq!(&result, &expected);
+    }
+
+    #[test]
+    fn test_decimal_add_scalar_dyn() {
+        let a = Decimal128Array::from(vec![100, 210, 320])
+            .with_precision_and_scale(38, 2)
+            .unwrap();
+
+        let result = add_scalar_dyn::<Decimal128Type>(&a, 1).unwrap();
+        let result = as_primitive_array::<Decimal128Type>(&result)
+            .clone()
+            .with_precision_and_scale(38, 2)
+            .unwrap();
+        let expected = Decimal128Array::from(vec![101, 211, 321])
+            .with_precision_and_scale(38, 2)
+            .unwrap();
+
+        assert_eq!(&expected, &result);
     }
 }
