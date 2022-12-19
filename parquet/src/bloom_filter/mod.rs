@@ -329,10 +329,6 @@ impl Sbbf {
         let block_index = self.hash_to_block_index(hash);
         self.0[block_index].check(hash as u32)
     }
-
-    pub(crate) fn block_num(&self) -> usize {
-        self.0.len()
-    }
 }
 
 // per spec we use xxHash with seed=0
