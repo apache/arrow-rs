@@ -128,12 +128,13 @@ mod tests {
         let res = parquet_test_data();
         let store = LocalFileSystem::new_with_prefix(res).unwrap();
 
-        let meta = store
+        let mut meta = store
             .head(&Path::from("alltypes_plain.parquet"))
             .await
             .unwrap();
 
-        let object_reader = ParquetObjectReader::new(Arc::new(store), meta);
+        let store = Arc::new(store) as Arc<dyn ObjectStore>;
+        let object_reader = ParquetObjectReader::new(Arc::clone(&store), meta.clone());
         let builder = ParquetRecordBatchStreamBuilder::new(object_reader)
             .await
             .unwrap();
@@ -141,5 +142,17 @@ mod tests {
 
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].num_rows(), 8);
+
+        meta.location = Path::from("I don't exist.parquet");
+
+        let object_reader = ParquetObjectReader::new(store, meta);
+        // Cannot use unwrap_err as ParquetRecordBatchStreamBuilder: !Debug
+        match ParquetRecordBatchStreamBuilder::new(object_reader).await {
+            Ok(_) => panic!("expected failure"),
+            Err(e) => {
+                let err = e.to_string();
+                assert!(err.contains("Parquet error: ParquetFileReader::get_metadata error: Object at location") && err.contains("not found: No such file or directory (os error 2)"), "{}", err);
+            }
+        }
     }
 }

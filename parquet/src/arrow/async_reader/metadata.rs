@@ -22,7 +22,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use std::future::Future;
 use std::ops::Range;
 
-/// Fetches parquet metadata 
+/// Fetches parquet metadata
 ///
 /// Parameters:
 /// * fetch: an async function that can fetch byte ranges
@@ -39,12 +39,12 @@ use std::ops::Range;
 /// if additional bytes are needed. This can therefore eliminate a
 /// potentially costly additional fetch operation
 pub async fn fetch_parquet_metadata<F, Fut>(
-    fetch: F,
+    mut fetch: F,
     file_size: usize,
     footer_size_hint: Option<usize>,
 ) -> Result<ParquetMetaData>
 where
-    F: Fn(Range<usize>) -> Fut,
+    F: FnMut(Range<usize>) -> Fut,
     Fut: Future<Output = Result<Bytes>>,
 {
     if file_size < 8 {
@@ -95,5 +95,65 @@ where
         Ok(decode_metadata(
             &suffix[metadata_start - footer_start..suffix_len - 8],
         )?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::file::reader::{FileReader, Length, SerializedFileReader};
+    use crate::util::test_common::file_util::get_test_file;
+    use std::fs::File;
+    use std::io::{Read, Seek, SeekFrom};
+
+    fn read_range(file: &mut File, range: Range<usize>) -> Result<Bytes> {
+        file.seek(SeekFrom::Start(range.start as _))?;
+        let len = range.end - range.start;
+        let mut buf = Vec::with_capacity(len);
+        file.take(len as _).read_to_end(&mut buf)?;
+        Ok(buf.into())
+    }
+
+    #[tokio::test]
+    async fn test_simple() {
+        let mut file = get_test_file("nulls.snappy.parquet");
+        let len = file.len() as usize;
+
+        let reader = SerializedFileReader::new(file.try_clone().unwrap()).unwrap();
+        let expected = reader.metadata().file_metadata().schema();
+
+        let mut fetch = |range| futures::future::ready(read_range(&mut file, range));
+        let actual = fetch_parquet_metadata(&mut fetch, len, None).await.unwrap();
+        assert_eq!(actual.file_metadata().schema(), expected);
+
+        // Metadata hint too small
+        let actual = fetch_parquet_metadata(&mut fetch, len, Some(10))
+            .await
+            .unwrap();
+        assert_eq!(actual.file_metadata().schema(), expected);
+
+        // Metadata hint too large
+        let actual = fetch_parquet_metadata(&mut fetch, len, Some(500))
+            .await
+            .unwrap();
+        assert_eq!(actual.file_metadata().schema(), expected);
+
+        // Metadata hint exactly correct
+        let actual = fetch_parquet_metadata(&mut fetch, len, Some(428))
+            .await
+            .unwrap();
+        assert_eq!(actual.file_metadata().schema(), expected);
+
+        let err = fetch_parquet_metadata(&mut fetch, 4, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "EOF: file size of 4 is less than footer");
+
+        let err = fetch_parquet_metadata(&mut fetch, 20, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "Parquet error: Invalid Parquet file. Corrupt footer");
     }
 }
