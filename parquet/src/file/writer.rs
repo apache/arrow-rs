@@ -21,7 +21,7 @@
 use crate::bloom_filter::Sbbf;
 use crate::format as parquet;
 use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
-use std::io::BufWriter;
+use std::io::{BufWriter, IoSlice};
 use std::{io::Write, sync::Arc};
 use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol, TSerializable};
 
@@ -82,6 +82,19 @@ impl<W: Write> Write for TrackedWrite<W> {
         let bytes = self.inner.write(buf)?;
         self.bytes_written += bytes;
         Ok(bytes)
+    }
+
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> std::io::Result<usize> {
+        let bytes = self.inner.write_vectored(bufs)?;
+        self.bytes_written += bytes;
+        Ok(bytes)
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.inner.write_all(buf)?;
+        self.bytes_written += buf.len();
+
+        Ok(())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
