@@ -138,7 +138,7 @@ pub struct Any {
     /// `path/google.protobuf.Duration`). The name should be in a canonical form
     /// (e.g., leading "." is not accepted).
     #[prost(string, tag = "1")]
-    pub type_url: ::prost::alloc::string::String,
+    pub type_url: String,
     /// Must be a valid serialized protocol buffer of the above specified type.
     #[prost(bytes = "bytes", tag = "2")]
     pub value: Bytes,
