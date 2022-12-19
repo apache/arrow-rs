@@ -337,7 +337,7 @@ impl<W: Write> SerializedFileWriter<W> {
         }
     }
 
-    pub(crate) fn append_key_value_metadata(&mut self, kv_metadata: KeyValue) {
+    pub fn append_key_value_metadata(&mut self, kv_metadata: KeyValue) {
         self.kv_metadatas.push(kv_metadata);
     }
 
