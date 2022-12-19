@@ -44,7 +44,8 @@ use crate::schema::types::{
 };
 
 /// A wrapper around a [`Write`] that keeps track of the number
-/// of bytes that have been written
+/// of bytes that have been written. The given [`Write`] is wrapped
+/// with a [`BufWriter`] to optimize writing performance.
 pub struct TrackedWrite<W: Write> {
     inner: BufWriter<W>,
     bytes_written: usize,
