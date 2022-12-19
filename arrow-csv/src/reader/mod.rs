@@ -1043,12 +1043,15 @@ impl ReaderBuilder {
         self
     }
 
-    /// Create a new `Reader` from the `ReaderBuilder`
+    /// Create a new `Reader` from a non-buffered reader
+    ///
+    /// If `R: BufRead` consider using [`Self::build_buffered`] to avoid unnecessary additional
+    /// buffering, as internally this method wraps `reader` in [`std::io::BufReader`]
     pub fn build<R: Read + Seek>(self, reader: R) -> Result<Reader<R>, ArrowError> {
         self.build_buffered(StdBufReader::new(reader))
     }
 
-    /// Create a new `BufReader`
+    /// Create a new `BufReader` from a buffered reader
     pub fn build_buffered<R: BufRead + Seek>(
         mut self,
         mut reader: R,
