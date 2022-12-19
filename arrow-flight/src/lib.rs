@@ -15,6 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! A native Rust implementaiton of [Apache Arrow Flight](https://arrow.apache.org/docs/format/Flight.html)
+//! for exchanging [Arrow](https://arrow.apache.org) data between processes.
+//!
+//! Please see the [arrow-flight crates.io](https://crates.io/crates/arrow-flight)
+//! page for feature flags and more information.
+//!
+//! # Overview
+//!
+//! This crate contains:
+//!
+//! 1. Low level [prost] generated structs
+//!  for Flight gRPC protobuf messages, such as [`FlightData`].
+//!
+//! 2. Low level [tonic] generated [`flight_service_client`] and
+//! [`flight_service_server`].
 #![allow(rustdoc::invalid_html_tags)]
 
 use arrow_ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
@@ -35,16 +50,20 @@ mod gen {
     include!("arrow.flight.protocol.rs");
 }
 
+/// Defines a `Flight` for generation or retrieval.
 pub mod flight_descriptor {
     use super::gen;
     pub use gen::flight_descriptor::DescriptorType;
 }
 
+/// Low Level [tonic] [`FlightServiceClient`](gen::flight_service_client::FlightServiceClient).
 pub mod flight_service_client {
     use super::gen;
     pub use gen::flight_service_client::FlightServiceClient;
 }
 
+/// Low Level [tonic] [`FlightServiceServer`](gen::flight_service_server::FlightServiceServer)
+/// and [`FlightService`](gen::flight_service_server::FlightService).
 pub mod flight_service_server {
     use super::gen;
     pub use gen::flight_service_server::FlightService;
