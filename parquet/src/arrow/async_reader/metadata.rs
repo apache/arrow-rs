@@ -22,7 +22,12 @@ use bytes::{BufMut, Bytes, BytesMut};
 use std::future::Future;
 use std::ops::Range;
 
-/// Fetches parquet metadata using an async function that can fetch byte ranges
+/// Fetches parquet metadata 
+///
+/// Parameters:
+/// * fetch: an async function that can fetch byte ranges
+/// * file_size: the total size of the parquet file
+/// * footer_size_hint: footer prefetch size (see comments below)
 ///
 /// The length of the parquet footer, which contains file metadata, is not
 /// known up front. Therefore this function will first issue a request to read
