@@ -122,6 +122,8 @@ pub struct SerializedFileWriter<W: Write> {
     column_indexes: Vec<Vec<Option<ColumnIndex>>>,
     offset_indexes: Vec<Vec<Option<OffsetIndex>>>,
     row_group_index: usize,
+    // kv_metadatas will overwrite KeyValue in `props` if not None
+    kv_metadatas: Option<Vec<KeyValue>>,
 }
 
 impl<W: Write> SerializedFileWriter<W> {
@@ -139,6 +141,7 @@ impl<W: Write> SerializedFileWriter<W> {
             column_indexes: Vec::new(),
             offset_indexes: Vec::new(),
             row_group_index: 0,
+            kv_metadatas: None,
         })
     }
 
@@ -298,7 +301,10 @@ impl<W: Write> SerializedFileWriter<W> {
             row_groups,
             version: self.props.writer_version().as_num(),
             schema: types::to_thrift(self.schema.as_ref())?,
-            key_value_metadata: self.props.key_value_metadata().cloned(),
+            key_value_metadata: self
+                .kv_metadatas
+                .clone()
+                .or(self.props.key_value_metadata().cloned()),
             created_by: Some(self.props.created_by().to_owned()),
             column_orders: None,
             encryption_algorithm: None,
@@ -329,6 +335,10 @@ impl<W: Write> SerializedFileWriter<W> {
         } else {
             Ok(())
         }
+    }
+
+    pub(crate) fn update_key_value_metadata(&mut self, kv_metadatas: Vec<KeyValue>) {
+        self.kv_metadatas = Some(kv_metadatas);
     }
 
     /// Writes the file footer and returns the underlying writer.

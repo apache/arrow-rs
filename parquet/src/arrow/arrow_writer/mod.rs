@@ -32,7 +32,7 @@ use super::schema::{
 use crate::arrow::arrow_writer::byte_array::ByteArrayWriter;
 use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::RowGroupMetaDataPtr;
+use crate::file::metadata::{KeyValue, RowGroupMetaDataPtr};
 use crate::file::properties::WriterProperties;
 use crate::file::writer::SerializedRowGroupWriter;
 use crate::{data_type::*, file::writer::SerializedFileWriter};
@@ -156,6 +156,11 @@ impl<W: Write> ArrowWriter<W> {
     /// Flushes all buffered rows into a new row group
     pub fn flush(&mut self) -> Result<()> {
         self.flush_rows(self.buffered_rows)
+    }
+
+    /// Update key value metadata
+    pub fn update_key_value_metadata(&mut self, kv_metadatas: Vec<KeyValue>) {
+        self.writer.update_key_value_metadata(kv_metadatas)
     }
 
     /// Flushes `num_rows` from the buffer into a new row group
