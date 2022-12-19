@@ -33,9 +33,18 @@
 //!
 //! # Create an [`ObjectStore`] implementation:
 //!
-//! * [Google Cloud Storage](https://cloud.google.com/storage/): [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)
-//! * [Amazon S3](https://aws.amazon.com/s3/): [`AmazonS3Builder`](aws::AmazonS3Builder)
-//! * [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/):: [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)
+#![cfg_attr(
+    feature = "gcp",
+    doc = "* [Google Cloud Storage](https://cloud.google.com/storage/): [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)"
+)]
+#![cfg_attr(
+    feature = "aws",
+    doc = "* [Amazon S3](https://aws.amazon.com/s3/): [`AmazonS3Builder`](aws::AmazonS3Builder)"
+)]
+#![cfg_attr(
+    feature = "azure",
+    doc = "* [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/): [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)"
+)]
 //! * In Memory: [`InMemory`](memory::InMemory)
 //! * Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)
 //!

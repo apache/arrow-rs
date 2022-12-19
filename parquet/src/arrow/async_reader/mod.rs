@@ -116,6 +116,14 @@ use crate::file::FOOTER_SIZE;
 
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
 
+mod metadata;
+pub use metadata::*;
+
+#[cfg(feature = "object_store")]
+mod store;
+#[cfg(feature = "object_store")]
+pub use store::*;
+
 /// The asynchronous interface used by [`ParquetRecordBatchStream`] to read parquet files
 pub trait AsyncFileReader: Send {
     /// Retrieve the bytes in `range`

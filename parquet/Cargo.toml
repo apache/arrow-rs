@@ -43,6 +43,7 @@ arrow-data = { version = "29.0.0", path = "../arrow-data", default-features = fa
 arrow-schema = { version = "29.0.0", path = "../arrow-schema", default-features = false, optional = true }
 arrow-select = { version = "29.0.0", path = "../arrow-select", default-features = false, optional = true }
 arrow-ipc = { version = "29.0.0", path = "../arrow-ipc", default-features = false, optional = true }
+object_store = { version = "0.5", path = "../object_store", default-features = false, optional = true }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
@@ -96,6 +97,8 @@ test_common = ["arrow/test_utils"]
 experimental = []
 # Enable async APIs
 async = ["futures", "tokio"]
+# Enable object_store integration
+object_store = ["dep:object_store", "async"]
 
 [[example]]
 name = "read_parquet"
