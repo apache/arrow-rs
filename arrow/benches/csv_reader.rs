@@ -44,7 +44,7 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
                     .with_schema(batch.schema())
                     .with_batch_size(batch_size)
                     .has_header(true)
-                    .build(cursor)
+                    .build_buffered(cursor)
                     .unwrap();
 
                 for next in reader {
