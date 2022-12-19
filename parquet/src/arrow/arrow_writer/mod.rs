@@ -158,7 +158,9 @@ impl<W: Write> ArrowWriter<W> {
         self.flush_rows(self.buffered_rows)
     }
 
-    /// Update key value metadata
+    /// Update key value metadata.
+    ///
+    /// This method provide a way to set kv_metadata after write RecordBatch
     pub fn update_key_value_metadata(&mut self, kv_metadatas: Vec<KeyValue>) {
         self.writer.update_key_value_metadata(kv_metadatas)
     }
