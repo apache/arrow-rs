@@ -45,7 +45,7 @@ static DEFAULT_USER_AGENT: &str =
 #[derive(Debug, Clone, Default)]
 pub struct ClientOptions {
     user_agent: Option<HeaderValue>,
-    content_type_map: Option<HashMap<String, String>>,
+    content_type_map: HashMap<String, String>,
     default_content_type: Option<String>,
     default_headers: Option<HeaderMap>,
     proxy_url: Option<String>,
@@ -87,9 +87,7 @@ impl ClientOptions {
         extension: impl Into<String>,
         mime: impl Into<String>,
     ) -> Self {
-        self.content_type_map
-            .get_or_insert_with(HashMap::new)
-            .insert(extension.into(), mime.into());
+        self.content_type_map.insert(extension.into(), mime.into());
         self
     }
 
@@ -197,16 +195,9 @@ impl ClientOptions {
     /// Otherwise returns the default mime type if it was defined
     /// earlier through `ClientOptions::with_default_content_type`
     pub fn get_content_type(&self, path: &Path) -> Option<&str> {
-        match path
-            .as_ref()
-            .rsplit_once('.')
-            .map(|(_, extension)| extension)
-        {
-            Some(extension) => match self.content_type_map.as_ref() {
-                Some(types) => match types.get(extension) {
-                    Some(ct) => Some(ct.as_str()),
-                    None => self.default_content_type.as_deref(),
-                },
+        match path.extension() {
+            Some(extension) => match self.content_type_map.get(extension) {
+                Some(ct) => Some(ct.as_str()),
                 None => self.default_content_type.as_deref(),
             },
             None => self.default_content_type.as_deref(),
