@@ -151,7 +151,7 @@ mod tests {
             Ok(_) => panic!("expected failure"),
             Err(e) => {
                 let err = e.to_string();
-                assert!(err.contains("Parquet error: ParquetFileReader::get_metadata error: Object at location") && err.contains("not found: No such file or directory (os error 2)"), "{}", err);
+                assert!(err.contains("Parquet error: ParquetObjectReader::get_metadata error: Object at location") && err.contains("not found: No such file or directory (os error 2)"), "{}", err);
             }
         }
     }
