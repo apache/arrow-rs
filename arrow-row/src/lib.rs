@@ -117,11 +117,11 @@
 //! }
 //! ```
 //!
-//! [non-comparison sorts]:[https://en.wikipedia.org/wiki/Sorting_algorithm#Non-comparison_sorts]
-//! [radix sort]:[https://en.wikipedia.org/wiki/Radix_sort]
-//! [normalized for sorting]:[https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.83.1080&rep=rep1&type=pdf]
-//! [`memcmp`]:[https://www.man7.org/linux/man-pages/man3/memcmp.3.html]
-//! [`lexsort`]: crate::compute::kernels::sort::lexsort
+//! [non-comparison sorts]: https://en.wikipedia.org/wiki/Sorting_algorithm#Non-comparison_sorts
+//! [radix sort]: https://en.wikipedia.org/wiki/Radix_sort
+//! [normalized for sorting]: https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.83.1080&rep=rep1&type=pdf
+//! [`memcmp`]: https://www.man7.org/linux/man-pages/man3/memcmp.3.html
+//! [`lexsort`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort.html
 //! [compared]: PartialOrd
 //! [compare]: PartialOrd
 
