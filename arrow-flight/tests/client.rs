@@ -295,37 +295,3 @@ impl Drop for TestFixture {
         }
     }
 }
-
-//         // We would just listen on TCP, but it seems impossible to know when tonic is ready to serve
-//         let service = FlightSqlServiceImpl {};
-//         let serve_future = Server::builder()
-//             .add_service(FlightServiceServer::new(service))
-//             .serve_with_incoming(stream);
-
-//         let request_future = async {
-//             let mut client = client_with_uds(path).await;
-//             let token = client.handshake("admin", "password").await.unwrap();
-//             println!("Auth succeeded with token: {:?}", token);
-//             let mut stmt = client.prepare("select 1;".to_string()).await.unwrap();
-//             let flight_info = stmt.execute().await.unwrap();
-//             let ticket = flight_info.endpoint[0].ticket.as_ref().unwrap().clone();
-//             let flight_data = client.do_get(ticket).await.unwrap();
-//             let flight_data: Vec<FlightData> = flight_data.try_collect().await.unwrap();
-//             let batches = flight_data_to_batches(&flight_data).unwrap();
-//             let res = pretty_format_batches(batches.as_slice()).unwrap();
-//             let expected = r#"
-// +-------------------+
-// | salutation        |
-// +-------------------+
-// | Hello, FlightSQL! |
-// +-------------------+"#
-//                 .trim()
-//                 .to_string();
-//             assert_eq!(res.to_string(), expected);
-//         };
-
-//         tokio::select! {
-//             _ = serve_future => panic!("server returned first"),
-//             _ = request_future => println!("Client finished!"),
-//         }
-//}

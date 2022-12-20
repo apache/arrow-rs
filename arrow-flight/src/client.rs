@@ -181,7 +181,6 @@ impl FlightClient {
     /// #  .await
     /// #  .expect("error connecting");
     /// # let ticket = Ticket { ticket: b"foo".to_vec() };
-    ///
     /// let mut client = FlightClient::new(channel);
     ///
     /// // Invoke a do_get request on the server with a previously
