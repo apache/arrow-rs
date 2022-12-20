@@ -141,17 +141,15 @@ impl FlightClient {
         };
 
         // apply headers, etc
-        let request = self.make_request(stream::iter(vec![request]));
+        let request = self.make_request(stream::once(ready(request)));
 
         let mut response_stream = self
             .inner
             .handshake(request)
-            .await
-            .map_err(FlightError::Tonic)?
+            .await?
             .into_inner();
 
-        if let Some(response) = response_stream.next().await {
-            let response = response.map_err(FlightError::Tonic)?;
+        if let Some(response) = response_stream.next().await.transpose()? {
 
             // check if there is another response
             if response_stream.next().await.is_some() {
@@ -207,8 +205,7 @@ impl FlightClient {
         let response = self
             .inner
             .do_get(request)
-            .await
-            .map_err(FlightError::Tonic)?
+            .await?
             .into_inner();
 
         let flight_data_stream = FlightDataStream::new(response);
@@ -263,8 +260,7 @@ impl FlightClient {
         let response = self
             .inner
             .get_flight_info(request)
-            .await
-            .map_err(FlightError::Tonic)?
+            .await?
             .into_inner();
         Ok(response)
     }
