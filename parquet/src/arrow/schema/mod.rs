@@ -526,6 +526,7 @@ mod tests {
             OPTIONAL FLOAT   float;
             OPTIONAL BINARY  string (UTF8);
             OPTIONAL BINARY  string_2 (STRING);
+            OPTIONAL BINARY  json (JSON);
         }
         ";
         let parquet_group_type = parse_message_type(message_type).unwrap();
@@ -546,6 +547,7 @@ mod tests {
             Field::new("float", DataType::Float32, true),
             Field::new("string", DataType::Utf8, true),
             Field::new("string_2", DataType::Utf8, true),
+            Field::new("json", DataType::Utf8, true),
         ];
 
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
