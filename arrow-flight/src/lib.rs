@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! A native Rust implementaiton of [Apache Arrow Flight](https://arrow.apache.org/docs/format/Flight.html)
+//! A native Rust implementation of [Apache Arrow Flight](https://arrow.apache.org/docs/format/Flight.html)
 //! for exchanging [Arrow](https://arrow.apache.org) data between processes.
 //!
 //! Please see the [arrow-flight crates.io](https://crates.io/crates/arrow-flight)
