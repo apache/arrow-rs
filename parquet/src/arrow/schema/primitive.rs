@@ -227,11 +227,11 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
 fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32) -> Result<DataType> {
     match (info.logical_type(), info.converted_type()) {
         (Some(LogicalType::String), _) => Ok(DataType::Utf8),
-        (Some(LogicalType::Json), _) => Ok(DataType::Binary),
+        (Some(LogicalType::Json), _) => Ok(DataType::Utf8),
         (Some(LogicalType::Bson), _) => Ok(DataType::Binary),
         (Some(LogicalType::Enum), _) => Ok(DataType::Binary),
         (None, ConvertedType::NONE) => Ok(DataType::Binary),
-        (None, ConvertedType::JSON) => Ok(DataType::Binary),
+        (None, ConvertedType::JSON) => Ok(DataType::Utf8),
         (None, ConvertedType::BSON) => Ok(DataType::Binary),
         (None, ConvertedType::ENUM) => Ok(DataType::Binary),
         (None, ConvertedType::UTF8) => Ok(DataType::Utf8),
