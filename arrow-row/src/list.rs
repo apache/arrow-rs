@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::compute::SortOptions;
-use crate::row::{RowConverter, Rows, SortField};
+use crate::{RowConverter, Rows, SortField};
 use arrow_array::builder::BufferBuilder;
-use arrow_array::{Array, GenericListArray, OffsetSizeTrait};
+use arrow_array::{Array, GenericListArray, OffsetSizeTrait, SortOptions};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::ArrowError;
 use std::ops::Range;

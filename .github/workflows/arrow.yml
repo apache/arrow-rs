@@ -35,6 +35,7 @@ on:
       - arrow-ipc/**
       - arrow-json/**
       - arrow-ord/**
+      - arrow-row/**
       - arrow-schema/**
       - arrow-select/**
       - arrow-string/**
@@ -76,6 +77,8 @@ jobs:
         run: cargo test -p arrow-string --all-features
       - name: Test arrow-ord with all features except SIMD
         run: cargo test -p arrow-ord --features dyn_cmp_dict
+      - name: Test arrow-row with all features
+        run: cargo test -p arrow-row --all-reatures
       - name: Test arrow-integration-test with all features
         run: cargo test -p arrow-integration-test --all-features
       - name: Test arrow with default features
@@ -196,5 +199,7 @@ jobs:
         run: cargo clippy -p arrow-string --all-targets --all-features -- -D warnings
       - name: Clippy arrow-ord with all features except SIMD
         run: cargo clippy -p arrow-ord --all-targets --features dyn_cmp_dict -- -D warnings
+      - name: Clippy arrow-ord with all features
+        run: cargo clippy -p arrow-ord --all-targets --all-features -- -D warnings
       - name: Clippy arrow
         run: cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict,dyn_arith_dict,chrono-tz --all-targets -- -D warnings

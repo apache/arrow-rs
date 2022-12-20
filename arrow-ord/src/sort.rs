@@ -27,6 +27,8 @@ use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use arrow_select::take::take;
 use std::cmp::Ordering;
 
+pub use arrow_array::SortOptions;
+
 /// Sort the `ArrayRef` using `SortOptions`.
 ///
 /// Performs a sort on values and indices. Nulls are ordered according
@@ -364,25 +366,6 @@ pub fn sort_to_indices(
             )));
         }
     })
-}
-
-/// Options that define how sort kernels should behave
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SortOptions {
-    /// Whether to sort in descending order
-    pub descending: bool,
-    /// Whether to sort nulls first
-    pub nulls_first: bool,
-}
-
-impl Default for SortOptions {
-    fn default() -> Self {
-        Self {
-            descending: false,
-            // default to nulls first to match spark's behavior
-            nulls_first: true,
-        }
-    }
 }
 
 /// Sort boolean values

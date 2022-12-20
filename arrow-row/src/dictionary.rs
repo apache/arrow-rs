@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::compute::SortOptions;
-use crate::row::fixed::{FixedLengthEncoding, FromSlice};
-use crate::row::interner::{Interned, OrderPreservingInterner};
-use crate::row::{null_sentinel, Rows};
+use crate::fixed::{FixedLengthEncoding, FromSlice};
+use crate::interner::{Interned, OrderPreservingInterner};
+use crate::{null_sentinel, Rows};
 use arrow_array::builder::*;
 use arrow_array::cast::*;
 use arrow_array::types::*;

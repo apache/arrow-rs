@@ -53,9 +53,11 @@ arrow-data = { version = "29.0.0", path = "../arrow-data" }
 arrow-ipc = { version = "29.0.0", path = "../arrow-ipc", optional = true }
 arrow-json = { version = "29.0.0", path = "../arrow-json", optional = true }
 arrow-ord = { version = "29.0.0", path = "../arrow-ord" }
+arrow-row = { version = "29.0.0", path = "../arrow-row" }
 arrow-schema = { version = "29.0.0", path = "../arrow-schema" }
 arrow-select = { version = "29.0.0", path = "../arrow-select" }
 arrow-string = { version = "29.0.0", path = "../arrow-string" }
+
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
