@@ -125,7 +125,7 @@ impl FlightService for FlightServiceImpl {
                     arrow_flight::utils::flight_data_from_arrow_batch(batch, &options);
 
                 // Only the record batch's FlightData gets app_metadata
-                let metadata = counter.to_string().into_bytes();
+                let metadata = counter.to_string().into();
                 batch_flight_data.app_metadata = metadata;
 
                 dictionary_flight_data
@@ -275,7 +275,7 @@ async fn send_app_metadata(
     app_metadata: &[u8],
 ) -> Result<(), Status> {
     tx.send(Ok(PutResult {
-        app_metadata: app_metadata.to_vec(),
+        app_metadata: app_metadata.to_vec().into(),
     }))
     .await
     .map_err(|e| Status::internal(format!("Could not send PutResult: {:?}", e)))

@@ -446,16 +446,16 @@ pub struct ActionCreatePreparedStatementRequest {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionCreatePreparedStatementResult {
     /// Opaque handle for the prepared statement on the server.
-    #[prost(bytes = "vec", tag = "1")]
-    pub prepared_statement_handle: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1")]
+    pub prepared_statement_handle: ::prost::bytes::Bytes,
     /// If a result set generating query was provided, dataset_schema contains the
     /// schema of the dataset as described in Schema.fbs::Schema, it is serialized as an IPC message.
-    #[prost(bytes = "vec", tag = "2")]
-    pub dataset_schema: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "2")]
+    pub dataset_schema: ::prost::bytes::Bytes,
     /// If the query provided contained parameters, parameter_schema contains the
     /// schema of the expected parameters as described in Schema.fbs::Schema, it is serialized as an IPC message.
-    #[prost(bytes = "vec", tag = "3")]
-    pub parameter_schema: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "3")]
+    pub parameter_schema: ::prost::bytes::Bytes,
 }
 ///
 /// Request message for the "ClosePreparedStatement" action on a Flight SQL enabled backend.
@@ -464,8 +464,8 @@ pub struct ActionCreatePreparedStatementResult {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionClosePreparedStatementRequest {
     /// Opaque handle for the prepared statement on the server.
-    #[prost(bytes = "vec", tag = "1")]
-    pub prepared_statement_handle: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1")]
+    pub prepared_statement_handle: ::prost::bytes::Bytes,
 }
 ///
 /// Represents a SQL query. Used in the command member of FlightDescriptor
@@ -497,8 +497,8 @@ pub struct CommandStatementQuery {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TicketStatementQuery {
     /// Unique identifier for the instance of the statement to execute.
-    #[prost(bytes = "vec", tag = "1")]
-    pub statement_handle: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1")]
+    pub statement_handle: ::prost::bytes::Bytes,
 }
 ///
 /// Represents an instance of executing a prepared statement. Used in the command member of FlightDescriptor for
@@ -521,8 +521,8 @@ pub struct TicketStatementQuery {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandPreparedStatementQuery {
     /// Opaque handle for the prepared statement on the server.
-    #[prost(bytes = "vec", tag = "1")]
-    pub prepared_statement_handle: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1")]
+    pub prepared_statement_handle: ::prost::bytes::Bytes,
 }
 ///
 /// Represents a SQL update query. Used in the command member of FlightDescriptor
@@ -542,8 +542,8 @@ pub struct CommandStatementUpdate {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandPreparedStatementUpdate {
     /// Opaque handle for the prepared statement on the server.
-    #[prost(bytes = "vec", tag = "1")]
-    pub prepared_statement_handle: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1")]
+    pub prepared_statement_handle: ::prost::bytes::Bytes,
 }
 ///
 /// Returned from the RPC call DoPut when a CommandStatementUpdate

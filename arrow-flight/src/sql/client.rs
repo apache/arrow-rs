@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -119,10 +120,10 @@ impl FlightSqlServiceClient {
         &mut self,
         username: &str,
         password: &str,
-    ) -> Result<Vec<u8>, ArrowError> {
+    ) -> Result<Bytes, ArrowError> {
         let cmd = HandshakeRequest {
             protocol_version: 0,
-            payload: vec![],
+            payload: Default::default(),
         };
         let mut req = tonic::Request::new(stream::iter(vec![cmd]));
         let val = base64::encode(format!("{}:{}", username, password));
@@ -279,7 +280,7 @@ impl FlightSqlServiceClient {
         let cmd = ActionCreatePreparedStatementRequest { query };
         let action = Action {
             r#type: CREATE_PREPARED_STATEMENT.to_string(),
-            body: cmd.as_any().encode_to_vec(),
+            body: cmd.as_any().encode_to_vec().into(),
         };
         let mut req = tonic::Request::new(action);
         if let Some(token) = &self.token {
@@ -328,7 +329,7 @@ impl FlightSqlServiceClient {
 pub struct PreparedStatement<T> {
     flight_client: Arc<Mutex<FlightServiceClient<T>>>,
     parameter_binding: Option<RecordBatch>,
-    handle: Vec<u8>,
+    handle: Bytes,
     dataset_schema: Schema,
     parameter_schema: Schema,
 }
@@ -336,14 +337,14 @@ pub struct PreparedStatement<T> {
 impl PreparedStatement<Channel> {
     pub(crate) fn new(
         client: Arc<Mutex<FlightServiceClient<Channel>>>,
-        handle: Vec<u8>,
+        handle: impl Into<Bytes>,
         dataset_schema: Schema,
         parameter_schema: Schema,
     ) -> Self {
         PreparedStatement {
             flight_client: client,
             parameter_binding: None,
-            handle,
+            handle: handle.into(),
             dataset_schema,
             parameter_schema,
         }
@@ -417,7 +418,7 @@ impl PreparedStatement<Channel> {
         };
         let action = Action {
             r#type: CLOSE_PREPARED_STATEMENT.to_string(),
-            body: cmd.as_any().encode_to_vec(),
+            body: cmd.as_any().encode_to_vec().into(),
         };
         let _ = self
             .mut_client()?
