@@ -21,7 +21,7 @@ use std::{
 };
 
 use futures::Stream;
-use tonic::{Request, Response, Status, Streaming, metadata::MetadataMap};
+use tonic::{metadata::MetadataMap, Request, Response, Status, Streaming};
 
 use arrow_flight::{
     flight_service_server::{FlightService, FlightServiceServer},
@@ -67,7 +67,6 @@ impl TestFlightServer {
             .take()
     }
 
-
     /// Specify the response returned from the next call to handshake
     pub fn set_get_flight_info_response(&self, response: Result<FlightInfo, Status>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
@@ -93,15 +92,12 @@ impl TestFlightServer {
             .take()
     }
 
-
-
     /// Save the last request's metadatacom
     fn save_metadata<T>(&self, request: &Request<T>) {
         let metadata = request.metadata().clone();
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.last_request_metadata = Some(metadata);
     }
-
 }
 
 /// mutable state for the TestFlightSwrver
@@ -183,11 +179,9 @@ impl FlightService for TestFlightServer {
         self.save_metadata(&request);
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.get_flight_info_request = Some(request.into_inner());
-        let response = state.get_flight_info_response
-            .take()
-            .unwrap_or_else(|| {
-                Err(Status::internal("No get_flight_info response configured"))
-            })?;
+        let response = state.get_flight_info_response.take().unwrap_or_else(|| {
+            Err(Status::internal("No get_flight_info response configured"))
+        })?;
         Ok(Response::new(response))
     }
 

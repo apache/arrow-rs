@@ -21,6 +21,7 @@ use crate::{
 };
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::Schema;
+use bytes::Bytes;
 use futures::{ready, stream, StreamExt};
 use std::{collections::HashMap, convert::TryFrom, pin::Pin, sync::Arc, task::Poll};
 use tonic::{metadata::MetadataMap, transport::Channel, Streaming};
@@ -38,6 +39,7 @@ use crate::error::{FlightError, Result};
 /// ```no_run
 /// # async fn run() {
 /// # use arrow_flight::FlightClient;
+/// # use bytes::Bytes;
 /// use tonic::transport::Channel;
 /// let channel = Channel::from_static("http://localhost:1234")
 ///   .connect()
@@ -48,12 +50,12 @@ use crate::error::{FlightError, Result};
 ///
 /// // Send 'Hi' bytes as the handshake request to the server
 /// let response = client
-///   .handshake(b"Hi".to_vec())
+///   .handshake(Bytes::from("Hi"))
 ///   .await
 ///   .expect("error handshaking");
 ///
 /// // Expect the server responded with 'Ho'
-/// assert_eq!(response, b"Ho".to_vec());
+/// assert_eq!(response, Bytes::from("Ho"));
 /// # }
 /// ```
 #[derive(Debug)]
@@ -132,10 +134,10 @@ impl FlightClient {
     /// bytes returned from the server
     ///
     /// See [`FlightClient`] docs for an example.
-    pub async fn handshake(&mut self, payload: Vec<u8>) -> Result<Vec<u8>> {
+    pub async fn handshake(&mut self, payload: impl Into<Bytes>) -> Result<Bytes> {
         let request = HandshakeRequest {
             protocol_version: 0,
-            payload,
+            payload: payload.into(),
         };
 
         // apply headers, etc
@@ -171,6 +173,7 @@ impl FlightClient {
     /// # Example:
     /// ```no_run
     /// # async fn run() {
+    /// # use bytes::Bytes;
     /// # use arrow_flight::FlightClient;
     /// # use arrow_flight::Ticket;
     /// # use arrow_array::RecordBatch;
@@ -180,7 +183,7 @@ impl FlightClient {
     /// #  .connect()
     /// #  .await
     /// #  .expect("error connecting");
-    /// # let ticket = Ticket { ticket: b"foo".to_vec() };
+    /// # let ticket = Ticket { ticket: Bytes::from("foo") };
     /// let mut client = FlightClient::new(channel);
     ///
     /// // Invoke a do_get request on the server with a previously
@@ -273,8 +276,6 @@ impl FlightClient {
     // do_action
     // list_actions
     // do_exchange
-
-
 
     /// return a Request, adding any configured metadata
     fn make_request<T>(&self, t: T) -> tonic::Request<T> {

@@ -20,9 +20,13 @@
 mod common {
     pub mod server;
 }
-use arrow_flight::{FlightClient, HandshakeRequest, HandshakeResponse, error::FlightError, FlightDescriptor, FlightInfo, Ticket};
+use arrow_flight::{
+    error::FlightError, FlightClient, FlightDescriptor, FlightInfo, HandshakeRequest,
+    HandshakeResponse,
+};
+use bytes::Bytes;
 use common::server::TestFlightServer;
-use futures::{Future, TryStreamExt};
+use futures::Future;
 use tokio::{net::TcpListener, task::JoinHandle};
 use tonic::{
     transport::{Channel, Uri},
@@ -35,83 +39,86 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 
 #[tokio::test]
 async fn test_handshake() {
-    do_test(|test_server, mut client| {
-        async move {
-            let request_payload = b"foo".to_vec();
-            let response_payload = b"Bar".to_vec();
+    do_test(|test_server, mut client| async move {
+        let request_payload = Bytes::from("foo");
+        let response_payload = Bytes::from("Bar");
 
-            let request = HandshakeRequest {
-                payload: request_payload.clone(),
-                protocol_version: 0,
-            };
+        let request = HandshakeRequest {
+            payload: request_payload.clone(),
+            protocol_version: 0,
+        };
 
-            let response = HandshakeResponse {
-                payload: response_payload.clone(),
-                protocol_version: 0,
-            };
+        let response = HandshakeResponse {
+            payload: response_payload.clone(),
+            protocol_version: 0,
+        };
 
-            test_server.set_handshake_response(Ok(response));
-            let response = client.handshake(request_payload).await.unwrap();
-            assert_eq!(response, response_payload);
-            assert_eq!(test_server.take_handshake_request(), Some(request));
-        }
-    }).await;
+        test_server.set_handshake_response(Ok(response));
+        let response = client.handshake(request_payload).await.unwrap();
+        assert_eq!(response, response_payload);
+        assert_eq!(test_server.take_handshake_request(), Some(request));
+    })
+    .await;
 }
-
 
 #[tokio::test]
 async fn test_handshake_error() {
-    do_test(|test_server, mut client| {
-        async move {
-            let request_payload = "foo".to_string().into_bytes();
-            let e = Status::unauthenticated("DENIED");
-            test_server.set_handshake_response(Err(e));
+    do_test(|test_server, mut client| async move {
+        let request_payload = "foo".to_string().into_bytes();
+        let e = Status::unauthenticated("DENIED");
+        test_server.set_handshake_response(Err(e));
 
-            let response = client.handshake(request_payload).await.unwrap_err();
-            let e = Status::unauthenticated("DENIED");
-            expect_status(response, e);
-        }
-    }).await;
+        let response = client.handshake(request_payload).await.unwrap_err();
+        let e = Status::unauthenticated("DENIED");
+        expect_status(response, e);
+    })
+    .await;
 }
-
 
 #[tokio::test]
 async fn test_handshake_metadata() {
-    do_test(|test_server, mut client| {
-        async move {
-            client.add_header("foo", "bar").unwrap();
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo", "bar").unwrap();
 
-            let request_payload = "Blarg".to_string().into_bytes();
-            let response_payload = "Bazz".to_string().into_bytes();
+        let request_payload = Bytes::from("Blarg");
+        let response_payload = Bytes::from("Bazz");
 
-            let response = HandshakeResponse {
-                payload: response_payload.clone(),
-                protocol_version: 0,
-            };
+        let response = HandshakeResponse {
+            payload: response_payload.clone(),
+            protocol_version: 0,
+        };
 
-            test_server.set_handshake_response(Ok(response));
-            client.handshake(request_payload).await.unwrap();
-            ensure_metadata(&client, &test_server);
-        }
-    }).await;
+        test_server.set_handshake_response(Ok(response));
+        client.handshake(request_payload).await.unwrap();
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
 }
 
 /// Verifies that all headers sent from the the client are in the request_metadata
 fn ensure_metadata(client: &FlightClient, test_server: &TestFlightServer) {
     let client_metadata = client.metadata().clone().into_headers();
     assert!(client_metadata.len() > 0);
-    let metadata = test_server.take_last_request_metadata().expect("No headers in server").into_headers();
+    let metadata = test_server
+        .take_last_request_metadata()
+        .expect("No headers in server")
+        .into_headers();
 
     for (k, v) in &client_metadata {
-        assert_eq!(metadata.get(k).as_ref(), Some(&v),
-                   "Missing / Mismatched metadata {:?} sent {:?} got {:?}",
-                   k, client_metadata, metadata);
+        assert_eq!(
+            metadata.get(k).as_ref(),
+            Some(&v),
+            "Missing / Mismatched metadata {:?} sent {:?} got {:?}",
+            k,
+            client_metadata,
+            metadata
+        );
     }
 }
 
 fn test_flight_info(request: &FlightDescriptor) -> FlightInfo {
     FlightInfo {
-        schema: vec![],
+        schema: Bytes::new(),
         endpoint: vec![],
         flight_descriptor: Some(request.clone()),
         total_bytes: 123,
@@ -121,66 +128,58 @@ fn test_flight_info(request: &FlightDescriptor) -> FlightInfo {
 
 #[tokio::test]
 async fn test_get_flight_info() {
-    do_test(|test_server, mut client| {
-        async move {
-            let request = FlightDescriptor::new_cmd(b"My Command".to_vec());
+    do_test(|test_server, mut client| async move {
+        let request = FlightDescriptor::new_cmd(b"My Command".to_vec());
 
-            let expected_response = test_flight_info(&request);
-            test_server.set_get_flight_info_response(Ok(expected_response.clone()));
+        let expected_response = test_flight_info(&request);
+        test_server.set_get_flight_info_response(Ok(expected_response.clone()));
 
-            let response = client.get_flight_info(request.clone()).await.unwrap();
+        let response = client.get_flight_info(request.clone()).await.unwrap();
 
-            assert_eq!(response, expected_response);
-            assert_eq!(test_server.take_get_flight_info_request(), Some(request));
-        }
-    }).await;
+        assert_eq!(response, expected_response);
+        assert_eq!(test_server.take_get_flight_info_request(), Some(request));
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn test_get_flight_info_error() {
-    do_test(|test_server, mut client| {
-        async move {
-            let request = FlightDescriptor::new_cmd(b"My Command".to_vec());
+    do_test(|test_server, mut client| async move {
+        let request = FlightDescriptor::new_cmd(b"My Command".to_vec());
 
-            let e = Status::unauthenticated("DENIED");
-            test_server.set_get_flight_info_response(Err(e));
+        let e = Status::unauthenticated("DENIED");
+        test_server.set_get_flight_info_response(Err(e));
 
-            let response = client.get_flight_info(request.clone()).await.unwrap_err();
-            let e = Status::unauthenticated("DENIED");
-            expect_status(response, e);
-        }
-    }).await;
+        let response = client.get_flight_info(request.clone()).await.unwrap_err();
+        let e = Status::unauthenticated("DENIED");
+        expect_status(response, e);
+    })
+    .await;
 }
-
 
 #[tokio::test]
 async fn test_get_flight_info_metadata() {
-    do_test(|test_server, mut client| {
-        async move {
-            client.add_header("foo", "bar").unwrap();
-            let request = FlightDescriptor::new_cmd(b"My Command".to_vec());
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo", "bar").unwrap();
+        let request = FlightDescriptor::new_cmd(b"My Command".to_vec());
 
-            let expected_response = test_flight_info(&request);
-            test_server.set_get_flight_info_response(Ok(expected_response));
-            client.get_flight_info(request.clone()).await.unwrap();
-            ensure_metadata(&client, &test_server);
-
-        }
-    }).await;
+        let expected_response = test_flight_info(&request);
+        test_server.set_get_flight_info_response(Ok(expected_response));
+        client.get_flight_info(request.clone()).await.unwrap();
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
 }
 
 // TODO more negative  tests (like if there are endpoints defined, etc)
 
-
 // TODO test for do_get
-
-
 
 /// Runs the future returned by the function,  passing it a test server and client
 async fn do_test<F, Fut>(f: F)
 where
     F: Fn(TestFlightServer, FlightClient) -> Fut,
-    Fut: Future<Output=()>
+    Fut: Future<Output = ()>,
 {
     let test_server = TestFlightServer::new();
     let fixture = TestFixture::new(&test_server).await;
@@ -193,10 +192,6 @@ where
     fixture.shutdown_and_wait().await
 }
 
-
-
-
-
 fn expect_status(error: FlightError, expected: Status) {
     let status = if let FlightError::Tonic(status) = error {
         status
@@ -204,11 +199,28 @@ fn expect_status(error: FlightError, expected: Status) {
         panic!("Expected FlightError::Tonic, got: {:?}", error);
     };
 
-    assert_eq!(status.code(), expected.code(), "Got {:?} want {:?}", status, expected);
-    assert_eq!(status.message(), expected.message(), "Got {:?} want {:?}", status, expected);
-    assert_eq!(status.details(), expected.details(), "Got {:?} want {:?}", status, expected);
+    assert_eq!(
+        status.code(),
+        expected.code(),
+        "Got {:?} want {:?}",
+        status,
+        expected
+    );
+    assert_eq!(
+        status.message(),
+        expected.message(),
+        "Got {:?} want {:?}",
+        status,
+        expected
+    );
+    assert_eq!(
+        status.details(),
+        expected.details(),
+        "Got {:?} want {:?}",
+        status,
+        expected
+    );
 }
-
 
 /// Creates and manages a running TestServer with a background task
 struct TestFixture {
