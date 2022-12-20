@@ -23,7 +23,7 @@ use crate::format as parquet;
 use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
 use std::io::{BufWriter, IoSlice};
 use std::{io::Write, sync::Arc};
-use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol, TSerializable};
+use thrift::protocol::{TCompactOutputProtocol, TSerializable};
 
 use crate::basic::PageType;
 use crate::column::writer::{
@@ -227,7 +227,6 @@ impl<W: Write> SerializedFileWriter<W> {
                         let start_offset = self.buf.bytes_written();
                         let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
                         offset_index.write_to_out_protocol(&mut protocol)?;
-                        protocol.flush()?;
                         let end_offset = self.buf.bytes_written();
                         // set offset and index for offset index
                         column_metadata.offset_index_offset = Some(start_offset as i64);
@@ -279,7 +278,6 @@ impl<W: Write> SerializedFileWriter<W> {
                         let start_offset = self.buf.bytes_written();
                         let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
                         column_index.write_to_out_protocol(&mut protocol)?;
-                        protocol.flush()?;
                         let end_offset = self.buf.bytes_written();
                         // set offset and index for offset index
                         column_metadata.column_index_offset = Some(start_offset as i64);
@@ -326,7 +324,6 @@ impl<W: Write> SerializedFileWriter<W> {
         {
             let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
             file_metadata.write_to_out_protocol(&mut protocol)?;
-            protocol.flush()?;
         }
         let end_pos = self.buf.bytes_written();
 
@@ -592,7 +589,6 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
         {
             let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
             header.write_to_out_protocol(&mut protocol)?;
-            protocol.flush()?;
         }
         Ok(self.sink.bytes_written() - start_pos)
     }
@@ -689,7 +685,6 @@ impl<'a, W: Write> PageWriter for SerializedPageWriter<'a, W> {
         metadata
             .to_column_metadata_thrift()
             .write_to_out_protocol(&mut protocol)?;
-        protocol.flush()?;
         Ok(())
     }
 
