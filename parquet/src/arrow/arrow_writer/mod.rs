@@ -158,7 +158,7 @@ impl<W: Write> ArrowWriter<W> {
         self.flush_rows(self.buffered_rows)
     }
 
-    /// Update key value metadata.
+    /// Additional [`KeyValue`] metadata to be written in addition to those from [`WriterProperties`]
     ///
     /// This method provide a way to append kv_metadata after write RecordBatch
     pub fn append_key_value_metadata(&mut self, kv_metadata: KeyValue) {
