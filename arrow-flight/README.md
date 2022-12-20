@@ -39,6 +39,6 @@ that demonstrate how to build a Flight server implemented with [tonic](https://d
 
 ## Feature Flags
 
-* `flight-sql-experimental`: Enables experimental support for
-   [Apache Arrow FlightSQL](https://arrow.apache.org/docs/format/FlightSql.html),
-   a protocol for interacting with SQL databases.
+- `flight-sql-experimental`: Enables experimental support for
+  [Apache Arrow FlightSQL](https://arrow.apache.org/docs/format/FlightSql.html),
+  a protocol for interacting with SQL databases.
