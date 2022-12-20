@@ -48,6 +48,9 @@ num = { version = "0.4", default-features = false, features = ["std"] }
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 
+[package.metadata.docs.rs]
+features = ["dyn_cmp_dict"]
+
 [features]
 dyn_cmp_dict = []
 simd = ["arrow-array/simd"]
