@@ -296,16 +296,18 @@ impl<W: Write> SerializedFileWriter<W> {
         self.write_column_indexes(&mut row_groups)?;
         self.write_offset_indexes(&mut row_groups)?;
 
+        let key_value_metadata = match self.props.key_value_metadata() {
+            Some(kv) => Some(kv.iter().chain(&self.kv_metadatas).cloned().collect()),
+            None if self.kv_metadatas.is_empty() => None,
+            None => Some(self.kv_metadatas.clone()),
+        };
+
         let file_metadata = parquet::FileMetaData {
             num_rows,
             row_groups,
+            key_value_metadata,
             version: self.props.writer_version().as_num(),
             schema: types::to_thrift(self.schema.as_ref())?,
-            key_value_metadata: self.props.key_value_metadata().cloned().map(|kv| {
-                kv.into_iter()
-                    .chain(self.kv_metadatas.clone().into_iter())
-                    .collect()
-            }),
             created_by: Some(self.props.created_by().to_owned()),
             column_orders: None,
             encryption_algorithm: None,
@@ -1349,5 +1351,70 @@ mod tests {
                 assert_ne!(None, column_chunk.offset_index_length);
             })
         });
+    }
+
+    fn test_kv_metadata(
+        initial_kv: Option<Vec<KeyValue>>,
+        final_kv: Option<Vec<KeyValue>>,
+    ) {
+        let schema = Arc::new(
+            types::Type::group_type_builder("schema")
+                .with_fields(&mut vec![Arc::new(
+                    types::Type::primitive_type_builder("col1", Type::INT32)
+                        .with_repetition(Repetition::REQUIRED)
+                        .build()
+                        .unwrap(),
+                )])
+                .build()
+                .unwrap(),
+        );
+        let mut out = Vec::with_capacity(1024);
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_key_value_metadata(initial_kv.clone())
+                .build(),
+        );
+        let mut writer = SerializedFileWriter::new(&mut out, schema, props).unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
+        let column = row_group_writer.next_column().unwrap().unwrap();
+        column.close().unwrap();
+        row_group_writer.close().unwrap();
+        if let Some(kvs) = &final_kv {
+            for kv in kvs {
+                writer.append_key_value_metadata(kv.clone())
+            }
+        }
+        writer.close().unwrap();
+
+        let reader = SerializedFileReader::new(Bytes::from(out)).unwrap();
+        let metadata = reader.metadata().file_metadata();
+        let keys = metadata.key_value_metadata();
+
+        match (initial_kv, final_kv) {
+            (Some(a), Some(b)) => {
+                let keys = keys.unwrap();
+                assert_eq!(keys.len(), a.len() + b.len());
+                assert_eq!(&keys[..a.len()], a.as_slice());
+                assert_eq!(&keys[a.len()..], b.as_slice());
+            }
+            (Some(v), None) => assert_eq!(keys.unwrap(), &v),
+            (None, Some(v)) if !v.is_empty() => assert_eq!(keys.unwrap(), &v),
+            _ => assert!(keys.is_none()),
+        }
+    }
+
+    #[test]
+    fn test_append_metadata() {
+        let kv1 = KeyValue::new("cupcakes".to_string(), "awesome".to_string());
+        let kv2 = KeyValue::new("bingo".to_string(), "bongo".to_string());
+
+        test_kv_metadata(None, None);
+        test_kv_metadata(Some(vec![kv1.clone()]), None);
+        test_kv_metadata(None, Some(vec![kv2.clone()]));
+        test_kv_metadata(Some(vec![kv1.clone()]), Some(vec![kv2.clone()]));
+        test_kv_metadata(Some(vec![]), Some(vec![kv2]));
+        test_kv_metadata(Some(vec![]), Some(vec![]));
+        test_kv_metadata(Some(vec![kv1]), Some(vec![]));
+        test_kv_metadata(None, Some(vec![]));
     }
 }
