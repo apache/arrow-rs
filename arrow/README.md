@@ -44,7 +44,7 @@ The `arrow` crate provides the following features which may be enabled in your `
 - `csv` (default) - support for reading and writing Arrow arrays to/from csv files
 - `json` (default) - support for reading and writing Arrow array to/from json files
 - `ipc` (default) - support for reading [Arrow IPC Format](https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc), also used as the wire protocol in [arrow-flight](https://crates.io/crates/arrow-flight)
-- `ipc_compression`  - Enables reading and writing compressed IPC streams (also enables `ipc`)
+- `ipc_compression` - Enables reading and writing compressed IPC streams (also enables `ipc`)
 - `prettyprint` - support for formatting record batches as textual columns
 - `js` - support for building arrow for WebAssembly / JavaScript
 - `simd` - (_Requires Nightly Rust_) Use alternate hand optimized
