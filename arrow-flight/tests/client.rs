@@ -98,7 +98,7 @@ async fn test_handshake_metadata() {
 /// Verifies that all headers sent from the the client are in the request_metadata
 fn ensure_metadata(client: &FlightClient, test_server: &TestFlightServer) {
     let client_metadata = client.metadata().clone().into_headers();
-    assert!(client_metadata.len() > 0);
+    assert!(!client_metadata.is_empty());
     let metadata = test_server
         .take_last_request_metadata()
         .expect("No headers in server")
