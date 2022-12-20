@@ -39,7 +39,7 @@ pub async fn listen_on(port: u16) -> Result<SocketAddr> {
 pub fn endpoint(ticket: &str, location_uri: impl Into<String>) -> FlightEndpoint {
     FlightEndpoint {
         ticket: Some(Ticket {
-            ticket: ticket.as_bytes().to_vec(),
+            ticket: ticket.as_bytes().to_vec().into(),
         }),
         location: vec![Location {
             uri: location_uri.into(),

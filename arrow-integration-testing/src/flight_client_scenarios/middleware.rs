@@ -19,6 +19,7 @@ use arrow_flight::{
     flight_descriptor::DescriptorType, flight_service_client::FlightServiceClient,
     FlightDescriptor,
 };
+use prost::bytes::Bytes;
 use tonic::{Request, Status};
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -31,7 +32,7 @@ pub async fn run_scenario(host: &str, port: u16) -> Result {
 
     let mut descriptor = FlightDescriptor::default();
     descriptor.set_type(DescriptorType::Cmd);
-    descriptor.cmd = b"".to_vec();
+    descriptor.cmd = Bytes::from_static(b"");
 
     // This call is expected to fail.
     match client
@@ -56,7 +57,7 @@ pub async fn run_scenario(host: &str, port: u16) -> Result {
     }
 
     // This call should succeed
-    descriptor.cmd = b"success".to_vec();
+    descriptor.cmd = Bytes::from_static(b"success");
     let resp = client.get_flight_info(Request::new(descriptor)).await?;
 
     let headers = resp.metadata();

@@ -138,7 +138,7 @@ async fn send_batch(
         .await?;
 
     // Only the record batch's FlightData gets app_metadata
-    batch_flight_data.app_metadata = metadata.to_vec();
+    batch_flight_data.app_metadata = metadata.to_vec().into();
     upload_tx.send(batch_flight_data).await?;
     Ok(())
 }

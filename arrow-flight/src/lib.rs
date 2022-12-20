@@ -21,6 +21,7 @@ use arrow_ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema};
 
 use arrow_ipc::convert::try_schema_from_ipc_buffer;
+use bytes::Bytes;
 use std::{
     convert::{TryFrom, TryInto},
     fmt,
@@ -83,7 +84,7 @@ pub struct SchemaAsIpc<'a> {
 /// IpcMessage represents a `Schema` in the format expected in
 /// `FlightInfo.schema`
 #[derive(Debug)]
-pub struct IpcMessage(pub Vec<u8>);
+pub struct IpcMessage(pub Bytes);
 
 // Useful conversion functions
 
@@ -97,7 +98,7 @@ fn flight_schema_as_encoded_data(
 
 fn flight_schema_as_flatbuffer(schema: &Schema, options: &IpcWriteOptions) -> IpcMessage {
     let encoded_data = flight_schema_as_encoded_data(schema, options);
-    IpcMessage(encoded_data.ipc_message)
+    IpcMessage(encoded_data.ipc_message.into())
 }
 
 // Implement a bunch of useful traits for various conversions, displays,
@@ -106,7 +107,7 @@ fn flight_schema_as_flatbuffer(schema: &Schema, options: &IpcWriteOptions) -> Ip
 // Deref
 
 impl Deref for IpcMessage {
-    type Target = Vec<u8>;
+    type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -239,8 +240,8 @@ impl fmt::Display for Ticket {
 impl From<EncodedData> for FlightData {
     fn from(data: EncodedData) -> Self {
         FlightData {
-            data_header: data.ipc_message,
-            data_body: data.arrow_data,
+            data_header: data.ipc_message.into(),
+            data_body: data.arrow_data.into(),
             ..Default::default()
         }
     }
@@ -294,7 +295,7 @@ fn schema_to_ipc_format(schema_ipc: SchemaAsIpc) -> ArrowResult<IpcMessage> {
 
     let mut schema = vec![];
     writer::write_message(&mut schema, encoded_data, pair.1)?;
-    Ok(IpcMessage(schema))
+    Ok(IpcMessage(schema.into()))
 }
 
 impl TryFrom<&FlightData> for Schema {
@@ -322,14 +323,14 @@ impl TryFrom<IpcMessage> for Schema {
     type Error = ArrowError;
 
     fn try_from(value: IpcMessage) -> ArrowResult<Self> {
-        try_schema_from_ipc_buffer(value.0.as_slice())
+        try_schema_from_ipc_buffer(&value)
     }
 }
 
 impl TryFrom<&SchemaResult> for Schema {
     type Error = ArrowError;
     fn try_from(data: &SchemaResult) -> ArrowResult<Self> {
-        try_schema_from_ipc_buffer(data.schema.as_slice())
+        try_schema_from_ipc_buffer(&data.schema)
     }
 }
 
@@ -339,24 +340,24 @@ impl FlightData {
     pub fn new(
         flight_descriptor: Option<FlightDescriptor>,
         message: IpcMessage,
-        app_metadata: Vec<u8>,
-        data_body: Vec<u8>,
+        app_metadata: impl Into<Bytes>,
+        data_body: impl Into<Bytes>,
     ) -> Self {
         let IpcMessage(vals) = message;
         FlightData {
             flight_descriptor,
             data_header: vals,
-            app_metadata,
-            data_body,
+            app_metadata: app_metadata.into(),
+            data_body: data_body.into(),
         }
     }
 }
 
 impl FlightDescriptor {
-    pub fn new_cmd(cmd: Vec<u8>) -> Self {
+    pub fn new_cmd(cmd: impl Into<Bytes>) -> Self {
         FlightDescriptor {
             r#type: DescriptorType::Cmd.into(),
-            cmd,
+            cmd: cmd.into(),
             ..Default::default()
         }
     }

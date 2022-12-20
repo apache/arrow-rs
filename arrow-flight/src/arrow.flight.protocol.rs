@@ -11,8 +11,8 @@ pub struct HandshakeRequest {
     pub protocol_version: u64,
     ///
     /// Arbitrary auth/handshake info.
-    #[prost(bytes = "vec", tag = "2")]
-    pub payload: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "2")]
+    pub payload: ::prost::bytes::Bytes,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -23,8 +23,8 @@ pub struct HandshakeResponse {
     pub protocol_version: u64,
     ///
     /// Arbitrary auth/handshake info.
-    #[prost(bytes = "vec", tag = "2")]
-    pub payload: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "2")]
+    pub payload: ::prost::bytes::Bytes,
 }
 ///
 /// A message for doing simple auth.
@@ -56,8 +56,8 @@ pub struct ActionType {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Criteria {
-    #[prost(bytes = "vec", tag = "1")]
-    pub expression: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1")]
+    pub expression: ::prost::bytes::Bytes,
 }
 ///
 /// An opaque action specific for the service.
@@ -66,16 +66,16 @@ pub struct Criteria {
 pub struct Action {
     #[prost(string, tag = "1")]
     pub r#type: ::prost::alloc::string::String,
-    #[prost(bytes = "vec", tag = "2")]
-    pub body: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "2")]
+    pub body: ::prost::bytes::Bytes,
 }
 ///
 /// An opaque result returned after executing an action.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Result {
-    #[prost(bytes = "vec", tag = "1")]
-    pub body: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1")]
+    pub body: ::prost::bytes::Bytes,
 }
 ///
 /// Wrap the result of a getSchema call
@@ -86,8 +86,8 @@ pub struct SchemaResult {
     ///    4 bytes - an optional IPC_CONTINUATION_TOKEN prefix
     ///    4 bytes - the byte length of the payload
     ///    a flatbuffer Message whose header is the Schema
-    #[prost(bytes = "vec", tag = "1")]
-    pub schema: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1")]
+    pub schema: ::prost::bytes::Bytes,
 }
 ///
 /// The name or tag for a Flight. May be used as a way to retrieve or generate
@@ -100,8 +100,8 @@ pub struct FlightDescriptor {
     ///
     /// Opaque value used to express a command. Should only be defined when
     /// type = CMD.
-    #[prost(bytes = "vec", tag = "2")]
-    pub cmd: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "2")]
+    pub cmd: ::prost::bytes::Bytes,
     ///
     /// List of strings identifying a particular dataset. Should only be defined
     /// when type = PATH.
@@ -160,8 +160,8 @@ pub struct FlightInfo {
     ///    4 bytes - an optional IPC_CONTINUATION_TOKEN prefix
     ///    4 bytes - the byte length of the payload
     ///    a flatbuffer Message whose header is the Schema
-    #[prost(bytes = "vec", tag = "1")]
-    pub schema: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1")]
+    pub schema: ::prost::bytes::Bytes,
     ///
     /// The descriptor associated with this info.
     #[prost(message, optional, tag = "2")]
@@ -229,8 +229,8 @@ pub struct Location {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Ticket {
-    #[prost(bytes = "vec", tag = "1")]
-    pub ticket: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1")]
+    pub ticket: ::prost::bytes::Bytes,
 }
 ///
 /// A batch of Arrow data as part of a stream of batches.
@@ -244,27 +244,27 @@ pub struct FlightData {
     pub flight_descriptor: ::core::option::Option<FlightDescriptor>,
     ///
     /// Header for message data as described in Message.fbs::Message.
-    #[prost(bytes = "vec", tag = "2")]
-    pub data_header: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "2")]
+    pub data_header: ::prost::bytes::Bytes,
     ///
     /// Application-defined metadata.
-    #[prost(bytes = "vec", tag = "3")]
-    pub app_metadata: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "3")]
+    pub app_metadata: ::prost::bytes::Bytes,
     ///
     /// The actual batch of Arrow data. Preferably handled with minimal-copies
     /// coming last in the definition to help with sidecar patterns (it is
     /// expected that some implementations will fetch this field off the wire
     /// with specialized code to avoid extra memory copies).
-    #[prost(bytes = "vec", tag = "1000")]
-    pub data_body: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1000")]
+    pub data_body: ::prost::bytes::Bytes,
 }
 /// *
 /// The response message associated with the submission of a DoPut.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PutResult {
-    #[prost(bytes = "vec", tag = "1")]
-    pub app_metadata: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1")]
+    pub app_metadata: ::prost::bytes::Bytes,
 }
 /// Generated client implementations.
 pub mod flight_service_client {

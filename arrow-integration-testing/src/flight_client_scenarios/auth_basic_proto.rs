@@ -74,7 +74,7 @@ pub async fn run_scenario(host: &str, port: u16) -> Result {
         .expect("No response received")
         .expect("Invalid response received");
 
-    let body = String::from_utf8(r.body).unwrap();
+    let body = std::str::from_utf8(&r.body).unwrap();
     assert_eq!(body, AUTH_USERNAME);
 
     Ok(())
@@ -94,7 +94,7 @@ async fn authenticate(
 
     let req = stream::once(async {
         HandshakeRequest {
-            payload,
+            payload: payload.into(),
             ..HandshakeRequest::default()
         }
     });
@@ -105,5 +105,5 @@ async fn authenticate(
     let r = rx.next().await.expect("must respond from handshake")?;
     assert!(rx.next().await.is_none(), "must not respond a second time");
 
-    Ok(String::from_utf8(r.payload).unwrap())
+    Ok(std::str::from_utf8(&r.payload).unwrap().into())
 }

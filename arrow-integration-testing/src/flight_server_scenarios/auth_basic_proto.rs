@@ -149,7 +149,7 @@ impl FlightService for AuthBasicProtoScenarioImpl {
                             && *auth.password == *password
                         {
                             Ok(HandshakeResponse {
-                                payload: username.as_bytes().to_vec(),
+                                payload: username.as_bytes().to_vec().into(),
                                 ..HandshakeResponse::default()
                             })
                         } else {
@@ -203,7 +203,7 @@ impl FlightService for AuthBasicProtoScenarioImpl {
     ) -> Result<Response<Self::DoActionStream>, Status> {
         let flight_context = self.check_auth(request.metadata()).await?;
         // Respond with the authenticated username.
-        let buf = flight_context.peer_identity().as_bytes().to_vec();
+        let buf = flight_context.peer_identity().as_bytes().to_vec().into();
         let result = arrow_flight::Result { body: buf };
         let output = futures::stream::once(async { Ok(result) });
         Ok(Response::new(Box::pin(output) as Self::DoActionStream))

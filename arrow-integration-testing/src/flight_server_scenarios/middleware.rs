@@ -93,7 +93,8 @@ impl FlightService for MiddlewareScenarioImpl {
 
         let descriptor = request.into_inner();
 
-        if descriptor.r#type == DescriptorType::Cmd as i32 && descriptor.cmd == b"success"
+        if descriptor.r#type == DescriptorType::Cmd as i32
+            && descriptor.cmd.as_ref() == b"success"
         {
             // Return a fake location - the test doesn't read it
             let endpoint = super::endpoint("foo", "grpc+tcp://localhost:10010");

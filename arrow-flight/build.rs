@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // protoc in unbuntu builder needs this option
             .protoc_arg("--experimental_allow_proto3_optional")
             .out_dir("src")
-            .compile(&[proto_path], &[proto_dir])?;
+            .compile_with_config(prost_config(), &[proto_path], &[proto_dir])?;
 
         // read file contents to string
         let mut file = OpenOptions::new()
@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // protoc in ubuntu builder needs this option
             .protoc_arg("--experimental_allow_proto3_optional")
             .out_dir("src/sql")
-            .compile(&[proto_path], &[proto_dir])?;
+            .compile_with_config(prost_config(), &[proto_path], &[proto_dir])?;
 
         // read file contents to string
         let mut file = OpenOptions::new()
@@ -93,4 +93,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // As the proto file is checked in, the build should not fail if the file is not found
     Ok(())
+}
+
+fn prost_config() -> prost_build::Config {
+    let mut config = prost_build::Config::new();
+    config.bytes([".arrow"]);
+    config
 }
