@@ -301,9 +301,10 @@ impl<W: Write> SerializedFileWriter<W> {
             row_groups,
             version: self.props.writer_version().as_num(),
             schema: types::to_thrift(self.schema.as_ref())?,
-            key_value_metadata: self.props.key_value_metadata().cloned().map(|mut v| {
-                v.extend(self.kv_metadatas.clone());
-                v
+            key_value_metadata: self.props.key_value_metadata().cloned().map(|kv| {
+                kv.into_iter()
+                    .chain(self.kv_metadatas.clone().into_iter())
+                    .collect()
             }),
             created_by: Some(self.props.created_by().to_owned()),
             column_orders: None,
