@@ -77,6 +77,7 @@ jobs:
       AZURE_USE_EMULATOR: "1"
       AZURITE_BLOB_STORAGE_URL: "http://localhost:10000"
       AZURITE_QUEUE_STORAGE_URL: "http://localhost:10001"
+      HTTP_URL: "http://localhost:8080"
       GOOGLE_SERVICE_ACCOUNT: "/tmp/gcs.json"
       OBJECT_STORE_BUCKET: test-bucket
 
@@ -90,6 +91,9 @@ jobs:
           sleep 1
           curl -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "http://localhost:4443/storage/v1/b"
           echo '{"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": ""}' > "$GOOGLE_SERVICE_ACCOUNT"
+
+      - name: Setup WebDav
+        run: docker run -d -p 8080:80 rclone/rclone serve webdav /data --addr :80
 
       - name: Setup LocalStack (AWS emulation)
         env:
@@ -120,7 +124,7 @@ jobs:
           OBJECT_STORE_AWS_ACCESS_KEY_ID: test
           OBJECT_STORE_AWS_SECRET_ACCESS_KEY: test
           OBJECT_STORE_AWS_ENDPOINT: http://localhost:4566
-        run: cargo test -p object_store --features=aws,azure,gcp
+        run: cargo test -p object_store --features=aws,azure,gcp,http
 
   # test the object_store crate builds against wasm32 in stable rust
   wasm32-build:

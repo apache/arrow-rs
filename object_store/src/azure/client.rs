@@ -20,20 +20,20 @@ use crate::azure::credential::*;
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
 use crate::path::DELIMITER;
-use crate::util::{format_http_range, format_prefix};
+use crate::util::{deserialize_rfc1123, format_http_range, format_prefix};
 use crate::{
     BoxStream, ClientOptions, ListResult, ObjectMeta, Path, Result, RetryConfig,
     StreamExt,
 };
 use bytes::{Buf, Bytes};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{
     header::{HeaderValue, CONTENT_LENGTH, IF_NONE_MATCH, RANGE},
     Client as ReqwestClient, Method, Response, StatusCode,
 };
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::collections::HashMap;
 use std::ops::Range;
@@ -479,7 +479,7 @@ impl TryFrom<Blob> for ObjectMeta {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct BlobProperties {
-    #[serde(deserialize_with = "deserialize_http_date", rename = "Last-Modified")]
+    #[serde(deserialize_with = "deserialize_rfc1123", rename = "Last-Modified")]
     pub last_modified: DateTime<Utc>,
     pub etag: String,
     #[serde(rename = "Content-Length")]
@@ -490,16 +490,6 @@ struct BlobProperties {
     pub content_encoding: Option<String>,
     #[serde(rename = "Content-Language")]
     pub content_language: Option<String>,
-}
-
-// deserialize dates used in Azure payloads according to rfc1123
-fn deserialize_http_date<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let s = String::deserialize(deserializer)?;
-    Utc.datetime_from_str(&s, RFC1123_FMT)
-        .map_err(serde::de::Error::custom)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -45,6 +45,10 @@
     feature = "azure",
     doc = "* [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/): [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)"
 )]
+#![cfg_attr(
+    feature = "http",
+    doc = "* [HTTP Storage](https://datatracker.ietf.org/doc/html/rfc2518): [`HttpBuilder`](http::HttpBuilder)"
+)]
 //! * In Memory: [`InMemory`](memory::InMemory)
 //! * Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)
 //!
@@ -177,6 +181,8 @@ pub mod chunked;
 pub mod delimited;
 #[cfg(feature = "gcp")]
 pub mod gcp;
+#[cfg(feature = "http")]
+pub mod http;
 pub mod limit;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod local;
@@ -185,10 +191,10 @@ pub mod path;
 pub mod prefix;
 pub mod throttle;
 
-#[cfg(any(feature = "gcp", feature = "aws", feature = "azure"))]
+#[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
 mod client;
 
-#[cfg(any(feature = "gcp", feature = "aws", feature = "azure"))]
+#[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
 pub use client::{backoff::BackoffConfig, retry::RetryConfig};
 
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
@@ -210,7 +216,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use tokio::io::AsyncWrite;
 
-#[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
+#[cfg(any(feature = "azure", feature = "aws", feature = "gcp", feature = "http"))]
 pub use client::ClientOptions;
 
 /// An alias for a dynamically dispatched object store implementation.
@@ -1003,7 +1009,7 @@ mod tests {
         let paths = flatten_list_stream(storage, None).await.unwrap();
 
         for f in &paths {
-            let _ = storage.delete(f).await;
+            storage.delete(f).await.unwrap();
         }
     }
 
