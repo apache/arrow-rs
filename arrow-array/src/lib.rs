@@ -183,25 +183,6 @@ pub mod timezone;
 mod trusted_len;
 pub mod types;
 
-/// Options that define how sort kernels should behave
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SortOptions {
-    /// Whether to sort in descending order
-    pub descending: bool,
-    /// Whether to sort nulls first
-    pub nulls_first: bool,
-}
-
-impl Default for SortOptions {
-    fn default() -> Self {
-        Self {
-            descending: false,
-            // default to nulls first to match spark's behavior
-            nulls_first: true,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::builder::*;

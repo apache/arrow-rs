@@ -27,7 +27,7 @@ use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use arrow_select::take::take;
 use std::cmp::Ordering;
 
-pub use arrow_array::SortOptions;
+pub use arrow_schema::SortOptions;
 
 /// Sort the `ArrayRef` using `SortOptions`.
 ///

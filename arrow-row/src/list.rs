@@ -17,9 +17,9 @@
 
 use crate::{RowConverter, Rows, SortField};
 use arrow_array::builder::BufferBuilder;
-use arrow_array::{Array, GenericListArray, OffsetSizeTrait, SortOptions};
+use arrow_array::{Array, GenericListArray, OffsetSizeTrait};
 use arrow_data::ArrayDataBuilder;
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, SortOptions};
 use std::ops::Range;
 
 pub fn compute_lengths<O: OffsetSizeTrait>(

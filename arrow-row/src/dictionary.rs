@@ -24,7 +24,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, MutableBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::{ArrowError, DataType, SortOptions};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 

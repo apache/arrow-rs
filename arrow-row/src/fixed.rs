@@ -18,10 +18,10 @@
 use crate::array::PrimitiveArray;
 use crate::{null_sentinel, Rows};
 use arrow_array::builder::BufferBuilder;
-use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray, SortOptions};
+use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
 use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, SortOptions};
 use half::f16;
 
 pub trait FromSlice {

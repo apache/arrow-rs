@@ -21,7 +21,7 @@ use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::MutableBuffer;
 use arrow_data::ArrayDataBuilder;
-use arrow_schema::DataType;
+use arrow_schema::{DataType, SortOptions};
 
 /// The block size of the variable length encoding
 pub const BLOCK_SIZE: usize = 32;
