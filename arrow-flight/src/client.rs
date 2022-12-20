@@ -22,7 +22,7 @@ use crate::{
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::Schema;
 use bytes::Bytes;
-use futures::{ready, stream, StreamExt};
+use futures::{future::ready, ready, stream, StreamExt};
 use std::{collections::HashMap, convert::TryFrom, pin::Pin, sync::Arc, task::Poll};
 use tonic::{metadata::MetadataMap, transport::Channel, Streaming};
 
@@ -143,14 +143,9 @@ impl FlightClient {
         // apply headers, etc
         let request = self.make_request(stream::once(ready(request)));
 
-        let mut response_stream = self
-            .inner
-            .handshake(request)
-            .await?
-            .into_inner();
+        let mut response_stream = self.inner.handshake(request).await?.into_inner();
 
         if let Some(response) = response_stream.next().await.transpose()? {
-
             // check if there is another response
             if response_stream.next().await.is_some() {
                 return Err(FlightError::protocol(
@@ -202,11 +197,7 @@ impl FlightClient {
     pub async fn do_get(&mut self, ticket: Ticket) -> Result<FlightRecordBatchStream> {
         let request = self.make_request(ticket);
 
-        let response = self
-            .inner
-            .do_get(request)
-            .await?
-            .into_inner();
+        let response = self.inner.do_get(request).await?.into_inner();
 
         let flight_data_stream = FlightDataStream::new(response);
         Ok(FlightRecordBatchStream::new(flight_data_stream))
@@ -257,11 +248,7 @@ impl FlightClient {
     ) -> Result<FlightInfo> {
         let request = self.make_request(descriptor);
 
-        let response = self
-            .inner
-            .get_flight_info(request)
-            .await?
-            .into_inner();
+        let response = self.inner.get_flight_info(request).await?.into_inner();
         Ok(response)
     }
 
