@@ -33,11 +33,12 @@ on:
       - arrow-integration-test/**
       - arrow-integration-testing/**
       - arrow-ipc/**
-      - arrow-ord/**
       - arrow-json/**
+      - arrow-ord/**
       - arrow-pyarrow-integration-testing/**
       - arrow-schema/**
       - arrow-select/**
+      - arrow-sort/**
       - arrow-string/**
       - arrow/**
 

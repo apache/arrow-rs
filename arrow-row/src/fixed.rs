@@ -16,14 +16,12 @@
 // under the License.
 
 use crate::array::PrimitiveArray;
-use crate::compute::SortOptions;
-use crate::datatypes::ArrowPrimitiveType;
-use crate::row::{null_sentinel, Rows};
+use crate::{null_sentinel, Rows};
 use arrow_array::builder::BufferBuilder;
-use arrow_array::{BooleanArray, FixedSizeBinaryArray};
+use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
 use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, SortOptions};
 use half::f16;
 
 pub trait FromSlice {

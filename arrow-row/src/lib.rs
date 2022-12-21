@@ -50,7 +50,7 @@
 //! # Basic Example
 //! ```
 //! # use std::sync::Arc;
-//! # use arrow::row::{RowConverter, SortField};
+//! # use arrow_row::{RowConverter, SortField};
 //! # use arrow_array::{ArrayRef, Int32Array, StringArray};
 //! # use arrow_array::cast::{as_primitive_array, as_string_array};
 //! # use arrow_array::types::Int32Type;
@@ -102,7 +102,7 @@
 //! The row format can also be used to implement a fast multi-column / lexicographic sort
 //!
 //! ```
-//! # use arrow::row::{RowConverter, SortField};
+//! # use arrow_row::{RowConverter, SortField};
 //! # use arrow_array::{ArrayRef, UInt32Array};
 //! fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
 //!     let fields = arrays
@@ -117,11 +117,11 @@
 //! }
 //! ```
 //!
-//! [non-comparison sorts]:[https://en.wikipedia.org/wiki/Sorting_algorithm#Non-comparison_sorts]
-//! [radix sort]:[https://en.wikipedia.org/wiki/Radix_sort]
-//! [normalized for sorting]:[https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.83.1080&rep=rep1&type=pdf]
-//! [`memcmp`]:[https://www.man7.org/linux/man-pages/man3/memcmp.3.html]
-//! [`lexsort`]: crate::compute::kernels::sort::lexsort
+//! [non-comparison sorts]: https://en.wikipedia.org/wiki/Sorting_algorithm#Non-comparison_sorts
+//! [radix sort]: https://en.wikipedia.org/wiki/Radix_sort
+//! [normalized for sorting]: https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.83.1080&rep=rep1&type=pdf
+//! [`memcmp`]: https://www.man7.org/linux/man-pages/man3/memcmp.3.html
+//! [`lexsort`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort.html
 //! [compared]: PartialOrd
 //! [compare]: PartialOrd
 
@@ -131,18 +131,16 @@ use std::sync::Arc;
 
 use arrow_array::cast::*;
 use arrow_array::*;
+use arrow_buffer::ArrowNativeType;
 use arrow_data::ArrayDataBuilder;
+use arrow_schema::*;
 
-use crate::compute::SortOptions;
-use crate::datatypes::*;
-use crate::error::{ArrowError, Result};
-use crate::row::dictionary::{
+use crate::dictionary::{
     compute_dictionary_mapping, decode_dictionary, encode_dictionary,
 };
-use crate::row::fixed::{decode_bool, decode_fixed_size_binary, decode_primitive};
-use crate::row::interner::OrderPreservingInterner;
-use crate::row::variable::{decode_binary, decode_string};
-use crate::{downcast_dictionary_array, downcast_primitive_array};
+use crate::fixed::{decode_bool, decode_fixed_size_binary, decode_primitive};
+use crate::interner::OrderPreservingInterner;
+use crate::variable::{decode_binary, decode_string};
 
 mod dictionary;
 mod fixed;
@@ -437,7 +435,7 @@ enum Codec {
 }
 
 impl Codec {
-    fn new(sort_field: &SortField) -> Result<Self> {
+    fn new(sort_field: &SortField) -> Result<Self, ArrowError> {
         match &sort_field.data_type {
             DataType::Dictionary(_, _) => Ok(Self::Dictionary(Default::default())),
             d if !d.is_nested() => Ok(Self::Stateless),
@@ -485,7 +483,7 @@ impl Codec {
         }
     }
 
-    fn encoder(&mut self, array: &dyn Array) -> Result<Encoder<'_>> {
+    fn encoder(&mut self, array: &dyn Array) -> Result<Encoder<'_>, ArrowError> {
         match self {
             Codec::Stateless => Ok(Encoder::Stateless),
             Codec::Dictionary(interner) => {
@@ -577,7 +575,7 @@ impl SortField {
 
 impl RowConverter {
     /// Create a new [`RowConverter`] with the provided schema
-    pub fn new(fields: Vec<SortField>) -> Result<Self> {
+    pub fn new(fields: Vec<SortField>) -> Result<Self, ArrowError> {
         if !Self::supports_fields(&fields) {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Row format support not yet implemented for: {:?}",
@@ -585,7 +583,7 @@ impl RowConverter {
             )));
         }
 
-        let codecs = fields.iter().map(Codec::new).collect::<Result<_>>()?;
+        let codecs = fields.iter().map(Codec::new).collect::<Result<_, _>>()?;
         Ok(Self {
             fields: fields.into(),
             codecs,
@@ -617,7 +615,7 @@ impl RowConverter {
     /// # Panics
     ///
     /// Panics if the schema of `columns` does not match that provided to [`RowConverter::new`]
-    pub fn convert_columns(&mut self, columns: &[ArrayRef]) -> Result<Rows> {
+    pub fn convert_columns(&mut self, columns: &[ArrayRef]) -> Result<Rows, ArrowError> {
         if columns.len() != self.fields.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Incorrect number of arrays provided to RowConverter, expected {} got {}",
@@ -640,7 +638,7 @@ impl RowConverter {
                 }
                 codec.encoder(column.as_ref())
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
 
         let config = RowConfig {
             fields: Arc::clone(&self.fields),
@@ -671,7 +669,7 @@ impl RowConverter {
     /// # Panics
     ///
     /// Panics if the rows were not produced by this [`RowConverter`]
-    pub fn convert_rows<'a, I>(&self, rows: I) -> Result<Vec<ArrayRef>>
+    pub fn convert_rows<'a, I>(&self, rows: I) -> Result<Vec<ArrayRef>, ArrowError>
     where
         I: IntoIterator<Item = Row<'a>>,
     {
@@ -703,7 +701,7 @@ impl RowConverter {
         &self,
         rows: &mut [&[u8]],
         validate_utf8: bool,
-    ) -> Result<Vec<ArrayRef>> {
+    ) -> Result<Vec<ArrayRef>, ArrowError> {
         self.fields
             .iter()
             .zip(&self.codecs)
@@ -1196,7 +1194,7 @@ unsafe fn decode_column(
     rows: &mut [&[u8]],
     codec: &Codec,
     validate_utf8: bool,
-) -> Result<ArrayRef> {
+) -> Result<ArrayRef, ArrowError> {
     let options = field.options;
 
     let array: ArrayRef = match codec {
@@ -1255,23 +1253,17 @@ unsafe fn decode_column(
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::builder::{
-        FixedSizeBinaryBuilder, GenericListBuilder, Int32Builder,
-    };
     use rand::distributions::uniform::SampleUniform;
     use rand::distributions::{Distribution, Standard};
     use rand::{thread_rng, Rng};
 
-    use arrow_array::NullArray;
+    use arrow_array::builder::*;
+    use arrow_array::types::*;
+    use arrow_array::*;
+    use arrow_buffer::i256;
     use arrow_buffer::Buffer;
+    use arrow_cast::display::array_value_to_string;
     use arrow_ord::sort::{LexicographicalComparator, SortColumn, SortOptions};
-
-    use crate::array::{
-        BinaryArray, BooleanArray, DictionaryArray, Float32Array, GenericStringArray,
-        Int16Array, Int32Array, OffsetSizeTrait, PrimitiveArray,
-        PrimitiveDictionaryBuilder, StringArray,
-    };
-    use crate::util::display::array_value_to_string;
 
     use super::*;
 

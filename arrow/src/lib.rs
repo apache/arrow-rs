@@ -328,7 +328,7 @@ pub mod pyarrow;
 pub mod record_batch {
     pub use arrow_array::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 }
-pub mod row;
 pub use arrow_array::temporal_conversions;
+pub use arrow_row as row;
 pub mod tensor;
 pub mod util;

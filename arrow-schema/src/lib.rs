@@ -25,3 +25,22 @@ mod field;
 pub use field::*;
 mod schema;
 pub use schema::*;
+
+/// Options that define the sort order of a given column
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SortOptions {
+    /// Whether to sort in descending order
+    pub descending: bool,
+    /// Whether to sort nulls first
+    pub nulls_first: bool,
+}
+
+impl Default for SortOptions {
+    fn default() -> Self {
+        Self {
+            descending: false,
+            // default to nulls first to match spark's behavior
+            nulls_first: true,
+        }
+    }
+}

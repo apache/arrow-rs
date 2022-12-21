@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::compute::SortOptions;
-use crate::row::{null_sentinel, Rows};
-use crate::util::bit_util::ceil;
+use crate::{null_sentinel, Rows};
 use arrow_array::builder::BufferBuilder;
-use arrow_array::{Array, GenericBinaryArray, GenericStringArray, OffsetSizeTrait};
+use arrow_array::*;
+use arrow_buffer::bit_util::ceil;
 use arrow_buffer::MutableBuffer;
 use arrow_data::ArrayDataBuilder;
-use arrow_schema::DataType;
+use arrow_schema::{DataType, SortOptions};
 
 /// The block size of the variable length encoding
 pub const BLOCK_SIZE: usize = 32;

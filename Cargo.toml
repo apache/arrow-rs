@@ -29,6 +29,7 @@ members = [
     "arrow-ipc",
     "arrow-json",
     "arrow-ord",
+    "arrow-row",
     "arrow-schema",
     "arrow-select",
     "arrow-string",
