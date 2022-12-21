@@ -2545,7 +2545,6 @@ mod tests {
     #[should_panic(expected = "DivideByZero")]
     #[cfg(feature = "dyn_arith_dict")]
     fn test_f32_dict_array_divide_dyn_by_zero() {
-        use crate::datatypes::Float32Type;
         let mut builder =
             PrimitiveDictionaryBuilder::<Int8Type, Float32Type>::with_capacity(1, 1);
         builder.append(1.5).unwrap();
