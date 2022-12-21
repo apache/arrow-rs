@@ -482,8 +482,14 @@ impl ProstMessageExt for FetchResults {
 mod tests {
     use super::*;
     use futures::TryStreamExt;
+    use std::fs;
+    use tempfile::NamedTempFile;
+    use tokio::net::{UnixListener, UnixStream};
+    use tokio_stream::wrappers::UnixListenerStream;
+    use tonic::transport::Endpoint;
 
     use arrow::util::pretty::pretty_format_batches;
+    use arrow_flight::sql::client::FlightSqlServiceClient;
     use arrow_flight::utils::flight_data_to_batches;
     use tower::service_fn;
 
