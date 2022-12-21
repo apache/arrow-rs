@@ -1234,6 +1234,125 @@ impl SqlInfo {
             }
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "FLIGHT_SQL_SERVER_NAME" => Some(Self::FlightSqlServerName),
+            "FLIGHT_SQL_SERVER_VERSION" => Some(Self::FlightSqlServerVersion),
+            "FLIGHT_SQL_SERVER_ARROW_VERSION" => Some(Self::FlightSqlServerArrowVersion),
+            "FLIGHT_SQL_SERVER_READ_ONLY" => Some(Self::FlightSqlServerReadOnly),
+            "SQL_DDL_CATALOG" => Some(Self::SqlDdlCatalog),
+            "SQL_DDL_SCHEMA" => Some(Self::SqlDdlSchema),
+            "SQL_DDL_TABLE" => Some(Self::SqlDdlTable),
+            "SQL_IDENTIFIER_CASE" => Some(Self::SqlIdentifierCase),
+            "SQL_IDENTIFIER_QUOTE_CHAR" => Some(Self::SqlIdentifierQuoteChar),
+            "SQL_QUOTED_IDENTIFIER_CASE" => Some(Self::SqlQuotedIdentifierCase),
+            "SQL_ALL_TABLES_ARE_SELECTABLE" => Some(Self::SqlAllTablesAreSelectable),
+            "SQL_NULL_ORDERING" => Some(Self::SqlNullOrdering),
+            "SQL_KEYWORDS" => Some(Self::SqlKeywords),
+            "SQL_NUMERIC_FUNCTIONS" => Some(Self::SqlNumericFunctions),
+            "SQL_STRING_FUNCTIONS" => Some(Self::SqlStringFunctions),
+            "SQL_SYSTEM_FUNCTIONS" => Some(Self::SqlSystemFunctions),
+            "SQL_DATETIME_FUNCTIONS" => Some(Self::SqlDatetimeFunctions),
+            "SQL_SEARCH_STRING_ESCAPE" => Some(Self::SqlSearchStringEscape),
+            "SQL_EXTRA_NAME_CHARACTERS" => Some(Self::SqlExtraNameCharacters),
+            "SQL_SUPPORTS_COLUMN_ALIASING" => Some(Self::SqlSupportsColumnAliasing),
+            "SQL_NULL_PLUS_NULL_IS_NULL" => Some(Self::SqlNullPlusNullIsNull),
+            "SQL_SUPPORTS_CONVERT" => Some(Self::SqlSupportsConvert),
+            "SQL_SUPPORTS_TABLE_CORRELATION_NAMES" => {
+                Some(Self::SqlSupportsTableCorrelationNames)
+            }
+            "SQL_SUPPORTS_DIFFERENT_TABLE_CORRELATION_NAMES" => {
+                Some(Self::SqlSupportsDifferentTableCorrelationNames)
+            }
+            "SQL_SUPPORTS_EXPRESSIONS_IN_ORDER_BY" => {
+                Some(Self::SqlSupportsExpressionsInOrderBy)
+            }
+            "SQL_SUPPORTS_ORDER_BY_UNRELATED" => Some(Self::SqlSupportsOrderByUnrelated),
+            "SQL_SUPPORTED_GROUP_BY" => Some(Self::SqlSupportedGroupBy),
+            "SQL_SUPPORTS_LIKE_ESCAPE_CLAUSE" => Some(Self::SqlSupportsLikeEscapeClause),
+            "SQL_SUPPORTS_NON_NULLABLE_COLUMNS" => {
+                Some(Self::SqlSupportsNonNullableColumns)
+            }
+            "SQL_SUPPORTED_GRAMMAR" => Some(Self::SqlSupportedGrammar),
+            "SQL_ANSI92_SUPPORTED_LEVEL" => Some(Self::SqlAnsi92SupportedLevel),
+            "SQL_SUPPORTS_INTEGRITY_ENHANCEMENT_FACILITY" => {
+                Some(Self::SqlSupportsIntegrityEnhancementFacility)
+            }
+            "SQL_OUTER_JOINS_SUPPORT_LEVEL" => Some(Self::SqlOuterJoinsSupportLevel),
+            "SQL_SCHEMA_TERM" => Some(Self::SqlSchemaTerm),
+            "SQL_PROCEDURE_TERM" => Some(Self::SqlProcedureTerm),
+            "SQL_CATALOG_TERM" => Some(Self::SqlCatalogTerm),
+            "SQL_CATALOG_AT_START" => Some(Self::SqlCatalogAtStart),
+            "SQL_SCHEMAS_SUPPORTED_ACTIONS" => Some(Self::SqlSchemasSupportedActions),
+            "SQL_CATALOGS_SUPPORTED_ACTIONS" => Some(Self::SqlCatalogsSupportedActions),
+            "SQL_SUPPORTED_POSITIONED_COMMANDS" => {
+                Some(Self::SqlSupportedPositionedCommands)
+            }
+            "SQL_SELECT_FOR_UPDATE_SUPPORTED" => Some(Self::SqlSelectForUpdateSupported),
+            "SQL_STORED_PROCEDURES_SUPPORTED" => Some(Self::SqlStoredProceduresSupported),
+            "SQL_SUPPORTED_SUBQUERIES" => Some(Self::SqlSupportedSubqueries),
+            "SQL_CORRELATED_SUBQUERIES_SUPPORTED" => {
+                Some(Self::SqlCorrelatedSubqueriesSupported)
+            }
+            "SQL_SUPPORTED_UNIONS" => Some(Self::SqlSupportedUnions),
+            "SQL_MAX_BINARY_LITERAL_LENGTH" => Some(Self::SqlMaxBinaryLiteralLength),
+            "SQL_MAX_CHAR_LITERAL_LENGTH" => Some(Self::SqlMaxCharLiteralLength),
+            "SQL_MAX_COLUMN_NAME_LENGTH" => Some(Self::SqlMaxColumnNameLength),
+            "SQL_MAX_COLUMNS_IN_GROUP_BY" => Some(Self::SqlMaxColumnsInGroupBy),
+            "SQL_MAX_COLUMNS_IN_INDEX" => Some(Self::SqlMaxColumnsInIndex),
+            "SQL_MAX_COLUMNS_IN_ORDER_BY" => Some(Self::SqlMaxColumnsInOrderBy),
+            "SQL_MAX_COLUMNS_IN_SELECT" => Some(Self::SqlMaxColumnsInSelect),
+            "SQL_MAX_COLUMNS_IN_TABLE" => Some(Self::SqlMaxColumnsInTable),
+            "SQL_MAX_CONNECTIONS" => Some(Self::SqlMaxConnections),
+            "SQL_MAX_CURSOR_NAME_LENGTH" => Some(Self::SqlMaxCursorNameLength),
+            "SQL_MAX_INDEX_LENGTH" => Some(Self::SqlMaxIndexLength),
+            "SQL_DB_SCHEMA_NAME_LENGTH" => Some(Self::SqlDbSchemaNameLength),
+            "SQL_MAX_PROCEDURE_NAME_LENGTH" => Some(Self::SqlMaxProcedureNameLength),
+            "SQL_MAX_CATALOG_NAME_LENGTH" => Some(Self::SqlMaxCatalogNameLength),
+            "SQL_MAX_ROW_SIZE" => Some(Self::SqlMaxRowSize),
+            "SQL_MAX_ROW_SIZE_INCLUDES_BLOBS" => Some(Self::SqlMaxRowSizeIncludesBlobs),
+            "SQL_MAX_STATEMENT_LENGTH" => Some(Self::SqlMaxStatementLength),
+            "SQL_MAX_STATEMENTS" => Some(Self::SqlMaxStatements),
+            "SQL_MAX_TABLE_NAME_LENGTH" => Some(Self::SqlMaxTableNameLength),
+            "SQL_MAX_TABLES_IN_SELECT" => Some(Self::SqlMaxTablesInSelect),
+            "SQL_MAX_USERNAME_LENGTH" => Some(Self::SqlMaxUsernameLength),
+            "SQL_DEFAULT_TRANSACTION_ISOLATION" => {
+                Some(Self::SqlDefaultTransactionIsolation)
+            }
+            "SQL_TRANSACTIONS_SUPPORTED" => Some(Self::SqlTransactionsSupported),
+            "SQL_SUPPORTED_TRANSACTIONS_ISOLATION_LEVELS" => {
+                Some(Self::SqlSupportedTransactionsIsolationLevels)
+            }
+            "SQL_DATA_DEFINITION_CAUSES_TRANSACTION_COMMIT" => {
+                Some(Self::SqlDataDefinitionCausesTransactionCommit)
+            }
+            "SQL_DATA_DEFINITIONS_IN_TRANSACTIONS_IGNORED" => {
+                Some(Self::SqlDataDefinitionsInTransactionsIgnored)
+            }
+            "SQL_SUPPORTED_RESULT_SET_TYPES" => Some(Self::SqlSupportedResultSetTypes),
+            "SQL_SUPPORTED_CONCURRENCIES_FOR_RESULT_SET_UNSPECIFIED" => {
+                Some(Self::SqlSupportedConcurrenciesForResultSetUnspecified)
+            }
+            "SQL_SUPPORTED_CONCURRENCIES_FOR_RESULT_SET_FORWARD_ONLY" => {
+                Some(Self::SqlSupportedConcurrenciesForResultSetForwardOnly)
+            }
+            "SQL_SUPPORTED_CONCURRENCIES_FOR_RESULT_SET_SCROLL_SENSITIVE" => {
+                Some(Self::SqlSupportedConcurrenciesForResultSetScrollSensitive)
+            }
+            "SQL_SUPPORTED_CONCURRENCIES_FOR_RESULT_SET_SCROLL_INSENSITIVE" => {
+                Some(Self::SqlSupportedConcurrenciesForResultSetScrollInsensitive)
+            }
+            "SQL_BATCH_UPDATES_SUPPORTED" => Some(Self::SqlBatchUpdatesSupported),
+            "SQL_SAVEPOINTS_SUPPORTED" => Some(Self::SqlSavepointsSupported),
+            "SQL_NAMED_PARAMETERS_SUPPORTED" => Some(Self::SqlNamedParametersSupported),
+            "SQL_LOCATORS_UPDATE_COPY" => Some(Self::SqlLocatorsUpdateCopy),
+            "SQL_STORED_FUNCTIONS_USING_CALL_SYNTAX_SUPPORTED" => {
+                Some(Self::SqlStoredFunctionsUsingCallSyntaxSupported)
+            }
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1264,6 +1383,18 @@ impl SqlSupportedCaseSensitivity {
             }
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SQL_CASE_SENSITIVITY_UNKNOWN" => Some(Self::SqlCaseSensitivityUnknown),
+            "SQL_CASE_SENSITIVITY_CASE_INSENSITIVE" => {
+                Some(Self::SqlCaseSensitivityCaseInsensitive)
+            }
+            "SQL_CASE_SENSITIVITY_UPPERCASE" => Some(Self::SqlCaseSensitivityUppercase),
+            "SQL_CASE_SENSITIVITY_LOWERCASE" => Some(Self::SqlCaseSensitivityLowercase),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1286,6 +1417,16 @@ impl SqlNullOrdering {
             SqlNullOrdering::SqlNullsSortedAtEnd => "SQL_NULLS_SORTED_AT_END",
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SQL_NULLS_SORTED_HIGH" => Some(Self::SqlNullsSortedHigh),
+            "SQL_NULLS_SORTED_LOW" => Some(Self::SqlNullsSortedLow),
+            "SQL_NULLS_SORTED_AT_START" => Some(Self::SqlNullsSortedAtStart),
+            "SQL_NULLS_SORTED_AT_END" => Some(Self::SqlNullsSortedAtEnd),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1304,6 +1445,15 @@ impl SupportedSqlGrammar {
             SupportedSqlGrammar::SqlMinimumGrammar => "SQL_MINIMUM_GRAMMAR",
             SupportedSqlGrammar::SqlCoreGrammar => "SQL_CORE_GRAMMAR",
             SupportedSqlGrammar::SqlExtendedGrammar => "SQL_EXTENDED_GRAMMAR",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SQL_MINIMUM_GRAMMAR" => Some(Self::SqlMinimumGrammar),
+            "SQL_CORE_GRAMMAR" => Some(Self::SqlCoreGrammar),
+            "SQL_EXTENDED_GRAMMAR" => Some(Self::SqlExtendedGrammar),
+            _ => None,
         }
     }
 }
@@ -1328,6 +1478,15 @@ impl SupportedAnsi92SqlGrammarLevel {
             SupportedAnsi92SqlGrammarLevel::Ansi92FullSql => "ANSI92_FULL_SQL",
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "ANSI92_ENTRY_SQL" => Some(Self::Ansi92EntrySql),
+            "ANSI92_INTERMEDIATE_SQL" => Some(Self::Ansi92IntermediateSql),
+            "ANSI92_FULL_SQL" => Some(Self::Ansi92FullSql),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1348,6 +1507,15 @@ impl SqlOuterJoinsSupportLevel {
             SqlOuterJoinsSupportLevel::SqlFullOuterJoins => "SQL_FULL_OUTER_JOINS",
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SQL_JOINS_UNSUPPORTED" => Some(Self::SqlJoinsUnsupported),
+            "SQL_LIMITED_OUTER_JOINS" => Some(Self::SqlLimitedOuterJoins),
+            "SQL_FULL_OUTER_JOINS" => Some(Self::SqlFullOuterJoins),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1364,6 +1532,14 @@ impl SqlSupportedGroupBy {
         match self {
             SqlSupportedGroupBy::SqlGroupByUnrelated => "SQL_GROUP_BY_UNRELATED",
             SqlSupportedGroupBy::SqlGroupByBeyondSelect => "SQL_GROUP_BY_BEYOND_SELECT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SQL_GROUP_BY_UNRELATED" => Some(Self::SqlGroupByUnrelated),
+            "SQL_GROUP_BY_BEYOND_SELECT" => Some(Self::SqlGroupByBeyondSelect),
+            _ => None,
         }
     }
 }
@@ -1392,6 +1568,19 @@ impl SqlSupportedElementActions {
             }
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SQL_ELEMENT_IN_PROCEDURE_CALLS" => Some(Self::SqlElementInProcedureCalls),
+            "SQL_ELEMENT_IN_INDEX_DEFINITIONS" => {
+                Some(Self::SqlElementInIndexDefinitions)
+            }
+            "SQL_ELEMENT_IN_PRIVILEGE_DEFINITIONS" => {
+                Some(Self::SqlElementInPrivilegeDefinitions)
+            }
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1412,6 +1601,14 @@ impl SqlSupportedPositionedCommands {
             SqlSupportedPositionedCommands::SqlPositionedUpdate => {
                 "SQL_POSITIONED_UPDATE"
             }
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SQL_POSITIONED_DELETE" => Some(Self::SqlPositionedDelete),
+            "SQL_POSITIONED_UPDATE" => Some(Self::SqlPositionedUpdate),
+            _ => None,
         }
     }
 }
@@ -1440,6 +1637,16 @@ impl SqlSupportedSubqueries {
             }
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SQL_SUBQUERIES_IN_COMPARISONS" => Some(Self::SqlSubqueriesInComparisons),
+            "SQL_SUBQUERIES_IN_EXISTS" => Some(Self::SqlSubqueriesInExists),
+            "SQL_SUBQUERIES_IN_INS" => Some(Self::SqlSubqueriesInIns),
+            "SQL_SUBQUERIES_IN_QUANTIFIEDS" => Some(Self::SqlSubqueriesInQuantifieds),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1456,6 +1663,14 @@ impl SqlSupportedUnions {
         match self {
             SqlSupportedUnions::SqlUnion => "SQL_UNION",
             SqlSupportedUnions::SqlUnionAll => "SQL_UNION_ALL",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SQL_UNION" => Some(Self::SqlUnion),
+            "SQL_UNION_ALL" => Some(Self::SqlUnionAll),
+            _ => None,
         }
     }
 }
@@ -1490,6 +1705,19 @@ impl SqlTransactionIsolationLevel {
             }
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SQL_TRANSACTION_NONE" => Some(Self::SqlTransactionNone),
+            "SQL_TRANSACTION_READ_UNCOMMITTED" => {
+                Some(Self::SqlTransactionReadUncommitted)
+            }
+            "SQL_TRANSACTION_READ_COMMITTED" => Some(Self::SqlTransactionReadCommitted),
+            "SQL_TRANSACTION_REPEATABLE_READ" => Some(Self::SqlTransactionRepeatableRead),
+            "SQL_TRANSACTION_SERIALIZABLE" => Some(Self::SqlTransactionSerializable),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1514,6 +1742,19 @@ impl SqlSupportedTransactions {
             SqlSupportedTransactions::SqlDataManipulationTransactions => {
                 "SQL_DATA_MANIPULATION_TRANSACTIONS"
             }
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SQL_TRANSACTION_UNSPECIFIED" => Some(Self::SqlTransactionUnspecified),
+            "SQL_DATA_DEFINITION_TRANSACTIONS" => {
+                Some(Self::SqlDataDefinitionTransactions)
+            }
+            "SQL_DATA_MANIPULATION_TRANSACTIONS" => {
+                Some(Self::SqlDataManipulationTransactions)
+            }
+            _ => None,
         }
     }
 }
@@ -1546,6 +1787,20 @@ impl SqlSupportedResultSetType {
             }
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SQL_RESULT_SET_TYPE_UNSPECIFIED" => Some(Self::SqlResultSetTypeUnspecified),
+            "SQL_RESULT_SET_TYPE_FORWARD_ONLY" => Some(Self::SqlResultSetTypeForwardOnly),
+            "SQL_RESULT_SET_TYPE_SCROLL_INSENSITIVE" => {
+                Some(Self::SqlResultSetTypeScrollInsensitive)
+            }
+            "SQL_RESULT_SET_TYPE_SCROLL_SENSITIVE" => {
+                Some(Self::SqlResultSetTypeScrollSensitive)
+            }
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1570,6 +1825,21 @@ impl SqlSupportedResultSetConcurrency {
             SqlSupportedResultSetConcurrency::SqlResultSetConcurrencyUpdatable => {
                 "SQL_RESULT_SET_CONCURRENCY_UPDATABLE"
             }
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SQL_RESULT_SET_CONCURRENCY_UNSPECIFIED" => {
+                Some(Self::SqlResultSetConcurrencyUnspecified)
+            }
+            "SQL_RESULT_SET_CONCURRENCY_READ_ONLY" => {
+                Some(Self::SqlResultSetConcurrencyReadOnly)
+            }
+            "SQL_RESULT_SET_CONCURRENCY_UPDATABLE" => {
+                Some(Self::SqlResultSetConcurrencyUpdatable)
+            }
+            _ => None,
         }
     }
 }
@@ -1628,6 +1898,32 @@ impl SqlSupportsConvert {
             SqlSupportsConvert::SqlConvertTinyint => "SQL_CONVERT_TINYINT",
             SqlSupportsConvert::SqlConvertVarbinary => "SQL_CONVERT_VARBINARY",
             SqlSupportsConvert::SqlConvertVarchar => "SQL_CONVERT_VARCHAR",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SQL_CONVERT_BIGINT" => Some(Self::SqlConvertBigint),
+            "SQL_CONVERT_BINARY" => Some(Self::SqlConvertBinary),
+            "SQL_CONVERT_BIT" => Some(Self::SqlConvertBit),
+            "SQL_CONVERT_CHAR" => Some(Self::SqlConvertChar),
+            "SQL_CONVERT_DATE" => Some(Self::SqlConvertDate),
+            "SQL_CONVERT_DECIMAL" => Some(Self::SqlConvertDecimal),
+            "SQL_CONVERT_FLOAT" => Some(Self::SqlConvertFloat),
+            "SQL_CONVERT_INTEGER" => Some(Self::SqlConvertInteger),
+            "SQL_CONVERT_INTERVAL_DAY_TIME" => Some(Self::SqlConvertIntervalDayTime),
+            "SQL_CONVERT_INTERVAL_YEAR_MONTH" => Some(Self::SqlConvertIntervalYearMonth),
+            "SQL_CONVERT_LONGVARBINARY" => Some(Self::SqlConvertLongvarbinary),
+            "SQL_CONVERT_LONGVARCHAR" => Some(Self::SqlConvertLongvarchar),
+            "SQL_CONVERT_NUMERIC" => Some(Self::SqlConvertNumeric),
+            "SQL_CONVERT_REAL" => Some(Self::SqlConvertReal),
+            "SQL_CONVERT_SMALLINT" => Some(Self::SqlConvertSmallint),
+            "SQL_CONVERT_TIME" => Some(Self::SqlConvertTime),
+            "SQL_CONVERT_TIMESTAMP" => Some(Self::SqlConvertTimestamp),
+            "SQL_CONVERT_TINYINT" => Some(Self::SqlConvertTinyint),
+            "SQL_CONVERT_VARBINARY" => Some(Self::SqlConvertVarbinary),
+            "SQL_CONVERT_VARCHAR" => Some(Self::SqlConvertVarchar),
+            _ => None,
         }
     }
 }
@@ -1693,6 +1989,36 @@ impl XdbcDataType {
             XdbcDataType::XdbcBit => "XDBC_BIT",
             XdbcDataType::XdbcWchar => "XDBC_WCHAR",
             XdbcDataType::XdbcWvarchar => "XDBC_WVARCHAR",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "XDBC_UNKNOWN_TYPE" => Some(Self::XdbcUnknownType),
+            "XDBC_CHAR" => Some(Self::XdbcChar),
+            "XDBC_NUMERIC" => Some(Self::XdbcNumeric),
+            "XDBC_DECIMAL" => Some(Self::XdbcDecimal),
+            "XDBC_INTEGER" => Some(Self::XdbcInteger),
+            "XDBC_SMALLINT" => Some(Self::XdbcSmallint),
+            "XDBC_FLOAT" => Some(Self::XdbcFloat),
+            "XDBC_REAL" => Some(Self::XdbcReal),
+            "XDBC_DOUBLE" => Some(Self::XdbcDouble),
+            "XDBC_DATETIME" => Some(Self::XdbcDatetime),
+            "XDBC_INTERVAL" => Some(Self::XdbcInterval),
+            "XDBC_VARCHAR" => Some(Self::XdbcVarchar),
+            "XDBC_DATE" => Some(Self::XdbcDate),
+            "XDBC_TIME" => Some(Self::XdbcTime),
+            "XDBC_TIMESTAMP" => Some(Self::XdbcTimestamp),
+            "XDBC_LONGVARCHAR" => Some(Self::XdbcLongvarchar),
+            "XDBC_BINARY" => Some(Self::XdbcBinary),
+            "XDBC_VARBINARY" => Some(Self::XdbcVarbinary),
+            "XDBC_LONGVARBINARY" => Some(Self::XdbcLongvarbinary),
+            "XDBC_BIGINT" => Some(Self::XdbcBigint),
+            "XDBC_TINYINT" => Some(Self::XdbcTinyint),
+            "XDBC_BIT" => Some(Self::XdbcBit),
+            "XDBC_WCHAR" => Some(Self::XdbcWchar),
+            "XDBC_WVARCHAR" => Some(Self::XdbcWvarchar),
+            _ => None,
         }
     }
 }
@@ -1791,6 +2117,55 @@ impl XdbcDatetimeSubcode {
             }
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "XDBC_SUBCODE_UNKNOWN" => Some(Self::XdbcSubcodeUnknown),
+            "XDBC_SUBCODE_YEAR" => Some(Self::XdbcSubcodeYear),
+            "XDBC_SUBCODE_TIME" => Some(Self::XdbcSubcodeTime),
+            "XDBC_SUBCODE_TIMESTAMP" => Some(Self::XdbcSubcodeTimestamp),
+            "XDBC_SUBCODE_TIME_WITH_TIMEZONE" => Some(Self::XdbcSubcodeTimeWithTimezone),
+            "XDBC_SUBCODE_TIMESTAMP_WITH_TIMEZONE" => {
+                Some(Self::XdbcSubcodeTimestampWithTimezone)
+            }
+            "XDBC_SUBCODE_SECOND" => Some(Self::XdbcSubcodeSecond),
+            "XDBC_SUBCODE_YEAR_TO_MONTH" => Some(Self::XdbcSubcodeYearToMonth),
+            "XDBC_SUBCODE_DAY_TO_HOUR" => Some(Self::XdbcSubcodeDayToHour),
+            "XDBC_SUBCODE_DAY_TO_MINUTE" => Some(Self::XdbcSubcodeDayToMinute),
+            "XDBC_SUBCODE_DAY_TO_SECOND" => Some(Self::XdbcSubcodeDayToSecond),
+            "XDBC_SUBCODE_HOUR_TO_MINUTE" => Some(Self::XdbcSubcodeHourToMinute),
+            "XDBC_SUBCODE_HOUR_TO_SECOND" => Some(Self::XdbcSubcodeHourToSecond),
+            "XDBC_SUBCODE_MINUTE_TO_SECOND" => Some(Self::XdbcSubcodeMinuteToSecond),
+            "XDBC_SUBCODE_INTERVAL_YEAR" => Some(Self::XdbcSubcodeIntervalYear),
+            "XDBC_SUBCODE_INTERVAL_MONTH" => Some(Self::XdbcSubcodeIntervalMonth),
+            "XDBC_SUBCODE_INTERVAL_DAY" => Some(Self::XdbcSubcodeIntervalDay),
+            "XDBC_SUBCODE_INTERVAL_HOUR" => Some(Self::XdbcSubcodeIntervalHour),
+            "XDBC_SUBCODE_INTERVAL_MINUTE" => Some(Self::XdbcSubcodeIntervalMinute),
+            "XDBC_SUBCODE_INTERVAL_SECOND" => Some(Self::XdbcSubcodeIntervalSecond),
+            "XDBC_SUBCODE_INTERVAL_YEAR_TO_MONTH" => {
+                Some(Self::XdbcSubcodeIntervalYearToMonth)
+            }
+            "XDBC_SUBCODE_INTERVAL_DAY_TO_HOUR" => {
+                Some(Self::XdbcSubcodeIntervalDayToHour)
+            }
+            "XDBC_SUBCODE_INTERVAL_DAY_TO_MINUTE" => {
+                Some(Self::XdbcSubcodeIntervalDayToMinute)
+            }
+            "XDBC_SUBCODE_INTERVAL_DAY_TO_SECOND" => {
+                Some(Self::XdbcSubcodeIntervalDayToSecond)
+            }
+            "XDBC_SUBCODE_INTERVAL_HOUR_TO_MINUTE" => {
+                Some(Self::XdbcSubcodeIntervalHourToMinute)
+            }
+            "XDBC_SUBCODE_INTERVAL_HOUR_TO_SECOND" => {
+                Some(Self::XdbcSubcodeIntervalHourToSecond)
+            }
+            "XDBC_SUBCODE_INTERVAL_MINUTE_TO_SECOND" => {
+                Some(Self::XdbcSubcodeIntervalMinuteToSecond)
+            }
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1815,6 +2190,15 @@ impl Nullable {
             Nullable::NullabilityNoNulls => "NULLABILITY_NO_NULLS",
             Nullable::NullabilityNullable => "NULLABILITY_NULLABLE",
             Nullable::NullabilityUnknown => "NULLABILITY_UNKNOWN",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "NULLABILITY_NO_NULLS" => Some(Self::NullabilityNoNulls),
+            "NULLABILITY_NULLABLE" => Some(Self::NullabilityNullable),
+            "NULLABILITY_UNKNOWN" => Some(Self::NullabilityUnknown),
+            _ => None,
         }
     }
 }
@@ -1852,6 +2236,16 @@ impl Searchable {
             Searchable::Full => "SEARCHABLE_FULL",
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SEARCHABLE_NONE" => Some(Self::None),
+            "SEARCHABLE_CHAR" => Some(Self::Char),
+            "SEARCHABLE_BASIC" => Some(Self::Basic),
+            "SEARCHABLE_FULL" => Some(Self::Full),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1874,6 +2268,17 @@ impl UpdateDeleteRules {
             UpdateDeleteRules::SetNull => "SET_NULL",
             UpdateDeleteRules::NoAction => "NO_ACTION",
             UpdateDeleteRules::SetDefault => "SET_DEFAULT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CASCADE" => Some(Self::Cascade),
+            "RESTRICT" => Some(Self::Restrict),
+            "SET_NULL" => Some(Self::SetNull),
+            "NO_ACTION" => Some(Self::NoAction),
+            "SET_DEFAULT" => Some(Self::SetDefault),
+            _ => None,
         }
     }
 }
