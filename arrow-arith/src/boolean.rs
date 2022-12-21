@@ -22,17 +22,16 @@
 //! `RUSTFLAGS="-C target-feature=+avx2"` for example.  See the documentation
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 
-pub use arrow_select::nullif;
-
-use crate::array::{Array, ArrayData, BooleanArray};
-use crate::buffer::{
+use arrow_array::*;
+use arrow_buffer::bit_util::ceil;
+use arrow_buffer::buffer::{
     bitwise_bin_op_helper, bitwise_quaternary_op_helper, buffer_bin_and, buffer_bin_or,
-    buffer_unary_not, Buffer, MutableBuffer,
+    buffer_unary_not,
 };
-use crate::datatypes::DataType;
-use crate::error::{ArrowError, Result};
-use crate::util::bit_util::ceil;
+use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::bit_mask::combine_option_bitmap;
+use arrow_data::ArrayData;
+use arrow_schema::{ArrowError, DataType};
 
 /// Updates null buffer based on data buffer and null buffer of the operand at other side
 /// in boolean AND kernel with Kleene logic. In short, because for AND kernel, null AND false
@@ -182,7 +181,7 @@ pub(crate) fn binary_boolean_kernel<F, U>(
     right: &BooleanArray,
     op: F,
     null_op: U,
-) -> Result<BooleanArray>
+) -> Result<BooleanArray, ArrowError>
 where
     F: Fn(&Buffer, usize, &Buffer, usize, usize) -> Buffer,
     U: Fn(&ArrayData, usize, &ArrayData, usize, usize) -> Option<Buffer>,
@@ -227,18 +226,17 @@ where
 /// This function errors when the arrays have different lengths.
 /// # Example
 /// ```rust
-/// use arrow::array::BooleanArray;
-/// use arrow::error::Result;
-/// use arrow::compute::kernels::boolean::and;
-/// # fn main() -> Result<()> {
+/// # use arrow_array::BooleanArray;
+/// # use arrow_arith::boolean::and;
 /// let a = BooleanArray::from(vec![Some(false), Some(true), None]);
 /// let b = BooleanArray::from(vec![Some(true), Some(true), Some(false)]);
-/// let and_ab = and(&a, &b)?;
+/// let and_ab = and(&a, &b).unwrap();
 /// assert_eq!(and_ab, BooleanArray::from(vec![Some(false), Some(true), None]));
-/// # Ok(())
-/// # }
 /// ```
-pub fn and(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn and(
+    left: &BooleanArray,
+    right: &BooleanArray,
+) -> Result<BooleanArray, ArrowError> {
     binary_boolean_kernel(left, right, buffer_bin_and, build_null_buffer_for_and_or)
 }
 
@@ -261,22 +259,21 @@ pub fn and(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
 /// # Example
 ///
 /// ```rust
-/// use arrow::array::BooleanArray;
-/// use arrow::error::Result;
-/// use arrow::compute::kernels::boolean::and_kleene;
-/// # fn main() -> Result<()> {
+/// # use arrow_array::BooleanArray;
+/// # use arrow_arith::boolean::and_kleene;
 /// let a = BooleanArray::from(vec![Some(true), Some(false), None]);
 /// let b = BooleanArray::from(vec![None, None, None]);
-/// let and_ab = and_kleene(&a, &b)?;
+/// let and_ab = and_kleene(&a, &b).unwrap();
 /// assert_eq!(and_ab, BooleanArray::from(vec![None, Some(false), None]));
-/// # Ok(())
-/// # }
 /// ```
 ///
 /// # Fails
 ///
 /// If the operands have different lengths
-pub fn and_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn and_kleene(
+    left: &BooleanArray,
+    right: &BooleanArray,
+) -> Result<BooleanArray, ArrowError> {
     binary_boolean_kernel(
         left,
         right,
@@ -291,18 +288,14 @@ pub fn and_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanAr
 /// This function errors when the arrays have different lengths.
 /// # Example
 /// ```rust
-/// use arrow::array::BooleanArray;
-/// use arrow::error::Result;
-/// use arrow::compute::kernels::boolean::or;
-/// # fn main() -> Result<()> {
+/// # use arrow_array::BooleanArray;
+/// # use arrow_arith::boolean::or;
 /// let a = BooleanArray::from(vec![Some(false), Some(true), None]);
 /// let b = BooleanArray::from(vec![Some(true), Some(true), Some(false)]);
-/// let or_ab = or(&a, &b)?;
+/// let or_ab = or(&a, &b).unwrap();
 /// assert_eq!(or_ab, BooleanArray::from(vec![Some(true), Some(true), None]));
-/// # Ok(())
-/// # }
 /// ```
-pub fn or(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn or(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     binary_boolean_kernel(left, right, buffer_bin_or, build_null_buffer_for_and_or)
 }
 
@@ -325,22 +318,21 @@ pub fn or(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
 /// # Example
 ///
 /// ```rust
-/// use arrow::array::BooleanArray;
-/// use arrow::error::Result;
-/// use arrow::compute::kernels::boolean::or_kleene;
-/// # fn main() -> Result<()> {
+/// # use arrow_array::BooleanArray;
+/// # use arrow_arith::boolean::or_kleene;
 /// let a = BooleanArray::from(vec![Some(true), Some(false), None]);
 /// let b = BooleanArray::from(vec![None, None, None]);
-/// let or_ab = or_kleene(&a, &b)?;
+/// let or_ab = or_kleene(&a, &b).unwrap();
 /// assert_eq!(or_ab, BooleanArray::from(vec![Some(true), None, None]));
-/// # Ok(())
-/// # }
 /// ```
 ///
 /// # Fails
 ///
 /// If the operands have different lengths
-pub fn or_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn or_kleene(
+    left: &BooleanArray,
+    right: &BooleanArray,
+) -> Result<BooleanArray, ArrowError> {
     binary_boolean_kernel(left, right, buffer_bin_or, build_null_buffer_for_or_kleene)
 }
 
@@ -350,17 +342,13 @@ pub fn or_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArr
 /// This function never errors. It returns an error for consistency.
 /// # Example
 /// ```rust
-/// use arrow::array::BooleanArray;
-/// use arrow::error::Result;
-/// use arrow::compute::kernels::boolean::not;
-/// # fn main() -> Result<()> {
+/// # use arrow_array::BooleanArray;
+/// # use arrow_arith::boolean::not;
 /// let a = BooleanArray::from(vec![Some(false), Some(true), None]);
-/// let not_a = not(&a)?;
+/// let not_a = not(&a).unwrap();
 /// assert_eq!(not_a, BooleanArray::from(vec![Some(true), Some(false), None]));
-/// # Ok(())
-/// # }
 /// ```
-pub fn not(left: &BooleanArray) -> Result<BooleanArray> {
+pub fn not(left: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     let left_offset = left.offset();
     let len = left.len();
 
@@ -391,17 +379,13 @@ pub fn not(left: &BooleanArray) -> Result<BooleanArray> {
 /// This function never errors.
 /// # Example
 /// ```rust
-/// # use arrow::error::Result;
-/// use arrow::array::BooleanArray;
-/// use arrow::compute::kernels::boolean::is_null;
-/// # fn main() -> Result<()> {
+/// # use arrow_array::BooleanArray;
+/// # use arrow_arith::boolean::is_null;
 /// let a = BooleanArray::from(vec![Some(false), Some(true), None]);
-/// let a_is_null = is_null(&a)?;
+/// let a_is_null = is_null(&a).unwrap();
 /// assert_eq!(a_is_null, BooleanArray::from(vec![false, false, true]));
-/// # Ok(())
-/// # }
 /// ```
-pub fn is_null(input: &dyn Array) -> Result<BooleanArray> {
+pub fn is_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
     let len = input.len();
 
     let output = match input.data_ref().null_buffer() {
@@ -432,17 +416,13 @@ pub fn is_null(input: &dyn Array) -> Result<BooleanArray> {
 /// This function never errors.
 /// # Example
 /// ```rust
-/// # use arrow::error::Result;
-/// use arrow::array::BooleanArray;
-/// use arrow::compute::kernels::boolean::is_not_null;
-/// # fn main() -> Result<()> {
+/// # use arrow_array::BooleanArray;
+/// # use arrow_arith::boolean::is_not_null;
 /// let a = BooleanArray::from(vec![Some(false), Some(true), None]);
-/// let a_is_not_null = is_not_null(&a)?;
+/// let a_is_not_null = is_not_null(&a).unwrap();
 /// assert_eq!(a_is_not_null, BooleanArray::from(vec![true, true, false]));
-/// # Ok(())
-/// # }
 /// ```
-pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray> {
+pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
     let len = input.len();
 
     let output = match input.data_ref().null_buffer() {
@@ -473,7 +453,6 @@ pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::{ArrayRef, Int32Array};
     use std::sync::Arc;
 
     #[test]

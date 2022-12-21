@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::PrimitiveArray;
-use crate::compute::{binary, unary};
-use crate::datatypes::ArrowNumericType;
-use crate::error::Result;
+use crate::arity::{binary, unary};
+use arrow_array::*;
+use arrow_schema::ArrowError;
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 // The helper function for bitwise operation with two array
@@ -26,7 +25,7 @@ fn bitwise_op<T, F>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
     op: F,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     F: Fn(T::Native, T::Native) -> T::Native,
@@ -39,7 +38,7 @@ where
 pub fn bitwise_and<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: BitAnd<Output = T::Native>,
@@ -52,7 +51,7 @@ where
 pub fn bitwise_or<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: BitOr<Output = T::Native>,
@@ -65,7 +64,7 @@ where
 pub fn bitwise_xor<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: BitXor<Output = T::Native>,
@@ -75,7 +74,7 @@ where
 
 /// Perform `!array` operation on array. If array value is null
 /// then the result is also null.
-pub fn bitwise_not<T>(array: &PrimitiveArray<T>) -> Result<PrimitiveArray<T>>
+pub fn bitwise_not<T>(array: &PrimitiveArray<T>) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: Not<Output = T::Native>,
@@ -88,7 +87,7 @@ where
 pub fn bitwise_and_scalar<T>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: BitAnd<Output = T::Native>,
@@ -101,7 +100,7 @@ where
 pub fn bitwise_or_scalar<T>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: BitOr<Output = T::Native>,
@@ -114,7 +113,7 @@ where
 pub fn bitwise_xor_scalar<T>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: BitXor<Output = T::Native>,
@@ -124,15 +123,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::array::{Int32Array, UInt64Array};
-    use crate::compute::kernels::bitwise::{
-        bitwise_and, bitwise_and_scalar, bitwise_not, bitwise_or, bitwise_or_scalar,
-        bitwise_xor, bitwise_xor_scalar,
-    };
-    use crate::error::Result;
+    use super::*;
 
     #[test]
-    fn test_bitwise_and_array() -> Result<()> {
+    fn test_bitwise_and_array() -> Result<(), ArrowError> {
         // unsigned value
         let left = UInt64Array::from(vec![Some(1), Some(2), None, Some(4)]);
         let right = UInt64Array::from(vec![Some(5), Some(10), Some(8), Some(12)]);
@@ -150,43 +144,41 @@ mod tests {
     }
 
     #[test]
-    fn test_bitwise_and_array_scalar() -> Result<()> {
+    fn test_bitwise_and_array_scalar() {
         // unsigned value
         let left = UInt64Array::from(vec![Some(15), Some(2), None, Some(4)]);
         let scalar = 7;
         let expected = UInt64Array::from(vec![Some(7), Some(2), None, Some(4)]);
-        let result = bitwise_and_scalar(&left, scalar)?;
+        let result = bitwise_and_scalar(&left, scalar).unwrap();
         assert_eq!(expected, result);
 
         // signed value
         let left = Int32Array::from(vec![Some(1), Some(2), None, Some(4)]);
         let scalar = -20;
         let expected = Int32Array::from(vec![Some(0), Some(0), None, Some(4)]);
-        let result = bitwise_and_scalar(&left, scalar)?;
+        let result = bitwise_and_scalar(&left, scalar).unwrap();
         assert_eq!(expected, result);
-        Ok(())
     }
 
     #[test]
-    fn test_bitwise_or_array() -> Result<()> {
+    fn test_bitwise_or_array() {
         // unsigned value
         let left = UInt64Array::from(vec![Some(1), Some(2), None, Some(4)]);
         let right = UInt64Array::from(vec![Some(7), Some(5), Some(8), Some(13)]);
         let expected = UInt64Array::from(vec![Some(7), Some(7), None, Some(13)]);
-        let result = bitwise_or(&left, &right)?;
+        let result = bitwise_or(&left, &right).unwrap();
         assert_eq!(expected, result);
 
         // signed value
         let left = Int32Array::from(vec![Some(1), Some(2), None, Some(4)]);
         let right = Int32Array::from(vec![Some(-7), Some(-5), Some(8), Some(13)]);
         let expected = Int32Array::from(vec![Some(-7), Some(-5), None, Some(13)]);
-        let result = bitwise_or(&left, &right)?;
+        let result = bitwise_or(&left, &right).unwrap();
         assert_eq!(expected, result);
-        Ok(())
     }
 
     #[test]
-    fn test_bitwise_not_array() -> Result<()> {
+    fn test_bitwise_not_array() {
         // unsigned value
         let array = UInt64Array::from(vec![Some(1), Some(2), None, Some(4)]);
         let expected = UInt64Array::from(vec![
@@ -195,67 +187,63 @@ mod tests {
             None,
             Some(18446744073709551611),
         ]);
-        let result = bitwise_not(&array)?;
+        let result = bitwise_not(&array).unwrap();
         assert_eq!(expected, result);
         // signed value
         let array = Int32Array::from(vec![Some(1), Some(2), None, Some(4)]);
         let expected = Int32Array::from(vec![Some(-2), Some(-3), None, Some(-5)]);
-        let result = bitwise_not(&array)?;
+        let result = bitwise_not(&array).unwrap();
         assert_eq!(expected, result);
-        Ok(())
     }
 
     #[test]
-    fn test_bitwise_or_array_scalar() -> Result<()> {
+    fn test_bitwise_or_array_scalar() {
         // unsigned value
         let left = UInt64Array::from(vec![Some(15), Some(2), None, Some(4)]);
         let scalar = 7;
         let expected = UInt64Array::from(vec![Some(15), Some(7), None, Some(7)]);
-        let result = bitwise_or_scalar(&left, scalar)?;
+        let result = bitwise_or_scalar(&left, scalar).unwrap();
         assert_eq!(expected, result);
 
         // signed value
         let left = Int32Array::from(vec![Some(1), Some(2), None, Some(4)]);
         let scalar = 20;
         let expected = Int32Array::from(vec![Some(21), Some(22), None, Some(20)]);
-        let result = bitwise_or_scalar(&left, scalar)?;
+        let result = bitwise_or_scalar(&left, scalar).unwrap();
         assert_eq!(expected, result);
-        Ok(())
     }
 
     #[test]
-    fn test_bitwise_xor_array() -> Result<()> {
+    fn test_bitwise_xor_array() {
         // unsigned value
         let left = UInt64Array::from(vec![Some(1), Some(2), None, Some(4)]);
         let right = UInt64Array::from(vec![Some(7), Some(5), Some(8), Some(13)]);
         let expected = UInt64Array::from(vec![Some(6), Some(7), None, Some(9)]);
-        let result = bitwise_xor(&left, &right)?;
+        let result = bitwise_xor(&left, &right).unwrap();
         assert_eq!(expected, result);
 
         // signed value
         let left = Int32Array::from(vec![Some(1), Some(2), None, Some(4)]);
         let right = Int32Array::from(vec![Some(-7), Some(5), Some(8), Some(-13)]);
         let expected = Int32Array::from(vec![Some(-8), Some(7), None, Some(-9)]);
-        let result = bitwise_xor(&left, &right)?;
+        let result = bitwise_xor(&left, &right).unwrap();
         assert_eq!(expected, result);
-        Ok(())
     }
 
     #[test]
-    fn test_bitwise_xor_array_scalar() -> Result<()> {
+    fn test_bitwise_xor_array_scalar() {
         // unsigned value
         let left = UInt64Array::from(vec![Some(15), Some(2), None, Some(4)]);
         let scalar = 7;
         let expected = UInt64Array::from(vec![Some(8), Some(5), None, Some(3)]);
-        let result = bitwise_xor_scalar(&left, scalar)?;
+        let result = bitwise_xor_scalar(&left, scalar).unwrap();
         assert_eq!(expected, result);
 
         // signed value
         let left = Int32Array::from(vec![Some(1), Some(2), None, Some(4)]);
         let scalar = -20;
         let expected = Int32Array::from(vec![Some(-19), Some(-18), None, Some(-24)]);
-        let result = bitwise_xor_scalar(&left, scalar)?;
+        let result = bitwise_xor_scalar(&left, scalar).unwrap();
         assert_eq!(expected, result);
-        Ok(())
     }
 }
