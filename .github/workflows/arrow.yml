@@ -26,6 +26,7 @@ on:
   pull_request:
     paths:
       - .github/**
+      - arrow-arith/**
       - arrow-array/**
       - arrow-buffer/**
       - arrow-cast/**
@@ -77,6 +78,8 @@ jobs:
         run: cargo test -p arrow-string --all-features
       - name: Test arrow-ord with all features except SIMD
         run: cargo test -p arrow-ord --features dyn_cmp_dict
+      - name: Test arrow-arith with all features except SIMD
+        run: cargo test -p arrow-ord --features dyn_arith_dict
       - name: Test arrow-row with all features
         run: cargo test -p arrow-row --all-features
       - name: Test arrow-integration-test with all features
@@ -140,6 +143,8 @@ jobs:
         run: cargo test -p arrow-array --features simd
       - name: Test arrow-ord with SIMD
         run: cargo test -p arrow-ord --features simd
+      - name: Test arrow-arith with SIMD
+        run: cargo test -p arrow-arith --features simd
       - name: Test arrow with SIMD
         run: cargo test -p arrow --features simd
       - name: Check compilation --features simd --all-targets
@@ -199,7 +204,9 @@ jobs:
         run: cargo clippy -p arrow-string --all-targets --all-features -- -D warnings
       - name: Clippy arrow-ord with all features except SIMD
         run: cargo clippy -p arrow-ord --all-targets --features dyn_cmp_dict -- -D warnings
+      - name: Clippy arrow-arith with all features except SIMD
+        run: cargo clippy -p arrow-arith --all-targets --features dyn_arith_dict -- -D warnings
       - name: Clippy arrow-row with all features
         run: cargo clippy -p arrow-row --all-targets --all-features -- -D warnings
-      - name: Clippy arrow
+      - name: Clippy arrow with all features except SIMD
         run: cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict,dyn_arith_dict,chrono-tz --all-targets -- -D warnings

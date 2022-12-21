@@ -262,6 +262,7 @@ Rust Arrow Crates:
 (cd arrow-csv && cargo publish)
 (cd arrow-json && cargo publish)
 (cd arrow-ord && cargo publish)
+(cd arrow-arith && cargo publish)
 (cd arrow-string && cargo publish)
 (cd arrow-row && cargo publish)
 (cd arrow && cargo publish)
