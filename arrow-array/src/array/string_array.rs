@@ -734,4 +734,15 @@ mod tests {
         let array = builder.finish();
         assert_eq!(expected, array);
     }
+
+    #[test]
+    fn test_into_builder_err() {
+        let array: StringArray = vec!["hello", "arrow"].into();
+
+        // Clone it, so we cannot get a mutable builder back
+        let shared_array = array.clone();
+
+        let err_return = array.into_builder().unwrap_err();
+        assert_eq!(&err_return, &shared_array);
+    }
 }

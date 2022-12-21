@@ -179,13 +179,13 @@ impl<T: ByteArrayType> GenericByteArray<T> {
                 // try_mutable_offset_buffer.map(...).map_err(...) doesn't work as the compiler complains
                 // mutable_null_buffer is moved into map closure.
                 match (try_mutable_offset_buffer, try_mutable_value_buffer) {
-                    (Ok(mutable_offset_buffer), Ok(mutable_value_buffer)) => {
+                    (Ok(mutable_offset_buffer), Ok(mutable_value_buffer)) => unsafe {
                         Ok(GenericByteBuilder::<T>::new_from_buffer(
                             mutable_offset_buffer,
                             mutable_value_buffer,
                             mutable_null_buffer,
                         ))
-                    }
+                    },
                     (Ok(mutable_offset_buffer), Err(value_buffer)) => Err((
                         mutable_offset_buffer.into(),
                         value_buffer,

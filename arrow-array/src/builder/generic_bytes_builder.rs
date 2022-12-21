@@ -53,8 +53,12 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         }
     }
 
-    /// Creates a new primitive array builder from buffers
-    pub fn new_from_buffer(
+    /// Creates a new  [`GenericByteBuilder`] from buffers.
+    ///
+    /// # Safety
+    /// This doesn't verify buffer contents as it assumes the buffers are from existing and
+    /// valid [`GenericByteArray`].
+    pub unsafe fn new_from_buffer(
         offsets_buffer: MutableBuffer,
         value_buffer: MutableBuffer,
         null_buffer: Option<MutableBuffer>,
@@ -150,11 +154,6 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// Returns the current offsets buffer as a slice
     pub fn offsets_slice(&self) -> &[T::Offset] {
         self.offsets_builder.as_slice()
-    }
-
-    /// Returns the current offsets buffer as a mutable slice
-    pub fn offsets_slice_mut(&mut self) -> &mut [T::Offset] {
-        self.offsets_builder.as_slice_mut()
     }
 
     /// Returns the current null buffer as a slice
