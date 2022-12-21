@@ -79,7 +79,7 @@ jobs:
       - name: Test arrow-ord with all features except SIMD
         run: cargo test -p arrow-ord --features dyn_cmp_dict
       - name: Test arrow-arith with all features except SIMD
-        run: cargo test -p arrow-ord --features dyn_arith_dict
+        run: cargo test -p arrow-arith --features dyn_arith_dict
       - name: Test arrow-row with all features
         run: cargo test -p arrow-row --all-features
       - name: Test arrow-integration-test with all features
