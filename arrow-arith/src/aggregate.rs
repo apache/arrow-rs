@@ -17,19 +17,16 @@
 
 //! Defines aggregations over Arrow arrays.
 
-use arrow_data::bit_iterator::try_for_each_valid_idx;
-use arrow_schema::ArrowError;
 use multiversion::multiversion;
-#[allow(unused_imports)]
-use std::ops::{Add, Deref};
 
-use crate::array::{
-    as_primitive_array, Array, ArrayAccessor, ArrayIter, BooleanArray,
-    GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
-};
-use crate::datatypes::{ArrowNativeType, ArrowNativeTypeOp, ArrowNumericType, DataType};
-use crate::error::Result;
-use crate::util::bit_iterator::BitIndexIterator;
+use arrow_array::cast::*;
+use arrow_array::iterator::ArrayIter;
+use arrow_array::*;
+use arrow_buffer::ArrowNativeType;
+use arrow_data::bit_iterator::try_for_each_valid_idx;
+use arrow_data::bit_iterator::BitIndexIterator;
+use arrow_schema::ArrowError;
+use arrow_schema::*;
 
 /// Generic test for NaN, the optimizer should be able to remove this for integer types.
 #[inline]
@@ -63,10 +60,8 @@ where
 /// Returns the minimum value in the boolean array.
 ///
 /// ```
-/// use arrow::{
-///   array::BooleanArray,
-///   compute::min_boolean,
-/// };
+/// # use arrow_array::BooleanArray;
+/// # use arrow_arith::aggregate::min_boolean;
 ///
 /// let a = BooleanArray::from(vec![Some(true), None, Some(false)]);
 /// assert_eq!(min_boolean(&a), Some(false))
@@ -88,10 +83,8 @@ pub fn min_boolean(array: &BooleanArray) -> Option<bool> {
 /// Returns the maximum value in the boolean array
 ///
 /// ```
-/// use arrow::{
-///   array::BooleanArray,
-///   compute::max_boolean,
-/// };
+/// # use arrow_array::BooleanArray;
+/// # use arrow_arith::aggregate::max_boolean;
 ///
 /// let a = BooleanArray::from(vec![Some(true), None, Some(false)]);
 /// assert_eq!(max_boolean(&a), Some(true))
@@ -205,7 +198,7 @@ where
 /// use `sum_array` instead.
 pub fn sum_array_checked<T, A: ArrayAccessor<Item = T::Native>>(
     array: A,
-) -> Result<Option<T::Native>>
+) -> Result<Option<T::Native>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -345,7 +338,7 @@ where
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `sum` instead.
-pub fn sum_checked<T>(array: &PrimitiveArray<T>) -> Result<Option<T::Native>>
+pub fn sum_checked<T>(array: &PrimitiveArray<T>) -> Result<Option<T::Native>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -375,7 +368,7 @@ where
                 array.len(),
                 array.offset(),
                 null_count,
-                Some(buffer.deref()),
+                Some(buffer.as_slice()),
                 |idx| {
                     unsafe { sum = sum.add_checked(array.value_unchecked(idx))? };
                     Ok::<_, ArrowError>(())
@@ -390,8 +383,7 @@ where
 #[cfg(feature = "simd")]
 mod simd {
     use super::is_nan;
-    use crate::array::{Array, PrimitiveArray};
-    use crate::datatypes::{ArrowNativeTypeOp, ArrowNumericType};
+    use arrow_array::*;
     use std::marker::PhantomData;
 
     pub(super) trait SimdAggregate<T: ArrowNumericType> {
@@ -771,10 +763,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::*;
-    use crate::compute::add;
-    use crate::datatypes::{Float32Type, Int32Type, Int8Type};
-    use arrow_array::types::Float64Type;
+    use crate::arithmetic::add;
+    use arrow_array::types::*;
 
     #[test]
     fn test_primitive_array_sum() {

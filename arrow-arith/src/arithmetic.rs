@@ -22,29 +22,12 @@
 //! `RUSTFLAGS="-C target-feature=+avx2"` for example.  See the documentation
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 
-use crate::array::*;
-#[cfg(feature = "simd")]
-use crate::buffer::MutableBuffer;
-use crate::compute::kernels::arity::unary;
-use crate::compute::{
-    binary, binary_opt, try_binary, try_unary, try_unary_dyn, unary_dyn,
-};
-use crate::datatypes::{
-    ArrowNativeTypeOp, ArrowNumericType, DataType, Date32Type, Date64Type,
-    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
-};
-#[cfg(feature = "dyn_arith_dict")]
-use crate::datatypes::{
-    Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-};
-use crate::error::{ArrowError, Result};
-use crate::{datatypes, downcast_primitive_array};
+use crate::arity::*;
+use arrow_array::cast::*;
+use arrow_array::types::*;
+use arrow_array::*;
+use arrow_schema::*;
 use num::traits::Pow;
-#[cfg(feature = "simd")]
-use std::borrow::BorrowMut;
-#[cfg(feature = "simd")]
-use std::slice::{ChunksExact, ChunksExactMut};
 use std::sync::Arc;
 
 /// Helper function to perform math lambda function on values from two arrays. If either
@@ -58,7 +41,7 @@ pub fn math_op<LT, RT, F>(
     left: &PrimitiveArray<LT>,
     right: &PrimitiveArray<RT>,
     op: F,
-) -> Result<PrimitiveArray<LT>>
+) -> Result<PrimitiveArray<LT>, ArrowError>
 where
     LT: ArrowNumericType,
     RT: ArrowNumericType,
@@ -76,11 +59,11 @@ fn math_checked_op<LT, RT, F>(
     left: &PrimitiveArray<LT>,
     right: &PrimitiveArray<RT>,
     op: F,
-) -> Result<PrimitiveArray<LT>>
+) -> Result<PrimitiveArray<LT>, ArrowError>
 where
     LT: ArrowNumericType,
     RT: ArrowNumericType,
-    F: Fn(LT::Native, RT::Native) -> Result<LT::Native>,
+    F: Fn(LT::Native, RT::Native) -> Result<LT::Native, ArrowError>,
     LT::Native: ArrowNativeTypeOp,
     RT::Native: ArrowNativeTypeOp,
 {
@@ -99,11 +82,11 @@ fn math_checked_divide_op<LT, RT, F>(
     left: &PrimitiveArray<LT>,
     right: &PrimitiveArray<RT>,
     op: F,
-) -> Result<PrimitiveArray<LT>>
+) -> Result<PrimitiveArray<LT>, ArrowError>
 where
     LT: ArrowNumericType,
     RT: ArrowNumericType,
-    F: Fn(LT::Native, RT::Native) -> Result<LT::Native>,
+    F: Fn(LT::Native, RT::Native) -> Result<LT::Native, ArrowError>,
 {
     try_binary(left, right, op)
 }
@@ -122,11 +105,11 @@ fn math_checked_divide_op_on_iters<T, F>(
     right: impl Iterator<Item = Option<T::Native>>,
     op: F,
     len: usize,
-    null_bit_buffer: Option<crate::buffer::Buffer>,
-) -> Result<PrimitiveArray<T>>
+    null_bit_buffer: Option<arrow_buffer::Buffer>,
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
-    F: Fn(T::Native, T::Native) -> Result<T::Native>,
+    F: Fn(T::Native, T::Native) -> Result<T::Native, ArrowError>,
 {
     let buffer = if null_bit_buffer.is_some() {
         let values = left.zip(right).map(|(left, right)| {
@@ -137,7 +120,7 @@ where
             }
         });
         // Safety: Iterator comes from a PrimitiveArray which reports its size correctly
-        unsafe { crate::buffer::Buffer::try_from_trusted_len_iter(values) }
+        unsafe { arrow_buffer::Buffer::try_from_trusted_len_iter(values) }
     } else {
         // no value is null
         let values = left
@@ -145,11 +128,11 @@ where
             .zip(right.map(|r| r.unwrap()))
             .map(|(left, right)| op(left, right));
         // Safety: Iterator comes from a PrimitiveArray which reports its size correctly
-        unsafe { crate::buffer::Buffer::try_from_trusted_len_iter(values) }
+        unsafe { arrow_buffer::Buffer::try_from_trusted_len_iter(values) }
     }?;
 
     let data = unsafe {
-        ArrayData::new_unchecked(
+        arrow_data::ArrayData::new_unchecked(
             T::DATA_TYPE,
             len,
             None,
@@ -174,7 +157,7 @@ fn simd_checked_modulus<T: ArrowNumericType>(
     valid_mask: Option<u64>,
     left: T::Simd,
     right: T::Simd,
-) -> Result<T::Simd>
+) -> Result<T::Simd, ArrowError>
 where
     T::Native: ArrowNativeTypeOp,
 {
@@ -211,7 +194,7 @@ fn simd_checked_divide<T: ArrowNumericType>(
     valid_mask: Option<u64>,
     left: T::Simd,
     right: T::Simd,
-) -> Result<T::Simd>
+) -> Result<T::Simd, ArrowError>
 where
     T::Native: ArrowNativeTypeOp,
 {
@@ -247,11 +230,11 @@ where
 #[inline]
 fn simd_checked_divide_op_remainder<T, F>(
     valid_mask: Option<u64>,
-    left_chunks: ChunksExact<T::Native>,
-    right_chunks: ChunksExact<T::Native>,
-    result_chunks: ChunksExactMut<T::Native>,
+    left_chunks: std::slice::ChunksExact<T::Native>,
+    right_chunks: std::slice::ChunksExact<T::Native>,
+    result_chunks: std::slice::ChunksExactMut<T::Native>,
     op: F,
-) -> Result<()>
+) -> Result<(), ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -296,11 +279,11 @@ fn simd_checked_divide_op<T, SI, SC>(
     right: &PrimitiveArray<T>,
     simd_op: SI,
     scalar_op: SC,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
-    SI: Fn(Option<u64>, T::Simd, T::Simd) -> Result<T::Simd>,
+    SI: Fn(Option<u64>, T::Simd, T::Simd) -> Result<T::Simd, ArrowError>,
     SC: Fn(T::Native, T::Native) -> T::Native,
 {
     if left.len() != right.len() {
@@ -317,7 +300,8 @@ where
 
     let lanes = T::lanes();
     let buffer_size = left.len() * std::mem::size_of::<T::Native>();
-    let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
+    let mut result =
+        arrow_buffer::MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
 
     match &null_bit_buffer {
         Some(b) => {
@@ -332,11 +316,7 @@ where
 
             valid_chunks
                 .iter()
-                .zip(
-                    result_chunks
-                        .borrow_mut()
-                        .zip(left_chunks.borrow_mut().zip(right_chunks.borrow_mut())),
-                )
+                .zip((&mut result_chunks).zip((&mut left_chunks).zip(&mut right_chunks)))
                 .try_for_each(
                     |(mut mask, (result_slice, (left_slice, right_slice)))| {
                         // split chunks further into slices corresponding to the vector length
@@ -345,7 +325,7 @@ where
                         result_slice
                             .chunks_exact_mut(lanes)
                             .zip(left_slice.chunks_exact(lanes).zip(right_slice.chunks_exact(lanes)))
-                            .try_for_each(|(result_slice, (left_slice, right_slice))| -> Result<()> {
+                            .try_for_each(|(result_slice, (left_slice, right_slice))| -> Result<(), ArrowError> {
                                 let simd_left = T::load(left_slice);
                                 let simd_right = T::load(right_slice);
 
@@ -376,21 +356,20 @@ where
             let mut left_chunks = left.values().chunks_exact(lanes);
             let mut right_chunks = right.values().chunks_exact(lanes);
 
-            result_chunks
-                .borrow_mut()
-                .zip(left_chunks.borrow_mut().zip(right_chunks.borrow_mut()))
+            (&mut result_chunks)
+                .zip((&mut left_chunks).zip(&mut right_chunks))
                 .try_for_each(
-                    |(result_slice, (left_slice, right_slice))| -> Result<()> {
-                        let simd_left = T::load(left_slice);
-                        let simd_right = T::load(right_slice);
+                |(result_slice, (left_slice, right_slice))| -> Result<(), ArrowError> {
+                    let simd_left = T::load(left_slice);
+                    let simd_right = T::load(right_slice);
 
-                        let simd_result = simd_op(None, simd_left, simd_right)?;
+                    let simd_result = simd_op(None, simd_left, simd_right)?;
 
-                        T::write(simd_result, result_slice);
+                    T::write(simd_result, result_slice);
 
-                        Ok(())
-                    },
-                )?;
+                    Ok(())
+                },
+            )?;
 
             simd_checked_divide_op_remainder::<T, _>(
                 None,
@@ -403,7 +382,7 @@ where
     }
 
     let data = unsafe {
-        ArrayData::new_unchecked(
+        arrow_data::ArrayData::new_unchecked(
             T::DATA_TYPE,
             left.len(),
             None,
@@ -556,7 +535,7 @@ fn math_op_dict<K, T, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
     op: F,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     K: ArrowNumericType,
     T: ArrowNumericType,
@@ -612,11 +591,11 @@ fn math_checked_op_dict<K, T, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
     op: F,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     K: ArrowNumericType,
     T: ArrowNumericType,
-    F: Fn(T::Native, T::Native) -> Result<T::Native>,
+    F: Fn(T::Native, T::Native) -> Result<T::Native, ArrowError>,
     T::Native: ArrowNativeTypeOp,
 {
     // left and right's value types are supposed to be same as guaranteed by the caller macro now.
@@ -646,11 +625,11 @@ fn math_divide_checked_op_dict<K, T, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
     op: F,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     K: ArrowNumericType,
     T: ArrowNumericType,
-    F: Fn(T::Native, T::Native) -> Result<T::Native>,
+    F: Fn(T::Native, T::Native) -> Result<T::Native, ArrowError>,
 {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(format!(
@@ -699,7 +678,7 @@ fn math_divide_safe_op_dict<K, T, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
     op: F,
-) -> Result<ArrayRef>
+) -> Result<ArrayRef, ArrowError>
 where
     K: ArrowNumericType,
     T: ArrowNumericType,
@@ -715,7 +694,7 @@ fn math_safe_divide_op<LT, RT, F>(
     left: &PrimitiveArray<LT>,
     right: &PrimitiveArray<RT>,
     op: F,
-) -> Result<ArrayRef>
+) -> Result<ArrayRef, ArrowError>
 where
     LT: ArrowNumericType,
     RT: ArrowNumericType,
@@ -733,7 +712,7 @@ where
 pub fn add<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -749,7 +728,7 @@ where
 pub fn add_checked<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -762,7 +741,7 @@ where
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `add_dyn_checked` instead.
-pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(left, right, |a, b| a.add_wrapping(b), math_op_dict)
@@ -834,7 +813,10 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `add_dyn` instead.
-pub fn add_dyn_checked(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+pub fn add_dyn_checked(
+    left: &dyn Array,
+    right: &dyn Array,
+) -> Result<ArrayRef, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(
@@ -914,7 +896,7 @@ pub fn add_dyn_checked(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> 
 pub fn add_scalar<T>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -930,7 +912,7 @@ where
 pub fn add_scalar_checked<T>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -946,7 +928,10 @@ where
 /// For an overflow-checking variant, use `add_scalar_checked_dyn` instead.
 ///
 /// This returns an `Err` when the input array is not supported for adding operation.
-pub fn add_scalar_dyn<T>(array: &dyn Array, scalar: T::Native) -> Result<ArrayRef>
+pub fn add_scalar_dyn<T>(
+    array: &dyn Array,
+    scalar: T::Native,
+) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -963,7 +948,10 @@ where
 ///
 /// As this kernel has the branching costs and also prevents LLVM from vectorising it correctly,
 /// it is usually much slower than non-checking variant.
-pub fn add_scalar_checked_dyn<T>(array: &dyn Array, scalar: T::Native) -> Result<ArrayRef>
+pub fn add_scalar_checked_dyn<T>(
+    array: &dyn Array,
+    scalar: T::Native,
+) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -980,7 +968,7 @@ where
 pub fn subtract<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -996,7 +984,7 @@ where
 pub fn subtract_checked<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1009,7 +997,7 @@ where
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `subtract_dyn_checked` instead.
-pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(left, right, |a, b| a.sub_wrapping(b), math_op_dict)
@@ -1033,7 +1021,10 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `subtract_dyn` instead.
-pub fn subtract_dyn_checked(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+pub fn subtract_dyn_checked(
+    left: &dyn Array,
+    right: &dyn Array,
+) -> Result<ArrayRef, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(
@@ -1065,7 +1056,7 @@ pub fn subtract_dyn_checked(left: &dyn Array, right: &dyn Array) -> Result<Array
 pub fn subtract_scalar<T>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1081,7 +1072,7 @@ where
 pub fn subtract_scalar_checked<T>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1095,7 +1086,10 @@ where
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `subtract_scalar_checked_dyn` instead.
-pub fn subtract_scalar_dyn<T>(array: &dyn Array, scalar: T::Native) -> Result<ArrayRef>
+pub fn subtract_scalar_dyn<T>(
+    array: &dyn Array,
+    scalar: T::Native,
+) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1112,7 +1106,7 @@ where
 pub fn subtract_scalar_checked_dyn<T>(
     array: &dyn Array,
     scalar: T::Native,
-) -> Result<ArrayRef>
+) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1125,7 +1119,7 @@ where
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `negate_checked` instead.
-pub fn negate<T>(array: &PrimitiveArray<T>) -> Result<PrimitiveArray<T>>
+pub fn negate<T>(array: &PrimitiveArray<T>) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1137,7 +1131,9 @@ where
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `negate` instead.
-pub fn negate_checked<T>(array: &PrimitiveArray<T>) -> Result<PrimitiveArray<T>>
+pub fn negate_checked<T>(
+    array: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1149,9 +1145,9 @@ where
 pub fn powf_scalar<T>(
     array: &PrimitiveArray<T>,
     raise: T::Native,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
-    T: datatypes::ArrowFloatNumericType,
+    T: ArrowFloatNumericType,
     T::Native: Pow<T::Native, Output = T::Native>,
 {
     Ok(unary(array, |x| x.pow(raise)))
@@ -1165,7 +1161,7 @@ where
 pub fn multiply<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1181,7 +1177,7 @@ where
 pub fn multiply_checked<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1194,7 +1190,7 @@ where
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `multiply_dyn_checked` instead.
-pub fn multiply_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+pub fn multiply_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(left, right, |a, b| a.mul_wrapping(b), math_op_dict)
@@ -1218,7 +1214,10 @@ pub fn multiply_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `multiply_dyn` instead.
-pub fn multiply_dyn_checked(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+pub fn multiply_dyn_checked(
+    left: &dyn Array,
+    right: &dyn Array,
+) -> Result<ArrayRef, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(
@@ -1250,9 +1249,9 @@ pub fn multiply_dyn_checked(left: &dyn Array, right: &dyn Array) -> Result<Array
 pub fn multiply_scalar<T>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
-    T: datatypes::ArrowNumericType,
+    T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
 {
     Ok(unary(array, |value| value.mul_wrapping(scalar)))
@@ -1266,7 +1265,7 @@ where
 pub fn multiply_scalar_checked<T>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1280,7 +1279,10 @@ where
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `multiply_scalar_checked_dyn` instead.
-pub fn multiply_scalar_dyn<T>(array: &dyn Array, scalar: T::Native) -> Result<ArrayRef>
+pub fn multiply_scalar_dyn<T>(
+    array: &dyn Array,
+    scalar: T::Native,
+) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1297,7 +1299,7 @@ where
 pub fn multiply_scalar_checked_dyn<T>(
     array: &dyn Array,
     scalar: T::Native,
-) -> Result<ArrayRef>
+) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1312,7 +1314,7 @@ where
 pub fn modulus<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1340,7 +1342,7 @@ where
 pub fn divide_checked<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1370,7 +1372,7 @@ where
 pub fn divide_opt<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1390,7 +1392,7 @@ where
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `divide_dyn_checked` instead.
-pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(
@@ -1432,7 +1434,10 @@ pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `divide_dyn` instead.
-pub fn divide_dyn_checked(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+pub fn divide_dyn_checked(
+    left: &dyn Array,
+    right: &dyn Array,
+) -> Result<ArrayRef, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(
@@ -1465,7 +1470,10 @@ pub fn divide_dyn_checked(left: &dyn Array, right: &dyn Array) -> Result<ArrayRe
 /// Unlike `divide_dyn` or `divide_dyn_checked`, division by zero will get a null value instead
 /// returning an `Err`, this also doesn't check overflowing, overflowing will just wrap
 /// the result around.
-pub fn divide_dyn_opt(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+pub fn divide_dyn_opt(
+    left: &dyn Array,
+    right: &dyn Array,
+) -> Result<ArrayRef, ArrowError> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(
@@ -1515,7 +1523,7 @@ pub fn divide_dyn_opt(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
 pub fn divide<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1531,7 +1539,7 @@ where
 pub fn modulus_scalar<T>(
     array: &PrimitiveArray<T>,
     modulo: T::Native,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1549,7 +1557,7 @@ where
 pub fn divide_scalar<T>(
     array: &PrimitiveArray<T>,
     divisor: T::Native,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1567,7 +1575,10 @@ where
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `divide_scalar_checked_dyn` instead.
-pub fn divide_scalar_dyn<T>(array: &dyn Array, divisor: T::Native) -> Result<ArrayRef>
+pub fn divide_scalar_dyn<T>(
+    array: &dyn Array,
+    divisor: T::Native,
+) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1588,7 +1599,7 @@ where
 pub fn divide_scalar_checked_dyn<T>(
     array: &dyn Array,
     divisor: T::Native,
-) -> Result<ArrayRef>
+) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1611,7 +1622,10 @@ where
 /// Unlike `divide_scalar_dyn` or `divide_scalar_checked_dyn`, division by zero will get a
 /// null value instead returning an `Err`, this also doesn't check overflowing, overflowing
 /// will just wrap the result around.
-pub fn divide_scalar_opt_dyn<T>(array: &dyn Array, divisor: T::Native) -> Result<ArrayRef>
+pub fn divide_scalar_opt_dyn<T>(
+    array: &dyn Array,
+    divisor: T::Native,
+) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1631,10 +1645,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::Int32Array;
-    use crate::compute::{binary_mut, try_binary_mut, try_unary_mut, unary_mut};
-    use crate::datatypes::{Date64Type, Decimal128Type, Int32Type, Int8Type};
+    use arrow_array::builder::{
+        BooleanBufferBuilder, BufferBuilder, PrimitiveDictionaryBuilder,
+    };
     use arrow_buffer::i256;
+    use arrow_data::ArrayDataBuilder;
     use chrono::NaiveDate;
     use half::f16;
 

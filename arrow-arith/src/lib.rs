@@ -15,20 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Computation kernels on Arrow Arrays
+//! Arrow arithmetic and aggregation kernels
 
-pub mod limit;
-
-pub use arrow_arith::{aggregate, arithmetic, arity, bitwise, boolean, temporal};
-pub use arrow_cast::cast;
-pub use arrow_cast::parse as cast_utils;
-pub use arrow_ord::{partition, sort};
-pub use arrow_select::{concat, filter, interleave, take, window, zip};
-pub use arrow_string::{concat_elements, length, regexp, substring};
-
-/// Comparison kernels for `Array`s.
-pub mod comparison {
-    pub use arrow_ord::comparison::*;
-    pub use arrow_string::like::*;
-    pub use arrow_string::regexp::{regexp_is_match_utf8, regexp_is_match_utf8_scalar};
-}
+pub mod aggregate;
+pub mod arithmetic;
+pub mod arity;
+pub mod bitwise;
+pub mod boolean;
+pub mod temporal;
