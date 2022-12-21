@@ -44,6 +44,8 @@ use arrow_schema::{ArrowError, Schema, SchemaRef};
 use futures::{stream, TryStreamExt};
 use prost::Message;
 use tokio::sync::{Mutex, MutexGuard};
+#[cfg(feature = "tls")]
+use tonic::transport::{Certificate, ClientTlsConfig, Identity};
 use tonic::transport::{Channel, Endpoint};
 use tonic::Streaming;
 
@@ -60,6 +62,7 @@ pub struct FlightSqlServiceClient {
 /// Github issues are welcomed.
 impl FlightSqlServiceClient {
     /// Creates a new FlightSql Client that connects via TCP to a server
+    #[cfg(not(feature = "tls"))]
     pub async fn new_with_endpoint(host: &str, port: u16) -> Result<Self, ArrowError> {
         let addr = format!("http://{}:{}", host, port);
         let endpoint = Endpoint::new(addr)
@@ -71,6 +74,43 @@ impl FlightSqlServiceClient {
             .http2_keep_alive_interval(Duration::from_secs(300))
             .keep_alive_timeout(Duration::from_secs(20))
             .keep_alive_while_idle(true);
+
+        let channel = endpoint.connect().await.map_err(|e| {
+            ArrowError::IoError(format!("Cannot connect to endpoint: {}", e))
+        })?;
+        Ok(Self::new(channel))
+    }
+
+    /// Creates a new HTTPs FlightSql Client that connects via TCP to a server
+    #[cfg(feature = "tls")]
+    pub async fn new_with_endpoint(
+        client_ident: Identity,
+        server_ca: Certificate,
+        domain: &str,
+        host: &str,
+        port: u16,
+    ) -> Result<Self, ArrowError> {
+        let addr = format!("https://{}:{}", host, port);
+
+        let endpoint = Endpoint::new(addr)
+            .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
+            .connect_timeout(Duration::from_secs(20))
+            .timeout(Duration::from_secs(20))
+            .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait
+            .tcp_keepalive(Option::Some(Duration::from_secs(3600)))
+            .http2_keep_alive_interval(Duration::from_secs(300))
+            .keep_alive_timeout(Duration::from_secs(20))
+            .keep_alive_while_idle(true);
+
+        let tls_config = ClientTlsConfig::new()
+            .domain_name(domain)
+            .ca_certificate(server_ca)
+            .identity(client_ident);
+
+        let endpoint = endpoint
+            .tls_config(tls_config)
+            .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?;
+
         let channel = endpoint.connect().await.map_err(|e| {
             ArrowError::IoError(format!("Cannot connect to endpoint: {}", e))
         })?;
