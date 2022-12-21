@@ -29,6 +29,7 @@ use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ParquetMetaData;
 
 /// Implements [`AsyncFileReader`] for a parquet file in object storage
+#[derive(Clone, Debug)]
 pub struct ParquetObjectReader {
     store: Arc<dyn ObjectStore>,
     meta: ObjectMeta,
