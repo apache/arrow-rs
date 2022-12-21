@@ -148,6 +148,15 @@ pub mod flight_descriptor {
                 DescriptorType::Cmd => "CMD",
             }
         }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "UNKNOWN" => Some(Self::Unknown),
+                "PATH" => Some(Self::Path),
+                "CMD" => Some(Self::Cmd),
+                _ => None,
+            }
+        }
     }
 }
 ///
