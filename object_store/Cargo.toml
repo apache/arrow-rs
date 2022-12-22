@@ -61,6 +61,7 @@ cloud = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest
 azure = ["cloud"]
 gcp = ["cloud", "rustls-pemfile"]
 aws = ["cloud"]
+http = ["cloud"]
 
 # Experimental support for AWS_PROFILE
 aws_profile = ["aws", "aws-config", "aws-types"]

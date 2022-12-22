@@ -46,6 +46,7 @@ use std::sync::Arc;
 use tokio::io::AsyncWrite;
 use url::Url;
 
+use crate::util::RFC1123_FMT;
 pub use credential::authority_hosts;
 
 mod client;
@@ -219,7 +220,7 @@ impl ObjectStore for MicrosoftAzure {
             .to_str()
             .context(BadHeaderSnafu)?;
         let last_modified = Utc
-            .datetime_from_str(last_modified, credential::RFC1123_FMT)
+            .datetime_from_str(last_modified, RFC1123_FMT)
             .context(InvalidLastModifiedSnafu { last_modified })?;
 
         let content_length = headers

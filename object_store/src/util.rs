@@ -20,6 +20,22 @@ use super::Result;
 use bytes::Bytes;
 use futures::{stream::StreamExt, Stream, TryStreamExt};
 
+#[cfg(any(feature = "azure", feature = "http"))]
+pub static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
+
+// deserialize dates according to rfc1123
+#[cfg(any(feature = "azure", feature = "http"))]
+pub fn deserialize_rfc1123<'de, D>(
+    deserializer: D,
+) -> Result<chrono::DateTime<chrono::Utc>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = serde::Deserialize::deserialize(deserializer)?;
+    chrono::TimeZone::datetime_from_str(&chrono::Utc, &s, RFC1123_FMT)
+        .map_err(serde::de::Error::custom)
+}
+
 /// Returns the prefix to be passed to an object store
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub fn format_prefix(prefix: Option<&crate::path::Path>) -> Option<String> {
@@ -30,7 +46,7 @@ pub fn format_prefix(prefix: Option<&crate::path::Path>) -> Option<String> {
 
 /// Returns a formatted HTTP range header as per
 /// <https://httpwg.org/specs/rfc7233.html#header.range>
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure", feature = "http"))]
 pub fn format_http_range(range: std::ops::Range<usize>) -> String {
     format!("bytes={}-{}", range.start, range.end.saturating_sub(1))
 }

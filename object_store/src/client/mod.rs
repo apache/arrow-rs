@@ -20,8 +20,10 @@
 pub mod backoff;
 #[cfg(test)]
 pub mod mock_server;
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod pagination;
 pub mod retry;
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod token;
 
 use reqwest::header::{HeaderMap, HeaderValue};
