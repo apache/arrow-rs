@@ -56,6 +56,9 @@ jobs:
       - name: Test --all-features
         run: |
           cargo test -p arrow-flight --all-features
+      - name: Test --examples
+        run: |
+          cargo test -p arrow-flight  --features=flight-sql-experimental --examples
       - name: Verify workspace clean
         run: git diff --exit-code
 
