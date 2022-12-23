@@ -71,6 +71,13 @@ pub mod flight_service_server {
     pub use gen::flight_service_server::FlightServiceServer;
 }
 
+/// Mid Level [`FlightClient`] for
+pub mod client;
+pub use client::FlightClient;
+
+/// Common error types
+pub mod error;
+
 pub use gen::Action;
 pub use gen::ActionType;
 pub use gen::BasicAuth;
