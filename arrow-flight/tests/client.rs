@@ -20,20 +20,21 @@
 mod common {
     pub mod server;
 }
+use arrow_array::{RecordBatch, UInt64Array};
 use arrow_flight::{
     error::FlightError, FlightClient, FlightDescriptor, FlightInfo, HandshakeRequest,
-    HandshakeResponse,
+    HandshakeResponse, Ticket,
 };
 use bytes::Bytes;
 use common::server::TestFlightServer;
-use futures::Future;
+use futures::{Future, TryStreamExt};
 use tokio::{net::TcpListener, task::JoinHandle};
 use tonic::{
     transport::{Channel, Uri},
     Status,
 };
 
-use std::{net::SocketAddr, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 
@@ -173,7 +174,90 @@ async fn test_get_flight_info_metadata() {
 
 // TODO more negative  tests (like if there are endpoints defined, etc)
 
-// TODO test for do_get
+#[tokio::test]
+async fn test_do_get() {
+    do_test(|test_server, mut client| async move {
+        let ticket = Ticket {
+            ticket: Bytes::from("my awesome flight ticket"),
+        };
+
+        let batch = RecordBatch::try_from_iter(vec![(
+            "col",
+            Arc::new(UInt64Array::from_iter([1, 2, 3, 4])) as _,
+        )])
+        .unwrap();
+
+        let response = vec![Ok(batch.clone())];
+        test_server.set_do_get_response(response);
+        let response_stream = client
+            .do_get(ticket.clone())
+            .await
+            .expect("error making request");
+
+        let expected_response = vec![batch];
+        let response: Vec<_> = response_stream
+            .try_collect()
+            .await
+            .expect("Error streaming data");
+
+        assert_eq!(response, expected_response);
+        assert_eq!(test_server.take_do_get_request(), Some(ticket));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_do_get_error() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo", "bar").unwrap();
+        let ticket = Ticket {
+            ticket: Bytes::from("my awesome flight ticket"),
+        };
+
+        let response = client.do_get(ticket.clone()).await.unwrap_err();
+
+        let e = Status::internal("No do_get response configured");
+        expect_status(response, e);
+        // server still got the request
+        assert_eq!(test_server.take_do_get_request(), Some(ticket));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_do_get_error_in_record_batch_stream() {
+    do_test(|test_server, mut client| async move {
+        let ticket = Ticket {
+            ticket: Bytes::from("my awesome flight ticket"),
+        };
+
+        let batch = RecordBatch::try_from_iter(vec![(
+            "col",
+            Arc::new(UInt64Array::from_iter([1, 2, 3, 4])) as _,
+        )])
+        .unwrap();
+
+        let e = Status::data_loss("she's dead jim");
+
+        let expected_response = vec![Ok(batch), Err(FlightError::Tonic(e.clone()))];
+
+        test_server.set_do_get_response(expected_response);
+
+        let response_stream = client
+            .do_get(ticket.clone())
+            .await
+            .expect("error making request");
+
+        let response: Result<Vec<_>, FlightError> = response_stream.try_collect().await;
+
+        let response = response.unwrap_err();
+        expect_status(response, e);
+        // server still got the request
+        assert_eq!(test_server.take_do_get_request(), Some(ticket));
+    })
+    .await;
+}
 
 /// Runs the future returned by the function,  passing it a test server and client
 async fn do_test<F, Fut>(f: F)

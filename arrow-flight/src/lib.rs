@@ -71,9 +71,17 @@ pub mod flight_service_server {
     pub use gen::flight_service_server::FlightServiceServer;
 }
 
-/// Mid Level [`FlightClient`] for
+/// Mid Level [`FlightClient`]
 pub mod client;
 pub use client::FlightClient;
+
+/// Decoder to create [`RecordBatch`](arrow_array::RecordBatch) streams from [`FlightData`] streams.
+/// See [`FlightRecordBatchStream`](decode::FlightRecordBatchStream).
+pub mod decode;
+
+/// Encoder to create [`FlightData`] streams from [`RecordBatch`](arrow_array::RecordBatch) streams.
+/// See [`FlightDataEncoderBuilder`](encode::FlightDataEncoderBuilder).
+pub mod encode;
 
 /// Common error types
 pub mod error;

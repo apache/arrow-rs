@@ -17,10 +17,13 @@
 
 use std::sync::{Arc, Mutex};
 
-use futures::stream::BoxStream;
+use arrow_array::RecordBatch;
+use futures::{stream::BoxStream, TryStreamExt};
 use tonic::{metadata::MetadataMap, Request, Response, Status, Streaming};
 
 use arrow_flight::{
+    encode::FlightDataEncoderBuilder,
+    error::FlightError,
     flight_service_server::{FlightService, FlightServiceServer},
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
@@ -80,6 +83,21 @@ impl TestFlightServer {
             .take()
     }
 
+    /// Specify the response returned from the next call to `do_get`
+    pub fn set_do_get_response(&self, response: Vec<Result<RecordBatch, FlightError>>) {
+        let mut state = self.state.lock().expect("mutex not poisoned");
+        state.do_get_response.replace(response);
+    }
+
+    /// Take and return last do_get request send to the server,
+    pub fn take_do_get_request(&self) -> Option<Ticket> {
+        self.state
+            .lock()
+            .expect("mutex not poisoned")
+            .do_get_request
+            .take()
+    }
+
     /// Returns the last metadata from a request received by the server
     pub fn take_last_request_metadata(&self) -> Option<MetadataMap> {
         self.state
@@ -97,7 +115,7 @@ impl TestFlightServer {
     }
 }
 
-/// mutable state for the TestFlightSwrver
+/// mutable state for the TestFlightServer, captures requests and provides responses
 #[derive(Debug, Default)]
 struct State {
     /// The last handshake request that was received
@@ -108,6 +126,10 @@ struct State {
     pub get_flight_info_request: Option<FlightDescriptor>,
     /// the next response  to return from `get_flight_info`
     pub get_flight_info_response: Option<Result<FlightInfo, Status>>,
+    /// The last do_get request received
+    pub do_get_request: Option<Ticket>,
+    /// The next response returned from `do_get`
+    pub do_get_response: Option<Vec<Result<RecordBatch, FlightError>>>,
     /// The last request headers received
     pub last_request_metadata: Option<MetadataMap>,
 }
@@ -177,9 +199,25 @@ impl FlightService for TestFlightServer {
 
     async fn do_get(
         &self,
-        _request: Request<Ticket>,
+        request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
-        Err(Status::unimplemented("Implement do_get"))
+        self.save_metadata(&request);
+        let mut state = self.state.lock().expect("mutex not poisoned");
+
+        state.do_get_request = Some(request.into_inner());
+
+        let batches: Vec<_> = state
+            .do_get_response
+            .take()
+            .ok_or_else(|| Status::internal("No do_get response configured"))?;
+
+        let batch_stream = futures::stream::iter(batches);
+
+        let stream = FlightDataEncoderBuilder::new()
+            .build(batch_stream)
+            .map_err(|e| e.into());
+
+        Ok(Response::new(Box::pin(stream) as _))
     }
 
     async fn do_put(

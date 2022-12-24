@@ -29,6 +29,8 @@ license = "Apache-2.0"
 [dependencies]
 arrow-array = { version = "29.0.0", path = "../arrow-array" }
 arrow-buffer = { version = "29.0.0", path = "../arrow-buffer" }
+# TODO is this needed??
+arrow-cast = { version = "29.0.0", path = "../arrow-cast" }
 arrow-ipc = { version = "29.0.0", path = "../arrow-ipc" }
 arrow-schema = { version = "29.0.0", path = "../arrow-schema" }
 base64 = { version = "0.20", default-features = false, features = ["std"] }

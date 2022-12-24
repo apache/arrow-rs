@@ -15,9 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_schema::ArrowError;
+
 /// Errors for the Apache Arrow Flight crate
 #[derive(Debug)]
 pub enum FlightError {
+    /// Underlying arrow error
+    Arrow(ArrowError),
     /// Returned when functionality is not yet available.
     NotYetImplemented(String),
     /// Error from the underlying tonic library
@@ -53,6 +57,21 @@ impl std::error::Error for FlightError {}
 impl From<tonic::Status> for FlightError {
     fn from(status: tonic::Status) -> Self {
         Self::Tonic(status)
+    }
+}
+
+// default conversion from FlightError to tonic treats everything
+// other than `Status` as an internal error
+impl From<FlightError> for tonic::Status {
+    fn from(value: FlightError) -> Self {
+        match value {
+            FlightError::Arrow(e) => tonic::Status::internal(e.to_string()),
+            FlightError::NotYetImplemented(e) => tonic::Status::internal(e),
+            FlightError::Tonic(status) => status,
+            FlightError::ProtocolError(e) => tonic::Status::internal(e),
+            FlightError::DecodeError(e) => tonic::Status::internal(e),
+            FlightError::ExternalError(e) => tonic::Status::internal(e.to_string()),
+        }
     }
 }
 

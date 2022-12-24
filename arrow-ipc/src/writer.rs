@@ -37,7 +37,7 @@ use arrow_schema::*;
 use crate::compression::CompressionCodec;
 use crate::CONTINUATION_MARKER;
 
-/// IPC write options used to control the behaviour of the writer
+/// IPC write options used to control the behaviour of the [`IpcDataGenerator`]
 #[derive(Debug, Clone)]
 pub struct IpcWriteOptions {
     /// Write padding after memory buffers to this multiple of bytes.
@@ -514,6 +514,9 @@ pub struct DictionaryTracker {
 }
 
 impl DictionaryTracker {
+    /// Create a new [`DictionaryTracker`]. If `error_on_replacement`
+    /// is true, an error will be generated if an update to an
+    /// existing dictionary is attempted.
     pub fn new(error_on_replacement: bool) -> Self {
         Self {
             written: HashMap::new(),
