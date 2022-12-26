@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::{
-    decode::{FlightRecordBatchStream},
-    flight_service_client::FlightServiceClient,
+    decode::FlightRecordBatchStream, flight_service_client::FlightServiceClient,
     FlightDescriptor, FlightInfo, HandshakeRequest, Ticket,
 };
 use bytes::Bytes;
@@ -203,7 +202,9 @@ impl FlightClient {
             // convert to FlightError
             .map_err(|e| e.into());
 
-        Ok(FlightRecordBatchStream::new_from_flight_data(response_stream))
+        Ok(FlightRecordBatchStream::new_from_flight_data(
+            response_stream,
+        ))
     }
 
     /// Make a `GetFlightInfo` call to the server with the provided

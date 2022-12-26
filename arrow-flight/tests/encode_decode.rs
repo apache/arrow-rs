@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow::{compute::concat_batches, datatypes::Int32Type};
 use arrow_array::{ArrayRef, DictionaryArray, Float64Array, RecordBatch, UInt8Array};
 use arrow_flight::{
-    decode::{DecodedPayload, FlightRecordBatchStream},
+    decode::{DecodedPayload, FlightDataDecoder, FlightRecordBatchStream},
     encode::{
         prepare_batch_for_flight, prepare_schema_for_flight, FlightDataEncoderBuilder,
     },
@@ -182,7 +182,6 @@ async fn test_max_message_size_fuzz() {
     }
 }
 
-
 #[tokio::test]
 async fn test_mismatched_record_batch_schema() {
     // send 2 batches with different schemas
@@ -202,6 +201,66 @@ async fn test_mismatched_record_batch_schema() {
     );
 }
 
+#[tokio::test]
+async fn test_chained_streams_batch_decoder() {
+    let batch1 = make_primative_batch(5);
+    let batch2 = make_dictionary_batch(3);
+
+    // Model sending two flight streams back to back, with different schemas
+    let encode_stream1 = FlightDataEncoderBuilder::default()
+        .build(futures::stream::iter(vec![Ok(batch1.clone())]));
+    let encode_stream2 = FlightDataEncoderBuilder::default()
+        .build(futures::stream::iter(vec![Ok(batch2.clone())]));
+
+    // append the two streams (so they will have two different schema messages)
+    let encode_stream = encode_stream1.chain(encode_stream2);
+
+    // FlightRecordBatchStream errors if the schema changes
+    let decode_stream = FlightRecordBatchStream::new_from_flight_data(encode_stream);
+    let result: Result<Vec<_>, FlightError> = decode_stream.try_collect().await;
+
+    let err = result.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "ProtocolError(\"Unexpectedly saw multiple Schema messages in FlightData stream\")"
+    );
+}
+
+#[tokio::test]
+async fn test_chained_streams_data_decoder() {
+    let batch1 = make_primative_batch(5);
+    let batch2 = make_dictionary_batch(3);
+
+    // Model sending two flight streams back to back, with different schemas
+    let encode_stream1 = FlightDataEncoderBuilder::default()
+        .build(futures::stream::iter(vec![Ok(batch1.clone())]));
+    let encode_stream2 = FlightDataEncoderBuilder::default()
+        .build(futures::stream::iter(vec![Ok(batch2.clone())]));
+
+    // append the two streams (so they will have two different schema messages)
+    let encode_stream = encode_stream1.chain(encode_stream2);
+
+    // lower level decode stream can handle multiple schema messages
+    let decode_stream = FlightDataDecoder::new(encode_stream);
+
+    let decoded_data: Vec<_> =
+        decode_stream.try_collect().await.expect("encode / decode");
+
+    println!("decoded data: {decoded_data:#?}");
+
+    // expect two schema messages with the data
+    assert_eq!(decoded_data.len(), 4);
+    assert!(matches!(decoded_data[0].payload, DecodedPayload::Schema(_)));
+    assert!(matches!(
+        decoded_data[1].payload,
+        DecodedPayload::RecordBatch(_)
+    ));
+    assert!(matches!(decoded_data[2].payload, DecodedPayload::Schema(_)));
+    assert!(matches!(
+        decoded_data[3].payload,
+        DecodedPayload::RecordBatch(_)
+    ));
+}
 
 /// Make a primtive batch for testing
 ///
