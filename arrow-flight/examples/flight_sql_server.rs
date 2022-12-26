@@ -29,6 +29,8 @@ use prost::Message;
 use std::pin::Pin;
 use std::sync::Arc;
 use tonic::transport::Server;
+#[cfg(feature = "tls")]
+use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
 
 use arrow_flight::flight_descriptor::DescriptorType;
@@ -447,6 +449,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
 /// This example shows how to run a FlightSql server
 #[tokio::main]
+#[cfg(not(feature = "tls"))]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "0.0.0.0:50051".parse()?;
 
@@ -455,6 +458,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Listening on {:?}", addr);
 
     Server::builder().add_service(svc).serve(addr).await?;
+
+    Ok(())
+}
+
+/// This example shows how to run a HTTPs FlightSql server
+#[tokio::main]
+#[cfg(feature = "tls")]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let addr = "0.0.0.0:50051".parse()?;
+
+    let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
+
+    println!("Listening on {:?}", addr);
+
+    let cert = std::fs::read_to_string("arrow-flight/examples/data/server.pem")?;
+    let key = std::fs::read_to_string("arrow-flight/examples/data/server.key")?;
+    let client_ca = std::fs::read_to_string("arrow-flight/examples/data/client_ca.pem")?;
+
+    let tls_config = ServerTlsConfig::new()
+        .identity(Identity::from_pem(&cert, &key))
+        .client_ca_root(Certificate::from_pem(&client_ca));
+
+    Server::builder()
+        .tls_config(tls_config)?
+        .add_service(svc)
+        .serve(addr)
+        .await?;
 
     Ok(())
 }
@@ -479,20 +509,29 @@ impl ProstMessageExt for FetchResults {
 }
 
 #[cfg(test)]
+#[allow(unused_imports)]
 mod tests {
     use super::*;
     use futures::TryStreamExt;
     use std::fs;
+    use std::time::Duration;
     use tempfile::NamedTempFile;
     use tokio::net::{UnixListener, UnixStream};
+    use tokio::time::sleep;
     use tokio_stream::wrappers::UnixListenerStream;
-    use tonic::transport::Endpoint;
+    use tonic::body::BoxBody;
+    use tonic::codegen::{http, Body, Service};
+
+    #[cfg(feature = "tls")]
+    use tonic::transport::ClientTlsConfig;
 
     use arrow::util::pretty::pretty_format_batches;
     use arrow_flight::sql::client::FlightSqlServiceClient;
     use arrow_flight::utils::flight_data_to_batches;
-    use tower::service_fn;
+    use tonic::transport::{Certificate, Channel, Endpoint};
+    use tower::{service_fn, ServiceExt};
 
+    #[cfg(not(feature = "tls"))]
     async fn client_with_uds(path: String) -> FlightSqlServiceClient {
         let connector = service_fn(move |_| UnixStream::connect(path.clone()));
         let channel = Endpoint::try_from("https://example.com")
@@ -503,7 +542,78 @@ mod tests {
         FlightSqlServiceClient::new(channel)
     }
 
+    #[cfg(feature = "tls")]
+    async fn create_https_server() -> Result<(), tonic::transport::Error> {
+        let cert = std::fs::read_to_string("examples/data/server.pem").unwrap();
+        let key = std::fs::read_to_string("examples/data/server.key").unwrap();
+        let client_ca = std::fs::read_to_string("examples/data/client_ca.pem").unwrap();
+
+        let tls_config = ServerTlsConfig::new()
+            .identity(Identity::from_pem(&cert, &key))
+            .client_ca_root(Certificate::from_pem(&client_ca));
+
+        let addr = "0.0.0.0:50051".parse().unwrap();
+
+        let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
+
+        Server::builder()
+            .tls_config(tls_config)
+            .unwrap()
+            .add_service(svc)
+            .serve(addr)
+            .await
+    }
+
     #[tokio::test]
+    #[cfg(feature = "tls")]
+    async fn test_select_https() {
+        tokio::spawn(async {
+            create_https_server().await.unwrap();
+        });
+
+        sleep(Duration::from_millis(2000)).await;
+
+        let request_future = async {
+            let cert = std::fs::read_to_string("examples/data/client1.pem").unwrap();
+            let key = std::fs::read_to_string("examples/data/client1.key").unwrap();
+            let server_ca = std::fs::read_to_string("examples/data/ca.pem").unwrap();
+
+            let mut client = FlightSqlServiceClient::new_with_endpoint(
+                Identity::from_pem(cert, key),
+                Certificate::from_pem(&server_ca),
+                "localhost",
+                "127.0.0.1",
+                50051,
+            )
+            .await
+            .unwrap();
+            let token = client.handshake("admin", "password").await.unwrap();
+            println!("Auth succeeded with token: {:?}", token);
+            let mut stmt = client.prepare("select 1;".to_string()).await.unwrap();
+            let flight_info = stmt.execute().await.unwrap();
+            let ticket = flight_info.endpoint[0].ticket.as_ref().unwrap().clone();
+            let flight_data = client.do_get(ticket).await.unwrap();
+            let flight_data: Vec<FlightData> = flight_data.try_collect().await.unwrap();
+            let batches = flight_data_to_batches(&flight_data).unwrap();
+            let res = pretty_format_batches(batches.as_slice()).unwrap();
+            let expected = r#"
++-------------------+
+| salutation        |
++-------------------+
+| Hello, FlightSQL! |
++-------------------+"#
+                .trim()
+                .to_string();
+            assert_eq!(res.to_string(), expected);
+        };
+
+        tokio::select! {
+            _ = request_future => println!("Client finished!"),
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(not(feature = "tls"))]
     async fn test_select_1() {
         let file = NamedTempFile::new().unwrap();
         let path = file.into_temp_path().to_str().unwrap().to_string();

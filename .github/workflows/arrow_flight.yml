@@ -59,6 +59,9 @@ jobs:
       - name: Test --examples
         run: |
           cargo test -p arrow-flight  --features=flight-sql-experimental --examples
+      - name: Test --examples with TLS
+        run: |
+          cargo test -p arrow-flight  --features=flight-sql-experimental,tls --examples
       - name: Verify workspace clean
         run: git diff --exit-code
 
