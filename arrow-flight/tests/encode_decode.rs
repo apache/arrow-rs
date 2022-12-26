@@ -182,6 +182,27 @@ async fn test_max_message_size_fuzz() {
     }
 }
 
+
+#[tokio::test]
+async fn test_mismatched_record_batch_schema() {
+    // send 2 batches with different schemas
+    let input_batch_stream = futures::stream::iter(vec![
+        Ok(make_primative_batch(5)),
+        Ok(make_dictionary_batch(3)),
+    ]);
+
+    let encoder = FlightDataEncoderBuilder::default();
+    let encode_stream = encoder.build(input_batch_stream);
+
+    let result: Result<Vec<_>, FlightError> = encode_stream.try_collect().await;
+    let err = result.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Arrow(InvalidArgumentError(\"number of columns(1) must match number of fields(2) in schema\"))"
+    );
+}
+
+
 /// Make a primtive batch for testing
 ///
 /// Example:
