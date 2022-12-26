@@ -263,34 +263,40 @@ async fn test_chained_streams_data_decoder() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "assertion failed: idx < self.len()")]
 async fn test_mismatched_schema_message() {
-    let batch1 = make_primative_batch(5);
-    let batch2 = make_dictionary_batch(3);
-
     // Model sending schema that is mismatched with the data
+    // and expect an error
+    async fn do_test(batch1: RecordBatch, batch2: RecordBatch, expected: &str) {
+        let encode_stream1 = FlightDataEncoderBuilder::default()
+            .build(futures::stream::iter(vec![Ok(batch1.clone())]))
+            // take only schema message from first stream
+            .take(1);
+        let encode_stream2 = FlightDataEncoderBuilder::default()
+            .build(futures::stream::iter(vec![Ok(batch2.clone())]))
+            // take only data message from second
+            .skip(1);
 
-    let encode_stream1 = FlightDataEncoderBuilder::default()
-        .build(futures::stream::iter(vec![Ok(batch1.clone())]))
-        // take only schema message from first stream
-        .take(1);
-    let encode_stream2 = FlightDataEncoderBuilder::default()
-        .build(futures::stream::iter(vec![Ok(batch2.clone())]))
-        // take only data message from second
-        .skip(1);
+        // append the two streams
+        let encode_stream = encode_stream1.chain(encode_stream2);
 
-    // append the two streams
-    let encode_stream = encode_stream1.chain(encode_stream2);
+        // FlightRecordBatchStream errors if the schema changes
+        let decode_stream = FlightRecordBatchStream::new_from_flight_data(encode_stream);
+        let result: Result<Vec<_>, FlightError> = decode_stream.try_collect().await;
 
-    // FlightRecordBatchStream errors if the schema changes
-    let decode_stream = FlightRecordBatchStream::new_from_flight_data(encode_stream);
-    let result: Result<Vec<_>, FlightError> = decode_stream.try_collect().await;
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains(expected),
+            "could not find '{expected}' in '{err}'"
+        );
+    }
 
-    let err = result.unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "ProtocolError(\"Unexpectedly saw multiple Schema messages in FlightData stream\")"
-    );
+    // primitive batch has more columns
+    do_test(
+        make_primative_batch(5),
+        make_dictionary_batch(3),
+        "Error decoding ipc RecordBatch: Io error: Invalid data for schema",
+    )
+    .await;
 }
 
 /// Make a primtive batch for testing
