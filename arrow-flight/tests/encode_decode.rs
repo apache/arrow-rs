@@ -262,6 +262,37 @@ async fn test_chained_streams_data_decoder() {
     ));
 }
 
+#[tokio::test]
+#[should_panic(expected = "assertion failed: idx < self.len()")]
+async fn test_mismatched_schema_message() {
+    let batch1 = make_primative_batch(5);
+    let batch2 = make_dictionary_batch(3);
+
+    // Model sending schema that is mismatched with the data
+
+    let encode_stream1 = FlightDataEncoderBuilder::default()
+        .build(futures::stream::iter(vec![Ok(batch1.clone())]))
+        // take only schema message from first stream
+        .take(1);
+    let encode_stream2 = FlightDataEncoderBuilder::default()
+        .build(futures::stream::iter(vec![Ok(batch2.clone())]))
+        // take only data message from second
+        .skip(1);
+
+    // append the two streams
+    let encode_stream = encode_stream1.chain(encode_stream2);
+
+    // FlightRecordBatchStream errors if the schema changes
+    let decode_stream = FlightRecordBatchStream::new_from_flight_data(encode_stream);
+    let result: Result<Vec<_>, FlightError> = decode_stream.try_collect().await;
+
+    let err = result.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "ProtocolError(\"Unexpectedly saw multiple Schema messages in FlightData stream\")"
+    );
+}
+
 /// Make a primtive batch for testing
 ///
 /// Example:
