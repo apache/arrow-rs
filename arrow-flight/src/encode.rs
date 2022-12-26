@@ -119,7 +119,7 @@ impl FlightDataEncoderBuilder {
     }
 
     /// Return a [`Stream`](futures::Stream) of [`FlightData`],
-    /// consuming self. More details on [`FlightDataEncoderBuilder`]
+    /// consuming self. More details on [`FlightDataEncoder`]
     pub fn build<S>(self, input: S) -> FlightDataEncoder
     where
         S: Stream<Item = Result<RecordBatch>> + Send + 'static,
