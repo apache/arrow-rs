@@ -290,11 +290,19 @@ async fn test_mismatched_schema_message() {
         );
     }
 
-    // primitive batch has more columns
+    // primitive batch first (has more columns)
     do_test(
         make_primative_batch(5),
         make_dictionary_batch(3),
         "Error decoding ipc RecordBatch: Io error: Invalid data for schema",
+    )
+    .await;
+
+    // dictioanry batch first
+    do_test(
+        make_dictionary_batch(3),
+        make_primative_batch(5),
+        "Error decoding ipc RecordBatch: Invalid argument error",
     )
     .await;
 }
