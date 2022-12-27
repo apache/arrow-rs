@@ -57,65 +57,76 @@ pub struct FlightSqlServiceClient {
     flight_client: Arc<Mutex<FlightServiceClient<Channel>>>,
 }
 
-/// A FlightSql protocol client that can run queries against FlightSql servers
-/// This client is in the "experimental" stage. It is not guaranteed to follow the spec in all instances.
-/// Github issues are welcomed.
+/// A [FlightSQL](https://arrow.apache.org/docs/format/FlightSql.html)
+/// protocol client for running queries against FlightSQL
+/// servers.
+///
+/// # Notes
+/// This client is in the "experimental" stage. It is not
+/// guaranteed to follow the spec in all instances.  Github issues are
+/// welcomed.
+///
+/// # Example
+/// (TODO demonstrate how to add an authorization header)
+///
+/// # Exmaple with TLS
+///
 impl FlightSqlServiceClient {
-    /// Creates a new FlightSql Client that connects via TCP to a server
-    #[cfg(not(feature = "tls"))]
-    pub async fn new_with_endpoint(host: &str, port: u16) -> Result<Self, ArrowError> {
-        let addr = format!("http://{}:{}", host, port);
-        let endpoint = Endpoint::new(addr)
-            .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
-            .connect_timeout(Duration::from_secs(20))
-            .timeout(Duration::from_secs(20))
-            .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait
-            .tcp_keepalive(Option::Some(Duration::from_secs(3600)))
-            .http2_keep_alive_interval(Duration::from_secs(300))
-            .keep_alive_timeout(Duration::from_secs(20))
-            .keep_alive_while_idle(true);
+    // /// Creates a new FlightSql Client that connects via TCP to a server
+    // #[cfg(not(feature = "tls"))]
+    // pub async fn new_with_endpoint(host: &str, port: u16) -> Result<Self, ArrowError> {
+    //     let addr = format!("http://{}:{}", host, port);
+    //     let endpoint = Endpoint::new(addr)
+    //         .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
+    //         .connect_timeout(Duration::from_secs(20))
+    //         .timeout(Duration::from_secs(20))
+    //         .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait
+    //         .tcp_keepalive(Option::Some(Duration::from_secs(3600)))
+    //         .http2_keep_alive_interval(Duration::from_secs(300))
+    //         .keep_alive_timeout(Duration::from_secs(20))
+    //         .keep_alive_while_idle(true);
 
-        let channel = endpoint.connect().await.map_err(|e| {
-            ArrowError::IoError(format!("Cannot connect to endpoint: {}", e))
-        })?;
-        Ok(Self::new(channel))
-    }
+    //     let channel = endpoint.connect().await.map_err(|e| {
+    //         ArrowError::IoError(format!("Cannot connect to endpoint: {}", e))
+    //     })?;
+    //     Ok(Self::new(channel))
+    // }
 
-    /// Creates a new HTTPs FlightSql Client that connects via TCP to a server
-    #[cfg(feature = "tls")]
-    pub async fn new_with_endpoint(
-        client_ident: Identity,
-        server_ca: Certificate,
-        domain: &str,
-        host: &str,
-        port: u16,
-    ) -> Result<Self, ArrowError> {
-        let addr = format!("https://{}:{}", host, port);
+    // /// Creates a new HTTPs FlightSql Client that connects via TCP to a server
+    // #[cfg(feature = "tls")]
+    // pub async fn new_with_endpoint(
+    //     client_ident: Identity,
+    //     server_ca: Certificate,
+    //     domain: &str,
+    //     host: &str,
+    //     port: u16,
+    // ) -> Result<Self, ArrowError> {
+    //     let addr = format!("https://{}:{}", host, port);
 
-        let endpoint = Endpoint::new(addr)
-            .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
-            .connect_timeout(Duration::from_secs(20))
-            .timeout(Duration::from_secs(20))
-            .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait
-            .tcp_keepalive(Option::Some(Duration::from_secs(3600)))
-            .http2_keep_alive_interval(Duration::from_secs(300))
-            .keep_alive_timeout(Duration::from_secs(20))
-            .keep_alive_while_idle(true);
+    //     let endpoint = Endpoint::new(addr)
+    //         .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
+    //         .connect_timeout(Duration::from_secs(20))
+    //         .timeout(Duration::from_secs(20))
+    //         .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait
+    //         .tcp_keepalive(Option::Some(Duration::from_secs(3600)))
+    //         .http2_keep_alive_interval(Duration::from_secs(300))
+    //         .keep_alive_timeout(Duration::from_secs(20))
+    //         .keep_alive_while_idle(true);
 
-        let tls_config = ClientTlsConfig::new()
-            .domain_name(domain)
-            .ca_certificate(server_ca)
-            .identity(client_ident);
+    //     let tls_config = ClientTlsConfig::new()
+    //         .domain_name(domain)
+    //         .ca_certificate(server_ca)
+    //         .identity(client_ident);
 
-        let endpoint = endpoint
-            .tls_config(tls_config)
-            .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?;
+    //     let endpoint = endpoint
+    //         .tls_config(tls_config)
+    //         .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?;
 
-        let channel = endpoint.connect().await.map_err(|e| {
-            ArrowError::IoError(format!("Cannot connect to endpoint: {}", e))
-        })?;
-        Ok(Self::new(channel))
-    }
+    //     let channel = endpoint.connect().await.map_err(|e| {
+    //         ArrowError::IoError(format!("Cannot connect to endpoint: {}", e))
+    //     })?;
+    //     Ok(Self::new(channel))
+    // }
 
     /// Creates a new FlightSql client that connects to a server over an arbitrary tonic `Channel`
     pub fn new(channel: Channel) -> Self {
