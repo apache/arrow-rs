@@ -47,6 +47,7 @@ all-features = true
 [features]
 default = []
 flight-sql-experimental = []
+tls = ["tonic/tls"]
 
 [dev-dependencies]
 arrow = { version = "29.0.0", path = "../arrow", features = ["prettyprint"] }

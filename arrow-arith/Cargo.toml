@@ -44,7 +44,7 @@ arrow-data = { version = "29.0.0", path = "../arrow-data" }
 arrow-schema = { version = "29.0.0", path = "../arrow-schema" }
 chrono = { version = "0.4.23", default-features = false }
 half = { version = "2.1", default-features = false }
-multiversion = { version = "0.6.1", default-features = false }
+multiversion = { version = "0.7.1", default-features = false }
 num = { version = "0.4", default-features = false, features = ["std"] }
 
 [dev-dependencies]

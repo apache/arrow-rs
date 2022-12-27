@@ -410,7 +410,6 @@ impl TryFrom<ListResultInternal> for ListResult {
         let common_prefixes = value
             .blobs
             .blob_prefix
-            .unwrap_or_default()
             .into_iter()
             .map(|x| Ok(Path::parse(x.name)?))
             .collect::<Result<_>>()?;
@@ -437,7 +436,8 @@ impl TryFrom<ListResultInternal> for ListResult {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct Blobs {
-    pub blob_prefix: Option<Vec<BlobPrefix>>,
+    #[serde(default)]
+    pub blob_prefix: Vec<BlobPrefix>,
     #[serde(rename = "Blob", default)]
     pub blobs: Vec<Blob>,
 }

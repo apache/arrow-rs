@@ -189,9 +189,9 @@ struct CompleteMultipart {
 
 #[derive(Debug, Serialize)]
 struct MultipartPart {
-    #[serde(rename = "$unflatten=ETag")]
+    #[serde(rename = "ETag")]
     e_tag: String,
-    #[serde(rename = "$unflatten=PartNumber")]
+    #[serde(rename = "PartNumber")]
     part_number: usize,
 }
 
