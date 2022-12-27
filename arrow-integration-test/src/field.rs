@@ -253,7 +253,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
             };
 
             let mut field =
-                Field::new_dict(&name, data_type, nullable, dict_id, dict_is_ordered);
+                Field::new_dict(name, data_type, nullable, dict_id, dict_is_ordered);
             field.set_metadata(metadata);
             Ok(field)
         }
