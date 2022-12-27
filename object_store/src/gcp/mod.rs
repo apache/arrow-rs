@@ -221,9 +221,9 @@ struct InitiateMultipartUploadResult {
 #[derive(serde::Serialize, Debug)]
 #[serde(rename_all = "PascalCase", rename(serialize = "Part"))]
 struct MultipartPart {
-    #[serde(rename = "$unflatten=PartNumber")]
+    #[serde(rename = "PartNumber")]
     part_number: usize,
-    #[serde(rename = "$unflatten=ETag")]
+    #[serde(rename = "ETag")]
     e_tag: String,
 }
 
