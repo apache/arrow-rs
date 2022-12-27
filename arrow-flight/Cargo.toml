@@ -45,7 +45,7 @@ futures = { version = "0.3", default-features = false, features = ["alloc"] }
 all-features = true
 
 [features]
-default = []
+default = ["flight-sql-experimental"]
 flight-sql-experimental = []
 tls = ["tonic/tls"]
 

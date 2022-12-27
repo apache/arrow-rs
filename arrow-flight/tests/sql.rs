@@ -20,3 +20,35 @@ mod common {
     // Use common mock server
     pub mod server;
 }
+use common::server::{
+    do_test,
+    expect_status,
+    TestFlightServer
+};
+
+
+#[tokio::test]
+async fn test_handshake() {
+    do_test(|test_server, client| async move {
+        let sql_client = FlightSQL
+
+        let request_payload = Bytes::from("foo");
+        let response_payload = Bytes::from("Bar");
+
+        let request = HandshakeRequest {
+            payload: request_payload.clone(),
+            protocol_version: 0,
+        };
+
+        let response = HandshakeResponse {
+            payload: response_payload.clone(),
+            protocol_version: 0,
+        };
+
+        test_server.set_handshake_response(Ok(response));
+        let response = client.handshake(request_payload).await.unwrap();
+        assert_eq!(response, response_payload);
+        assert_eq!(test_server.take_handshake_request(), Some(request));
+    })
+    .await;
+}
