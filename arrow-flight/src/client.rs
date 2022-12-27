@@ -17,10 +17,14 @@
 
 use crate::{
     decode::FlightRecordBatchStream, flight_service_client::FlightServiceClient,
-    FlightDescriptor, FlightInfo, HandshakeRequest, Ticket,
+    FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, PutResult, Ticket,
 };
 use bytes::Bytes;
-use futures::{future::ready, stream, StreamExt, TryStreamExt};
+use futures::{
+    future::ready,
+    stream::{self, BoxStream},
+    Stream, StreamExt, TryStreamExt,
+};
 use tonic::{metadata::MetadataMap, transport::Channel};
 
 use crate::error::{FlightError, Result};
@@ -160,6 +164,11 @@ impl FlightClient {
     /// returning a [`FlightRecordBatchStream`] for reading
     /// [`RecordBatch`](arrow_array::RecordBatch)es.
     ///
+    /// # Note
+    ///
+    /// To access the returned [`FlightData`] use
+    /// [`FlightRecordBatchStream::into_inner()`]
+    ///
     /// # Example:
     /// ```no_run
     /// # async fn run() {
@@ -167,12 +176,8 @@ impl FlightClient {
     /// # use arrow_flight::FlightClient;
     /// # use arrow_flight::Ticket;
     /// # use arrow_array::RecordBatch;
-    /// # use tonic::transport::Channel;
     /// # use futures::stream::TryStreamExt;
-    /// # let channel = Channel::from_static("http://localhost:1234")
-    /// #  .connect()
-    /// #  .await
-    /// #  .expect("error connecting");
+    /// # let channel: tonic::transport::Channel = unimplemented!();
     /// # let ticket = Ticket { ticket: Bytes::from("foo") };
     /// let mut client = FlightClient::new(channel);
     ///
@@ -199,8 +204,7 @@ impl FlightClient {
             .do_get(request)
             .await?
             .into_inner()
-            // convert to FlightError
-            .map_err(|e| e.into());
+            .map_err(FlightError::Tonic);
 
         Ok(FlightRecordBatchStream::new_from_flight_data(
             response_stream,
@@ -217,11 +221,7 @@ impl FlightClient {
     /// # async fn run() {
     /// # use arrow_flight::FlightClient;
     /// # use arrow_flight::FlightDescriptor;
-    /// # use tonic::transport::Channel;
-    /// # let channel = Channel::from_static("http://localhost:1234")
-    /// #   .connect()
-    /// #   .await
-    /// #   .expect("error connecting");
+    /// # let channel: tonic::transport::Channel = unimplemented!();
     /// let mut client = FlightClient::new(channel);
     ///
     /// // Send a 'CMD' request to the server
@@ -256,13 +256,113 @@ impl FlightClient {
         Ok(response)
     }
 
+    /// Make a `DoPut` call to the server with the provided
+    /// [`Stream`](futures::Stream) of [`FlightData`] and returning a
+    /// stream of [`PutResult`].
+    ///
+    /// # Example:
+    /// ```no_run
+    /// # async fn run() {
+    /// # use futures::{TryStreamExt, StreamExt};
+    /// # use std::sync::Arc;
+    /// # use arrow_array::UInt64Array;
+    /// # use arrow_array::RecordBatch;
+    /// # use arrow_flight::{FlightClient, FlightDescriptor, PutResult};
+    /// # use arrow_flight::encode::FlightDataEncoderBuilder;
+    /// # let batch = RecordBatch::try_from_iter(vec![
+    /// #  ("col2", Arc::new(UInt64Array::from_iter([10, 23, 33])) as _)
+    /// # ]).unwrap();
+    /// # let channel: tonic::transport::Channel = unimplemented!();
+    /// let mut client = FlightClient::new(channel);
+    ///
+    /// // encode the batch as a stream of `FlightData`
+    /// let flight_data_stream = FlightDataEncoderBuilder::new()
+    ///   .build(futures::stream::iter(vec![Ok(batch)]))
+    ///   // data encoder return Results, but do_put requires FlightData
+    ///   .map(|batch|batch.unwrap());
+    ///
+    /// // send the stream and get the results as `PutResult`
+    /// let response: Vec<PutResult>= client
+    ///   .do_put(flight_data_stream)
+    ///   .await
+    ///   .unwrap()
+    ///   .try_collect() // use TryStreamExt to collect stream
+    ///   .await
+    ///   .expect("error calling do_put");
+    /// # }
+    /// ```
+    pub async fn do_put<S: Stream<Item = FlightData> + Send + 'static>(
+        &mut self,
+        request: S,
+    ) -> Result<BoxStream<'static, Result<PutResult>>> {
+        let request = self.make_request(request);
+
+        let response = self
+            .inner
+            .do_put(request)
+            .await?
+            .into_inner()
+            .map_err(FlightError::Tonic);
+
+        Ok(response.boxed())
+    }
+
+    /// Make a `DoExchange` call to the server with the provided
+    /// [`Stream`](futures::Stream) of [`FlightData`] and returning a
+    /// stream of [`FlightData`].
+    ///
+    /// # Example:
+    /// ```no_run
+    /// # async fn run() {
+    /// # use futures::{TryStreamExt, StreamExt};
+    /// # use std::sync::Arc;
+    /// # use arrow_array::UInt64Array;
+    /// # use arrow_array::RecordBatch;
+    /// # use arrow_flight::{FlightClient, FlightDescriptor, PutResult};
+    /// # use arrow_flight::encode::FlightDataEncoderBuilder;
+    /// # let batch = RecordBatch::try_from_iter(vec![
+    /// #  ("col2", Arc::new(UInt64Array::from_iter([10, 23, 33])) as _)
+    /// # ]).unwrap();
+    /// # let channel: tonic::transport::Channel = unimplemented!();
+    /// let mut client = FlightClient::new(channel);
+    ///
+    /// // encode the batch as a stream of `FlightData`
+    /// let flight_data_stream = FlightDataEncoderBuilder::new()
+    ///   .build(futures::stream::iter(vec![Ok(batch)]))
+    ///   // data encoder return Results, but do_put requires FlightData
+    ///   .map(|batch|batch.unwrap());
+    ///
+    /// // send the stream and get the results as `RecordBatches`
+    /// let response: Vec<RecordBatch> = client
+    ///   .do_exchange(flight_data_stream)
+    ///   .await
+    ///   .unwrap()
+    ///   .try_collect() // use TryStreamExt to collect stream
+    ///   .await
+    ///   .expect("error calling do_put");
+    /// # }
+    /// ```
+    pub async fn do_exchange<S: Stream<Item = FlightData> + Send + 'static>(
+        &mut self,
+        request: S,
+    ) -> Result<FlightRecordBatchStream> {
+        let request = self.make_request(request);
+
+        let response = self
+            .inner
+            .do_exchange(request)
+            .await?
+            .into_inner()
+            .map_err(FlightError::Tonic);
+
+        Ok(FlightRecordBatchStream::new_from_flight_data(response))
+    }
+
     // TODO other methods
-    // list_flights
     // get_schema
-    // do_put
     // do_action
     // list_actions
-    // do_exchange
+    // list_flights
 
     /// return a Request, adding any configured metadata
     fn make_request<T>(&self, t: T) -> tonic::Request<T> {

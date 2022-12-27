@@ -98,6 +98,39 @@ impl TestFlightServer {
             .take()
     }
 
+    /// Specify the response returned from the next call to `do_put`
+    pub fn set_do_put_response(&self, response: Vec<Result<PutResult, FlightError>>) {
+        let mut state = self.state.lock().expect("mutex not poisoned");
+        state.do_put_response.replace(response);
+    }
+
+    /// Take and return last do_put request send to the server,
+    pub fn take_do_put_request(&self) -> Option<Vec<FlightData>> {
+        self.state
+            .lock()
+            .expect("mutex not poisoned")
+            .do_put_request
+            .take()
+    }
+
+    /// Specify the response returned from the next call to `do_exchange`
+    pub fn set_do_exchange_response(
+        &self,
+        response: Vec<Result<FlightData, FlightError>>,
+    ) {
+        let mut state = self.state.lock().expect("mutex not poisoned");
+        state.do_exchange_response.replace(response);
+    }
+
+    /// Take and return last do_exchange request send to the server,
+    pub fn take_do_exchange_request(&self) -> Option<Vec<FlightData>> {
+        self.state
+            .lock()
+            .expect("mutex not poisoned")
+            .do_exchange_request
+            .take()
+    }
+
     /// Returns the last metadata from a request received by the server
     pub fn take_last_request_metadata(&self) -> Option<MetadataMap> {
         self.state
@@ -130,6 +163,14 @@ struct State {
     pub do_get_request: Option<Ticket>,
     /// The next response returned from `do_get`
     pub do_get_response: Option<Vec<Result<RecordBatch, FlightError>>>,
+    /// The last do_put request received
+    pub do_put_request: Option<Vec<FlightData>>,
+    /// The next response returned from `do_put`
+    pub do_put_response: Option<Vec<Result<PutResult, FlightError>>>,
+    /// The last do_exchange request received
+    pub do_exchange_request: Option<Vec<FlightData>>,
+    /// The next response returned from `do_exchange`
+    pub do_exchange_response: Option<Vec<Result<FlightData, FlightError>>>,
     /// The last request headers received
     pub last_request_metadata: Option<MetadataMap>,
 }
@@ -222,9 +263,23 @@ impl FlightService for TestFlightServer {
 
     async fn do_put(
         &self,
-        _request: Request<Streaming<FlightData>>,
+        request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoPutStream>, Status> {
-        Err(Status::unimplemented("Implement do_put"))
+        self.save_metadata(&request);
+        let do_put_request: Vec<_> = request.into_inner().try_collect().await?;
+
+        let mut state = self.state.lock().expect("mutex not poisoned");
+
+        state.do_put_request = Some(do_put_request);
+
+        let response = state
+            .do_put_response
+            .take()
+            .ok_or_else(|| Status::internal("No do_put response configured"))?;
+
+        let stream = futures::stream::iter(response).map_err(|e| e.into());
+
+        Ok(Response::new(Box::pin(stream) as _))
     }
 
     async fn do_action(
@@ -243,8 +298,22 @@ impl FlightService for TestFlightServer {
 
     async fn do_exchange(
         &self,
-        _request: Request<Streaming<FlightData>>,
+        request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoExchangeStream>, Status> {
-        Err(Status::unimplemented("Implement do_exchange"))
+        self.save_metadata(&request);
+        let do_exchange_request: Vec<_> = request.into_inner().try_collect().await?;
+
+        let mut state = self.state.lock().expect("mutex not poisoned");
+
+        state.do_exchange_request = Some(do_exchange_request);
+
+        let response = state
+            .do_exchange_response
+            .take()
+            .ok_or_else(|| Status::internal("No do_exchange response configured"))?;
+
+        let stream = futures::stream::iter(response).map_err(|e| e.into());
+
+        Ok(Response::new(Box::pin(stream) as _))
     }
 }

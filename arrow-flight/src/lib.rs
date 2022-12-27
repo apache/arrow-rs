@@ -348,8 +348,7 @@ impl TryFrom<FlightInfo> for Schema {
     type Error = ArrowError;
 
     fn try_from(value: FlightInfo) -> ArrowResult<Self> {
-        let msg = IpcMessage(value.schema);
-        msg.try_into()
+        value.try_decode_schema()
     }
 }
 
@@ -421,6 +420,12 @@ impl FlightInfo {
             total_records,
             total_bytes,
         }
+    }
+
+    /// Try and convert the data in this  `FlightInfo` into a [`Schema`]
+    pub fn try_decode_schema(self) -> ArrowResult<Schema> {
+        let msg = IpcMessage(self.schema);
+        msg.try_into()
     }
 }
 
