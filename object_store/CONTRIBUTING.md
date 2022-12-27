@@ -39,7 +39,7 @@ To test the S3 integration against [localstack](https://localstack.cloud/)
 First start up a container running localstack
 
 ```
-$ podman run --rm -it -p 4566:4566 -p 4510-4559:4510-4559 localstack/localstack
+$ podman run --rm -it -e PROVIDER_OVERRIDE_S3=asf -p 4566:4566 -p 4510-4559:4510-4559 localstack/localstack 
 ```
 
 Setup environment
@@ -49,7 +49,9 @@ export TEST_INTEGRATION=1
 export OBJECT_STORE_AWS_DEFAULT_REGION=us-east-1
 export OBJECT_STORE_AWS_ACCESS_KEY_ID=test
 export OBJECT_STORE_AWS_SECRET_ACCESS_KEY=test
-export AWS_ENDPOINT=http://128.0.0.1:4566
+export OBJECT_STORE_AWS_ENDPOINT=http://localhost:4566
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
 export OBJECT_STORE_BUCKET=test-bucket
 ```
 
@@ -57,6 +59,12 @@ Create a bucket using the AWS CLI
 
 ```
 podman run --net=host --env-host amazon/aws-cli --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket
+```
+
+Or directly with:
+
+```
+aws s3 mb s3://test-bucket --endpoint-url=http://localhost:4566
 ```
 
 Run tests
