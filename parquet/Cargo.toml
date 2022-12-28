@@ -138,6 +138,10 @@ required-features = ["cli"]
 name = "parquet-layout"
 required-features = ["cli"]
 
+[[bin]]
+name = "parquet-index"
+required-features = ["cli"]
+
 [[bench]]
 name = "arrow_writer"
 required-features = ["arrow"]
