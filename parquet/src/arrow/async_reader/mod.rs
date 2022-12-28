@@ -451,6 +451,8 @@ enum StreamState<T> {
     Decoding(ParquetRecordBatchReader),
     /// Reading data from input
     Reading(BoxFuture<'static, ReadResult<T>>),
+    /// Error
+    Error,
 }
 
 impl<T> std::fmt::Debug for StreamState<T> {
@@ -459,6 +461,7 @@ impl<T> std::fmt::Debug for StreamState<T> {
             StreamState::Init => write!(f, "StreamState::Init"),
             StreamState::Decoding(_) => write!(f, "StreamState::Decoding"),
             StreamState::Reading(_) => write!(f, "StreamState::Reading"),
+            StreamState::Error => write!(f, "StreamState::Error"),
         }
     }
 }
@@ -518,6 +521,7 @@ where
                 StreamState::Decoding(batch_reader) => match batch_reader.next() {
                     Some(Ok(batch)) => return Poll::Ready(Some(Ok(batch))),
                     Some(Err(e)) => {
+                        self.state = StreamState::Error;
                         return Poll::Ready(Some(Err(ParquetError::ArrowError(
                             e.to_string(),
                         ))));
@@ -560,9 +564,11 @@ where
                         }
                     }
                     Err(e) => {
+                        self.state = StreamState::Error;
                         return Poll::Ready(Some(Err(e)));
                     }
                 },
+                StreamState::Error => return Poll::Ready(None), // Ends the stream as error happens.
             }
         }
     }
