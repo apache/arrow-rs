@@ -165,15 +165,6 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     pub fn validity_slice_mut(&mut self) -> Option<&mut [u8]> {
         self.null_buffer_builder.as_slice_mut()
     }
-
-    /// Returns the current offsets, values buffer and null buffer as a slice
-    pub fn slices_mut(&mut self) -> (&mut [T::Offset], &mut [u8], Option<&mut [u8]>) {
-        (
-            self.offsets_builder.as_slice_mut(),
-            self.value_builder.as_slice_mut(),
-            self.null_buffer_builder.as_slice_mut(),
-        )
-    }
 }
 
 impl<T: ByteArrayType> std::fmt::Debug for GenericByteBuilder<T> {

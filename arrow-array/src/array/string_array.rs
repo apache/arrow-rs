@@ -706,9 +706,7 @@ mod tests {
         // Modify values
         let mut builder = array.into_builder().unwrap();
 
-        let (offset_slice, value_slice, _) = builder.slices_mut();
-
-        assert_eq!(offset_slice, &[0, 5, 10]);
+        let value_slice = builder.values_slice_mut();
 
         let expected_slice = "helloarrow".as_bytes();
         assert_eq!(value_slice, expected_slice);
@@ -720,17 +718,6 @@ mod tests {
         value_slice[4] = 'O'.as_();
 
         let expected: StringArray = vec!["HELLO", "arrow"].into();
-        let array = builder.finish();
-        assert_eq!(expected, array);
-
-        // Modify offsets
-        let mut builder = array.into_builder().unwrap();
-
-        let (offset_slice, _, _) = builder.slices_mut();
-
-        offset_slice[1] = 7;
-
-        let expected: StringArray = vec!["HELLOar", "row"].into();
         let array = builder.finish();
         assert_eq!(expected, array);
     }
