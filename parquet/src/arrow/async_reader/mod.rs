@@ -568,7 +568,7 @@ where
                         return Poll::Ready(Some(Err(e)));
                     }
                 },
-                StreamState::Error => return Poll::Pending,
+                StreamState::Error => return Poll::Ready(None), // Ends the stream as error happens.
             }
         }
     }
