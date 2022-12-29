@@ -245,6 +245,9 @@ impl Stream for FlightDataEncoder {
                 None => {
                     // inner is done
                     self.done = true;
+                    // queue must also be empty so we are done
+                    assert!(self.queue.is_empty());
+                    return Poll::Ready(None);
                 }
                 Some(Err(e)) => {
                     // error from inner
