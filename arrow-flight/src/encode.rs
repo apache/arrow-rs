@@ -374,7 +374,7 @@ impl FlightIpcEncoder {
 /// 1. Hydrates any dictionaries to its underlying type. See
 /// hydrate_dictionary for more information.
 ///
-pub fn prepare_batch_for_flight(
+fn prepare_batch_for_flight(
     batch: &RecordBatch,
     schema: SchemaRef,
 ) -> Result<RecordBatch> {

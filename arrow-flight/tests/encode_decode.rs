@@ -23,10 +23,10 @@ use arrow::{compute::concat_batches, datatypes::Int32Type};
 use arrow_array::{ArrayRef, DictionaryArray, Float64Array, RecordBatch, UInt8Array};
 use arrow_flight::{
     decode::{DecodedPayload, FlightDataDecoder, FlightRecordBatchStream},
-    encode::{prepare_batch_for_flight, FlightDataEncoderBuilder},
+    encode::FlightDataEncoderBuilder,
     error::FlightError,
 };
-use arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
 
@@ -427,4 +427,27 @@ fn prepare_schema_for_flight(schema: &Schema) -> Schema {
         .collect();
 
     Schema::new(fields)
+}
+
+/// Workaround for https://github.com/apache/arrow-rs/issues/1206
+fn prepare_batch_for_flight(
+    batch: &RecordBatch,
+    schema: SchemaRef,
+) -> Result<RecordBatch, FlightError> {
+    let columns = batch
+        .columns()
+        .iter()
+        .map(hydrate_dictionary)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(RecordBatch::try_new(schema, columns)?)
+}
+
+fn hydrate_dictionary(array: &ArrayRef) -> Result<ArrayRef, FlightError> {
+    let arr = if let DataType::Dictionary(_, value) = array.data_type() {
+        arrow_cast::cast(array, value)?
+    } else {
+        Arc::clone(array)
+    };
+    Ok(arr)
 }
