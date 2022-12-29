@@ -293,8 +293,8 @@ fn prepare_schema_for_flight(schema: &Schema) -> Schema {
 /// Data is zero-copy sliced into batches.
 ///
 /// Note: this method does not take into account already sliced
-/// arrays,
-pub fn split_batch_for_grpc_response(
+/// arrays: <https://github.com/apache/arrow-rs/issues/3407>
+fn split_batch_for_grpc_response(
     batch: RecordBatch,
     max_batch_size: usize,
 ) -> Vec<RecordBatch> {
