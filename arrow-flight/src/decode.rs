@@ -192,7 +192,7 @@ pub struct FlightDataDecoder {
     response: BoxStream<'static, Result<FlightData>>,
     /// Decoding state
     state: Option<FlightStreamState>,
-    /// seen the end of the inner stream?
+    /// Seen the end of the inner stream?
     done: bool,
 }
 

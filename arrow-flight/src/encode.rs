@@ -73,7 +73,7 @@ pub struct FlightDataEncoderBuilder {
 /// Default target size for record batches to send.
 ///
 /// Note this value would normally be 4MB, but the size calculation is
-/// somehwhat inexact, so we set it to 2MB.
+/// somewhat inexact, so we set it to 2MB.
 pub const GRPC_TARGET_MAX_BATCH_SIZE: usize = 2097152;
 
 impl Default for FlightDataEncoderBuilder {
@@ -92,7 +92,7 @@ impl FlightDataEncoderBuilder {
     }
 
     /// Set the (approximate) maximum encoded [`RecordBatch`] size to
-    /// limit the gRPC message size. Defaults fo 2MB.
+    /// limit the gRPC message size. Defaults to 2MB.
     ///
     /// The encoder splits up [`RecordBatch`]s (preserving order) to
     /// limit individual messages to approximately this size. The size
@@ -104,7 +104,7 @@ impl FlightDataEncoderBuilder {
         self
     }
 
-    /// Specfy application specific metadata included in the
+    /// Specify application specific metadata included in the
     /// [`FlightData::app_metadata`] field of the the first Schema
     /// message
     pub fn with_metadata(mut self, app_metadata: Bytes) -> Self {
@@ -142,7 +142,7 @@ pub struct FlightDataEncoder {
     inner: BoxStream<'static, Result<RecordBatch>>,
     /// schema, set after the first batch
     schema: Option<SchemaRef>,
-    /// Max sixe of batches to encode
+    /// Max size of batches to encode
     max_batch_size: usize,
     /// do the encoding / tracking of dictionaries
     encoder: FlightIpcEncoder,
@@ -178,7 +178,7 @@ impl FlightDataEncoder {
     }
 
     /// Place the `FlightData` in the queue to send
-    fn queue_messages(&mut self, datas: Vec<FlightData>) {
+    fn queue_messages(&mut self, datas: impl IntoIterator<Item=FlightData>) {
         for data in datas {
             self.queue_message(data)
         }
@@ -271,7 +271,7 @@ impl Stream for FlightDataEncoder {
 /// Convert dictionary types to underlying types
 ///
 /// See hydrate_dictionary for more information
-pub fn prepare_schema_for_flight(schema: &Schema) -> Schema {
+fn prepare_schema_for_flight(schema: &Schema) -> Schema {
     let fields = schema
         .fields()
         .iter()
@@ -299,7 +299,7 @@ pub fn split_batch_for_grpc_response(
     let size = batch
         .columns()
         .iter()
-        .map(|col| col.get_array_memory_size())
+        .map(|col| col.get_buffer_memory_size())
         .sum::<usize>();
 
     let n_batches =
