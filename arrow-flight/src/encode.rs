@@ -60,6 +60,7 @@ use futures::{ready, stream::BoxStream, Stream, StreamExt};
 /// ```
 ///
 /// [`FlightService::do_get`]: crate::flight_service_server::FlightService::do_get
+/// [`FlightError`]: crate::error::FlightError
 #[derive(Debug)]
 pub struct FlightDataEncoderBuilder {
     /// The maximum message size (see details on [`Self::with_max_message_size`]).
