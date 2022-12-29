@@ -336,10 +336,14 @@ fn make_primative_batch(num_rows: usize) -> RecordBatch {
         .unwrap()
 }
 
+/// Make a dictionary batch for testing
+///
+/// Example:
+/// a: value0, value1, value2, None, value1, value2
 fn make_dictionary_batch(num_rows: usize) -> RecordBatch {
     let values: Vec<_> = (0..num_rows)
         .map(|i| {
-            if i == i / 2 {
+            if i == num_rows / 2 {
                 None
             } else {
                 // repeat some values for low cardinality
