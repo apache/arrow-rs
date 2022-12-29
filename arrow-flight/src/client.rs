@@ -16,9 +16,11 @@
 // under the License.
 
 use crate::{
-    decode::FlightRecordBatchStream, flight_service_client::FlightServiceClient,
-    FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, PutResult, Ticket,
+    decode::FlightRecordBatchStream, flight_service_client::FlightServiceClient, Action,
+    ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
+    HandshakeRequest, PutResult, Ticket,
 };
+use arrow_schema::Schema;
 use bytes::Bytes;
 use futures::{
     future::ready,
@@ -358,11 +360,171 @@ impl FlightClient {
         Ok(FlightRecordBatchStream::new_from_flight_data(response))
     }
 
+    /// Make a `ListFlights` call to the server with the provided
+    /// critera and returns a [`Stream`](futures::Stream) of [`FlightInfo`].
+    ///
+    /// # Example:
+    /// ```no_run
+    /// # async fn run() {
+    /// # use futures::TryStreamExt;
+    /// # use bytes::Bytes;
+    /// # use arrow_flight::{FlightInfo, FlightClient};
+    /// # let channel: tonic::transport::Channel = unimplemented!();
+    /// let mut client = FlightClient::new(channel);
+    ///
+    /// // Send 'Name=Foo' bytes as the "expression" to the server
+    /// // and gather the returned FlightInfo
+    /// let responses: Vec<FlightInfo> = client
+    ///   .list_flights(Bytes::from("Name=Foo"))
+    ///   .await
+    ///   .expect("error listing flights")
+    ///   .try_collect() // use TryStreamExt to collect stream
+    ///   .await
+    ///   .expect("error gathering flights");
+    /// # }
+    /// ```
+    pub async fn list_flights(
+        &mut self,
+        expression: impl Into<Bytes>,
+    ) -> Result<BoxStream<'static, Result<FlightInfo>>> {
+        let request = Criteria {
+            expression: expression.into(),
+        };
+
+        let request = self.make_request(request);
+
+        let response = self
+            .inner
+            .list_flights(request)
+            .await?
+            .into_inner()
+            .map_err(FlightError::Tonic);
+
+        Ok(response.boxed())
+    }
+
+    /// Make a `GetSchema` call to the server with the provided
+    /// [`FlightDescriptor`] and returns the associated [`Schema`].
+    ///
+    /// # Example:
+    /// ```no_run
+    /// # async fn run() {
+    /// # use bytes::Bytes;
+    /// # use arrow_flight::{FlightDescriptor, FlightClient};
+    /// # use arrow_schema::Schema;
+    /// # let channel: tonic::transport::Channel = unimplemented!();
+    /// let mut client = FlightClient::new(channel);
+    ///
+    /// // Request the schema result of a 'CMD' request to the server
+    /// let request = FlightDescriptor::new_cmd(b"MOAR DATA".to_vec());
+    ///
+    /// let schema: Schema = client
+    ///   .get_schema(request)
+    ///   .await
+    ///   .expect("error making request");
+    /// # }
+    /// ```
+    pub async fn get_schema(
+        &mut self,
+        flight_descriptor: FlightDescriptor,
+    ) -> Result<Schema> {
+        let request = self.make_request(flight_descriptor);
+
+        let schema_result = self.inner.get_schema(request).await?.into_inner();
+
+        // attempt decode from IPC
+        let schema: Schema = schema_result.try_into()?;
+
+        Ok(schema)
+    }
+
+    /// Make a `ListActions` call to the server and returns a
+    /// [`Stream`](futures::Stream) of [`ActionType`].
+    ///
+    /// # Example:
+    /// ```no_run
+    /// # async fn run() {
+    /// # use futures::TryStreamExt;
+    /// # use arrow_flight::{ActionType, FlightClient};
+    /// # use arrow_schema::Schema;
+    /// # let channel: tonic::transport::Channel = unimplemented!();
+    /// let mut client = FlightClient::new(channel);
+    ///
+    /// // List available actions on the server:
+    /// let actions: Vec<ActionType> = client
+    ///   .list_actions()
+    ///   .await
+    ///   .expect("error listing actions")
+    ///   .try_collect() // use TryStreamExt to collect stream
+    ///   .await
+    ///   .expect("error gathering actions");
+    /// # }
+    /// ```
+    pub async fn list_actions(
+        &mut self,
+    ) -> Result<BoxStream<'static, Result<ActionType>>> {
+        let request = self.make_request(Empty {});
+
+        let action_stream = self
+            .inner
+            .list_actions(request)
+            .await?
+            .into_inner()
+            .map_err(FlightError::Tonic);
+
+        Ok(action_stream.boxed())
+    }
+
+    /// Make a `DoAction` call to the server and returns a
+    /// [`Stream`](futures::Stream) of opaque [`Bytes`].
+    ///
+    /// # Example:
+    /// ```no_run
+    /// # async fn run() {
+    /// # use bytes::Bytes;
+    /// # use futures::TryStreamExt;
+    /// # use arrow_flight::{Action, FlightClient};
+    /// # use arrow_schema::Schema;
+    /// # let channel: tonic::transport::Channel = unimplemented!();
+    /// let mut client = FlightClient::new(channel);
+    ///
+    /// let request = Action::new("my_action", "the body");
+    ///
+    /// // Make a request to run the action on the server
+    /// let results: Vec<Bytes> = client
+    ///   .do_action(request)
+    ///   .await
+    ///   .expect("error executing acton")
+    ///   .try_collect() // use TryStreamExt to collect stream
+    ///   .await
+    ///   .expect("error gathering action results");
+    /// # }
+    /// ```
+    pub async fn do_action(
+        &mut self,
+        action: Action,
+    ) -> Result<BoxStream<'static, Result<Bytes>>> {
+        let request = self.make_request(action);
+
+        let result_stream = self
+            .inner
+            .do_action(request)
+            .await?
+            .into_inner()
+            .map_err(FlightError::Tonic)
+            .map(|r| {
+                r.map(|r| {
+                    // unwrap inner bytes
+                    let crate::Result { body } = r;
+                    body
+                })
+            });
+
+        Ok(result_stream.boxed())
+    }
+
     // TODO other methods
-    // get_schema
     // do_action
-    // list_actions
-    // list_flights
 
     /// return a Request, adding any configured metadata
     fn make_request<T>(&self, t: T) -> tonic::Request<T> {

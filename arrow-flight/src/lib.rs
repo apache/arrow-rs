@@ -367,6 +367,13 @@ impl TryFrom<&SchemaResult> for Schema {
     }
 }
 
+impl TryFrom<SchemaResult> for Schema {
+    type Error = ArrowError;
+    fn try_from(data: SchemaResult) -> ArrowResult<Self> {
+        (&data).try_into()
+    }
+}
+
 // FlightData, FlightDescriptor, etc..
 
 impl FlightData {
@@ -433,6 +440,16 @@ impl<'a> SchemaAsIpc<'a> {
     pub fn new(schema: &'a Schema, options: &'a IpcWriteOptions) -> Self {
         SchemaAsIpc {
             pair: (schema, options),
+        }
+    }
+}
+
+impl Action {
+    /// Create a new Action with type and body
+    pub fn new(action_type: impl Into<String>, body: impl Into<Bytes>) -> Self {
+        Self {
+            r#type: action_type.into(),
+            body: body.into(),
         }
     }
 }
