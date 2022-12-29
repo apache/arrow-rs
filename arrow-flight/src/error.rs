@@ -60,6 +60,12 @@ impl From<tonic::Status> for FlightError {
     }
 }
 
+impl From<ArrowError> for FlightError {
+    fn from(value: ArrowError) -> Self {
+        Self::Arrow(value)
+    }
+}
+
 // default conversion from FlightError to tonic treats everything
 // other than `Status` as an internal error
 impl From<FlightError> for tonic::Status {

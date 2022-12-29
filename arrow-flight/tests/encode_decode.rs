@@ -23,11 +23,10 @@ use arrow::{compute::concat_batches, datatypes::Int32Type};
 use arrow_array::{ArrayRef, DictionaryArray, Float64Array, RecordBatch, UInt8Array};
 use arrow_flight::{
     decode::{DecodedPayload, FlightDataDecoder, FlightRecordBatchStream},
-    encode::{
-        prepare_batch_for_flight, prepare_schema_for_flight, FlightDataEncoderBuilder,
-    },
+    encode::{prepare_batch_for_flight, FlightDataEncoderBuilder},
     error::FlightError,
 };
+use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
 
@@ -405,4 +404,23 @@ async fn roundtrip_with_encoder(
         .collect();
 
     assert_eq!(expected_batches, output_batches);
+}
+
+/// Workaround for https://github.com/apache/arrow-rs/issues/1206
+fn prepare_schema_for_flight(schema: &Schema) -> Schema {
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| match field.data_type() {
+            DataType::Dictionary(_, value_type) => Field::new(
+                field.name(),
+                value_type.as_ref().clone(),
+                field.is_nullable(),
+            )
+            .with_metadata(field.metadata().clone()),
+            _ => field.clone(),
+        })
+        .collect();
+
+    Schema::new(fields)
 }

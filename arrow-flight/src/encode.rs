@@ -17,7 +17,7 @@
 
 use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 
-use crate::{error::FlightError, error::Result, FlightData, SchemaAsIpc};
+use crate::{error::Result, FlightData, SchemaAsIpc};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
@@ -178,7 +178,7 @@ impl FlightDataEncoder {
     }
 
     /// Place the `FlightData` in the queue to send
-    fn queue_messages(&mut self, datas: impl IntoIterator<Item=FlightData>) {
+    fn queue_messages(&mut self, datas: impl IntoIterator<Item = FlightData>) {
         for data in datas {
             self.queue_message(data)
         }
@@ -292,6 +292,9 @@ fn prepare_schema_for_flight(schema: &Schema) -> Schema {
 /// Split [`RecordBatch`] so it hopefully fits into a gRPC response.
 ///
 /// Data is zero-copy sliced into batches.
+///
+/// Note: this method does not take into account already sliced
+/// arrays,
 pub fn split_batch_for_grpc_response(
     batch: RecordBatch,
     max_batch_size: usize,
@@ -351,10 +354,11 @@ impl FlightIpcEncoder {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<(Vec<FlightData>, FlightData)> {
-        let (encoded_dictionaries, encoded_batch) = self
-            .data_gen
-            .encoded_batch(batch, &mut self.dictionary_tracker, &self.options)
-            .map_err(FlightError::Arrow)?;
+        let (encoded_dictionaries, encoded_batch) = self.data_gen.encoded_batch(
+            batch,
+            &mut self.dictionary_tracker,
+            &self.options,
+        )?;
 
         let flight_dictionaries =
             encoded_dictionaries.into_iter().map(Into::into).collect();
@@ -381,7 +385,7 @@ pub fn prepare_batch_for_flight(
         .map(hydrate_dictionary)
         .collect::<Result<Vec<_>>>()?;
 
-    RecordBatch::try_new(schema, columns).map_err(FlightError::Arrow)
+    Ok(RecordBatch::try_new(schema, columns)?)
 }
 
 /// Hydrates a dictionary to its underlying type
@@ -398,11 +402,12 @@ pub fn prepare_batch_for_flight(
 ///
 /// For now we just hydrate the dictionaries to their underlying type
 fn hydrate_dictionary(array: &ArrayRef) -> Result<ArrayRef> {
-    if let DataType::Dictionary(_, value) = array.data_type() {
-        arrow_cast::cast(array, value).map_err(FlightError::Arrow)
+    let arr = if let DataType::Dictionary(_, value) = array.data_type() {
+        arrow_cast::cast(array, value)?
     } else {
-        Ok(Arc::clone(array))
-    }
+        Arc::clone(array)
+    };
+    Ok(arr)
 }
 
 #[cfg(test)]
