@@ -18,7 +18,7 @@
 [package]
 name = "arrow-flight"
 description = "Apache Arrow Flight"
-version = "29.0.0"
+version = "30.0.0"
 edition = "2021"
 rust-version = "1.62"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -27,10 +27,10 @@ repository = "https://github.com/apache/arrow-rs"
 license = "Apache-2.0"
 
 [dependencies]
-arrow-array = { version = "29.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "29.0.0", path = "../arrow-buffer" }
-arrow-ipc = { version = "29.0.0", path = "../arrow-ipc" }
-arrow-schema = { version = "29.0.0", path = "../arrow-schema" }
+arrow-array = { version = "30.0.0", path = "../arrow-array" }
+arrow-buffer = { version = "30.0.0", path = "../arrow-buffer" }
+arrow-ipc = { version = "30.0.0", path = "../arrow-ipc" }
+arrow-schema = { version = "30.0.0", path = "../arrow-schema" }
 base64 = { version = "0.20", default-features = false, features = ["std"] }
 tonic = { version = "0.8", default-features = false, features = ["transport", "codegen", "prost"] }
 bytes = { version = "1", default-features = false }
@@ -48,7 +48,7 @@ flight-sql-experimental = []
 tls = ["tonic/tls"]
 
 [dev-dependencies]
-arrow = { version = "29.0.0", path = "../arrow", features = ["prettyprint"] }
+arrow = { version = "30.0.0", path = "../arrow", features = ["prettyprint"] }
 tempfile = "3.3"
 tokio-stream = { version = "0.1", features = ["net"] }
 tower = "0.4.13"
