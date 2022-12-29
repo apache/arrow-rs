@@ -186,8 +186,8 @@ impl FlightDataEncoder {
 
     /// Encodes batch into one or more `FlightData` messages in self.queue
     fn encode_batch(&mut self, batch: RecordBatch) -> Result<()> {
-        let schema = match self.schema.take() {
-            Some(schema) => schema,
+        let schema = match &self.schema {
+            Some(schema) => schema.clone(),
             None => {
                 let batch_schema = batch.schema();
                 // The first message is the schema message, and all
@@ -200,12 +200,11 @@ impl FlightDataEncoder {
                     schema_flight_data.app_metadata = app_metadata;
                 }
                 self.queue_message(schema_flight_data);
+                // remember schema
+                self.schema = Some(schema.clone());
                 schema
             }
         };
-
-        // remember schema
-        self.schema = Some(schema.clone());
 
         // encode the batch
         let batch = prepare_batch_for_flight(&batch, schema)?;
