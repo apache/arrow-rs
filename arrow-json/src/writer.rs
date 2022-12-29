@@ -105,6 +105,8 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_schema::*;
 
+use arrow_cast::display::array_value_to_string;
+
 fn primitive_array_to_json<T>(array: &ArrayRef) -> Result<Vec<Value>, ArrowError>
 where
     T: ArrowPrimitiveType,
@@ -217,17 +219,13 @@ macro_rules! set_column_by_array_type {
 
 macro_rules! set_temporal_column_by_array_type {
     ($array_type:ident, $col_name:ident, $rows:ident, $array:ident, $row_count:ident, $cast_fn:ident) => {
-        let arr = $array.as_any().downcast_ref::<$array_type>().unwrap();
-
         $rows
             .iter_mut()
             .enumerate()
             .take($row_count)
             .for_each(|(i, row)| {
-                if !arr.is_null(i) {
-                    if let Some(v) = arr.$cast_fn(i) {
-                        row.insert($col_name.to_string(), v.to_string().into());
-                    }
+                if !$array.is_null(i) {
+                    row.insert($col_name.to_string(), array_value_to_string($array, i).unwrap().to_string().into());
                 }
             });
     };
