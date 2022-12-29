@@ -146,11 +146,6 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         self.value_builder.as_slice()
     }
 
-    /// Returns the current values buffer as a mutable slice
-    pub fn values_slice_mut(&mut self) -> &mut [u8] {
-        self.value_builder.as_slice_mut()
-    }
-
     /// Returns the current offsets buffer as a slice
     pub fn offsets_slice(&self) -> &[T::Offset] {
         self.offsets_builder.as_slice()

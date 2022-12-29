@@ -285,7 +285,6 @@ mod tests {
     use crate::builder::{ListBuilder, StringBuilder};
     use arrow_buffer::Buffer;
     use arrow_schema::Field;
-    use num::cast::AsPrimitive;
 
     #[test]
     fn test_string_array_from_u8_slice() {
@@ -703,21 +702,12 @@ mod tests {
     fn test_into_builder() {
         let array: StringArray = vec!["hello", "arrow"].into();
 
-        // Modify values
+        // Append values
         let mut builder = array.into_builder().unwrap();
 
-        let value_slice = builder.values_slice_mut();
+        builder.append_value("rust");
 
-        let expected_slice = "helloarrow".as_bytes();
-        assert_eq!(value_slice, expected_slice);
-
-        value_slice[0] = 'H'.as_();
-        value_slice[1] = 'E'.as_();
-        value_slice[2] = 'L'.as_();
-        value_slice[3] = 'L'.as_();
-        value_slice[4] = 'O'.as_();
-
-        let expected: StringArray = vec!["HELLO", "arrow"].into();
+        let expected: StringArray = vec!["hello", "arrow", "rust"].into();
         let array = builder.finish();
         assert_eq!(expected, array);
     }
