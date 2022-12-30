@@ -96,7 +96,10 @@ test_source_distribution() {
   export RUSTUP_HOME=$PWD/test-rustup
   export CARGO_HOME=$PWD/test-rustup
 
-  curl https://sh.rustup.rs -sSf | sh -s -- -y --no-modify-path
+  # Install rustup if necessary
+  if ! command -v rustup &> /dev/null; then
+    curl https://sh.rustup.rs -sSf | sh -s -- -y --no-modify-path
+  fi
 
   export PATH=$RUSTUP_HOME/bin:$PATH
   source $RUSTUP_HOME/env
