@@ -930,7 +930,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(features = "chrono-tz")]
+    #[cfg(feature = "chrono-tz")]
     fn write_timestamps_with_tz() {
         let ts_string = "2018-11-13T17:11:10.011375885995";
         let ts_nanos = ts_string
@@ -947,7 +947,7 @@ mod tests {
         let arr_secs = TimestampSecondArray::from(vec![Some(ts_secs), None]);
         let arr_names = StringArray::from(vec![Some("a"), Some("b")]);
 
-        let tz = "+08:00".to_string();
+        let tz = "+00:00".to_string();
 
         let arr_nanos = arr_nanos.with_timezone(&tz);
         let arr_micros = arr_micros.with_timezone(&tz);

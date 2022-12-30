@@ -37,6 +37,9 @@ name = "arrow_json"
 path = "src/lib.rs"
 bench = false
 
+[features]
+default = ["chrono-tz"]
+
 [dependencies]
 arrow-array = { version = "29.0.0", path = "../arrow-array" }
 arrow-buffer = { version = "29.0.0", path = "../arrow-buffer" }
