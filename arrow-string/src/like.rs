@@ -25,121 +25,31 @@ use arrow_select::take::take;
 use regex::Regex;
 use std::collections::HashMap;
 
-trait LikeFunctionOp {
-    fn call_utf8<O: OffsetSizeTrait>(
-        left: &GenericStringArray<O>,
-        right: &GenericStringArray<O>,
-    ) -> Result<BooleanArray, ArrowError>;
-    #[cfg(feature = "dyn_cmp_dict")]
-    fn call_dict<K: ArrowPrimitiveType>(
-        left: &DictionaryArray<K>,
-        right: &DictionaryArray<K>,
-    ) -> Result<BooleanArray, ArrowError>;
-}
-
-struct LikeFunction {}
-impl LikeFunctionOp for LikeFunction {
-    fn call_utf8<O: OffsetSizeTrait>(
-        left: &GenericStringArray<O>,
-        right: &GenericStringArray<O>,
-    ) -> Result<BooleanArray, ArrowError> {
-        like_utf8(left, right)
-    }
-    #[cfg(feature = "dyn_cmp_dict")]
-    fn call_dict<K: ArrowPrimitiveType>(
-        left: &DictionaryArray<K>,
-        right: &DictionaryArray<K>,
-    ) -> Result<BooleanArray, ArrowError> {
-        like_dict(left, right)
-    }
-}
-struct NLikeFunction {}
-impl LikeFunctionOp for NLikeFunction {
-    fn call_utf8<O: OffsetSizeTrait>(
-        left: &GenericStringArray<O>,
-        right: &GenericStringArray<O>,
-    ) -> Result<BooleanArray, ArrowError> {
-        nlike_utf8(left, right)
-    }
-    #[cfg(feature = "dyn_cmp_dict")]
-    fn call_dict<K: ArrowPrimitiveType>(
-        left: &DictionaryArray<K>,
-        right: &DictionaryArray<K>,
-    ) -> Result<BooleanArray, ArrowError> {
-        nlike_dict(left, right)
-    }
-}
-
-struct ILikeFunction {}
-impl LikeFunctionOp for ILikeFunction {
-    fn call_utf8<O: OffsetSizeTrait>(
-        left: &GenericStringArray<O>,
-        right: &GenericStringArray<O>,
-    ) -> Result<BooleanArray, ArrowError> {
-        ilike_utf8(left, right)
-    }
-    #[cfg(feature = "dyn_cmp_dict")]
-    fn call_dict<K: ArrowPrimitiveType>(
-        left: &DictionaryArray<K>,
-        right: &DictionaryArray<K>,
-    ) -> Result<BooleanArray, ArrowError> {
-        ilike_dict(left, right)
-    }
-}
-
-struct NILikeFunction {}
-impl LikeFunctionOp for NILikeFunction {
-    fn call_utf8<O: OffsetSizeTrait>(
-        left: &GenericStringArray<O>,
-        right: &GenericStringArray<O>,
-    ) -> Result<BooleanArray, ArrowError> {
-        nilike_utf8(left, right)
-    }
-    #[cfg(feature = "dyn_cmp_dict")]
-    fn call_dict<K: ArrowPrimitiveType>(
-        left: &DictionaryArray<K>,
-        right: &DictionaryArray<K>,
-    ) -> Result<BooleanArray, ArrowError> {
-        nilike_dict(left, right)
-    }
-}
-static LIKE_DYN: &str = "like_dyn";
-static N_LIKE_DYN: &str = "nlike_dyn";
-static I_LIKE_DYN: &str = "ilike_dyn";
-static N_I_LIKE_DYN: &str = "nilike_dyn";
-static LIKE_FN: &LikeFunction = &LikeFunction {};
-static N_LIKE_FN: &NLikeFunction = &NLikeFunction {};
-static I_LIKE_FN: &ILikeFunction = &ILikeFunction {};
-static N_I_LIKE_FN: &NILikeFunction = &NILikeFunction {};
-
-// A template function to be used by all the *_dyn functions in this file.
-#[inline]
-fn dyn_op<F>(
-    left: &dyn Array,
-    right: &dyn Array,
-    _like_utf8_template: &F,
-    name: &str,
-) -> Result<BooleanArray, ArrowError>
-where
-    F: LikeFunctionOp,
-{
+macro_rules! dyn_function {
+    ($sql:tt, $fn_name:tt, $fn_utf8:tt, $fn_dict:tt) => {
+#[doc = concat!("Perform SQL `left ", $sql ," right` operation on [`StringArray`] /")]
+/// [`LargeStringArray`], or [`DictionaryArray`] with values
+/// [`StringArray`]/[`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn $fn_name(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, ArrowError> {
     match (left.data_type(), right.data_type()) {
         (DataType::Utf8, DataType::Utf8)  => {
             let left = as_string_array(left);
             let right = as_string_array(right);
-            F::call_utf8(left, right)
+            $fn_utf8(left, right)
         }
         (DataType::LargeUtf8, DataType::LargeUtf8) => {
             let left = as_largestring_array(left);
             let right = as_largestring_array(right);
-            F::call_utf8(left, right)
+            $fn_utf8(left, right)
         }
         #[cfg(feature = "dyn_cmp_dict")]
         (DataType::Dictionary(_, _), DataType::Dictionary(_, _)) => {
             downcast_dictionary_array!(
                 left => {
                     let right = as_dictionary_array(right);
-                    F::call_dict(left, right)
+                    $fn_dict(left, right)
                 }
                 t => Err(ArrowError::ComputeError(format!(
                     "Should be DictionaryArray but got: {}", t
@@ -148,11 +58,19 @@ where
         }
         _ => {
             Err(ArrowError::ComputeError(format!(
-                "{name} only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values"),
-            ))
+                "{} only supports Utf8, LargeUtf8 or DictionaryArray (with feature `dyn_cmp_dict`) with Utf8 or LargeUtf8 values",
+                stringify!($fn_name)
+            )))
         }
     }
 }
+
+    }
+}
+dyn_function!("LIKE", like_dyn, like_utf8, like_dict);
+dyn_function!("NOT LIKE", nlike_dyn, nlike_utf8, nlike_dict);
+dyn_function!("ILIKE", ilike_dyn, ilike_utf8, ilike_dict);
+dyn_function!("NOT ILIKE", nilike_dyn, nilike_utf8, nilike_dict);
 
 /// Perform SQL `left LIKE right` operation on [`StringArray`] / [`LargeStringArray`].
 ///
@@ -184,15 +102,6 @@ pub fn like_utf8<OffsetSize: OffsetSizeTrait>(
             ))
         })
     })
-}
-
-/// Perform SQL `left LIKE right` operation on [`StringArray`] /
-/// [`LargeStringArray`], or [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`].
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn like_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, ArrowError> {
-    dyn_op(left, right, LIKE_FN, LIKE_DYN)
 }
 
 /// Perform SQL `left LIKE right` operation on on [`DictionaryArray`] with values
@@ -404,17 +313,6 @@ pub fn nlike_utf8<OffsetSize: OffsetSizeTrait>(
 /// [`StringArray`]/[`LargeStringArray`].
 ///
 /// See the documentation on [`like_utf8`] for more details.
-pub fn nlike_dyn(
-    left: &dyn Array,
-    right: &dyn Array,
-) -> Result<BooleanArray, ArrowError> {
-    dyn_op(left, right, N_LIKE_FN, N_LIKE_DYN)
-}
-
-/// Perform SQL `left NOT LIKE right` operation on on [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`].
-///
-/// See the documentation on [`like_utf8`] for more details.
 #[cfg(feature = "dyn_cmp_dict")]
 fn nlike_dict<K: ArrowPrimitiveType>(
     left: &DictionaryArray<K>,
@@ -531,17 +429,6 @@ pub fn ilike_utf8<OffsetSize: OffsetSizeTrait>(
             ))
         })
     })
-}
-
-/// Perform SQL `left ILIKE right` operation on on [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`].
-///
-/// See the documentation on [`like_utf8`] for more details.
-pub fn ilike_dyn(
-    left: &dyn Array,
-    right: &dyn Array,
-) -> Result<BooleanArray, ArrowError> {
-    dyn_op(left, right, I_LIKE_FN, I_LIKE_DYN)
 }
 
 /// Perform SQL `left ILIKE right` operation on on [`DictionaryArray`] with values
@@ -708,17 +595,6 @@ pub fn nilike_utf8<OffsetSize: OffsetSizeTrait>(
             ))
         })
     })
-}
-
-/// Perform SQL `left NOT ILIKE right` operation on on [`DictionaryArray`] with values
-/// [`StringArray`]/[`LargeStringArray`].
-///
-/// See the documentation on [`ilike_utf8`] for more details.
-pub fn nilike_dyn(
-    left: &dyn Array,
-    right: &dyn Array,
-) -> Result<BooleanArray, ArrowError> {
-    dyn_op(left, right, N_I_LIKE_FN, N_I_LIKE_DYN)
 }
 
 /// Perform SQL `left NOT ILIKE right` operation on on [`DictionaryArray`] with values
