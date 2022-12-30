@@ -48,6 +48,7 @@ indexmap = { version = "1.9", default-features = false, features = ["std"] }
 num = { version = "0.4", default-features = false, features = ["std"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
+chrono-tz = { version = "0.8", optional = true }
 
 [dev-dependencies]
 tempfile = "3.3"
