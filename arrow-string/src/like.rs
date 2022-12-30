@@ -25,7 +25,7 @@ use arrow_select::take::take;
 use regex::Regex;
 use std::collections::HashMap;
 
-trait LikeFunctionTemplate {
+trait LikeFunctionOp {
     fn call_utf8<O: OffsetSizeTrait>(
         left: &GenericStringArray<O>,
         right: &GenericStringArray<O>,
@@ -38,7 +38,7 @@ trait LikeFunctionTemplate {
 }
 
 struct LikeFunction {}
-impl LikeFunctionTemplate for LikeFunction {
+impl LikeFunctionOp for LikeFunction {
     fn call_utf8<O: OffsetSizeTrait>(
         left: &GenericStringArray<O>,
         right: &GenericStringArray<O>,
@@ -54,7 +54,7 @@ impl LikeFunctionTemplate for LikeFunction {
     }
 }
 struct NLikeFunction {}
-impl LikeFunctionTemplate for NLikeFunction {
+impl LikeFunctionOp for NLikeFunction {
     fn call_utf8<O: OffsetSizeTrait>(
         left: &GenericStringArray<O>,
         right: &GenericStringArray<O>,
@@ -71,7 +71,7 @@ impl LikeFunctionTemplate for NLikeFunction {
 }
 
 struct ILikeFunction {}
-impl LikeFunctionTemplate for ILikeFunction {
+impl LikeFunctionOp for ILikeFunction {
     fn call_utf8<O: OffsetSizeTrait>(
         left: &GenericStringArray<O>,
         right: &GenericStringArray<O>,
@@ -88,7 +88,7 @@ impl LikeFunctionTemplate for ILikeFunction {
 }
 
 struct NILikeFunction {}
-impl LikeFunctionTemplate for NILikeFunction {
+impl LikeFunctionOp for NILikeFunction {
     fn call_utf8<O: OffsetSizeTrait>(
         left: &GenericStringArray<O>,
         right: &GenericStringArray<O>,
@@ -114,14 +114,14 @@ static N_I_LIKE_FN: &NILikeFunction = &NILikeFunction {};
 
 // A template function to be used by all the *_dyn functions in this file.
 #[inline]
-fn like_dyn_template<F>(
+fn dyn_op<F>(
     left: &dyn Array,
     right: &dyn Array,
     _like_utf8_template: &F,
     name: &str,
 ) -> Result<BooleanArray, ArrowError>
 where
-    F: LikeFunctionTemplate,
+    F: LikeFunctionOp,
 {
     match (left.data_type(), right.data_type()) {
         (DataType::Utf8, DataType::Utf8)  => {
@@ -192,7 +192,7 @@ pub fn like_utf8<OffsetSize: OffsetSizeTrait>(
 ///
 /// See the documentation on [`like_utf8`] for more details.
 pub fn like_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, ArrowError> {
-    like_dyn_template(left, right, LIKE_FN, LIKE_DYN)
+    dyn_op(left, right, LIKE_FN, LIKE_DYN)
 }
 
 /// Perform SQL `left LIKE right` operation on on [`DictionaryArray`] with values
@@ -408,7 +408,7 @@ pub fn nlike_dyn(
     left: &dyn Array,
     right: &dyn Array,
 ) -> Result<BooleanArray, ArrowError> {
-    like_dyn_template(left, right, N_LIKE_FN, N_LIKE_DYN)
+    dyn_op(left, right, N_LIKE_FN, N_LIKE_DYN)
 }
 
 /// Perform SQL `left NOT LIKE right` operation on on [`DictionaryArray`] with values
@@ -541,7 +541,7 @@ pub fn ilike_dyn(
     left: &dyn Array,
     right: &dyn Array,
 ) -> Result<BooleanArray, ArrowError> {
-    like_dyn_template(left, right, I_LIKE_FN, I_LIKE_DYN)
+    dyn_op(left, right, I_LIKE_FN, I_LIKE_DYN)
 }
 
 /// Perform SQL `left ILIKE right` operation on on [`DictionaryArray`] with values
@@ -718,7 +718,7 @@ pub fn nilike_dyn(
     left: &dyn Array,
     right: &dyn Array,
 ) -> Result<BooleanArray, ArrowError> {
-    like_dyn_template(left, right, N_I_LIKE_FN, N_I_LIKE_DYN)
+    dyn_op(left, right, N_I_LIKE_FN, N_I_LIKE_DYN)
 }
 
 /// Perform SQL `left NOT ILIKE right` operation on on [`DictionaryArray`] with values
