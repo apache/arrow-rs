@@ -103,6 +103,8 @@ fn main() {
                         }
                     )
                 });
+            } else {
+                println!("No bloom filter found for column {}", args.column);
             }
         } else {
             println!(

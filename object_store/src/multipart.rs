@@ -109,6 +109,43 @@ where
     }
 }
 
+impl<T> CloudMultiPartUpload<T>
+where
+    T: CloudMultiPartUploadImpl + Send + Sync,
+{
+    // The `poll_flush` function will only flush the in-progress tasks.
+    // The `final_flush` method called during `poll_shutdown` will flush
+    // the `current_buffer` along with in-progress tasks.
+    // Please see https://github.com/apache/arrow-rs/issues/3390 for more details.
+    fn final_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<(), io::Error>> {
+        // Poll current tasks
+        self.as_mut().poll_tasks(cx)?;
+
+        // If current_buffer is not empty, see if it can be submitted
+        if !self.current_buffer.is_empty() && self.tasks.len() < self.max_concurrency {
+            let out_buffer: Vec<u8> = std::mem::take(&mut self.current_buffer);
+            let inner = Arc::clone(&self.inner);
+            let part_idx = self.current_part_idx;
+            self.tasks.push(Box::pin(async move {
+                let upload_part = inner.put_multipart_part(out_buffer, part_idx).await?;
+                Ok((part_idx, upload_part))
+            }));
+        }
+
+        self.as_mut().poll_tasks(cx)?;
+
+        // If tasks and current_buffer are empty, return Ready
+        if self.tasks.is_empty() && self.current_buffer.is_empty() {
+            Poll::Ready(Ok(()))
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
 impl<T> AsyncWrite for CloudMultiPartUpload<T>
 where
     T: CloudMultiPartUploadImpl + Send + Sync,
@@ -158,21 +195,8 @@ where
         // Poll current tasks
         self.as_mut().poll_tasks(cx)?;
 
-        // If current_buffer is not empty, see if it can be submitted
-        if !self.current_buffer.is_empty() && self.tasks.len() < self.max_concurrency {
-            let out_buffer: Vec<u8> = std::mem::take(&mut self.current_buffer);
-            let inner = Arc::clone(&self.inner);
-            let part_idx = self.current_part_idx;
-            self.tasks.push(Box::pin(async move {
-                let upload_part = inner.put_multipart_part(out_buffer, part_idx).await?;
-                Ok((part_idx, upload_part))
-            }));
-        }
-
-        self.as_mut().poll_tasks(cx)?;
-
-        // If tasks and current_buffer are empty, return Ready
-        if self.tasks.is_empty() && self.current_buffer.is_empty() {
+        // If tasks is empty, return Ready
+        if self.tasks.is_empty() {
             Poll::Ready(Ok(()))
         } else {
             Poll::Pending
@@ -184,7 +208,7 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), io::Error>> {
         // First, poll flush
-        match self.as_mut().poll_flush(cx) {
+        match self.as_mut().final_flush(cx) {
             Poll::Pending => return Poll::Pending,
             Poll::Ready(res) => res?,
         };

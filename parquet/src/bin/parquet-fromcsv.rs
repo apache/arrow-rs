@@ -25,7 +25,7 @@
 //! cargo install parquet --features=cli
 //! ```
 //!
-//! After this `parquet-fromcsv` shoud be available:
+//! After this `parquet-fromcsv` should be available:
 //!
 //! ```text
 //! parquet-fromcsv --schema message_schema_for_parquet.txt input.csv output.parquet
@@ -46,15 +46,19 @@
 //!
 //! ## Parquet file options
 //!
+//! ```text
 //! - `-b`, `--batch-size` : Batch size for Parquet
 //! - `-c`, `--parquet-compression` : Compression option for Parquet, default is SNAPPY
 //! - `-s`, `--schema` : Path to message schema for generated Parquet file
 //! - `-o`, `--output-file` : Path to output Parquet file
 //! - `-w`, `--writer-version` : Writer version
 //! - `-m`, `--max-row-group-size` : Max row group size
+//! -       `--enable-bloom-filter` : Enable bloom filter during writing
+//! ```
 //!
 //! ## Input file options
 //!
+//! ```text
 //! - `-i`, `--input-file` : Path to input CSV file
 //! - `-f`, `--input-format` : Dialect for input file, `csv` or `tsv`.
 //! - `-d`, `--delimiter : Field delimiter for CSV file, default depends `--input-format`
@@ -62,6 +66,7 @@
 //! - `-h`, `--has-header` : Input has header
 //! - `-r`, `--record-terminator` : Record terminator character for input. default is CRLF
 //! - `-q`, `--quote-char` : Input quoting character
+//! ```
 //!
 
 use std::{

@@ -118,6 +118,11 @@ test_source_distribution() {
 
   (cd arrow && cargo build && cargo test)
   (cd arrow-flight && cargo build && cargo test)
+  # To avoid https://github.com/apache/arrow-rs/issues/3410,
+  # remove path reference from parquet:
+  # object_store = { version = "0.5", path = "../object_store", default-features = false, optional = true }
+  # object_store = { version = "0.5", default-features = false, optional = true }
+  sed -i -e 's/\(^object_store.*\)\(path = ".*", \)/\1/g' parquet/Cargo.toml
   (cd parquet && cargo build && cargo test)
   (cd parquet_derive && cargo build && cargo test)
 
