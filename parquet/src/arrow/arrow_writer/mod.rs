@@ -21,7 +21,9 @@ use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, RecordBatch};
+use arrow_array::{
+    Array, ArrayRef, Decimal128Array, Int32Array, Int64Array, RecordBatch,
+};
 use arrow_schema::{DataType as ArrowDataType, IntervalUnit, SchemaRef};
 
 use super::schema::{
@@ -30,11 +32,13 @@ use super::schema::{
 };
 
 use crate::arrow::arrow_writer::byte_array::ByteArrayWriter;
+use crate::basic::Type;
 use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{KeyValue, RowGroupMetaDataPtr};
 use crate::file::properties::WriterProperties;
 use crate::file::writer::SerializedRowGroupWriter;
+use crate::schema::types::SchemaDescriptor;
 use crate::{data_type::*, file::writer::SerializedFileWriter};
 use levels::{calculate_array_levels, LevelInfo};
 
@@ -85,6 +89,9 @@ pub struct ArrowWriter<W: Write> {
 
     /// The length of arrays to write to each row group
     max_row_group_size: usize,
+
+    /// The parquet schema descriptor
+    parquet_schema: SchemaDescriptor,
 }
 
 impl<W: Write> ArrowWriter<W> {
@@ -114,6 +121,7 @@ impl<W: Write> ArrowWriter<W> {
             buffered_rows: 0,
             arrow_schema,
             max_row_group_size,
+            parquet_schema: schema,
         })
     }
 
@@ -129,14 +137,51 @@ impl<W: Write> ArrowWriter<W> {
     /// and drop any fully written `RecordBatch`
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         // validate batch schema against writer's supplied schema
-        if self.arrow_schema != batch.schema() {
+        if self.arrow_schema != batch.schema()
+            || self.arrow_schema.fields().len() != self.parquet_schema.columns().len()
+        {
             return Err(ParquetError::ArrowError(
                 "Record batch schema does not match writer schema".to_string(),
             ));
         }
 
-        for (buffer, column) in self.buffer.iter_mut().zip(batch.columns()) {
-            buffer.push_back(column.clone())
+        for ((buffer, column), parquet_column_field) in self
+            .buffer
+            .iter_mut()
+            .zip(batch.columns())
+            .zip(self.parquet_schema.columns())
+        {
+            match column.data_type() {
+                // if the arrow data type is decimal
+                ArrowDataType::Decimal128(_, _) => {
+                    match parquet_column_field.as_ref().physical_type() {
+                        // the physical data type is not fixed length byte array
+                        // convert the decimal array to the INT32/INT64 array
+                        Type::INT32 => {
+                            let new_array = column
+                                .as_any()
+                                .downcast_ref::<Decimal128Array>()
+                                .unwrap()
+                                .iter()
+                                .map(|v| v.map(|v| v as i32))
+                                .collect::<Int32Array>();
+                            buffer.push_back(Arc::new(new_array))
+                        }
+                        Type::INT64 => {
+                            let new_array = column
+                                .as_any()
+                                .downcast_ref::<Decimal128Array>()
+                                .unwrap()
+                                .iter()
+                                .map(|v| v.map(|v| v as i64))
+                                .collect::<Int64Array>();
+                            buffer.push_back(Arc::new(new_array))
+                        }
+                        _ => buffer.push_back(column.clone()),
+                    }
+                }
+                _ => buffer.push_back(column.clone()),
+            }
         }
 
         self.buffered_rows += batch.num_rows();
@@ -840,23 +885,32 @@ mod tests {
         roundtrip(batch, Some(SMALL_SIZE / 2));
     }
 
-    #[test]
-    fn arrow_writer_decimal() {
-        let decimal_field = Field::new("a", DataType::Decimal128(5, 2), false);
+    fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {
+        let decimal_field =
+            Field::new("a", DataType::Decimal128(precision, scale), false);
         let schema = Schema::new(vec![decimal_field]);
 
         let decimal_values = vec![10_000, 50_000, 0, -100]
             .into_iter()
             .map(Some)
             .collect::<Decimal128Array>()
-            .with_precision_and_scale(5, 2)
+            .with_precision_and_scale(precision, scale)
             .unwrap();
 
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(decimal_values)])
-                .unwrap();
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(decimal_values)]).unwrap()
+    }
 
-        roundtrip(batch, Some(SMALL_SIZE / 2));
+    #[test]
+    fn arrow_writer_decimal() {
+        // int32 to store the decimal value
+        let batch_int32_decimal = get_decimal_batch(5, 2);
+        roundtrip(batch_int32_decimal, Some(SMALL_SIZE / 2));
+        // int64 to store the decimal value
+        let batch_int64_decimal = get_decimal_batch(12, 2);
+        roundtrip(batch_int64_decimal, Some(SMALL_SIZE / 2));
+        // fixed_length_byte_array to store the decimal value
+        let batch_fixed_len_byte_array_decimal = get_decimal_batch(30, 2);
+        roundtrip(batch_fixed_len_byte_array_decimal, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -1225,7 +1279,6 @@ mod tests {
         for i in 0..expected_batch.num_columns() {
             let expected_data = expected_batch.column(i).data();
             let actual_data = actual_batch.column(i).data();
-
             assert_eq!(expected_data, actual_data);
         }
 
