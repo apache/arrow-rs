@@ -87,7 +87,12 @@ impl Args {
             .enumerate()
         {
             println!("Row Group: {}", row_group_idx);
-            let offset_index = &offset_indices[column_idx];
+            let offset_index = offset_indices.get(column_idx).ok_or_else(|| {
+                ParquetError::General(format!(
+                    "No offset index for row group {} column chunk {}",
+                    row_group_idx, column_idx
+                ))
+            })?;
 
             let row_counts = compute_row_counts(offset_index, row_group.num_rows());
             match &column_indices[column_idx] {
