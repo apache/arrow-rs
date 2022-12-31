@@ -246,7 +246,7 @@ impl std::fmt::Display for GoogleCloudStorage {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct GoogleCloudStorageClient {
     client: Client,
     base_url: String,

@@ -210,7 +210,7 @@ impl ObjectStore for HttpStore {
 }
 
 /// Configure a connection to a generic HTTP server
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct HttpBuilder {
     url: Option<Result<Url>>,
     client_options: ClientOptions,

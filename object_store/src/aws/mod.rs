@@ -358,7 +358,7 @@ impl CloudMultiPartUploadImpl for S3MultiPartUpload {
 ///  .with_secret_access_key(SECRET_KEY)
 ///  .build();
 /// ```
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct AmazonS3Builder {
     access_key_id: Option<String>,
     secret_access_key: Option<String>,
