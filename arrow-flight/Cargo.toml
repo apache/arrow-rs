@@ -29,6 +29,8 @@ license = "Apache-2.0"
 [dependencies]
 arrow-array = { version = "30.0.0", path = "../arrow-array" }
 arrow-buffer = { version = "30.0.0", path = "../arrow-buffer" }
+# Cast is needed to work around https://github.com/apache/arrow-rs/issues/3389
+arrow-cast = { version = "30.0.0", path = "../arrow-cast" }
 arrow-ipc = { version = "30.0.0", path = "../arrow-ipc" }
 arrow-schema = { version = "30.0.0", path = "../arrow-schema" }
 base64 = { version = "0.20", default-features = false, features = ["std"] }
