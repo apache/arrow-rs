@@ -37,7 +37,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
-use snafu::{ResultExt, Snafu};
+use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::BTreeSet;
 use std::fmt::{Debug, Formatter};
 use std::io;
@@ -121,6 +121,9 @@ enum Error {
         scheme
     ))]
     UnknownUrlScheme { scheme: String },
+
+    #[snafu(display("URL did not match any known pattern for scheme: {}", url))]
+    UrlNotRecognised { url: String },
 }
 
 impl From<Error> for super::Error {
@@ -365,10 +368,10 @@ pub struct MicrosoftAzureBuilder {
     tenant_id: Option<String>,
     sas_query_pairs: Option<Vec<(String, String)>>,
     authority_host: Option<String>,
+    url: Option<String>,
     use_emulator: bool,
     retry_config: RetryConfig,
     client_options: ClientOptions,
-    url_parse_error: Option<Error>,
 }
 
 impl Debug for MicrosoftAzureBuilder {
@@ -444,9 +447,7 @@ impl MicrosoftAzureBuilder {
     /// - `https://<account>.dfs.core.windows.net`
     /// - `https://<account>.blob.core.windows.net`
     ///
-    /// Please note that this is a best effort implementation, and will not fail for malformed URLs,
-    /// but rather warn and ignore the passed url. The url also has no effect on how the
-    /// storage is accessed - e.g. which driver or protocol is used for reading from the location.
+    /// Note: Settings derived from the URL will override any others set on this builder
     ///
     /// # Example
     /// ```
@@ -456,52 +457,43 @@ impl MicrosoftAzureBuilder {
     ///     .with_url("abfss://file_system@account.dfs.core.windows.net/")
     ///     .build();
     /// ```
-    pub fn with_url(mut self, url: impl AsRef<str>) -> Self {
-        let maybe_parsed = Url::parse(url.as_ref());
-        match maybe_parsed {
-            Ok(parsed) => match parsed.scheme() {
-                "az" | "adl" | "azure" => {
-                    self.container_name = parsed.host_str().map(|host| host.to_owned());
-                }
-                "abfs" | "abfss" => {
-                    // abfs(s) might refer to the fsspec convention abfs://<container>/<path>
-                    // or the convention for the hadoop driver abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>
-                    if parsed.username().is_empty() {
-                        self.container_name =
-                            parsed.host_str().map(|host| host.to_owned());
-                    } else if let Some(host) = parsed.host_str() {
-                        let parts = host.splitn(2, '.').collect::<Vec<&str>>();
-                        if parts.len() == 2 && parts[1] == "dfs.core.windows.net" {
-                            self.container_name = Some(parsed.username().to_owned());
-                            self.account_name = Some(parts[0].to_string());
-                        }
-                    }
-                }
-                "https" => {
-                    if let Some(host) = parsed.host_str() {
-                        let parts = host.splitn(2, '.').collect::<Vec<&str>>();
-                        if parts.len() == 2
-                            && (parts[1] == "dfs.core.windows.net"
-                                || parts[1] == "blob.core.windows.net")
-                        {
-                            self.account_name = Some(parts[0].to_string());
-                        }
-                    }
-                }
-                other => {
-                    self.url_parse_error = Some(Error::UnknownUrlScheme {
-                        scheme: other.into(),
-                    });
-                }
-            },
-            Err(err) => {
-                self.url_parse_error = Some(Error::UnableToParseUrl {
-                    source: err,
-                    url: url.as_ref().into(),
-                });
-            }
-        };
+    pub fn with_url(mut self, url: impl Into<String>) -> Self {
+        self.url = Some(url.into());
         self
+    }
+
+    /// Sets properties on this builder based on a URL
+    ///
+    /// This is a separate member function to allow fallible computation to
+    /// be deferred until [`Self::build`] which in turn allows deriving [`Clone`]
+    fn parse_url(&mut self, url: &str) -> Result<()> {
+        let parsed = Url::parse(url).context(UnableToParseUrlSnafu { url })?;
+        let host = parsed.host_str().context(UrlNotRecognisedSnafu { url })?;
+
+        match parsed.scheme() {
+            "az" | "adl" | "azure" => self.container_name = Some(host.to_string()),
+            "abfs" | "abfss" => {
+                // abfs(s) might refer to the fsspec convention abfs://<container>/<path>
+                // or the convention for the hadoop driver abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>
+                if parsed.username().is_empty() {
+                    self.container_name = Some(host.to_string());
+                } else if let Some(a) = host.strip_suffix(".dfs.core.windows.net") {
+                    self.container_name = Some(parsed.username().to_owned());
+                    self.account_name = Some(a.to_string());
+                } else {
+                    return Err(UrlNotRecognisedSnafu { url }.build().into());
+                }
+            }
+            "https" => match host.split_once('.') {
+                Some((a, "dfs.core.windows.net"))
+                | Some((a, "blob.core.windows.net")) => {
+                    self.account_name = Some(a.to_string());
+                }
+                _ => return Err(UrlNotRecognisedSnafu { url }.build().into()),
+            },
+            scheme => return Err(UnknownUrlSchemeSnafu { scheme }.build().into()),
+        }
+        Ok(())
     }
 
     /// Set the Azure Account (required)
@@ -595,63 +587,49 @@ impl MicrosoftAzureBuilder {
 
     /// Configure a connection to container with given name on Microsoft Azure
     /// Blob store.
-    pub fn build(self) -> Result<MicrosoftAzure> {
-        let Self {
-            account_name,
-            access_key,
-            container_name,
-            bearer_token,
-            client_id,
-            client_secret,
-            tenant_id,
-            sas_query_pairs,
-            use_emulator,
-            retry_config,
-            authority_host,
-            mut client_options,
-            url_parse_error,
-        } = self;
-
-        if let Some(err) = url_parse_error {
-            return Err(err.into());
+    pub fn build(mut self) -> Result<MicrosoftAzure> {
+        if let Some(url) = self.url.take() {
+            self.parse_url(&url)?;
         }
 
-        let container = container_name.ok_or(Error::MissingContainerName {})?;
+        let container = self.container_name.ok_or(Error::MissingContainerName {})?;
 
-        let (is_emulator, storage_url, auth, account) = if use_emulator {
-            let account_name =
-                account_name.unwrap_or_else(|| EMULATOR_ACCOUNT.to_string());
+        let (is_emulator, storage_url, auth, account) = if self.use_emulator {
+            let account_name = self
+                .account_name
+                .unwrap_or_else(|| EMULATOR_ACCOUNT.to_string());
             // Allow overriding defaults. Values taken from
             // from https://docs.rs/azure_storage/0.2.0/src/azure_storage/core/clients/storage_account_client.rs.html#129-141
             let url = url_from_env("AZURITE_BLOB_STORAGE_URL", "http://127.0.0.1:10000")?;
-            let account_key =
-                access_key.unwrap_or_else(|| EMULATOR_ACCOUNT_KEY.to_string());
+            let account_key = self
+                .access_key
+                .unwrap_or_else(|| EMULATOR_ACCOUNT_KEY.to_string());
             let credential = credential::CredentialProvider::AccessKey(account_key);
 
-            client_options = client_options.with_allow_http(true);
+            self.client_options = self.client_options.with_allow_http(true);
             (true, url, credential, account_name)
         } else {
-            let account_name = account_name.ok_or(Error::MissingAccount {})?;
+            let account_name = self.account_name.ok_or(Error::MissingAccount {})?;
             let account_url = format!("https://{}.blob.core.windows.net", &account_name);
             let url = Url::parse(&account_url)
                 .context(UnableToParseUrlSnafu { url: account_url })?;
-            let credential = if let Some(bearer_token) = bearer_token {
+            let credential = if let Some(bearer_token) = self.bearer_token {
                 Ok(credential::CredentialProvider::AccessKey(bearer_token))
-            } else if let Some(access_key) = access_key {
+            } else if let Some(access_key) = self.access_key {
                 Ok(credential::CredentialProvider::AccessKey(access_key))
             } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
-                (client_id, client_secret, tenant_id)
+                (self.client_id, self.client_secret, self.tenant_id)
             {
                 let client_credential = credential::ClientSecretOAuthProvider::new(
                     client_id,
                     client_secret,
                     tenant_id,
-                    authority_host,
+                    self.authority_host,
                 );
                 Ok(credential::CredentialProvider::ClientSecret(
                     client_credential,
                 ))
-            } else if let Some(query_pairs) = sas_query_pairs {
+            } else if let Some(query_pairs) = self.sas_query_pairs {
                 Ok(credential::CredentialProvider::SASToken(query_pairs))
             } else {
                 Err(Error::MissingCredentials {})
@@ -661,12 +639,12 @@ impl MicrosoftAzureBuilder {
 
         let config = client::AzureConfig {
             account,
-            retry_config,
-            service: storage_url,
-            container,
-            credentials: auth,
             is_emulator,
-            client_options,
+            container,
+            retry_config: self.retry_config,
+            client_options: self.client_options,
+            service: storage_url,
+            credentials: auth,
         };
 
         let client = Arc::new(client::AzureClient::new(config)?);
@@ -804,26 +782,35 @@ mod tests {
 
     #[test]
     fn azure_blob_test_urls() {
-        let builder = MicrosoftAzureBuilder::new()
-            .with_url("abfss://file_system@account.dfs.core.windows.net/");
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder
+            .parse_url("abfss://file_system@account.dfs.core.windows.net/")
+            .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
         assert_eq!(builder.container_name, Some("file_system".to_string()));
 
-        let builder = MicrosoftAzureBuilder::new().with_url("abfs://container/path");
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder.parse_url("abfs://container/path").unwrap();
         assert_eq!(builder.container_name, Some("container".to_string()));
 
-        let builder = MicrosoftAzureBuilder::new().with_url("az://container");
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder.parse_url("az://container").unwrap();
         assert_eq!(builder.container_name, Some("container".to_string()));
 
-        let builder = MicrosoftAzureBuilder::new().with_url("az://container/path");
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder.parse_url("az://container/path").unwrap();
         assert_eq!(builder.container_name, Some("container".to_string()));
 
-        let builder = MicrosoftAzureBuilder::new()
-            .with_url("https://account.dfs.core.windows.net/");
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder
+            .parse_url("https://account.dfs.core.windows.net/")
+            .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
 
-        let builder = MicrosoftAzureBuilder::new()
-            .with_url("https://account.blob.core.windows.net/");
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder
+            .parse_url("https://account.blob.core.windows.net/")
+            .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()))
     }
 }
