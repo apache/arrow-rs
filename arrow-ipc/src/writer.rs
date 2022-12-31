@@ -137,8 +137,8 @@ impl Default for IpcWriteOptions {
 }
 
 #[derive(Debug, Default)]
-/// Handles low level details of encoding [`Array`] and [`Schema`] into the Arrow IPC
-/// format. [TODO get doc link for IPC Format]
+/// Handles low level details of encoding [`Array`] and [`Schema`] into the
+/// [Arrow IPC Format](https://arrow.apache.org/docs/format/IPC.html)
 ///
 /// # Example:
 /// ```
