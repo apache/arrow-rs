@@ -298,6 +298,12 @@ fn create_array(
             make_array(data)
         }
         _ => {
+            if nodes.len() <= node_index {
+                return Err(ArrowError::IoError(format!(
+                    "Invalid data for schema. {} refers to node index {} but only {} in schema",
+                    field, node_index, nodes.len()
+                )));
+            }
             let array = create_primitive_array(
                 nodes.get(node_index),
                 data_type,
