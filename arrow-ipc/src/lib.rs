@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Support for the [Arrow IPC Format](https://arrow.apache.org/docs/format/IPC.html)
+//! Support for the [Arrow IPC Format]
+//!
+//! [Arrow IPC Format]: https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc
 
 pub mod convert;
 pub mod reader;

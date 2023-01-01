@@ -138,7 +138,7 @@ impl Default for IpcWriteOptions {
 
 #[derive(Debug, Default)]
 /// Handles low level details of encoding [`Array`] and [`Schema`] into the
-/// [Arrow IPC Format](https://arrow.apache.org/docs/format/IPC.html)
+/// [Arrow IPC Format].
 ///
 /// # Example:
 /// ```
@@ -165,6 +165,10 @@ impl Default for IpcWriteOptions {
 ///   .encoded_batch(&batch, &mut dictionary_tracker, &options)
 ///   .unwrap();
 /// # }
+/// ```
+///
+/// [Arrow IPC Format]: https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc
+
 pub struct IpcDataGenerator {}
 
 impl IpcDataGenerator {
