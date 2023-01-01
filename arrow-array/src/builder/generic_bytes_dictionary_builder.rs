@@ -397,16 +397,20 @@ mod tests {
     use crate::array::Array;
     use crate::array::Int8Array;
     use crate::types::{Int16Type, Int8Type};
-    use crate::StringArray;
+    use crate::{BinaryArray, StringArray};
 
-    #[test]
-    fn test_string_dictionary_builder() {
-        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
-        builder.append("abc").unwrap();
+    fn test_bytes_dictionary_builder<T>(values: Vec<&T::Native>)
+    where
+        T: ByteArrayType,
+        <T as ByteArrayType>::Native: PartialEq,
+        <T as ByteArrayType>::Native: AsRef<<T as ByteArrayType>::Native>,
+    {
+        let mut builder = GenericByteDictionaryBuilder::<Int8Type, T>::new();
+        builder.append(values[0]).unwrap();
         builder.append_null();
-        builder.append("def").unwrap();
-        builder.append("def").unwrap();
-        builder.append("abc").unwrap();
+        builder.append(values[1]).unwrap();
+        builder.append(values[1]).unwrap();
+        builder.append(values[0]).unwrap();
         let array = builder.finish();
 
         assert_eq!(
@@ -416,20 +420,36 @@ mod tests {
 
         // Values are polymorphic and so require a downcast.
         let av = array.values();
-        let ava: &StringArray = av.as_any().downcast_ref::<StringArray>().unwrap();
+        let ava: &GenericByteArray<T> =
+            av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
 
-        assert_eq!(ava.value(0), "abc");
-        assert_eq!(ava.value(1), "def");
+        assert_eq!(*ava.value(0), *values[0]);
+        assert_eq!(*ava.value(1), *values[1]);
     }
 
     #[test]
-    fn test_string_dictionary_builder_finish_cloned() {
-        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
-        builder.append("abc").unwrap();
+    fn test_string_dictionary_builder() {
+        test_bytes_dictionary_builder::<GenericStringType<i32>>(vec!["abc", "def"]);
+    }
+
+    #[test]
+    fn test_binary_dictionary_builder() {
+        test_bytes_dictionary_builder::<GenericBinaryType<i32>>(vec![b"abc", b"def"]);
+    }
+
+    fn test_bytes_dictionary_builder_finish_cloned<T>(values: Vec<&T::Native>)
+    where
+        T: ByteArrayType,
+        <T as ByteArrayType>::Native: PartialEq,
+        <T as ByteArrayType>::Native: AsRef<<T as ByteArrayType>::Native>,
+    {
+        let mut builder = GenericByteDictionaryBuilder::<Int8Type, T>::new();
+
+        builder.append(values[0]).unwrap();
         builder.append_null();
-        builder.append("def").unwrap();
-        builder.append("def").unwrap();
-        builder.append("abc").unwrap();
+        builder.append(values[1]).unwrap();
+        builder.append(values[1]).unwrap();
+        builder.append(values[0]).unwrap();
         let mut array = builder.finish_cloned();
 
         assert_eq!(
@@ -439,14 +459,15 @@ mod tests {
 
         // Values are polymorphic and so require a downcast.
         let av = array.values();
-        let ava: &StringArray = av.as_any().downcast_ref::<StringArray>().unwrap();
+        let ava: &GenericByteArray<T> =
+            av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
 
-        assert_eq!(ava.value(0), "abc");
-        assert_eq!(ava.value(1), "def");
+        assert_eq!(ava.value(0), values[0]);
+        assert_eq!(ava.value(1), values[1]);
 
-        builder.append("abc").unwrap();
-        builder.append("ghi").unwrap();
-        builder.append("def").unwrap();
+        builder.append(values[0]).unwrap();
+        builder.append(values[2]).unwrap();
+        builder.append(values[1]).unwrap();
 
         array = builder.finish();
 
@@ -466,25 +487,48 @@ mod tests {
 
         // Values are polymorphic and so require a downcast.
         let av2 = array.values();
-        let ava2: &StringArray = av2.as_any().downcast_ref::<StringArray>().unwrap();
+        let ava2: &GenericByteArray<T> =
+            av2.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
 
-        assert_eq!(ava2.value(0), "abc");
-        assert_eq!(ava2.value(1), "def");
-        assert_eq!(ava2.value(2), "ghi");
+        assert_eq!(ava2.value(0), values[0]);
+        assert_eq!(ava2.value(1), values[1]);
+        assert_eq!(ava2.value(2), values[2]);
     }
 
     #[test]
-    fn test_string_dictionary_builder_with_existing_dictionary() {
-        let dictionary = StringArray::from(vec![None, Some("def"), Some("abc")]);
+    fn test_string_dictionary_builder_finish_cloned() {
+        test_bytes_dictionary_builder_finish_cloned::<GenericStringType<i32>>(vec![
+            "abc", "def", "ghi",
+        ]);
+    }
 
+    #[test]
+    fn test_binary_dictionary_builder_finish_cloned() {
+        test_bytes_dictionary_builder_finish_cloned::<GenericBinaryType<i32>>(vec![
+            b"abc", b"def", b"ghi",
+        ]);
+    }
+
+    fn test_bytes_dictionary_builder_with_existing_dictionary<T>(
+        dictionary: GenericByteArray<T>,
+        values: Vec<&T::Native>,
+    ) where
+        T: ByteArrayType,
+        <T as ByteArrayType>::Native: PartialEq,
+        <T as ByteArrayType>::Native: AsRef<<T as ByteArrayType>::Native>,
+    {
         let mut builder =
-            StringDictionaryBuilder::new_with_dictionary(6, &dictionary).unwrap();
-        builder.append("abc").unwrap();
+            GenericByteDictionaryBuilder::<Int8Type, T>::new_with_dictionary(
+                6,
+                &dictionary,
+            )
+            .unwrap();
+        builder.append(values[0]).unwrap();
         builder.append_null();
-        builder.append("def").unwrap();
-        builder.append("def").unwrap();
-        builder.append("abc").unwrap();
-        builder.append("ghi").unwrap();
+        builder.append(values[1]).unwrap();
+        builder.append(values[1]).unwrap();
+        builder.append(values[0]).unwrap();
+        builder.append(values[2]).unwrap();
         let array = builder.finish();
 
         assert_eq!(
@@ -494,26 +538,50 @@ mod tests {
 
         // Values are polymorphic and so require a downcast.
         let av = array.values();
-        let ava: &StringArray = av.as_any().downcast_ref::<StringArray>().unwrap();
+        let ava: &GenericByteArray<T> =
+            av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
 
         assert!(!ava.is_valid(0));
-        assert_eq!(ava.value(1), "def");
-        assert_eq!(ava.value(2), "abc");
-        assert_eq!(ava.value(3), "ghi");
+        assert_eq!(ava.value(1), values[1]);
+        assert_eq!(ava.value(2), values[0]);
+        assert_eq!(ava.value(3), values[2]);
     }
 
     #[test]
-    fn test_string_dictionary_builder_with_reserved_null_value() {
-        let dictionary: Vec<Option<&str>> = vec![None];
-        let dictionary = StringArray::from(dictionary);
+    fn test_string_dictionary_builder_with_existing_dictionary() {
+        test_bytes_dictionary_builder_with_existing_dictionary::<GenericStringType<i32>>(
+            StringArray::from(vec![None, Some("def"), Some("abc")]),
+            vec!["abc", "def", "ghi"],
+        );
+    }
 
+    #[test]
+    fn test_binary_dictionary_builder_with_existing_dictionary() {
+        let values: Vec<Option<&[u8]>> = vec![None, Some(b"def"), Some(b"abc")];
+        test_bytes_dictionary_builder_with_existing_dictionary::<GenericBinaryType<i32>>(
+            BinaryArray::from(values),
+            vec![b"abc", b"def", b"ghi"],
+        );
+    }
+
+    fn test_bytes_dictionary_builder_with_reserved_null_value<T>(
+        dictionary: GenericByteArray<T>,
+        values: Vec<&T::Native>,
+    ) where
+        T: ByteArrayType,
+        <T as ByteArrayType>::Native: PartialEq,
+        <T as ByteArrayType>::Native: AsRef<<T as ByteArrayType>::Native>,
+    {
         let mut builder =
-            StringDictionaryBuilder::<Int16Type>::new_with_dictionary(4, &dictionary)
-                .unwrap();
-        builder.append("abc").unwrap();
+            GenericByteDictionaryBuilder::<Int16Type, T>::new_with_dictionary(
+                4,
+                &dictionary,
+            )
+            .unwrap();
+        builder.append(values[0]).unwrap();
         builder.append_null();
-        builder.append("def").unwrap();
-        builder.append("abc").unwrap();
+        builder.append(values[1]).unwrap();
+        builder.append(values[0]).unwrap();
         let array = builder.finish();
 
         assert!(array.is_null(1));
@@ -527,5 +595,22 @@ mod tests {
         assert_eq!(keys.value(1), 0);
         assert_eq!(keys.value(2), 2);
         assert_eq!(keys.value(3), 1);
+    }
+
+    #[test]
+    fn test_string_dictionary_builder_with_reserved_null_value() {
+        test_bytes_dictionary_builder_with_reserved_null_value::<GenericStringType<i32>>(
+            StringArray::from(vec![None]),
+            vec!["abc", "def"],
+        );
+    }
+
+    #[test]
+    fn test_binary_dictionary_builder_with_reserved_null_value() {
+        let values: Vec<Option<&[u8]>> = vec![None];
+        test_bytes_dictionary_builder_with_reserved_null_value::<GenericBinaryType<i32>>(
+            BinaryArray::from(values),
+            vec![b"abc", b"def"],
+        );
     }
 }
