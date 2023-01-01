@@ -39,10 +39,10 @@ mod primitive_builder;
 pub use primitive_builder::*;
 mod primitive_dictionary_builder;
 pub use primitive_dictionary_builder::*;
-mod string_dictionary_builder;
-pub use string_dictionary_builder::*;
 mod struct_builder;
 pub use struct_builder::*;
+mod generic_bytes_dictionary_builder;
+pub use generic_bytes_dictionary_builder::*;
 mod union_builder;
 pub use union_builder::*;
 
