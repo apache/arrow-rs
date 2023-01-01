@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{ArrayBuilder, PrimitiveBuilder, StringBuilder};
-use crate::types::ArrowDictionaryKeyType;
-use crate::{Array, ArrayRef, DictionaryArray, StringArray};
+use crate::builder::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder};
+use crate::types::{
+    ArrowDictionaryKeyType, ByteArrayType, GenericBinaryType, GenericStringType,
+};
+use crate::{Array, ArrayRef, DictionaryArray, GenericByteArray};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::{ArrowError, DataType};
 use hashbrown::hash_map::RawEntryMut;
@@ -25,45 +27,15 @@ use hashbrown::HashMap;
 use std::any::Any;
 use std::sync::Arc;
 
-/// Array builder for `DictionaryArray` that stores Strings. For example to map a set of byte indices
-/// to String values. Note that the use of a `HashMap` here will not scale to very large
-/// arrays or result in an ordered dictionary.
-///
-/// ```
-/// // Create a dictionary array indexed by bytes whose values are Strings.
-/// // It can thus hold up to 256 distinct string values.
-///
-/// # use arrow_array::builder::StringDictionaryBuilder;
-/// # use arrow_array::{Int8Array, StringArray};
-/// # use arrow_array::types::Int8Type;
-///
-/// let mut builder = StringDictionaryBuilder::<Int8Type>::new();
-///
-/// // The builder builds the dictionary value by value
-/// builder.append("abc").unwrap();
-/// builder.append_null();
-/// builder.append("def").unwrap();
-/// builder.append("def").unwrap();
-/// builder.append("abc").unwrap();
-/// let array = builder.finish();
-///
-/// assert_eq!(
-///   array.keys(),
-///   &Int8Array::from(vec![Some(0), None, Some(1), Some(1), Some(0)])
-/// );
-///
-/// // Values are polymorphic and so require a downcast.
-/// let av = array.values();
-/// let ava: &StringArray = av.as_any().downcast_ref::<StringArray>().unwrap();
-///
-/// assert_eq!(ava.value(0), "abc");
-/// assert_eq!(ava.value(1), "def");
-///
-/// ```
+/// Generic array builder for `DictionaryArray` that stores generic byte values.
+/// For example to map a set of byte indices to String values. Note that
+/// the use of a `HashMap` here will not scale to very large arrays or
+/// result in an ordered dictionary.
 #[derive(Debug)]
-pub struct StringDictionaryBuilder<K>
+pub struct GenericByteDictionaryBuilder<K, T>
 where
     K: ArrowDictionaryKeyType,
+    T: ByteArrayType,
 {
     state: ahash::RandomState,
     /// Used to provide a lookup from string value to key type
@@ -74,26 +46,28 @@ where
     dedup: HashMap<K::Native, (), ()>,
 
     keys_builder: PrimitiveBuilder<K>,
-    values_builder: StringBuilder,
+    values_builder: GenericByteBuilder<T>,
 }
 
-impl<K> Default for StringDictionaryBuilder<K>
+impl<K, T> Default for GenericByteDictionaryBuilder<K, T>
 where
     K: ArrowDictionaryKeyType,
+    T: ByteArrayType,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K> StringDictionaryBuilder<K>
+impl<K, T> GenericByteDictionaryBuilder<K, T>
 where
     K: ArrowDictionaryKeyType,
+    T: ByteArrayType,
 {
-    /// Creates a new `StringDictionaryBuilder`
+    /// Creates a new `GenericByteDictionaryBuilder`
     pub fn new() -> Self {
         let keys_builder = PrimitiveBuilder::new();
-        let values_builder = StringBuilder::new();
+        let values_builder = GenericByteBuilder::<T>::new();
         Self {
             state: Default::default(),
             dedup: HashMap::with_capacity_and_hasher(keys_builder.capacity(), ()),
@@ -102,25 +76,28 @@ where
         }
     }
 
-    /// Creates a new `StringDictionaryBuilder` with the provided capacities
+    /// Creates a new `GenericByteDictionaryBuilder` with the provided capacities
     ///
     /// `keys_capacity`: the number of keys, i.e. length of array to build
     /// `value_capacity`: the number of distinct dictionary values, i.e. size of dictionary
-    /// `string_capacity`: the total number of bytes of all distinct strings in the dictionary
+    /// `data_capacity`: the total number of bytes of all distinct bytes in the dictionary
     pub fn with_capacity(
         keys_capacity: usize,
         value_capacity: usize,
-        string_capacity: usize,
+        data_capacity: usize,
     ) -> Self {
         Self {
             state: Default::default(),
             dedup: Default::default(),
             keys_builder: PrimitiveBuilder::with_capacity(keys_capacity),
-            values_builder: StringBuilder::with_capacity(value_capacity, string_capacity),
+            values_builder: GenericByteBuilder::<T>::with_capacity(
+                value_capacity,
+                data_capacity,
+            ),
         }
     }
 
-    /// Creates a new `StringDictionaryBuilder` from a keys capacity and a dictionary
+    /// Creates a new `GenericByteDictionaryBuilder` from a keys capacity and a dictionary
     /// which is initialized with the given values.
     /// The indices of those dictionary values are used as keys.
     ///
@@ -145,27 +122,32 @@ where
     /// ```
     pub fn new_with_dictionary(
         keys_capacity: usize,
-        dictionary_values: &StringArray,
-    ) -> Result<Self, ArrowError> {
+        dictionary_values: &GenericByteArray<T>,
+    ) -> Result<Self, ArrowError>
+    where
+        <T as ByteArrayType>::Native: AsRef<<T as ByteArrayType>::Native> + AsRef<[u8]>,
+    {
         let state = ahash::RandomState::default();
         let dict_len = dictionary_values.len();
 
         let mut dedup = HashMap::with_capacity_and_hasher(dict_len, ());
 
         let values_len = dictionary_values.value_data().len();
-        let mut values_builder = StringBuilder::with_capacity(dict_len, values_len);
+        let mut values_builder =
+            GenericByteBuilder::<T>::with_capacity(dict_len, values_len);
 
         for (idx, maybe_value) in dictionary_values.iter().enumerate() {
             match maybe_value {
                 Some(value) => {
-                    let hash = state.hash_one(value.as_bytes());
+                    let value_bytes: &[u8] = value.as_ref();
+                    let hash = state.hash_one(value_bytes);
 
                     let key = K::Native::from_usize(idx)
                         .ok_or(ArrowError::DictionaryKeyOverflowError)?;
 
                     let entry =
                         dedup.raw_entry_mut().from_hash(hash, |key: &K::Native| {
-                            value.as_bytes() == get_bytes(&values_builder, key)
+                            value_bytes == get_bytes(&values_builder, key)
                         });
 
                     if let RawEntryMut::Vacant(v) = entry {
@@ -189,9 +171,10 @@ where
     }
 }
 
-impl<K> ArrayBuilder for StringDictionaryBuilder<K>
+impl<K, T> ArrayBuilder for GenericByteDictionaryBuilder<K, T>
 where
     K: ArrowDictionaryKeyType,
+    T: ByteArrayType,
 {
     /// Returns the builder as an non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
@@ -229,26 +212,31 @@ where
     }
 }
 
-impl<K> StringDictionaryBuilder<K>
+impl<K, T> GenericByteDictionaryBuilder<K, T>
 where
     K: ArrowDictionaryKeyType,
+    T: ByteArrayType,
 {
     /// Append a primitive value to the array. Return an existing index
     /// if already present in the values array or a new index if the
     /// value is appended to the values array.
     ///
     /// Returns an error if the new index would overflow the key type.
-    pub fn append(&mut self, value: impl AsRef<str>) -> Result<K::Native, ArrowError> {
-        let value = value.as_ref();
+    pub fn append(
+        &mut self,
+        value: impl AsRef<T::Native>,
+    ) -> Result<K::Native, ArrowError> {
+        let value_native: &T::Native = value.as_ref();
+        let value_bytes: &[u8] = value_native.as_ref();
 
         let state = &self.state;
         let storage = &mut self.values_builder;
-        let hash = state.hash_one(value.as_bytes());
+        let hash = state.hash_one(value_bytes);
 
         let entry = self
             .dedup
             .raw_entry_mut()
-            .from_hash(hash, |key| value.as_bytes() == get_bytes(storage, key));
+            .from_hash(hash, |key| value_bytes == get_bytes(storage, key));
 
         let key = match entry {
             RawEntryMut::Occupied(entry) => *entry.into_key(),
@@ -312,7 +300,10 @@ where
     }
 }
 
-fn get_bytes<'a, K: ArrowNativeType>(values: &'a StringBuilder, key: &K) -> &'a [u8] {
+fn get_bytes<'a, K: ArrowNativeType, T: ByteArrayType>(
+    values: &'a GenericByteBuilder<T>,
+    key: &K,
+) -> &'a [u8] {
     let offsets = values.offsets_slice();
     let values = values.values_slice();
 
@@ -323,6 +314,82 @@ fn get_bytes<'a, K: ArrowNativeType>(values: &'a StringBuilder, key: &K) -> &'a 
     &values[start_offset..end_offset]
 }
 
+/// Array builder for `DictionaryArray` that stores Strings. For example to map a set of byte indices
+/// to String values. Note that the use of a `HashMap` here will not scale to very large
+/// arrays or result in an ordered dictionary.
+///
+/// ```
+/// // Create a dictionary array indexed by bytes whose values are Strings.
+/// // It can thus hold up to 256 distinct string values.
+///
+/// # use arrow_array::builder::StringDictionaryBuilder;
+/// # use arrow_array::{Int8Array, StringArray};
+/// # use arrow_array::types::Int8Type;
+///
+/// let mut builder = StringDictionaryBuilder::<Int8Type>::new();
+///
+/// // The builder builds the dictionary value by value
+/// builder.append("abc").unwrap();
+/// builder.append_null();
+/// builder.append("def").unwrap();
+/// builder.append("def").unwrap();
+/// builder.append("abc").unwrap();
+/// let array = builder.finish();
+///
+/// assert_eq!(
+///   array.keys(),
+///   &Int8Array::from(vec![Some(0), None, Some(1), Some(1), Some(0)])
+/// );
+///
+/// // Values are polymorphic and so require a downcast.
+/// let av = array.values();
+/// let ava: &StringArray = av.as_any().downcast_ref::<StringArray>().unwrap();
+///
+/// assert_eq!(ava.value(0), "abc");
+/// assert_eq!(ava.value(1), "def");
+///
+/// ```
+pub type StringDictionaryBuilder<K> =
+    GenericByteDictionaryBuilder<K, GenericStringType<i32>>;
+
+/// Array builder for `DictionaryArray` that stores binary. For example to map a set of byte indices
+/// to binary values. Note that the use of a `HashMap` here will not scale to very large
+/// arrays or result in an ordered dictionary.
+///
+/// ```
+/// // Create a dictionary array indexed by bytes whose values are binary.
+/// // It can thus hold up to 256 distinct binary values.
+///
+/// # use arrow_array::builder::BinaryDictionaryBuilder;
+/// # use arrow_array::{BinaryArray, Int8Array};
+/// # use arrow_array::types::Int8Type;
+///
+/// let mut builder = BinaryDictionaryBuilder::<Int8Type>::new();
+///
+/// // The builder builds the dictionary value by value
+/// builder.append(b"abc").unwrap();
+/// builder.append_null();
+/// builder.append(b"def").unwrap();
+/// builder.append(b"def").unwrap();
+/// builder.append(b"abc").unwrap();
+/// let array = builder.finish();
+///
+/// assert_eq!(
+///   array.keys(),
+///   &Int8Array::from(vec![Some(0), None, Some(1), Some(1), Some(0)])
+/// );
+///
+/// // Values are polymorphic and so require a downcast.
+/// let av = array.values();
+/// let ava: &BinaryArray = av.as_any().downcast_ref::<BinaryArray>().unwrap();
+///
+/// assert_eq!(ava.value(0), b"abc");
+/// assert_eq!(ava.value(1), b"def");
+///
+/// ```
+pub type BinaryDictionaryBuilder<K> =
+    GenericByteDictionaryBuilder<K, GenericBinaryType<i32>>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,6 +397,7 @@ mod tests {
     use crate::array::Array;
     use crate::array::Int8Array;
     use crate::types::{Int16Type, Int8Type};
+    use crate::StringArray;
 
     #[test]
     fn test_string_dictionary_builder() {
