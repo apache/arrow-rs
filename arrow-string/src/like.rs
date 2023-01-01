@@ -31,7 +31,7 @@ macro_rules! dyn_function {
 /// [`LargeStringArray`], or [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`].
 ///
-/// See the documentation on [`like_utf8`] for more details.
+#[doc = concat!("See the documentation on [`", stringify!($fn_utf8) ,"`] for more details.")]
 pub fn $fn_name(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, ArrowError> {
     match (left.data_type(), right.data_type()) {
         (DataType::Utf8, DataType::Utf8)  => {
