@@ -466,8 +466,6 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         )
         .unwrap();
 
-        print!("{:?}", batch);
-
         let builder = WriterBuilder::new().has_headers(false);
 
         let mut buf: Cursor<Vec<u8>> = Default::default();
@@ -500,8 +498,6 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
 
         let actual = c1.into_iter().collect::<Vec<_>>();
         let expected = vec![Some(3), Some(2), Some(1)];
-
-        print!("{:?}", actual);
 
         assert_eq!(actual, expected);
         let actual = c2.into_iter().collect::<Vec<_>>();
