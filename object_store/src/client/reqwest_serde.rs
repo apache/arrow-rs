@@ -17,7 +17,7 @@
 
 /// Implement serialization for the structs re-exported from the http crate: HeaderValue and HeaderMap.
 /// Some of the code here is copied from the crate http_serde, depending on that crate creates a sync between the two serde versions.
-/// https://gitlab.com/kornelski/http-serde/-/blob/master/src/lib.rs
+/// <https://gitlab.com/kornelski/http-serde/-/blob/master/src/lib.rs>
 
 pub mod header_value {
     use reqwest::header::HeaderValue;

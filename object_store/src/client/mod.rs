@@ -273,7 +273,6 @@ impl ClientOptions {
 mod tests {
     use super::*;
     use hyper::header::InvalidHeaderValue;
-    use serde_json;
 
     /// Errors that can show up during testing.
     #[derive(Debug)]
@@ -284,13 +283,13 @@ mod tests {
 
     impl From<serde_json::Error> for TestError {
         fn from(value: serde_json::Error) -> Self {
-            TestError::Json(value)
+            Self::Json(value)
         }
     }
 
     impl From<InvalidHeaderValue> for TestError {
         fn from(_value: InvalidHeaderValue) -> Self {
-            TestError::Message("invalid header value".into())
+            Self::Message("invalid header value".into())
         }
     }
 
