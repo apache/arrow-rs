@@ -102,24 +102,26 @@ fn write_2_0_0_compression() {
             .unwrap()
             .try_with_compression(Some(ipc::CompressionType::LZ4_FRAME))
             .unwrap(),
-
         // write IPC version 5 with zstd
         IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
             .unwrap()
             .try_with_compression(Some(ipc::CompressionType::ZSTD))
-            .unwrap()
+            .unwrap(),
     ];
 
     paths.iter().for_each(|path| {
         for options in &all_options {
             println!("Using options {options:?}");
             roundtrip_arrow_file_with_options(&testdata, version, path, options.clone());
-            roundtrip_arrow_stream_with_options(&testdata, version, path, options.clone());
+            roundtrip_arrow_stream_with_options(
+                &testdata,
+                version,
+                path,
+                options.clone(),
+            );
         }
     });
 }
-
-
 
 /// Verifies the arrow file writer by reading the contents of an
 /// arrow_file, writing it to a file, and then ensuring the contents
@@ -136,7 +138,9 @@ fn roundtrip_arrow_file(testdata: &str, version: &str, path: &str) {
 }
 
 fn roundtrip_arrow_file_with_options(
-    testdata: &str, version: &str, path: &str,
+    testdata: &str,
+    version: &str,
+    path: &str,
     options: IpcWriteOptions,
 ) {
     let filename = format!(
@@ -154,8 +158,12 @@ fn roundtrip_arrow_file_with_options(
 
         // read and rewrite the file to a temp location
         {
-            let mut writer =
-                FileWriter::try_new_with_options(&mut tempfile, &reader.schema(), options).unwrap();
+            let mut writer = FileWriter::try_new_with_options(
+                &mut tempfile,
+                &reader.schema(),
+                options,
+            )
+            .unwrap();
             while let Some(Ok(batch)) = reader.next() {
                 writer.write(&batch).unwrap();
             }
