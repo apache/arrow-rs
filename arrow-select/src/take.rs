@@ -592,11 +592,9 @@ where
 
             let s = array.value(index);
 
-            length_so_far += T::Offset::from_usize(
-                <<T as ByteArrayType>::Native as AsRef<[u8]>>::as_ref(s).len(),
-            )
-            .unwrap();
-            values.extend_from_slice(s.as_ref());
+            let s: &[u8] = s.as_ref();
+            length_so_far += T::Offset::from_usize(s.len()).unwrap();
+            values.extend_from_slice(s);
             *offset = length_so_far;
         }
         nulls = None
