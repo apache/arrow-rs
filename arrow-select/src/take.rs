@@ -592,7 +592,10 @@ where
 
             let s = array.value(index);
 
-            length_so_far += T::Offset::from_usize(s.as_ref().len()).unwrap();
+            length_so_far += T::Offset::from_usize(
+                <<T as ByteArrayType>::Native as AsRef<[u8]>>::as_ref(s).len(),
+            )
+            .unwrap();
             values.extend_from_slice(s.as_ref());
             *offset = length_so_far;
         }
@@ -609,7 +612,7 @@ where
             })?;
 
             if array.is_valid(index) {
-                let s = array.value(index).as_ref();
+                let s: &[u8] = array.value(index).as_ref();
 
                 length_so_far += T::Offset::from_usize(s.len()).unwrap();
                 values.extend_from_slice(s.as_ref());
@@ -627,7 +630,7 @@ where
                         ArrowError::ComputeError("Cast to usize failed".to_string())
                     })?;
 
-                let s = array.value(index).as_ref();
+                let s: &[u8] = array.value(index).as_ref();
 
                 length_so_far += T::Offset::from_usize(s.len()).unwrap();
                 values.extend_from_slice(s);
@@ -647,7 +650,7 @@ where
             })?;
 
             if array.is_valid(index) && indices.is_valid(i) {
-                let s = array.value(index).as_ref();
+                let s: &[u8] = array.value(index).as_ref();
 
                 length_so_far += T::Offset::from_usize(s.len()).unwrap();
                 values.extend_from_slice(s);

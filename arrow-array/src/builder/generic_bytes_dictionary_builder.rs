@@ -123,10 +123,7 @@ where
     pub fn new_with_dictionary(
         keys_capacity: usize,
         dictionary_values: &GenericByteArray<T>,
-    ) -> Result<Self, ArrowError>
-    where
-        <T as ByteArrayType>::Native: AsRef<<T as ByteArrayType>::Native> + AsRef<[u8]>,
-    {
+    ) -> Result<Self, ArrowError> {
         let state = ahash::RandomState::default();
         let dict_len = dictionary_values.len();
 
@@ -352,6 +349,12 @@ fn get_bytes<'a, K: ArrowNativeType, T: ByteArrayType>(
 pub type StringDictionaryBuilder<K> =
     GenericByteDictionaryBuilder<K, GenericStringType<i32>>;
 
+/// Array builder for `DictionaryArray` that stores large Strings. For example to map a set of byte indices
+/// to String values. Note that the use of a `HashMap` here will not scale to very large
+/// arrays or result in an ordered dictionary.
+pub type LargeStringDictionaryBuilder<K> =
+    GenericByteDictionaryBuilder<K, GenericStringType<i64>>;
+
 /// Array builder for `DictionaryArray` that stores binary. For example to map a set of byte indices
 /// to binary values. Note that the use of a `HashMap` here will not scale to very large
 /// arrays or result in an ordered dictionary.
@@ -389,6 +392,12 @@ pub type StringDictionaryBuilder<K> =
 /// ```
 pub type BinaryDictionaryBuilder<K> =
     GenericByteDictionaryBuilder<K, GenericBinaryType<i32>>;
+
+/// Array builder for `DictionaryArray` that stores large binary. For example to map a set of byte indices
+/// to binary values. Note that the use of a `HashMap` here will not scale to very large
+/// arrays or result in an ordered dictionary.
+pub type LargeBinaryDictionaryBuilder<K> =
+    GenericByteDictionaryBuilder<K, GenericBinaryType<i64>>;
 
 #[cfg(test)]
 mod tests {
