@@ -357,7 +357,7 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
 ///  .with_container_name(BUCKET_NAME)
 ///  .build();
 /// ```
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MicrosoftAzureBuilder {
     account_name: Option<String>,
     access_key: Option<String>,
@@ -470,16 +470,21 @@ impl MicrosoftAzureBuilder {
         let parsed = Url::parse(url).context(UnableToParseUrlSnafu { url })?;
         let host = parsed.host_str().context(UrlNotRecognisedSnafu { url })?;
 
+        let validate = |s: &str| match s.contains('.') {
+            true => Err(UrlNotRecognisedSnafu { url }.build()),
+            false => Ok(s.to_string()),
+        };
+
         match parsed.scheme() {
-            "az" | "adl" | "azure" => self.container_name = Some(host.to_string()),
+            "az" | "adl" | "azure" => self.container_name = Some(validate(host)?),
             "abfs" | "abfss" => {
                 // abfs(s) might refer to the fsspec convention abfs://<container>/<path>
                 // or the convention for the hadoop driver abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>
                 if parsed.username().is_empty() {
-                    self.container_name = Some(host.to_string());
+                    self.container_name = Some(validate(host)?);
                 } else if let Some(a) = host.strip_suffix(".dfs.core.windows.net") {
-                    self.container_name = Some(parsed.username().to_owned());
-                    self.account_name = Some(a.to_string());
+                    self.container_name = Some(validate(parsed.username())?);
+                    self.account_name = Some(validate(a)?);
                 } else {
                     return Err(UrlNotRecognisedSnafu { url }.build().into());
                 }
@@ -487,7 +492,7 @@ impl MicrosoftAzureBuilder {
             "https" => match host.split_once('.') {
                 Some((a, "dfs.core.windows.net"))
                 | Some((a, "blob.core.windows.net")) => {
-                    self.account_name = Some(a.to_string());
+                    self.account_name = Some(validate(a)?);
                 }
                 _ => return Err(UrlNotRecognisedSnafu { url }.build().into()),
             },
@@ -811,6 +816,20 @@ mod tests {
         builder
             .parse_url("https://account.blob.core.windows.net/")
             .unwrap();
-        assert_eq!(builder.account_name, Some("account".to_string()))
+        assert_eq!(builder.account_name, Some("account".to_string()));
+
+        let err_cases = [
+            "mailto://account.blob.core.windows.net/",
+            "az://blob.mydomain/",
+            "abfs://container.foo/path",
+            "abfss://file_system@account.foo.dfs.core.windows.net/",
+            "abfss://file_system.bar@account.dfs.core.windows.net/",
+            "https://blob.mydomain/",
+            "https://blob.foo.dfs.core.windows.net/",
+        ];
+        let mut builder = MicrosoftAzureBuilder::new();
+        for case in err_cases {
+            builder.parse_url(case).unwrap_err();
+        }
     }
 }
