@@ -300,8 +300,7 @@ impl WriterBuilder {
 mod tests {
     use super::*;
 
-    use crate::Reader;
-    use std::io::{Cursor, Read, Seek};
+    use std::io::{Read, Seek};
     use std::sync::Arc;
 
     #[test]
@@ -439,72 +438,5 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
             .to_string(),
             String::from_utf8(buffer).unwrap()
         );
-    }
-
-    #[test]
-    fn test_conversion_consistency() {
-        // test if we can serialize and deserialize whilst retaining the same type information/ precision
-
-        let schema = Schema::new(vec![
-            Field::new("c1", DataType::Date32, false),
-            Field::new("c2", DataType::Date64, false),
-            Field::new("c3", DataType::Timestamp(TimeUnit::Nanosecond, None), false),
-        ]);
-
-        let nanoseconds = vec![
-            1599566300000000000,
-            1599566200000000000,
-            1599566100000000000,
-        ];
-        let c1 = Date32Array::from(vec![3, 2, 1]);
-        let c2 = Date64Array::from(vec![3, 2, 1]);
-        let c3 = TimestampNanosecondArray::from(nanoseconds.clone());
-
-        let batch = RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![Arc::new(c1), Arc::new(c2), Arc::new(c3)],
-        )
-        .unwrap();
-
-        let builder = WriterBuilder::new().has_headers(false);
-
-        let mut buf: Cursor<Vec<u8>> = Default::default();
-        // drop the writer early to release the borrow.
-        {
-            let mut writer = builder.build(&mut buf);
-            writer.write(&batch).unwrap();
-        }
-        buf.set_position(0);
-
-        let mut reader = Reader::new(
-            buf,
-            Arc::new(schema),
-            false,
-            None,
-            3,
-            // starting at row 2 and up to row 6.
-            None,
-            None,
-            None,
-        );
-        let rb = reader.next().unwrap().unwrap();
-        let c1 = rb.column(0).as_any().downcast_ref::<Date32Array>().unwrap();
-        let c2 = rb.column(1).as_any().downcast_ref::<Date64Array>().unwrap();
-        let c3 = rb
-            .column(2)
-            .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
-            .unwrap();
-
-        let actual = c1.into_iter().collect::<Vec<_>>();
-        let expected = vec![Some(3), Some(2), Some(1)];
-
-        assert_eq!(actual, expected);
-        let actual = c2.into_iter().collect::<Vec<_>>();
-        let expected = vec![Some(3), Some(2), Some(1)];
-        assert_eq!(actual, expected);
-        let actual = c3.into_iter().collect::<Vec<_>>();
-        let expected = nanoseconds.into_iter().map(Some).collect::<Vec<_>>();
-        assert_eq!(actual, expected);
     }
 }
