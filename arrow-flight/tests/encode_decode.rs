@@ -96,6 +96,12 @@ async fn test_dictionary_many() {
     .await;
 }
 
+// test sending cloned arrays
+
+// test sending dictionary array that clearly share the same dictionary
+
+// test sending sliced dictionary arrays
+
 #[tokio::test]
 async fn test_app_metadata() {
     let input_batch_stream = futures::stream::iter(vec![Ok(make_primative_batch(78))]);
