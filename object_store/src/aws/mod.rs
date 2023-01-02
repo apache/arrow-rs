@@ -36,6 +36,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
+use itertools::Itertools;
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -129,6 +130,9 @@ enum Error {
         scheme
     ))]
     UnknownUrlScheme { scheme: String },
+
+    #[snafu(display("URL did not match any known pattern for scheme: {}", url))]
+    UrlNotRecognised { url: String },
 }
 
 impl From<Error> for super::Error {
@@ -358,7 +362,7 @@ impl CloudMultiPartUploadImpl for S3MultiPartUpload {
 ///  .with_secret_access_key(SECRET_KEY)
 ///  .build();
 /// ```
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct AmazonS3Builder {
     access_key_id: Option<String>,
     secret_access_key: Option<String>,
@@ -366,13 +370,13 @@ pub struct AmazonS3Builder {
     bucket_name: Option<String>,
     endpoint: Option<String>,
     token: Option<String>,
+    url: Option<String>,
     retry_config: RetryConfig,
     imdsv1_fallback: bool,
     virtual_hosted_style_request: bool,
     metadata_endpoint: Option<String>,
     profile: Option<String>,
     client_options: ClientOptions,
-    url_parse_error: Option<Error>,
 }
 
 impl AmazonS3Builder {
@@ -453,9 +457,7 @@ impl AmazonS3Builder {
     /// - `https://s3.<bucket>.amazonaws.com`
     /// - `https://<bucket>.s3.<region>.amazonaws.com`
     ///
-    /// Please note that this is a best effort implementation, and will not fail for malformed URLs,
-    /// but rather warn and ignore the passed url. The url also has no effect on how the
-    /// storage is accessed - e.g. which driver or protocol is used for reading from the location.
+    /// Note: Settings derived from the URL will override any others set on this builder
     ///
     /// # Example
     /// ```
@@ -465,44 +467,39 @@ impl AmazonS3Builder {
     ///     .with_url("s3://bucket/path")
     ///     .build();
     /// ```
-    pub fn with_url(mut self, url: impl AsRef<str>) -> Self {
-        let maybe_parsed = Url::parse(url.as_ref());
-        match maybe_parsed {
-            Ok(parsed) => match parsed.scheme() {
-                "s3" | "s3a" => {
-                    self.bucket_name = parsed.host_str().map(|host| host.to_owned());
-                }
-                "https" => {
-                    if let Some(host) = parsed.host_str() {
-                        let parts = host.splitn(4, '.').collect::<Vec<&str>>();
-                        if parts.len() == 4 && parts[0] == "s3" && parts[2] == "amazonaws"
-                        {
-                            self.bucket_name = Some(parts[1].to_string());
-                        }
-                        if parts.len() == 4
-                            && parts[1] == "s3"
-                            && parts[3] == "amazonaws.com"
-                        {
-                            self.bucket_name = Some(parts[0].to_string());
-                            self.region = Some(parts[2].to_string());
-                            self.virtual_hosted_style_request = true;
-                        }
-                    }
-                }
-                other => {
-                    self.url_parse_error = Some(Error::UnknownUrlScheme {
-                        scheme: other.into(),
-                    });
-                }
-            },
-            Err(err) => {
-                self.url_parse_error = Some(Error::UnableToParseUrl {
-                    source: err,
-                    url: url.as_ref().into(),
-                });
-            }
-        };
+    pub fn with_url(mut self, url: impl Into<String>) -> Self {
+        self.url = Some(url.into());
         self
+    }
+
+    /// Sets properties on this builder based on a URL
+    ///
+    /// This is a separate member function to allow fallible computation to
+    /// be deferred until [`Self::build`] which in turn allows deriving [`Clone`]
+    fn parse_url(&mut self, url: &str) -> Result<()> {
+        let parsed = Url::parse(url).context(UnableToParseUrlSnafu { url })?;
+        let host = parsed.host_str().context(UrlNotRecognisedSnafu { url })?;
+        let validate = |s: &str| match s.contains('.') {
+            true => Err(UrlNotRecognisedSnafu { url }.build()),
+            false => Ok(s.to_string()),
+        };
+
+        match parsed.scheme() {
+            "s3" | "s3a" => self.bucket_name = Some(validate(host)?),
+            "https" => match host.splitn(4, '.').collect_tuple() {
+                Some(("s3", bucket, "amazonaws", "com")) => {
+                    self.bucket_name = Some(bucket.to_string());
+                }
+                Some((bucket, "s3", region, "amazonaws.com")) => {
+                    self.bucket_name = Some(bucket.to_string());
+                    self.region = Some(region.to_string());
+                    self.virtual_hosted_style_request = true;
+                }
+                _ => return Err(UrlNotRecognisedSnafu { url }.build().into()),
+            },
+            scheme => return Err(UnknownUrlSchemeSnafu { scheme }.build().into()),
+        };
+        Ok(())
     }
 
     /// Set the AWS Access Key (required)
@@ -641,9 +638,9 @@ impl AmazonS3Builder {
 
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
-    pub fn build(self) -> Result<AmazonS3> {
-        if let Some(err) = self.url_parse_error {
-            return Err(err.into());
+    pub fn build(mut self) -> Result<AmazonS3> {
+        if let Some(url) = self.url.take() {
+            self.parse_url(&url)?;
         }
 
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
@@ -1022,15 +1019,36 @@ mod tests {
 
     #[test]
     fn s3_test_urls() {
-        let builder = AmazonS3Builder::new().with_url("s3://bucket/path");
+        let mut builder = AmazonS3Builder::new();
+        builder.parse_url("s3://bucket/path").unwrap();
         assert_eq!(builder.bucket_name, Some("bucket".to_string()));
 
-        let builder = AmazonS3Builder::new().with_url("https://s3.bucket.amazonaws.com");
+        let mut builder = AmazonS3Builder::new();
+        builder
+            .parse_url("https://s3.bucket.amazonaws.com")
+            .unwrap();
         assert_eq!(builder.bucket_name, Some("bucket".to_string()));
 
-        let builder =
-            AmazonS3Builder::new().with_url("https://bucket.s3.region.amazonaws.com");
+        let mut builder = AmazonS3Builder::new();
+        builder
+            .parse_url("https://bucket.s3.region.amazonaws.com")
+            .unwrap();
         assert_eq!(builder.bucket_name, Some("bucket".to_string()));
-        assert_eq!(builder.region, Some("region".to_string()))
+        assert_eq!(builder.region, Some("region".to_string()));
+        assert!(builder.virtual_hosted_style_request);
+
+        let err_cases = [
+            "mailto://bucket/path",
+            "s3://bucket.mydomain/path",
+            "https://s3.bucket.mydomain.com",
+            "https://s3.bucket.foo.amazonaws.com",
+            "https://bucket.mydomain.region.amazonaws.com",
+            "https://bucket.s3.region.bar.amazonaws.com",
+            "https://bucket.foo.s3.amazonaws.com",
+        ];
+        let mut builder = AmazonS3Builder::new();
+        for case in err_cases {
+            builder.parse_url(case).unwrap_err();
+        }
     }
 }
