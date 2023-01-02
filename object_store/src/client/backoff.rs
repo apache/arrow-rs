@@ -22,7 +22,7 @@ use std::time::Duration;
 ///
 /// See <https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/>
 #[allow(missing_copy_implementations)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct BackoffConfig {
     /// The initial backoff duration
     pub init_backoff: Duration,

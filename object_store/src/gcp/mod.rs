@@ -787,7 +787,7 @@ fn reader_credentials_file(
 ///  .with_bucket_name(BUCKET_NAME)
 ///  .build();
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GoogleCloudStorageBuilder {
     bucket_name: Option<String>,
     url: Option<String>,

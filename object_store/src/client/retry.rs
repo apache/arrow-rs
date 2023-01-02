@@ -87,7 +87,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// By default they will be retried up to some limit, using exponential
 /// backoff with jitter. See [`BackoffConfig`] for more information
 ///
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RetryConfig {
     /// The backoff configuration
     pub backoff: BackoffConfig,

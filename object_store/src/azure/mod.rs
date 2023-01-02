@@ -357,7 +357,7 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
 ///  .with_container_name(BUCKET_NAME)
 ///  .build();
 /// ```
-#[derive(Default, Clone)]
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MicrosoftAzureBuilder {
     account_name: Option<String>,
     access_key: Option<String>,

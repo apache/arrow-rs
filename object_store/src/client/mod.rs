@@ -22,6 +22,7 @@ pub mod backoff;
 pub mod mock_server;
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod pagination;
+mod reqwest_serde;
 pub mod retry;
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod token;
@@ -44,11 +45,13 @@ static DEFAULT_USER_AGENT: &str =
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 /// HTTP client configuration for remote object stores
-#[derive(Debug, Clone, Default)]
+#[derive(PartialEq, Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ClientOptions {
+    #[serde(with = "reqwest_serde::option_header_value")]
     user_agent: Option<HeaderValue>,
     content_type_map: HashMap<String, String>,
     default_content_type: Option<String>,
+    #[serde(with = "reqwest_serde::option_header_map")]
     default_headers: Option<HeaderMap>,
     proxy_url: Option<String>,
     allow_http: bool,
@@ -263,5 +266,64 @@ impl ClientOptions {
             .https_only(!self.allow_http)
             .build()
             .map_err(map_client_error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hyper::header::InvalidHeaderValue;
+    use serde_json;
+
+    /// Errors that can show up during testing.
+    #[derive(Debug)]
+    enum TestError {
+        Json(serde_json::Error),
+        Message(String),
+    }
+
+    impl From<serde_json::Error> for TestError {
+        fn from(value: serde_json::Error) -> Self {
+            TestError::Json(value)
+        }
+    }
+
+    impl From<InvalidHeaderValue> for TestError {
+        fn from(_value: InvalidHeaderValue) -> Self {
+            TestError::Message("invalid header value".into())
+        }
+    }
+
+    fn round_trip(options: ClientOptions) -> Result<(), TestError> {
+        let as_json = serde_json::to_string(&options)?;
+        let back = serde_json::from_str(&as_json)?;
+        assert_eq!(options, back);
+        Ok(())
+    }
+
+    #[test]
+    fn test_serde() -> Result<(), TestError> {
+        round_trip(ClientOptions::default())?;
+        // Test HeaderValue.
+        round_trip(
+            ClientOptions::default()
+                .with_user_agent(HeaderValue::from_str("Example").unwrap()),
+        )?;
+        // Test HeaderMap.
+        let mut headers = HeaderMap::new();
+        headers.insert(reqwest::header::HOST, "example.com".parse::<HeaderValue>()?);
+        round_trip(ClientOptions::default().with_default_headers(headers))?;
+        // Test content type map.
+        round_trip(
+            ClientOptions::default().with_content_type_for_suffix("foo", "text/foo"),
+        )?;
+        // Test regular fields.
+        round_trip(
+            ClientOptions::default()
+                .with_allow_http(true)
+                .with_connect_timeout(Duration::from_secs(1))
+                .with_proxy_url(String::from("http://127.0.0.1:4242")),
+        )?;
+        Ok(())
     }
 }
