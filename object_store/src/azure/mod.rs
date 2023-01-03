@@ -37,8 +37,10 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
+use once_cell::sync::Lazy;
+use percent_encoding::percent_decode_str;
 use snafu::{OptionExt, ResultExt, Snafu};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::{Debug, Formatter};
 use std::io;
 use std::ops::Range;
@@ -124,6 +126,12 @@ enum Error {
 
     #[snafu(display("URL did not match any known pattern for scheme: {}", url))]
     UrlNotRecognised { url: String },
+
+    #[snafu(display("Failed parsing an SAS key"))]
+    DecodeSasKey { source: std::str::Utf8Error },
+
+    #[snafu(display("Missing component in SAS query pair"))]
+    MissingSasComponent {},
 }
 
 impl From<Error> for super::Error {
@@ -367,12 +375,102 @@ pub struct MicrosoftAzureBuilder {
     client_secret: Option<String>,
     tenant_id: Option<String>,
     sas_query_pairs: Option<Vec<(String, String)>>,
+    sas_key: Option<String>,
     authority_host: Option<String>,
     url: Option<String>,
     use_emulator: bool,
     retry_config: RetryConfig,
     client_options: ClientOptions,
 }
+
+#[derive(PartialEq, Eq)]
+enum AzureConfigKey {
+    /// The name of the azure storage account
+    ///
+    /// Supported keys:
+    /// - `azure_storage_account_name`
+    /// - `account_name`
+    AccountName,
+
+    /// Master key for accessing storage account
+    ///
+    /// Supported keys:
+    /// - `azure_storage_account_key`
+    /// - `azure_storage_access_key`
+    /// - `azure_storage_master_key`
+    /// - `access_key`
+    /// - `account_key`
+    /// - `master_key`
+    AccessKey,
+
+    /// Service principal client id for authorizing requests
+    ///
+    /// Supported keys:
+    /// - `azure_storage_client_id`
+    /// - `azure_client_id`
+    /// - `client_id`
+    ClientId,
+
+    /// Service principal client secret for authorizing requests
+    ///
+    /// Supported keys:
+    /// - `azure_storage_client_secret`
+    /// - `azure_client_secret`
+    /// - `client_secret`
+    ClientSecret,
+
+    /// Tenant id used in oauth flows
+    ///
+    /// Supported keys:
+    /// - `azure_storage_tenant_id`
+    /// - `azure_storage_authority_id`
+    /// - `azure_tenant_id`
+    /// - `azure_authority_id`
+    /// - `tenant_id`
+    /// - `authority_id`
+    AuthorityId,
+    SasKey,
+    UseEmulator,
+}
+
+static ALIAS_MAP: Lazy<HashMap<&'static str, AzureConfigKey>> = Lazy::new(|| {
+    HashMap::from([
+        // access key
+        ("azure_storage_account_key", AzureConfigKey::AccessKey),
+        ("azure_storage_access_key", AzureConfigKey::AccessKey),
+        ("azure_storage_master_key", AzureConfigKey::AccessKey),
+        ("master_key", AzureConfigKey::AccessKey),
+        ("account_key", AzureConfigKey::AccessKey),
+        ("access_key", AzureConfigKey::AccessKey),
+        // sas key
+        ("azure_storage_sas_token", AzureConfigKey::SasKey),
+        ("azure_storage_sas_key", AzureConfigKey::SasKey),
+        ("sas_token", AzureConfigKey::SasKey),
+        ("sas_key", AzureConfigKey::SasKey),
+        // account name
+        ("azure_storage_account_name", AzureConfigKey::AccountName),
+        ("account_name", AzureConfigKey::AccountName),
+        // client id
+        ("azure_storage_client_id", AzureConfigKey::ClientId),
+        ("azure_client_id", AzureConfigKey::ClientId),
+        ("client_id", AzureConfigKey::ClientId),
+        // client secret
+        ("azure_storage_client_secret", AzureConfigKey::ClientSecret),
+        ("azure_client_secret", AzureConfigKey::ClientSecret),
+        ("client_secret", AzureConfigKey::ClientSecret),
+        // authority id
+        ("azure_storage_tenant_id", AzureConfigKey::AuthorityId),
+        ("azure_storage_authority_id", AzureConfigKey::AuthorityId),
+        ("azure_tenant_id", AzureConfigKey::AuthorityId),
+        ("azure_authority_id", AzureConfigKey::AuthorityId),
+        ("tenant_id", AzureConfigKey::AuthorityId),
+        ("authority_id", AzureConfigKey::AuthorityId),
+        // use emulator
+        ("azure_storage_use_emulator", AzureConfigKey::UseEmulator),
+        ("object_store_use_emulator", AzureConfigKey::UseEmulator),
+        ("use_emulator", AzureConfigKey::UseEmulator),
+    ])
+});
 
 impl Debug for MicrosoftAzureBuilder {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -409,29 +507,13 @@ impl MicrosoftAzureBuilder {
     /// ```
     pub fn from_env() -> Self {
         let mut builder = Self::default();
-
-        if let Ok(account_name) = std::env::var("AZURE_STORAGE_ACCOUNT_NAME") {
-            builder.account_name = Some(account_name);
+        for (key, _) in ALIAS_MAP.iter() {
+            if key.starts_with("azure_") {
+                if let Ok(value) = std::env::var(key.to_ascii_uppercase()) {
+                    builder = builder.with_option(*key, value)
+                }
+            }
         }
-
-        if let Ok(access_key) = std::env::var("AZURE_STORAGE_ACCOUNT_KEY") {
-            builder.access_key = Some(access_key);
-        } else if let Ok(access_key) = std::env::var("AZURE_STORAGE_ACCESS_KEY") {
-            builder.access_key = Some(access_key);
-        }
-
-        if let Ok(client_id) = std::env::var("AZURE_STORAGE_CLIENT_ID") {
-            builder.client_id = Some(client_id);
-        }
-
-        if let Ok(client_secret) = std::env::var("AZURE_STORAGE_CLIENT_SECRET") {
-            builder.client_secret = Some(client_secret);
-        }
-
-        if let Ok(tenant_id) = std::env::var("AZURE_STORAGE_TENANT_ID") {
-            builder.tenant_id = Some(tenant_id);
-        }
-
         builder
     }
 
@@ -459,6 +541,37 @@ impl MicrosoftAzureBuilder {
     /// ```
     pub fn with_url(mut self, url: impl Into<String>) -> Self {
         self.url = Some(url.into());
+        self
+    }
+
+    /// Set an option on the builder via a key - value pair.
+    pub fn with_option(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        let raw = key.into();
+        if let Some(key) = ALIAS_MAP.get(&*raw.to_ascii_lowercase()) {
+            match key {
+                AzureConfigKey::AccessKey => self.access_key = Some(value.into()),
+                AzureConfigKey::AccountName => self.account_name = Some(value.into()),
+                AzureConfigKey::ClientId => self.client_id = Some(value.into()),
+                AzureConfigKey::ClientSecret => self.client_secret = Some(value.into()),
+                AzureConfigKey::AuthorityId => self.tenant_id = Some(value.into()),
+                AzureConfigKey::SasKey => self.sas_key = Some(value.into()),
+                AzureConfigKey::UseEmulator => {
+                    self.use_emulator = str_is_truthy(&value.into())
+                }
+            };
+        }
+        self
+    }
+
+    /// Hydrate builder from key value pairs
+    pub fn with_options(mut self, options: &HashMap<String, String>) -> Self {
+        for (key, value) in options {
+            self = self.with_option(key, value);
+        }
         self
     }
 
@@ -636,6 +749,8 @@ impl MicrosoftAzureBuilder {
                 ))
             } else if let Some(query_pairs) = self.sas_query_pairs {
                 Ok(credential::CredentialProvider::SASToken(query_pairs))
+            } else if let Some(sas) = self.sas_key {
+                Ok(credential::CredentialProvider::SASToken(split_sas(&sas)?))
             } else {
                 Err(Error::MissingCredentials {})
             }?;
@@ -671,6 +786,33 @@ fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
         Err(_) => Url::parse(default_url).expect("Failed to parse default URL"),
     };
     Ok(url)
+}
+
+fn split_sas(sas: &str) -> Result<Vec<(String, String)>, Error> {
+    let sas = percent_decode_str(sas)
+        .decode_utf8()
+        .context(DecodeSasKeySnafu {})?;
+    let kv_str_pairs = sas
+        .trim_start_matches('?')
+        .split('&')
+        .filter(|s| !s.chars().all(char::is_whitespace));
+    let mut pairs = Vec::new();
+    for kv_pair_str in kv_str_pairs {
+        let (k, v) = kv_pair_str
+            .trim()
+            .split_once('=')
+            .ok_or(Error::MissingSasComponent {})?;
+        pairs.push((k.into(), v.into()))
+    }
+    Ok(pairs)
+}
+
+pub(crate) fn str_is_truthy(val: &str) -> bool {
+    val == "1"
+        || val.to_lowercase() == "true"
+        || val.to_lowercase() == "on"
+        || val.to_lowercase() == "yes"
+        || val.to_lowercase() == "y"
 }
 
 #[cfg(test)]
