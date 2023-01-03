@@ -21,6 +21,7 @@ use crate::types::*;
 use crate::{ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::ArrayData;
+use arrow_schema::DataType;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -94,6 +95,7 @@ pub type Decimal256Builder = PrimitiveBuilder<Decimal256Type>;
 pub struct PrimitiveBuilder<T: ArrowPrimitiveType> {
     values_builder: BufferBuilder<T::Native>,
     null_buffer_builder: NullBufferBuilder,
+    data_type: DataType,
 }
 
 impl<T: ArrowPrimitiveType> ArrayBuilder for PrimitiveBuilder<T> {
@@ -150,6 +152,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         Self {
             values_builder: BufferBuilder::<T::Native>::new(capacity),
             null_buffer_builder: NullBufferBuilder::new(capacity),
+            data_type: T::DATA_TYPE,
         }
     }
 
@@ -169,7 +172,27 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         Self {
             values_builder,
             null_buffer_builder,
+            data_type: T::DATA_TYPE,
         }
+    }
+
+    /// By default [`PrimitiveBuilder`] uses [`T::DATA_TYPE`] as the data type of
+    /// the generated array.
+    ///
+    /// This method allows overriding the data type, to allow specifying timezones
+    /// for [`DataType::Timestamp`] or precision and scale for [`DataType::Decimal128`]
+    ///
+    /// # Panics
+    ///
+    /// This method panics if `data_type` is not [PrimitiveArray::is_compatible]
+    pub fn with_data_type(self, data_type: DataType) -> Self {
+        assert!(
+            PrimitiveArray::<T>::is_compatible(&data_type),
+            "incompatible data type for builder, expected {} got {}",
+            T::DATA_TYPE,
+            data_type
+        );
+        Self { data_type, ..self }
     }
 
     /// Returns the capacity of this builder measured in slots of type `T`
@@ -250,7 +273,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     pub fn finish(&mut self) -> PrimitiveArray<T> {
         let len = self.len();
         let null_bit_buffer = self.null_buffer_builder.finish();
-        let builder = ArrayData::builder(T::DATA_TYPE)
+        let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
             .add_buffer(self.values_builder.finish())
             .null_bit_buffer(null_bit_buffer);
@@ -267,7 +290,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             .as_slice()
             .map(Buffer::from_slice_ref);
         let values_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
-        let builder = ArrayData::builder(T::DATA_TYPE)
+        let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
             .add_buffer(values_buffer)
             .null_bit_buffer(null_bit_buffer);
@@ -309,6 +332,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
 mod tests {
     use super::*;
     use arrow_buffer::Buffer;
+    use arrow_schema::TimeUnit;
 
     use crate::array::Array;
     use crate::array::BooleanArray;
@@ -527,5 +551,31 @@ mod tests {
         arr = builder.finish();
         assert_eq!(5, arr.len());
         assert_eq!(0, builder.len());
+    }
+
+    #[test]
+    fn test_primitive_array_builder_with_data_type() {
+        let mut builder =
+            Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
+        builder.append_value(1);
+        let array = builder.finish();
+        assert_eq!(array.precision(), 1);
+        assert_eq!(array.scale(), 2);
+
+        let data_type =
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_string()));
+        let mut builder =
+            TimestampNanosecondBuilder::new().with_data_type(data_type.clone());
+        builder.append_value(1);
+        let array = builder.finish();
+        assert_eq!(array.data_type(), &data_type);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "incompatible data type for builder, expected Int32 got Int64"
+    )]
+    fn test_invalid_with_data_type() {
+        Int32Builder::new().with_data_type(DataType::Int64);
     }
 }
