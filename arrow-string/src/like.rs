@@ -21,7 +21,7 @@ use arrow_array::*;
 use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayData;
 use arrow_schema::*;
-use arrow_select::take::take;
+use arrow_select::take::take_boolean;
 use regex::Regex;
 use std::collections::HashMap;
 
@@ -96,8 +96,7 @@ pub fn $fn_name(
             downcast_dictionary_array!(
                 left => {
                     let dict_comparison = $fn_name(left.values().as_ref(), right)?;
-                    // TODO: Use take_boolean (#2967)
-                    let array = take(&dict_comparison, left.keys(), None)?;
+                    let array = take_boolean(&dict_comparison, left.keys())?;
                     Ok(BooleanArray::from(array.data().clone()))
                 }
                 t => Err(ArrowError::ComputeError(format!(

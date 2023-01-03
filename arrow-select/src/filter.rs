@@ -463,7 +463,10 @@ fn filter_bits(buffer: &Buffer, offset: usize, predicate: &FilterPredicate) -> B
 }
 
 /// `filter` implementation for boolean buffers
-fn filter_boolean(values: &BooleanArray, predicate: &FilterPredicate) -> BooleanArray {
+pub fn filter_boolean(
+    values: &BooleanArray,
+    predicate: &FilterPredicate,
+) -> BooleanArray {
     let data = values.data();
     assert_eq!(data.buffers().len(), 1);
     assert_eq!(data.child_data().len(), 0);
@@ -483,7 +486,7 @@ fn filter_boolean(values: &BooleanArray, predicate: &FilterPredicate) -> Boolean
 }
 
 /// `filter` implementation for primitive arrays
-fn filter_primitive<T>(
+pub fn filter_primitive<T>(
     values: &PrimitiveArray<T>,
     predicate: &FilterPredicate,
 ) -> PrimitiveArray<T>
@@ -626,7 +629,7 @@ where
 ///
 /// Note: NULLs with a non-zero slot length in `array` will have the corresponding
 /// data copied across. This allows handling the null mask separately from the data
-fn filter_bytes<T>(
+pub fn filter_bytes<T>(
     array: &GenericByteArray<T>,
     predicate: &FilterPredicate,
 ) -> GenericByteArray<T>
@@ -664,7 +667,7 @@ where
 }
 
 /// `filter` implementation for dictionaries
-fn filter_dict<T>(
+pub fn filter_dict<T>(
     array: &DictionaryArray<T>,
     predicate: &FilterPredicate,
 ) -> DictionaryArray<T>
