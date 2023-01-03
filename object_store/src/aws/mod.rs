@@ -1109,10 +1109,7 @@ mod tests {
         let aws_session_token = "object_store:fake_session_token".to_string();
         let options = HashMap::from([
             ("aws_access_key_id".to_string(), aws_access_key_id.clone()),
-            (
-                "aws_secret_access_key".to_string(),
-                aws_secret_access_key.clone(),
-            ),
+            ("aws_secret_access_key".to_string(), aws_secret_access_key),
             ("aws_default_region".to_string(), aws_default_region.clone()),
             ("aws_endpoint".to_string(), aws_endpoint.clone()),
             ("aws_session_token".to_string(), aws_session_token.clone()),

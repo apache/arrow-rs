@@ -808,7 +808,7 @@ enum GoogleConfigKey {
 
     /// Bucket name
     ///
-    /// See [`AmazonS3Builder::with_bucket_name`] for details.
+    /// See [`GoogleCloudStorageBuilder::with_bucket_name`] for details.
     ///
     /// Supported keys:
     /// - `google_bucket`
