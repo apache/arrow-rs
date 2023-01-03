@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::array::{empty_offsets, print_long_array};
+use crate::builder::GenericByteBuilder;
 use crate::iterator::ArrayIter;
 use crate::raw_pointer::RawPtrBox;
 use crate::types::bytes::ByteArrayNativeType;
@@ -138,6 +139,91 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// constructs a new iterator
     pub fn iter(&self) -> ArrayIter<&Self> {
         ArrayIter::new(self)
+    }
+
+    /// Returns `GenericByteBuilder` of this byte array for mutating its values if the underlying
+    /// offset and data buffers are not shared by others.
+    pub fn into_builder(self) -> Result<GenericByteBuilder<T>, Self> {
+        let len = self.len();
+        let null_bit_buffer = self
+            .data
+            .null_buffer()
+            .map(|b| b.bit_slice(self.data.offset(), len));
+
+        let element_len = std::mem::size_of::<T::Offset>();
+        let offset_buffer = self.data.buffers()[0]
+            .slice_with_length(self.data.offset() * element_len, (len + 1) * element_len);
+
+        let element_len = std::mem::size_of::<u8>();
+        let value_len =
+            T::Offset::as_usize(self.value_offsets()[len] - self.value_offsets()[0]);
+        let value_buffer = self.data.buffers()[1]
+            .slice_with_length(self.data.offset() * element_len, value_len * element_len);
+
+        drop(self.data);
+
+        let try_mutable_null_buffer = match null_bit_buffer {
+            None => Ok(None),
+            Some(null_buffer) => {
+                // Null buffer exists, tries to make it mutable
+                null_buffer.into_mutable().map(Some)
+            }
+        };
+
+        let try_mutable_buffers = match try_mutable_null_buffer {
+            Ok(mutable_null_buffer) => {
+                // Got mutable null buffer, tries to get mutable value buffer
+                let try_mutable_offset_buffer = offset_buffer.into_mutable();
+                let try_mutable_value_buffer = value_buffer.into_mutable();
+
+                // try_mutable_offset_buffer.map(...).map_err(...) doesn't work as the compiler complains
+                // mutable_null_buffer is moved into map closure.
+                match (try_mutable_offset_buffer, try_mutable_value_buffer) {
+                    (Ok(mutable_offset_buffer), Ok(mutable_value_buffer)) => unsafe {
+                        Ok(GenericByteBuilder::<T>::new_from_buffer(
+                            mutable_offset_buffer,
+                            mutable_value_buffer,
+                            mutable_null_buffer,
+                        ))
+                    },
+                    (Ok(mutable_offset_buffer), Err(value_buffer)) => Err((
+                        mutable_offset_buffer.into(),
+                        value_buffer,
+                        mutable_null_buffer.map(|b| b.into()),
+                    )),
+                    (Err(offset_buffer), Ok(mutable_value_buffer)) => Err((
+                        offset_buffer,
+                        mutable_value_buffer.into(),
+                        mutable_null_buffer.map(|b| b.into()),
+                    )),
+                    (Err(offset_buffer), Err(value_buffer)) => Err((
+                        offset_buffer,
+                        value_buffer,
+                        mutable_null_buffer.map(|b| b.into()),
+                    )),
+                }
+            }
+            Err(mutable_null_buffer) => {
+                // Unable to get mutable null buffer
+                Err((offset_buffer, value_buffer, Some(mutable_null_buffer)))
+            }
+        };
+
+        match try_mutable_buffers {
+            Ok(builder) => Ok(builder),
+            Err((offset_buffer, value_buffer, null_bit_buffer)) => {
+                let builder = ArrayData::builder(T::DATA_TYPE)
+                    .len(len)
+                    .add_buffer(offset_buffer)
+                    .add_buffer(value_buffer)
+                    .null_bit_buffer(null_bit_buffer);
+
+                let array_data = unsafe { builder.build_unchecked() };
+                let array = GenericByteArray::<T>::from(array_data);
+
+                Err(array)
+            }
+        }
     }
 }
 

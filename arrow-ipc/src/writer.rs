@@ -137,6 +137,38 @@ impl Default for IpcWriteOptions {
 }
 
 #[derive(Debug, Default)]
+/// Handles low level details of encoding [`Array`] and [`Schema`] into the
+/// [Arrow IPC Format].
+///
+/// # Example:
+/// ```
+/// # fn run() {
+/// # use std::sync::Arc;
+/// # use arrow_array::UInt64Array;
+/// # use arrow_array::RecordBatch;
+/// # use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
+///
+/// // Create a record batch
+/// let batch = RecordBatch::try_from_iter(vec![
+///  ("col2", Arc::new(UInt64Array::from_iter([10, 23, 33])) as _)
+/// ]).unwrap();
+///
+/// // Error of dictionary ids are replaced.
+/// let error_on_replacement = true;
+/// let options = IpcWriteOptions::default();
+/// let mut dictionary_tracker = DictionaryTracker::new(error_on_replacement);
+///
+/// // encode the batch into zero or more encoded dictionaries
+/// // and the data for the actual array.
+/// let data_gen = IpcDataGenerator {};
+/// let (encoded_dictionaries, encoded_message) = data_gen
+///   .encoded_batch(&batch, &mut dictionary_tracker, &options)
+///   .unwrap();
+/// # }
+/// ```
+///
+/// [Arrow IPC Format]: https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc
+
 pub struct IpcDataGenerator {}
 
 impl IpcDataGenerator {
