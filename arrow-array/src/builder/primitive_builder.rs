@@ -176,8 +176,8 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         }
     }
 
-    /// By default [`PrimitiveBuilder`] uses [`T::DATA_TYPE`] as the data type of
-    /// the generated array.
+    /// By default [`PrimitiveBuilder`] uses [`ArrowPrimitiveType::DATA_TYPE`] as the
+    /// data type of the generated array.
     ///
     /// This method allows overriding the data type, to allow specifying timezones
     /// for [`DataType::Timestamp`] or precision and scale for [`DataType::Decimal128`]
