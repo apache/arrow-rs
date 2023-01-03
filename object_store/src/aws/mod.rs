@@ -37,8 +37,9 @@ use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use itertools::Itertools;
+use once_cell::sync::Lazy;
 use snafu::{OptionExt, ResultExt, Snafu};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
@@ -51,6 +52,7 @@ use crate::aws::credential::{
     StaticCredentialProvider, WebIdentityProvider,
 };
 use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
+use crate::util::str_is_truthy;
 use crate::{
     ClientOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path,
     Result, RetryConfig, StreamExt,
@@ -379,6 +381,162 @@ pub struct AmazonS3Builder {
     client_options: ClientOptions,
 }
 
+#[derive(PartialEq, Eq)]
+enum AmazonS3ConfigKey {
+    /// AWS Access Key
+    ///
+    /// See [`AmazonS3Builder::with_access_key_id`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_access_key_id`
+    /// - `access_key_id`
+    AccessKeyId,
+
+    /// Secret Access Key
+    ///
+    /// See [`AmazonS3Builder::with_secret_access_key`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_secret_access_key`
+    /// - `secret_access_key`
+    SecretAccessKey,
+
+    /// Region
+    ///
+    /// See [`AmazonS3Builder::with_region`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_region`
+    /// - `region`
+    Region,
+
+    /// Default region
+    ///
+    /// See [`AmazonS3Builder::with_region`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_default_region`
+    /// - `default_region`
+    DefaultRegion,
+
+    /// Bucket name
+    ///
+    /// See [`AmazonS3Builder::with_bucket_name`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_bucket`
+    /// - `aws_bucket_name`
+    /// - `bucket`
+    /// - `bucket_name`
+    Bucket,
+
+    /// Sets custom endpoint for communicating with AWS S3.
+    ///
+    /// See [`AmazonS3Builder::with_endpoint`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_endpoint`
+    /// - `aws_endpoint_url`
+    /// - `endpoint`
+    /// - `endpoint_url`
+    Endpoint,
+
+    /// Token to use for requests (passed to underlying provider)
+    ///
+    /// See [`AmazonS3Builder::with_token`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_session_token`
+    /// - `aws_token`
+    /// - `session_token`
+    /// - `token`
+    Token,
+
+    /// Fall back to ImdsV1
+    ///
+    /// See [`AmazonS3Builder::with_imdsv1_fallback`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_imdsv1_fallback`
+    /// - `imdsv1_fallback`
+    ImdsV1Fallback,
+
+    /// If virtual hosted style request has to be used
+    ///
+    /// See [`AmazonS3Builder::with_virtual_hosted_style_request`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_virtual_hosted_style_request`
+    /// - `virtual_hosted_style_request`
+    VirtualHostedStyleRequest,
+
+    /// Set the instance metadata endpoint
+    ///
+    /// See [`AmazonS3Builder::with_metadata_endpoint`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_metadata_endpoint`
+    /// - `metadata_endpoint`
+    MetadataEndpoint,
+
+    /// AWS profile name
+    ///
+    /// Supported keys:
+    /// - `aws_profile`
+    /// - `profile`
+    Profile,
+}
+
+static ALIAS_MAP: Lazy<BTreeMap<&'static str, AmazonS3ConfigKey>> = Lazy::new(|| {
+    BTreeMap::from([
+        // access key id
+        ("aws_access_key_id", AmazonS3ConfigKey::AccessKeyId),
+        ("access_key_id", AmazonS3ConfigKey::AccessKeyId),
+        // secret access key
+        ("aws_secret_access_key", AmazonS3ConfigKey::SecretAccessKey),
+        ("secret_access_key", AmazonS3ConfigKey::SecretAccessKey),
+        // default region
+        ("aws_default_region", AmazonS3ConfigKey::DefaultRegion),
+        ("default_region", AmazonS3ConfigKey::DefaultRegion),
+        // region
+        ("aws_region", AmazonS3ConfigKey::Region),
+        ("region", AmazonS3ConfigKey::Region),
+        // bucket
+        ("aws_bucket", AmazonS3ConfigKey::Bucket),
+        ("aws_bucket_name", AmazonS3ConfigKey::Bucket),
+        ("bucket_name", AmazonS3ConfigKey::Bucket),
+        ("bucket", AmazonS3ConfigKey::Bucket),
+        // custom S3 endpoint
+        ("aws_endpoint_url", AmazonS3ConfigKey::Endpoint),
+        ("aws_endpoint", AmazonS3ConfigKey::Endpoint),
+        ("endpoint_url", AmazonS3ConfigKey::Endpoint),
+        ("endpoint", AmazonS3ConfigKey::Endpoint),
+        // session token
+        ("aws_session_token", AmazonS3ConfigKey::Token),
+        ("aws_token", AmazonS3ConfigKey::Token),
+        ("session_token", AmazonS3ConfigKey::Token),
+        ("token", AmazonS3ConfigKey::Token),
+        // virtual hosted style request
+        (
+            "aws_virtual_hosted_style_request",
+            AmazonS3ConfigKey::VirtualHostedStyleRequest,
+        ),
+        (
+            "virtual_hosted_style_request",
+            AmazonS3ConfigKey::VirtualHostedStyleRequest,
+        ),
+        // profile
+        ("aws_profile", AmazonS3ConfigKey::Profile),
+        ("profile", AmazonS3ConfigKey::Profile),
+        // imds v1 fallback
+        ("aws_imdsv1_fallback", AmazonS3ConfigKey::ImdsV1Fallback),
+        ("imdsv1_fallback", AmazonS3ConfigKey::ImdsV1Fallback),
+        // metadata endpoint
+        ("aws_metadata_endpoint", AmazonS3ConfigKey::MetadataEndpoint),
+        ("metadata_endpoint", AmazonS3ConfigKey::MetadataEndpoint),
+    ])
+});
+
 impl AmazonS3Builder {
     /// Create a new [`AmazonS3Builder`] with default values.
     pub fn new() -> Self {
@@ -407,28 +565,12 @@ impl AmazonS3Builder {
     pub fn from_env() -> Self {
         let mut builder: Self = Default::default();
 
-        if let Ok(access_key_id) = std::env::var("AWS_ACCESS_KEY_ID") {
-            builder.access_key_id = Some(access_key_id);
-        }
-
-        if let Ok(secret_access_key) = std::env::var("AWS_SECRET_ACCESS_KEY") {
-            builder.secret_access_key = Some(secret_access_key);
-        }
-
-        if let Ok(secret) = std::env::var("AWS_DEFAULT_REGION") {
-            builder.region = Some(secret);
-        }
-
-        if let Ok(endpoint) = std::env::var("AWS_ENDPOINT") {
-            builder.endpoint = Some(endpoint);
-        }
-
-        if let Ok(token) = std::env::var("AWS_SESSION_TOKEN") {
-            builder.token = Some(token);
-        }
-
-        if let Ok(profile) = std::env::var("AWS_PROFILE") {
-            builder.profile = Some(profile);
+        for (key, _) in ALIAS_MAP.iter() {
+            if key.starts_with("aws_") {
+                if let Ok(value) = std::env::var(key.to_ascii_uppercase()) {
+                    builder = builder.with_option(*key, value)
+                }
+            }
         }
 
         // This env var is set in ECS
@@ -469,6 +611,49 @@ impl AmazonS3Builder {
     /// ```
     pub fn with_url(mut self, url: impl Into<String>) -> Self {
         self.url = Some(url.into());
+        self
+    }
+
+    /// Set an option on the builder via a key - value pair.
+    pub fn with_option(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        let raw = key.into();
+        if let Some(key) = ALIAS_MAP.get(&*raw.to_ascii_lowercase()) {
+            match key {
+                AmazonS3ConfigKey::AccessKeyId => self.access_key_id = Some(value.into()),
+                AmazonS3ConfigKey::SecretAccessKey => {
+                    self.secret_access_key = Some(value.into())
+                }
+                AmazonS3ConfigKey::Region => self.region = Some(value.into()),
+                AmazonS3ConfigKey::Bucket => self.bucket_name = Some(value.into()),
+                AmazonS3ConfigKey::Endpoint => self.endpoint = Some(value.into()),
+                AmazonS3ConfigKey::Token => self.token = Some(value.into()),
+                AmazonS3ConfigKey::ImdsV1Fallback => {
+                    self.imdsv1_fallback = str_is_truthy(&value.into())
+                }
+                AmazonS3ConfigKey::VirtualHostedStyleRequest => {
+                    self.virtual_hosted_style_request = str_is_truthy(&value.into())
+                }
+                AmazonS3ConfigKey::DefaultRegion => {
+                    self.region = self.region.or_else(|| Some(value.into()))
+                }
+                AmazonS3ConfigKey::MetadataEndpoint => {
+                    self.metadata_endpoint = Some(value.into())
+                }
+                AmazonS3ConfigKey::Profile => self.profile = Some(value.into()),
+            };
+        }
+        self
+    }
+
+    /// Hydrate builder from key value pairs
+    pub fn with_options(mut self, options: &HashMap<String, String>) -> Self {
+        for (key, value) in options {
+            self = self.with_option(key, value);
+        }
         self
     }
 
@@ -913,6 +1098,34 @@ mod tests {
         let metadata_uri =
             format!("{}{}", METADATA_ENDPOINT, container_creds_relative_uri);
         assert_eq!(builder.metadata_endpoint.unwrap(), metadata_uri);
+    }
+
+    #[test]
+    fn s3_test_config_from_map() {
+        let aws_access_key_id = "object_store:fake_access_key_id".to_string();
+        let aws_secret_access_key = "object_store:fake_secret_key".to_string();
+        let aws_default_region = "object_store:fake_default_region".to_string();
+        let aws_endpoint = "object_store:fake_endpoint".to_string();
+        let aws_session_token = "object_store:fake_session_token".to_string();
+        let options = HashMap::from([
+            ("aws_access_key_id".to_string(), aws_access_key_id.clone()),
+            (
+                "aws_secret_access_key".to_string(),
+                aws_secret_access_key.clone(),
+            ),
+            ("aws_default_region".to_string(), aws_default_region.clone()),
+            ("aws_endpoint".to_string(), aws_endpoint.clone()),
+            ("aws_session_token".to_string(), aws_session_token.clone()),
+        ]);
+
+        let builder = AmazonS3Builder::new()
+            .with_options(&options)
+            .with_option("aws_secret_access_key", "new-secret-key");
+        assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
+        assert_eq!(builder.secret_access_key.unwrap(), "new-secret-key");
+        assert_eq!(builder.region.unwrap(), aws_default_region);
+        assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
+        assert_eq!(builder.token.unwrap(), aws_session_token);
     }
 
     #[tokio::test]

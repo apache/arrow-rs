@@ -29,7 +29,7 @@
 //! to abort the upload and drop those unneeded parts. In addition, you may wish to
 //! consider implementing automatic clean up of unused parts that are older than one
 //! week.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{self, BufReader};
 use std::ops::Range;
@@ -39,6 +39,7 @@ use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
+use once_cell::sync::Lazy;
 use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
 use reqwest::header::RANGE;
 use reqwest::{header, Client, Method, Response, StatusCode};
@@ -796,6 +797,40 @@ pub struct GoogleCloudStorageBuilder {
     client_options: ClientOptions,
 }
 
+#[derive(PartialEq, Eq)]
+enum GoogleConfigKey {
+    /// Path to the service account file
+    ///
+    /// Supported keys:
+    /// - `google_service_account`
+    /// - `service_account`
+    ServiceAccount,
+
+    /// Bucket name
+    ///
+    /// See [`AmazonS3Builder::with_bucket_name`] for details.
+    ///
+    /// Supported keys:
+    /// - `google_bucket`
+    /// - `google_bucket_name`
+    /// - `bucket`
+    /// - `bucket_name`
+    Bucket,
+}
+
+static ALIAS_MAP: Lazy<BTreeMap<&'static str, GoogleConfigKey>> = Lazy::new(|| {
+    BTreeMap::from([
+        // service account
+        ("google_service_account", GoogleConfigKey::ServiceAccount),
+        ("service_account", GoogleConfigKey::ServiceAccount),
+        // bucket
+        ("google_bucket", GoogleConfigKey::Bucket),
+        ("google_bucket_name", GoogleConfigKey::Bucket),
+        ("bucket_name", GoogleConfigKey::Bucket),
+        ("bucket", GoogleConfigKey::Bucket),
+    ])
+});
+
 impl Default for GoogleCloudStorageBuilder {
     fn default() -> Self {
         Self {
@@ -835,8 +870,12 @@ impl GoogleCloudStorageBuilder {
             builder.service_account_path = Some(service_account_path);
         }
 
-        if let Ok(service_account_path) = std::env::var("GOOGLE_SERVICE_ACCOUNT") {
-            builder.service_account_path = Some(service_account_path);
+        for (key, _) in ALIAS_MAP.iter() {
+            if key.starts_with("google_") {
+                if let Ok(value) = std::env::var(key.to_ascii_uppercase()) {
+                    builder = builder.with_option(*key, value)
+                }
+            }
         }
 
         builder
@@ -860,6 +899,32 @@ impl GoogleCloudStorageBuilder {
     /// ```
     pub fn with_url(mut self, url: impl Into<String>) -> Self {
         self.url = Some(url.into());
+        self
+    }
+
+    /// Set an option on the builder via a key - value pair.
+    pub fn with_option(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        let raw = key.into();
+        if let Some(key) = ALIAS_MAP.get(&*raw.to_ascii_lowercase()) {
+            match key {
+                GoogleConfigKey::ServiceAccount => {
+                    self.service_account_path = Some(value.into())
+                }
+                GoogleConfigKey::Bucket => self.bucket_name = Some(value.into()),
+            };
+        }
+        self
+    }
+
+    /// Hydrate builder from key value pairs
+    pub fn with_options(mut self, options: &HashMap<String, String>) -> Self {
+        for (key, value) in options {
+            self = self.with_option(key, value);
+        }
         self
     }
 
@@ -1204,5 +1269,25 @@ mod test {
         for case in err_cases {
             builder.parse_url(case).unwrap_err();
         }
+    }
+
+    #[test]
+    fn gcs_test_config_from_map() {
+        let google_service_account = "object_store:fake_service_account".to_string();
+        let google_bucket_name = "object_store:fake_bucket".to_string();
+        let options = HashMap::from([
+            (
+                "google_service_account".to_string(),
+                google_service_account.clone(),
+            ),
+            ("google_bucket_name".to_string(), google_bucket_name.clone()),
+        ]);
+
+        let builder = GoogleCloudStorageBuilder::new().with_options(&options);
+        assert_eq!(
+            builder.service_account_path.unwrap(),
+            google_service_account.as_str()
+        );
+        assert_eq!(builder.bucket_name.unwrap(), google_bucket_name.as_str());
     }
 }

@@ -48,7 +48,7 @@ use std::sync::Arc;
 use tokio::io::AsyncWrite;
 use url::Url;
 
-use crate::util::RFC1123_FMT;
+use crate::util::{str_is_truthy, RFC1123_FMT};
 pub use credential::authority_hosts;
 
 mod client;
@@ -429,7 +429,33 @@ enum AzureConfigKey {
     /// - `tenant_id`
     /// - `authority_id`
     AuthorityId,
+
+    /// Shared access signature.
+    ///
+    /// The signature is expected to be percent-encoded, much like they are provided
+    /// in the azure storage explorer or azure protal.
+    ///
+    /// Supported keys:
+    /// - `azure_storage_sas_key`
+    /// - `azure_storage_sas_token`
+    /// - `sas_key`
+    /// - `sas_token`
     SasKey,
+
+    /// Bearer token
+    ///
+    /// Supported keys:
+    /// - `azure_storage_token`
+    /// - `bearer_token`
+    /// - `token`
+    Token,
+
+    /// Use object store with azurite storage emulator
+    ///
+    /// Supported keys:
+    /// - `azure_storage_use_emulator`
+    /// - `object_store_use_emulator`
+    /// - `use_emulator`
     UseEmulator,
 }
 
@@ -465,6 +491,15 @@ static ALIAS_MAP: Lazy<HashMap<&'static str, AzureConfigKey>> = Lazy::new(|| {
         ("azure_authority_id", AzureConfigKey::AuthorityId),
         ("tenant_id", AzureConfigKey::AuthorityId),
         ("authority_id", AzureConfigKey::AuthorityId),
+        // account name
+        ("azure_storage_sas_key", AzureConfigKey::SasKey),
+        ("azure_storage_sas_token", AzureConfigKey::SasKey),
+        ("sas_key", AzureConfigKey::SasKey),
+        ("sas_token", AzureConfigKey::SasKey),
+        // bearer token
+        ("azure_storage_token", AzureConfigKey::Token),
+        ("bearer_token", AzureConfigKey::Token),
+        ("token", AzureConfigKey::Token),
         // use emulator
         ("azure_storage_use_emulator", AzureConfigKey::UseEmulator),
         ("object_store_use_emulator", AzureConfigKey::UseEmulator),
@@ -559,6 +594,7 @@ impl MicrosoftAzureBuilder {
                 AzureConfigKey::ClientSecret => self.client_secret = Some(value.into()),
                 AzureConfigKey::AuthorityId => self.tenant_id = Some(value.into()),
                 AzureConfigKey::SasKey => self.sas_key = Some(value.into()),
+                AzureConfigKey::Token => self.bearer_token = Some(value.into()),
                 AzureConfigKey::UseEmulator => {
                     self.use_emulator = str_is_truthy(&value.into())
                 }
@@ -807,14 +843,6 @@ fn split_sas(sas: &str) -> Result<Vec<(String, String)>, Error> {
     Ok(pairs)
 }
 
-pub(crate) fn str_is_truthy(val: &str) -> bool {
-    val == "1"
-        || val.to_lowercase() == "true"
-        || val.to_lowercase() == "on"
-        || val.to_lowercase() == "yes"
-        || val.to_lowercase() == "y"
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -973,5 +1001,30 @@ mod tests {
         for case in err_cases {
             builder.parse_url(case).unwrap_err();
         }
+    }
+
+    #[test]
+    fn azure_test_config_from_map() {
+        let azure_client_id = "object_store:fake_access_key_id".to_string();
+        let azure_storage_account_name = "object_store:fake_secret_key".to_string();
+        let azure_storage_token = "object_store:fake_default_region".to_string();
+        let options = HashMap::from([
+            ("azure_client_id".to_string(), azure_client_id.clone()),
+            (
+                "azure_storage_account_name".to_string(),
+                azure_storage_account_name.clone(),
+            ),
+            (
+                "azure_storage_token".to_string(),
+                azure_storage_token.clone(),
+            ),
+        ]);
+
+        let builder = MicrosoftAzureBuilder::new()
+            .with_options(&options)
+            .with_option("unknown-key", "unknown-value");
+        assert_eq!(builder.client_id.unwrap(), azure_client_id);
+        assert_eq!(builder.account_name.unwrap(), azure_storage_account_name);
+        assert_eq!(builder.bearer_token.unwrap(), azure_storage_token);
     }
 }

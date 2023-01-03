@@ -185,6 +185,15 @@ fn merge_ranges(
     ret
 }
 
+#[allow(dead_code)]
+pub(crate) fn str_is_truthy(val: &str) -> bool {
+    val == "1"
+        || val.to_lowercase() == "true"
+        || val.to_lowercase() == "on"
+        || val.to_lowercase() == "yes"
+        || val.to_lowercase() == "y"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
