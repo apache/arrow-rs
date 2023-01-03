@@ -131,7 +131,7 @@ async fn test_max_message_size() {
     let input_batch_stream = futures::stream::iter(vec![Ok(make_primative_batch(5))]);
 
     // 5 input rows, with a very small limit should result in 5 batch messages
-    let encoder = FlightDataEncoderBuilder::default().with_max_message_size(1);
+    let encoder = FlightDataEncoderBuilder::default().with_max_message_size_bytes(1);
 
     let encode_stream = encoder.build(input_batch_stream);
 
@@ -164,9 +164,9 @@ async fn test_max_message_size_fuzz() {
         make_primative_batch(127),
     ];
 
-    for max_message_size in [10, 1024, 2048, 6400, 3211212] {
-        let encoder =
-            FlightDataEncoderBuilder::default().with_max_message_size(max_message_size);
+    for max_message_size_bytes in [10, 1024, 2048, 6400, 3211212] {
+        let encoder = FlightDataEncoderBuilder::default()
+            .with_max_message_size_bytes(max_message_size_bytes);
 
         let input_batch_stream = futures::stream::iter(input.clone()).map(Ok);
 

@@ -63,8 +63,8 @@ use futures::{ready, stream::BoxStream, Stream, StreamExt};
 /// [`FlightError`]: crate::error::FlightError
 #[derive(Debug)]
 pub struct FlightDataEncoderBuilder {
-    /// The maximum message size (see details on [`Self::with_max_message_size`]).
-    max_batch_size: usize,
+    /// The maximum message size in bytes (see details on [`Self::with_max_message_size_bytes`]).
+    max_batch_size_bytes: usize,
     /// Ipc writer options
     options: IpcWriteOptions,
     /// Metadata to add to the schema message
@@ -80,7 +80,7 @@ pub const GRPC_TARGET_MAX_BATCH_SIZE: usize = 2097152;
 impl Default for FlightDataEncoderBuilder {
     fn default() -> Self {
         Self {
-            max_batch_size: GRPC_TARGET_MAX_BATCH_SIZE,
+            max_batch_size_bytes: GRPC_TARGET_MAX_BATCH_SIZE,
             options: IpcWriteOptions::default(),
             app_metadata: Bytes::new(),
         }
@@ -100,8 +100,8 @@ impl FlightDataEncoderBuilder {
     /// is approximate because there additional encoding overhead on
     /// top of the underlying data itself.
     ///
-    pub fn with_max_message_size(mut self, max_batch_size: usize) -> Self {
-        self.max_batch_size = max_batch_size;
+    pub fn with_max_message_size_bytes(mut self, max_batch_size_bytes: usize) -> Self {
+        self.max_batch_size_bytes = max_batch_size_bytes;
         self
     }
 
@@ -126,7 +126,7 @@ impl FlightDataEncoderBuilder {
         S: Stream<Item = Result<RecordBatch>> + Send + 'static,
     {
         let Self {
-            max_batch_size,
+            max_batch_size_bytes: max_batch_size,
             options,
             app_metadata,
         } = self;
@@ -419,6 +419,7 @@ mod tests {
         array::{UInt32Array, UInt8Array},
         compute::concat_batches,
     };
+    use arrow_array::UInt64Array;
 
     use super::*;
 
@@ -504,6 +505,47 @@ mod tests {
             n_rows
         );
         assert_eq!(concat_batches(&batch.schema(), &split).unwrap(), batch);
+    }
+
+    #[test]
+    fn test_split_batch_for_grpc_response_sizes() {
+        // 2000 8 byte entries into 2k pieces: 8 chunks of 250 rows
+        verify_split(2000, 2 * 1024, vec![250, 250, 250, 250, 250, 250, 250, 250]);
+
+        // 2000 8 byte entries into 4k pieces: 4 chunks of 500 rows
+        verify_split(2000, 4 * 1024, vec![500, 500, 500, 500]);
+
+        // 2023 8 byte entries into 3k pieces does not divide evenly
+        verify_split(2023, 3 * 1024, vec![337, 337, 337, 337, 337, 337, 1]);
+
+        // 10 8 byte entries into 1 byte pieces means each rows gets its own
+        verify_split(10, 1, vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+
+        // 10 8 byte entries into 1k byte pieces means one piece
+        verify_split(10, 1024, vec![10]);
+    }
+
+    /// Creates a UInt64Array of 8 byte integers with input_rows rows
+    /// `max_batch_size_bytes` pieces and verifies the row counts in
+    /// those pieces
+    fn verify_split(
+        num_input_rows: u64,
+        max_batch_size_bytes: usize,
+        expected_sizes: Vec<usize>,
+    ) {
+        let array: UInt64Array = (0..num_input_rows).collect();
+
+        let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(array) as ArrayRef)])
+            .expect("cannot create record batch");
+
+        let input_rows = batch.num_rows();
+
+        let split = split_batch_for_grpc_response(batch.clone(), max_batch_size_bytes);
+        let sizes: Vec<_> = split.iter().map(|batch| batch.num_rows()).collect();
+        let output_rows: usize = sizes.iter().sum();
+
+        assert_eq!(sizes, expected_sizes, "mismatch for {batch:?}");
+        assert_eq!(input_rows, output_rows, "mismatch for {batch:?}");
     }
 
     // test sending record batches
