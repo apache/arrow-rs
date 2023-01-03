@@ -114,9 +114,7 @@ where
     T: ArrowPrimitiveType,
     F: Fn(T::Native) -> Result<T::Native, ArrowError>,
 {
-    if std::mem::discriminant(&array.value_type())
-        != std::mem::discriminant(&T::DATA_TYPE)
-    {
+    if !PrimitiveArray::<T>::is_compatible(&array.value_type()) {
         return Err(ArrowError::CastError(format!(
             "Cannot perform the unary operation of type {} on dictionary array of value type {}",
             T::DATA_TYPE,
@@ -138,7 +136,7 @@ where
     downcast_dictionary_array! {
         array => unary_dict::<_, F, T>(array, op),
         t => {
-            if std::mem::discriminant(t) == std::mem::discriminant(&T::DATA_TYPE) {
+            if PrimitiveArray::<T>::is_compatible(t) {
                 Ok(Arc::new(unary::<T, F, T>(
                     array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap(),
                     op,
@@ -170,7 +168,7 @@ where
             )))
         },
         t => {
-            if std::mem::discriminant(t) == std::mem::discriminant(&T::DATA_TYPE) {
+            if PrimitiveArray::<T>::is_compatible(t) {
                 Ok(Arc::new(try_unary::<T, F, T>(
                     array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap(),
                     op,

@@ -343,10 +343,7 @@ pub fn decode_primitive<T: ArrowPrimitiveType>(
 where
     T::Native: FixedLengthEncoding,
 {
-    assert_eq!(
-        std::mem::discriminant(&T::DATA_TYPE),
-        std::mem::discriminant(&data_type),
-    );
+    assert!(PrimitiveArray::<T>::is_compatible(&data_type));
     // SAFETY:
     // Validated data type above
     unsafe { decode_fixed::<T::Native>(rows, data_type, options).into() }
