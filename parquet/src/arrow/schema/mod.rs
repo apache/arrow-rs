@@ -202,7 +202,7 @@ pub fn arrow_to_parquet_fields(schema : &Schema) -> Result<Vec<Type>> {
     schema
         .fields()
         .iter()
-        .map(|field| arrow_to_parquet_type(field))
+        .map(arrow_to_parquet_type)
         .collect()
 }
 

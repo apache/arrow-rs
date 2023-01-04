@@ -121,7 +121,7 @@ impl<W: Write> ArrowWriter<W> {
             buffered_rows: 0,
             arrow_schema,
             max_row_group_size,
-            parquet_fields: parquet_fields,
+            parquet_fields,
         })
     }
 
