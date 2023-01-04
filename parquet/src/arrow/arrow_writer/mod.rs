@@ -1851,7 +1851,6 @@ mod tests {
         one_column_roundtrip(values, false);
     }
 
-    #[ignore]
     #[test]
     fn fallback_flush_data_page() {
         //tests if the Fallback::flush_data_page clears all buffers correctly
@@ -1887,7 +1886,7 @@ mod tests {
                         string_array_a.iter().map(|v| v.unwrap()).collect();
                     let vec_b: Vec<&str> =
                         string_array_b.iter().map(|v| v.unwrap()).collect();
-                    assert_eq!(vec_a, vec_b);
+                    assert_eq!(vec_a, vec_b, "{}", format!("failed for encoder: {encoding:?} and row_group_size: {row_group_size:?}"));
                 });
             }
         }

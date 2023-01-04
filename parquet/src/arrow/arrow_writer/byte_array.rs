@@ -295,7 +295,7 @@ impl FallbackEncoder {
                 buffer,
                 prefix_lengths,
                 suffix_lengths,
-                ..
+                last_value
             } => {
                 let prefix_lengths = prefix_lengths.flush_buffer()?;
                 let suffix_lengths = suffix_lengths.flush_buffer()?;
@@ -307,6 +307,7 @@ impl FallbackEncoder {
                 out.extend_from_slice(suffix_lengths.data());
                 out.extend_from_slice(buffer);
                 buffer.clear();
+                last_value.clear();
                 (out, Encoding::DELTA_BYTE_ARRAY)
             }
         };
