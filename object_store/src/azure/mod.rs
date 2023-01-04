@@ -493,19 +493,6 @@ pub enum AzureConfigKey {
     UseEmulator,
 }
 
-impl AzureConfigKey {
-    /// Helper function to filter an iterator to only contain valid configuration keys.
-    pub fn filter_options<
-        I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
-    >(
-        options: I,
-    ) -> impl IntoIterator<Item = (impl AsRef<str>, impl Into<String>)> {
-        options
-            .into_iter()
-            .filter_map(|(key, value)| Some((Self::from_str(key.as_ref()).ok()?, value)))
-    }
-}
-
 impl AsRef<str> for AzureConfigKey {
     fn as_ref(&self) -> &str {
         match self {
@@ -1120,8 +1107,5 @@ mod tests {
 
         let builder = MicrosoftAzureBuilder::new().try_with_options(&options);
         assert!(builder.is_err());
-        let builder = MicrosoftAzureBuilder::new()
-            .try_with_options(AzureConfigKey::filter_options(&options));
-        assert!(builder.is_ok());
     }
 }
