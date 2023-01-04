@@ -295,7 +295,7 @@ impl FallbackEncoder {
                 buffer,
                 prefix_lengths,
                 suffix_lengths,
-                last_value
+                last_value,
             } => {
                 let prefix_lengths = prefix_lengths.flush_buffer()?;
                 let suffix_lengths = suffix_lengths.flush_buffer()?;
