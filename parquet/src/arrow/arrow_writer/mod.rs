@@ -30,13 +30,14 @@ use super::schema::{
 };
 
 use crate::arrow::arrow_writer::byte_array::ByteArrayWriter;
-use crate::basic::Type;
+use crate::arrow::schema::arrow_to_parquet_fields;
+use crate::basic::Type as ParquetPhysicalType;
 use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{KeyValue, RowGroupMetaDataPtr};
 use crate::file::properties::WriterProperties;
 use crate::file::writer::SerializedRowGroupWriter;
-use crate::schema::types::SchemaDescriptor;
+use crate::schema::types::Type;
 use crate::{data_type::*, file::writer::SerializedFileWriter};
 use levels::{calculate_array_levels, LevelInfo};
 
@@ -88,8 +89,8 @@ pub struct ArrowWriter<W: Write> {
     /// The length of arrays to write to each row group
     max_row_group_size: usize,
 
-    /// The parquet schema descriptor
-    parquet_schema: SchemaDescriptor,
+    /// The types of the parquet schema for each field
+    parquet_fields: Vec<Type>,
 }
 
 impl<W: Write> ArrowWriter<W> {
@@ -104,6 +105,7 @@ impl<W: Write> ArrowWriter<W> {
         props: Option<WriterProperties>,
     ) -> Result<Self> {
         let schema = arrow_to_parquet_schema(&arrow_schema)?;
+        let parquet_fields = arrow_to_parquet_fields(&arrow_schema)?;
         // add serialized arrow schema
         let mut props = props.unwrap_or_else(|| WriterProperties::builder().build());
         add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut props);
@@ -119,7 +121,7 @@ impl<W: Write> ArrowWriter<W> {
             buffered_rows: 0,
             arrow_schema,
             max_row_group_size,
-            parquet_schema: schema,
+            parquet_fields: parquet_fields,
         })
     }
 
@@ -135,27 +137,25 @@ impl<W: Write> ArrowWriter<W> {
     /// and drop any fully written `RecordBatch`
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         // validate batch schema against writer's supplied schema
-        if self.arrow_schema != batch.schema()
-            || self.arrow_schema.fields().len() != self.parquet_schema.columns().len()
-        {
+        if self.arrow_schema != batch.schema() {
             return Err(ParquetError::ArrowError(
                 "Record batch schema does not match writer schema".to_string(),
             ));
         }
 
-        for ((buffer, column), parquet_column_field) in self
+        for ((buffer, column), parquet_field) in self
             .buffer
             .iter_mut()
             .zip(batch.columns())
-            .zip(self.parquet_schema.columns())
+            .zip(&self.parquet_fields)
         {
             match column.data_type() {
                 // if the arrow data type is decimal
                 ArrowDataType::Decimal128(_, _) => {
-                    match parquet_column_field.as_ref().physical_type() {
+                    match parquet_field.get_physical_type() {
                         // the physical data type is not fixed length byte array
                         // convert the decimal array to the INT32/INT64 array
-                        Type::INT32 => {
+                        ParquetPhysicalType::INT32 => {
                             let new_array = column
                                 .as_any()
                                 .downcast_ref::<Decimal128Array>()
@@ -163,7 +163,7 @@ impl<W: Write> ArrowWriter<W> {
                                 .unary::<_, types::Int32Type>(|v| v as i32);
                             buffer.push_back(Arc::new(new_array))
                         }
-                        Type::INT64 => {
+                        ParquetPhysicalType::INT64 => {
                             let new_array = column
                                 .as_any()
                                 .downcast_ref::<Decimal128Array>()
@@ -171,6 +171,7 @@ impl<W: Write> ArrowWriter<W> {
                                 .unary::<_, types::Int64Type>(|v| v as i64);
                             buffer.push_back(Arc::new(new_array))
                         }
+                        // the default type is fixed_length_byte_array
                         _ => buffer.push_back(column.clone()),
                     }
                 }
