@@ -1883,8 +1883,10 @@ mod tests {
                 roundtrip_opts_with_array_validation(&expected_batch, props, |a, b| {
                     let string_array_a = StringArray::from(a.clone());
                     let string_array_b = StringArray::from(b.clone());
-                    let vec_a: Vec<&str> = string_array_a.iter().map(|v| v.unwrap()).collect();
-                    let vec_b: Vec<&str> = string_array_b.iter().map(|v| v.unwrap()).collect();
+                    let vec_a: Vec<&str> =
+                        string_array_a.iter().map(|v| v.unwrap()).collect();
+                    let vec_b: Vec<&str> =
+                        string_array_b.iter().map(|v| v.unwrap()).collect();
                     assert_eq!(vec_a, vec_b);
                 });
             }
