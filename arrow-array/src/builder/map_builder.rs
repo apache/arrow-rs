@@ -102,8 +102,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         capacity: usize,
     ) -> Self {
         let mut offsets_builder = BufferBuilder::<i32>::new(capacity + 1);
-        let len = 0;
-        offsets_builder.append(len);
+        offsets_builder.append(0);
         Self {
             offsets_builder,
             null_buffer_builder: NullBufferBuilder::new(capacity),
@@ -143,56 +142,49 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     /// Builds the [`MapArray`]
     pub fn finish(&mut self) -> MapArray {
         let len = self.len();
-
         // Build the keys
         let keys_arr = self.key_builder.finish();
         let values_arr = self.value_builder.finish();
-
-        let keys_field = Field::new(
-            self.field_names.key.as_str(),
-            keys_arr.data_type().clone(),
-            false, // always nullable
-        );
-        let values_field = Field::new(
-            self.field_names.value.as_str(),
-            values_arr.data_type().clone(),
-            true,
-        );
-
-        let struct_array =
-            StructArray::from(vec![(keys_field, keys_arr), (values_field, values_arr)]);
-
         let offset_buffer = self.offsets_builder.finish();
-        let null_bit_buffer = self.null_buffer_builder.finish();
         self.offsets_builder.append(0);
-        let map_field = Box::new(Field::new(
-            self.field_names.entry.as_str(),
-            struct_array.data_type().clone(),
-            false, // always non-nullable
-        ));
-        let array_data = ArrayData::builder(DataType::Map(map_field, false)) // TODO: support sorted keys
-            .len(len)
-            .add_buffer(offset_buffer)
-            .add_child_data(struct_array.into_data())
-            .null_bit_buffer(null_bit_buffer);
+        let null_bit_buffer = self.null_buffer_builder.finish();
 
-        let array_data = unsafe { array_data.build_unchecked() };
-
-        MapArray::from(array_data)
+        self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer, len)
     }
 
     /// Builds the [`MapArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> MapArray {
         let len = self.len();
-
         // Build the keys
         let keys_arr = self.key_builder.finish_cloned();
         let values_arr = self.value_builder.finish_cloned();
+        let offset_buffer = Buffer::from_slice_ref(self.offsets_builder.as_slice());
+        let null_bit_buffer = self
+            .null_buffer_builder
+            .as_slice()
+            .map(Buffer::from_slice_ref);
+
+        self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer, len)
+    }
+
+    fn finish_helper(
+        &self,
+        keys_arr: Arc<dyn Array>,
+        values_arr: Arc<dyn Array>,
+        offset_buffer: Buffer,
+        null_bit_buffer: Option<Buffer>,
+        len: usize,
+    ) -> MapArray {
+        assert!(
+            keys_arr.null_count() == 0,
+            "Keys array must have no null values, found {} null value(s)",
+            keys_arr.null_count()
+        );
 
         let keys_field = Field::new(
             self.field_names.key.as_str(),
             keys_arr.data_type().clone(),
-            false, // always nullable
+            false, // always non-nullable
         );
         let values_field = Field::new(
             self.field_names.value.as_str(),
@@ -203,11 +195,6 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         let struct_array =
             StructArray::from(vec![(keys_field, keys_arr), (values_field, values_arr)]);
 
-        let offset_buffer = Buffer::from_slice_ref(self.offsets_builder.as_slice());
-        let null_bit_buffer = self
-            .null_buffer_builder
-            .as_slice()
-            .map(Buffer::from_slice_ref);
         let map_field = Box::new(Field::new(
             self.field_names.entry.as_str(),
             struct_array.data_type().clone(),
@@ -253,5 +240,29 @@ impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
 
     fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        builder::{Int32Builder, StringBuilder},
+        Int32Array, StringArray,
+    };
+
+    use super::*;
+
+    #[test]
+    #[should_panic(
+        expected = "Keys array must have no null values, found 1 null value(s)"
+    )]
+    fn test_map_builder_with_null_keys_panics() {
+        let mut builder =
+            MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        builder.keys().append_null();
+        builder.values().append_value(42);
+        builder.append(true).unwrap();
+
+        builder.finish();
     }
 }
