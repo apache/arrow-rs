@@ -38,12 +38,13 @@ use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use percent_encoding::percent_decode_str;
+use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
-use std::collections::{BTreeSet, HashMap};
 use std::fmt::{Debug, Formatter};
 use std::io;
 use std::ops::Range;
 use std::sync::Arc;
+use std::{collections::BTreeSet, str::FromStr};
 use tokio::io::AsyncWrite;
 use url::Url;
 
@@ -386,7 +387,28 @@ pub struct MicrosoftAzureBuilder {
 }
 
 /// Configuration keys for [`MicrosoftAzureBuilder`]
-#[derive(PartialEq, Eq, Hash, Clone, Debug, Copy)]
+///
+/// Configuration via keys can be dome via the [`with_option`](MicrosoftAzureBuilder::with_option)
+/// or [`with_options`](MicrosoftAzureBuilder::with_options) methods on the builder.
+///
+/// # Example
+/// ```
+/// use std::collections::HashMap;
+/// use object_store::azure::{MicrosoftAzureBuilder, AzureConfigKey};
+///
+/// let options = HashMap::from([
+///     ("azure_client_id", "my-client-id"),
+///     ("azure_client_secret", "my-account-name"),
+/// ]);
+/// let typed_options = vec![
+///     (AzureConfigKey::AccountName, "my-account-name"),
+/// ];
+/// let azure = MicrosoftAzureBuilder::new()
+///     .with_options(options)
+///     .with_options(typed_options)
+///     .with_option(AzureConfigKey::AuthorityId, "my-tenant-id");
+/// ```
+#[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Deserialize, Serialize)]
 pub enum AzureConfigKey {
     /// The name of the azure storage account
     ///
@@ -436,7 +458,7 @@ pub enum AzureConfigKey {
     /// Shared access signature.
     ///
     /// The signature is expected to be percent-encoded, much like they are provided
-    /// in the azure storage explorer or azure protal.
+    /// in the azure storage explorer or azure portal.
     ///
     /// Supported keys:
     /// - `azure_storage_sas_key`
@@ -462,26 +484,26 @@ pub enum AzureConfigKey {
     UseEmulator,
 }
 
-impl From<AzureConfigKey> for String {
-    fn from(value: AzureConfigKey) -> Self {
-        match value {
-            AzureConfigKey::AccountName => Self::from("azure_storage_account_name"),
-            AzureConfigKey::AccessKey => Self::from("azure_storage_account_key"),
-            AzureConfigKey::ClientId => Self::from("azure_storage_client_id"),
-            AzureConfigKey::ClientSecret => Self::from("azure_storage_client_secret"),
-            AzureConfigKey::AuthorityId => Self::from("azure_storage_tenant_id"),
-            AzureConfigKey::SasKey => Self::from("azure_storage_sas_key"),
-            AzureConfigKey::Token => Self::from("azure_storage_token"),
-            AzureConfigKey::UseEmulator => Self::from("azure_storage_use_emulator"),
+impl AsRef<str> for AzureConfigKey {
+    fn as_ref(&self) -> &str {
+        match self {
+            AzureConfigKey::AccountName => "azure_storage_account_name",
+            AzureConfigKey::AccessKey => "azure_storage_account_key",
+            AzureConfigKey::ClientId => "azure_storage_client_id",
+            AzureConfigKey::ClientSecret => "azure_storage_client_secret",
+            AzureConfigKey::AuthorityId => "azure_storage_tenant_id",
+            AzureConfigKey::SasKey => "azure_storage_sas_key",
+            AzureConfigKey::Token => "azure_storage_token",
+            AzureConfigKey::UseEmulator => "azure_storage_use_emulator",
         }
     }
 }
 
-impl TryFrom<&str> for AzureConfigKey {
-    type Error = super::Error;
+impl FromStr for AzureConfigKey {
+    type Err = super::Error;
 
-    fn try_from(value: &str) -> Result<Self> {
-        match value.to_ascii_lowercase().as_str() {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
             "azure_storage_account_key"
             | "azure_storage_access_key"
             | "azure_storage_master_key"
@@ -507,16 +529,8 @@ impl TryFrom<&str> for AzureConfigKey {
             | "sas_token" => Ok(Self::SasKey),
             "azure_storage_token" | "bearer_token" | "token" => Ok(Self::Token),
             "azure_storage_use_emulator" | "use_emulator" => Ok(Self::UseEmulator),
-            _ => Err(Error::UnknownConfigurationKey { key: value.into() }.into()),
+            _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
         }
-    }
-}
-
-impl TryFrom<String> for AzureConfigKey {
-    type Error = super::Error;
-
-    fn try_from(value: String) -> Result<Self> {
-        Self::try_from(value.as_str())
     }
 }
 
@@ -555,12 +569,19 @@ impl MicrosoftAzureBuilder {
     /// ```
     pub fn from_env() -> Self {
         let mut builder = Self::default();
-        for (key, value) in std::env::vars()
-            .into_iter()
-            .filter(|(key, _)| key.starts_with("AZURE_"))
-        {
-            builder = builder.with_option(key, value);
+        for (os_key, os_value) in std::env::vars_os().into_iter() {
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
+                if key.starts_with("AZURE_") {
+                    builder = builder.with_option(key.to_ascii_lowercase(), value);
+                }
+            }
         }
+
+        if let Ok(text) = std::env::var("AZURE_ALLOW_HTTP") {
+            builder.client_options =
+                builder.client_options.with_allow_http(str_is_truthy(&text));
+        }
+
         builder
     }
 
@@ -592,12 +613,8 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Set an option on the builder via a key - value pair.
-    pub fn with_option(
-        mut self,
-        key: impl Into<String>,
-        value: impl Into<String>,
-    ) -> Self {
-        match AzureConfigKey::try_from(key.into()) {
+    pub fn with_option(mut self, key: impl AsRef<str>, value: impl Into<String>) -> Self {
+        match AzureConfigKey::from_str(key.as_ref()) {
             Ok(AzureConfigKey::AccessKey) => self.access_key = Some(value.into()),
             Ok(AzureConfigKey::AccountName) => self.account_name = Some(value.into()),
             Ok(AzureConfigKey::ClientId) => self.client_id = Some(value.into()),
@@ -614,12 +631,12 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Hydrate builder from key value pairs
-    pub fn with_options(
+    pub fn with_options<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
         mut self,
-        options: &HashMap<impl Into<String> + Clone, String>,
+        options: I,
     ) -> Self {
         for (key, value) in options {
-            self = self.with_option(key.clone(), value);
+            self = self.with_option(key, value);
         }
         self
     }
@@ -863,6 +880,7 @@ mod tests {
         copy_if_not_exists, list_uses_directories_correctly, list_with_delimiter,
         put_get_delete_list, put_get_delete_list_opts, rename_and_copy, stream_get,
     };
+    use std::collections::HashMap;
     use std::env;
 
     // Helper macro to skip tests if TEST_INTEGRATION and the Azure environment
@@ -1022,15 +1040,12 @@ mod tests {
         let azure_storage_account_name = "object_store:fake_secret_key".to_string();
         let azure_storage_token = "object_store:fake_default_region".to_string();
         let options = HashMap::from([
-            ("azure_client_id".to_string(), azure_client_id.clone()),
+            ("azure_client_id", azure_client_id.clone()),
             (
-                "azure_storage_account_name".to_string(),
+                "azure_storage_account_name",
                 azure_storage_account_name.clone(),
             ),
-            (
-                "azure_storage_token".to_string(),
-                azure_storage_token.clone(),
-            ),
+            ("azure_storage_token", azure_storage_token.clone()),
         ]);
 
         let builder = MicrosoftAzureBuilder::new()

@@ -187,11 +187,11 @@ fn merge_ranges(
 
 #[allow(dead_code)]
 pub(crate) fn str_is_truthy(val: &str) -> bool {
-    val == "1"
-        || val.to_lowercase() == "true"
-        || val.to_lowercase() == "on"
-        || val.to_lowercase() == "yes"
-        || val.to_lowercase() == "y"
+    val.eq_ignore_ascii_case("1")
+        | val.eq_ignore_ascii_case("true")
+        | val.eq_ignore_ascii_case("on")
+        | val.eq_ignore_ascii_case("yes")
+        | val.eq_ignore_ascii_case("y")
 }
 
 #[cfg(test)]

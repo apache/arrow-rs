@@ -37,9 +37,11 @@ use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::ops::Range;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
 use tracing::info;
@@ -384,7 +386,28 @@ pub struct AmazonS3Builder {
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
-#[derive(PartialEq, Eq, Hash, Clone, Debug, Copy)]
+///
+/// Configuration via keys can be dome via the [`with_option`](AmazonS3Builder::with_option)
+/// or [`with_options`](AmazonS3Builder::with_options) methods on the builder.
+///
+/// # Example
+/// ```
+/// use std::collections::HashMap;
+/// use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
+///
+/// let options = HashMap::from([
+///     ("aws_access_key_id", "my-access-key-id"),
+///     ("aws_secret_access_key", "my-secret-access-key"),
+/// ]);
+/// let typed_options = vec![
+///     (AmazonS3ConfigKey::DefaultRegion, "my-default-region"),
+/// ];
+/// let azure = AmazonS3Builder::new()
+///     .with_options(options)
+///     .with_options(typed_options)
+///     .with_option(AmazonS3ConfigKey::Region, "my-region");
+/// ```
+#[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Serialize, Deserialize)]
 pub enum AmazonS3ConfigKey {
     /// AWS Access Key
     ///
@@ -490,31 +513,31 @@ pub enum AmazonS3ConfigKey {
     Profile,
 }
 
-impl From<AmazonS3ConfigKey> for String {
-    fn from(value: AmazonS3ConfigKey) -> Self {
-        match value {
-            AmazonS3ConfigKey::AccessKeyId => Self::from("aws_access_key_id"),
-            AmazonS3ConfigKey::SecretAccessKey => Self::from("aws_secret_access_key"),
-            AmazonS3ConfigKey::Region => Self::from("aws_region"),
-            AmazonS3ConfigKey::Bucket => Self::from("aws_bucket"),
-            AmazonS3ConfigKey::Endpoint => Self::from("aws_endpoint"),
-            AmazonS3ConfigKey::Token => Self::from("aws_session_token"),
-            AmazonS3ConfigKey::ImdsV1Fallback => Self::from("aws_imdsv1_fallback"),
+impl AsRef<str> for AmazonS3ConfigKey {
+    fn as_ref(&self) -> &str {
+        match self {
+            AmazonS3ConfigKey::AccessKeyId => "aws_access_key_id",
+            AmazonS3ConfigKey::SecretAccessKey => "aws_secret_access_key",
+            AmazonS3ConfigKey::Region => "aws_region",
+            AmazonS3ConfigKey::Bucket => "aws_bucket",
+            AmazonS3ConfigKey::Endpoint => "aws_endpoint",
+            AmazonS3ConfigKey::Token => "aws_session_token",
+            AmazonS3ConfigKey::ImdsV1Fallback => "aws_imdsv1_fallback",
             AmazonS3ConfigKey::VirtualHostedStyleRequest => {
-                Self::from("aws_virtual_hosted_style_request")
+                "aws_virtual_hosted_style_request"
             }
-            AmazonS3ConfigKey::DefaultRegion => Self::from("aws_default_region"),
-            AmazonS3ConfigKey::MetadataEndpoint => Self::from("aws_metadata_endpoint"),
-            AmazonS3ConfigKey::Profile => Self::from("aws_profile"),
+            AmazonS3ConfigKey::DefaultRegion => "aws_default_region",
+            AmazonS3ConfigKey::MetadataEndpoint => "aws_metadata_endpoint",
+            AmazonS3ConfigKey::Profile => "aws_profile",
         }
     }
 }
 
-impl TryFrom<&str> for AmazonS3ConfigKey {
-    type Error = super::Error;
+impl FromStr for AmazonS3ConfigKey {
+    type Err = super::Error;
 
-    fn try_from(value: &str) -> Result<Self> {
-        match value.to_ascii_lowercase().as_str() {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
             "aws_access_key_id" | "access_key_id" => Ok(Self::AccessKeyId),
             "aws_secret_access_key" | "secret_access_key" => Ok(Self::SecretAccessKey),
             "aws_default_region" | "default_region" => Ok(Self::DefaultRegion),
@@ -534,16 +557,8 @@ impl TryFrom<&str> for AmazonS3ConfigKey {
             "aws_profile" | "profile" => Ok(Self::Profile),
             "aws_imdsv1_fallback" | "imdsv1_fallback" => Ok(Self::ImdsV1Fallback),
             "aws_metadata_endpoint" | "metadata_endpoint" => Ok(Self::MetadataEndpoint),
-            _ => Err(Error::UnknownConfigurationKey { key: value.into() }.into()),
+            _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
         }
-    }
-}
-
-impl TryFrom<String> for AmazonS3ConfigKey {
-    type Error = super::Error;
-
-    fn try_from(value: String) -> Result<Self> {
-        Self::try_from(value.as_str())
     }
 }
 
@@ -575,11 +590,12 @@ impl AmazonS3Builder {
     pub fn from_env() -> Self {
         let mut builder: Self = Default::default();
 
-        for (key, value) in std::env::vars()
-            .into_iter()
-            .filter(|(key, _)| key.starts_with("AWS_"))
-        {
-            builder = builder.with_option(key, value);
+        for (os_key, os_value) in std::env::vars_os().into_iter() {
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
+                if key.starts_with("AWS_") {
+                    builder = builder.with_option(key.to_ascii_lowercase(), value);
+                }
+            }
         }
 
         // This env var is set in ECS
@@ -624,12 +640,8 @@ impl AmazonS3Builder {
     }
 
     /// Set an option on the builder via a key - value pair.
-    pub fn with_option(
-        mut self,
-        key: impl Into<String>,
-        value: impl Into<String>,
-    ) -> Self {
-        match AmazonS3ConfigKey::try_from(key.into()) {
+    pub fn with_option(mut self, key: impl AsRef<str>, value: impl Into<String>) -> Self {
+        match AmazonS3ConfigKey::from_str(key.as_ref()) {
             Ok(AmazonS3ConfigKey::AccessKeyId) => self.access_key_id = Some(value.into()),
             Ok(AmazonS3ConfigKey::SecretAccessKey) => {
                 self.secret_access_key = Some(value.into())
@@ -657,12 +669,12 @@ impl AmazonS3Builder {
     }
 
     /// Hydrate builder from key value pairs
-    pub fn with_options(
+    pub fn with_options<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
         mut self,
-        options: &HashMap<impl Into<String> + Clone, String>,
+        options: I,
     ) -> Self {
         for (key, value) in options {
-            self = self.with_option(key.clone(), value);
+            self = self.with_option(key, value);
         }
         self
     }
@@ -968,6 +980,7 @@ mod tests {
         put_get_delete_list_opts, rename_and_copy, stream_get,
     };
     use bytes::Bytes;
+    use std::collections::HashMap;
     use std::env;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
@@ -1118,11 +1131,11 @@ mod tests {
         let aws_endpoint = "object_store:fake_endpoint".to_string();
         let aws_session_token = "object_store:fake_session_token".to_string();
         let options = HashMap::from([
-            ("aws_access_key_id".to_string(), aws_access_key_id.clone()),
-            ("aws_secret_access_key".to_string(), aws_secret_access_key),
-            ("aws_default_region".to_string(), aws_default_region.clone()),
-            ("aws_endpoint".to_string(), aws_endpoint.clone()),
-            ("aws_session_token".to_string(), aws_session_token.clone()),
+            ("aws_access_key_id", aws_access_key_id.clone()),
+            ("aws_secret_access_key", aws_secret_access_key),
+            ("aws_default_region", aws_default_region.clone()),
+            ("aws_endpoint", aws_endpoint.clone()),
+            ("aws_session_token", aws_session_token.clone()),
         ]);
 
         let builder = AmazonS3Builder::new()
