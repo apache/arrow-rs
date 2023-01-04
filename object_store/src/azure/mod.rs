@@ -383,8 +383,9 @@ pub struct MicrosoftAzureBuilder {
     client_options: ClientOptions,
 }
 
-#[derive(PartialEq, Eq)]
-enum AzureConfigKey {
+/// Configuration keys for [`MicrosoftAzureBuilder`]
+#[derive(PartialEq, Eq, Hash, Clone, Debug, Copy)]
+pub enum AzureConfigKey {
     /// The name of the azure storage account
     ///
     /// Supported keys:
@@ -459,6 +460,21 @@ enum AzureConfigKey {
     UseEmulator,
 }
 
+impl From<AzureConfigKey> for String {
+    fn from(value: AzureConfigKey) -> Self {
+        match value {
+            AzureConfigKey::AccountName => Self::from("azure_storage_account_name"),
+            AzureConfigKey::AccessKey => Self::from("azure_storage_account_key"),
+            AzureConfigKey::ClientId => Self::from("azure_storage_client_id"),
+            AzureConfigKey::ClientSecret => Self::from("azure_storage_client_secret"),
+            AzureConfigKey::AuthorityId => Self::from("azure_storage_tenant_id"),
+            AzureConfigKey::SasKey => Self::from("azure_storage_sas_key"),
+            AzureConfigKey::Token => Self::from("azure_storage_token"),
+            AzureConfigKey::UseEmulator => Self::from("azure_storage_use_emulator"),
+        }
+    }
+}
+
 static ALIAS_MAP: Lazy<HashMap<&'static str, AzureConfigKey>> = Lazy::new(|| {
     HashMap::from([
         // access key
@@ -468,11 +484,6 @@ static ALIAS_MAP: Lazy<HashMap<&'static str, AzureConfigKey>> = Lazy::new(|| {
         ("master_key", AzureConfigKey::AccessKey),
         ("account_key", AzureConfigKey::AccessKey),
         ("access_key", AzureConfigKey::AccessKey),
-        // sas key
-        ("azure_storage_sas_token", AzureConfigKey::SasKey),
-        ("azure_storage_sas_key", AzureConfigKey::SasKey),
-        ("sas_token", AzureConfigKey::SasKey),
-        ("sas_key", AzureConfigKey::SasKey),
         // account name
         ("azure_storage_account_name", AzureConfigKey::AccountName),
         ("account_name", AzureConfigKey::AccountName),
@@ -604,9 +615,12 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Hydrate builder from key value pairs
-    pub fn with_options(mut self, options: &HashMap<String, String>) -> Self {
+    pub fn with_options(
+        mut self,
+        options: &HashMap<impl Into<String> + Clone, String>,
+    ) -> Self {
         for (key, value) in options {
-            self = self.with_option(key, value);
+            self = self.with_option(key.clone(), value);
         }
         self
     }
@@ -1018,6 +1032,28 @@ mod tests {
                 "azure_storage_token".to_string(),
                 azure_storage_token.clone(),
             ),
+        ]);
+
+        let builder = MicrosoftAzureBuilder::new()
+            .with_options(&options)
+            .with_option("unknown-key", "unknown-value");
+        assert_eq!(builder.client_id.unwrap(), azure_client_id);
+        assert_eq!(builder.account_name.unwrap(), azure_storage_account_name);
+        assert_eq!(builder.bearer_token.unwrap(), azure_storage_token);
+    }
+
+    #[test]
+    fn azure_test_config_from_typed_map() {
+        let azure_client_id = "object_store:fake_access_key_id".to_string();
+        let azure_storage_account_name = "object_store:fake_secret_key".to_string();
+        let azure_storage_token = "object_store:fake_default_region".to_string();
+        let options = HashMap::from([
+            (AzureConfigKey::ClientId, azure_client_id.clone()),
+            (
+                AzureConfigKey::AccountName,
+                azure_storage_account_name.clone(),
+            ),
+            (AzureConfigKey::Token, azure_storage_token.clone()),
         ]);
 
         let builder = MicrosoftAzureBuilder::new()

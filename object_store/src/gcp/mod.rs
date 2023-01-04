@@ -797,8 +797,9 @@ pub struct GoogleCloudStorageBuilder {
     client_options: ClientOptions,
 }
 
-#[derive(PartialEq, Eq)]
-enum GoogleConfigKey {
+/// Configuration keys for [`GoogleCloudStorageBuilder`]
+#[derive(PartialEq, Eq, Hash, Clone, Debug, Copy)]
+pub enum GoogleConfigKey {
     /// Path to the service account file
     ///
     /// Supported keys:
@@ -816,6 +817,15 @@ enum GoogleConfigKey {
     /// - `bucket`
     /// - `bucket_name`
     Bucket,
+}
+
+impl From<GoogleConfigKey> for String {
+    fn from(value: GoogleConfigKey) -> Self {
+        match value {
+            GoogleConfigKey::ServiceAccount => Self::from("google_service_account"),
+            GoogleConfigKey::Bucket => Self::from("google_bucket"),
+        }
+    }
 }
 
 static ALIAS_MAP: Lazy<BTreeMap<&'static str, GoogleConfigKey>> = Lazy::new(|| {
@@ -921,9 +931,12 @@ impl GoogleCloudStorageBuilder {
     }
 
     /// Hydrate builder from key value pairs
-    pub fn with_options(mut self, options: &HashMap<String, String>) -> Self {
+    pub fn with_options(
+        mut self,
+        options: &HashMap<impl Into<String> + Clone, String>,
+    ) -> Self {
         for (key, value) in options {
-            self = self.with_option(key, value);
+            self = self.with_option(key.clone(), value);
         }
         self
     }
@@ -1281,6 +1294,26 @@ mod test {
                 google_service_account.clone(),
             ),
             ("google_bucket_name".to_string(), google_bucket_name.clone()),
+        ]);
+
+        let builder = GoogleCloudStorageBuilder::new().with_options(&options);
+        assert_eq!(
+            builder.service_account_path.unwrap(),
+            google_service_account.as_str()
+        );
+        assert_eq!(builder.bucket_name.unwrap(), google_bucket_name.as_str());
+    }
+
+    #[test]
+    fn gcs_test_config_from_typed_map() {
+        let google_service_account = "object_store:fake_service_account".to_string();
+        let google_bucket_name = "object_store:fake_bucket".to_string();
+        let options = HashMap::from([
+            (
+                GoogleConfigKey::ServiceAccount,
+                google_service_account.clone(),
+            ),
+            (GoogleConfigKey::Bucket, google_bucket_name.clone()),
         ]);
 
         let builder = GoogleCloudStorageBuilder::new().with_options(&options);

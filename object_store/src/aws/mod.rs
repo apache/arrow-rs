@@ -381,8 +381,9 @@ pub struct AmazonS3Builder {
     client_options: ClientOptions,
 }
 
-#[derive(PartialEq, Eq)]
-enum AmazonS3ConfigKey {
+/// Configuration keys for [`AmazonS3Builder`]
+#[derive(PartialEq, Eq, Hash, Clone, Debug, Copy)]
+pub enum AmazonS3ConfigKey {
     /// AWS Access Key
     ///
     /// See [`AmazonS3Builder::with_access_key_id`] for details.
@@ -485,6 +486,26 @@ enum AmazonS3ConfigKey {
     /// - `aws_profile`
     /// - `profile`
     Profile,
+}
+
+impl From<AmazonS3ConfigKey> for String {
+    fn from(value: AmazonS3ConfigKey) -> Self {
+        match value {
+            AmazonS3ConfigKey::AccessKeyId => Self::from("aws_access_key_id"),
+            AmazonS3ConfigKey::SecretAccessKey => Self::from("aws_secret_access_key"),
+            AmazonS3ConfigKey::Region => Self::from("aws_region"),
+            AmazonS3ConfigKey::Bucket => Self::from("aws_bucket"),
+            AmazonS3ConfigKey::Endpoint => Self::from("aws_endpoint"),
+            AmazonS3ConfigKey::Token => Self::from("aws_session_token"),
+            AmazonS3ConfigKey::ImdsV1Fallback => Self::from("aws_imdsv1_fallback"),
+            AmazonS3ConfigKey::VirtualHostedStyleRequest => {
+                Self::from("aws_virtual_hosted_style_request")
+            }
+            AmazonS3ConfigKey::DefaultRegion => Self::from("aws_default_region"),
+            AmazonS3ConfigKey::MetadataEndpoint => Self::from("aws_metadata_endpoint"),
+            AmazonS3ConfigKey::Profile => Self::from("aws_profile"),
+        }
+    }
 }
 
 static ALIAS_MAP: Lazy<BTreeMap<&'static str, AmazonS3ConfigKey>> = Lazy::new(|| {
@@ -650,9 +671,12 @@ impl AmazonS3Builder {
     }
 
     /// Hydrate builder from key value pairs
-    pub fn with_options(mut self, options: &HashMap<String, String>) -> Self {
+    pub fn with_options(
+        mut self,
+        options: &HashMap<impl Into<String> + Clone, String>,
+    ) -> Self {
         for (key, value) in options {
-            self = self.with_option(key, value);
+            self = self.with_option(key.clone(), value);
         }
         self
     }
@@ -1118,6 +1142,31 @@ mod tests {
         let builder = AmazonS3Builder::new()
             .with_options(&options)
             .with_option("aws_secret_access_key", "new-secret-key");
+        assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
+        assert_eq!(builder.secret_access_key.unwrap(), "new-secret-key");
+        assert_eq!(builder.region.unwrap(), aws_default_region);
+        assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
+        assert_eq!(builder.token.unwrap(), aws_session_token);
+    }
+
+    #[test]
+    fn s3_test_config_from_typed_map() {
+        let aws_access_key_id = "object_store:fake_access_key_id".to_string();
+        let aws_secret_access_key = "object_store:fake_secret_key".to_string();
+        let aws_default_region = "object_store:fake_default_region".to_string();
+        let aws_endpoint = "object_store:fake_endpoint".to_string();
+        let aws_session_token = "object_store:fake_session_token".to_string();
+        let options = HashMap::from([
+            (AmazonS3ConfigKey::AccessKeyId, aws_access_key_id.clone()),
+            (AmazonS3ConfigKey::SecretAccessKey, aws_secret_access_key),
+            (AmazonS3ConfigKey::DefaultRegion, aws_default_region.clone()),
+            (AmazonS3ConfigKey::Endpoint, aws_endpoint.clone()),
+            (AmazonS3ConfigKey::Token, aws_session_token.clone()),
+        ]);
+
+        let builder = AmazonS3Builder::new()
+            .with_options(&options)
+            .with_option(AmazonS3ConfigKey::SecretAccessKey, "new-secret-key");
         assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
         assert_eq!(builder.secret_access_key.unwrap(), "new-secret-key");
         assert_eq!(builder.region.unwrap(), aws_default_region);
