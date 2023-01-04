@@ -1,0 +1,625 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use crate::builder::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder};
+use crate::types::{
+    ArrowDictionaryKeyType, ByteArrayType, GenericBinaryType, GenericStringType,
+};
+use crate::{Array, ArrayRef, DictionaryArray, GenericByteArray};
+use arrow_buffer::ArrowNativeType;
+use arrow_schema::{ArrowError, DataType};
+use hashbrown::hash_map::RawEntryMut;
+use hashbrown::HashMap;
+use std::any::Any;
+use std::sync::Arc;
+
+/// Generic array builder for `DictionaryArray` that stores generic byte values.
+/// For example to map a set of byte indices to String values. Note that
+/// the use of a `HashMap` here will not scale to very large arrays or
+/// result in an ordered dictionary.
+#[derive(Debug)]
+pub struct GenericByteDictionaryBuilder<K, T>
+where
+    K: ArrowDictionaryKeyType,
+    T: ByteArrayType,
+{
+    state: ahash::RandomState,
+    /// Used to provide a lookup from string value to key type
+    ///
+    /// Note: K's hash implementation is not used, instead the raw entry
+    /// API is used to store keys w.r.t the hash of the strings themselves
+    ///
+    dedup: HashMap<K::Native, (), ()>,
+
+    keys_builder: PrimitiveBuilder<K>,
+    values_builder: GenericByteBuilder<T>,
+}
+
+impl<K, T> Default for GenericByteDictionaryBuilder<K, T>
+where
+    K: ArrowDictionaryKeyType,
+    T: ByteArrayType,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<K, T> GenericByteDictionaryBuilder<K, T>
+where
+    K: ArrowDictionaryKeyType,
+    T: ByteArrayType,
+{
+    /// Creates a new `GenericByteDictionaryBuilder`
+    pub fn new() -> Self {
+        let keys_builder = PrimitiveBuilder::new();
+        let values_builder = GenericByteBuilder::<T>::new();
+        Self {
+            state: Default::default(),
+            dedup: HashMap::with_capacity_and_hasher(keys_builder.capacity(), ()),
+            keys_builder,
+            values_builder,
+        }
+    }
+
+    /// Creates a new `GenericByteDictionaryBuilder` with the provided capacities
+    ///
+    /// `keys_capacity`: the number of keys, i.e. length of array to build
+    /// `value_capacity`: the number of distinct dictionary values, i.e. size of dictionary
+    /// `data_capacity`: the total number of bytes of all distinct bytes in the dictionary
+    pub fn with_capacity(
+        keys_capacity: usize,
+        value_capacity: usize,
+        data_capacity: usize,
+    ) -> Self {
+        Self {
+            state: Default::default(),
+            dedup: Default::default(),
+            keys_builder: PrimitiveBuilder::with_capacity(keys_capacity),
+            values_builder: GenericByteBuilder::<T>::with_capacity(
+                value_capacity,
+                data_capacity,
+            ),
+        }
+    }
+
+    /// Creates a new `GenericByteDictionaryBuilder` from a keys capacity and a dictionary
+    /// which is initialized with the given values.
+    /// The indices of those dictionary values are used as keys.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_array::builder::StringDictionaryBuilder;
+    /// # use arrow_array::{Int16Array, StringArray};
+    ///
+    /// let dictionary_values = StringArray::from(vec![None, Some("abc"), Some("def")]);
+    ///
+    /// let mut builder = StringDictionaryBuilder::new_with_dictionary(3, &dictionary_values).unwrap();
+    /// builder.append("def").unwrap();
+    /// builder.append_null();
+    /// builder.append("abc").unwrap();
+    ///
+    /// let dictionary_array = builder.finish();
+    ///
+    /// let keys = dictionary_array.keys();
+    ///
+    /// assert_eq!(keys, &Int16Array::from(vec![Some(2), None, Some(1)]));
+    /// ```
+    pub fn new_with_dictionary(
+        keys_capacity: usize,
+        dictionary_values: &GenericByteArray<T>,
+    ) -> Result<Self, ArrowError> {
+        let state = ahash::RandomState::default();
+        let dict_len = dictionary_values.len();
+
+        let mut dedup = HashMap::with_capacity_and_hasher(dict_len, ());
+
+        let values_len = dictionary_values.value_data().len();
+        let mut values_builder =
+            GenericByteBuilder::<T>::with_capacity(dict_len, values_len);
+
+        for (idx, maybe_value) in dictionary_values.iter().enumerate() {
+            match maybe_value {
+                Some(value) => {
+                    let value_bytes: &[u8] = value.as_ref();
+                    let hash = state.hash_one(value_bytes);
+
+                    let key = K::Native::from_usize(idx)
+                        .ok_or(ArrowError::DictionaryKeyOverflowError)?;
+
+                    let entry =
+                        dedup.raw_entry_mut().from_hash(hash, |key: &K::Native| {
+                            value_bytes == get_bytes(&values_builder, key)
+                        });
+
+                    if let RawEntryMut::Vacant(v) = entry {
+                        v.insert_with_hasher(hash, key, (), |key| {
+                            state.hash_one(get_bytes(&values_builder, key))
+                        });
+                    }
+
+                    values_builder.append_value(value);
+                }
+                None => values_builder.append_null(),
+            }
+        }
+
+        Ok(Self {
+            state,
+            dedup,
+            keys_builder: PrimitiveBuilder::with_capacity(keys_capacity),
+            values_builder,
+        })
+    }
+}
+
+impl<K, T> ArrayBuilder for GenericByteDictionaryBuilder<K, T>
+where
+    K: ArrowDictionaryKeyType,
+    T: ByteArrayType,
+{
+    /// Returns the builder as an non-mutable `Any` reference.
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Returns the builder as an mutable `Any` reference.
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    /// Returns the boxed builder as a box of `Any`.
+    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+
+    /// Returns the number of array slots in the builder
+    fn len(&self) -> usize {
+        self.keys_builder.len()
+    }
+
+    /// Returns whether the number of array slots is zero
+    fn is_empty(&self) -> bool {
+        self.keys_builder.is_empty()
+    }
+
+    /// Builds the array and reset this builder.
+    fn finish(&mut self) -> ArrayRef {
+        Arc::new(self.finish())
+    }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> ArrayRef {
+        Arc::new(self.finish_cloned())
+    }
+}
+
+impl<K, T> GenericByteDictionaryBuilder<K, T>
+where
+    K: ArrowDictionaryKeyType,
+    T: ByteArrayType,
+{
+    /// Append a primitive value to the array. Return an existing index
+    /// if already present in the values array or a new index if the
+    /// value is appended to the values array.
+    ///
+    /// Returns an error if the new index would overflow the key type.
+    pub fn append(
+        &mut self,
+        value: impl AsRef<T::Native>,
+    ) -> Result<K::Native, ArrowError> {
+        let value_native: &T::Native = value.as_ref();
+        let value_bytes: &[u8] = value_native.as_ref();
+
+        let state = &self.state;
+        let storage = &mut self.values_builder;
+        let hash = state.hash_one(value_bytes);
+
+        let entry = self
+            .dedup
+            .raw_entry_mut()
+            .from_hash(hash, |key| value_bytes == get_bytes(storage, key));
+
+        let key = match entry {
+            RawEntryMut::Occupied(entry) => *entry.into_key(),
+            RawEntryMut::Vacant(entry) => {
+                let index = storage.len();
+                storage.append_value(value);
+                let key = K::Native::from_usize(index)
+                    .ok_or(ArrowError::DictionaryKeyOverflowError)?;
+
+                *entry
+                    .insert_with_hasher(hash, key, (), |key| {
+                        state.hash_one(get_bytes(storage, key))
+                    })
+                    .0
+            }
+        };
+        self.keys_builder.append_value(key);
+
+        Ok(key)
+    }
+
+    /// Appends a null slot into the builder
+    #[inline]
+    pub fn append_null(&mut self) {
+        self.keys_builder.append_null()
+    }
+
+    /// Builds the `DictionaryArray` and reset this builder.
+    pub fn finish(&mut self) -> DictionaryArray<K> {
+        self.dedup.clear();
+        let values = self.values_builder.finish();
+        let keys = self.keys_builder.finish();
+
+        let data_type =
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(DataType::Utf8));
+
+        let builder = keys
+            .into_data()
+            .into_builder()
+            .data_type(data_type)
+            .child_data(vec![values.into_data()]);
+
+        DictionaryArray::from(unsafe { builder.build_unchecked() })
+    }
+
+    /// Builds the `DictionaryArray` without resetting the builder.
+    pub fn finish_cloned(&self) -> DictionaryArray<K> {
+        let values = self.values_builder.finish_cloned();
+        let keys = self.keys_builder.finish_cloned();
+
+        let data_type =
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(DataType::Utf8));
+
+        let builder = keys
+            .into_data()
+            .into_builder()
+            .data_type(data_type)
+            .child_data(vec![values.into_data()]);
+
+        DictionaryArray::from(unsafe { builder.build_unchecked() })
+    }
+}
+
+fn get_bytes<'a, K: ArrowNativeType, T: ByteArrayType>(
+    values: &'a GenericByteBuilder<T>,
+    key: &K,
+) -> &'a [u8] {
+    let offsets = values.offsets_slice();
+    let values = values.values_slice();
+
+    let idx = key.as_usize();
+    let end_offset = offsets[idx + 1].as_usize();
+    let start_offset = offsets[idx].as_usize();
+
+    &values[start_offset..end_offset]
+}
+
+/// Array builder for `DictionaryArray` that stores Strings. For example to map a set of byte indices
+/// to String values. Note that the use of a `HashMap` here will not scale to very large
+/// arrays or result in an ordered dictionary.
+///
+/// ```
+/// // Create a dictionary array indexed by bytes whose values are Strings.
+/// // It can thus hold up to 256 distinct string values.
+///
+/// # use arrow_array::builder::StringDictionaryBuilder;
+/// # use arrow_array::{Int8Array, StringArray};
+/// # use arrow_array::types::Int8Type;
+///
+/// let mut builder = StringDictionaryBuilder::<Int8Type>::new();
+///
+/// // The builder builds the dictionary value by value
+/// builder.append("abc").unwrap();
+/// builder.append_null();
+/// builder.append("def").unwrap();
+/// builder.append("def").unwrap();
+/// builder.append("abc").unwrap();
+/// let array = builder.finish();
+///
+/// assert_eq!(
+///   array.keys(),
+///   &Int8Array::from(vec![Some(0), None, Some(1), Some(1), Some(0)])
+/// );
+///
+/// // Values are polymorphic and so require a downcast.
+/// let av = array.values();
+/// let ava: &StringArray = av.as_any().downcast_ref::<StringArray>().unwrap();
+///
+/// assert_eq!(ava.value(0), "abc");
+/// assert_eq!(ava.value(1), "def");
+///
+/// ```
+pub type StringDictionaryBuilder<K> =
+    GenericByteDictionaryBuilder<K, GenericStringType<i32>>;
+
+/// Array builder for `DictionaryArray` that stores large Strings. For example to map a set of byte indices
+/// to String values. Note that the use of a `HashMap` here will not scale to very large
+/// arrays or result in an ordered dictionary.
+pub type LargeStringDictionaryBuilder<K> =
+    GenericByteDictionaryBuilder<K, GenericStringType<i64>>;
+
+/// Array builder for `DictionaryArray` that stores binary. For example to map a set of byte indices
+/// to binary values. Note that the use of a `HashMap` here will not scale to very large
+/// arrays or result in an ordered dictionary.
+///
+/// ```
+/// // Create a dictionary array indexed by bytes whose values are binary.
+/// // It can thus hold up to 256 distinct binary values.
+///
+/// # use arrow_array::builder::BinaryDictionaryBuilder;
+/// # use arrow_array::{BinaryArray, Int8Array};
+/// # use arrow_array::types::Int8Type;
+///
+/// let mut builder = BinaryDictionaryBuilder::<Int8Type>::new();
+///
+/// // The builder builds the dictionary value by value
+/// builder.append(b"abc").unwrap();
+/// builder.append_null();
+/// builder.append(b"def").unwrap();
+/// builder.append(b"def").unwrap();
+/// builder.append(b"abc").unwrap();
+/// let array = builder.finish();
+///
+/// assert_eq!(
+///   array.keys(),
+///   &Int8Array::from(vec![Some(0), None, Some(1), Some(1), Some(0)])
+/// );
+///
+/// // Values are polymorphic and so require a downcast.
+/// let av = array.values();
+/// let ava: &BinaryArray = av.as_any().downcast_ref::<BinaryArray>().unwrap();
+///
+/// assert_eq!(ava.value(0), b"abc");
+/// assert_eq!(ava.value(1), b"def");
+///
+/// ```
+pub type BinaryDictionaryBuilder<K> =
+    GenericByteDictionaryBuilder<K, GenericBinaryType<i32>>;
+
+/// Array builder for `DictionaryArray` that stores large binary. For example to map a set of byte indices
+/// to binary values. Note that the use of a `HashMap` here will not scale to very large
+/// arrays or result in an ordered dictionary.
+pub type LargeBinaryDictionaryBuilder<K> =
+    GenericByteDictionaryBuilder<K, GenericBinaryType<i64>>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::array::Array;
+    use crate::array::Int8Array;
+    use crate::types::{Int16Type, Int8Type};
+    use crate::{BinaryArray, StringArray};
+
+    fn test_bytes_dictionary_builder<T>(values: Vec<&T::Native>)
+    where
+        T: ByteArrayType,
+        <T as ByteArrayType>::Native: PartialEq,
+        <T as ByteArrayType>::Native: AsRef<<T as ByteArrayType>::Native>,
+    {
+        let mut builder = GenericByteDictionaryBuilder::<Int8Type, T>::new();
+        builder.append(values[0]).unwrap();
+        builder.append_null();
+        builder.append(values[1]).unwrap();
+        builder.append(values[1]).unwrap();
+        builder.append(values[0]).unwrap();
+        let array = builder.finish();
+
+        assert_eq!(
+            array.keys(),
+            &Int8Array::from(vec![Some(0), None, Some(1), Some(1), Some(0)])
+        );
+
+        // Values are polymorphic and so require a downcast.
+        let av = array.values();
+        let ava: &GenericByteArray<T> =
+            av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
+
+        assert_eq!(*ava.value(0), *values[0]);
+        assert_eq!(*ava.value(1), *values[1]);
+    }
+
+    #[test]
+    fn test_string_dictionary_builder() {
+        test_bytes_dictionary_builder::<GenericStringType<i32>>(vec!["abc", "def"]);
+    }
+
+    #[test]
+    fn test_binary_dictionary_builder() {
+        test_bytes_dictionary_builder::<GenericBinaryType<i32>>(vec![b"abc", b"def"]);
+    }
+
+    fn test_bytes_dictionary_builder_finish_cloned<T>(values: Vec<&T::Native>)
+    where
+        T: ByteArrayType,
+        <T as ByteArrayType>::Native: PartialEq,
+        <T as ByteArrayType>::Native: AsRef<<T as ByteArrayType>::Native>,
+    {
+        let mut builder = GenericByteDictionaryBuilder::<Int8Type, T>::new();
+
+        builder.append(values[0]).unwrap();
+        builder.append_null();
+        builder.append(values[1]).unwrap();
+        builder.append(values[1]).unwrap();
+        builder.append(values[0]).unwrap();
+        let mut array = builder.finish_cloned();
+
+        assert_eq!(
+            array.keys(),
+            &Int8Array::from(vec![Some(0), None, Some(1), Some(1), Some(0)])
+        );
+
+        // Values are polymorphic and so require a downcast.
+        let av = array.values();
+        let ava: &GenericByteArray<T> =
+            av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
+
+        assert_eq!(ava.value(0), values[0]);
+        assert_eq!(ava.value(1), values[1]);
+
+        builder.append(values[0]).unwrap();
+        builder.append(values[2]).unwrap();
+        builder.append(values[1]).unwrap();
+
+        array = builder.finish();
+
+        assert_eq!(
+            array.keys(),
+            &Int8Array::from(vec![
+                Some(0),
+                None,
+                Some(1),
+                Some(1),
+                Some(0),
+                Some(0),
+                Some(2),
+                Some(1)
+            ])
+        );
+
+        // Values are polymorphic and so require a downcast.
+        let av2 = array.values();
+        let ava2: &GenericByteArray<T> =
+            av2.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
+
+        assert_eq!(ava2.value(0), values[0]);
+        assert_eq!(ava2.value(1), values[1]);
+        assert_eq!(ava2.value(2), values[2]);
+    }
+
+    #[test]
+    fn test_string_dictionary_builder_finish_cloned() {
+        test_bytes_dictionary_builder_finish_cloned::<GenericStringType<i32>>(vec![
+            "abc", "def", "ghi",
+        ]);
+    }
+
+    #[test]
+    fn test_binary_dictionary_builder_finish_cloned() {
+        test_bytes_dictionary_builder_finish_cloned::<GenericBinaryType<i32>>(vec![
+            b"abc", b"def", b"ghi",
+        ]);
+    }
+
+    fn test_bytes_dictionary_builder_with_existing_dictionary<T>(
+        dictionary: GenericByteArray<T>,
+        values: Vec<&T::Native>,
+    ) where
+        T: ByteArrayType,
+        <T as ByteArrayType>::Native: PartialEq,
+        <T as ByteArrayType>::Native: AsRef<<T as ByteArrayType>::Native>,
+    {
+        let mut builder =
+            GenericByteDictionaryBuilder::<Int8Type, T>::new_with_dictionary(
+                6,
+                &dictionary,
+            )
+            .unwrap();
+        builder.append(values[0]).unwrap();
+        builder.append_null();
+        builder.append(values[1]).unwrap();
+        builder.append(values[1]).unwrap();
+        builder.append(values[0]).unwrap();
+        builder.append(values[2]).unwrap();
+        let array = builder.finish();
+
+        assert_eq!(
+            array.keys(),
+            &Int8Array::from(vec![Some(2), None, Some(1), Some(1), Some(2), Some(3)])
+        );
+
+        // Values are polymorphic and so require a downcast.
+        let av = array.values();
+        let ava: &GenericByteArray<T> =
+            av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
+
+        assert!(!ava.is_valid(0));
+        assert_eq!(ava.value(1), values[1]);
+        assert_eq!(ava.value(2), values[0]);
+        assert_eq!(ava.value(3), values[2]);
+    }
+
+    #[test]
+    fn test_string_dictionary_builder_with_existing_dictionary() {
+        test_bytes_dictionary_builder_with_existing_dictionary::<GenericStringType<i32>>(
+            StringArray::from(vec![None, Some("def"), Some("abc")]),
+            vec!["abc", "def", "ghi"],
+        );
+    }
+
+    #[test]
+    fn test_binary_dictionary_builder_with_existing_dictionary() {
+        let values: Vec<Option<&[u8]>> = vec![None, Some(b"def"), Some(b"abc")];
+        test_bytes_dictionary_builder_with_existing_dictionary::<GenericBinaryType<i32>>(
+            BinaryArray::from(values),
+            vec![b"abc", b"def", b"ghi"],
+        );
+    }
+
+    fn test_bytes_dictionary_builder_with_reserved_null_value<T>(
+        dictionary: GenericByteArray<T>,
+        values: Vec<&T::Native>,
+    ) where
+        T: ByteArrayType,
+        <T as ByteArrayType>::Native: PartialEq,
+        <T as ByteArrayType>::Native: AsRef<<T as ByteArrayType>::Native>,
+    {
+        let mut builder =
+            GenericByteDictionaryBuilder::<Int16Type, T>::new_with_dictionary(
+                4,
+                &dictionary,
+            )
+            .unwrap();
+        builder.append(values[0]).unwrap();
+        builder.append_null();
+        builder.append(values[1]).unwrap();
+        builder.append(values[0]).unwrap();
+        let array = builder.finish();
+
+        assert!(array.is_null(1));
+        assert!(!array.is_valid(1));
+
+        let keys = array.keys();
+
+        assert_eq!(keys.value(0), 1);
+        assert!(keys.is_null(1));
+        // zero initialization is currently guaranteed by Buffer allocation and resizing
+        assert_eq!(keys.value(1), 0);
+        assert_eq!(keys.value(2), 2);
+        assert_eq!(keys.value(3), 1);
+    }
+
+    #[test]
+    fn test_string_dictionary_builder_with_reserved_null_value() {
+        test_bytes_dictionary_builder_with_reserved_null_value::<GenericStringType<i32>>(
+            StringArray::from(vec![None]),
+            vec!["abc", "def"],
+        );
+    }
+
+    #[test]
+    fn test_binary_dictionary_builder_with_reserved_null_value() {
+        let values: Vec<Option<&[u8]>> = vec![None];
+        test_bytes_dictionary_builder_with_reserved_null_value::<GenericBinaryType<i32>>(
+            BinaryArray::from(values),
+            vec![b"abc", b"def"],
+        );
+    }
+}

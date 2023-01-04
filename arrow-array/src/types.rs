@@ -713,7 +713,7 @@ pub trait ByteArrayType: 'static + Send + Sync + bytes::ByteArrayTypeSealed {
     /// Type for representing its equivalent rust type i.e
     /// Utf8Array will have native type has &str
     /// BinaryArray will have type as [u8]
-    type Native: bytes::ByteArrayNativeType + AsRef<[u8]> + ?Sized;
+    type Native: bytes::ByteArrayNativeType + AsRef<Self::Native> + AsRef<[u8]> + ?Sized;
     /// "Binary" or "String", for use in error messages
     const PREFIX: &'static str;
     /// Datatype of array elements
