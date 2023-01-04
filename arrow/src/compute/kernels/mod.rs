@@ -23,7 +23,7 @@ pub use arrow_arith::{aggregate, arithmetic, arity, bitwise, boolean, temporal};
 pub use arrow_cast::cast;
 pub use arrow_cast::parse as cast_utils;
 pub use arrow_ord::{partition, sort};
-pub use arrow_select::{concat, filter, interleave, take, window, zip};
+pub use arrow_select::{concat, filter, interleave, nullif, take, window, zip};
 pub use arrow_string::{concat_elements, length, regexp, substring};
 
 /// Comparison kernels for `Array`s.
