@@ -21,9 +21,7 @@ use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow_array::{
-    Array, ArrayRef, Decimal128Array, Int32Array, Int64Array, RecordBatch,
-};
+use arrow_array::{types, Array, ArrayRef, Decimal128Array, RecordBatch};
 use arrow_schema::{DataType as ArrowDataType, IntervalUnit, SchemaRef};
 
 use super::schema::{
@@ -162,9 +160,7 @@ impl<W: Write> ArrowWriter<W> {
                                 .as_any()
                                 .downcast_ref::<Decimal128Array>()
                                 .unwrap()
-                                .iter()
-                                .map(|v| v.map(|v| v as i32))
-                                .collect::<Int32Array>();
+                                .unary::<_, types::Int32Type>(|v| v as i32);
                             buffer.push_back(Arc::new(new_array))
                         }
                         Type::INT64 => {
@@ -172,9 +168,7 @@ impl<W: Write> ArrowWriter<W> {
                                 .as_any()
                                 .downcast_ref::<Decimal128Array>()
                                 .unwrap()
-                                .iter()
-                                .map(|v| v.map(|v| v as i64))
-                                .collect::<Int64Array>();
+                                .unary::<_, types::Int64Type>(|v| v as i64);
                             buffer.push_back(Arc::new(new_array))
                         }
                         _ => buffer.push_back(column.clone()),

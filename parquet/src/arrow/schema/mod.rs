@@ -423,7 +423,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_scale(*scale as i32)
                 .build()
         }
-        DataType::Decimal256(precision, scala) => {
+        DataType::Decimal256(precision, scale) => {
             // For the decimal256, use the fixed length byte array to store the data
             Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_repetition(repetition)
