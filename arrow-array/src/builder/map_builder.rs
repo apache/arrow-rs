@@ -245,10 +245,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        builder::{Int32Builder, StringBuilder},
-        Int32Array, StringArray,
-    };
+    use crate::builder::{Int32Builder, StringBuilder};
 
     use super::*;
 
