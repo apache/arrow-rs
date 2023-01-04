@@ -19,6 +19,15 @@
 
 # Changelog
 
+## [30.0.1](https://github.com/apache/arrow-rs/tree/30.0.1) (2023-01-04)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/30.0.0...30.0.1)
+
+**Merged pull requests:**
+
+- Remove multiversion dependency [\#3452](https://github.com/apache/arrow-rs/pull/3452) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Re-export nullif kernel [\#3451](https://github.com/apache/arrow-rs/pull/3451) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+
 ## [30.0.0](https://github.com/apache/arrow-rs/tree/30.0.0) (2022-12-29)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/29.0.0...30.0.0)
