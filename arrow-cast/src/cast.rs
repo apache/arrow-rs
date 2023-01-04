@@ -3285,6 +3285,8 @@ fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
         ),
         Utf8 => pack_string_to_dictionary::<K>(array, cast_options),
         LargeUtf8 => pack_string_to_dictionary::<K>(array, cast_options),
+        Binary => pack_binary_to_dictionary::<K>(array, cast_options),
+        LargeBinary => pack_binary_to_dictionary::<K>(array, cast_options),
         _ => Err(ArrowError::CastError(format!(
             "Unsupported output type for dictionary packing: {:?}",
             dict_value_type
@@ -3336,6 +3338,30 @@ where
     let cast_values = cast_with_options(array, &DataType::Utf8, cast_options)?;
     let values = cast_values.as_any().downcast_ref::<StringArray>().unwrap();
     let mut b = StringDictionaryBuilder::<K>::with_capacity(values.len(), 1024, 1024);
+
+    // copy each element one at a time
+    for i in 0..values.len() {
+        if values.is_null(i) {
+            b.append_null();
+        } else {
+            b.append(values.value(i))?;
+        }
+    }
+    Ok(Arc::new(b.finish()))
+}
+
+// Packs the data as a BinaryDictionaryArray, if possible, with the
+// key types of K
+fn pack_binary_to_dictionary<K>(
+    array: &ArrayRef,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError>
+where
+    K: ArrowDictionaryKeyType,
+{
+    let cast_values = cast_with_options(array, &DataType::Binary, cast_options)?;
+    let values = cast_values.as_any().downcast_ref::<BinaryArray>().unwrap();
+    let mut b = BinaryDictionaryBuilder::<K>::with_capacity(values.len(), 1024, 1024);
 
     // copy each element one at a time
     for i in 0..values.len() {
