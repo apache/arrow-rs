@@ -1886,7 +1886,7 @@ mod tests {
                         string_array_a.iter().map(|v| v.unwrap()).collect();
                     let vec_b: Vec<&str> =
                         string_array_b.iter().map(|v| v.unwrap()).collect();
-                    assert_eq!(vec_a, vec_b, "{}", format!("failed for encoder: {encoding:?} and row_group_size: {row_group_size:?}"));
+                    assert_eq!(vec_a, vec_b, "failed for encoder: {encoding:?} and row_group_size: {row_group_size:?}");
                 });
             }
         }
