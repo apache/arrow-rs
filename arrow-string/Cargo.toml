@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-string"
-version = "30.0.0"
+version = "30.0.1"
 description = "String kernels for arrow arrays"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"

@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-integration-test"
-version = "30.0.0"
+version = "30.0.1"
 description = "Support for the Apache Arrow JSON test data format"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"

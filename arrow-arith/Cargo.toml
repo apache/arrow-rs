@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-arith"
-version = "30.0.0"
+version = "30.0.1"
 description = "Arrow arithmetic kernels"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"

@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-ipc"
-version = "30.0.0"
+version = "30.0.1"
 description = "Support for the Arrow IPC format"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
