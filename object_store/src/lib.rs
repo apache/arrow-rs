@@ -555,6 +555,13 @@ pub enum Error {
 
     #[snafu(display("Operation not yet implemented."))]
     NotImplemented,
+
+    #[snafu(display(
+        "Configuration key: '{}' is not valid for store '{}'.",
+        key,
+        store
+    ))]
+    UnknownConfigurationKey { store: &'static str, key: String },
 }
 
 impl From<Error> for std::io::Error {
