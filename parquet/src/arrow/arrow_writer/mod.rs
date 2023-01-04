@@ -1206,7 +1206,7 @@ mod tests {
         validate: F,
     ) -> File
     where
-        F: Fn(&ArrayData, &ArrayData) -> (),
+        F: Fn(&ArrayData, &ArrayData),
     {
         let file = tempfile::tempfile().unwrap();
 
