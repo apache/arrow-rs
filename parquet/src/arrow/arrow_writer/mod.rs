@@ -1180,6 +1180,7 @@ mod tests {
     }
 
     const SMALL_SIZE: usize = 7;
+    const MEDIUM_SIZE: usize = 63;
 
     fn roundtrip(
         expected_batch: RecordBatch,
@@ -1199,7 +1200,14 @@ mod tests {
         files
     }
 
-    fn roundtrip_opts(expected_batch: &RecordBatch, props: WriterProperties) -> File {
+    fn roundtrip_opts_with_array_validation<F>(
+        expected_batch: &RecordBatch,
+        props: WriterProperties,
+        validate: F,
+    ) -> File
+    where
+        F: Fn(&ArrayData, &ArrayData) -> (),
+    {
         let file = tempfile::tempfile().unwrap();
 
         let mut writer = ArrowWriter::try_new(
@@ -1225,11 +1233,16 @@ mod tests {
         for i in 0..expected_batch.num_columns() {
             let expected_data = expected_batch.column(i).data();
             let actual_data = actual_batch.column(i).data();
-
-            assert_eq!(expected_data, actual_data);
+            validate(expected_data, actual_data);
         }
 
         file
+    }
+
+    fn roundtrip_opts(expected_batch: &RecordBatch, props: WriterProperties) -> File {
+        roundtrip_opts_with_array_validation(expected_batch, props, |a, b| {
+            assert_eq!(a, b)
+        })
     }
 
     struct RoundTripOptions {
@@ -1836,6 +1849,46 @@ mod tests {
 
         let values = Arc::new(s);
         one_column_roundtrip(values, false);
+    }
+
+    #[ignore]
+    #[test]
+    fn fallback_flush_data_page() {
+        //tests if the Fallback::flush_data_page clears all buffers correctly
+        let raw_values: Vec<_> = (0..MEDIUM_SIZE).map(|i| i.to_string()).collect();
+        let values = Arc::new(StringArray::from(raw_values));
+        let encodings = vec![
+            Encoding::DELTA_BYTE_ARRAY,
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+        ];
+        let data_type = values.data_type().clone();
+        let schema = Arc::new(Schema::new(vec![Field::new("col", data_type, false)]));
+        let expected_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
+
+        let row_group_sizes = [1024, SMALL_SIZE, SMALL_SIZE / 2, SMALL_SIZE / 2 + 1, 10];
+        let data_pagesize_limit: usize = 32;
+        let write_batch_size: usize = 16;
+
+        for encoding in &encodings {
+            for row_group_size in row_group_sizes {
+                let props = WriterProperties::builder()
+                    .set_writer_version(WriterVersion::PARQUET_2_0)
+                    .set_max_row_group_size(row_group_size)
+                    .set_dictionary_enabled(false)
+                    .set_encoding(*encoding)
+                    .set_data_pagesize_limit(data_pagesize_limit)
+                    .set_write_batch_size(write_batch_size)
+                    .build();
+
+                roundtrip_opts_with_array_validation(&expected_batch, props, |a, b| {
+                    let string_array_a = StringArray::from(a.clone());
+                    let string_array_b = StringArray::from(b.clone());
+                    let vec_a: Vec<&str> = string_array_a.iter().map(|v| v.unwrap()).collect();
+                    let vec_b: Vec<&str> = string_array_b.iter().map(|v| v.unwrap()).collect();
+                    assert_eq!(vec_a, vec_b);
+                });
+            }
+        }
     }
 
     #[test]
