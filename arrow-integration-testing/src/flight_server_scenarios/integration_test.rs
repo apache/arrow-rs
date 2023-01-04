@@ -25,7 +25,7 @@ use arrow::{
     buffer::Buffer,
     datatypes::Schema,
     datatypes::SchemaRef,
-    ipc::{self, reader},
+    ipc::{self, reader, writer},
     record_batch::RecordBatch,
 };
 use arrow_flight::{
@@ -121,15 +121,24 @@ impl FlightService for FlightServiceImpl {
             .iter()
             .enumerate()
             .flat_map(|(counter, batch)| {
-                let (dictionary_flight_data, mut batch_flight_data) =
-                    arrow_flight::utils::flight_data_from_arrow_batch(batch, &options);
+                let data_gen = writer::IpcDataGenerator::default();
+                let mut dictionary_tracker = writer::DictionaryTracker::new(false);
+
+                let (encoded_dictionaries, encoded_batch) = data_gen
+                    .encoded_batch(batch, &mut dictionary_tracker, &options)
+                    .expect(
+                        "DictionaryTracker configured above to not error on replacement",
+                    );
+
+                let dictionary_flight_data =
+                    encoded_dictionaries.into_iter().map(Into::into);
+                let mut batch_flight_data: FlightData = encoded_batch.into();
 
                 // Only the record batch's FlightData gets app_metadata
                 let metadata = counter.to_string().into();
                 batch_flight_data.app_metadata = metadata;
 
                 dictionary_flight_data
-                    .into_iter()
                     .chain(std::iter::once(batch_flight_data))
                     .map(Ok)
             });

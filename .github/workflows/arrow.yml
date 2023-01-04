@@ -210,3 +210,7 @@ jobs:
         run: cargo clippy -p arrow-row --all-targets --all-features -- -D warnings
       - name: Clippy arrow with all features except SIMD
         run: cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict,dyn_arith_dict,chrono-tz --all-targets -- -D warnings
+      - name: Clippy arrow-integration-test with all features
+        run: cargo clippy -p arrow-integration-test --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-integration-testing with all features
+        run: cargo clippy -p arrow-integration-testing --all-targets --all-features -- -D warnings

@@ -33,6 +33,7 @@ use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{self, BufReader};
 use std::ops::Range;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -42,6 +43,7 @@ use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
 use reqwest::header::RANGE;
 use reqwest::{header, Client, Method, Response, StatusCode};
+use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use tokio::io::AsyncWrite;
 use url::Url;
@@ -145,6 +147,9 @@ enum Error {
 
     #[snafu(display("URL did not match any known pattern for scheme: {}", url))]
     UrlNotRecognised { url: String },
+
+    #[snafu(display("Configuration key: '{}' is not known.", key))]
+    UnknownConfigurationKey { key: String },
 }
 
 impl From<Error> for super::Error {
@@ -164,6 +169,9 @@ impl From<Error> for super::Error {
                 source: Box::new(source),
                 path,
             },
+            Error::UnknownConfigurationKey { key } => {
+                Self::UnknownConfigurationKey { store: "GCS", key }
+            }
             _ => Self::Generic {
                 store: "GCS",
                 source: Box::new(err),
@@ -796,6 +804,74 @@ pub struct GoogleCloudStorageBuilder {
     client_options: ClientOptions,
 }
 
+/// Configuration keys for [`GoogleCloudStorageBuilder`]
+///
+/// Configuration via keys can be dome via the [`try_with_option`](GoogleCloudStorageBuilder::try_with_option)
+/// or [`with_options`](GoogleCloudStorageBuilder::try_with_options) methods on the builder.
+///
+/// # Example
+/// ```
+/// use std::collections::HashMap;
+/// use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
+///
+/// let options = HashMap::from([
+///     ("google_service_account", "my-service-account"),
+/// ]);
+/// let typed_options = vec![
+///     (GoogleConfigKey::Bucket, "my-bucket"),
+/// ];
+/// let azure = GoogleCloudStorageBuilder::new()
+///     .try_with_options(options)
+///     .unwrap()
+///     .try_with_options(typed_options)
+///     .unwrap()
+///     .try_with_option(GoogleConfigKey::Bucket, "my-new-bucket")
+///     .unwrap();
+/// ```
+#[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Serialize, Deserialize)]
+pub enum GoogleConfigKey {
+    /// Path to the service account file
+    ///
+    /// Supported keys:
+    /// - `google_service_account`
+    /// - `service_account`
+    ServiceAccount,
+
+    /// Bucket name
+    ///
+    /// See [`GoogleCloudStorageBuilder::with_bucket_name`] for details.
+    ///
+    /// Supported keys:
+    /// - `google_bucket`
+    /// - `google_bucket_name`
+    /// - `bucket`
+    /// - `bucket_name`
+    Bucket,
+}
+
+impl AsRef<str> for GoogleConfigKey {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::ServiceAccount => "google_service_account",
+            Self::Bucket => "google_bucket",
+        }
+    }
+}
+
+impl FromStr for GoogleConfigKey {
+    type Err = super::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "google_service_account" | "service_account" => Ok(Self::ServiceAccount),
+            "google_bucket" | "google_bucket_name" | "bucket" | "bucket_name" => {
+                Ok(Self::Bucket)
+            }
+            _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
+        }
+    }
+}
+
 impl Default for GoogleCloudStorageBuilder {
     fn default() -> Self {
         Self {
@@ -835,8 +911,16 @@ impl GoogleCloudStorageBuilder {
             builder.service_account_path = Some(service_account_path);
         }
 
-        if let Ok(service_account_path) = std::env::var("GOOGLE_SERVICE_ACCOUNT") {
-            builder.service_account_path = Some(service_account_path);
+        for (os_key, os_value) in std::env::vars_os() {
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
+                if key.starts_with("GOOGLE_") {
+                    if let Ok(config_key) =
+                        GoogleConfigKey::from_str(&key.to_ascii_lowercase())
+                    {
+                        builder = builder.try_with_option(config_key, value).unwrap();
+                    }
+                }
+            }
         }
 
         builder
@@ -861,6 +945,34 @@ impl GoogleCloudStorageBuilder {
     pub fn with_url(mut self, url: impl Into<String>) -> Self {
         self.url = Some(url.into());
         self
+    }
+
+    /// Set an option on the builder via a key - value pair.
+    pub fn try_with_option(
+        mut self,
+        key: impl AsRef<str>,
+        value: impl Into<String>,
+    ) -> Result<Self> {
+        match GoogleConfigKey::from_str(key.as_ref())? {
+            GoogleConfigKey::ServiceAccount => {
+                self.service_account_path = Some(value.into())
+            }
+            GoogleConfigKey::Bucket => self.bucket_name = Some(value.into()),
+        };
+        Ok(self)
+    }
+
+    /// Hydrate builder from key value pairs
+    pub fn try_with_options<
+        I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
+    >(
+        mut self,
+        options: I,
+    ) -> Result<Self> {
+        for (key, value) in options {
+            self = self.try_with_option(key, value)?;
+        }
+        Ok(self)
     }
 
     /// Sets properties on this builder based on a URL
@@ -995,9 +1107,9 @@ fn convert_object_meta(object: &Object) -> Result<ObjectMeta> {
 
 #[cfg(test)]
 mod test {
-    use std::env;
-
     use bytes::Bytes;
+    use std::collections::HashMap;
+    use std::env;
 
     use crate::{
         tests::{
@@ -1204,5 +1316,59 @@ mod test {
         for case in err_cases {
             builder.parse_url(case).unwrap_err();
         }
+    }
+
+    #[test]
+    fn gcs_test_config_from_map() {
+        let google_service_account = "object_store:fake_service_account".to_string();
+        let google_bucket_name = "object_store:fake_bucket".to_string();
+        let options = HashMap::from([
+            ("google_service_account", google_service_account.clone()),
+            ("google_bucket_name", google_bucket_name.clone()),
+        ]);
+
+        let builder = GoogleCloudStorageBuilder::new()
+            .try_with_options(&options)
+            .unwrap();
+        assert_eq!(
+            builder.service_account_path.unwrap(),
+            google_service_account.as_str()
+        );
+        assert_eq!(builder.bucket_name.unwrap(), google_bucket_name.as_str());
+    }
+
+    #[test]
+    fn gcs_test_config_from_typed_map() {
+        let google_service_account = "object_store:fake_service_account".to_string();
+        let google_bucket_name = "object_store:fake_bucket".to_string();
+        let options = HashMap::from([
+            (
+                GoogleConfigKey::ServiceAccount,
+                google_service_account.clone(),
+            ),
+            (GoogleConfigKey::Bucket, google_bucket_name.clone()),
+        ]);
+
+        let builder = GoogleCloudStorageBuilder::new()
+            .try_with_options(&options)
+            .unwrap();
+        assert_eq!(
+            builder.service_account_path.unwrap(),
+            google_service_account.as_str()
+        );
+        assert_eq!(builder.bucket_name.unwrap(), google_bucket_name.as_str());
+    }
+
+    #[test]
+    fn gcs_test_config_fallible_options() {
+        let google_service_account = "object_store:fake_service_account".to_string();
+        let google_bucket_name = "object_store:fake_bucket".to_string();
+        let options = HashMap::from([
+            ("google_service_account", google_service_account),
+            ("invalid-key", google_bucket_name),
+        ]);
+
+        let builder = GoogleCloudStorageBuilder::new().try_with_options(&options);
+        assert!(builder.is_err());
     }
 }
