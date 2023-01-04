@@ -142,10 +142,15 @@ enum Error {
 }
 
 impl From<Error> for super::Error {
-    fn from(err: Error) -> Self {
-        Self::Generic {
-            store: "S3",
-            source: Box::new(err),
+    fn from(source: Error) -> Self {
+        match source {
+            Error::UnknownConfigurationKey { key } => {
+                Self::UnknownConfigurationKey { store: "S3", key }
+            }
+            _ => Self::Generic {
+                store: "S3",
+                source: Box::new(source),
+            },
         }
     }
 }
@@ -513,22 +518,33 @@ pub enum AmazonS3ConfigKey {
     Profile,
 }
 
+impl AmazonS3ConfigKey {
+    /// Helper function to filter an iterator to only contain valid configuration keys.
+    pub fn filter_options<
+        I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
+    >(
+        options: I,
+    ) -> impl IntoIterator<Item = (impl AsRef<str>, impl Into<String>)> {
+        options
+            .into_iter()
+            .filter_map(|(key, value)| Some((Self::from_str(key.as_ref()).ok()?, value)))
+    }
+}
+
 impl AsRef<str> for AmazonS3ConfigKey {
     fn as_ref(&self) -> &str {
         match self {
-            AmazonS3ConfigKey::AccessKeyId => "aws_access_key_id",
-            AmazonS3ConfigKey::SecretAccessKey => "aws_secret_access_key",
-            AmazonS3ConfigKey::Region => "aws_region",
-            AmazonS3ConfigKey::Bucket => "aws_bucket",
-            AmazonS3ConfigKey::Endpoint => "aws_endpoint",
-            AmazonS3ConfigKey::Token => "aws_session_token",
-            AmazonS3ConfigKey::ImdsV1Fallback => "aws_imdsv1_fallback",
-            AmazonS3ConfigKey::VirtualHostedStyleRequest => {
-                "aws_virtual_hosted_style_request"
-            }
-            AmazonS3ConfigKey::DefaultRegion => "aws_default_region",
-            AmazonS3ConfigKey::MetadataEndpoint => "aws_metadata_endpoint",
-            AmazonS3ConfigKey::Profile => "aws_profile",
+            Self::AccessKeyId => "aws_access_key_id",
+            Self::SecretAccessKey => "aws_secret_access_key",
+            Self::Region => "aws_region",
+            Self::Bucket => "aws_bucket",
+            Self::Endpoint => "aws_endpoint",
+            Self::Token => "aws_session_token",
+            Self::ImdsV1Fallback => "aws_imdsv1_fallback",
+            Self::VirtualHostedStyleRequest => "aws_virtual_hosted_style_request",
+            Self::DefaultRegion => "aws_default_region",
+            Self::MetadataEndpoint => "aws_metadata_endpoint",
+            Self::Profile => "aws_profile",
         }
     }
 }
@@ -590,10 +606,14 @@ impl AmazonS3Builder {
     pub fn from_env() -> Self {
         let mut builder: Self = Default::default();
 
-        for (os_key, os_value) in std::env::vars_os().into_iter() {
+        for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if key.starts_with("AWS_") {
-                    builder = builder.with_option(key.to_ascii_lowercase(), value);
+                    if let Ok(config_key) =
+                        AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase())
+                    {
+                        builder = builder.try_with_option(config_key, value).unwrap();
+                    }
                 }
             }
         }
@@ -640,43 +660,52 @@ impl AmazonS3Builder {
     }
 
     /// Set an option on the builder via a key - value pair.
-    pub fn with_option(mut self, key: impl AsRef<str>, value: impl Into<String>) -> Self {
-        match AmazonS3ConfigKey::from_str(key.as_ref()) {
-            Ok(AmazonS3ConfigKey::AccessKeyId) => self.access_key_id = Some(value.into()),
-            Ok(AmazonS3ConfigKey::SecretAccessKey) => {
+    ///
+    /// This method will return an `UnknownConfigKey` error if key cannot be parsed into [`AmazonS3ConfigKey`].
+    pub fn try_with_option(
+        mut self,
+        key: impl AsRef<str>,
+        value: impl Into<String>,
+    ) -> Result<Self> {
+        match AmazonS3ConfigKey::from_str(key.as_ref())? {
+            AmazonS3ConfigKey::AccessKeyId => self.access_key_id = Some(value.into()),
+            AmazonS3ConfigKey::SecretAccessKey => {
                 self.secret_access_key = Some(value.into())
             }
-            Ok(AmazonS3ConfigKey::Region) => self.region = Some(value.into()),
-            Ok(AmazonS3ConfigKey::Bucket) => self.bucket_name = Some(value.into()),
-            Ok(AmazonS3ConfigKey::Endpoint) => self.endpoint = Some(value.into()),
-            Ok(AmazonS3ConfigKey::Token) => self.token = Some(value.into()),
-            Ok(AmazonS3ConfigKey::ImdsV1Fallback) => {
+            AmazonS3ConfigKey::Region => self.region = Some(value.into()),
+            AmazonS3ConfigKey::Bucket => self.bucket_name = Some(value.into()),
+            AmazonS3ConfigKey::Endpoint => self.endpoint = Some(value.into()),
+            AmazonS3ConfigKey::Token => self.token = Some(value.into()),
+            AmazonS3ConfigKey::ImdsV1Fallback => {
                 self.imdsv1_fallback = str_is_truthy(&value.into())
             }
-            Ok(AmazonS3ConfigKey::VirtualHostedStyleRequest) => {
+            AmazonS3ConfigKey::VirtualHostedStyleRequest => {
                 self.virtual_hosted_style_request = str_is_truthy(&value.into())
             }
-            Ok(AmazonS3ConfigKey::DefaultRegion) => {
+            AmazonS3ConfigKey::DefaultRegion => {
                 self.region = self.region.or_else(|| Some(value.into()))
             }
-            Ok(AmazonS3ConfigKey::MetadataEndpoint) => {
+            AmazonS3ConfigKey::MetadataEndpoint => {
                 self.metadata_endpoint = Some(value.into())
             }
-            Ok(AmazonS3ConfigKey::Profile) => self.profile = Some(value.into()),
-            Err(_) => (),
+            AmazonS3ConfigKey::Profile => self.profile = Some(value.into()),
         };
-        self
+        Ok(self)
     }
 
     /// Hydrate builder from key value pairs
-    pub fn with_options<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
+    ///
+    /// This method will return an `UnknownConfigKey` error if any key cannot be parsed into [`AmazonS3ConfigKey`].
+    pub fn try_with_options<
+        I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
+    >(
         mut self,
         options: I,
-    ) -> Self {
+    ) -> Result<Self> {
         for (key, value) in options {
-            self = self.with_option(key, value);
+            self = self.try_with_option(key, value)?;
         }
-        self
+        Ok(self)
     }
 
     /// Sets properties on this builder based on a URL
@@ -1139,8 +1168,10 @@ mod tests {
         ]);
 
         let builder = AmazonS3Builder::new()
-            .with_options(&options)
-            .with_option("aws_secret_access_key", "new-secret-key");
+            .try_with_options(&options)
+            .unwrap()
+            .try_with_option("aws_secret_access_key", "new-secret-key")
+            .unwrap();
         assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
         assert_eq!(builder.secret_access_key.unwrap(), "new-secret-key");
         assert_eq!(builder.region.unwrap(), aws_default_region);
@@ -1164,13 +1195,31 @@ mod tests {
         ]);
 
         let builder = AmazonS3Builder::new()
-            .with_options(&options)
-            .with_option(AmazonS3ConfigKey::SecretAccessKey, "new-secret-key");
+            .try_with_options(&options)
+            .unwrap()
+            .try_with_option(AmazonS3ConfigKey::SecretAccessKey, "new-secret-key")
+            .unwrap();
         assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
         assert_eq!(builder.secret_access_key.unwrap(), "new-secret-key");
         assert_eq!(builder.region.unwrap(), aws_default_region);
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
+    }
+
+    #[test]
+    fn s3_test_config_fallible_options() {
+        let aws_access_key_id = "object_store:fake_access_key_id".to_string();
+        let aws_secret_access_key = "object_store:fake_secret_key".to_string();
+        let options = HashMap::from([
+            ("aws_access_key_id", aws_access_key_id),
+            ("invalid-key", aws_secret_access_key),
+        ]);
+
+        let builder = AmazonS3Builder::new().try_with_options(&options);
+        assert!(builder.is_err());
+        let builder = AmazonS3Builder::new()
+            .try_with_options(AmazonS3ConfigKey::filter_options(&options));
+        assert!(builder.is_ok());
     }
 
     #[tokio::test]

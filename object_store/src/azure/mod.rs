@@ -139,9 +139,15 @@ enum Error {
 
 impl From<Error> for super::Error {
     fn from(source: Error) -> Self {
-        Self::Generic {
-            store: "MicrosoftAzure",
-            source: Box::new(source),
+        match source {
+            Error::UnknownConfigurationKey { key } => Self::UnknownConfigurationKey {
+                store: "MicrosoftAzure",
+                key,
+            },
+            _ => Self::Generic {
+                store: "MicrosoftAzure",
+                source: Box::new(source),
+            },
         }
     }
 }
@@ -484,17 +490,30 @@ pub enum AzureConfigKey {
     UseEmulator,
 }
 
+impl AzureConfigKey {
+    /// Helper function to filter an iterator to only contain valid configuration keys.
+    pub fn filter_options<
+        I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
+    >(
+        options: I,
+    ) -> impl IntoIterator<Item = (impl AsRef<str>, impl Into<String>)> {
+        options
+            .into_iter()
+            .filter_map(|(key, value)| Some((Self::from_str(key.as_ref()).ok()?, value)))
+    }
+}
+
 impl AsRef<str> for AzureConfigKey {
     fn as_ref(&self) -> &str {
         match self {
-            AzureConfigKey::AccountName => "azure_storage_account_name",
-            AzureConfigKey::AccessKey => "azure_storage_account_key",
-            AzureConfigKey::ClientId => "azure_storage_client_id",
-            AzureConfigKey::ClientSecret => "azure_storage_client_secret",
-            AzureConfigKey::AuthorityId => "azure_storage_tenant_id",
-            AzureConfigKey::SasKey => "azure_storage_sas_key",
-            AzureConfigKey::Token => "azure_storage_token",
-            AzureConfigKey::UseEmulator => "azure_storage_use_emulator",
+            Self::AccountName => "azure_storage_account_name",
+            Self::AccessKey => "azure_storage_account_key",
+            Self::ClientId => "azure_storage_client_id",
+            Self::ClientSecret => "azure_storage_client_secret",
+            Self::AuthorityId => "azure_storage_tenant_id",
+            Self::SasKey => "azure_storage_sas_key",
+            Self::Token => "azure_storage_token",
+            Self::UseEmulator => "azure_storage_use_emulator",
         }
     }
 }
@@ -569,10 +588,14 @@ impl MicrosoftAzureBuilder {
     /// ```
     pub fn from_env() -> Self {
         let mut builder = Self::default();
-        for (os_key, os_value) in std::env::vars_os().into_iter() {
+        for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if key.starts_with("AZURE_") {
-                    builder = builder.with_option(key.to_ascii_lowercase(), value);
+                    if let Ok(config_key) =
+                        AzureConfigKey::from_str(&key.to_ascii_lowercase())
+                    {
+                        builder = builder.try_with_option(config_key, value).unwrap();
+                    }
                 }
             }
         }
@@ -613,32 +636,37 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Set an option on the builder via a key - value pair.
-    pub fn with_option(mut self, key: impl AsRef<str>, value: impl Into<String>) -> Self {
-        match AzureConfigKey::from_str(key.as_ref()) {
-            Ok(AzureConfigKey::AccessKey) => self.access_key = Some(value.into()),
-            Ok(AzureConfigKey::AccountName) => self.account_name = Some(value.into()),
-            Ok(AzureConfigKey::ClientId) => self.client_id = Some(value.into()),
-            Ok(AzureConfigKey::ClientSecret) => self.client_secret = Some(value.into()),
-            Ok(AzureConfigKey::AuthorityId) => self.tenant_id = Some(value.into()),
-            Ok(AzureConfigKey::SasKey) => self.sas_key = Some(value.into()),
-            Ok(AzureConfigKey::Token) => self.bearer_token = Some(value.into()),
-            Ok(AzureConfigKey::UseEmulator) => {
+    pub fn try_with_option(
+        mut self,
+        key: impl AsRef<str>,
+        value: impl Into<String>,
+    ) -> Result<Self> {
+        match AzureConfigKey::from_str(key.as_ref())? {
+            AzureConfigKey::AccessKey => self.access_key = Some(value.into()),
+            AzureConfigKey::AccountName => self.account_name = Some(value.into()),
+            AzureConfigKey::ClientId => self.client_id = Some(value.into()),
+            AzureConfigKey::ClientSecret => self.client_secret = Some(value.into()),
+            AzureConfigKey::AuthorityId => self.tenant_id = Some(value.into()),
+            AzureConfigKey::SasKey => self.sas_key = Some(value.into()),
+            AzureConfigKey::Token => self.bearer_token = Some(value.into()),
+            AzureConfigKey::UseEmulator => {
                 self.use_emulator = str_is_truthy(&value.into())
             }
-            Err(_) => (),
         };
-        self
+        Ok(self)
     }
 
     /// Hydrate builder from key value pairs
-    pub fn with_options<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
+    pub fn try_with_options<
+        I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
+    >(
         mut self,
         options: I,
-    ) -> Self {
+    ) -> Result<Self> {
         for (key, value) in options {
-            self = self.with_option(key, value);
+            self = self.try_with_option(key, value)?;
         }
-        self
+        Ok(self)
     }
 
     /// Sets properties on this builder based on a URL
@@ -1049,8 +1077,8 @@ mod tests {
         ]);
 
         let builder = MicrosoftAzureBuilder::new()
-            .with_options(&options)
-            .with_option("unknown-key", "unknown-value");
+            .try_with_options(&options)
+            .unwrap();
         assert_eq!(builder.client_id.unwrap(), azure_client_id);
         assert_eq!(builder.account_name.unwrap(), azure_storage_account_name);
         assert_eq!(builder.bearer_token.unwrap(), azure_storage_token);
@@ -1071,10 +1099,26 @@ mod tests {
         ]);
 
         let builder = MicrosoftAzureBuilder::new()
-            .with_options(&options)
-            .with_option("unknown-key", "unknown-value");
+            .try_with_options(&options)
+            .unwrap();
         assert_eq!(builder.client_id.unwrap(), azure_client_id);
         assert_eq!(builder.account_name.unwrap(), azure_storage_account_name);
         assert_eq!(builder.bearer_token.unwrap(), azure_storage_token);
+    }
+
+    #[test]
+    fn azure_test_config_fallible_options() {
+        let azure_client_id = "object_store:fake_access_key_id".to_string();
+        let azure_storage_token = "object_store:fake_default_region".to_string();
+        let options = HashMap::from([
+            ("azure_client_id", azure_client_id),
+            ("invalid-key", azure_storage_token),
+        ]);
+
+        let builder = MicrosoftAzureBuilder::new().try_with_options(&options);
+        assert!(builder.is_err());
+        let builder = MicrosoftAzureBuilder::new()
+            .try_with_options(AzureConfigKey::filter_options(&options));
+        assert!(builder.is_ok());
     }
 }
