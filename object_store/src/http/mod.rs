@@ -55,8 +55,11 @@ enum Error {
     #[snafu(display("Must specify a URL"))]
     MissingUrl,
 
-    #[snafu(display("Invalid URL: {}", source))]
-    InvalidUrl { source: reqwest::Error },
+    #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
+    UnableToParseUrl {
+        source: url::ParseError,
+        url: String,
+    },
 
     #[snafu(display("Object is a directory"))]
     IsDirectory,
@@ -210,9 +213,9 @@ impl ObjectStore for HttpStore {
 }
 
 /// Configure a connection to a generic HTTP server
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct HttpBuilder {
-    url: Option<Result<Url>>,
+    url: Option<String>,
     client_options: ClientOptions,
     retry_config: RetryConfig,
 }
@@ -224,8 +227,8 @@ impl HttpBuilder {
     }
 
     /// Set the URL
-    pub fn with_url(mut self, url: impl reqwest::IntoUrl) -> Self {
-        self.url = Some(url.into_url().context(InvalidUrlSnafu).map_err(Into::into));
+    pub fn with_url(mut self, url: impl Into<String>) -> Self {
+        self.url = Some(url.into());
         self
     }
 
@@ -243,9 +246,11 @@ impl HttpBuilder {
 
     /// Build an [`HttpStore`] with the configured options
     pub fn build(self) -> Result<HttpStore> {
-        let url = self.url.context(MissingUrlSnafu)??;
+        let url = self.url.context(MissingUrlSnafu)?;
+        let parsed = Url::parse(&url).context(UnableToParseUrlSnafu { url })?;
+
         Ok(HttpStore {
-            client: Client::new(url, self.client_options, self.retry_config)?,
+            client: Client::new(parsed, self.client_options, self.retry_config)?,
         })
     }
 }

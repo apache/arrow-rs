@@ -37,16 +37,18 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
-use snafu::{ResultExt, Snafu};
-use std::collections::BTreeSet;
+use percent_encoding::percent_decode_str;
+use serde::{Deserialize, Serialize};
+use snafu::{OptionExt, ResultExt, Snafu};
 use std::fmt::{Debug, Formatter};
 use std::io;
 use std::ops::Range;
 use std::sync::Arc;
+use std::{collections::BTreeSet, str::FromStr};
 use tokio::io::AsyncWrite;
 use url::Url;
 
-use crate::util::RFC1123_FMT;
+use crate::util::{str_is_truthy, RFC1123_FMT};
 pub use credential::authority_hosts;
 
 mod client;
@@ -121,13 +123,31 @@ enum Error {
         scheme
     ))]
     UnknownUrlScheme { scheme: String },
+
+    #[snafu(display("URL did not match any known pattern for scheme: {}", url))]
+    UrlNotRecognised { url: String },
+
+    #[snafu(display("Failed parsing an SAS key"))]
+    DecodeSasKey { source: std::str::Utf8Error },
+
+    #[snafu(display("Missing component in SAS query pair"))]
+    MissingSasComponent {},
+
+    #[snafu(display("Configuration key: '{}' is not known.", key))]
+    UnknownConfigurationKey { key: String },
 }
 
 impl From<Error> for super::Error {
     fn from(source: Error) -> Self {
-        Self::Generic {
-            store: "MicrosoftAzure",
-            source: Box::new(source),
+        match source {
+            Error::UnknownConfigurationKey { key } => Self::UnknownConfigurationKey {
+                store: "MicrosoftAzure",
+                key,
+            },
+            _ => Self::Generic {
+                store: "MicrosoftAzure",
+                source: Box::new(source),
+            },
         }
     }
 }
@@ -354,7 +374,7 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
 ///  .with_container_name(BUCKET_NAME)
 ///  .build();
 /// ```
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MicrosoftAzureBuilder {
     account_name: Option<String>,
     access_key: Option<String>,
@@ -364,11 +384,163 @@ pub struct MicrosoftAzureBuilder {
     client_secret: Option<String>,
     tenant_id: Option<String>,
     sas_query_pairs: Option<Vec<(String, String)>>,
+    sas_key: Option<String>,
     authority_host: Option<String>,
+    url: Option<String>,
     use_emulator: bool,
     retry_config: RetryConfig,
     client_options: ClientOptions,
-    url_parse_error: Option<Error>,
+}
+
+/// Configuration keys for [`MicrosoftAzureBuilder`]
+///
+/// Configuration via keys can be dome via the [`try_with_option`](MicrosoftAzureBuilder::try_with_option)
+/// or [`with_options`](MicrosoftAzureBuilder::try_with_options) methods on the builder.
+///
+/// # Example
+/// ```
+/// use std::collections::HashMap;
+/// use object_store::azure::{MicrosoftAzureBuilder, AzureConfigKey};
+///
+/// let options = HashMap::from([
+///     ("azure_client_id", "my-client-id"),
+///     ("azure_client_secret", "my-account-name"),
+/// ]);
+/// let typed_options = vec![
+///     (AzureConfigKey::AccountName, "my-account-name"),
+/// ];
+/// let azure = MicrosoftAzureBuilder::new()
+///     .try_with_options(options)
+///     .unwrap()
+///     .try_with_options(typed_options)
+///     .unwrap()
+///     .try_with_option(AzureConfigKey::AuthorityId, "my-tenant-id")
+///     .unwrap();
+/// ```
+#[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Deserialize, Serialize)]
+pub enum AzureConfigKey {
+    /// The name of the azure storage account
+    ///
+    /// Supported keys:
+    /// - `azure_storage_account_name`
+    /// - `account_name`
+    AccountName,
+
+    /// Master key for accessing storage account
+    ///
+    /// Supported keys:
+    /// - `azure_storage_account_key`
+    /// - `azure_storage_access_key`
+    /// - `azure_storage_master_key`
+    /// - `access_key`
+    /// - `account_key`
+    /// - `master_key`
+    AccessKey,
+
+    /// Service principal client id for authorizing requests
+    ///
+    /// Supported keys:
+    /// - `azure_storage_client_id`
+    /// - `azure_client_id`
+    /// - `client_id`
+    ClientId,
+
+    /// Service principal client secret for authorizing requests
+    ///
+    /// Supported keys:
+    /// - `azure_storage_client_secret`
+    /// - `azure_client_secret`
+    /// - `client_secret`
+    ClientSecret,
+
+    /// Tenant id used in oauth flows
+    ///
+    /// Supported keys:
+    /// - `azure_storage_tenant_id`
+    /// - `azure_storage_authority_id`
+    /// - `azure_tenant_id`
+    /// - `azure_authority_id`
+    /// - `tenant_id`
+    /// - `authority_id`
+    AuthorityId,
+
+    /// Shared access signature.
+    ///
+    /// The signature is expected to be percent-encoded, much like they are provided
+    /// in the azure storage explorer or azure portal.
+    ///
+    /// Supported keys:
+    /// - `azure_storage_sas_key`
+    /// - `azure_storage_sas_token`
+    /// - `sas_key`
+    /// - `sas_token`
+    SasKey,
+
+    /// Bearer token
+    ///
+    /// Supported keys:
+    /// - `azure_storage_token`
+    /// - `bearer_token`
+    /// - `token`
+    Token,
+
+    /// Use object store with azurite storage emulator
+    ///
+    /// Supported keys:
+    /// - `azure_storage_use_emulator`
+    /// - `object_store_use_emulator`
+    /// - `use_emulator`
+    UseEmulator,
+}
+
+impl AsRef<str> for AzureConfigKey {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::AccountName => "azure_storage_account_name",
+            Self::AccessKey => "azure_storage_account_key",
+            Self::ClientId => "azure_storage_client_id",
+            Self::ClientSecret => "azure_storage_client_secret",
+            Self::AuthorityId => "azure_storage_tenant_id",
+            Self::SasKey => "azure_storage_sas_key",
+            Self::Token => "azure_storage_token",
+            Self::UseEmulator => "azure_storage_use_emulator",
+        }
+    }
+}
+
+impl FromStr for AzureConfigKey {
+    type Err = super::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "azure_storage_account_key"
+            | "azure_storage_access_key"
+            | "azure_storage_master_key"
+            | "master_key"
+            | "account_key"
+            | "access_key" => Ok(Self::AccessKey),
+            "azure_storage_account_name" | "account_name" => Ok(Self::AccountName),
+            "azure_storage_client_id" | "azure_client_id" | "client_id" => {
+                Ok(Self::ClientId)
+            }
+            "azure_storage_client_secret" | "azure_client_secret" | "client_secret" => {
+                Ok(Self::ClientSecret)
+            }
+            "azure_storage_tenant_id"
+            | "azure_storage_authority_id"
+            | "azure_tenant_id"
+            | "azure_authority_id"
+            | "tenant_id"
+            | "authority_id" => Ok(Self::AuthorityId),
+            "azure_storage_sas_key"
+            | "azure_storage_sas_token"
+            | "sas_key"
+            | "sas_token" => Ok(Self::SasKey),
+            "azure_storage_token" | "bearer_token" | "token" => Ok(Self::Token),
+            "azure_storage_use_emulator" | "use_emulator" => Ok(Self::UseEmulator),
+            _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
+        }
+    }
 }
 
 impl Debug for MicrosoftAzureBuilder {
@@ -406,27 +578,21 @@ impl MicrosoftAzureBuilder {
     /// ```
     pub fn from_env() -> Self {
         let mut builder = Self::default();
-
-        if let Ok(account_name) = std::env::var("AZURE_STORAGE_ACCOUNT_NAME") {
-            builder.account_name = Some(account_name);
+        for (os_key, os_value) in std::env::vars_os() {
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
+                if key.starts_with("AZURE_") {
+                    if let Ok(config_key) =
+                        AzureConfigKey::from_str(&key.to_ascii_lowercase())
+                    {
+                        builder = builder.try_with_option(config_key, value).unwrap();
+                    }
+                }
+            }
         }
 
-        if let Ok(access_key) = std::env::var("AZURE_STORAGE_ACCOUNT_KEY") {
-            builder.access_key = Some(access_key);
-        } else if let Ok(access_key) = std::env::var("AZURE_STORAGE_ACCESS_KEY") {
-            builder.access_key = Some(access_key);
-        }
-
-        if let Ok(client_id) = std::env::var("AZURE_STORAGE_CLIENT_ID") {
-            builder.client_id = Some(client_id);
-        }
-
-        if let Ok(client_secret) = std::env::var("AZURE_STORAGE_CLIENT_SECRET") {
-            builder.client_secret = Some(client_secret);
-        }
-
-        if let Ok(tenant_id) = std::env::var("AZURE_STORAGE_TENANT_ID") {
-            builder.tenant_id = Some(tenant_id);
+        if let Ok(text) = std::env::var("AZURE_ALLOW_HTTP") {
+            builder.client_options =
+                builder.client_options.with_allow_http(str_is_truthy(&text));
         }
 
         builder
@@ -444,9 +610,7 @@ impl MicrosoftAzureBuilder {
     /// - `https://<account>.dfs.core.windows.net`
     /// - `https://<account>.blob.core.windows.net`
     ///
-    /// Please note that this is a best effort implementation, and will not fail for malformed URLs,
-    /// but rather warn and ignore the passed url. The url also has no effect on how the
-    /// storage is accessed - e.g. which driver or protocol is used for reading from the location.
+    /// Note: Settings derived from the URL will override any others set on this builder
     ///
     /// # Example
     /// ```
@@ -456,52 +620,82 @@ impl MicrosoftAzureBuilder {
     ///     .with_url("abfss://file_system@account.dfs.core.windows.net/")
     ///     .build();
     /// ```
-    pub fn with_url(mut self, url: impl AsRef<str>) -> Self {
-        let maybe_parsed = Url::parse(url.as_ref());
-        match maybe_parsed {
-            Ok(parsed) => match parsed.scheme() {
-                "az" | "adl" | "azure" => {
-                    self.container_name = parsed.host_str().map(|host| host.to_owned());
-                }
-                "abfs" | "abfss" => {
-                    // abfs(s) might refer to the fsspec convention abfs://<container>/<path>
-                    // or the convention for the hadoop driver abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>
-                    if parsed.username().is_empty() {
-                        self.container_name =
-                            parsed.host_str().map(|host| host.to_owned());
-                    } else if let Some(host) = parsed.host_str() {
-                        let parts = host.splitn(2, '.').collect::<Vec<&str>>();
-                        if parts.len() == 2 && parts[1] == "dfs.core.windows.net" {
-                            self.container_name = Some(parsed.username().to_owned());
-                            self.account_name = Some(parts[0].to_string());
-                        }
-                    }
-                }
-                "https" => {
-                    if let Some(host) = parsed.host_str() {
-                        let parts = host.splitn(2, '.').collect::<Vec<&str>>();
-                        if parts.len() == 2
-                            && (parts[1] == "dfs.core.windows.net"
-                                || parts[1] == "blob.core.windows.net")
-                        {
-                            self.account_name = Some(parts[0].to_string());
-                        }
-                    }
-                }
-                other => {
-                    self.url_parse_error = Some(Error::UnknownUrlScheme {
-                        scheme: other.into(),
-                    });
-                }
-            },
-            Err(err) => {
-                self.url_parse_error = Some(Error::UnableToParseUrl {
-                    source: err,
-                    url: url.as_ref().into(),
-                });
+    pub fn with_url(mut self, url: impl Into<String>) -> Self {
+        self.url = Some(url.into());
+        self
+    }
+
+    /// Set an option on the builder via a key - value pair.
+    pub fn try_with_option(
+        mut self,
+        key: impl AsRef<str>,
+        value: impl Into<String>,
+    ) -> Result<Self> {
+        match AzureConfigKey::from_str(key.as_ref())? {
+            AzureConfigKey::AccessKey => self.access_key = Some(value.into()),
+            AzureConfigKey::AccountName => self.account_name = Some(value.into()),
+            AzureConfigKey::ClientId => self.client_id = Some(value.into()),
+            AzureConfigKey::ClientSecret => self.client_secret = Some(value.into()),
+            AzureConfigKey::AuthorityId => self.tenant_id = Some(value.into()),
+            AzureConfigKey::SasKey => self.sas_key = Some(value.into()),
+            AzureConfigKey::Token => self.bearer_token = Some(value.into()),
+            AzureConfigKey::UseEmulator => {
+                self.use_emulator = str_is_truthy(&value.into())
             }
         };
-        self
+        Ok(self)
+    }
+
+    /// Hydrate builder from key value pairs
+    pub fn try_with_options<
+        I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
+    >(
+        mut self,
+        options: I,
+    ) -> Result<Self> {
+        for (key, value) in options {
+            self = self.try_with_option(key, value)?;
+        }
+        Ok(self)
+    }
+
+    /// Sets properties on this builder based on a URL
+    ///
+    /// This is a separate member function to allow fallible computation to
+    /// be deferred until [`Self::build`] which in turn allows deriving [`Clone`]
+    fn parse_url(&mut self, url: &str) -> Result<()> {
+        let parsed = Url::parse(url).context(UnableToParseUrlSnafu { url })?;
+        let host = parsed.host_str().context(UrlNotRecognisedSnafu { url })?;
+
+        let validate = |s: &str| match s.contains('.') {
+            true => Err(UrlNotRecognisedSnafu { url }.build()),
+            false => Ok(s.to_string()),
+        };
+
+        match parsed.scheme() {
+            "az" | "adl" | "azure" => self.container_name = Some(validate(host)?),
+            "abfs" | "abfss" => {
+                // abfs(s) might refer to the fsspec convention abfs://<container>/<path>
+                // or the convention for the hadoop driver abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>
+                if parsed.username().is_empty() {
+                    self.container_name = Some(validate(host)?);
+                } else if let Some(a) = host.strip_suffix(".dfs.core.windows.net") {
+                    self.container_name = Some(validate(parsed.username())?);
+                    self.account_name = Some(validate(a)?);
+                } else {
+                    return Err(UrlNotRecognisedSnafu { url }.build().into());
+                }
+            }
+            "https" => match host.split_once('.') {
+                Some((a, "dfs.core.windows.net"))
+                | Some((a, "blob.core.windows.net")) => {
+                    self.account_name = Some(validate(a)?);
+                }
+                _ => return Err(UrlNotRecognisedSnafu { url }.build().into()),
+            },
+            scheme => return Err(UnknownUrlSchemeSnafu { scheme }.build().into()),
+        }
+        Ok(())
     }
 
     /// Set the Azure Account (required)
@@ -595,64 +789,52 @@ impl MicrosoftAzureBuilder {
 
     /// Configure a connection to container with given name on Microsoft Azure
     /// Blob store.
-    pub fn build(self) -> Result<MicrosoftAzure> {
-        let Self {
-            account_name,
-            access_key,
-            container_name,
-            bearer_token,
-            client_id,
-            client_secret,
-            tenant_id,
-            sas_query_pairs,
-            use_emulator,
-            retry_config,
-            authority_host,
-            mut client_options,
-            url_parse_error,
-        } = self;
-
-        if let Some(err) = url_parse_error {
-            return Err(err.into());
+    pub fn build(mut self) -> Result<MicrosoftAzure> {
+        if let Some(url) = self.url.take() {
+            self.parse_url(&url)?;
         }
 
-        let container = container_name.ok_or(Error::MissingContainerName {})?;
+        let container = self.container_name.ok_or(Error::MissingContainerName {})?;
 
-        let (is_emulator, storage_url, auth, account) = if use_emulator {
-            let account_name =
-                account_name.unwrap_or_else(|| EMULATOR_ACCOUNT.to_string());
+        let (is_emulator, storage_url, auth, account) = if self.use_emulator {
+            let account_name = self
+                .account_name
+                .unwrap_or_else(|| EMULATOR_ACCOUNT.to_string());
             // Allow overriding defaults. Values taken from
             // from https://docs.rs/azure_storage/0.2.0/src/azure_storage/core/clients/storage_account_client.rs.html#129-141
             let url = url_from_env("AZURITE_BLOB_STORAGE_URL", "http://127.0.0.1:10000")?;
-            let account_key =
-                access_key.unwrap_or_else(|| EMULATOR_ACCOUNT_KEY.to_string());
+            let account_key = self
+                .access_key
+                .unwrap_or_else(|| EMULATOR_ACCOUNT_KEY.to_string());
             let credential = credential::CredentialProvider::AccessKey(account_key);
 
-            client_options = client_options.with_allow_http(true);
+            self.client_options = self.client_options.with_allow_http(true);
             (true, url, credential, account_name)
         } else {
-            let account_name = account_name.ok_or(Error::MissingAccount {})?;
+            let account_name = self.account_name.ok_or(Error::MissingAccount {})?;
             let account_url = format!("https://{}.blob.core.windows.net", &account_name);
             let url = Url::parse(&account_url)
                 .context(UnableToParseUrlSnafu { url: account_url })?;
-            let credential = if let Some(bearer_token) = bearer_token {
+            let credential = if let Some(bearer_token) = self.bearer_token {
                 Ok(credential::CredentialProvider::AccessKey(bearer_token))
-            } else if let Some(access_key) = access_key {
+            } else if let Some(access_key) = self.access_key {
                 Ok(credential::CredentialProvider::AccessKey(access_key))
             } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
-                (client_id, client_secret, tenant_id)
+                (self.client_id, self.client_secret, self.tenant_id)
             {
                 let client_credential = credential::ClientSecretOAuthProvider::new(
                     client_id,
                     client_secret,
                     tenant_id,
-                    authority_host,
+                    self.authority_host,
                 );
                 Ok(credential::CredentialProvider::ClientSecret(
                     client_credential,
                 ))
-            } else if let Some(query_pairs) = sas_query_pairs {
+            } else if let Some(query_pairs) = self.sas_query_pairs {
                 Ok(credential::CredentialProvider::SASToken(query_pairs))
+            } else if let Some(sas) = self.sas_key {
+                Ok(credential::CredentialProvider::SASToken(split_sas(&sas)?))
             } else {
                 Err(Error::MissingCredentials {})
             }?;
@@ -661,12 +843,12 @@ impl MicrosoftAzureBuilder {
 
         let config = client::AzureConfig {
             account,
-            retry_config,
-            service: storage_url,
-            container,
-            credentials: auth,
             is_emulator,
-            client_options,
+            container,
+            retry_config: self.retry_config,
+            client_options: self.client_options,
+            service: storage_url,
+            credentials: auth,
         };
 
         let client = Arc::new(client::AzureClient::new(config)?);
@@ -690,6 +872,25 @@ fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
     Ok(url)
 }
 
+fn split_sas(sas: &str) -> Result<Vec<(String, String)>, Error> {
+    let sas = percent_decode_str(sas)
+        .decode_utf8()
+        .context(DecodeSasKeySnafu {})?;
+    let kv_str_pairs = sas
+        .trim_start_matches('?')
+        .split('&')
+        .filter(|s| !s.chars().all(char::is_whitespace));
+    let mut pairs = Vec::new();
+    for kv_pair_str in kv_str_pairs {
+        let (k, v) = kv_pair_str
+            .trim()
+            .split_once('=')
+            .ok_or(Error::MissingSasComponent {})?;
+        pairs.push((k.into(), v.into()))
+    }
+    Ok(pairs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -697,6 +898,7 @@ mod tests {
         copy_if_not_exists, list_uses_directories_correctly, list_with_delimiter,
         put_get_delete_list, put_get_delete_list_opts, rename_and_copy, stream_get,
     };
+    use std::collections::HashMap;
     use std::env;
 
     // Helper macro to skip tests if TEST_INTEGRATION and the Azure environment
@@ -804,26 +1006,121 @@ mod tests {
 
     #[test]
     fn azure_blob_test_urls() {
-        let builder = MicrosoftAzureBuilder::new()
-            .with_url("abfss://file_system@account.dfs.core.windows.net/");
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder
+            .parse_url("abfss://file_system@account.dfs.core.windows.net/")
+            .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
         assert_eq!(builder.container_name, Some("file_system".to_string()));
 
-        let builder = MicrosoftAzureBuilder::new().with_url("abfs://container/path");
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder.parse_url("abfs://container/path").unwrap();
         assert_eq!(builder.container_name, Some("container".to_string()));
 
-        let builder = MicrosoftAzureBuilder::new().with_url("az://container");
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder.parse_url("az://container").unwrap();
         assert_eq!(builder.container_name, Some("container".to_string()));
 
-        let builder = MicrosoftAzureBuilder::new().with_url("az://container/path");
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder.parse_url("az://container/path").unwrap();
         assert_eq!(builder.container_name, Some("container".to_string()));
 
-        let builder = MicrosoftAzureBuilder::new()
-            .with_url("https://account.dfs.core.windows.net/");
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder
+            .parse_url("https://account.dfs.core.windows.net/")
+            .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
 
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder
+            .parse_url("https://account.blob.core.windows.net/")
+            .unwrap();
+        assert_eq!(builder.account_name, Some("account".to_string()));
+
+        let err_cases = [
+            "mailto://account.blob.core.windows.net/",
+            "az://blob.mydomain/",
+            "abfs://container.foo/path",
+            "abfss://file_system@account.foo.dfs.core.windows.net/",
+            "abfss://file_system.bar@account.dfs.core.windows.net/",
+            "https://blob.mydomain/",
+            "https://blob.foo.dfs.core.windows.net/",
+        ];
+        let mut builder = MicrosoftAzureBuilder::new();
+        for case in err_cases {
+            builder.parse_url(case).unwrap_err();
+        }
+    }
+
+    #[test]
+    fn azure_test_config_from_map() {
+        let azure_client_id = "object_store:fake_access_key_id";
+        let azure_storage_account_name = "object_store:fake_secret_key";
+        let azure_storage_token = "object_store:fake_default_region";
+        let options = HashMap::from([
+            ("azure_client_id", azure_client_id),
+            ("azure_storage_account_name", azure_storage_account_name),
+            ("azure_storage_token", azure_storage_token),
+        ]);
+
         let builder = MicrosoftAzureBuilder::new()
-            .with_url("https://account.blob.core.windows.net/");
-        assert_eq!(builder.account_name, Some("account".to_string()))
+            .try_with_options(options)
+            .unwrap();
+        assert_eq!(builder.client_id.unwrap(), azure_client_id);
+        assert_eq!(builder.account_name.unwrap(), azure_storage_account_name);
+        assert_eq!(builder.bearer_token.unwrap(), azure_storage_token);
+    }
+
+    #[test]
+    fn azure_test_config_from_typed_map() {
+        let azure_client_id = "object_store:fake_access_key_id".to_string();
+        let azure_storage_account_name = "object_store:fake_secret_key".to_string();
+        let azure_storage_token = "object_store:fake_default_region".to_string();
+        let options = HashMap::from([
+            (AzureConfigKey::ClientId, azure_client_id.clone()),
+            (
+                AzureConfigKey::AccountName,
+                azure_storage_account_name.clone(),
+            ),
+            (AzureConfigKey::Token, azure_storage_token.clone()),
+        ]);
+
+        let builder = MicrosoftAzureBuilder::new()
+            .try_with_options(&options)
+            .unwrap();
+        assert_eq!(builder.client_id.unwrap(), azure_client_id);
+        assert_eq!(builder.account_name.unwrap(), azure_storage_account_name);
+        assert_eq!(builder.bearer_token.unwrap(), azure_storage_token);
+    }
+
+    #[test]
+    fn azure_test_config_fallible_options() {
+        let azure_client_id = "object_store:fake_access_key_id".to_string();
+        let azure_storage_token = "object_store:fake_default_region".to_string();
+        let options = HashMap::from([
+            ("azure_client_id", azure_client_id),
+            ("invalid-key", azure_storage_token),
+        ]);
+
+        let builder = MicrosoftAzureBuilder::new().try_with_options(&options);
+        assert!(builder.is_err());
+    }
+
+    #[test]
+    fn azure_test_split_sas() {
+        let raw_sas = "?sv=2021-10-04&st=2023-01-04T17%3A48%3A57Z&se=2023-01-04T18%3A15%3A00Z&sr=c&sp=rcwl&sig=C7%2BZeEOWbrxPA3R0Cw%2Fw1EZz0%2B4KBvQexeKZKe%2BB6h0%3D";
+        let expected = vec![
+            ("sv".to_string(), "2021-10-04".to_string()),
+            ("st".to_string(), "2023-01-04T17:48:57Z".to_string()),
+            ("se".to_string(), "2023-01-04T18:15:00Z".to_string()),
+            ("sr".to_string(), "c".to_string()),
+            ("sp".to_string(), "rcwl".to_string()),
+            (
+                "sig".to_string(),
+                "C7+ZeEOWbrxPA3R0Cw/w1EZz0+4KBvQexeKZKe+B6h0=".to_string(),
+            ),
+        ];
+        let pairs = split_sas(raw_sas).unwrap();
+        assert_eq!(expected, pairs);
     }
 }

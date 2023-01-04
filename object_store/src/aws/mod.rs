@@ -36,9 +36,12 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
+use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::BTreeSet;
 use std::ops::Range;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
 use tracing::info;
@@ -50,6 +53,7 @@ use crate::aws::credential::{
     StaticCredentialProvider, WebIdentityProvider,
 };
 use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
+use crate::util::str_is_truthy;
 use crate::{
     ClientOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path,
     Result, RetryConfig, StreamExt,
@@ -129,13 +133,24 @@ enum Error {
         scheme
     ))]
     UnknownUrlScheme { scheme: String },
+
+    #[snafu(display("URL did not match any known pattern for scheme: {}", url))]
+    UrlNotRecognised { url: String },
+
+    #[snafu(display("Configuration key: '{}' is not known.", key))]
+    UnknownConfigurationKey { key: String },
 }
 
 impl From<Error> for super::Error {
-    fn from(err: Error) -> Self {
-        Self::Generic {
-            store: "S3",
-            source: Box::new(err),
+    fn from(source: Error) -> Self {
+        match source {
+            Error::UnknownConfigurationKey { key } => {
+                Self::UnknownConfigurationKey { store: "S3", key }
+            }
+            _ => Self::Generic {
+                store: "S3",
+                source: Box::new(source),
+            },
         }
     }
 }
@@ -358,7 +373,7 @@ impl CloudMultiPartUploadImpl for S3MultiPartUpload {
 ///  .with_secret_access_key(SECRET_KEY)
 ///  .build();
 /// ```
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct AmazonS3Builder {
     access_key_id: Option<String>,
     secret_access_key: Option<String>,
@@ -366,13 +381,191 @@ pub struct AmazonS3Builder {
     bucket_name: Option<String>,
     endpoint: Option<String>,
     token: Option<String>,
+    url: Option<String>,
     retry_config: RetryConfig,
     imdsv1_fallback: bool,
     virtual_hosted_style_request: bool,
     metadata_endpoint: Option<String>,
     profile: Option<String>,
     client_options: ClientOptions,
-    url_parse_error: Option<Error>,
+}
+
+/// Configuration keys for [`AmazonS3Builder`]
+///
+/// Configuration via keys can be dome via the [`try_with_option`](AmazonS3Builder::try_with_option)
+/// or [`with_options`](AmazonS3Builder::try_with_options) methods on the builder.
+///
+/// # Example
+/// ```
+/// use std::collections::HashMap;
+/// use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
+///
+/// let options = HashMap::from([
+///     ("aws_access_key_id", "my-access-key-id"),
+///     ("aws_secret_access_key", "my-secret-access-key"),
+/// ]);
+/// let typed_options = vec![
+///     (AmazonS3ConfigKey::DefaultRegion, "my-default-region"),
+/// ];
+/// let azure = AmazonS3Builder::new()
+///     .try_with_options(options)
+///     .unwrap()
+///     .try_with_options(typed_options)
+///     .unwrap()
+///     .try_with_option(AmazonS3ConfigKey::Region, "my-region")
+///     .unwrap();
+/// ```
+#[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Serialize, Deserialize)]
+pub enum AmazonS3ConfigKey {
+    /// AWS Access Key
+    ///
+    /// See [`AmazonS3Builder::with_access_key_id`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_access_key_id`
+    /// - `access_key_id`
+    AccessKeyId,
+
+    /// Secret Access Key
+    ///
+    /// See [`AmazonS3Builder::with_secret_access_key`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_secret_access_key`
+    /// - `secret_access_key`
+    SecretAccessKey,
+
+    /// Region
+    ///
+    /// See [`AmazonS3Builder::with_region`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_region`
+    /// - `region`
+    Region,
+
+    /// Default region
+    ///
+    /// See [`AmazonS3Builder::with_region`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_default_region`
+    /// - `default_region`
+    DefaultRegion,
+
+    /// Bucket name
+    ///
+    /// See [`AmazonS3Builder::with_bucket_name`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_bucket`
+    /// - `aws_bucket_name`
+    /// - `bucket`
+    /// - `bucket_name`
+    Bucket,
+
+    /// Sets custom endpoint for communicating with AWS S3.
+    ///
+    /// See [`AmazonS3Builder::with_endpoint`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_endpoint`
+    /// - `aws_endpoint_url`
+    /// - `endpoint`
+    /// - `endpoint_url`
+    Endpoint,
+
+    /// Token to use for requests (passed to underlying provider)
+    ///
+    /// See [`AmazonS3Builder::with_token`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_session_token`
+    /// - `aws_token`
+    /// - `session_token`
+    /// - `token`
+    Token,
+
+    /// Fall back to ImdsV1
+    ///
+    /// See [`AmazonS3Builder::with_imdsv1_fallback`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_imdsv1_fallback`
+    /// - `imdsv1_fallback`
+    ImdsV1Fallback,
+
+    /// If virtual hosted style request has to be used
+    ///
+    /// See [`AmazonS3Builder::with_virtual_hosted_style_request`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_virtual_hosted_style_request`
+    /// - `virtual_hosted_style_request`
+    VirtualHostedStyleRequest,
+
+    /// Set the instance metadata endpoint
+    ///
+    /// See [`AmazonS3Builder::with_metadata_endpoint`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_metadata_endpoint`
+    /// - `metadata_endpoint`
+    MetadataEndpoint,
+
+    /// AWS profile name
+    ///
+    /// Supported keys:
+    /// - `aws_profile`
+    /// - `profile`
+    Profile,
+}
+
+impl AsRef<str> for AmazonS3ConfigKey {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::AccessKeyId => "aws_access_key_id",
+            Self::SecretAccessKey => "aws_secret_access_key",
+            Self::Region => "aws_region",
+            Self::Bucket => "aws_bucket",
+            Self::Endpoint => "aws_endpoint",
+            Self::Token => "aws_session_token",
+            Self::ImdsV1Fallback => "aws_imdsv1_fallback",
+            Self::VirtualHostedStyleRequest => "aws_virtual_hosted_style_request",
+            Self::DefaultRegion => "aws_default_region",
+            Self::MetadataEndpoint => "aws_metadata_endpoint",
+            Self::Profile => "aws_profile",
+        }
+    }
+}
+
+impl FromStr for AmazonS3ConfigKey {
+    type Err = super::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "aws_access_key_id" | "access_key_id" => Ok(Self::AccessKeyId),
+            "aws_secret_access_key" | "secret_access_key" => Ok(Self::SecretAccessKey),
+            "aws_default_region" | "default_region" => Ok(Self::DefaultRegion),
+            "aws_region" | "region" => Ok(Self::Region),
+            "aws_bucket" | "aws_bucket_name" | "bucket_name" | "bucket" => {
+                Ok(Self::Bucket)
+            }
+            "aws_endpoint_url" | "aws_endpoint" | "endpoint_url" | "endpoint" => {
+                Ok(Self::Endpoint)
+            }
+            "aws_session_token" | "aws_token" | "session_token" | "token" => {
+                Ok(Self::Token)
+            }
+            "aws_virtual_hosted_style_request" | "virtual_hosted_style_request" => {
+                Ok(Self::VirtualHostedStyleRequest)
+            }
+            "aws_profile" | "profile" => Ok(Self::Profile),
+            "aws_imdsv1_fallback" | "imdsv1_fallback" => Ok(Self::ImdsV1Fallback),
+            "aws_metadata_endpoint" | "metadata_endpoint" => Ok(Self::MetadataEndpoint),
+            _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
+        }
+    }
 }
 
 impl AmazonS3Builder {
@@ -403,28 +596,16 @@ impl AmazonS3Builder {
     pub fn from_env() -> Self {
         let mut builder: Self = Default::default();
 
-        if let Ok(access_key_id) = std::env::var("AWS_ACCESS_KEY_ID") {
-            builder.access_key_id = Some(access_key_id);
-        }
-
-        if let Ok(secret_access_key) = std::env::var("AWS_SECRET_ACCESS_KEY") {
-            builder.secret_access_key = Some(secret_access_key);
-        }
-
-        if let Ok(secret) = std::env::var("AWS_DEFAULT_REGION") {
-            builder.region = Some(secret);
-        }
-
-        if let Ok(endpoint) = std::env::var("AWS_ENDPOINT") {
-            builder.endpoint = Some(endpoint);
-        }
-
-        if let Ok(token) = std::env::var("AWS_SESSION_TOKEN") {
-            builder.token = Some(token);
-        }
-
-        if let Ok(profile) = std::env::var("AWS_PROFILE") {
-            builder.profile = Some(profile);
+        for (os_key, os_value) in std::env::vars_os() {
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
+                if key.starts_with("AWS_") {
+                    if let Ok(config_key) =
+                        AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase())
+                    {
+                        builder = builder.try_with_option(config_key, value).unwrap();
+                    }
+                }
+            }
         }
 
         // This env var is set in ECS
@@ -438,7 +619,7 @@ impl AmazonS3Builder {
 
         if let Ok(text) = std::env::var("AWS_ALLOW_HTTP") {
             builder.client_options =
-                builder.client_options.with_allow_http(text == "true");
+                builder.client_options.with_allow_http(str_is_truthy(&text));
         }
 
         builder
@@ -453,9 +634,7 @@ impl AmazonS3Builder {
     /// - `https://s3.<bucket>.amazonaws.com`
     /// - `https://<bucket>.s3.<region>.amazonaws.com`
     ///
-    /// Please note that this is a best effort implementation, and will not fail for malformed URLs,
-    /// but rather warn and ignore the passed url. The url also has no effect on how the
-    /// storage is accessed - e.g. which driver or protocol is used for reading from the location.
+    /// Note: Settings derived from the URL will override any others set on this builder
     ///
     /// # Example
     /// ```
@@ -465,44 +644,88 @@ impl AmazonS3Builder {
     ///     .with_url("s3://bucket/path")
     ///     .build();
     /// ```
-    pub fn with_url(mut self, url: impl AsRef<str>) -> Self {
-        let maybe_parsed = Url::parse(url.as_ref());
-        match maybe_parsed {
-            Ok(parsed) => match parsed.scheme() {
-                "s3" | "s3a" => {
-                    self.bucket_name = parsed.host_str().map(|host| host.to_owned());
-                }
-                "https" => {
-                    if let Some(host) = parsed.host_str() {
-                        let parts = host.splitn(4, '.').collect::<Vec<&str>>();
-                        if parts.len() == 4 && parts[0] == "s3" && parts[2] == "amazonaws"
-                        {
-                            self.bucket_name = Some(parts[1].to_string());
-                        }
-                        if parts.len() == 4
-                            && parts[1] == "s3"
-                            && parts[3] == "amazonaws.com"
-                        {
-                            self.bucket_name = Some(parts[0].to_string());
-                            self.region = Some(parts[2].to_string());
-                            self.virtual_hosted_style_request = true;
-                        }
-                    }
-                }
-                other => {
-                    self.url_parse_error = Some(Error::UnknownUrlScheme {
-                        scheme: other.into(),
-                    });
-                }
-            },
-            Err(err) => {
-                self.url_parse_error = Some(Error::UnableToParseUrl {
-                    source: err,
-                    url: url.as_ref().into(),
-                });
-            }
-        };
+    pub fn with_url(mut self, url: impl Into<String>) -> Self {
+        self.url = Some(url.into());
         self
+    }
+
+    /// Set an option on the builder via a key - value pair.
+    ///
+    /// This method will return an `UnknownConfigKey` error if key cannot be parsed into [`AmazonS3ConfigKey`].
+    pub fn try_with_option(
+        mut self,
+        key: impl AsRef<str>,
+        value: impl Into<String>,
+    ) -> Result<Self> {
+        match AmazonS3ConfigKey::from_str(key.as_ref())? {
+            AmazonS3ConfigKey::AccessKeyId => self.access_key_id = Some(value.into()),
+            AmazonS3ConfigKey::SecretAccessKey => {
+                self.secret_access_key = Some(value.into())
+            }
+            AmazonS3ConfigKey::Region => self.region = Some(value.into()),
+            AmazonS3ConfigKey::Bucket => self.bucket_name = Some(value.into()),
+            AmazonS3ConfigKey::Endpoint => self.endpoint = Some(value.into()),
+            AmazonS3ConfigKey::Token => self.token = Some(value.into()),
+            AmazonS3ConfigKey::ImdsV1Fallback => {
+                self.imdsv1_fallback = str_is_truthy(&value.into())
+            }
+            AmazonS3ConfigKey::VirtualHostedStyleRequest => {
+                self.virtual_hosted_style_request = str_is_truthy(&value.into())
+            }
+            AmazonS3ConfigKey::DefaultRegion => {
+                self.region = self.region.or_else(|| Some(value.into()))
+            }
+            AmazonS3ConfigKey::MetadataEndpoint => {
+                self.metadata_endpoint = Some(value.into())
+            }
+            AmazonS3ConfigKey::Profile => self.profile = Some(value.into()),
+        };
+        Ok(self)
+    }
+
+    /// Hydrate builder from key value pairs
+    ///
+    /// This method will return an `UnknownConfigKey` error if any key cannot be parsed into [`AmazonS3ConfigKey`].
+    pub fn try_with_options<
+        I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
+    >(
+        mut self,
+        options: I,
+    ) -> Result<Self> {
+        for (key, value) in options {
+            self = self.try_with_option(key, value)?;
+        }
+        Ok(self)
+    }
+
+    /// Sets properties on this builder based on a URL
+    ///
+    /// This is a separate member function to allow fallible computation to
+    /// be deferred until [`Self::build`] which in turn allows deriving [`Clone`]
+    fn parse_url(&mut self, url: &str) -> Result<()> {
+        let parsed = Url::parse(url).context(UnableToParseUrlSnafu { url })?;
+        let host = parsed.host_str().context(UrlNotRecognisedSnafu { url })?;
+        let validate = |s: &str| match s.contains('.') {
+            true => Err(UrlNotRecognisedSnafu { url }.build()),
+            false => Ok(s.to_string()),
+        };
+
+        match parsed.scheme() {
+            "s3" | "s3a" => self.bucket_name = Some(validate(host)?),
+            "https" => match host.splitn(4, '.').collect_tuple() {
+                Some(("s3", bucket, "amazonaws", "com")) => {
+                    self.bucket_name = Some(bucket.to_string());
+                }
+                Some((bucket, "s3", region, "amazonaws.com")) => {
+                    self.bucket_name = Some(bucket.to_string());
+                    self.region = Some(region.to_string());
+                    self.virtual_hosted_style_request = true;
+                }
+                _ => return Err(UrlNotRecognisedSnafu { url }.build().into()),
+            },
+            scheme => return Err(UnknownUrlSchemeSnafu { scheme }.build().into()),
+        };
+        Ok(())
     }
 
     /// Set the AWS Access Key (required)
@@ -641,9 +864,9 @@ impl AmazonS3Builder {
 
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
-    pub fn build(self) -> Result<AmazonS3> {
-        if let Some(err) = self.url_parse_error {
-            return Err(err.into());
+    pub fn build(mut self) -> Result<AmazonS3> {
+        if let Some(url) = self.url.take() {
+            self.parse_url(&url)?;
         }
 
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
@@ -776,6 +999,7 @@ mod tests {
         put_get_delete_list_opts, rename_and_copy, stream_get,
     };
     use bytes::Bytes;
+    use std::collections::HashMap;
     use std::env;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
@@ -918,6 +1142,73 @@ mod tests {
         assert_eq!(builder.metadata_endpoint.unwrap(), metadata_uri);
     }
 
+    #[test]
+    fn s3_test_config_from_map() {
+        let aws_access_key_id = "object_store:fake_access_key_id".to_string();
+        let aws_secret_access_key = "object_store:fake_secret_key".to_string();
+        let aws_default_region = "object_store:fake_default_region".to_string();
+        let aws_endpoint = "object_store:fake_endpoint".to_string();
+        let aws_session_token = "object_store:fake_session_token".to_string();
+        let options = HashMap::from([
+            ("aws_access_key_id", aws_access_key_id.clone()),
+            ("aws_secret_access_key", aws_secret_access_key),
+            ("aws_default_region", aws_default_region.clone()),
+            ("aws_endpoint", aws_endpoint.clone()),
+            ("aws_session_token", aws_session_token.clone()),
+        ]);
+
+        let builder = AmazonS3Builder::new()
+            .try_with_options(&options)
+            .unwrap()
+            .try_with_option("aws_secret_access_key", "new-secret-key")
+            .unwrap();
+        assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
+        assert_eq!(builder.secret_access_key.unwrap(), "new-secret-key");
+        assert_eq!(builder.region.unwrap(), aws_default_region);
+        assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
+        assert_eq!(builder.token.unwrap(), aws_session_token);
+    }
+
+    #[test]
+    fn s3_test_config_from_typed_map() {
+        let aws_access_key_id = "object_store:fake_access_key_id".to_string();
+        let aws_secret_access_key = "object_store:fake_secret_key".to_string();
+        let aws_default_region = "object_store:fake_default_region".to_string();
+        let aws_endpoint = "object_store:fake_endpoint".to_string();
+        let aws_session_token = "object_store:fake_session_token".to_string();
+        let options = HashMap::from([
+            (AmazonS3ConfigKey::AccessKeyId, aws_access_key_id.clone()),
+            (AmazonS3ConfigKey::SecretAccessKey, aws_secret_access_key),
+            (AmazonS3ConfigKey::DefaultRegion, aws_default_region.clone()),
+            (AmazonS3ConfigKey::Endpoint, aws_endpoint.clone()),
+            (AmazonS3ConfigKey::Token, aws_session_token.clone()),
+        ]);
+
+        let builder = AmazonS3Builder::new()
+            .try_with_options(&options)
+            .unwrap()
+            .try_with_option(AmazonS3ConfigKey::SecretAccessKey, "new-secret-key")
+            .unwrap();
+        assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
+        assert_eq!(builder.secret_access_key.unwrap(), "new-secret-key");
+        assert_eq!(builder.region.unwrap(), aws_default_region);
+        assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
+        assert_eq!(builder.token.unwrap(), aws_session_token);
+    }
+
+    #[test]
+    fn s3_test_config_fallible_options() {
+        let aws_access_key_id = "object_store:fake_access_key_id".to_string();
+        let aws_secret_access_key = "object_store:fake_secret_key".to_string();
+        let options = HashMap::from([
+            ("aws_access_key_id", aws_access_key_id),
+            ("invalid-key", aws_secret_access_key),
+        ]);
+
+        let builder = AmazonS3Builder::new().try_with_options(&options);
+        assert!(builder.is_err());
+    }
+
     #[tokio::test]
     async fn s3_test() {
         let config = maybe_skip_integration!();
@@ -1022,15 +1313,36 @@ mod tests {
 
     #[test]
     fn s3_test_urls() {
-        let builder = AmazonS3Builder::new().with_url("s3://bucket/path");
+        let mut builder = AmazonS3Builder::new();
+        builder.parse_url("s3://bucket/path").unwrap();
         assert_eq!(builder.bucket_name, Some("bucket".to_string()));
 
-        let builder = AmazonS3Builder::new().with_url("https://s3.bucket.amazonaws.com");
+        let mut builder = AmazonS3Builder::new();
+        builder
+            .parse_url("https://s3.bucket.amazonaws.com")
+            .unwrap();
         assert_eq!(builder.bucket_name, Some("bucket".to_string()));
 
-        let builder =
-            AmazonS3Builder::new().with_url("https://bucket.s3.region.amazonaws.com");
+        let mut builder = AmazonS3Builder::new();
+        builder
+            .parse_url("https://bucket.s3.region.amazonaws.com")
+            .unwrap();
         assert_eq!(builder.bucket_name, Some("bucket".to_string()));
-        assert_eq!(builder.region, Some("region".to_string()))
+        assert_eq!(builder.region, Some("region".to_string()));
+        assert!(builder.virtual_hosted_style_request);
+
+        let err_cases = [
+            "mailto://bucket/path",
+            "s3://bucket.mydomain/path",
+            "https://s3.bucket.mydomain.com",
+            "https://s3.bucket.foo.amazonaws.com",
+            "https://bucket.mydomain.region.amazonaws.com",
+            "https://bucket.s3.region.bar.amazonaws.com",
+            "https://bucket.foo.s3.amazonaws.com",
+        ];
+        let mut builder = AmazonS3Builder::new();
+        for case in err_cases {
+            builder.parse_url(case).unwrap_err();
+        }
     }
 }

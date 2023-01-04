@@ -297,6 +297,21 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         PrimitiveBuilder::<T>::with_capacity(capacity)
     }
 
+    /// Returns if this [`PrimitiveArray`] is compatible with the provided [`DataType`]
+    ///
+    /// This is equivalent to `data_type == T::DATA_TYPE`, however ignores timestamp
+    /// timezones and decimal precision and scale
+    pub fn is_compatible(data_type: &DataType) -> bool {
+        match T::DATA_TYPE {
+            DataType::Timestamp(t1, _) => {
+                matches!(data_type, DataType::Timestamp(t2, _) if &t1 == t2)
+            }
+            DataType::Decimal128(_, _) => matches!(data_type, DataType::Decimal128(_, _)),
+            DataType::Decimal256(_, _) => matches!(data_type, DataType::Decimal256(_, _)),
+            _ => T::DATA_TYPE.eq(data_type),
+        }
+    }
+
     /// Returns the primitive value at index `i`.
     ///
     /// # Safety
@@ -1042,10 +1057,8 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
 /// Constructs a `PrimitiveArray` from an array data reference.
 impl<T: ArrowPrimitiveType> From<ArrayData> for PrimitiveArray<T> {
     fn from(data: ArrayData) -> Self {
-        // Use discriminant to allow for decimals
-        assert_eq!(
-            std::mem::discriminant(&T::DATA_TYPE),
-            std::mem::discriminant(data.data_type()),
+        assert!(
+            Self::is_compatible(data.data_type()),
             "PrimitiveArray expected ArrayData with type {} got {}",
             T::DATA_TYPE,
             data.data_type()
@@ -2204,5 +2217,14 @@ mod tests {
         let array: Int32Array = Int32Array::from(vec![Some(5), Some(7), None]);
         let c = array.unary_mut(|x| x * 2 + 1).unwrap();
         assert_eq!(c, Int32Array::from(vec![Some(11), Some(15), None]));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "PrimitiveArray expected ArrayData with type Interval(MonthDayNano) got Interval(DayTime)"
+    )]
+    fn test_invalid_interval_type() {
+        let array = IntervalDayTimeArray::from(vec![1, 2, 3]);
+        let _ = IntervalMonthDayNanoArray::from(array.into_data());
     }
 }

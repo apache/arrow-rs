@@ -17,8 +17,6 @@
 
 //! Defines aggregations over Arrow arrays.
 
-use multiversion::multiversion;
-
 use arrow_array::cast::*;
 use arrow_array::iterator::ArrayIter;
 use arrow_array::*;
@@ -104,7 +102,6 @@ pub fn max_boolean(array: &BooleanArray) -> Option<bool> {
 }
 
 /// Helper to compute min/max of [`ArrayAccessor`].
-#[multiversion(targets("x86_64+avx"))]
 fn min_max_helper<T, A: ArrayAccessor<Item = T>, F>(array: A, cmp: F) -> Option<T>
 where
     F: Fn(&T, &T) -> bool,

@@ -697,4 +697,29 @@ mod tests {
         assert_eq!(string.len(), 0);
         assert_eq!(string.value_offsets(), &[0]);
     }
+
+    #[test]
+    fn test_into_builder() {
+        let array: StringArray = vec!["hello", "arrow"].into();
+
+        // Append values
+        let mut builder = array.into_builder().unwrap();
+
+        builder.append_value("rust");
+
+        let expected: StringArray = vec!["hello", "arrow", "rust"].into();
+        let array = builder.finish();
+        assert_eq!(expected, array);
+    }
+
+    #[test]
+    fn test_into_builder_err() {
+        let array: StringArray = vec!["hello", "arrow"].into();
+
+        // Clone it, so we cannot get a mutable builder back
+        let shared_array = array.clone();
+
+        let err_return = array.into_builder().unwrap_err();
+        assert_eq!(&err_return, &shared_array);
+    }
 }

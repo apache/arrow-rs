@@ -61,7 +61,7 @@
 //! * Concurrent Request Limit: [`LimitStore`](limit::LimitStore)
 //!
 //!
-//! # Listing objects:
+//! # List objects:
 //!
 //! Use the [`ObjectStore::list`] method to iterate over objects in
 //! remote storage or files in the local filesystem:
@@ -114,7 +114,7 @@
 //! ...
 //! ```
 //!
-//! # Fetching objects
+//! # Fetch objects
 //!
 //! Use the [`ObjectStore::get`] method to fetch the data bytes
 //! from remote storage or files in the local filesystem as a stream.
@@ -164,7 +164,57 @@
 //! ```text
 //! Num zeros in data/file01.parquet is 657
 //! ```
+//! #  Put object
+//! Use the [`ObjectStore::put`] method to save data in remote storage or local filesystem.
 //!
+//! ```
+//! # use object_store::local::LocalFileSystem;
+//! # fn get_object_store() -> LocalFileSystem {
+//! #     LocalFileSystem::new_with_prefix("/tmp").unwrap()
+//! # }
+//! # async fn put() {
+//!  use object_store::ObjectStore;
+//!  use std::sync::Arc;
+//!  use bytes::Bytes;
+//!  use object_store::path::Path;
+//!
+//!  let object_store: Arc<dyn ObjectStore> = Arc::new(get_object_store());
+//!  let path: Path = "data/file1".try_into().unwrap();
+//!  let bytes = Bytes::from_static(b"hello");
+//!  object_store
+//!      .put(&path, bytes)
+//!      .await
+//!      .unwrap();
+//! # }
+//! ```
+//!
+//! #  Multipart put object
+//! Use the [`ObjectStore::put_multipart`] method to save large amount of data in chunks.
+//!
+//! ```
+//! # use object_store::local::LocalFileSystem;
+//! # fn get_object_store() -> LocalFileSystem {
+//! #     LocalFileSystem::new_with_prefix("/tmp").unwrap()
+//! # }
+//! # async fn multi_upload() {
+//!  use object_store::ObjectStore;
+//!  use std::sync::Arc;
+//!  use bytes::Bytes;
+//!  use tokio::io::AsyncWriteExt;
+//!  use object_store::path::Path;
+//!
+//!  let object_store: Arc<dyn ObjectStore> = Arc::new(get_object_store());
+//!  let path: Path = "data/large_file".try_into().unwrap();
+//!  let (_id, mut writer) =  object_store
+//!      .put_multipart(&path)
+//!      .await
+//!      .unwrap();
+//!  let bytes = Bytes::from_static(b"hello");
+//!  writer.write_all(&bytes).await.unwrap();
+//!  writer.flush().await.unwrap();
+//!  writer.shutdown().await.unwrap();
+//! # }
+//! ```
 
 #[cfg(all(
     target_arch = "wasm32",
@@ -505,6 +555,13 @@ pub enum Error {
 
     #[snafu(display("Operation not yet implemented."))]
     NotImplemented,
+
+    #[snafu(display(
+        "Configuration key: '{}' is not valid for store '{}'.",
+        key,
+        store
+    ))]
+    UnknownConfigurationKey { store: &'static str, key: String },
 }
 
 impl From<Error> for std::io::Error {

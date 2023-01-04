@@ -19,7 +19,7 @@ use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder, UInt8BufferBuilder};
 use crate::types::{ByteArrayType, GenericBinaryType, GenericStringType};
 use crate::{ArrayRef, GenericByteArray, OffsetSizeTrait};
-use arrow_buffer::{ArrowNativeType, Buffer};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
 use std::any::Any;
 use std::sync::Arc;
@@ -50,6 +50,34 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             value_builder: UInt8BufferBuilder::new(data_capacity),
             offsets_builder,
             null_buffer_builder: NullBufferBuilder::new(item_capacity),
+        }
+    }
+
+    /// Creates a new  [`GenericByteBuilder`] from buffers.
+    ///
+    /// # Safety
+    /// This doesn't verify buffer contents as it assumes the buffers are from existing and
+    /// valid [`GenericByteArray`].
+    pub unsafe fn new_from_buffer(
+        offsets_buffer: MutableBuffer,
+        value_buffer: MutableBuffer,
+        null_buffer: Option<MutableBuffer>,
+    ) -> Self {
+        let offsets_builder = BufferBuilder::<T::Offset>::new_from_buffer(offsets_buffer);
+        let value_builder = BufferBuilder::<u8>::new_from_buffer(value_buffer);
+
+        let null_buffer_builder = null_buffer
+            .map(|buffer| {
+                NullBufferBuilder::new_from_buffer(buffer, offsets_builder.len() - 1)
+            })
+            .unwrap_or_else(|| {
+                NullBufferBuilder::new_with_len(offsets_builder.len() - 1)
+            });
+
+        Self {
+            offsets_builder,
+            value_builder,
+            null_buffer_builder,
         }
     }
 
@@ -121,6 +149,16 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// Returns the current offsets buffer as a slice
     pub fn offsets_slice(&self) -> &[T::Offset] {
         self.offsets_builder.as_slice()
+    }
+
+    /// Returns the current null buffer as a slice
+    pub fn validity_slice(&self) -> Option<&[u8]> {
+        self.null_buffer_builder.as_slice()
+    }
+
+    /// Returns the current null buffer as a mutable slice
+    pub fn validity_slice_mut(&mut self) -> Option<&mut [u8]> {
+        self.null_buffer_builder.as_slice_mut()
     }
 }
 
