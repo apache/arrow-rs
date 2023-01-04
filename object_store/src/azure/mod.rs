@@ -1054,20 +1054,17 @@ mod tests {
 
     #[test]
     fn azure_test_config_from_map() {
-        let azure_client_id = "object_store:fake_access_key_id".to_string();
-        let azure_storage_account_name = "object_store:fake_secret_key".to_string();
-        let azure_storage_token = "object_store:fake_default_region".to_string();
+        let azure_client_id = "object_store:fake_access_key_id";
+        let azure_storage_account_name = "object_store:fake_secret_key";
+        let azure_storage_token = "object_store:fake_default_region";
         let options = HashMap::from([
-            ("azure_client_id", azure_client_id.clone()),
-            (
-                "azure_storage_account_name",
-                azure_storage_account_name.clone(),
-            ),
-            ("azure_storage_token", azure_storage_token.clone()),
+            ("azure_client_id", azure_client_id),
+            ("azure_storage_account_name", azure_storage_account_name),
+            ("azure_storage_token", azure_storage_token),
         ]);
 
         let builder = MicrosoftAzureBuilder::new()
-            .try_with_options(&options)
+            .try_with_options(options)
             .unwrap();
         assert_eq!(builder.client_id.unwrap(), azure_client_id);
         assert_eq!(builder.account_name.unwrap(), azure_storage_account_name);
@@ -1107,5 +1104,23 @@ mod tests {
 
         let builder = MicrosoftAzureBuilder::new().try_with_options(&options);
         assert!(builder.is_err());
+    }
+
+    #[test]
+    fn azure_test_split_sas() {
+        let raw_sas = "?sv=2021-10-04&st=2023-01-04T17%3A48%3A57Z&se=2023-01-04T18%3A15%3A00Z&sr=c&sp=rcwl&sig=C7%2BZeEOWbrxPA3R0Cw%2Fw1EZz0%2B4KBvQexeKZKe%2BB6h0%3D";
+        let expected = vec![
+            ("sv".to_string(), "2021-10-04".to_string()),
+            ("st".to_string(), "2023-01-04T17:48:57Z".to_string()),
+            ("se".to_string(), "2023-01-04T18:15:00Z".to_string()),
+            ("sr".to_string(), "c".to_string()),
+            ("sp".to_string(), "rcwl".to_string()),
+            (
+                "sig".to_string(),
+                "C7+ZeEOWbrxPA3R0Cw/w1EZz0+4KBvQexeKZKe+B6h0=".to_string(),
+            ),
+        ];
+        let pairs = split_sas(raw_sas).unwrap();
+        assert_eq!(expected, pairs);
     }
 }
