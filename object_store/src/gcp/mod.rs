@@ -29,7 +29,7 @@
 //! to abort the upload and drop those unneeded parts. In addition, you may wish to
 //! consider implementing automatic clean up of unused parts that are older than one
 //! week.
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{self, BufReader};
 use std::ops::Range;
@@ -39,7 +39,6 @@ use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
-use once_cell::sync::Lazy;
 use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
 use reqwest::header::RANGE;
 use reqwest::{header, Client, Method, Response, StatusCode};
@@ -146,6 +145,9 @@ enum Error {
 
     #[snafu(display("URL did not match any known pattern for scheme: {}", url))]
     UrlNotRecognised { url: String },
+
+    #[snafu(display("Configuration key: '{}' is not known.", key))]
+    UnknownConfigurationKey { key: String },
 }
 
 impl From<Error> for super::Error {
@@ -828,18 +830,27 @@ impl From<GoogleConfigKey> for String {
     }
 }
 
-static ALIAS_MAP: Lazy<BTreeMap<&'static str, GoogleConfigKey>> = Lazy::new(|| {
-    BTreeMap::from([
-        // service account
-        ("google_service_account", GoogleConfigKey::ServiceAccount),
-        ("service_account", GoogleConfigKey::ServiceAccount),
-        // bucket
-        ("google_bucket", GoogleConfigKey::Bucket),
-        ("google_bucket_name", GoogleConfigKey::Bucket),
-        ("bucket_name", GoogleConfigKey::Bucket),
-        ("bucket", GoogleConfigKey::Bucket),
-    ])
-});
+impl TryFrom<&str> for GoogleConfigKey {
+    type Error = super::Error;
+
+    fn try_from(value: &str) -> Result<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "google_service_account" | "service_account" => Ok(Self::ServiceAccount),
+            "google_bucket" | "google_bucket_name" | "bucket" | "bucket_name" => {
+                Ok(Self::Bucket)
+            }
+            _ => Err(Error::UnknownConfigurationKey { key: value.into() }.into()),
+        }
+    }
+}
+
+impl TryFrom<String> for GoogleConfigKey {
+    type Error = super::Error;
+
+    fn try_from(value: String) -> Result<Self> {
+        Self::try_from(value.as_str())
+    }
+}
 
 impl Default for GoogleCloudStorageBuilder {
     fn default() -> Self {
@@ -880,12 +891,11 @@ impl GoogleCloudStorageBuilder {
             builder.service_account_path = Some(service_account_path);
         }
 
-        for (key, _) in ALIAS_MAP.iter() {
-            if key.starts_with("google_") {
-                if let Ok(value) = std::env::var(key.to_ascii_uppercase()) {
-                    builder = builder.with_option(*key, value)
-                }
-            }
+        for (key, value) in std::env::vars()
+            .into_iter()
+            .filter(|(key, _)| key.starts_with("GOOGLE_"))
+        {
+            builder = builder.with_option(key, value);
         }
 
         builder
@@ -918,15 +928,13 @@ impl GoogleCloudStorageBuilder {
         key: impl Into<String>,
         value: impl Into<String>,
     ) -> Self {
-        let raw = key.into();
-        if let Some(key) = ALIAS_MAP.get(&*raw.to_ascii_lowercase()) {
-            match key {
-                GoogleConfigKey::ServiceAccount => {
-                    self.service_account_path = Some(value.into())
-                }
-                GoogleConfigKey::Bucket => self.bucket_name = Some(value.into()),
-            };
-        }
+        match GoogleConfigKey::try_from(key.into()) {
+            Ok(GoogleConfigKey::ServiceAccount) => {
+                self.service_account_path = Some(value.into())
+            }
+            Ok(GoogleConfigKey::Bucket) => self.bucket_name = Some(value.into()),
+            Err(_) => (),
+        };
         self
     }
 

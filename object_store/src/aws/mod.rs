@@ -37,9 +37,8 @@ use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use itertools::Itertools;
-use once_cell::sync::Lazy;
 use snafu::{OptionExt, ResultExt, Snafu};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
@@ -135,6 +134,9 @@ enum Error {
 
     #[snafu(display("URL did not match any known pattern for scheme: {}", url))]
     UrlNotRecognised { url: String },
+
+    #[snafu(display("Configuration key: '{}' is not known.", key))]
+    UnknownConfigurationKey { key: String },
 }
 
 impl From<Error> for super::Error {
@@ -508,55 +510,42 @@ impl From<AmazonS3ConfigKey> for String {
     }
 }
 
-static ALIAS_MAP: Lazy<BTreeMap<&'static str, AmazonS3ConfigKey>> = Lazy::new(|| {
-    BTreeMap::from([
-        // access key id
-        ("aws_access_key_id", AmazonS3ConfigKey::AccessKeyId),
-        ("access_key_id", AmazonS3ConfigKey::AccessKeyId),
-        // secret access key
-        ("aws_secret_access_key", AmazonS3ConfigKey::SecretAccessKey),
-        ("secret_access_key", AmazonS3ConfigKey::SecretAccessKey),
-        // default region
-        ("aws_default_region", AmazonS3ConfigKey::DefaultRegion),
-        ("default_region", AmazonS3ConfigKey::DefaultRegion),
-        // region
-        ("aws_region", AmazonS3ConfigKey::Region),
-        ("region", AmazonS3ConfigKey::Region),
-        // bucket
-        ("aws_bucket", AmazonS3ConfigKey::Bucket),
-        ("aws_bucket_name", AmazonS3ConfigKey::Bucket),
-        ("bucket_name", AmazonS3ConfigKey::Bucket),
-        ("bucket", AmazonS3ConfigKey::Bucket),
-        // custom S3 endpoint
-        ("aws_endpoint_url", AmazonS3ConfigKey::Endpoint),
-        ("aws_endpoint", AmazonS3ConfigKey::Endpoint),
-        ("endpoint_url", AmazonS3ConfigKey::Endpoint),
-        ("endpoint", AmazonS3ConfigKey::Endpoint),
-        // session token
-        ("aws_session_token", AmazonS3ConfigKey::Token),
-        ("aws_token", AmazonS3ConfigKey::Token),
-        ("session_token", AmazonS3ConfigKey::Token),
-        ("token", AmazonS3ConfigKey::Token),
-        // virtual hosted style request
-        (
-            "aws_virtual_hosted_style_request",
-            AmazonS3ConfigKey::VirtualHostedStyleRequest,
-        ),
-        (
-            "virtual_hosted_style_request",
-            AmazonS3ConfigKey::VirtualHostedStyleRequest,
-        ),
-        // profile
-        ("aws_profile", AmazonS3ConfigKey::Profile),
-        ("profile", AmazonS3ConfigKey::Profile),
-        // imds v1 fallback
-        ("aws_imdsv1_fallback", AmazonS3ConfigKey::ImdsV1Fallback),
-        ("imdsv1_fallback", AmazonS3ConfigKey::ImdsV1Fallback),
-        // metadata endpoint
-        ("aws_metadata_endpoint", AmazonS3ConfigKey::MetadataEndpoint),
-        ("metadata_endpoint", AmazonS3ConfigKey::MetadataEndpoint),
-    ])
-});
+impl TryFrom<&str> for AmazonS3ConfigKey {
+    type Error = super::Error;
+
+    fn try_from(value: &str) -> Result<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "aws_access_key_id" | "access_key_id" => Ok(Self::AccessKeyId),
+            "aws_secret_access_key" | "secret_access_key" => Ok(Self::SecretAccessKey),
+            "aws_default_region" | "default_region" => Ok(Self::DefaultRegion),
+            "aws_region" | "region" => Ok(Self::Region),
+            "aws_bucket" | "aws_bucket_name" | "bucket_name" | "bucket" => {
+                Ok(Self::Bucket)
+            }
+            "aws_endpoint_url" | "aws_endpoint" | "endpoint_url" | "endpoint" => {
+                Ok(Self::Endpoint)
+            }
+            "aws_session_token" | "aws_token" | "session_token" | "token" => {
+                Ok(Self::Token)
+            }
+            "aws_virtual_hosted_style_request" | "virtual_hosted_style_request" => {
+                Ok(Self::VirtualHostedStyleRequest)
+            }
+            "aws_profile" | "profile" => Ok(Self::Profile),
+            "aws_imdsv1_fallback" | "imdsv1_fallback" => Ok(Self::ImdsV1Fallback),
+            "aws_metadata_endpoint" | "metadata_endpoint" => Ok(Self::MetadataEndpoint),
+            _ => Err(Error::UnknownConfigurationKey { key: value.into() }.into()),
+        }
+    }
+}
+
+impl TryFrom<String> for AmazonS3ConfigKey {
+    type Error = super::Error;
+
+    fn try_from(value: String) -> Result<Self> {
+        Self::try_from(value.as_str())
+    }
+}
 
 impl AmazonS3Builder {
     /// Create a new [`AmazonS3Builder`] with default values.
@@ -586,12 +575,11 @@ impl AmazonS3Builder {
     pub fn from_env() -> Self {
         let mut builder: Self = Default::default();
 
-        for (key, _) in ALIAS_MAP.iter() {
-            if key.starts_with("aws_") {
-                if let Ok(value) = std::env::var(key.to_ascii_uppercase()) {
-                    builder = builder.with_option(*key, value)
-                }
-            }
+        for (key, value) in std::env::vars()
+            .into_iter()
+            .filter(|(key, _)| key.starts_with("AWS_"))
+        {
+            builder = builder.with_option(key, value);
         }
 
         // This env var is set in ECS
@@ -605,7 +593,7 @@ impl AmazonS3Builder {
 
         if let Ok(text) = std::env::var("AWS_ALLOW_HTTP") {
             builder.client_options =
-                builder.client_options.with_allow_http(text == "true");
+                builder.client_options.with_allow_http(str_is_truthy(&text));
         }
 
         builder
@@ -641,32 +629,30 @@ impl AmazonS3Builder {
         key: impl Into<String>,
         value: impl Into<String>,
     ) -> Self {
-        let raw = key.into();
-        if let Some(key) = ALIAS_MAP.get(&*raw.to_ascii_lowercase()) {
-            match key {
-                AmazonS3ConfigKey::AccessKeyId => self.access_key_id = Some(value.into()),
-                AmazonS3ConfigKey::SecretAccessKey => {
-                    self.secret_access_key = Some(value.into())
-                }
-                AmazonS3ConfigKey::Region => self.region = Some(value.into()),
-                AmazonS3ConfigKey::Bucket => self.bucket_name = Some(value.into()),
-                AmazonS3ConfigKey::Endpoint => self.endpoint = Some(value.into()),
-                AmazonS3ConfigKey::Token => self.token = Some(value.into()),
-                AmazonS3ConfigKey::ImdsV1Fallback => {
-                    self.imdsv1_fallback = str_is_truthy(&value.into())
-                }
-                AmazonS3ConfigKey::VirtualHostedStyleRequest => {
-                    self.virtual_hosted_style_request = str_is_truthy(&value.into())
-                }
-                AmazonS3ConfigKey::DefaultRegion => {
-                    self.region = self.region.or_else(|| Some(value.into()))
-                }
-                AmazonS3ConfigKey::MetadataEndpoint => {
-                    self.metadata_endpoint = Some(value.into())
-                }
-                AmazonS3ConfigKey::Profile => self.profile = Some(value.into()),
-            };
-        }
+        match AmazonS3ConfigKey::try_from(key.into()) {
+            Ok(AmazonS3ConfigKey::AccessKeyId) => self.access_key_id = Some(value.into()),
+            Ok(AmazonS3ConfigKey::SecretAccessKey) => {
+                self.secret_access_key = Some(value.into())
+            }
+            Ok(AmazonS3ConfigKey::Region) => self.region = Some(value.into()),
+            Ok(AmazonS3ConfigKey::Bucket) => self.bucket_name = Some(value.into()),
+            Ok(AmazonS3ConfigKey::Endpoint) => self.endpoint = Some(value.into()),
+            Ok(AmazonS3ConfigKey::Token) => self.token = Some(value.into()),
+            Ok(AmazonS3ConfigKey::ImdsV1Fallback) => {
+                self.imdsv1_fallback = str_is_truthy(&value.into())
+            }
+            Ok(AmazonS3ConfigKey::VirtualHostedStyleRequest) => {
+                self.virtual_hosted_style_request = str_is_truthy(&value.into())
+            }
+            Ok(AmazonS3ConfigKey::DefaultRegion) => {
+                self.region = self.region.or_else(|| Some(value.into()))
+            }
+            Ok(AmazonS3ConfigKey::MetadataEndpoint) => {
+                self.metadata_endpoint = Some(value.into())
+            }
+            Ok(AmazonS3ConfigKey::Profile) => self.profile = Some(value.into()),
+            Err(_) => (),
+        };
         self
     }
 

@@ -37,7 +37,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
-use once_cell::sync::Lazy;
 use percent_encoding::percent_decode_str;
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::{BTreeSet, HashMap};
@@ -132,6 +131,9 @@ enum Error {
 
     #[snafu(display("Missing component in SAS query pair"))]
     MissingSasComponent {},
+
+    #[snafu(display("Configuration key: '{}' is not known.", key))]
+    UnknownConfigurationKey { key: String },
 }
 
 impl From<Error> for super::Error {
@@ -475,48 +477,48 @@ impl From<AzureConfigKey> for String {
     }
 }
 
-static ALIAS_MAP: Lazy<HashMap<&'static str, AzureConfigKey>> = Lazy::new(|| {
-    HashMap::from([
-        // access key
-        ("azure_storage_account_key", AzureConfigKey::AccessKey),
-        ("azure_storage_access_key", AzureConfigKey::AccessKey),
-        ("azure_storage_master_key", AzureConfigKey::AccessKey),
-        ("master_key", AzureConfigKey::AccessKey),
-        ("account_key", AzureConfigKey::AccessKey),
-        ("access_key", AzureConfigKey::AccessKey),
-        // account name
-        ("azure_storage_account_name", AzureConfigKey::AccountName),
-        ("account_name", AzureConfigKey::AccountName),
-        // client id
-        ("azure_storage_client_id", AzureConfigKey::ClientId),
-        ("azure_client_id", AzureConfigKey::ClientId),
-        ("client_id", AzureConfigKey::ClientId),
-        // client secret
-        ("azure_storage_client_secret", AzureConfigKey::ClientSecret),
-        ("azure_client_secret", AzureConfigKey::ClientSecret),
-        ("client_secret", AzureConfigKey::ClientSecret),
-        // authority id
-        ("azure_storage_tenant_id", AzureConfigKey::AuthorityId),
-        ("azure_storage_authority_id", AzureConfigKey::AuthorityId),
-        ("azure_tenant_id", AzureConfigKey::AuthorityId),
-        ("azure_authority_id", AzureConfigKey::AuthorityId),
-        ("tenant_id", AzureConfigKey::AuthorityId),
-        ("authority_id", AzureConfigKey::AuthorityId),
-        // account name
-        ("azure_storage_sas_key", AzureConfigKey::SasKey),
-        ("azure_storage_sas_token", AzureConfigKey::SasKey),
-        ("sas_key", AzureConfigKey::SasKey),
-        ("sas_token", AzureConfigKey::SasKey),
-        // bearer token
-        ("azure_storage_token", AzureConfigKey::Token),
-        ("bearer_token", AzureConfigKey::Token),
-        ("token", AzureConfigKey::Token),
-        // use emulator
-        ("azure_storage_use_emulator", AzureConfigKey::UseEmulator),
-        ("object_store_use_emulator", AzureConfigKey::UseEmulator),
-        ("use_emulator", AzureConfigKey::UseEmulator),
-    ])
-});
+impl TryFrom<&str> for AzureConfigKey {
+    type Error = super::Error;
+
+    fn try_from(value: &str) -> Result<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "azure_storage_account_key"
+            | "azure_storage_access_key"
+            | "azure_storage_master_key"
+            | "master_key"
+            | "account_key"
+            | "access_key" => Ok(Self::AccessKey),
+            "azure_storage_account_name" | "account_name" => Ok(Self::AccountName),
+            "azure_storage_client_id" | "azure_client_id" | "client_id" => {
+                Ok(Self::ClientId)
+            }
+            "azure_storage_client_secret" | "azure_client_secret" | "client_secret" => {
+                Ok(Self::ClientSecret)
+            }
+            "azure_storage_tenant_id"
+            | "azure_storage_authority_id"
+            | "azure_tenant_id"
+            | "azure_authority_id"
+            | "tenant_id"
+            | "authority_id" => Ok(Self::AuthorityId),
+            "azure_storage_sas_key"
+            | "azure_storage_sas_token"
+            | "sas_key"
+            | "sas_token" => Ok(Self::SasKey),
+            "azure_storage_token" | "bearer_token" | "token" => Ok(Self::Token),
+            "azure_storage_use_emulator" | "use_emulator" => Ok(Self::UseEmulator),
+            _ => Err(Error::UnknownConfigurationKey { key: value.into() }.into()),
+        }
+    }
+}
+
+impl TryFrom<String> for AzureConfigKey {
+    type Error = super::Error;
+
+    fn try_from(value: String) -> Result<Self> {
+        Self::try_from(value.as_str())
+    }
+}
 
 impl Debug for MicrosoftAzureBuilder {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -553,12 +555,11 @@ impl MicrosoftAzureBuilder {
     /// ```
     pub fn from_env() -> Self {
         let mut builder = Self::default();
-        for (key, _) in ALIAS_MAP.iter() {
-            if key.starts_with("azure_") {
-                if let Ok(value) = std::env::var(key.to_ascii_uppercase()) {
-                    builder = builder.with_option(*key, value)
-                }
-            }
+        for (key, value) in std::env::vars()
+            .into_iter()
+            .filter(|(key, _)| key.starts_with("AZURE_"))
+        {
+            builder = builder.with_option(key, value);
         }
         builder
     }
@@ -596,21 +597,19 @@ impl MicrosoftAzureBuilder {
         key: impl Into<String>,
         value: impl Into<String>,
     ) -> Self {
-        let raw = key.into();
-        if let Some(key) = ALIAS_MAP.get(&*raw.to_ascii_lowercase()) {
-            match key {
-                AzureConfigKey::AccessKey => self.access_key = Some(value.into()),
-                AzureConfigKey::AccountName => self.account_name = Some(value.into()),
-                AzureConfigKey::ClientId => self.client_id = Some(value.into()),
-                AzureConfigKey::ClientSecret => self.client_secret = Some(value.into()),
-                AzureConfigKey::AuthorityId => self.tenant_id = Some(value.into()),
-                AzureConfigKey::SasKey => self.sas_key = Some(value.into()),
-                AzureConfigKey::Token => self.bearer_token = Some(value.into()),
-                AzureConfigKey::UseEmulator => {
-                    self.use_emulator = str_is_truthy(&value.into())
-                }
-            };
-        }
+        match AzureConfigKey::try_from(key.into()) {
+            Ok(AzureConfigKey::AccessKey) => self.access_key = Some(value.into()),
+            Ok(AzureConfigKey::AccountName) => self.account_name = Some(value.into()),
+            Ok(AzureConfigKey::ClientId) => self.client_id = Some(value.into()),
+            Ok(AzureConfigKey::ClientSecret) => self.client_secret = Some(value.into()),
+            Ok(AzureConfigKey::AuthorityId) => self.tenant_id = Some(value.into()),
+            Ok(AzureConfigKey::SasKey) => self.sas_key = Some(value.into()),
+            Ok(AzureConfigKey::Token) => self.bearer_token = Some(value.into()),
+            Ok(AzureConfigKey::UseEmulator) => {
+                self.use_emulator = str_is_truthy(&value.into())
+            }
+            Err(_) => (),
+        };
         self
     }
 
