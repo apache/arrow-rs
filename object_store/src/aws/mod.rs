@@ -392,8 +392,8 @@ pub struct AmazonS3Builder {
 
 /// Configuration keys for [`AmazonS3Builder`]
 ///
-/// Configuration via keys can be dome via the [`with_option`](AmazonS3Builder::with_option)
-/// or [`with_options`](AmazonS3Builder::with_options) methods on the builder.
+/// Configuration via keys can be dome via the [`try_with_option`](AmazonS3Builder::try_with_option)
+/// or [`with_options`](AmazonS3Builder::try_with_options) methods on the builder.
 ///
 /// # Example
 /// ```
@@ -408,9 +408,12 @@ pub struct AmazonS3Builder {
 ///     (AmazonS3ConfigKey::DefaultRegion, "my-default-region"),
 /// ];
 /// let azure = AmazonS3Builder::new()
-///     .with_options(options)
-///     .with_options(typed_options)
-///     .with_option(AmazonS3ConfigKey::Region, "my-region");
+///     .try_with_options(options)
+///     .unwrap()
+///     .try_with_options(typed_options)
+///     .unwrap()
+///     .try_with_option(AmazonS3ConfigKey::Region, "my-region")
+///     .unwrap();
 /// ```
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Serialize, Deserialize)]
 pub enum AmazonS3ConfigKey {

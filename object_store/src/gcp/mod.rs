@@ -806,8 +806,8 @@ pub struct GoogleCloudStorageBuilder {
 
 /// Configuration keys for [`GoogleCloudStorageBuilder`]
 ///
-/// Configuration via keys can be dome via the [`with_option`](GoogleCloudStorageBuilder::with_option)
-/// or [`with_options`](GoogleCloudStorageBuilder::with_options) methods on the builder.
+/// Configuration via keys can be dome via the [`try_with_option`](GoogleCloudStorageBuilder::try_with_option)
+/// or [`with_options`](GoogleCloudStorageBuilder::try_with_options) methods on the builder.
 ///
 /// # Example
 /// ```
@@ -821,9 +821,12 @@ pub struct GoogleCloudStorageBuilder {
 ///     (GoogleConfigKey::Bucket, "my-bucket"),
 /// ];
 /// let azure = GoogleCloudStorageBuilder::new()
-///     .with_options(options)
-///     .with_options(typed_options)
-///     .with_option(GoogleConfigKey::Bucket, "my-new-bucket");
+///     .try_with_options(options)
+///     .unwrap()
+///     .try_with_options(typed_options)
+///     .unwrap()
+///     .try_with_option(GoogleConfigKey::Bucket, "my-new-bucket")
+///     .unwrap();
 /// ```
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Serialize, Deserialize)]
 pub enum GoogleConfigKey {

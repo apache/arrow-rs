@@ -394,8 +394,8 @@ pub struct MicrosoftAzureBuilder {
 
 /// Configuration keys for [`MicrosoftAzureBuilder`]
 ///
-/// Configuration via keys can be dome via the [`with_option`](MicrosoftAzureBuilder::with_option)
-/// or [`with_options`](MicrosoftAzureBuilder::with_options) methods on the builder.
+/// Configuration via keys can be dome via the [`try_with_option`](MicrosoftAzureBuilder::try_with_option)
+/// or [`with_options`](MicrosoftAzureBuilder::try_with_options) methods on the builder.
 ///
 /// # Example
 /// ```
@@ -410,9 +410,12 @@ pub struct MicrosoftAzureBuilder {
 ///     (AzureConfigKey::AccountName, "my-account-name"),
 /// ];
 /// let azure = MicrosoftAzureBuilder::new()
-///     .with_options(options)
-///     .with_options(typed_options)
-///     .with_option(AzureConfigKey::AuthorityId, "my-tenant-id");
+///     .try_with_options(options)
+///     .unwrap()
+///     .try_with_options(typed_options)
+///     .unwrap()
+///     .try_with_option(AzureConfigKey::AuthorityId, "my-tenant-id")
+///     .unwrap();
 /// ```
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Deserialize, Serialize)]
 pub enum AzureConfigKey {
