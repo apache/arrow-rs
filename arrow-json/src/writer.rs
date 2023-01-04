@@ -930,7 +930,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "chrono-tz")]
     fn write_timestamps_with_tz() {
         let ts_string = "2018-11-13T17:11:10.011375885995";
         let ts_nanos = ts_string

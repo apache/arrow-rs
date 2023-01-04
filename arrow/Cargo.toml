@@ -93,7 +93,7 @@ dyn_cmp_dict = ["arrow-string/dyn_cmp_dict", "arrow-ord/dyn_cmp_dict"]
 # Enable dyn-arithmetic kernels for dictionary arrays
 # Note: this does not impact arithmetic with scalars
 dyn_arith_dict = ["arrow-arith/dyn_arith_dict"]
-chrono-tz = ["arrow-array/chrono-tz", "arrow-json/chrono-tz"]
+chrono-tz = ["arrow-array/chrono-tz"]
 
 [dev-dependencies]
 chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
