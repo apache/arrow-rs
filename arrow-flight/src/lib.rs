@@ -454,6 +454,13 @@ impl Action {
     }
 }
 
+impl Result {
+    /// Create a new Result with the specified body
+    pub fn new(body: impl Into<Bytes>) -> Self {
+        Self { body: body.into() }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
