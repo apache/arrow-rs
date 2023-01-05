@@ -266,10 +266,6 @@ harness = false
 required-features = ["test_utils"]
 
 [[test]]
-name = "ipc"
-required-features = ["test_utils", "ipc"]
-
-[[test]]
 name = "csv"
 required-features = ["csv", "chrono-tz"]
 
