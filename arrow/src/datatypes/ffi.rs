@@ -112,8 +112,8 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                                 DataType::Decimal128(parsed_precision, parsed_scale)
                             },
                             [precision, scale, bits] => {
-                                if *bits != "128" {
-                                    return Err(ArrowError::CDataInterface("Only 128 bit wide decimal is supported in the Rust implementation".to_string()));
+                                if *bits != "128" && *bits != "256" {
+                                    return Err(ArrowError::CDataInterface("Only 128/256 bit wide decimal is supported in the Rust implementation".to_string()));
                                 }
                                 let parsed_precision = precision.parse::<u8>().map_err(|_| {
                                     ArrowError::CDataInterface(
@@ -125,7 +125,11 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                                         "The decimal type requires an integer scale".to_string(),
                                     )
                                 })?;
-                                DataType::Decimal128(parsed_precision, parsed_scale)
+                                if *bits == "128" {
+                                    DataType::Decimal128(parsed_precision, parsed_scale)
+                                } else {
+                                    DataType::Decimal256(parsed_precision, parsed_scale)
+                                }
                             }
                             _ => {
                                 return Err(ArrowError::CDataInterface(format!(
@@ -304,6 +308,9 @@ fn get_format_string(dtype: &DataType) -> Result<String> {
         DataType::FixedSizeList(_, num_elems) => Ok(format!("+w:{}", num_elems)),
         DataType::Decimal128(precision, scale) => {
             Ok(format!("d:{},{}", precision, scale))
+        }
+        DataType::Decimal256(precision, scale) => {
+            Ok(format!("d:{},{},256", precision, scale))
         }
         DataType::Date32 => Ok("tdD".to_string()),
         DataType::Date64 => Ok("tdm".to_string()),

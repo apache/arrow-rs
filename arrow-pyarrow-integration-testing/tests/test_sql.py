@@ -63,6 +63,7 @@ _supported_pyarrow_types = [
     pa.float32(),
     pa.float64(),
     pa.decimal128(19, 4),
+    pa.decimal256(76, 38),
     pa.string(),
     pa.binary(),
     pa.binary(10),
@@ -110,7 +111,6 @@ _supported_pyarrow_types = [
 ]
 
 _unsupported_pyarrow_types = [
-    pa.decimal256(76, 38),
 ]
 
 
