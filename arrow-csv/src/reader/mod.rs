@@ -1125,6 +1125,31 @@ mod tests {
     use chrono::prelude::*;
 
     #[test]
+    fn rows_unequal_length() {
+        let file = File::open("test/data/unequal_lengths.csv").unwrap();
+        let schema = Schema::new(vec![
+            Field::new("foo", DataType::Int32, false),
+            Field::new("bar", DataType::Int32, false),
+        ]);
+        let mut csv = Reader::new(
+            file,
+            Arc::new(schema.clone()),
+            false,
+            None,
+            1024,
+            None,
+            None,
+            None,
+        );
+        let batch = csv.next().unwrap();
+        assert!(batch.is_err());
+        assert_eq!(
+            "Csv error: incorrect number of fields, expected 2 got 3",
+            batch.err().unwrap().to_string()
+        );
+    }
+
+    #[test]
     fn test_csv() {
         let _: Vec<()> = vec![None, Some("%Y-%m-%dT%H:%M:%S%.f%:z".to_string())]
             .into_iter()
