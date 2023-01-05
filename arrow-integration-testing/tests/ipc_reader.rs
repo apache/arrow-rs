@@ -96,8 +96,11 @@ fn read_1_0_0_bigendian() {
 
         FileReader::try_new(file, None).unwrap();
 
-        // While the the reader doesn't error but the values are not read correctly
-        // so verifing the contents fails
+        // While the the reader doesn't error but the values are not
+        // read correctly on little endian platforms so verifing the
+        // contents fails
+        //
+        // https://github.com/apache/arrow-rs/issues/3459
         //verify_arrow_file(&testdata, "1.0.0-bigendian", path);
     });
 }
@@ -117,8 +120,7 @@ fn read_1_0_0_littleendian() {
         "generated_extension",
         "generated_interval",
         "generated_map",
-        // fails with
-        // thread 'read_1_0_0_littleendian' panicked at 'assertion failed: `(left == right)`
+        // https://github.com/apache/arrow-rs/issues/3460
         //"generated_map_non_canonical",
         "generated_nested",
         "generated_nested_dictionary",
