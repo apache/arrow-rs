@@ -70,7 +70,7 @@ fn write_1_0_0_littleendian() {
         "generated_extension",
         "generated_interval",
         "generated_map",
-        // thread 'write_1_0_0_littleendian' panicked at 'assertion failed: `(left == right)`
+        // https://github.com/apache/arrow-rs/issues/3460
         // "generated_map_non_canonical",
         "generated_nested",
         "generated_nested_dictionary",
