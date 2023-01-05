@@ -331,7 +331,7 @@ impl FlightClient {
     /// // encode the batch as a stream of `FlightData`
     /// let flight_data_stream = FlightDataEncoderBuilder::new()
     ///   .build(futures::stream::iter(vec![Ok(batch)]))
-    ///   // data encoder return Results, but do_put requires FlightData
+    ///   // data encoder return Results, but do_exchange requires FlightData
     ///   .map(|batch|batch.unwrap());
     ///
     /// // send the stream and get the results as `RecordBatches`
@@ -341,7 +341,7 @@ impl FlightClient {
     ///   .unwrap()
     ///   .try_collect() // use TryStreamExt to collect stream
     ///   .await
-    ///   .expect("error calling do_put");
+    ///   .expect("error calling do_exchange");
     /// # }
     /// ```
     pub async fn do_exchange<S: Stream<Item = FlightData> + Send + 'static>(
@@ -361,7 +361,7 @@ impl FlightClient {
     }
 
     /// Make a `ListFlights` call to the server with the provided
-    /// critera and returns a [`Stream`](futures::Stream) of [`FlightInfo`].
+    /// critera and returning a [`Stream`](futures::Stream) of [`FlightInfo`].
     ///
     /// # Example:
     /// ```no_run
@@ -404,7 +404,7 @@ impl FlightClient {
     }
 
     /// Make a `GetSchema` call to the server with the provided
-    /// [`FlightDescriptor`] and returns the associated [`Schema`].
+    /// [`FlightDescriptor`] and returning the associated [`Schema`].
     ///
     /// # Example:
     /// ```no_run
@@ -438,7 +438,7 @@ impl FlightClient {
         Ok(schema)
     }
 
-    /// Make a `ListActions` call to the server and returns a
+    /// Make a `ListActions` call to the server and returning a
     /// [`Stream`](futures::Stream) of [`ActionType`].
     ///
     /// # Example:
@@ -475,7 +475,7 @@ impl FlightClient {
         Ok(action_stream.boxed())
     }
 
-    /// Make a `DoAction` call to the server and returns a
+    /// Make a `DoAction` call to the server and returning a
     /// [`Stream`](futures::Stream) of opaque [`Bytes`].
     ///
     /// # Example:
