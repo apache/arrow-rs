@@ -291,11 +291,9 @@ impl RecordBatch {
 
     /// Get a reference to a column's array by name.
     pub fn column_by_name(&self, name: &str) -> Option<&ArrayRef> {
-        if let Some((index, _)) = self.schema().column_with_name(name) {
-            Some(&self.columns[index])
-        } else {
-            None
-        }
+        self.schema()
+            .column_with_name(name)
+            .map(|(index, _)| &self.columns[index])
     }
 
     /// Get a reference to all columns in the record batch.
