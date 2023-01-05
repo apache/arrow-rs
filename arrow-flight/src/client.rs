@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::{
+    sync::{Arc, Mutex},
+    task::Poll,
+};
+
 use crate::{
     decode::FlightRecordBatchStream, flight_service_client::FlightServiceClient, Action,
     ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
@@ -262,6 +267,15 @@ impl FlightClient {
     /// [`Stream`](futures::Stream) of [`FlightData`] and returning a
     /// stream of [`PutResult`].
     ///
+    /// # Note
+    ///
+    /// The input stream is [`Result`] so that this can be connected
+    /// to a streaming data source (such as [`FlightDataEncoder`])
+    /// without having to buffer. If the input stream returns an error
+    /// that error will not be sent to the server, instead it will be
+    /// placed into the result stream and the server connection
+    /// terminated.
+    ///
     /// # Example:
     /// ```no_run
     /// # async fn run() {
@@ -279,9 +293,7 @@ impl FlightClient {
     ///
     /// // encode the batch as a stream of `FlightData`
     /// let flight_data_stream = FlightDataEncoderBuilder::new()
-    ///   .build(futures::stream::iter(vec![Ok(batch)]))
-    ///   // data encoder return Results, but do_put requires FlightData
-    ///   .map(|batch|batch.unwrap());
+    ///   .build(futures::stream::iter(vec![Ok(batch)]));
     ///
     /// // send the stream and get the results as `PutResult`
     /// let response: Vec<PutResult>= client
@@ -293,11 +305,14 @@ impl FlightClient {
     ///   .expect("error calling do_put");
     /// # }
     /// ```
-    pub async fn do_put<S: Stream<Item = FlightData> + Send + 'static>(
+    pub async fn do_put<S: Stream<Item = Result<FlightData>> + Send + 'static>(
         &mut self,
         request: S,
     ) -> Result<BoxStream<'static, Result<PutResult>>> {
-        let request = self.make_request(request);
+        let (ok_stream, err_stream) = split_stream(request.boxed());
+
+        // send ok result to the server
+        let request = self.make_request(ok_stream);
 
         let response = self
             .inner
@@ -306,7 +321,10 @@ impl FlightClient {
             .into_inner()
             .map_err(FlightError::Tonic);
 
-        Ok(response.boxed())
+        let err_stream = err_stream.map(Err);
+
+        // combine the response from the server and any error from the client
+        Ok(futures::stream::select_all([response.boxed(), err_stream.boxed()]).boxed())
     }
 
     /// Make a `DoExchange` call to the server with the provided
@@ -529,5 +547,144 @@ impl FlightClient {
         let mut request = tonic::Request::new(t);
         *request.metadata_mut() = self.metadata.clone();
         request
+    }
+}
+
+// splits the input stream  into an invallable flight data stream and errors errors
+//
+// TODO generify
+fn split_stream(
+    input_stream: BoxStream<'static, Result<FlightData>>,
+) -> (SplitStreamOk, SplitStreamErr) {
+    let inner = SplitStream {
+        input_stream,
+        next_ok: None,
+        next_err: None,
+        done: false,
+    };
+    let inner = Arc::new(Mutex::new(inner));
+
+    let ok_stream = SplitStreamOk {
+        inner: Arc::clone(&inner),
+    };
+
+    let err_stream = SplitStreamErr {
+        inner: Arc::clone(&inner),
+    };
+
+    (ok_stream, err_stream)
+}
+
+struct SplitStream {
+    input_stream: BoxStream<'static, Result<FlightData>>,
+    next_ok: Option<FlightData>,
+    next_err: Option<FlightError>,
+    done: bool,
+}
+
+impl SplitStream {
+    // returns the next ok item ready if any
+    fn poll_next_ok(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<FlightData>> {
+        loop {
+            if let Some(flight_data) = self.next_ok.take() {
+                return Poll::Ready(Some(flight_data));
+            }
+
+            if self.done {
+                return Poll::Ready(None);
+            }
+
+            // try to get another item from the inner stream
+            if !self.maybe_read(cx) {
+                return Poll::Pending;
+            }
+        }
+    }
+
+    // returns the next err item
+    fn poll_next_err(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<FlightError>> {
+        loop {
+            if let Some(e) = self.next_err.take() {
+                return Poll::Ready(Some(e));
+            }
+
+            if self.done {
+                return Poll::Ready(None);
+            }
+
+            // try to get another item from the inner stream
+            if !self.maybe_read(cx) {
+                return Poll::Pending;
+            }
+        }
+    }
+
+    // if we have space for both ok and error, take next from inner stream
+    // returns true if read an item false otherwise
+    fn maybe_read(&mut self, cx: &mut std::task::Context<'_>) -> bool {
+        // if there is space for ok and err, take next
+        if self.next_ok.is_some() || self.next_err.is_some() {
+            // can't take next until there is space
+            return false;
+        }
+
+        let next = match self.input_stream.poll_next_unpin(cx) {
+            Poll::Pending => return false,
+            Poll::Ready(next) => next,
+        };
+
+        match next {
+            Some(Ok(flight_data)) => {
+                self.next_ok = Some(flight_data);
+            }
+            Some(Err(e)) => {
+                self.next_err = Some(e);
+                // stop reading once we see an error
+                self.done = true;
+            }
+            None => {
+                self.done = true;
+            }
+        };
+
+        true
+    }
+}
+
+/// returns only the OK responses from a stream of results
+struct SplitStreamErr {
+    inner: Arc<Mutex<SplitStream>>,
+}
+
+impl Stream for SplitStreamOk {
+    type Item = FlightData;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.lock().unwrap().poll_next_ok(cx)
+    }
+}
+
+/// returns only the Err responses from a stream of results
+struct SplitStreamOk {
+    inner: Arc<Mutex<SplitStream>>,
+}
+
+impl Stream for SplitStreamErr {
+    type Item = FlightError;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.lock().unwrap().poll_next_err(cx)
     }
 }

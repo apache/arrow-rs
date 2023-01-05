@@ -252,8 +252,10 @@ async fn test_do_put() {
         test_server
             .set_do_put_response(expected_response.clone().into_iter().map(Ok).collect());
 
+        let input_stream = futures::stream::iter(input_flight_data.clone()).map(Ok);
+
         let response_stream = client
-            .do_put(futures::stream::iter(input_flight_data.clone()))
+            .do_put(input_stream)
             .await
             .expect("error making request");
 
@@ -276,9 +278,9 @@ async fn test_do_put_error() {
 
         let input_flight_data = test_flight_data().await;
 
-        let response = client
-            .do_put(futures::stream::iter(input_flight_data.clone()))
-            .await;
+        let input_stream = futures::stream::iter(input_flight_data.clone()).map(Ok);
+
+        let response = client.do_put(input_stream).await;
         let response = match response {
             Ok(_) => panic!("unexpected success"),
             Err(e) => e,
@@ -309,8 +311,10 @@ async fn test_do_put_error_stream() {
 
         test_server.set_do_put_response(response);
 
+        let input_stream = futures::stream::iter(input_flight_data.clone()).map(Ok);
+
         let response_stream = client
-            .do_put(futures::stream::iter(input_flight_data.clone()))
+            .do_put(input_stream)
             .await
             .expect("error making request");
 
