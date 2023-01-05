@@ -42,9 +42,9 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 #[tokio::test]
 async fn test_handshake() {
     do_test(|test_server, mut client| async move {
-        client.add_header("foo", "bar").unwrap();
-        let request_payload = Bytes::from("foo");
-        let response_payload = Bytes::from("Bar");
+        client.add_header("foo-header", "bar-header-value").unwrap();
+        let request_payload = Bytes::from("foo-request-payload");
+        let response_payload = Bytes::from("bar-response-payload");
 
         let request = HandshakeRequest {
             payload: request_payload.clone(),
@@ -68,7 +68,7 @@ async fn test_handshake() {
 #[tokio::test]
 async fn test_handshake_error() {
     do_test(|test_server, mut client| async move {
-        let request_payload = "foo".to_string().into_bytes();
+        let request_payload = "foo-request-payload".to_string().into_bytes();
         let e = Status::unauthenticated("DENIED");
         test_server.set_handshake_response(Err(e));
 
@@ -113,7 +113,7 @@ fn test_flight_info(request: &FlightDescriptor) -> FlightInfo {
 #[tokio::test]
 async fn test_get_flight_info() {
     do_test(|test_server, mut client| async move {
-        client.add_header("foo", "bar").unwrap();
+        client.add_header("foo-header", "bar-header-value").unwrap();
         let request = FlightDescriptor::new_cmd(b"My Command".to_vec());
 
         let expected_response = test_flight_info(&request);
@@ -148,7 +148,7 @@ async fn test_get_flight_info_error() {
 #[tokio::test]
 async fn test_do_get() {
     do_test(|test_server, mut client| async move {
-        client.add_header("foo", "bar").unwrap();
+        client.add_header("foo-header", "bar-header-value").unwrap();
         let ticket = Ticket {
             ticket: Bytes::from("my awesome flight ticket"),
         };
@@ -182,7 +182,7 @@ async fn test_do_get() {
 #[tokio::test]
 async fn test_do_get_error() {
     do_test(|test_server, mut client| async move {
-        client.add_header("foo", "bar").unwrap();
+        client.add_header("foo-header", "bar-header-value").unwrap();
         let ticket = Ticket {
             ticket: Bytes::from("my awesome flight ticket"),
         };
@@ -235,17 +235,17 @@ async fn test_do_get_error_in_record_batch_stream() {
 #[tokio::test]
 async fn test_do_put() {
     do_test(|test_server, mut client| async move {
-        client.add_header("foo", "bar").unwrap();
+        client.add_header("foo-header", "bar-header-value").unwrap();
 
         // encode the batch as a stream of FlightData
         let input_flight_data = test_flight_data().await;
 
         let expected_response = vec![
             PutResult {
-                app_metadata: Bytes::from("foo"),
+                app_metadata: Bytes::from("foo-metadata1"),
             },
             PutResult {
-                app_metadata: Bytes::from("bar"),
+                app_metadata: Bytes::from("bar-metadata2"),
             },
         ];
 
@@ -272,7 +272,7 @@ async fn test_do_put() {
 #[tokio::test]
 async fn test_do_put_error() {
     do_test(|test_server, mut client| async move {
-        client.add_header("foo", "bar").unwrap();
+        client.add_header("foo-header", "bar-header-value").unwrap();
 
         let input_flight_data = test_flight_data().await;
 
@@ -296,13 +296,13 @@ async fn test_do_put_error() {
 #[tokio::test]
 async fn test_do_put_error_stream() {
     do_test(|test_server, mut client| async move {
-        client.add_header("foo", "bar").unwrap();
+        client.add_header("foo-header", "bar-header-value").unwrap();
 
         let input_flight_data = test_flight_data().await;
 
         let response = vec![
             Ok(PutResult {
-                app_metadata: Bytes::from("foo"),
+                app_metadata: Bytes::from("foo-metadata"),
             }),
             Err(FlightError::Tonic(Status::invalid_argument("bad arg"))),
         ];
@@ -332,7 +332,7 @@ async fn test_do_put_error_stream() {
 #[tokio::test]
 async fn test_do_exchange() {
     do_test(|test_server, mut client| async move {
-        client.add_header("foo", "bar").unwrap();
+        client.add_header("foo-header", "bar-header-value").unwrap();
 
         // encode the batch as a stream of FlightData
         let input_flight_data = test_flight_data().await;
@@ -373,7 +373,7 @@ async fn test_do_exchange() {
 #[tokio::test]
 async fn test_do_exchange_error() {
     do_test(|test_server, mut client| async move {
-        client.add_header("foo", "bar").unwrap();
+        client.add_header("foo-header", "bar-header-value").unwrap();
 
         let input_flight_data = test_flight_data().await;
 
@@ -400,7 +400,7 @@ async fn test_do_exchange_error() {
 #[tokio::test]
 async fn test_do_exchange_error_stream() {
     do_test(|test_server, mut client| async move {
-        client.add_header("foo", "bar").unwrap();
+        client.add_header("foo-header", "bar-header-value").unwrap();
 
         let input_flight_data = test_flight_data().await;
 
