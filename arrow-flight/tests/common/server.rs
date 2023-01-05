@@ -18,7 +18,7 @@
 use std::sync::{Arc, Mutex};
 
 use arrow_array::RecordBatch;
-use futures::{stream::BoxStream, TryStreamExt};
+use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use tonic::{metadata::MetadataMap, Request, Response, Status, Streaming};
 
 use arrow_flight::{
@@ -208,7 +208,7 @@ impl FlightService for TestFlightServer {
 
         // turn into a streaming response
         let output = futures::stream::iter(std::iter::once(Ok(response)));
-        Ok(Response::new(Box::pin(output) as Self::HandshakeStream))
+        Ok(Response::new(output.boxed()))
     }
 
     async fn list_flights(
@@ -256,9 +256,9 @@ impl FlightService for TestFlightServer {
 
         let stream = FlightDataEncoderBuilder::new()
             .build(batch_stream)
-            .map_err(|e| e.into());
+            .map_err(Into::into);
 
-        Ok(Response::new(Box::pin(stream) as _))
+        Ok(Response::new(stream.boxed()))
     }
 
     async fn do_put(
@@ -277,9 +277,9 @@ impl FlightService for TestFlightServer {
             .take()
             .ok_or_else(|| Status::internal("No do_put response configured"))?;
 
-        let stream = futures::stream::iter(response).map_err(|e| e.into());
+        let stream = futures::stream::iter(response).map_err(Into::into);
 
-        Ok(Response::new(Box::pin(stream) as _))
+        Ok(Response::new(stream.boxed()))
     }
 
     async fn do_action(
@@ -312,8 +312,8 @@ impl FlightService for TestFlightServer {
             .take()
             .ok_or_else(|| Status::internal("No do_exchange response configured"))?;
 
-        let stream = futures::stream::iter(response).map_err(|e| e.into());
+        let stream = futures::stream::iter(response).map_err(Into::into);
 
-        Ok(Response::new(Box::pin(stream) as _))
+        Ok(Response::new(stream.boxed()))
     }
 }
