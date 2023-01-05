@@ -23,9 +23,10 @@ mod common {
 use arrow_array::{RecordBatch, UInt64Array};
 use arrow_flight::{
     decode::FlightRecordBatchStream, encode::FlightDataEncoderBuilder,
-    error::FlightError, FlightClient, FlightData, FlightDescriptor, FlightInfo,
-    HandshakeRequest, HandshakeResponse, PutResult, Ticket,
+    error::FlightError, Action, ActionType, Criteria, Empty, FlightClient, FlightData,
+    FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse, PutResult, Ticket,
 };
+use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use common::server::TestFlightServer;
 use futures::{Future, StreamExt, TryStreamExt};
@@ -70,10 +71,9 @@ async fn test_handshake_error() {
     do_test(|test_server, mut client| async move {
         let request_payload = "foo-request-payload".to_string().into_bytes();
         let e = Status::unauthenticated("DENIED");
-        test_server.set_handshake_response(Err(e));
+        test_server.set_handshake_response(Err(e.clone()));
 
         let response = client.handshake(request_payload).await.unwrap_err();
-        let e = Status::unauthenticated("DENIED");
         expect_status(response, e);
     })
     .await;
@@ -134,10 +134,9 @@ async fn test_get_flight_info_error() {
         let request = FlightDescriptor::new_cmd(b"My Command".to_vec());
 
         let e = Status::unauthenticated("DENIED");
-        test_server.set_get_flight_info_response(Err(e));
+        test_server.set_get_flight_info_response(Err(e.clone()));
 
         let response = client.get_flight_info(request.clone()).await.unwrap_err();
-        let e = Status::unauthenticated("DENIED");
         expect_status(response, e);
     })
     .await;
@@ -213,7 +212,7 @@ async fn test_do_get_error_in_record_batch_stream() {
 
         let e = Status::data_loss("she's dead jim");
 
-        let expected_response = vec![Ok(batch), Err(FlightError::Tonic(e.clone()))];
+        let expected_response = vec![Ok(batch), Err(e.clone())];
 
         test_server.set_do_get_response(expected_response);
 
@@ -300,11 +299,13 @@ async fn test_do_put_error_stream() {
 
         let input_flight_data = test_flight_data().await;
 
+        let e = Status::invalid_argument("bad arg");
+
         let response = vec![
             Ok(PutResult {
                 app_metadata: Bytes::from("foo-metadata"),
             }),
-            Err(FlightError::Tonic(Status::invalid_argument("bad arg"))),
+            Err(e.clone()),
         ];
 
         test_server.set_do_put_response(response);
@@ -320,7 +321,6 @@ async fn test_do_put_error_stream() {
             Err(e) => e,
         };
 
-        let e = Status::invalid_argument("bad arg");
         expect_status(response, e);
         // server still got the request
         assert_eq!(test_server.take_do_put_request(), Some(input_flight_data));
@@ -404,6 +404,7 @@ async fn test_do_exchange_error_stream() {
 
         let input_flight_data = test_flight_data().await;
 
+        let e = Status::invalid_argument("the error");
         let response = test_flight_data2()
             .await
             .into_iter()
@@ -413,8 +414,7 @@ async fn test_do_exchange_error_stream() {
                     Ok(m)
                 } else {
                     // make all messages after the first an error
-                    let e = tonic::Status::invalid_argument("the error");
-                    Err(FlightError::Tonic(e))
+                    Err(e.clone())
                 }
             })
             .collect();
@@ -432,13 +432,315 @@ async fn test_do_exchange_error_stream() {
             Err(e) => e,
         };
 
-        let e = tonic::Status::invalid_argument("the error");
         expect_status(response, e);
         // server still got the request
         assert_eq!(
             test_server.take_do_exchange_request(),
             Some(input_flight_data)
         );
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_get_schema() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let schema = Schema::new(vec![Field::new("foo", DataType::Int64, true)]);
+
+        let request = FlightDescriptor::new_cmd("my command");
+        test_server.set_get_schema_response(Ok(schema.clone()));
+
+        let response = client
+            .get_schema(request.clone())
+            .await
+            .expect("error making request");
+
+        let expected_schema = schema;
+        let expected_request = request;
+
+        assert_eq!(response, expected_schema);
+        assert_eq!(
+            test_server.take_get_schema_request(),
+            Some(expected_request)
+        );
+
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_get_schema_error() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+        let request = FlightDescriptor::new_cmd("my command");
+
+        let e = Status::unauthenticated("DENIED");
+        test_server.set_get_schema_response(Err(e.clone()));
+
+        let response = client.get_schema(request).await.unwrap_err();
+        expect_status(response, e);
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_list_flights() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let infos = vec![
+            test_flight_info(&FlightDescriptor::new_cmd("foo")),
+            test_flight_info(&FlightDescriptor::new_cmd("bar")),
+        ];
+
+        let response = infos.iter().map(|i| Ok(i.clone())).collect();
+        test_server.set_list_flights_response(response);
+
+        let response_stream = client
+            .list_flights("query")
+            .await
+            .expect("error making request");
+
+        let expected_response = infos;
+        let response: Vec<_> = response_stream
+            .try_collect()
+            .await
+            .expect("Error streaming data");
+
+        let expected_request = Some(Criteria {
+            expression: "query".into(),
+        });
+
+        assert_eq!(response, expected_response);
+        assert_eq!(test_server.take_list_flights_request(), expected_request);
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_list_flights_error() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let response = client.list_flights("query").await;
+        let response = match response {
+            Ok(_) => panic!("unexpected success"),
+            Err(e) => e,
+        };
+
+        let e = Status::internal("No list_flights response configured");
+        expect_status(response, e);
+        // server still got the request
+        let expected_request = Some(Criteria {
+            expression: "query".into(),
+        });
+        assert_eq!(test_server.take_list_flights_request(), expected_request);
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_list_flights_error_in_stream() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let e = Status::data_loss("she's dead jim");
+
+        let response = vec![
+            Ok(test_flight_info(&FlightDescriptor::new_cmd("foo"))),
+            Err(e.clone()),
+        ];
+        test_server.set_list_flights_response(response);
+
+        let response_stream = client
+            .list_flights("other query")
+            .await
+            .expect("error making request");
+
+        let response: Result<Vec<_>, FlightError> = response_stream.try_collect().await;
+
+        let response = response.unwrap_err();
+        expect_status(response, e);
+        // server still got the request
+        let expected_request = Some(Criteria {
+            expression: "other query".into(),
+        });
+        assert_eq!(test_server.take_list_flights_request(), expected_request);
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_list_actions() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let actions = vec![
+            ActionType {
+                r#type: "type 1".into(),
+                description: "awesomeness".into(),
+            },
+            ActionType {
+                r#type: "type 2".into(),
+                description: "more awesomeness".into(),
+            },
+        ];
+
+        let response = actions.iter().map(|i| Ok(i.clone())).collect();
+        test_server.set_list_actions_response(response);
+
+        let response_stream = client.list_actions().await.expect("error making request");
+
+        let expected_response = actions;
+        let response: Vec<_> = response_stream
+            .try_collect()
+            .await
+            .expect("Error streaming data");
+
+        assert_eq!(response, expected_response);
+        assert_eq!(test_server.take_list_actions_request(), Some(Empty {}));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_list_actions_error() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let response = client.list_actions().await;
+        let response = match response {
+            Ok(_) => panic!("unexpected success"),
+            Err(e) => e,
+        };
+
+        let e = Status::internal("No list_actions response configured");
+        expect_status(response, e);
+        // server still got the request
+        assert_eq!(test_server.take_list_actions_request(), Some(Empty {}));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_list_actions_error_in_stream() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let e = Status::data_loss("she's dead jim");
+
+        let response = vec![
+            Ok(ActionType {
+                r#type: "type 1".into(),
+                description: "awesomeness".into(),
+            }),
+            Err(e.clone()),
+        ];
+        test_server.set_list_actions_response(response);
+
+        let response_stream = client.list_actions().await.expect("error making request");
+
+        let response: Result<Vec<_>, FlightError> = response_stream.try_collect().await;
+
+        let response = response.unwrap_err();
+        expect_status(response, e);
+        // server still got the request
+        assert_eq!(test_server.take_list_actions_request(), Some(Empty {}));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_do_action() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let bytes = vec![Bytes::from("foo"), Bytes::from("blarg")];
+
+        let response = bytes
+            .iter()
+            .cloned()
+            .map(arrow_flight::Result::new)
+            .map(Ok)
+            .collect();
+        test_server.set_do_action_response(response);
+
+        let request = Action::new("action type", "action body");
+
+        let response_stream = client
+            .do_action(request.clone())
+            .await
+            .expect("error making request");
+
+        let expected_response = bytes;
+        let response: Vec<_> = response_stream
+            .try_collect()
+            .await
+            .expect("Error streaming data");
+
+        assert_eq!(response, expected_response);
+        assert_eq!(test_server.take_do_action_request(), Some(request));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_do_action_error() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let request = Action::new("action type", "action body");
+
+        let response = client.do_action(request.clone()).await;
+        let response = match response {
+            Ok(_) => panic!("unexpected success"),
+            Err(e) => e,
+        };
+
+        let e = Status::internal("No do_action response configured");
+        expect_status(response, e);
+        // server still got the request
+        assert_eq!(test_server.take_do_action_request(), Some(request));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_do_action_error_in_stream() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let e = Status::data_loss("she's dead jim");
+
+        let request = Action::new("action type", "action body");
+
+        let response = vec![Ok(arrow_flight::Result::new("foo")), Err(e.clone())];
+        test_server.set_do_action_response(response);
+
+        let response_stream = client
+            .do_action(request.clone())
+            .await
+            .expect("error making request");
+
+        let response: Result<Vec<_>, FlightError> = response_stream.try_collect().await;
+
+        let response = response.unwrap_err();
+        expect_status(response, e);
+        // server still got the request
+        assert_eq!(test_server.take_do_action_request(), Some(request));
         ensure_metadata(&client, &test_server);
     })
     .await;
