@@ -523,9 +523,6 @@ impl FlightClient {
         Ok(result_stream.boxed())
     }
 
-    // TODO other methods
-    // do_action
-
     /// return a Request, adding any configured metadata
     fn make_request<T>(&self, t: T) -> tonic::Request<T> {
         // Pass along metadata
