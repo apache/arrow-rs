@@ -37,6 +37,13 @@ name = "arrow_json"
 path = "src/lib.rs"
 bench = false
 
+[package.metadata.docs.rs]
+features = ["raw"]
+
+[features]
+# Enable experimental raw JSON reader
+raw = ["serde_json/raw_value"]
+
 [dependencies]
 arrow-array = { version = "30.0.0", path = "../arrow-array" }
 arrow-buffer = { version = "30.0.0", path = "../arrow-buffer" }
@@ -46,6 +53,7 @@ arrow-schema = { version = "30.0.0", path = "../arrow-schema" }
 half = { version = "2.1", default-features = false }
 indexmap = { version = "1.9", default-features = false, features = ["std"] }
 num = { version = "0.4", default-features = false, features = ["std"] }
+serde = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
 

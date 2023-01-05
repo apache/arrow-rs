@@ -18,18 +18,48 @@
 use criterion::*;
 
 use arrow::datatypes::*;
-use arrow_json::ReaderBuilder;
+use arrow::util::bench_util::{create_primitive_array, create_string_array};
+use arrow_array::RecordBatch;
+use arrow_json::raw::RawReaderBuilder;
+use arrow_json::{LineDelimitedWriter, ReaderBuilder};
 use std::io::Cursor;
 use std::sync::Arc;
 
-fn json_primitive_to_record_batch() {
+fn do_bench(c: &mut Criterion, name: &str, json: &str, schema: SchemaRef) {
+    c.bench_function(&format!("{name} (basic)"), |b| {
+        b.iter(|| {
+            let cursor = Cursor::new(black_box(json));
+            let builder = ReaderBuilder::new()
+                .with_schema(schema.clone())
+                .with_batch_size(64);
+
+            let mut reader = builder.build(cursor).unwrap();
+            while let Some(next) = reader.next().transpose() {
+                next.unwrap();
+            }
+        })
+    });
+
+    c.bench_function(&format!("{name} (raw)"), |b| {
+        b.iter(|| {
+            let cursor = Cursor::new(black_box(json));
+            let builder = RawReaderBuilder::new(schema.clone()).with_batch_size(64);
+            let mut reader = builder.build(cursor).unwrap();
+            while let Some(next) = reader.next() {
+                next.unwrap();
+            }
+        })
+    });
+}
+
+fn small_bench_primitive(c: &mut Criterion) {
     let schema = Arc::new(Schema::new(vec![
         Field::new("c1", DataType::Utf8, true),
         Field::new("c2", DataType::Float64, true),
         Field::new("c3", DataType::UInt32, true),
         Field::new("c4", DataType::Boolean, true),
     ]));
-    let builder = ReaderBuilder::new().with_schema(schema).with_batch_size(64);
+
     let json_content = r#"
         {"c1": "eleven", "c2": 6.2222222225, "c3": 5.0, "c4": false}
         {"c1": "twelve", "c2": -55555555555555.2, "c3": 3}
@@ -42,15 +72,33 @@ fn json_primitive_to_record_batch() {
         {"c2": -35, "c3": 100.0, "c4": true}
         {"c1": "fifteen", "c2": null, "c4": true}
         "#;
-    let cursor = Cursor::new(json_content);
-    let mut reader = builder.build(cursor).unwrap();
-    #[allow(clippy::unit_arg)]
-    criterion::black_box({
-        reader.next().unwrap();
-    });
+
+    do_bench(c, "small_bench_primitive", json_content, schema)
 }
 
-fn json_list_primitive_to_record_batch() {
+fn large_bench_primitive(c: &mut Criterion) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Utf8, true),
+        Field::new("c2", DataType::Int32, true),
+        Field::new("c3", DataType::UInt32, true),
+    ]));
+
+    let c1 = Arc::new(create_string_array::<i32>(4096, 0.));
+    let c2 = Arc::new(create_primitive_array::<Int32Type>(4096, 0.));
+    let c3 = Arc::new(create_primitive_array::<UInt32Type>(4096, 0.));
+
+    let batch =
+        RecordBatch::try_from_iter([("c1", c1 as _), ("c2", c2 as _), ("c3", c3 as _)])
+            .unwrap();
+
+    let mut out = Vec::with_capacity(1024);
+    LineDelimitedWriter::new(&mut out).write(batch).unwrap();
+
+    let json = std::str::from_utf8(&out).unwrap();
+    do_bench(c, "large_bench_primitive", json, schema)
+}
+
+fn small_bench_list() {
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "c1",
@@ -88,21 +136,16 @@ fn json_list_primitive_to_record_batch() {
         {"c1": ["fifteen"], "c2": [null, 2.1, 1.5, -3], "c4": [true, false, null]}
         {"c1": ["fifteen"], "c2": [], "c4": [true, false, null]}
         "#;
-    let cursor = Cursor::new(json_content);
+    let cursor = Cursor::new(black_box(json_content));
     let mut reader = builder.build(cursor).unwrap();
-    #[allow(clippy::unit_arg)]
-    criterion::black_box({
-        reader.next().unwrap();
-    });
+    reader.next().unwrap();
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("json_primitive_to_record_batch", |b| {
-        b.iter(json_primitive_to_record_batch)
-    });
-    c.bench_function("json_list_primitive_to_record_batch", |b| {
-        b.iter(json_list_primitive_to_record_batch)
-    });
+    c.bench_function("small_bench_list", |b| b.iter(small_bench_list));
+
+    small_bench_primitive(c);
+    large_bench_primitive(c);
 }
 
 criterion_group!(benches, criterion_benchmark);
