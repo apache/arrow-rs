@@ -22,12 +22,13 @@ mod common {
 }
 use arrow_array::{RecordBatch, UInt64Array};
 use arrow_flight::{
-    error::FlightError, FlightClient, FlightDescriptor, FlightInfo, HandshakeRequest,
-    HandshakeResponse, Ticket,
+    decode::FlightRecordBatchStream, encode::FlightDataEncoderBuilder,
+    error::FlightError, FlightClient, FlightData, FlightDescriptor, FlightInfo,
+    HandshakeRequest, HandshakeResponse, PutResult, Ticket,
 };
 use bytes::Bytes;
 use common::server::TestFlightServer;
-use futures::{Future, TryStreamExt};
+use futures::{Future, StreamExt, TryStreamExt};
 use tokio::{net::TcpListener, task::JoinHandle};
 use tonic::{
     transport::{Channel, Uri},
@@ -41,8 +42,9 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 #[tokio::test]
 async fn test_handshake() {
     do_test(|test_server, mut client| async move {
-        let request_payload = Bytes::from("foo");
-        let response_payload = Bytes::from("Bar");
+        client.add_header("foo-header", "bar-header-value").unwrap();
+        let request_payload = Bytes::from("foo-request-payload");
+        let response_payload = Bytes::from("bar-response-payload");
 
         let request = HandshakeRequest {
             payload: request_payload.clone(),
@@ -58,6 +60,7 @@ async fn test_handshake() {
         let response = client.handshake(request_payload).await.unwrap();
         assert_eq!(response, response_payload);
         assert_eq!(test_server.take_handshake_request(), Some(request));
+        ensure_metadata(&client, &test_server);
     })
     .await;
 }
@@ -65,33 +68,13 @@ async fn test_handshake() {
 #[tokio::test]
 async fn test_handshake_error() {
     do_test(|test_server, mut client| async move {
-        let request_payload = "foo".to_string().into_bytes();
+        let request_payload = "foo-request-payload".to_string().into_bytes();
         let e = Status::unauthenticated("DENIED");
         test_server.set_handshake_response(Err(e));
 
         let response = client.handshake(request_payload).await.unwrap_err();
         let e = Status::unauthenticated("DENIED");
         expect_status(response, e);
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn test_handshake_metadata() {
-    do_test(|test_server, mut client| async move {
-        client.add_header("foo", "bar").unwrap();
-
-        let request_payload = Bytes::from("Blarg");
-        let response_payload = Bytes::from("Bazz");
-
-        let response = HandshakeResponse {
-            payload: response_payload.clone(),
-            protocol_version: 0,
-        };
-
-        test_server.set_handshake_response(Ok(response));
-        client.handshake(request_payload).await.unwrap();
-        ensure_metadata(&client, &test_server);
     })
     .await;
 }
@@ -130,6 +113,7 @@ fn test_flight_info(request: &FlightDescriptor) -> FlightInfo {
 #[tokio::test]
 async fn test_get_flight_info() {
     do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
         let request = FlightDescriptor::new_cmd(b"My Command".to_vec());
 
         let expected_response = test_flight_info(&request);
@@ -139,6 +123,7 @@ async fn test_get_flight_info() {
 
         assert_eq!(response, expected_response);
         assert_eq!(test_server.take_get_flight_info_request(), Some(request));
+        ensure_metadata(&client, &test_server);
     })
     .await;
 }
@@ -158,25 +143,12 @@ async fn test_get_flight_info_error() {
     .await;
 }
 
-#[tokio::test]
-async fn test_get_flight_info_metadata() {
-    do_test(|test_server, mut client| async move {
-        client.add_header("foo", "bar").unwrap();
-        let request = FlightDescriptor::new_cmd(b"My Command".to_vec());
-
-        let expected_response = test_flight_info(&request);
-        test_server.set_get_flight_info_response(Ok(expected_response));
-        client.get_flight_info(request.clone()).await.unwrap();
-        ensure_metadata(&client, &test_server);
-    })
-    .await;
-}
-
 // TODO more negative  tests (like if there are endpoints defined, etc)
 
 #[tokio::test]
 async fn test_do_get() {
     do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
         let ticket = Ticket {
             ticket: Bytes::from("my awesome flight ticket"),
         };
@@ -202,6 +174,7 @@ async fn test_do_get() {
 
         assert_eq!(response, expected_response);
         assert_eq!(test_server.take_do_get_request(), Some(ticket));
+        ensure_metadata(&client, &test_server);
     })
     .await;
 }
@@ -209,7 +182,7 @@ async fn test_do_get() {
 #[tokio::test]
 async fn test_do_get_error() {
     do_test(|test_server, mut client| async move {
-        client.add_header("foo", "bar").unwrap();
+        client.add_header("foo-header", "bar-header-value").unwrap();
         let ticket = Ticket {
             ticket: Bytes::from("my awesome flight ticket"),
         };
@@ -257,6 +230,248 @@ async fn test_do_get_error_in_record_batch_stream() {
         assert_eq!(test_server.take_do_get_request(), Some(ticket));
     })
     .await;
+}
+
+#[tokio::test]
+async fn test_do_put() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        // encode the batch as a stream of FlightData
+        let input_flight_data = test_flight_data().await;
+
+        let expected_response = vec![
+            PutResult {
+                app_metadata: Bytes::from("foo-metadata1"),
+            },
+            PutResult {
+                app_metadata: Bytes::from("bar-metadata2"),
+            },
+        ];
+
+        test_server
+            .set_do_put_response(expected_response.clone().into_iter().map(Ok).collect());
+
+        let response_stream = client
+            .do_put(futures::stream::iter(input_flight_data.clone()))
+            .await
+            .expect("error making request");
+
+        let response: Vec<_> = response_stream
+            .try_collect()
+            .await
+            .expect("Error streaming data");
+
+        assert_eq!(response, expected_response);
+        assert_eq!(test_server.take_do_put_request(), Some(input_flight_data));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_do_put_error() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let input_flight_data = test_flight_data().await;
+
+        let response = client
+            .do_put(futures::stream::iter(input_flight_data.clone()))
+            .await;
+        let response = match response {
+            Ok(_) => panic!("unexpected success"),
+            Err(e) => e,
+        };
+
+        let e = Status::internal("No do_put response configured");
+        expect_status(response, e);
+        // server still got the request
+        assert_eq!(test_server.take_do_put_request(), Some(input_flight_data));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_do_put_error_stream() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let input_flight_data = test_flight_data().await;
+
+        let response = vec![
+            Ok(PutResult {
+                app_metadata: Bytes::from("foo-metadata"),
+            }),
+            Err(FlightError::Tonic(Status::invalid_argument("bad arg"))),
+        ];
+
+        test_server.set_do_put_response(response);
+
+        let response_stream = client
+            .do_put(futures::stream::iter(input_flight_data.clone()))
+            .await
+            .expect("error making request");
+
+        let response: Result<Vec<_>, _> = response_stream.try_collect().await;
+        let response = match response {
+            Ok(_) => panic!("unexpected success"),
+            Err(e) => e,
+        };
+
+        let e = Status::invalid_argument("bad arg");
+        expect_status(response, e);
+        // server still got the request
+        assert_eq!(test_server.take_do_put_request(), Some(input_flight_data));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_do_exchange() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        // encode the batch as a stream of FlightData
+        let input_flight_data = test_flight_data().await;
+        let output_flight_data = test_flight_data2().await;
+
+        test_server.set_do_exchange_response(
+            output_flight_data.clone().into_iter().map(Ok).collect(),
+        );
+
+        let response_stream = client
+            .do_exchange(futures::stream::iter(input_flight_data.clone()))
+            .await
+            .expect("error making request");
+
+        let response: Vec<_> = response_stream
+            .try_collect()
+            .await
+            .expect("Error streaming data");
+
+        let expected_stream = futures::stream::iter(output_flight_data).map(Ok);
+
+        let expected_batches: Vec<_> =
+            FlightRecordBatchStream::new_from_flight_data(expected_stream)
+                .try_collect()
+                .await
+                .unwrap();
+
+        assert_eq!(response, expected_batches);
+        assert_eq!(
+            test_server.take_do_exchange_request(),
+            Some(input_flight_data)
+        );
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_do_exchange_error() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let input_flight_data = test_flight_data().await;
+
+        let response = client
+            .do_exchange(futures::stream::iter(input_flight_data.clone()))
+            .await;
+        let response = match response {
+            Ok(_) => panic!("unexpected success"),
+            Err(e) => e,
+        };
+
+        let e = Status::internal("No do_exchange response configured");
+        expect_status(response, e);
+        // server still got the request
+        assert_eq!(
+            test_server.take_do_exchange_request(),
+            Some(input_flight_data)
+        );
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_do_exchange_error_stream() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let input_flight_data = test_flight_data().await;
+
+        let response = test_flight_data2()
+            .await
+            .into_iter()
+            .enumerate()
+            .map(|(i, m)| {
+                if i == 0 {
+                    Ok(m)
+                } else {
+                    // make all messages after the first an error
+                    let e = tonic::Status::invalid_argument("the error");
+                    Err(FlightError::Tonic(e))
+                }
+            })
+            .collect();
+
+        test_server.set_do_exchange_response(response);
+
+        let response_stream = client
+            .do_exchange(futures::stream::iter(input_flight_data.clone()))
+            .await
+            .expect("error making request");
+
+        let response: Result<Vec<_>, _> = response_stream.try_collect().await;
+        let response = match response {
+            Ok(_) => panic!("unexpected success"),
+            Err(e) => e,
+        };
+
+        let e = tonic::Status::invalid_argument("the error");
+        expect_status(response, e);
+        // server still got the request
+        assert_eq!(
+            test_server.take_do_exchange_request(),
+            Some(input_flight_data)
+        );
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+async fn test_flight_data() -> Vec<FlightData> {
+    let batch = RecordBatch::try_from_iter(vec![(
+        "col",
+        Arc::new(UInt64Array::from_iter([1, 2, 3, 4])) as _,
+    )])
+    .unwrap();
+
+    // encode the batch as a stream of FlightData
+    FlightDataEncoderBuilder::new()
+        .build(futures::stream::iter(vec![Ok(batch)]))
+        .try_collect()
+        .await
+        .unwrap()
+}
+
+async fn test_flight_data2() -> Vec<FlightData> {
+    let batch = RecordBatch::try_from_iter(vec![(
+        "col2",
+        Arc::new(UInt64Array::from_iter([10, 23, 33])) as _,
+    )])
+    .unwrap();
+
+    // encode the batch as a stream of FlightData
+    FlightDataEncoderBuilder::new()
+        .build(futures::stream::iter(vec![Ok(batch)]))
+        .try_collect()
+        .await
+        .unwrap()
 }
 
 /// Runs the future returned by the function,  passing it a test server and client
