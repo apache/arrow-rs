@@ -225,7 +225,10 @@ macro_rules! set_temporal_column_by_array_type {
             .take($row_count)
             .for_each(|(i, row)| {
                 if !$array.is_null(i) {
-                    row.insert($col_name.to_string(), array_value_to_string($array, i).unwrap().to_string().into());
+                    row.insert(
+                        $col_name.to_string(),
+                        array_value_to_string($array, i).unwrap().to_string().into(),
+                    );
                 }
             });
     };
