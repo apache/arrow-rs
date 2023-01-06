@@ -599,15 +599,15 @@ mod tests {
             "*".repeat(500),
         ]);
         let array2 = StringArray::from_iter_values(vec![
-            "*".repeat(1),
+            "*".to_string(),
             "*".repeat(1000),
             "*".repeat(2000),
             "*".repeat(4000),
         ]);
 
         let array3 = StringArray::from_iter_values(vec![
-            "*".repeat(1),
-            "*".repeat(1),
+            "*".to_string(),
+            "*".to_string(),
             "*".repeat(1000),
             "*".repeat(2000),
         ]);
@@ -758,7 +758,7 @@ mod tests {
                          allowed_overage: {allowed_overage}"
                 );
 
-                i = i + 1;
+                i += 1;
 
                 max_overage_seen = max_overage_seen.max(actual_overage)
             }
