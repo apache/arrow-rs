@@ -110,11 +110,12 @@ impl From<MapArray> for ArrayData {
 
 impl MapArray {
     fn try_new_from_array_data(data: ArrayData) -> Result<Self, ArrowError> {
-        assert!(
-            matches!(data.data_type(), DataType::Map(_, _)),
-            "MapArray expected ArrayData with DataType::Map got {}",
-            data.data_type()
-        );
+        if !matches!(data.data_type(), DataType::Map(_, _)) {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "MapArray expected ArrayData with DataType::Map got {}",
+                data.data_type()
+            )));
+        }
 
         if data.buffers().len() != 1 {
             return Err(ArrowError::InvalidArgumentError(
