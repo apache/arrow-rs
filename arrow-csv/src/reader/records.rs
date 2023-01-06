@@ -144,7 +144,7 @@ impl<R: BufRead> RecordReader<R> {
         Ok(read)
     }
 
-    /// Skips forward `to_skip` rows
+    /// Skips forward `to_skip` rows, returning an error if insufficient lines in source
     pub fn skip(&mut self, to_skip: usize) -> Result<(), ArrowError> {
         // TODO: This could be done by scanning for unquoted newline delimiters
         let mut skipped = 0;
