@@ -616,6 +616,10 @@ mod tests {
         assert_eq!(new_batch.schema().as_ref(), schema.as_ref());
         assert_eq!(2, new_batch.num_columns());
         assert_eq!(4, new_batch.num_rows());
+        let new_batch_owned = concat_batches(&schema, &[batch1, batch2]).unwrap();
+        assert_eq!(new_batch_owned.schema().as_ref(), schema.as_ref());
+        assert_eq!(2, new_batch_owned.num_columns());
+        assert_eq!(4, new_batch_owned.num_rows());
     }
 
     #[test]
