@@ -104,10 +104,11 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
 }
 
 /// Concatenates `batches` together into a single record batch.
-pub fn concat_batches(
+pub fn concat_batches<'a>(
     schema: &SchemaRef,
-    batches: &[RecordBatch],
+    input_batches: impl IntoIterator<Item = &'a RecordBatch>,
 ) -> Result<RecordBatch, ArrowError> {
+    let batches: Vec<&RecordBatch> = input_batches.into_iter().collect();
     if batches.is_empty() {
         return Ok(RecordBatch::new_empty(schema.clone()));
     }
@@ -611,10 +612,14 @@ mod tests {
             ],
         )
         .unwrap();
-        let new_batch = concat_batches(&schema, &[batch1, batch2]).unwrap();
+        let new_batch = concat_batches(&schema, [&batch1, &batch2]).unwrap();
         assert_eq!(new_batch.schema().as_ref(), schema.as_ref());
         assert_eq!(2, new_batch.num_columns());
         assert_eq!(4, new_batch.num_rows());
+        let new_batch_owned = concat_batches(&schema, &[batch1, batch2]).unwrap();
+        assert_eq!(new_batch_owned.schema().as_ref(), schema.as_ref());
+        assert_eq!(2, new_batch_owned.num_columns());
+        assert_eq!(4, new_batch_owned.num_rows());
     }
 
     #[test]
@@ -623,7 +628,7 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Utf8, false),
         ]));
-        let batch = concat_batches(&schema, &[]).unwrap();
+        let batch = concat_batches(&schema, []).unwrap();
         assert_eq!(batch.schema().as_ref(), schema.as_ref());
         assert_eq!(0, batch.num_rows());
     }
@@ -654,7 +659,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let error = concat_batches(&schema1, &[batch1, batch2]).unwrap_err();
+        let error = concat_batches(&schema1, [&batch1, &batch2]).unwrap_err();
         assert_eq!(
             error.to_string(),
             "Invalid argument error: batches[1] schema is different with argument schema.",
