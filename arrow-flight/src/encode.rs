@@ -586,6 +586,8 @@ mod tests {
         let batch =
             RecordBatch::try_from_iter(vec![("data", Arc::new(array) as _)]).unwrap();
 
+        // overage is much higher than ideal
+        // https://github.com/apache/arrow-rs/issues/3478
         verify_encoded_split(batch, 4304).await;
     }
 
@@ -619,7 +621,9 @@ mod tests {
         ])
         .unwrap();
 
-        // 5k over limit (which is 2x larger than limit of 5k) -- not great :(
+        // 5k over limit (which is 2x larger than limit of 5k)
+        // overage is much higher than ideal
+        // https://github.com/apache/arrow-rs/issues/3478
         verify_encoded_split(batch, 5800).await;
     }
 
@@ -651,6 +655,8 @@ mod tests {
         let batch =
             RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();
 
+        // overage is much higher than ideal
+        // https://github.com/apache/arrow-rs/issues/3478
         verify_encoded_split(batch, 3328).await;
     }
 
@@ -664,7 +670,8 @@ mod tests {
         let batch =
             RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();
 
-        // Almost twice as large as limit
+        // overage is much higher than ideal
+        // https://github.com/apache/arrow-rs/issues/3478
         verify_encoded_split(batch, 5280).await;
     }
 
@@ -691,6 +698,8 @@ mod tests {
         ])
         .unwrap();
 
+        // overage is much higher than ideal
+        // https://github.com/apache/arrow-rs/issues/3478
         verify_encoded_split(batch, 4128).await;
     }
 
@@ -764,7 +773,9 @@ mod tests {
             }
         }
 
-        // ensure that the specified overage is exactly the maxmium than necessary
+        // ensure that the specified overage is exactly the maxmium so
+        // that when the splitting logic improves, the tests must be
+        // updated to reflect the better logic
         assert_eq!(
             allowed_overage, max_overage_seen,
             "Specified overage was too high"
