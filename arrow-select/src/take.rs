@@ -690,26 +690,10 @@ where
 {
     // TODO: Some optimizations can be done here such as if it is
     // taking the whole list or a contiguous sublist
-    let (list_indices, offsets) =
+    let (list_indices, offsets, null_buf) =
         take_value_indices_from_list::<IndexType, OffsetType>(values, indices)?;
 
     let taken = take_impl::<OffsetType>(values.values().as_ref(), &list_indices, None)?;
-    // determine null count and null buffer, which are a function of `values` and `indices`
-    let mut null_count = 0;
-    let num_bytes = bit_util::ceil(indices.len(), 8);
-    let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
-    {
-        let null_slice = null_buf.as_slice_mut();
-        offsets[..].windows(2).enumerate().for_each(
-            |(i, window): (usize, &[OffsetType::Native])| {
-                if window[0] == window[1] {
-                    // offsets are equal, slot is null
-                    bit_util::unset_bit(null_slice, i);
-                    null_count += 1;
-                }
-            },
-        );
-    }
     let value_offsets = Buffer::from_slice_ref(&offsets);
     // create a new list with taken data and computed null information
     let list_data = ArrayDataBuilder::new(values.data_type().clone())
@@ -833,7 +817,14 @@ where
 fn take_value_indices_from_list<IndexType, OffsetType>(
     list: &GenericListArray<OffsetType::Native>,
     indices: &PrimitiveArray<IndexType>,
-) -> Result<(PrimitiveArray<OffsetType>, Vec<OffsetType::Native>), ArrowError>
+) -> Result<
+    (
+        PrimitiveArray<OffsetType>,
+        Vec<OffsetType::Native>,
+        MutableBuffer,
+    ),
+    ArrowError,
+>
 where
     IndexType: ArrowPrimitiveType,
     IndexType::Native: ToPrimitive,
@@ -849,6 +840,12 @@ where
     let mut current_offset = OffsetType::Native::zero();
     // add first offset
     new_offsets.push(OffsetType::Native::zero());
+
+    // Initialize null buffer
+    let num_bytes = bit_util::ceil(indices.len(), 8);
+    let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
+    let null_slice = null_buf.as_slice_mut();
+
     // compute the value indices, and set offsets accordingly
     for i in 0..indices.len() {
         if indices.is_valid(i) {
@@ -867,12 +864,20 @@ where
                 values.push(Some(curr));
                 curr += num::One::one();
             }
+            if !list.is_valid(ix) {
+                bit_util::unset_bit(null_slice, i);
+            }
         } else {
+            bit_util::unset_bit(null_slice, i);
             new_offsets.push(current_offset);
         }
     }
 
-    Ok((PrimitiveArray::<OffsetType>::from(values), new_offsets))
+    Ok((
+        PrimitiveArray::<OffsetType>::from(values),
+        new_offsets,
+        null_buf,
+    ))
 }
 
 /// Takes/filters a fixed size list array's inner data using the offsets of the list array.
@@ -2054,10 +2059,12 @@ mod tests {
         ]);
         let indices = UInt32Array::from(vec![2, 0]);
 
-        let (indexed, offsets) = take_value_indices_from_list(&list, &indices).unwrap();
+        let (indexed, offsets, null_buf) =
+            take_value_indices_from_list(&list, &indices).unwrap();
 
         assert_eq!(indexed, Int32Array::from(vec![5, 6, 7, 8, 9, 0, 1]));
         assert_eq!(offsets, vec![0, 5, 7]);
+        assert_eq!(null_buf.as_slice(), &[0b11111111]);
     }
 
     #[test]
@@ -2069,11 +2076,12 @@ mod tests {
         ]);
         let indices = UInt32Array::from(vec![2, 0]);
 
-        let (indexed, offsets) =
+        let (indexed, offsets, null_buf) =
             take_value_indices_from_list::<_, Int64Type>(&list, &indices).unwrap();
 
         assert_eq!(indexed, Int64Array::from(vec![5, 6, 7, 8, 9, 0, 1]));
         assert_eq!(offsets, vec![0, 5, 7]);
+        assert_eq!(null_buf.as_slice(), &[0b11111111]);
     }
 
     #[test]
