@@ -695,7 +695,7 @@ where
         take_value_indices_from_list::<IndexType, OffsetType>(values, indices)?;
 
     let taken = take_impl::<OffsetType>(values.values().as_ref(), &list_indices, None)?;
-    let value_offsets = Buffer::from_slice_ref(&offsets);
+    let value_offsets = Buffer::from_slice_ref(offsets);
     // create a new list with taken data and computed null information
     let list_data = ArrayDataBuilder::new(values.data_type().clone())
         .len(indices.len())
@@ -815,6 +815,7 @@ where
 /// Where a list array has indices `[0,2,5,10]`, taking indices of `[2,0]` returns
 /// an array of the indices `[5..10, 0..2]` and offsets `[0,5,7]` (5 elements and 2
 /// elements)
+#[allow(clippy::type_complexity)]
 fn take_value_indices_from_list<IndexType, OffsetType>(
     list: &GenericListArray<OffsetType::Native>,
     indices: &PrimitiveArray<IndexType>,
