@@ -1519,12 +1519,12 @@ mod tests {
 
     macro_rules! test_take_list {
         ($offset_type:ty, $list_data_type:ident, $list_array_type:ident) => {{
-            // Construct a value array, [[0,0,0], [-1,-2,-1], [2,3]]
+            // Construct a value array, [[0,0,0], [-1,-2,-1], [], [2,3]]
             let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 3])
                 .data()
                 .clone();
             // Construct offsets
-            let value_offsets: [$offset_type; 4] = [0, 3, 6, 8];
+            let value_offsets: [$offset_type; 5] = [0, 3, 6, 6, 8];
             let value_offsets = Buffer::from_slice_ref(&value_offsets);
             // Construct a list array from the above two
             let list_data_type = DataType::$list_data_type(Box::new(Field::new(
@@ -1533,30 +1533,28 @@ mod tests {
                 false,
             )));
             let list_data = ArrayData::builder(list_data_type.clone())
-                .len(3)
+                .len(4)
                 .add_buffer(value_offsets)
                 .add_child_data(value_data)
                 .build()
                 .unwrap();
             let list_array = $list_array_type::from(list_data);
 
-            // index returns: [[2,3], null, [-1,-2,-1], [2,3], [0,0,0]]
-            let index = UInt32Array::from(vec![Some(2), None, Some(1), Some(2), Some(0)]);
+            // index returns: [[2,3], null, [-1,-2,-1], [], [0,0,0]]
+            let index = UInt32Array::from(vec![Some(3), None, Some(1), Some(2), Some(0)]);
 
             let a = take(&list_array, &index, None).unwrap();
             let a: &$list_array_type =
                 a.as_any().downcast_ref::<$list_array_type>().unwrap();
 
             // construct a value array with expected results:
-            // [[2,3], null, [-1,-2,-1], [2,3], [0,0,0]]
+            // [[2,3], null, [-1,-2,-1], [], [0,0,0]]
             let expected_data = Int32Array::from(vec![
                 Some(2),
                 Some(3),
                 Some(-1),
                 Some(-2),
                 Some(-1),
-                Some(2),
-                Some(3),
                 Some(0),
                 Some(0),
                 Some(0),
@@ -1564,7 +1562,7 @@ mod tests {
             .data()
             .clone();
             // construct offsets
-            let expected_offsets: [$offset_type; 6] = [0, 2, 2, 5, 7, 10];
+            let expected_offsets: [$offset_type; 6] = [0, 2, 2, 5, 5, 8];
             let expected_offsets = Buffer::from_slice_ref(&expected_offsets);
             // construct list array from the two
             let expected_list_data = ArrayData::builder(list_data_type)
