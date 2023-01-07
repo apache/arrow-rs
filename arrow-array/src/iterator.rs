@@ -39,9 +39,9 @@ use crate::array::{
 /// there are more efficient ways to iterate over just the non-null indices, this functionality
 /// is provided by [`compute::try_unary`]
 ///
-/// [`PrimitiveArray`]: [crate::PrimitiveArray]
-/// [`compute::unary`]: [arrow::compute::unary]
-/// [`compute::try_unary`]: [arrow::compute::try_unary]
+/// [`PrimitiveArray`]: crate::PrimitiveArray
+/// [`compute::unary`]: arrow::compute::unary
+/// [`compute::try_unary`]: arrow::compute::try_unary
 #[derive(Debug)]
 pub struct ArrayIter<T: ArrayAccessor> {
     array: T,

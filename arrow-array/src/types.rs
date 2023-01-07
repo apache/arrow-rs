@@ -565,9 +565,9 @@ mod decimal {
 /// Implemented by [`Decimal128Type`] and [`Decimal256Type`] for [`Decimal128Array`]
 /// and [`Decimal256Array`] respectively
 ///
-/// [`DecimalArray`]: [crate::array::DecimalArray]
-/// [`Decimal128Array`]: [crate::array::Decimal128Array]
-/// [`Decimal256Array`]: [crate::array::Decimal256Array]
+/// [`DecimalArray`]: crate::array::DecimalArray
+/// [`Decimal128Array`]: crate::array::Decimal128Array
+/// [`Decimal256Array`]: crate::array::Decimal256Array
 pub trait DecimalType:
     'static + Send + Sync + ArrowPrimitiveType + decimal::DecimalTypeSealed
 {
