@@ -153,6 +153,12 @@ where
     })
 }
 
+macro_rules! cmp_dict_primitive_helper {
+    ($t:ty, $key_type_lhs:expr, $left:expr, $right:expr) => {
+        cmp_dict_primitive::<$t>($key_type_lhs, $left, $right)?
+    };
+}
+
 /// returns a comparison function that compares two values at two different positions
 /// between the two arrays.
 /// The arrays' types must be equal.
@@ -259,89 +265,8 @@ pub fn build_compare(
             }
 
             let key_type_lhs = key_type_lhs.as_ref();
-
-            match value_type_lhs.as_ref() {
-                Int8 => cmp_dict_primitive::<Int8Type>(key_type_lhs, left, right)?,
-                Int16 => cmp_dict_primitive::<Int16Type>(key_type_lhs, left, right)?,
-                Int32 => cmp_dict_primitive::<Int32Type>(key_type_lhs, left, right)?,
-                Int64 => cmp_dict_primitive::<Int64Type>(key_type_lhs, left, right)?,
-                UInt8 => cmp_dict_primitive::<UInt8Type>(key_type_lhs, left, right)?,
-                UInt16 => cmp_dict_primitive::<UInt16Type>(key_type_lhs, left, right)?,
-                UInt32 => cmp_dict_primitive::<UInt32Type>(key_type_lhs, left, right)?,
-                UInt64 => cmp_dict_primitive::<UInt64Type>(key_type_lhs, left, right)?,
-                Float32 => cmp_dict_primitive::<Float32Type>(key_type_lhs, left, right)?,
-                Float64 => cmp_dict_primitive::<Float64Type>(key_type_lhs, left, right)?,
-                Decimal128(_, _) => {
-                    cmp_dict_primitive::<Decimal128Type>(key_type_lhs, left, right)?
-                }
-                Decimal256(_, _) => {
-                    cmp_dict_primitive::<Decimal256Type>(key_type_lhs, left, right)?
-                }
-                Date32 => cmp_dict_primitive::<Date32Type>(key_type_lhs, left, right)?,
-                Date64 => cmp_dict_primitive::<Date64Type>(key_type_lhs, left, right)?,
-                Time32(Second) => {
-                    cmp_dict_primitive::<Time32SecondType>(key_type_lhs, left, right)?
-                }
-                Time32(Millisecond) => cmp_dict_primitive::<Time32MillisecondType>(
-                    key_type_lhs,
-                    left,
-                    right,
-                )?,
-                Time64(Microsecond) => cmp_dict_primitive::<Time64MicrosecondType>(
-                    key_type_lhs,
-                    left,
-                    right,
-                )?,
-                Time64(Nanosecond) => {
-                    cmp_dict_primitive::<Time64NanosecondType>(key_type_lhs, left, right)?
-                }
-                Timestamp(Second, _) => {
-                    cmp_dict_primitive::<TimestampSecondType>(key_type_lhs, left, right)?
-                }
-                Timestamp(Millisecond, _) => cmp_dict_primitive::<
-                    TimestampMillisecondType,
-                >(key_type_lhs, left, right)?,
-                Timestamp(Microsecond, _) => cmp_dict_primitive::<
-                    TimestampMicrosecondType,
-                >(key_type_lhs, left, right)?,
-                Timestamp(Nanosecond, _) => {
-                    cmp_dict_primitive::<TimestampNanosecondType>(
-                        key_type_lhs,
-                        left,
-                        right,
-                    )?
-                }
-                Interval(YearMonth) => cmp_dict_primitive::<IntervalYearMonthType>(
-                    key_type_lhs,
-                    left,
-                    right,
-                )?,
-                Interval(DayTime) => {
-                    cmp_dict_primitive::<IntervalDayTimeType>(key_type_lhs, left, right)?
-                }
-                Interval(MonthDayNano) => cmp_dict_primitive::<IntervalMonthDayNanoType>(
-                    key_type_lhs,
-                    left,
-                    right,
-                )?,
-                Duration(Second) => {
-                    cmp_dict_primitive::<DurationSecondType>(key_type_lhs, left, right)?
-                }
-                Duration(Millisecond) => cmp_dict_primitive::<DurationMillisecondType>(
-                    key_type_lhs,
-                    left,
-                    right,
-                )?,
-                Duration(Microsecond) => cmp_dict_primitive::<DurationMicrosecondType>(
-                    key_type_lhs,
-                    left,
-                    right,
-                )?,
-                Duration(Nanosecond) => cmp_dict_primitive::<DurationNanosecondType>(
-                    key_type_lhs,
-                    left,
-                    right,
-                )?,
+            downcast_primitive! {
+                value_type_lhs.as_ref() => (cmp_dict_primitive_helper, key_type_lhs, left, right),
                 Utf8 => match key_type_lhs {
                     UInt8 => compare_dict_string::<UInt8Type>(left, right),
                     UInt16 => compare_dict_string::<UInt16Type>(left, right),
