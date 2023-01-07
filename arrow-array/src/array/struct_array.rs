@@ -20,7 +20,7 @@ use arrow_buffer::buffer::buffer_bin_or;
 use arrow_buffer::Buffer;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
-use std::any::Any;
+use std::{any::Any, ops::Index};
 
 /// A nested array type where each child (called *field*) is represented by a separate
 /// array.
@@ -296,6 +296,23 @@ impl From<(Vec<(Field, ArrayRef)>, Buffer)> for StructArray {
     }
 }
 
+impl Index<&str> for StructArray {
+    type Output = ArrayRef;
+
+    /// Get a reference to a column's array by name.
+    ///
+    /// Note: A schema can currently have duplicate field names, in which case
+    /// the first field will always be selected.
+    /// This issue will be addressed in [ARROW-11178](https://issues.apache.org/jira/browse/ARROW-11178)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the name is not in the schema.
+    fn index(&self, name: &str) -> &Self::Output {
+        self.column_by_name(name).unwrap()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,6 +367,26 @@ mod tests {
         assert_eq!(4, struct_array.len());
         assert_eq!(0, struct_array.null_count());
         assert_eq!(0, struct_array.offset());
+    }
+
+    /// validates that struct can be accessed using `column_name` as index i.e. `struct_array["column_name"]`.
+    #[test]
+    fn test_struct_array_index_access() {
+        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
+        let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
+
+        let struct_array = StructArray::from(vec![
+            (
+                Field::new("b", DataType::Boolean, false),
+                boolean.clone() as ArrayRef,
+            ),
+            (
+                Field::new("c", DataType::Int32, false),
+                int.clone() as ArrayRef,
+            ),
+        ]);
+        assert_eq!(struct_array["b"].as_ref(), boolean.as_ref());
+        assert_eq!(struct_array["c"].as_ref(), int.as_ref());
     }
 
     /// validates that the in-memory representation follows [the spec](https://arrow.apache.org/docs/format/Columnar.html#struct-layout)
