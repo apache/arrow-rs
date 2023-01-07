@@ -193,6 +193,12 @@ pub fn build_compare(
         (Int64, Int64) => compare_primitives::<Int64Type>(left, right),
         (Float32, Float32) => compare_float::<Float32Type>(left, right),
         (Float64, Float64) => compare_float::<Float64Type>(left, right),
+        (Decimal128(_, _), Decimal128(_, _)) => {
+            compare_primitives::<Decimal128Type>(left, right)
+        }
+        (Decimal256(_, _), Decimal256(_, _)) => {
+            compare_primitives::<Decimal256Type>(left, right)
+        }
         (Date32, Date32) => compare_primitives::<Date32Type>(left, right),
         (Date64, Date64) => compare_primitives::<Date64Type>(left, right),
         (Time32(Second), Time32(Second)) => {
@@ -265,6 +271,12 @@ pub fn build_compare(
                 UInt64 => cmp_dict_primitive::<UInt64Type>(key_type_lhs, left, right)?,
                 Float32 => cmp_dict_primitive::<Float32Type>(key_type_lhs, left, right)?,
                 Float64 => cmp_dict_primitive::<Float64Type>(key_type_lhs, left, right)?,
+                Decimal128(_, _) => {
+                    cmp_dict_primitive::<Decimal128Type>(key_type_lhs, left, right)?
+                }
+                Decimal256(_, _) => {
+                    cmp_dict_primitive::<Decimal256Type>(key_type_lhs, left, right)?
+                }
                 Date32 => cmp_dict_primitive::<Date32Type>(key_type_lhs, left, right)?,
                 Date64 => cmp_dict_primitive::<Date64Type>(key_type_lhs, left, right)?,
                 Time32(Second) => {
@@ -354,11 +366,6 @@ pub fn build_compare(
                 }
             }
         }
-        (Decimal128(_, _), Decimal128(_, _)) => {
-            let left: Decimal128Array = Decimal128Array::from(left.data().clone());
-            let right: Decimal128Array = Decimal128Array::from(right.data().clone());
-            Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
-        }
         (FixedSizeBinary(_), FixedSizeBinary(_)) => {
             let left: FixedSizeBinaryArray =
                 FixedSizeBinaryArray::from(left.data().clone());
@@ -380,6 +387,7 @@ pub fn build_compare(
 pub mod tests {
     use super::*;
     use arrow_array::{FixedSizeBinaryArray, Float64Array, Int32Array};
+    use arrow_buffer::i256;
     use std::cmp::Ordering;
 
     #[test]
@@ -458,6 +466,23 @@ pub mod tests {
             .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap();
+
+        let cmp = build_compare(&array, &array).unwrap();
+        assert_eq!(Ordering::Less, (cmp)(1, 0));
+        assert_eq!(Ordering::Greater, (cmp)(0, 2));
+    }
+
+    #[test]
+    fn test_decimali256() {
+        let array = vec![
+            Some(i256::from_i128(5_i128)),
+            Some(i256::from_i128(2_i128)),
+            Some(i256::from_i128(3_i128)),
+        ]
+        .into_iter()
+        .collect::<Decimal256Array>()
+        .with_precision_and_scale(53, 6)
+        .unwrap();
 
         let cmp = build_compare(&array, &array).unwrap();
         assert_eq!(Ordering::Less, (cmp)(1, 0));
@@ -573,6 +598,54 @@ pub mod tests {
         let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
 
         let values = DurationSecondArray::from(vec![2, 3, 4, 5]);
+        let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
+        let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let cmp = build_compare(&array1, &array2).unwrap();
+
+        assert_eq!(Ordering::Less, (cmp)(0, 0));
+        assert_eq!(Ordering::Less, (cmp)(0, 3));
+        assert_eq!(Ordering::Equal, (cmp)(3, 3));
+        assert_eq!(Ordering::Greater, (cmp)(3, 1));
+        assert_eq!(Ordering::Greater, (cmp)(3, 2));
+    }
+
+    #[test]
+    fn test_decimal_dict() {
+        let values = Decimal128Array::from(vec![1, 0, 2, 5]);
+        let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
+        let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let values = Decimal128Array::from(vec![2, 3, 4, 5]);
+        let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
+        let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let cmp = build_compare(&array1, &array2).unwrap();
+
+        assert_eq!(Ordering::Less, (cmp)(0, 0));
+        assert_eq!(Ordering::Less, (cmp)(0, 3));
+        assert_eq!(Ordering::Equal, (cmp)(3, 3));
+        assert_eq!(Ordering::Greater, (cmp)(3, 1));
+        assert_eq!(Ordering::Greater, (cmp)(3, 2));
+    }
+
+    #[test]
+    fn test_decimal256_dict() {
+        let values = Decimal256Array::from(vec![
+            i256::from_i128(1),
+            i256::from_i128(0),
+            i256::from_i128(2),
+            i256::from_i128(5),
+        ]);
+        let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
+        let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let values = Decimal256Array::from(vec![
+            i256::from_i128(2),
+            i256::from_i128(3),
+            i256::from_i128(4),
+            i256::from_i128(5),
+        ]);
         let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
         let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
 
