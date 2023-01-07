@@ -40,8 +40,8 @@ use crate::array::{
 /// is provided by [`compute::try_unary`]
 ///
 /// [`PrimitiveArray`]: crate::PrimitiveArray
-/// [`compute::unary`]: arrow::compute::unary
-/// [`compute::try_unary`]: arrow::compute::try_unary
+/// [`compute::unary`]: https://docs.rs/arrow/latest/arrow/compute/fn.unary.html
+/// [`compute::try_unary`]: https://docs.rs/arrow/latest/arrow/compute/fn.try_unary.html
 #[derive(Debug)]
 pub struct ArrayIter<T: ArrayAccessor> {
     array: T,
