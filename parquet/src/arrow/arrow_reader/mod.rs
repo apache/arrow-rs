@@ -50,7 +50,7 @@ pub use selection::{RowSelection, RowSelector};
 /// * For a synchronous API - [`ParquetRecordBatchReaderBuilder`]
 /// * For an asynchronous API - [`ParquetRecordBatchStreamBuilder`]
 ///
-/// [`ParquetRecordBatchStreamBuilder`]: [crate::arrow::async_reader::ParquetRecordBatchStreamBuilder]
+/// [`ParquetRecordBatchStreamBuilder`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder
 pub struct ArrowReaderBuilder<T> {
     pub(crate) input: T,
 
@@ -150,7 +150,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// An example use case of this would be applying a selection determined by
     /// evaluating predicates against the [`Index`]
     ///
-    /// [`Index`]: [parquet::file::page_index::index::Index]
+    /// [`Index`]: crate::file::page_index::index::Index
     pub fn with_row_selection(self, selection: RowSelection) -> Self {
         Self {
             selection: Some(selection),
@@ -238,7 +238,7 @@ impl ArrowReaderOptions {
     /// Set this true to enable decoding of the [PageIndex] if present. This can be used
     /// to push down predicates to the parquet scan, potentially eliminating unnecessary IO
     ///
-    /// [PageIndex]: [https://github.com/apache/parquet-format/blob/master/PageIndex.md]
+    /// [PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_page_index(self, page_index: bool) -> Self {
         Self { page_index, ..self }
     }
