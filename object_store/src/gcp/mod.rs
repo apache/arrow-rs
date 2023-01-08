@@ -1446,4 +1446,41 @@ mod test {
         let builder = GoogleCloudStorageBuilder::new().try_with_options(&options);
         assert!(builder.is_err());
     }
+
+    #[test]
+    fn gcs_test_config_aliases() {
+        // Service account path
+        for alias in [
+            "google_service_account",
+            "service_account",
+            "google_service_account_path",
+            "service_account_path",
+        ] {
+            let builder = GoogleCloudStorageBuilder::new()
+                .try_with_options([(alias, "/fake/path.json")])
+                .unwrap();
+            assert_eq!("/fake/path.json", builder.service_account_path.unwrap());
+        }
+
+        // Service account key
+        for alias in ["google_service_account_key", "service_account_key"] {
+            let builder = GoogleCloudStorageBuilder::new()
+                .try_with_options([(alias, FAKE_KEY)])
+                .unwrap();
+            assert_eq!(FAKE_KEY, builder.service_account_key.unwrap());
+        }
+
+        // Bucket name
+        for alias in [
+            "google_bucket",
+            "google_bucket_name",
+            "bucket",
+            "bucket_name",
+        ] {
+            let builder = GoogleCloudStorageBuilder::new()
+                .try_with_options([(alias, "fake_bucket")])
+                .unwrap();
+            assert_eq!("fake_bucket", builder.bucket_name.unwrap());
+        }
+    }
 }
