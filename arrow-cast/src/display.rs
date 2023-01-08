@@ -74,13 +74,20 @@ macro_rules! make_string_interval_day_time {
         let secs = secs - (mins * 60);
         let mins = mins - (hours * 60);
 
+        let secs_sign = if secs < 0 || secs == 0 && milliseconds_part < 0 {
+            "-"
+        } else {
+            ""
+        };
+
         Ok(format!(
-            "0 years 0 mons {} days {} hours {} mins {}.{:03} secs",
+            "0 years 0 mons {} days {} hours {} mins {}{}.{:03} secs",
             days_parts,
             hours,
             mins,
-            secs,
-            (milliseconds_part % 1000),
+            secs_sign,
+            secs.abs(),
+            (milliseconds_part % 1000).abs(),
         ))
     }};
 }
@@ -106,14 +113,21 @@ macro_rules! make_string_interval_month_day_nano {
         let secs = secs - (mins * 60);
         let mins = mins - (hours * 60);
 
+        let secs_sign = if secs < 0 || secs == 0 && nanoseconds_part < 0 {
+            "-"
+        } else {
+            ""
+        };
+
         Ok(format!(
-            "0 years {} mons {} days {} hours {} mins {}.{:09} secs",
+            "0 years {} mons {} days {} hours {} mins {}{}.{:09} secs",
             months_part,
             days_part,
             hours,
             mins,
-            secs,
-            (nanoseconds_part % 1000000000),
+            secs_sign,
+            secs.abs(),
+            (nanoseconds_part % 1000000000).abs(),
         ))
     }};
 }
