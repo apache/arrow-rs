@@ -121,6 +121,13 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
         return Ok(ts.timestamp_nanos());
     }
 
+    // without a timezone specifier as a local time, using ' ' as a
+    // separator, no time mentioned
+    // Example: 2020-09-08
+    if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d") {
+        return Ok(ts.timestamp_nanos());
+    }
+
     // Note we don't pass along the error message from the underlying
     // chrono parsing because we tried several different format
     // strings and we don't know which the user was trying to
