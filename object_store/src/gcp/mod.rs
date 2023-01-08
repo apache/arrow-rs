@@ -841,6 +841,8 @@ pub enum GoogleConfigKey {
     /// Supported keys:
     /// - `google_service_account`
     /// - `service_account`
+    /// - `google_service_account_path`
+    /// - `service_account_path`
     ServiceAccount,
 
     /// The serialized service account key.
@@ -877,7 +879,10 @@ impl FromStr for GoogleConfigKey {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "google_service_account" | "service_account" => Ok(Self::ServiceAccount),
+            "google_service_account"
+            | "service_account"
+            | "google_service_account_path"
+            | "service_account_path" => Ok(Self::ServiceAccount),
             "google_service_account_key" | "service_account_key" => {
                 Ok(Self::ServiceAccountKey)
             }
@@ -912,13 +917,17 @@ impl GoogleCloudStorageBuilder {
     ///
     /// Variables extracted from environment:
     /// * GOOGLE_SERVICE_ACCOUNT: location of service account file
+    /// * GOOGLE_SERVICE_ACCOUNT_PATH: (alias) location of service account file
     /// * SERVICE_ACCOUNT: (alias) location of service account file
+    /// * GOOGLE_SERVICE_ACCOUNT_KEY: JSON serialized service account key
+    /// * GOOGLE_BUCKET: bucket name
+    /// * GOOGLE_BUCKET_NAME: (alias) bucket name
     ///
     /// # Example
     /// ```
     /// use object_store::gcp::GoogleCloudStorageBuilder;
     ///
-    /// let azure = GoogleCloudStorageBuilder::from_env()
+    /// let gcs = GoogleCloudStorageBuilder::from_env()
     ///     .with_bucket_name("foo")
     ///     .build();
     /// ```
