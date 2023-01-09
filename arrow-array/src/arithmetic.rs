@@ -363,7 +363,13 @@ macro_rules! native_type_float_op {
 
             #[inline]
             fn compare(self, rhs: Self) -> Ordering {
-                <$t>::total_cmp(&self, &rhs)
+                if self.abs() == $zero && rhs.abs() == $zero {
+                    // `total_cmp` treats positive zero and negative zero as different.
+                    // But for computation system, it usually treats them as equal.
+                    Ordering::Equal
+                } else {
+                    <$t>::total_cmp(&self, &rhs)
+                }
             }
 
             #[inline]
