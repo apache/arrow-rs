@@ -18,16 +18,12 @@
 use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
 use crate::RetryConfig;
-use base64::engine::fast_portable::FastPortable;
+use base64::engine::general_purpose;
+use base64::Engine;
 use reqwest::{Client, Method};
 use ring::signature::RsaKeyPair;
 use snafu::{ResultExt, Snafu};
 use std::time::{Duration, Instant};
-
-const URL_SAFE_NO_PAD: FastPortable = FastPortable::from(
-    &base64::alphabet::URL_SAFE,
-    base64::engine::fast_portable::NO_PAD,
-);
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -172,7 +168,7 @@ impl OAuthProvider {
             )
             .context(SignSnafu)?;
 
-        let signature = base64::encode_engine(&sig_bytes, &URL_SAFE_NO_PAD);
+        let signature = general_purpose::URL_SAFE_NO_PAD.encode(sig_bytes);
         let jwt = [message, signature].join(".");
 
         let body = [
@@ -224,5 +220,5 @@ fn decode_first_rsa_key(private_key_pem: String) -> Result<RsaKeyPair> {
 
 fn b64_encode_obj<T: serde::Serialize>(obj: &T) -> Result<String> {
     let string = serde_json::to_string(obj).context(EncodeSnafu)?;
-    Ok(base64::encode_engine(string, &URL_SAFE_NO_PAD))
+    Ok(general_purpose::URL_SAFE_NO_PAD.encode(string))
 }

@@ -33,7 +33,7 @@ arrow-buffer = { version = "30.0.0", path = "../arrow-buffer" }
 arrow-cast = { version = "30.0.0", path = "../arrow-cast" }
 arrow-ipc = { version = "30.0.0", path = "../arrow-ipc" }
 arrow-schema = { version = "30.0.0", path = "../arrow-schema" }
-base64 = { version = "0.20", default-features = false, features = ["std"] }
+base64 = { version = "0.21", default-features = false, features = ["std"] }
 tonic = { version = "0.8", default-features = false, features = ["transport", "codegen", "prost"] }
 bytes = { version = "1", default-features = false }
 prost = { version = "0.11", default-features = false }

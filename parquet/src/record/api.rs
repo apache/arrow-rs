@@ -17,6 +17,10 @@
 
 //! Contains Row enum that is used to represent record in Rust.
 
+#[cfg(any(feature = "json", test))]
+use base64::engine::general_purpose;
+#[cfg(any(feature = "json", test))]
+use base64::Engine;
 use std::fmt;
 
 use chrono::{TimeZone, Utc};
@@ -688,7 +692,7 @@ impl Field {
                 .unwrap_or(Value::Null),
             Field::Decimal(n) => Value::String(convert_decimal_to_string(n)),
             Field::Str(s) => Value::String(s.to_owned()),
-            Field::Bytes(b) => Value::String(base64::encode(b.data())),
+            Field::Bytes(b) => Value::String(general_purpose::STANDARD.encode(b.data())),
             Field::Date(d) => Value::String(convert_date_to_string(*d)),
             Field::TimestampMillis(ts) => {
                 Value::String(convert_timestamp_millis_to_string(*ts))
