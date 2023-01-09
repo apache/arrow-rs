@@ -35,6 +35,7 @@
 
 use std::fs::File;
 
+use arrow_array::RecordBatchReader;
 use clap::{builder::PossibleValue, Parser, ValueEnum};
 use parquet::{
     arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
@@ -276,30 +277,17 @@ fn main() {
             writer_properties_builder.set_writer_version(value.into());
     }
     let writer_properties = writer_properties_builder.build();
-    let mut parquet_writer = None;
+    let mut parquet_writer = ArrowWriter::try_new(
+        File::create(&args.output).expect("Unable to open output file"),
+        parquet_reader.schema(),
+        Some(writer_properties),
+    )
+    .expect("create arrow writer");
 
     for maybe_batch in parquet_reader {
         let batch = maybe_batch.expect("reading batch");
-        if parquet_writer.is_none() {
-            parquet_writer = Some(
-                ArrowWriter::try_new(
-                    File::create(&args.output).expect("Unable to open output file"),
-                    batch.schema(),
-                    Some(writer_properties.clone()),
-                )
-                .unwrap(),
-            );
-        }
-
-        parquet_writer
-            .as_mut()
-            .expect("initialized")
-            .write(&batch)
-            .expect("writing data");
+        parquet_writer.write(&batch).expect("writing data");
     }
 
-    parquet_writer
-        .expect("at least one batch")
-        .close()
-        .expect("finalizing file");
+    parquet_writer.close().expect("finalizing file");
 }
