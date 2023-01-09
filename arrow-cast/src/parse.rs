@@ -37,6 +37,7 @@ use chrono::prelude::*;
 /// * `1997-01-31T09:26:56.123`         # close to RCF3339 but no timezone offset specified
 /// * `1997-01-31 09:26:56.123`         # close to RCF3339 but uses a space and no timezone offset
 /// * `1997-01-31 09:26:56`             # close to RCF3339, no fractional seconds
+/// * `1997-01-31`                      # close to RCF3339, only date no time
 //
 /// Internally, this function uses the `chrono` library for the
 /// datetime parsing
@@ -119,6 +120,14 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     // Example: 2020-09-08 13:42:29
     if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
         return Ok(ts.timestamp_nanos());
+    }
+
+    // without a timezone specifier as a local time, only date
+    // Example: 2020-09-08
+    if let Ok(dt) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        if let Some(ts) = dt.and_hms_opt(0, 0, 0) {
+            return Ok(ts.timestamp_nanos());
+        }
     }
 
     // Note we don't pass along the error message from the underlying
@@ -494,6 +503,19 @@ mod tests {
             naive_datetime_whole_secs.timestamp_nanos(),
             parse_timestamp("2020-09-08 13:42:29").unwrap()
         );
+
+        // ensure without time work
+        // no time, should be the nano second at
+        // 2020-09-08 0:0:0
+        let naive_datetime_no_time = NaiveDateTime::new(
+            NaiveDate::from_ymd_opt(2020, 9, 8).unwrap(),
+            NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+        );
+
+        assert_eq!(
+            naive_datetime_no_time.timestamp_nanos(),
+            parse_timestamp("2020-09-08").unwrap()
+        )
     }
 
     #[test]
