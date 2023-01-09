@@ -5876,6 +5876,22 @@ mod tests {
         assert_eq!(e, r);
     }
 
+    #[test]
+    fn test_floating_zeros() {
+        let a = Float32Array::from(vec![0.0_f32, -0.0]);
+        let b = Float32Array::from(vec![-0.0_f32, 0.0]);
+
+        let result = eq_dyn(&a, &b).unwrap();
+        let excepted = BooleanArray::from(vec![true, true]);
+        assert_eq!(excepted, result);
+
+        let result = eq_dyn_scalar(&a, 0.0).unwrap();
+        assert_eq!(excepted, result);
+
+        let result = eq_dyn_scalar(&a, -0.0).unwrap();
+        assert_eq!(excepted, result);
+    }
+
     #[derive(Debug)]
     struct ToType {}
 
