@@ -463,6 +463,7 @@ impl ArrayData {
         size
     }
 
+    /// Returns the total number of the bytes of memory occupied by the buffers by this slice of [ArrayData]
     pub fn get_slice_memory_size(&self) -> Result<usize, ArrowError> {
         let mut result: usize = 0;
         let layout = layout(&self.data_type);
@@ -470,10 +471,12 @@ impl ArrayData {
         for spec in layout.buffers.iter() {
             match spec {
                 BufferSpec::FixedWidth { byte_width } => {
-                    let buffer_size = self
-                        .len
-                        .checked_mul(*byte_width)
-                        .expect("integer overflow computing buffer size");
+                    let buffer_size =
+                        self.len.checked_mul(*byte_width).ok_or_else(|| {
+                            ArrowError::InvalidArgumentError(
+                                "Integer overflow computing buffer size".to_string(),
+                            )
+                        })?;
                     result += buffer_size;
                 }
                 BufferSpec::VariableWidth => {
