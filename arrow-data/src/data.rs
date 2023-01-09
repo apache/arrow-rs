@@ -489,7 +489,7 @@ impl ArrayData {
                         }
                         _ => {
                             return Err(ArrowError::InvalidArgumentError(format!(
-                            "Invalid data type for VariableWidth buffer. Expected Utg8, LargeUtf8, Binary or LargeBinary. Got {}",
+                            "Invalid data type for VariableWidth buffer. Expected Utf8, LargeUtf8, Binary or LargeBinary. Got {}",
                             self.data_type
                             )))
                         }
