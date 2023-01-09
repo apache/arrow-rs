@@ -1235,34 +1235,10 @@ fn write_array_data(
         // Bools are special because the payload (= 1 bit) is smaller than the physical container elements (= bytes).
         // The array data may not start at the physical boundary of the underlying buffer, so we need to shift bits around.
         assert!(array_data.buffers().len() == 1);
+
         let buffer = &array_data.buffers()[0];
-
-        let byte_offset = array_data.offset() / 8;
-        let byte_len = array_data.len() / 8 + usize::from(array_data.len() % 8 != 0);
-        let bslice = &buffer.as_slice()[byte_offset..(byte_offset + byte_len)];
-        let bit_offset = array_data.offset() % 8;
-        let bslice_shifted = if bit_offset != 0 {
-            let mut bslice_shifted = Vec::<u8>::with_capacity(bslice.len());
-            let mut prev = 0u8;
-            for (i, b) in bslice.iter().enumerate() {
-                // first byte is special: we throw away `bit_offset` bits
-                if i > 0 {
-                    // use `bit_offset` bits from the previous element and `8 - bit_offset` bits from the current one
-                    bslice_shifted.push((b << (8 - bit_offset)) | prev);
-                }
-
-                // throw `bit_offset` lower bits and keep the rest
-                prev = b >> bit_offset;
-            }
-            bslice_shifted.push(prev);
-            Some(bslice_shifted)
-        } else {
-            // no need to copy the data
-            None
-        };
-        let bslice = bslice_shifted.as_deref().unwrap_or(bslice);
-
-        offset = write_buffer(bslice, buffers, arrow_data, offset, compression_codec)?;
+        let buffer = buffer.bit_slice(array_data.offset(), array_data.len());
+        offset = write_buffer(&buffer, buffers, arrow_data, offset, compression_codec)?;
     } else {
         for buffer in array_data.buffers() {
             offset =
