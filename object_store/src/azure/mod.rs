@@ -965,10 +965,8 @@ mod tests {
 
     #[tokio::test]
     async fn azure_blob_test() {
-        let use_emulator = env::var("AZURE_USE_EMULATOR").is_ok();
         let integration = maybe_skip_integration!().build().unwrap();
-        // Azurite doesn't support listing with spaces - https://github.com/localstack/localstack/issues/6328
-        put_get_delete_list_opts(&integration, use_emulator).await;
+        put_get_delete_list_opts(&integration, false).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
