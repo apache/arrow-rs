@@ -43,7 +43,7 @@ url = "2.2"
 walkdir = "2"
 
 # Cloud storage support
-base64 = { version = "0.20", default-features = false, features = ["std"], optional = true }
+base64 = { version = "0.21", default-features = false, features = ["std"], optional = true }
 quick-xml = { version = "0.27.0", features = ["serialize"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, optional = true }
