@@ -82,7 +82,7 @@ fn compare_dict_primitive<K, V>(left: &dyn Array, right: &dyn Array) -> DynCompa
 where
     K: ArrowDictionaryKeyType,
     V: ArrowPrimitiveType,
-    V::Native: Ord,
+    V::Native: ArrowNativeTypeOp,
 {
     let left = left.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
     let right = right.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
@@ -99,7 +99,7 @@ where
         let key_right = right_keys.value(j).as_usize();
         let left = left_values.value(key_left);
         let right = right_values.value(key_right);
-        left.cmp(&right)
+        left.compare(right)
     })
 }
 
@@ -131,7 +131,7 @@ fn cmp_dict_primitive<VT>(
 ) -> Result<DynComparator, ArrowError>
 where
     VT: ArrowPrimitiveType,
-    VT::Native: Ord,
+    VT::Native: ArrowNativeTypeOp,
 {
     use DataType::*;
 
@@ -263,6 +263,73 @@ pub fn build_compare(
                 UInt16 => cmp_dict_primitive::<UInt16Type>(key_type_lhs, left, right)?,
                 UInt32 => cmp_dict_primitive::<UInt32Type>(key_type_lhs, left, right)?,
                 UInt64 => cmp_dict_primitive::<UInt64Type>(key_type_lhs, left, right)?,
+                Float32 => cmp_dict_primitive::<Float32Type>(key_type_lhs, left, right)?,
+                Float64 => cmp_dict_primitive::<Float64Type>(key_type_lhs, left, right)?,
+                Date32 => cmp_dict_primitive::<Date32Type>(key_type_lhs, left, right)?,
+                Date64 => cmp_dict_primitive::<Date64Type>(key_type_lhs, left, right)?,
+                Time32(Second) => {
+                    cmp_dict_primitive::<Time32SecondType>(key_type_lhs, left, right)?
+                }
+                Time32(Millisecond) => cmp_dict_primitive::<Time32MillisecondType>(
+                    key_type_lhs,
+                    left,
+                    right,
+                )?,
+                Time64(Microsecond) => cmp_dict_primitive::<Time64MicrosecondType>(
+                    key_type_lhs,
+                    left,
+                    right,
+                )?,
+                Time64(Nanosecond) => {
+                    cmp_dict_primitive::<Time64NanosecondType>(key_type_lhs, left, right)?
+                }
+                Timestamp(Second, _) => {
+                    cmp_dict_primitive::<TimestampSecondType>(key_type_lhs, left, right)?
+                }
+                Timestamp(Millisecond, _) => cmp_dict_primitive::<
+                    TimestampMillisecondType,
+                >(key_type_lhs, left, right)?,
+                Timestamp(Microsecond, _) => cmp_dict_primitive::<
+                    TimestampMicrosecondType,
+                >(key_type_lhs, left, right)?,
+                Timestamp(Nanosecond, _) => {
+                    cmp_dict_primitive::<TimestampNanosecondType>(
+                        key_type_lhs,
+                        left,
+                        right,
+                    )?
+                }
+                Interval(YearMonth) => cmp_dict_primitive::<IntervalYearMonthType>(
+                    key_type_lhs,
+                    left,
+                    right,
+                )?,
+                Interval(DayTime) => {
+                    cmp_dict_primitive::<IntervalDayTimeType>(key_type_lhs, left, right)?
+                }
+                Interval(MonthDayNano) => cmp_dict_primitive::<IntervalMonthDayNanoType>(
+                    key_type_lhs,
+                    left,
+                    right,
+                )?,
+                Duration(Second) => {
+                    cmp_dict_primitive::<DurationSecondType>(key_type_lhs, left, right)?
+                }
+                Duration(Millisecond) => cmp_dict_primitive::<DurationMillisecondType>(
+                    key_type_lhs,
+                    left,
+                    right,
+                )?,
+                Duration(Microsecond) => cmp_dict_primitive::<DurationMicrosecondType>(
+                    key_type_lhs,
+                    left,
+                    right,
+                )?,
+                Duration(Nanosecond) => cmp_dict_primitive::<DurationNanosecondType>(
+                    key_type_lhs,
+                    left,
+                    right,
+                )?,
                 Utf8 => match key_type_lhs {
                     UInt8 => compare_dict_string::<UInt8Type>(left, right),
                     UInt16 => compare_dict_string::<UInt16Type>(left, right),
@@ -430,6 +497,82 @@ pub mod tests {
         let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
 
         let values = Int32Array::from(vec![2_i32, 3, 4, 5]);
+        let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
+        let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let cmp = build_compare(&array1, &array2).unwrap();
+
+        assert_eq!(Ordering::Less, (cmp)(0, 0));
+        assert_eq!(Ordering::Less, (cmp)(0, 3));
+        assert_eq!(Ordering::Equal, (cmp)(3, 3));
+        assert_eq!(Ordering::Greater, (cmp)(3, 1));
+        assert_eq!(Ordering::Greater, (cmp)(3, 2));
+    }
+
+    #[test]
+    fn test_float_dict() {
+        let values = Float32Array::from(vec![1.0, 0.5, 2.1, 5.5]);
+        let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
+        let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let values = Float32Array::from(vec![1.2, 3.2, 4.0, 5.5]);
+        let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
+        let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let cmp = build_compare(&array1, &array2).unwrap();
+
+        assert_eq!(Ordering::Less, (cmp)(0, 0));
+        assert_eq!(Ordering::Less, (cmp)(0, 3));
+        assert_eq!(Ordering::Equal, (cmp)(3, 3));
+        assert_eq!(Ordering::Greater, (cmp)(3, 1));
+        assert_eq!(Ordering::Greater, (cmp)(3, 2));
+    }
+
+    #[test]
+    fn test_timestamp_dict() {
+        let values = TimestampSecondArray::from(vec![1, 0, 2, 5]);
+        let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
+        let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let values = TimestampSecondArray::from(vec![2, 3, 4, 5]);
+        let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
+        let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let cmp = build_compare(&array1, &array2).unwrap();
+
+        assert_eq!(Ordering::Less, (cmp)(0, 0));
+        assert_eq!(Ordering::Less, (cmp)(0, 3));
+        assert_eq!(Ordering::Equal, (cmp)(3, 3));
+        assert_eq!(Ordering::Greater, (cmp)(3, 1));
+        assert_eq!(Ordering::Greater, (cmp)(3, 2));
+    }
+
+    #[test]
+    fn test_interval_dict() {
+        let values = IntervalDayTimeArray::from(vec![1, 0, 2, 5]);
+        let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
+        let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let values = IntervalDayTimeArray::from(vec![2, 3, 4, 5]);
+        let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
+        let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let cmp = build_compare(&array1, &array2).unwrap();
+
+        assert_eq!(Ordering::Less, (cmp)(0, 0));
+        assert_eq!(Ordering::Less, (cmp)(0, 3));
+        assert_eq!(Ordering::Equal, (cmp)(3, 3));
+        assert_eq!(Ordering::Greater, (cmp)(3, 1));
+        assert_eq!(Ordering::Greater, (cmp)(3, 2));
+    }
+
+    #[test]
+    fn test_duration_dict() {
+        let values = DurationSecondArray::from(vec![1, 0, 2, 5]);
+        let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
+        let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let values = DurationSecondArray::from(vec![2, 3, 4, 5]);
         let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
         let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
 

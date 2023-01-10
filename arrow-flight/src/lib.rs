@@ -348,8 +348,7 @@ impl TryFrom<FlightInfo> for Schema {
     type Error = ArrowError;
 
     fn try_from(value: FlightInfo) -> ArrowResult<Self> {
-        let msg = IpcMessage(value.schema);
-        msg.try_into()
+        value.try_decode_schema()
     }
 }
 
@@ -365,6 +364,13 @@ impl TryFrom<&SchemaResult> for Schema {
     type Error = ArrowError;
     fn try_from(data: &SchemaResult) -> ArrowResult<Self> {
         try_schema_from_ipc_buffer(&data.schema)
+    }
+}
+
+impl TryFrom<SchemaResult> for Schema {
+    type Error = ArrowError;
+    fn try_from(data: SchemaResult) -> ArrowResult<Self> {
+        (&data).try_into()
     }
 }
 
@@ -422,6 +428,12 @@ impl FlightInfo {
             total_bytes,
         }
     }
+
+    /// Try and convert the data in this  `FlightInfo` into a [`Schema`]
+    pub fn try_decode_schema(self) -> ArrowResult<Schema> {
+        let msg = IpcMessage(self.schema);
+        msg.try_into()
+    }
 }
 
 impl<'a> SchemaAsIpc<'a> {
@@ -429,6 +441,23 @@ impl<'a> SchemaAsIpc<'a> {
         SchemaAsIpc {
             pair: (schema, options),
         }
+    }
+}
+
+impl Action {
+    /// Create a new Action with type and body
+    pub fn new(action_type: impl Into<String>, body: impl Into<Bytes>) -> Self {
+        Self {
+            r#type: action_type.into(),
+            body: body.into(),
+        }
+    }
+}
+
+impl Result {
+    /// Create a new Result with the specified body
+    pub fn new(body: impl Into<Bytes>) -> Self {
+        Self { body: body.into() }
     }
 }
 

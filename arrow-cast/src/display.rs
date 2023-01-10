@@ -27,6 +27,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
+use chrono::prelude::SecondsFormat;
 
 macro_rules! make_string {
     ($array_type:ty, $column: ident, $row: ident) => {{
@@ -157,7 +158,7 @@ macro_rules! make_string_datetime_with_tz {
         let s = match $tz_string.parse::<Tz>() {
             Ok(tz) => array
                 .value_as_datetime_with_tz($row, tz)
-                .map(|d| format!("{}", d.to_rfc3339()))
+                .map(|d| format!("{}", d.to_rfc3339_opts(SecondsFormat::AutoSi, true)))
                 .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()),
             Err(_) => array
                 .value_as_datetime($row)

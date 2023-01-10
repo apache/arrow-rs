@@ -83,7 +83,7 @@ impl RowSelector {
 /// assert_eq!(actual, expected);
 /// ```
 ///
-/// [`PageIndex`]: [crate::file::page_index::index::PageIndex]
+/// [`PageIndex`]: crate::file::page_index::index::PageIndex
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct RowSelection {
     selectors: Vec<RowSelector>,

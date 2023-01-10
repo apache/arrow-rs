@@ -77,6 +77,13 @@ pub fn read_json_file(json_name: &str) -> Result<ArrowFile> {
 }
 
 /// Read gzipped JSON test file
+///
+/// For example given the input:
+/// version = `0.17.1`
+/// path = `generated_union`
+///
+/// Returns the contents of
+/// `arrow-ipc-stream/integration/0.17.1/generated_union.json.gz`
 pub fn read_gzip_json(version: &str, path: &str) -> ArrowJson {
     use flate2::read::GzDecoder;
     use std::io::Read;

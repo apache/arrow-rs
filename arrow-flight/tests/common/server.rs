@@ -18,15 +18,15 @@
 use std::sync::{Arc, Mutex};
 
 use arrow_array::RecordBatch;
-use futures::{stream::BoxStream, TryStreamExt};
+use arrow_schema::Schema;
+use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use tonic::{metadata::MetadataMap, Request, Response, Status, Streaming};
 
 use arrow_flight::{
     encode::FlightDataEncoderBuilder,
-    error::FlightError,
     flight_service_server::{FlightService, FlightServiceServer},
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
-    HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
+    HandshakeRequest, HandshakeResponse, PutResult, SchemaAsIpc, SchemaResult, Ticket,
 };
 
 #[derive(Debug, Clone)]
@@ -84,7 +84,7 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `do_get`
-    pub fn set_do_get_response(&self, response: Vec<Result<RecordBatch, FlightError>>) {
+    pub fn set_do_get_response(&self, response: Vec<Result<RecordBatch, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.do_get_response.replace(response);
     }
@@ -95,6 +95,99 @@ impl TestFlightServer {
             .lock()
             .expect("mutex not poisoned")
             .do_get_request
+            .take()
+    }
+
+    /// Specify the response returned from the next call to `do_put`
+    pub fn set_do_put_response(&self, response: Vec<Result<PutResult, Status>>) {
+        let mut state = self.state.lock().expect("mutex not poisoned");
+        state.do_put_response.replace(response);
+    }
+
+    /// Take and return last do_put request send to the server,
+    pub fn take_do_put_request(&self) -> Option<Vec<FlightData>> {
+        self.state
+            .lock()
+            .expect("mutex not poisoned")
+            .do_put_request
+            .take()
+    }
+
+    /// Specify the response returned from the next call to `do_exchange`
+    pub fn set_do_exchange_response(&self, response: Vec<Result<FlightData, Status>>) {
+        let mut state = self.state.lock().expect("mutex not poisoned");
+        state.do_exchange_response.replace(response);
+    }
+
+    /// Take and return last do_exchange request send to the server,
+    pub fn take_do_exchange_request(&self) -> Option<Vec<FlightData>> {
+        self.state
+            .lock()
+            .expect("mutex not poisoned")
+            .do_exchange_request
+            .take()
+    }
+
+    /// Specify the response returned from the next call to `list_flights`
+    pub fn set_list_flights_response(&self, response: Vec<Result<FlightInfo, Status>>) {
+        let mut state = self.state.lock().expect("mutex not poisoned");
+        state.list_flights_response.replace(response);
+    }
+
+    /// Take and return last list_flights request send to the server,
+    pub fn take_list_flights_request(&self) -> Option<Criteria> {
+        self.state
+            .lock()
+            .expect("mutex not poisoned")
+            .list_flights_request
+            .take()
+    }
+
+    /// Specify the response returned from the next call to `get_schema`
+    pub fn set_get_schema_response(&self, response: Result<Schema, Status>) {
+        let mut state = self.state.lock().expect("mutex not poisoned");
+        state.get_schema_response.replace(response);
+    }
+
+    /// Take and return last get_schema request send to the server,
+    pub fn take_get_schema_request(&self) -> Option<FlightDescriptor> {
+        self.state
+            .lock()
+            .expect("mutex not poisoned")
+            .get_schema_request
+            .take()
+    }
+
+    /// Specify the response returned from the next call to `list_actions`
+    pub fn set_list_actions_response(&self, response: Vec<Result<ActionType, Status>>) {
+        let mut state = self.state.lock().expect("mutex not poisoned");
+        state.list_actions_response.replace(response);
+    }
+
+    /// Take and return last list_actions request send to the server,
+    pub fn take_list_actions_request(&self) -> Option<Empty> {
+        self.state
+            .lock()
+            .expect("mutex not poisoned")
+            .list_actions_request
+            .take()
+    }
+
+    /// Specify the response returned from the next call to `do_action`
+    pub fn set_do_action_response(
+        &self,
+        response: Vec<Result<arrow_flight::Result, Status>>,
+    ) {
+        let mut state = self.state.lock().expect("mutex not poisoned");
+        state.do_action_response.replace(response);
+    }
+
+    /// Take and return last do_action request send to the server,
+    pub fn take_do_action_request(&self) -> Option<Action> {
+        self.state
+            .lock()
+            .expect("mutex not poisoned")
+            .do_action_request
             .take()
     }
 
@@ -129,7 +222,31 @@ struct State {
     /// The last do_get request received
     pub do_get_request: Option<Ticket>,
     /// The next response returned from `do_get`
-    pub do_get_response: Option<Vec<Result<RecordBatch, FlightError>>>,
+    pub do_get_response: Option<Vec<Result<RecordBatch, Status>>>,
+    /// The last do_put request received
+    pub do_put_request: Option<Vec<FlightData>>,
+    /// The next response returned from `do_put`
+    pub do_put_response: Option<Vec<Result<PutResult, Status>>>,
+    /// The last do_exchange request received
+    pub do_exchange_request: Option<Vec<FlightData>>,
+    /// The next response returned from `do_exchange`
+    pub do_exchange_response: Option<Vec<Result<FlightData, Status>>>,
+    /// The last list_flights request received
+    pub list_flights_request: Option<Criteria>,
+    /// The next response returned from `list_flights`
+    pub list_flights_response: Option<Vec<Result<FlightInfo, Status>>>,
+    /// The last get_schema request received
+    pub get_schema_request: Option<FlightDescriptor>,
+    /// The next response returned from `get_schema`
+    pub get_schema_response: Option<Result<Schema, Status>>,
+    /// The last list_actions request received
+    pub list_actions_request: Option<Empty>,
+    /// The next response returned from `list_actions`
+    pub list_actions_response: Option<Vec<Result<ActionType, Status>>>,
+    /// The last do_action request received
+    pub do_action_request: Option<Action>,
+    /// The next response returned from `do_action`
+    pub do_action_response: Option<Vec<Result<arrow_flight::Result, Status>>>,
     /// The last request headers received
     pub last_request_metadata: Option<MetadataMap>,
 }
@@ -167,14 +284,26 @@ impl FlightService for TestFlightServer {
 
         // turn into a streaming response
         let output = futures::stream::iter(std::iter::once(Ok(response)));
-        Ok(Response::new(Box::pin(output) as Self::HandshakeStream))
+        Ok(Response::new(output.boxed()))
     }
 
     async fn list_flights(
         &self,
-        _request: Request<Criteria>,
+        request: Request<Criteria>,
     ) -> Result<Response<Self::ListFlightsStream>, Status> {
-        Err(Status::unimplemented("Implement list_flights"))
+        self.save_metadata(&request);
+        let mut state = self.state.lock().expect("mutex not poisoned");
+
+        state.list_flights_request = Some(request.into_inner());
+
+        let flights: Vec<_> = state
+            .list_flights_response
+            .take()
+            .ok_or_else(|| Status::internal("No list_flights response configured"))?;
+
+        let flights_stream = futures::stream::iter(flights);
+
+        Ok(Response::new(flights_stream.boxed()))
     }
 
     async fn get_flight_info(
@@ -192,9 +321,22 @@ impl FlightService for TestFlightServer {
 
     async fn get_schema(
         &self,
-        _request: Request<FlightDescriptor>,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<SchemaResult>, Status> {
-        Err(Status::unimplemented("Implement get_schema"))
+        self.save_metadata(&request);
+        let mut state = self.state.lock().expect("mutex not poisoned");
+        state.get_schema_request = Some(request.into_inner());
+        let schema = state.get_schema_response.take().unwrap_or_else(|| {
+            Err(Status::internal("No get_schema response configured"))
+        })?;
+
+        // encode the schema
+        let options = arrow_ipc::writer::IpcWriteOptions::default();
+        let response: SchemaResult = SchemaAsIpc::new(&schema, &options)
+            .try_into()
+            .expect("Error encoding schema");
+
+        Ok(Response::new(response))
     }
 
     async fn do_get(
@@ -211,40 +353,92 @@ impl FlightService for TestFlightServer {
             .take()
             .ok_or_else(|| Status::internal("No do_get response configured"))?;
 
-        let batch_stream = futures::stream::iter(batches);
+        let batch_stream = futures::stream::iter(batches).map_err(Into::into);
 
         let stream = FlightDataEncoderBuilder::new()
             .build(batch_stream)
-            .map_err(|e| e.into());
+            .map_err(Into::into);
 
-        Ok(Response::new(Box::pin(stream) as _))
+        Ok(Response::new(stream.boxed()))
     }
 
     async fn do_put(
         &self,
-        _request: Request<Streaming<FlightData>>,
+        request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoPutStream>, Status> {
-        Err(Status::unimplemented("Implement do_put"))
+        self.save_metadata(&request);
+        let do_put_request: Vec<_> = request.into_inner().try_collect().await?;
+
+        let mut state = self.state.lock().expect("mutex not poisoned");
+
+        state.do_put_request = Some(do_put_request);
+
+        let response = state
+            .do_put_response
+            .take()
+            .ok_or_else(|| Status::internal("No do_put response configured"))?;
+
+        let stream = futures::stream::iter(response).map_err(Into::into);
+
+        Ok(Response::new(stream.boxed()))
     }
 
     async fn do_action(
         &self,
-        _request: Request<Action>,
+        request: Request<Action>,
     ) -> Result<Response<Self::DoActionStream>, Status> {
-        Err(Status::unimplemented("Implement do_action"))
+        self.save_metadata(&request);
+        let mut state = self.state.lock().expect("mutex not poisoned");
+
+        state.do_action_request = Some(request.into_inner());
+
+        let results: Vec<_> = state
+            .do_action_response
+            .take()
+            .ok_or_else(|| Status::internal("No do_action response configured"))?;
+
+        let results_stream = futures::stream::iter(results);
+
+        Ok(Response::new(results_stream.boxed()))
     }
 
     async fn list_actions(
         &self,
-        _request: Request<Empty>,
+        request: Request<Empty>,
     ) -> Result<Response<Self::ListActionsStream>, Status> {
-        Err(Status::unimplemented("Implement list_actions"))
+        self.save_metadata(&request);
+        let mut state = self.state.lock().expect("mutex not poisoned");
+
+        state.list_actions_request = Some(request.into_inner());
+
+        let actions: Vec<_> = state
+            .list_actions_response
+            .take()
+            .ok_or_else(|| Status::internal("No list_actions response configured"))?;
+
+        let action_stream = futures::stream::iter(actions);
+
+        Ok(Response::new(action_stream.boxed()))
     }
 
     async fn do_exchange(
         &self,
-        _request: Request<Streaming<FlightData>>,
+        request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoExchangeStream>, Status> {
-        Err(Status::unimplemented("Implement do_exchange"))
+        self.save_metadata(&request);
+        let do_exchange_request: Vec<_> = request.into_inner().try_collect().await?;
+
+        let mut state = self.state.lock().expect("mutex not poisoned");
+
+        state.do_exchange_request = Some(do_exchange_request);
+
+        let response = state
+            .do_exchange_response
+            .take()
+            .ok_or_else(|| Status::internal("No do_exchange response configured"))?;
+
+        let stream = futures::stream::iter(response).map_err(Into::into);
+
+        Ok(Response::new(stream.boxed()))
     }
 }

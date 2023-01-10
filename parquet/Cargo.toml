@@ -119,6 +119,10 @@ name = "parquet-read"
 required-features = ["cli"]
 
 [[bin]]
+name = "parquet-rewrite"
+required-features = ["arrow", "cli"]
+
+[[bin]]
 name = "parquet-schema"
 required-features = ["cli"]
 

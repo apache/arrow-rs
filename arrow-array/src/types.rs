@@ -559,15 +559,15 @@ mod decimal {
     impl DecimalTypeSealed for Decimal256Type {}
 }
 
-/// A trait over the decimal types, used by [`DecimalArray`] to provide a generic
+/// A trait over the decimal types, used by [`PrimitiveArray`] to provide a generic
 /// implementation across the various decimal types
 ///
 /// Implemented by [`Decimal128Type`] and [`Decimal256Type`] for [`Decimal128Array`]
 /// and [`Decimal256Array`] respectively
 ///
-/// [`DecimalArray`]: [crate::array::DecimalArray]
-/// [`Decimal128Array`]: [crate::array::Decimal128Array]
-/// [`Decimal256Array`]: [crate::array::Decimal256Array]
+/// [`PrimitiveArray`]: crate::array::PrimitiveArray
+/// [`Decimal128Array`]: crate::array::Decimal128Array
+/// [`Decimal256Array`]: crate::array::Decimal256Array
 pub trait DecimalType:
     'static + Send + Sync + ArrowPrimitiveType + decimal::DecimalTypeSealed
 {
