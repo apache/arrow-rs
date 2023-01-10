@@ -20,6 +20,7 @@ use arrow_array::cast::*;
 use arrow_array::*;
 use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayData;
+use arrow_ord::comparison::{compare_op, compare_op_scalar};
 use arrow_schema::*;
 use arrow_select::take::take;
 use regex::Regex;
@@ -71,6 +72,24 @@ dyn_function!("left LIKE right", like_dyn, like_utf8, like_dict);
 dyn_function!("left NOT LIKE right", nlike_dyn, nlike_utf8, nlike_dict);
 dyn_function!("left ILIKE right", ilike_dyn, ilike_utf8, ilike_dict);
 dyn_function!("left NOT ILIKE right", nilike_dyn, nilike_utf8, nilike_dict);
+dyn_function!(
+    "STARTSWITH(left, right)",
+    starts_with_dyn,
+    starts_with_utf8,
+    starts_with_dict
+);
+dyn_function!(
+    "ENDSWITH(left, right)",
+    ends_with_dyn,
+    ends_with_utf8,
+    ends_with_dict
+);
+dyn_function!(
+    "CONTAINS(left, right)",
+    contains_dyn,
+    contains_utf8,
+    contains_dict
+);
 
 macro_rules! scalar_dyn_function {
     ($sql:tt, $fn_name:tt, $fn_scalar:tt) => {
@@ -123,6 +142,21 @@ scalar_dyn_function!(
     nilike_utf8_scalar_dyn,
     nilike_scalar
 );
+scalar_dyn_function!(
+    "STARTSWITH(left, right)",
+    starts_with_utf8_scalar_dyn,
+    starts_with_scalar
+);
+scalar_dyn_function!(
+    "ENDSWITH(left, right)",
+    ends_with_utf8_scalar_dyn,
+    ends_with_scalar
+);
+scalar_dyn_function!(
+    "CONTAINS(left, right)",
+    contains_utf8_scalar_dyn,
+    contains_scalar
+);
 
 macro_rules! dict_function {
     ($sql:tt, $fn_name:tt, $fn_impl:tt) => {
@@ -162,6 +196,9 @@ dict_function!("left LIKE right", like_dict, like);
 dict_function!("left NOT LIKE right", nlike_dict, nlike);
 dict_function!("left ILIKE right", ilike_dict, ilike);
 dict_function!("left NOT ILIKE right", nilike_dict, nilike);
+dict_function!("STARTSWITH(left, right)", starts_with_dict, starts_with);
+dict_function!("ENDSWITH(left, right)", ends_with_dict, ends_with);
+dict_function!("CONTAINS(left, right)", contains_dict, contains);
 
 /// Perform SQL `left LIKE right` operation on [`StringArray`] / [`LargeStringArray`].
 ///
@@ -552,6 +589,108 @@ where
         )
     };
     Ok(BooleanArray::from(data))
+}
+
+pub fn starts_with_utf8<OffsetSize: OffsetSizeTrait>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &GenericStringArray<OffsetSize>,
+) -> Result<BooleanArray, ArrowError> {
+    starts_with(left, right)
+}
+
+#[inline]
+fn starts_with<'a, S: ArrayAccessor<Item = &'a str>>(
+    left: S,
+    right: S,
+) -> Result<BooleanArray, ArrowError> {
+    compare_op(left, right, |l, r| l.starts_with(r))
+}
+
+#[inline]
+fn starts_with_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
+    left: L,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
+    compare_op_scalar(left, |item| item.starts_with(right))
+}
+
+/// Perform SQL `STARTSWITH(left, right)` operation on [`StringArray`] /
+/// [`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn starts_with_utf8_scalar<OffsetSize: OffsetSizeTrait>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
+    starts_with_scalar(left, right)
+}
+
+pub fn ends_with_utf8<OffsetSize: OffsetSizeTrait>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &GenericStringArray<OffsetSize>,
+) -> Result<BooleanArray, ArrowError> {
+    ends_with(left, right)
+}
+
+#[inline]
+fn ends_with<'a, S: ArrayAccessor<Item = &'a str>>(
+    left: S,
+    right: S,
+) -> Result<BooleanArray, ArrowError> {
+    compare_op(left, right, |l, r| l.ends_with(r))
+}
+
+#[inline]
+fn ends_with_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
+    left: L,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
+    compare_op_scalar(left, |item| item.ends_with(right))
+}
+
+/// Perform SQL `ENDSWITH(left, right)` operation on [`StringArray`] /
+/// [`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn ends_with_utf8_scalar<OffsetSize: OffsetSizeTrait>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
+    ends_with_scalar(left, right)
+}
+
+pub fn contains_utf8<OffsetSize: OffsetSizeTrait>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &GenericStringArray<OffsetSize>,
+) -> Result<BooleanArray, ArrowError> {
+    contains(left, right)
+}
+
+#[inline]
+fn contains<'a, S: ArrayAccessor<Item = &'a str>>(
+    left: S,
+    right: S,
+) -> Result<BooleanArray, ArrowError> {
+    compare_op(left, right, |l, r| l.contains(r))
+}
+
+#[inline]
+fn contains_scalar<'a, L: ArrayAccessor<Item = &'a str>>(
+    left: L,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
+    compare_op_scalar(left, |item| item.contains(right))
+}
+
+/// Perform SQL `CONTAINS(left, right)` operation on [`StringArray`] /
+/// [`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn contains_utf8_scalar<OffsetSize: OffsetSizeTrait>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &str,
+) -> Result<BooleanArray, ArrowError> {
+    contains_scalar(left, right)
 }
 
 #[cfg(test)]
