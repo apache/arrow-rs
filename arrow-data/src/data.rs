@@ -1414,7 +1414,7 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::LargeUtf8 => DataTypeLayout::new_binary(size_of::<i64>()),
         DataType::List(_) => DataTypeLayout::new_fixed_width(size_of::<i32>()),
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
-        DataType::LargeList(_) => DataTypeLayout::new_fixed_width(size_of::<i32>()),
+        DataType::LargeList(_) => DataTypeLayout::new_fixed_width(size_of::<i64>()),
         DataType::Struct(_) => DataTypeLayout::new_empty(), // all in child data,
         DataType::Union(_, _, mode) => {
             let type_ids = BufferSpec::FixedWidth {
