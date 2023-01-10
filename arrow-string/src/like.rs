@@ -591,6 +591,7 @@ where
     Ok(BooleanArray::from(data))
 }
 
+/// Perform SQL `STARTSWITH(left, right)` operation on [`StringArray`] / [`LargeStringArray`].
 pub fn starts_with_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
@@ -625,6 +626,7 @@ pub fn starts_with_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     starts_with_scalar(left, right)
 }
 
+/// Perform SQL `ENDSWITH(left, right)` operation on [`StringArray`] / [`LargeStringArray`].
 pub fn ends_with_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
@@ -659,6 +661,7 @@ pub fn ends_with_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     ends_with_scalar(left, right)
 }
 
+/// Perform SQL `CONTAINS(left, right)` operation on [`StringArray`] / [`LargeStringArray`].
 pub fn contains_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
