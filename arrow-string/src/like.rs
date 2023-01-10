@@ -20,11 +20,56 @@ use arrow_array::cast::*;
 use arrow_array::*;
 use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayData;
-use arrow_ord::comparison::{compare_op, compare_op_scalar};
 use arrow_schema::*;
 use arrow_select::take::take;
 use regex::Regex;
 use std::collections::HashMap;
+
+/// Helper function to perform boolean lambda function on values from two array accessors, this
+/// version does not attempt to use SIMD.
+pub fn compare_op<T: ArrayAccessor, S: ArrayAccessor, F>(
+    left: T,
+    right: S,
+    op: F,
+) -> Result<BooleanArray, ArrowError>
+where
+    F: Fn(T::Item, S::Item) -> bool,
+{
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform comparison operation on arrays of different length"
+                .to_string(),
+        ));
+    }
+
+    Ok(BooleanArray::from_binary(left, right, op))
+}
+
+/// Helper function to perform boolean lambda function on values from array accessor, this
+/// version does not attempt to use SIMD.
+pub fn compare_op_scalar<T: ArrayAccessor, F>(
+    left: T,
+    op: F,
+) -> Result<BooleanArray, ArrowError>
+where
+    F: Fn(T::Item) -> bool,
+{
+    Ok(BooleanArray::from_unary(left, op))
+}
+
+/// Evaluate `op(left, right)` for [`PrimitiveArray`]s using a specified
+/// comparison function.
+pub fn no_simd_compare_op<T, F>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+    op: F,
+) -> Result<BooleanArray, ArrowError>
+where
+    T: ArrowPrimitiveType,
+    F: Fn(T::Native, T::Native) -> bool,
+{
+    compare_op(left, right, op)
+}
 
 macro_rules! dyn_function {
     ($sql:tt, $fn_name:tt, $fn_utf8:tt, $fn_dict:tt) => {
