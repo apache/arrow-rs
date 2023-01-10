@@ -23,7 +23,7 @@
 //!
 //! The interfaces for converting arrow schema to parquet schema is coming.
 
-use base64::engine::general_purpose;
+use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -102,7 +102,7 @@ pub(crate) fn parquet_to_array_schema_and_fields(
 
 /// Try to convert Arrow schema metadata into a schema
 fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
-    let decoded = general_purpose::STANDARD.decode(encoded_meta);
+    let decoded = BASE64_STANDARD.decode(encoded_meta);
     match decoded {
         Ok(bytes) => {
             let slice = if bytes.len() > 8 && bytes[0..4] == [255u8; 4] {
@@ -150,7 +150,7 @@ fn encode_arrow_schema(schema: &Schema) -> String {
     len_prefix_schema.append((schema_len as u32).to_le_bytes().to_vec().as_mut());
     len_prefix_schema.append(&mut serialized_schema.ipc_message);
 
-    general_purpose::STANDARD.encode(&len_prefix_schema)
+    BASE64_STANDARD.encode(&len_prefix_schema)
 }
 
 /// Mutates writer metadata by storing the encoded Arrow schema.

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use base64::engine::general_purpose;
+use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::Bytes;
 use std::collections::HashMap;
@@ -168,7 +168,7 @@ impl FlightSqlServiceClient {
             payload: Default::default(),
         };
         let mut req = tonic::Request::new(stream::iter(vec![cmd]));
-        let val = general_purpose::STANDARD.encode(format!("{}:{}", username, password));
+        let val = BASE64_STANDARD.encode(format!("{}:{}", username, password));
         let val = format!("Basic {}", val)
             .parse()
             .map_err(|_| ArrowError::ParseError("Cannot parse header".to_string()))?;

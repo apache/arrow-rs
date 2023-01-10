@@ -36,7 +36,7 @@ use arrow_ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema};
 
 use arrow_ipc::convert::try_schema_from_ipc_buffer;
-use base64::engine::general_purpose;
+use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::Bytes;
 use std::{
@@ -267,7 +267,7 @@ impl fmt::Display for Ticket {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Ticket {{")?;
         write!(f, " ticket: ")?;
-        write!(f, "{}", general_purpose::STANDARD.encode(&self.ticket))
+        write!(f, "{}", BASE64_STANDARD.encode(&self.ticket))
     }
 }
 

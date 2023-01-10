@@ -18,7 +18,7 @@
 use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
 use crate::RetryConfig;
-use base64::engine::general_purpose;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine;
 use reqwest::{Client, Method};
 use ring::signature::RsaKeyPair;
@@ -168,7 +168,7 @@ impl OAuthProvider {
             )
             .context(SignSnafu)?;
 
-        let signature = general_purpose::URL_SAFE_NO_PAD.encode(sig_bytes);
+        let signature = BASE64_URL_SAFE_NO_PAD.encode(sig_bytes);
         let jwt = [message, signature].join(".");
 
         let body = [
@@ -220,5 +220,5 @@ fn decode_first_rsa_key(private_key_pem: String) -> Result<RsaKeyPair> {
 
 fn b64_encode_obj<T: serde::Serialize>(obj: &T) -> Result<String> {
     let string = serde_json::to_string(obj).context(EncodeSnafu)?;
-    Ok(general_purpose::URL_SAFE_NO_PAD.encode(string))
+    Ok(BASE64_URL_SAFE_NO_PAD.encode(string))
 }

@@ -19,7 +19,7 @@ use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::util::hmac_sha256;
 use crate::RetryConfig;
-use base64::engine::general_purpose;
+use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use chrono::Utc;
 use reqwest::header::ACCEPT;
@@ -155,12 +155,8 @@ fn generate_authorization(
     key: &str,
 ) -> String {
     let str_to_sign = string_to_sign(h, u, method, account);
-    let auth = hmac_sha256(general_purpose::STANDARD.decode(key).unwrap(), str_to_sign);
-    format!(
-        "SharedKey {}:{}",
-        account,
-        general_purpose::STANDARD.encode(auth)
-    )
+    let auth = hmac_sha256(BASE64_STANDARD.decode(key).unwrap(), str_to_sign);
+    format!("SharedKey {}:{}", account, BASE64_STANDARD.encode(auth))
 }
 
 fn add_if_exists<'a>(h: &'a HeaderMap, key: &HeaderName) -> &'a str {

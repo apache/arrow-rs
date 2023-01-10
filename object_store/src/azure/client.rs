@@ -25,7 +25,7 @@ use crate::{
     BoxStream, ClientOptions, ListResult, ObjectMeta, Path, Result, RetryConfig,
     StreamExt,
 };
-use base64::engine::general_purpose;
+use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
@@ -530,7 +530,7 @@ impl BlockList {
         for block_id in &self.blocks {
             let node = format!(
                 "\t<Uncommitted>{}</Uncommitted>\n",
-                general_purpose::STANDARD.encode(block_id)
+                BASE64_STANDARD.encode(block_id)
             );
             s.push_str(&node);
         }

@@ -24,7 +24,7 @@ use arrow_flight::{
     Action, FlightData, FlightEndpoint, HandshakeRequest, HandshakeResponse, IpcMessage,
     Location, SchemaAsIpc, Ticket,
 };
-use base64::engine::general_purpose;
+use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use futures::{stream, Stream};
 use prost::Message;
@@ -98,7 +98,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             )))?;
         }
         let base64 = &authorization[basic.len()..];
-        let bytes = general_purpose::STANDARD
+        let bytes = BASE64_STANDARD
             .decode(base64)
             .map_err(|e| status!("authorization not decodable", e))?;
         let str = String::from_utf8(bytes)
