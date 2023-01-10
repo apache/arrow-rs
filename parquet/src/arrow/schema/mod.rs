@@ -197,15 +197,6 @@ pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
     Ok(SchemaDescriptor::new(Arc::new(group)))
 }
 
-/// Convert each field of arrow schema to parquet schema of field
-pub fn arrow_to_parquet_fields(schema : &Schema) -> Result<Vec<Type>> {
-    schema
-        .fields()
-        .iter()
-        .map(arrow_to_parquet_type)
-        .collect()
-}
-
 fn parse_key_value_metadata(
     key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Option<HashMap<String, String>> {
