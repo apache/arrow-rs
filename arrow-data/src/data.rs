@@ -473,7 +473,7 @@ impl ArrayData {
                 BufferSpec::FixedWidth { byte_width } => {
                     let buffer_size =
                         self.len.checked_mul(*byte_width).ok_or_else(|| {
-                            ArrowError::InvalidArgumentError(
+                            ArrowError::ComputeError(
                                 "Integer overflow computing buffer size".to_string(),
                             )
                         })?;
@@ -491,7 +491,7 @@ impl ArrayData {
                             buffer_len = (offsets[self.len] - offsets[0]) as usize;
                         }
                         _ => {
-                            return Err(ArrowError::InvalidArgumentError(format!(
+                            return Err(ArrowError::NotYetImplemented(format!(
                             "Invalid data type for VariableWidth buffer. Expected Utf8, LargeUtf8, Binary or LargeBinary. Got {}",
                             self.data_type
                             )))
