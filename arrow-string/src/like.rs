@@ -27,7 +27,7 @@ use std::collections::HashMap;
 
 macro_rules! dyn_function {
     ($sql:tt, $fn_name:tt, $fn_utf8:tt, $fn_dict:tt) => {
-#[doc = concat!("Perform SQL `left ", $sql ," right` operation on [`StringArray`] /")]
+#[doc = concat!("Perform SQL `", $sql ,"` operation on [`StringArray`] /")]
 /// [`LargeStringArray`], or [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`].
 ///
@@ -67,14 +67,14 @@ pub fn $fn_name(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, Arr
 
     }
 }
-dyn_function!("LIKE", like_dyn, like_utf8, like_dict);
-dyn_function!("NOT LIKE", nlike_dyn, nlike_utf8, nlike_dict);
-dyn_function!("ILIKE", ilike_dyn, ilike_utf8, ilike_dict);
-dyn_function!("NOT ILIKE", nilike_dyn, nilike_utf8, nilike_dict);
+dyn_function!("left LIKE right", like_dyn, like_utf8, like_dict);
+dyn_function!("left NOT LIKE right", nlike_dyn, nlike_utf8, nlike_dict);
+dyn_function!("left ILIKE right", ilike_dyn, ilike_utf8, ilike_dict);
+dyn_function!("left NOT ILIKE right", nilike_dyn, nilike_utf8, nilike_dict);
 
 macro_rules! scalar_dyn_function {
     ($sql:tt, $fn_name:tt, $fn_scalar:tt) => {
-#[doc = concat!("Perform SQL `left ", $sql ," right` operation on [`StringArray`] /")]
+#[doc = concat!("Perform SQL `", $sql ,"` operation on [`StringArray`] /")]
 /// [`LargeStringArray`], or [`DictionaryArray`] with values
 /// [`StringArray`]/[`LargeStringArray`] and a scalar.
 ///
@@ -115,15 +115,19 @@ pub fn $fn_name(
 }
     }
 }
-scalar_dyn_function!("LIKE", like_utf8_scalar_dyn, like_scalar);
-scalar_dyn_function!("NOT LIKE", nlike_utf8_scalar_dyn, nlike_scalar);
-scalar_dyn_function!("ILIKE", ilike_utf8_scalar_dyn, ilike_scalar);
-scalar_dyn_function!("NOT ILIKE", nilike_utf8_scalar_dyn, nilike_scalar);
+scalar_dyn_function!("left LIKE right", like_utf8_scalar_dyn, like_scalar);
+scalar_dyn_function!("left NOT LIKE right", nlike_utf8_scalar_dyn, nlike_scalar);
+scalar_dyn_function!("left ILIKE right", ilike_utf8_scalar_dyn, ilike_scalar);
+scalar_dyn_function!(
+    "left NOT ILIKE right",
+    nilike_utf8_scalar_dyn,
+    nilike_scalar
+);
 
 macro_rules! dict_function {
     ($sql:tt, $fn_name:tt, $fn_impl:tt) => {
 
-#[doc = concat!("Perform SQL `left ", $sql ," right` operation on on [`DictionaryArray`] with values")]
+#[doc = concat!("Perform SQL `", $sql ,"` operation on on [`DictionaryArray`] with values")]
 /// [`StringArray`]/[`LargeStringArray`].
 ///
 /// See the documentation on [`like_utf8`] for more details.
@@ -154,10 +158,10 @@ fn $fn_name<K: ArrowPrimitiveType>(
     }
 }
 
-dict_function!("LIKE", like_dict, like);
-dict_function!("NOT LIKE", nlike_dict, nlike);
-dict_function!("ILIKE", ilike_dict, ilike);
-dict_function!("NOT ILIKE", nilike_dict, nilike);
+dict_function!("left LIKE right", like_dict, like);
+dict_function!("left NOT LIKE right", nlike_dict, nlike);
+dict_function!("left ILIKE right", ilike_dict, ilike);
+dict_function!("left NOT ILIKE right", nilike_dict, nilike);
 
 /// Perform SQL `left LIKE right` operation on [`StringArray`] / [`LargeStringArray`].
 ///
