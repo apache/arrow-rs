@@ -121,7 +121,7 @@ scalar_dyn_function!("ILIKE", ilike_utf8_scalar_dyn, ilike_scalar);
 scalar_dyn_function!("NOT ILIKE", nilike_utf8_scalar_dyn, nilike_scalar);
 
 macro_rules! dict_function {
-    ($sql:tt, $fn_name:tt, $pat:tt, $neg:expr, $typ:tt) => {
+    ($sql:tt, $fn_name:tt, $fn_impl:tt) => {
 
 #[doc = concat!("Perform SQL `left ", $sql ," right` operation on on [`DictionaryArray`] with values")]
 /// [`StringArray`]/[`LargeStringArray`].
@@ -137,28 +137,13 @@ fn $fn_name<K: ArrowPrimitiveType>(
             let left = left.downcast_dict::<GenericStringArray<i32>>().unwrap();
             let right = right.downcast_dict::<GenericStringArray<i32>>().unwrap();
 
-            regex_like(left, right, $neg, |re_pattern| {
-                Regex::new(&format!($pat, re_pattern)).map_err(|e| {
-                    ArrowError::ComputeError(format!(
-                        "Unable to build regex from {} pattern: {}",
-                        $typ, e
-                    ))
-                })
-            })
+            $fn_impl(left, right)
         }
         (DataType::LargeUtf8, DataType::LargeUtf8) => {
             let left = left.downcast_dict::<GenericStringArray<i64>>().unwrap();
             let right = right.downcast_dict::<GenericStringArray<i64>>().unwrap();
 
-            regex_like(left, right, $neg, |re_pattern| {
-                Regex::new(&format!($pat, re_pattern)).map_err(|e| {
-                    ArrowError::ComputeError(format!(
-                        "Unable to build regex from {} pattern: {}",
-                        $typ,
-                        e
-                    ))
-                })
-            })
+            $fn_impl(left, right)
         }
         _ => Err(ArrowError::ComputeError(format!(
             "{} only supports DictionaryArray with Utf8 or LargeUtf8 values",
@@ -169,10 +154,10 @@ fn $fn_name<K: ArrowPrimitiveType>(
     }
 }
 
-dict_function!("LIKE", like_dict, "^{}$", false, "LIKE");
-dict_function!("NOT LIKE", nlike_dict, "^{}$", true, "LIKE");
-dict_function!("ILIKE", ilike_dict, "(?i)^{}$", false, "ILIKE");
-dict_function!("NOT ILIKE", nilike_dict, "(?i)^{}$", true, "ILIKE");
+dict_function!("LIKE", like_dict, like);
+dict_function!("NOT LIKE", nlike_dict, nlike);
+dict_function!("ILIKE", ilike_dict, ilike);
+dict_function!("NOT ILIKE", nilike_dict, nilike);
 
 /// Perform SQL `left LIKE right` operation on [`StringArray`] / [`LargeStringArray`].
 ///
@@ -195,6 +180,14 @@ dict_function!("NOT ILIKE", nilike_dict, "(?i)^{}$", true, "ILIKE");
 pub fn like_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
+) -> Result<BooleanArray, ArrowError> {
+    like(left, right)
+}
+
+#[inline]
+fn like<'a, S: ArrayAccessor<Item = &'a str>>(
+    left: S,
+    right: S,
 ) -> Result<BooleanArray, ArrowError> {
     regex_like(left, right, false, |re_pattern| {
         Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
@@ -319,6 +312,14 @@ pub fn nlike_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray, ArrowError> {
+    nlike(left, right)
+}
+
+#[inline]
+fn nlike<'a, S: ArrayAccessor<Item = &'a str>>(
+    left: S,
+    right: S,
+) -> Result<BooleanArray, ArrowError> {
     regex_like(left, right, true, |re_pattern| {
         Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
@@ -358,6 +359,14 @@ pub fn nlike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn ilike_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
+) -> Result<BooleanArray, ArrowError> {
+    ilike(left, right)
+}
+
+#[inline]
+fn ilike<'a, S: ArrayAccessor<Item = &'a str>>(
+    left: S,
+    right: S,
 ) -> Result<BooleanArray, ArrowError> {
     regex_like(left, right, false, |re_pattern| {
         Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
@@ -442,6 +451,14 @@ pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 pub fn nilike_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
+) -> Result<BooleanArray, ArrowError> {
+    nilike(left, right)
+}
+
+#[inline]
+fn nilike<'a, S: ArrayAccessor<Item = &'a str>>(
+    left: S,
+    right: S,
 ) -> Result<BooleanArray, ArrowError> {
     regex_like(left, right, true, |re_pattern| {
         Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
