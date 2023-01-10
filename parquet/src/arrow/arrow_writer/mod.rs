@@ -1260,7 +1260,7 @@ mod tests {
         for i in 0..expected_batch.num_columns() {
             let expected_data = expected_batch.column(i).data();
             let actual_data = actual_batch.column(i).data();
-            assert_eq!(expected_data, actual_data);
+            validate(expected_data, actual_data);
         }
 
         file
