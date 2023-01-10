@@ -17,10 +17,6 @@
 
 //! Contains Row enum that is used to represent record in Rust.
 
-#[cfg(any(feature = "json", test))]
-use base64::engine::general_purpose;
-#[cfg(any(feature = "json", test))]
-use base64::Engine;
 use std::fmt;
 
 use chrono::{TimeZone, Utc};
@@ -673,6 +669,9 @@ impl Field {
 
     #[cfg(any(feature = "json", test))]
     pub fn to_json_value(&self) -> Value {
+        use base64::engine::general_purpose;
+        use base64::Engine;
+
         match &self {
             Field::Null => Value::Null,
             Field::Bool(b) => Value::Bool(*b),
