@@ -1202,7 +1202,7 @@ fn write_array_data(
         )
     {
         // Truncate values
-        assert!(array_data.buffers().len() == 1);
+        assert_eq!(array_data.buffers().len(), 1);
 
         let buffer = &array_data.buffers()[0];
         let layout = layout(data_type);
@@ -1234,7 +1234,7 @@ fn write_array_data(
     } else if matches!(data_type, DataType::Boolean) {
         // Bools are special because the payload (= 1 bit) is smaller than the physical container elements (= bytes).
         // The array data may not start at the physical boundary of the underlying buffer, so we need to shift bits around.
-        assert!(array_data.buffers().len() == 1);
+        assert_eq!(array_data.buffers().len(), 1);
 
         let buffer = &array_data.buffers()[0];
         let buffer = buffer.bit_slice(array_data.offset(), array_data.len());
