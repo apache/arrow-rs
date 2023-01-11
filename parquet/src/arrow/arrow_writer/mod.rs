@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::as_primitive_array;
 use arrow_array::types::Decimal128Type;
-use arrow_array::{types, Array, ArrayRef, Decimal128Array, RecordBatch};
+use arrow_array::{types, Array, ArrayRef, RecordBatch};
 use arrow_schema::{DataType as ArrowDataType, IntervalUnit, SchemaRef};
 
 use super::schema::{
