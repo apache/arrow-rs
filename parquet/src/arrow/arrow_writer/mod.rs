@@ -21,7 +21,9 @@ use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, RecordBatch};
+use arrow_array::cast::as_primitive_array;
+use arrow_array::types::Decimal128Type;
+use arrow_array::{types, Array, ArrayRef, RecordBatch};
 use arrow_schema::{DataType as ArrowDataType, IntervalUnit, SchemaRef};
 
 use super::schema::{
@@ -397,6 +399,12 @@ fn write_leaf(
                     let array: &[i32] = data.buffers()[0].typed_data();
                     write_primitive(typed, &array[offset..offset + data.len()], levels)?
                 }
+                ArrowDataType::Decimal128(_, _) => {
+                    // use the int32 to represent the decimal with low precision
+                    let array = as_primitive_array::<Decimal128Type>(column)
+                        .unary::<_, types::Int32Type>(|v| v as i32);
+                    write_primitive(typed, array.values(), levels)?
+                }
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
                     let array = array
@@ -434,6 +442,12 @@ fn write_leaf(
                     let offset = data.offset();
                     let array: &[i64] = data.buffers()[0].typed_data();
                     write_primitive(typed, &array[offset..offset + data.len()], levels)?
+                }
+                ArrowDataType::Decimal128(_, _) => {
+                    // use the int64 to represent the decimal with low precision
+                    let array = as_primitive_array::<Decimal128Type>(column)
+                        .unary::<_, types::Int64Type>(|v| v as i64);
+                    write_primitive(typed, array.values(), levels)?
                 }
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
@@ -840,23 +854,32 @@ mod tests {
         roundtrip(batch, Some(SMALL_SIZE / 2));
     }
 
-    #[test]
-    fn arrow_writer_decimal() {
-        let decimal_field = Field::new("a", DataType::Decimal128(5, 2), false);
+    fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {
+        let decimal_field =
+            Field::new("a", DataType::Decimal128(precision, scale), false);
         let schema = Schema::new(vec![decimal_field]);
 
         let decimal_values = vec![10_000, 50_000, 0, -100]
             .into_iter()
             .map(Some)
             .collect::<Decimal128Array>()
-            .with_precision_and_scale(5, 2)
+            .with_precision_and_scale(precision, scale)
             .unwrap();
 
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(decimal_values)])
-                .unwrap();
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(decimal_values)]).unwrap()
+    }
 
-        roundtrip(batch, Some(SMALL_SIZE / 2));
+    #[test]
+    fn arrow_writer_decimal() {
+        // int32 to store the decimal value
+        let batch_int32_decimal = get_decimal_batch(5, 2);
+        roundtrip(batch_int32_decimal, Some(SMALL_SIZE / 2));
+        // int64 to store the decimal value
+        let batch_int64_decimal = get_decimal_batch(12, 2);
+        roundtrip(batch_int64_decimal, Some(SMALL_SIZE / 2));
+        // fixed_length_byte_array to store the decimal value
+        let batch_fixed_len_byte_array_decimal = get_decimal_batch(30, 2);
+        roundtrip(batch_fixed_len_byte_array_decimal, Some(SMALL_SIZE / 2));
     }
 
     #[test]
