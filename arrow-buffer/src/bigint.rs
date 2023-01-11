@@ -88,7 +88,7 @@ impl i256 {
         }
     }
 
-    /// Create an integer value from its representation as a byte array in little-endian.
+    /// Create an integer value from its representation as a byte array in big-endian.
     #[inline]
     pub const fn from_be_bytes(b: [u8; 32]) -> Self {
         let (high, low) = split_array(b);
