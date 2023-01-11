@@ -880,6 +880,18 @@ mod tests {
         vec![true, false, true, false]
     );
 
+    // Replicates `test_utf8_array_like_scalar_start` `test_utf8_array_like_scalar_dyn_start` to
+    // demonstrate that `SQL STARTSWITH` works as expected.
+    test_utf8_scalar!(
+        test_utf8_array_starts_with_scalar_start,
+        test_utf8_array_starts_with_scalar_dyn_start,
+        vec!["arrow", "parrow", "arrows", "arr"],
+        "arrow",
+        starts_with_utf8_scalar,
+        starts_with_utf8_scalar_dyn,
+        vec![true, false, true, false]
+    );
+
     test_utf8_scalar!(
         test_utf8_array_like_scalar_end,
         test_utf8_array_like_scalar_dyn_end,
@@ -887,6 +899,18 @@ mod tests {
         "%arrow",
         like_utf8_scalar,
         like_utf8_scalar_dyn,
+        vec![true, true, false, false]
+    );
+
+    // Replicates `test_utf8_array_like_scalar_end` `test_utf8_array_like_scalar_dyn_end` to
+    // demonstrate that `SQL ENDSWITH` works as expected.
+    test_utf8_scalar!(
+        test_utf8_array_ends_with_scalar_end,
+        test_utf8_array_ends_with_scalar_dyn_end,
+        vec!["arrow", "parrow", "arrows", "arr"],
+        "arrow",
+        ends_with_utf8_scalar,
+        ends_with_utf8_scalar_dyn,
         vec![true, true, false, false]
     );
 
@@ -1206,6 +1230,32 @@ mod tests {
         "%FFkoSS%",
         ilike_utf8_scalar,
         ilike_utf8_scalar_dyn,
+        vec![false, true, true, false, false, false, false, true, true, true]
+    );
+
+    // Replicates `test_utf8_array_ilike_unicode_contains` and
+    // `test_utf8_array_ilike_unicode_contains_dyn` to
+    // demonstrate that `SQL CONTAINS` works as expected.
+    //
+    // NOTE: 5 of the values were changed because the original used a case insensitive `ilike`.
+    test_utf8_scalar!(
+        test_utf8_array_contains_unicode_contains,
+        test_utf8_array_contains_unicode_contains_dyn,
+        vec![
+            "sdlkdfFkoßsdfs",
+            "sdlkdFFkoSSdggs", // Original was case insensitive "sdlkdfFkoSSdggs"
+            "sdlkdFFkoSSsdsd", // Original was case insensitive "sdlkdfFkosssdsd"
+            "FkoS",
+            "Fkos",
+            "ﬀkoSS",
+            "ﬀkoß",
+            "😃sadlksFFkoSSsh😃klF", // Original was case insensitive "😃sadlksffkosSsh😃klF"
+            "😱slgFFkoSSsh😃klF",    // Original was case insensitive "😱slgffkosSsh😃klF"
+            "FFkoSS",                    // "FFKoSS"
+        ],
+        "FFkoSS",
+        contains_utf8_scalar,
+        contains_utf8_scalar_dyn,
         vec![false, true, true, false, false, false, false, true, true, true]
     );
 
