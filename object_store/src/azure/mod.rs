@@ -34,6 +34,8 @@ use crate::{
     RetryConfig,
 };
 use async_trait::async_trait;
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
@@ -330,7 +332,10 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
                 &self.location,
                 Some(buf.into()),
                 true,
-                &[("comp", "block"), ("blockid", &base64::encode(block_id))],
+                &[
+                    ("comp", "block"),
+                    ("blockid", &BASE64_STANDARD.encode(block_id)),
+                ],
             )
             .await?;
 
