@@ -1943,7 +1943,24 @@ pub fn cast_with_options(
                 |x| x * (NANOSECONDS / MILLISECONDS),
             ),
         )),
-
+        (Date32, Timestamp(TimeUnit::Second, None)) => Ok(Arc::new(
+            as_primitive_array::<Date32Type>(array)
+                .unary::<_, TimestampSecondType>(|x| (x as i64) * SECONDS_IN_DAY),
+        )),
+        (Date32, Timestamp(TimeUnit::Millisecond, None)) => Ok(Arc::new(
+            as_primitive_array::<Date32Type>(array).unary::<_, TimestampMillisecondType>(
+                |x| (x as i64) * MILLISECONDS_IN_DAY,
+            ),
+        )),
+        (Date32, Timestamp(TimeUnit::Microsecond, None)) => Ok(Arc::new(
+            as_primitive_array::<Date32Type>(array).unary::<_, TimestampMicrosecondType>(
+                |x| (x as i64) * MICROSECONDS_IN_DAY,
+            ),
+        )),
+        (Date32, Timestamp(TimeUnit::Nanosecond, None)) => Ok(Arc::new(
+            as_primitive_array::<Date32Type>(array)
+                .unary::<_, TimestampNanosecondType>(|x| (x as i64) * NANOSECONDS_IN_DAY),
+        )),
         (Int64, Duration(TimeUnit::Second)) => {
             cast_reinterpret_arrays::<Int64Type, DurationSecondType>(array)
         }
@@ -7692,5 +7709,58 @@ mod tests {
         let overflow_array = Arc::new(overflow_str_array) as ArrayRef;
 
         test_cast_string_to_decimal256_overflow(overflow_array);
+    }
+
+    #[test]
+    fn test_cast_date32_to_timestamp() {
+        let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Second, None)).unwrap();
+        let c = b.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+        assert_eq!(1609459200, c.value(0));
+        assert_eq!(1640995200, c.value(1));
+        assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_date32_to_timestamp_ms() {
+        let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Millisecond, None)).unwrap();
+        let c = b
+            .as_any()
+            .downcast_ref::<TimestampMillisecondArray>()
+            .unwrap();
+        assert_eq!(1609459200000, c.value(0));
+        assert_eq!(1640995200000, c.value(1));
+        assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_date32_to_timestamp_us() {
+        let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+        let c = b
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .unwrap();
+        assert_eq!(1609459200000000, c.value(0));
+        assert_eq!(1640995200000000, c.value(1));
+        assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_date32_to_timestamp_ns() {
+        let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Nanosecond, None)).unwrap();
+        let c = b
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .unwrap();
+        assert_eq!(1609459200000000000, c.value(0));
+        assert_eq!(1640995200000000000, c.value(1));
+        assert!(c.is_null(2));
     }
 }
