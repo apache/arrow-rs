@@ -61,20 +61,6 @@ where
     Ok(BooleanArray::from_unary(left, op))
 }
 
-/// Evaluate `op(left, right)` for [`PrimitiveArray`]s using a specified
-/// comparison function.
-pub fn no_simd_compare_op<T, F>(
-    left: &PrimitiveArray<T>,
-    right: &PrimitiveArray<T>,
-    op: F,
-) -> Result<BooleanArray, ArrowError>
-where
-    T: ArrowPrimitiveType,
-    F: Fn(T::Native, T::Native) -> bool,
-{
-    compare_op(left, right, op)
-}
-
 macro_rules! dyn_function {
     ($sql:tt, $fn_name:tt, $fn_utf8:tt, $fn_dict:tt) => {
 #[doc = concat!("Perform SQL `", $sql ,"` operation on [`StringArray`] /")]
