@@ -27,7 +27,7 @@ use std::collections::HashMap;
 
 /// Helper function to perform boolean lambda function on values from two array accessors, this
 /// version does not attempt to use SIMD.
-pub fn compare_op<T: ArrayAccessor, S: ArrayAccessor, F>(
+fn compare_op<T: ArrayAccessor, S: ArrayAccessor, F>(
     left: T,
     right: S,
     op: F,
@@ -47,7 +47,7 @@ where
 
 /// Helper function to perform boolean lambda function on values from array accessor, this
 /// version does not attempt to use SIMD.
-pub fn compare_op_scalar<T: ArrayAccessor, F>(
+fn compare_op_scalar<T: ArrayAccessor, F>(
     left: T,
     op: F,
 ) -> Result<BooleanArray, ArrowError>
