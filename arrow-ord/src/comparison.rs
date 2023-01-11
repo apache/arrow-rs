@@ -35,8 +35,6 @@ use arrow_select::take::take;
 
 /// Helper function to perform boolean lambda function on values from two array accessors, this
 /// version does not attempt to use SIMD.
-///
-/// Duplicated from `arrow_ord::comparison`
 fn compare_op<T: ArrayAccessor, S: ArrayAccessor, F>(
     left: T,
     right: S,
@@ -57,8 +55,6 @@ where
 
 /// Helper function to perform boolean lambda function on values from array accessor, this
 /// version does not attempt to use SIMD.
-///
-/// Duplicated from `arrow_ord::comparison`
 fn compare_op_scalar<T: ArrayAccessor, F>(
     left: T,
     op: F,
