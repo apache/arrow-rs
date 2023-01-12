@@ -141,10 +141,13 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     )))
 }
 
+/// Defensive check to prevent chrono-rs panics when nanosecond conversion happens on non-supported dates
 #[inline]
 fn to_timestamp_nanos(dt: NaiveDateTime) -> Result<i64, ArrowError> {
     if dt.timestamp().checked_mul(1_000_000_000).is_none() {
-        return Err(ArrowError::ParseError(ERR_NANOSECONDS_NOT_SUPPORTED.to_string()));
+        return Err(ArrowError::ParseError(
+            ERR_NANOSECONDS_NOT_SUPPORTED.to_string(),
+        ));
     }
 
     Ok(dt.timestamp_nanos())
@@ -383,7 +386,7 @@ impl Parser for Time32SecondType {
 const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 
 /// Error message if nanosecond conversion request beyond supported interval
-const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds are between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
+const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
 impl Parser for Date32Type {
     fn parse(string: &str) -> Option<i32> {
@@ -860,6 +863,8 @@ mod tests {
 
     #[test]
     fn string_to_timestamp_old() {
-       parse_timestamp("1677-06-14T07:29:01.256").map_err(|e|  assert!(e.to_string().ends_with(ERR_NANOSECONDS_NOT_SUPPORTED))).unwrap_err();
+        parse_timestamp("1677-06-14T07:29:01.256")
+            .map_err(|e| assert!(e.to_string().ends_with(ERR_NANOSECONDS_NOT_SUPPORTED)))
+            .unwrap_err();
     }
 }
