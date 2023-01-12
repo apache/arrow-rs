@@ -30,6 +30,7 @@
 //! consider implementing automatic clean up of unused parts that are older than one
 //! week.
 use std::collections::BTreeSet;
+use std::env;
 use std::fs::File;
 use std::io::{self, BufReader};
 use std::ops::Range;
@@ -201,6 +202,16 @@ struct ServiceAccountCredentials {
     /// Disable oauth and use empty tokens.
     #[serde(default = "default_disable_oauth")]
     pub disable_oauth: bool,
+}
+
+/// A deserialized `application_default_credentials.json`-file.
+#[derive(serde::Deserialize, Debug)]
+struct ApplicationDefaultCredentials {
+    pub client_id: String,
+    pub client_secret: String,
+    pub refresh_token: String,
+    #[serde(rename = "type")]
+    pub type_: String,
 }
 
 fn default_gcs_base_url() -> String {
@@ -779,12 +790,13 @@ impl ObjectStore for GoogleCloudStorage {
     }
 }
 
-fn reader_credentials_file(
-    service_account_path: impl AsRef<std::path::Path>,
-) -> Result<ServiceAccountCredentials> {
-    let file = File::open(service_account_path).context(OpenCredentialsSnafu)?;
+fn read_credentials_file<T>(credentials_path: impl AsRef<std::path::Path>) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let file = File::open(credentials_path).context(OpenCredentialsSnafu)?;
     let reader = BufReader::new(file);
-    Ok(serde_json::from_reader(reader).context(DecodeCredentialsSnafu)?)
+    Ok(serde_json::from_reader::<_, T>(reader).context(DecodeCredentialsSnafu)?)
 }
 
 /// Configure a connection to Google Cloud Storage using the specified
@@ -826,7 +838,7 @@ pub struct GoogleCloudStorageBuilder {
 /// let typed_options = vec![
 ///     (GoogleConfigKey::Bucket, "my-bucket"),
 /// ];
-/// let azure = GoogleCloudStorageBuilder::new()
+/// let gcs = GoogleCloudStorageBuilder::new()
 ///     .try_with_options(options)
 ///     .unwrap()
 ///     .try_with_options(typed_options)
@@ -1099,7 +1111,9 @@ impl GoogleCloudStorageBuilder {
         let client = self.client_options.client()?;
 
         let credentials = match (self.service_account_path, self.service_account_key) {
-            (Some(path), None) => reader_credentials_file(path)?,
+            (Some(path), None) => {
+                read_credentials_file::<ServiceAccountCredentials>(path)?
+            }
             (None, Some(key)) => {
                 serde_json::from_str(&key).context(DecodeCredentialsSnafu)?
             }
