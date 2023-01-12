@@ -84,13 +84,13 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     // timezone offset, using ' ' as a separator
     // Example: 2020-09-08 13:42:29.190855-05:00
     if let Ok(ts) = DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f%:z") {
-        return Ok(ts.timestamp_nanos());
+        return to_timestamp_nanos(ts.naive_utc());
     }
 
     // with an explicit Z, using ' ' as a separator
     // Example: 2020-09-08 13:42:29Z
     if let Ok(ts) = Utc.datetime_from_str(s, "%Y-%m-%d %H:%M:%S%.fZ") {
-        return Ok(ts.timestamp_nanos());
+        return to_timestamp_nanos(ts.naive_utc());
     }
 
     // Support timestamps without an explicit timezone offset, again
@@ -99,7 +99,7 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     // without a timezone specifier as a local time, using T as a separator
     // Example: 2020-09-08T13:42:29.190855
     if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
-        return Ok(ts.timestamp_nanos());
+        return to_timestamp_nanos(ts);
     }
 
     // without a timezone specifier as a local time, using T as a
@@ -112,7 +112,7 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     // without a timezone specifier as a local time, using ' ' as a separator
     // Example: 2020-09-08 13:42:29.190855
     if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f") {
-        return Ok(ts.timestamp_nanos());
+        return to_timestamp_nanos(ts);
     }
 
     // without a timezone specifier as a local time, using ' ' as a
@@ -139,6 +139,15 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
         "Error parsing '{}' as timestamp",
         s
     )))
+}
+
+#[inline]
+fn to_timestamp_nanos(dt: NaiveDateTime) -> Result<i64, ArrowError> {
+    if dt.timestamp().checked_mul(1_000_000_000).is_none() {
+        return Err(ArrowError::ParseError(ERR_NANOSECONDS_NOT_SUPPORTED.to_string()));
+    }
+
+    Ok(dt.timestamp_nanos())
 }
 
 /// Accepts a string in ISO8601 standard format and some
@@ -372,6 +381,9 @@ impl Parser for Time32SecondType {
 
 /// Number of days between 0001-01-01 and 1970-01-01
 const EPOCH_DAYS_FROM_CE: i32 = 719_163;
+
+/// Error message if nanosecond conversion request beyond supported interval
+const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds are between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
 impl Parser for Date32Type {
     fn parse(string: &str) -> Option<i32> {
@@ -844,5 +856,10 @@ mod tests {
             Time32SecondType::parse_formatted("02 - 10 - 01", "%H - %M - %S"),
             Some(7_801)
         );
+    }
+
+    #[test]
+    fn string_to_timestamp_old() {
+       parse_timestamp("1677-06-14T07:29:01.256").map_err(|e|  assert!(e.to_string().ends_with(ERR_NANOSECONDS_NOT_SUPPORTED))).unwrap_err();
     }
 }
