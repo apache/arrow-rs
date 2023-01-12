@@ -29,6 +29,7 @@ pub use self::kernels::concat::*;
 pub use self::kernels::filter::*;
 pub use self::kernels::interleave::*;
 pub use self::kernels::limit::*;
+pub use self::kernels::nullif::*;
 pub use self::kernels::partition::*;
 pub use self::kernels::regexp::*;
 pub use self::kernels::sort::*;
