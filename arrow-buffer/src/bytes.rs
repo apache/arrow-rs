@@ -94,6 +94,7 @@ impl Bytes {
     pub fn capacity(&self) -> usize {
         match self.deallocation {
             Deallocation::Arrow(capacity) => capacity,
+            Deallocation::Global(l) => l.size(),
             // we cannot determine this in general,
             // and thus we state that this is externally-owned memory
             Deallocation::Custom(_) => 0,
@@ -117,6 +118,9 @@ impl Drop for Bytes {
         match &self.deallocation {
             Deallocation::Arrow(capacity) => {
                 unsafe { alloc::free_aligned(self.ptr, *capacity) };
+            }
+            Deallocation::Global(layout) => {
+                unsafe { std::alloc::dealloc(self.ptr.as_ptr(), *layout) };
             }
             // The automatic drop implementation will free the memory once the reference count reaches zero
             Deallocation::Custom(_allocation) => (),

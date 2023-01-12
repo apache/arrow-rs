@@ -135,8 +135,10 @@ pub(crate) enum Deallocation {
     /// An allocation of the given capacity that needs to be deallocated using arrows's cache aligned allocator.
     /// See [allocate_aligned] and [free_aligned].
     Arrow(usize),
-    /// An allocation from an external source like the FFI interface or a Rust Vec.
-    /// Deallocation will happen
+    /// An allocation using the system's default global allocator and the provided layout
+    Global(Layout),
+    /// An allocation from an external source like the FFI interface
+    /// Deallocation should happen when `Allocation` is dropped
     Custom(Arc<dyn Allocation>),
 }
 
@@ -144,10 +146,13 @@ impl Debug for Deallocation {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             Deallocation::Arrow(capacity) => {
-                write!(f, "Deallocation::Arrow {{ capacity: {} }}", capacity)
+                write!(f, "Deallocation::Arrow {{ capacity: {capacity} }}")
             }
             Deallocation::Custom(_) => {
                 write!(f, "Deallocation::Custom {{ capacity: unknown }}")
+            }
+            Deallocation::Global(layout) => {
+                write!(f, "Deallocation::Global {{ alignment: {layout:?} }}")
             }
         }
     }
