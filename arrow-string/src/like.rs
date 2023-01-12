@@ -196,7 +196,7 @@ scalar_dyn_function!(
 macro_rules! dict_function {
     ($sql:tt, $fn_name:tt, $fn_impl:tt) => {
 
-#[doc = concat!("Perform SQL `", $sql ,"` operation on on [`DictionaryArray`] with values")]
+#[doc = concat!("Perform SQL `", $sql ,"` operation on [`DictionaryArray`] with values")]
 /// [`StringArray`]/[`LargeStringArray`].
 ///
 /// See the documentation on [`like_utf8`] for more details.
