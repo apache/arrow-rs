@@ -627,6 +627,8 @@ where
 }
 
 /// Perform SQL `STARTSWITH(left, right)` operation on [`StringArray`] / [`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
 pub fn starts_with_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
@@ -662,6 +664,8 @@ pub fn starts_with_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 }
 
 /// Perform SQL `ENDSWITH(left, right)` operation on [`StringArray`] / [`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
 pub fn ends_with_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
@@ -697,6 +701,8 @@ pub fn ends_with_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 }
 
 /// Perform SQL `CONTAINS(left, right)` operation on [`StringArray`] / [`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
 pub fn contains_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
