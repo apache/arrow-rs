@@ -358,8 +358,8 @@ pub mod tests {
 
         let cmp = build_compare(&array, &array).unwrap();
 
-        assert_eq!(Ordering::Equal, (cmp)(0, 1));
-        assert_eq!(Ordering::Equal, (cmp)(1, 0));
+        assert_eq!(Ordering::Less, (cmp)(0, 1));
+        assert_eq!(Ordering::Greater, (cmp)(1, 0));
     }
 
     #[test]
