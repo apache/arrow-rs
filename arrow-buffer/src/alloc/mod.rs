@@ -136,6 +136,7 @@ pub(crate) enum Deallocation {
     /// See [allocate_aligned] and [free_aligned].
     Arrow(usize),
     /// An allocation using the system's default global allocator and the provided layout
+    #[allow(unused)]
     Global(Layout),
     /// An allocation from an external source like the FFI interface
     /// Deallocation should happen when `Allocation` is dropped
