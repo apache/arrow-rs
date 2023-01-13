@@ -21,32 +21,21 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::{ArrowError, DataType};
-use num::Float;
 use std::cmp::Ordering;
 
 /// Compare the values at two arbitrary indices in two arrays.
 pub type DynComparator = Box<dyn Fn(usize, usize) -> Ordering + Send + Sync>;
-
-/// compares two floats, placing NaNs at last
-fn cmp_nans_last<T: Float>(a: &T, b: &T) -> Ordering {
-    match (a.is_nan(), b.is_nan()) {
-        (true, true) => Ordering::Equal,
-        (true, false) => Ordering::Greater,
-        (false, true) => Ordering::Less,
-        _ => a.partial_cmp(b).unwrap(),
-    }
-}
 
 fn compare_primitives<T: ArrowPrimitiveType>(
     left: &dyn Array,
     right: &dyn Array,
 ) -> DynComparator
 where
-    T::Native: Ord,
+    T::Native: ArrowNativeTypeOp,
 {
     let left: PrimitiveArray<T> = PrimitiveArray::from(left.data().clone());
     let right: PrimitiveArray<T> = PrimitiveArray::from(right.data().clone());
-    Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
+    Box::new(move |i, j| left.value(i).compare(right.value(j)))
 }
 
 fn compare_boolean(left: &dyn Array, right: &dyn Array) -> DynComparator {
@@ -54,18 +43,6 @@ fn compare_boolean(left: &dyn Array, right: &dyn Array) -> DynComparator {
     let right: BooleanArray = BooleanArray::from(right.data().clone());
 
     Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
-}
-
-fn compare_float<T: ArrowPrimitiveType>(
-    left: &dyn Array,
-    right: &dyn Array,
-) -> DynComparator
-where
-    T::Native: Float,
-{
-    let left: PrimitiveArray<T> = PrimitiveArray::from(left.data().clone());
-    let right: PrimitiveArray<T> = PrimitiveArray::from(right.data().clone());
-    Box::new(move |i, j| cmp_nans_last(&left.value(i), &right.value(j)))
 }
 
 fn compare_string<T>(left: &dyn Array, right: &dyn Array) -> DynComparator
@@ -197,8 +174,8 @@ pub fn build_compare(
         (Int16, Int16) => compare_primitives::<Int16Type>(left, right),
         (Int32, Int32) => compare_primitives::<Int32Type>(left, right),
         (Int64, Int64) => compare_primitives::<Int64Type>(left, right),
-        (Float32, Float32) => compare_float::<Float32Type>(left, right),
-        (Float64, Float64) => compare_float::<Float64Type>(left, right),
+        (Float32, Float32) => compare_primitives::<Float32Type>(left, right),
+        (Float64, Float64) => compare_primitives::<Float64Type>(left, right),
         (Decimal128(_, _), Decimal128(_, _)) => {
             compare_primitives::<Decimal128Type>(left, right)
         }
@@ -372,6 +349,7 @@ pub mod tests {
         let cmp = build_compare(&array, &array).unwrap();
 
         assert_eq!(Ordering::Less, (cmp)(0, 1));
+        assert_eq!(Ordering::Equal, (cmp)(1, 1));
     }
 
     #[test]
@@ -380,8 +358,8 @@ pub mod tests {
 
         let cmp = build_compare(&array, &array).unwrap();
 
-        assert_eq!(Ordering::Equal, (cmp)(0, 1));
-        assert_eq!(Ordering::Equal, (cmp)(1, 0));
+        assert_eq!(Ordering::Less, (cmp)(0, 1));
+        assert_eq!(Ordering::Greater, (cmp)(1, 0));
     }
 
     #[test]
