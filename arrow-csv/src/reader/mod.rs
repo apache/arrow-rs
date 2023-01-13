@@ -2087,14 +2087,14 @@ mod tests {
 
         let c = as_boolean_array(b.column(0));
         assert_eq!(c.null_count(), 1);
-        assert_eq!(c.value(0), true);
-        assert_eq!(c.value(1), false);
+        assert!(c.value(0));
+        assert!(!c.value(1));
         assert!(c.is_null(2));
 
         let c = as_boolean_array(b.column(1));
         assert_eq!(c.null_count(), 0);
-        assert_eq!(c.value(0), false);
-        assert_eq!(c.value(1), true);
-        assert_eq!(c.value(2), true);
+        assert!(!c.value(0));
+        assert!(c.value(1));
+        assert!(c.value(2));
     }
 }
