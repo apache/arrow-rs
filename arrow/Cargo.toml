@@ -79,7 +79,7 @@ prettyprint = ["comfy-table"]
 # not the core arrow code itself. Be aware that `rand` must be kept as
 # an optional dependency for supporting compile to wasm32-unknown-unknown
 # target without assuming an environment containing JavaScript.
-test_utils = ["rand", "arrow-json/raw"]
+test_utils = ["rand"]
 pyarrow = ["pyo3", "ffi"]
 # force_validate runs full data validation for all arrays that are created
 # this is not enabled by default as it is too computationally expensive

@@ -15,34 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use serde_json::value::RawValue;
-
 use arrow_array::builder::BooleanBuilder;
 use arrow_array::Array;
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 
-use crate::raw::ArrayDecoder;
+use crate::raw::tape::{Tape, TapeElement};
+use crate::raw::{tape_error, ArrayDecoder};
 
 #[derive(Default)]
 pub struct BooleanArrayDecoder {}
 
 impl ArrayDecoder for BooleanArrayDecoder {
-    fn decode(&mut self, values: &[Option<&RawValue>]) -> Result<ArrayData, ArrowError> {
-        let mut builder = BooleanBuilder::with_capacity(values.len());
-        for v in values {
-            match v {
-                Some(v) => {
-                    let v = v.get();
-                    // First attempt to parse as primitive
-                    let value = serde_json::from_str(v).map_err(|_| {
-                        ArrowError::JsonError(format!(
-                            "Failed to parse {v} as DataType::Boolean",
-                        ))
-                    })?;
-                    builder.append_option(value);
-                }
-                None => builder.append_null(),
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+        let mut builder = BooleanBuilder::with_capacity(pos.len());
+        for p in pos {
+            match tape.get(*p) {
+                TapeElement::Null => builder.append_null(),
+                TapeElement::True => builder.append_value(true),
+                TapeElement::False => builder.append_value(false),
+                d => return Err(tape_error(d, "boolean")),
             }
         }
 

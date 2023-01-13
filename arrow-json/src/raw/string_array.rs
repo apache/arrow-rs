@@ -15,50 +15,43 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::borrow::Cow;
-use std::marker::PhantomData;
-
-use serde_json::value::RawValue;
-
 use arrow_array::builder::GenericStringBuilder;
 use arrow_array::{Array, OffsetSizeTrait};
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
+use std::marker::PhantomData;
 
-use crate::raw::ArrayDecoder;
+use crate::raw::tape::{Tape, TapeElement};
+use crate::raw::{tape_error, ArrayDecoder};
 
 #[derive(Default)]
-pub struct StringArrayDecoder<O> {
+pub struct StringArrayDecoder<O: OffsetSizeTrait> {
     phantom: PhantomData<O>,
 }
 
-impl<O> ArrayDecoder for StringArrayDecoder<O>
-where
-    O: OffsetSizeTrait,
-{
-    fn decode(&mut self, values: &[Option<&RawValue>]) -> Result<ArrayData, ArrowError> {
-        let bytes_capacity = values
-            .iter()
-            .map(|x| x.map(|x| x.get().len()).unwrap_or_default())
-            .sum();
+impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+        let mut data_capacity = 0;
+        for p in pos {
+            match tape.get(*p) {
+                TapeElement::String(idx) => {
+                    data_capacity += tape.get_string(idx).len();
+                }
+                TapeElement::Null => {}
+                d => return Err(tape_error(d, "string")),
+            }
+        }
 
         let mut builder =
-            GenericStringBuilder::<O>::with_capacity(values.len(), bytes_capacity);
-        for v in values {
-            match v {
-                Some(v) => {
-                    let v = v.get();
-                    // Use Cow to allow for strings containing escapes
-                    let value: Option<Cow<str>> =
-                        serde_json::from_str(v).map_err(|_| {
-                            ArrowError::JsonError(format!(
-                                "Failed to parse \"{}\" as string",
-                                v
-                            ))
-                        })?;
-                    builder.append_option(value);
+            GenericStringBuilder::<O>::with_capacity(pos.len(), data_capacity);
+
+        for p in pos {
+            match tape.get(*p) {
+                TapeElement::String(idx) => {
+                    builder.append_value(tape.get_string(idx));
                 }
-                None => builder.append_null(),
+                TapeElement::Null => builder.append_null(),
+                _ => unreachable!(),
             }
         }
 

@@ -18,27 +18,25 @@
 use num::NumCast;
 use std::marker::PhantomData;
 
-use serde_json::value::RawValue;
-
 use arrow_array::builder::PrimitiveBuilder;
-use arrow_array::{Array, ArrowPrimitiveType, PrimitiveArray};
+use arrow_array::{Array, ArrowPrimitiveType};
 use arrow_cast::parse::Parser;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 
-use crate::raw::ArrayDecoder;
+use crate::raw::tape::{Tape, TapeElement};
+use crate::raw::{tape_error, ArrayDecoder};
 
-pub struct PrimitiveArrayDecoder<P> {
-    phantom: PhantomData<P>,
+pub struct PrimitiveArrayDecoder<P: ArrowPrimitiveType> {
     data_type: DataType,
+    phantom: PhantomData<P>,
 }
 
 impl<P: ArrowPrimitiveType> PrimitiveArrayDecoder<P> {
     pub fn new(data_type: DataType) -> Self {
-        assert!(PrimitiveArray::<P>::is_compatible(&data_type));
         Self {
-            phantom: Default::default(),
             data_type,
+            phantom: Default::default(),
         }
     }
 }
@@ -48,35 +46,39 @@ where
     P: ArrowPrimitiveType + Parser,
     P::Native: NumCast,
 {
-    fn decode(&mut self, values: &[Option<&RawValue>]) -> Result<ArrayData, ArrowError> {
-        let mut builder = PrimitiveBuilder::<P>::with_capacity(values.len());
-        for v in values {
-            match v {
-                Some(v) => {
-                    let v = v.get();
-                    // First attempt to parse as primitive
-                    let value = match serde_json::from_str::<Option<f64>>(v) {
-                        Ok(Some(v)) => Some(NumCast::from(v).ok_or_else(|| {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+        let mut builder = PrimitiveBuilder::<P>::with_capacity(pos.len())
+            .with_data_type(self.data_type.clone());
+
+        for p in pos {
+            match tape.get(*p) {
+                TapeElement::Null => builder.append_null(),
+                TapeElement::String(idx) => {
+                    let s = tape.get_string(idx);
+                    let value = P::parse(s).ok_or_else(|| {
+                        ArrowError::JsonError(format!(
+                            "failed to parse \"{s}\" as {}",
+                            self.data_type
+                        ))
+                    })?;
+
+                    builder.append_value(value)
+                }
+                TapeElement::Number(idx) => {
+                    let s = tape.get_string(idx);
+                    let value = lexical_core::parse::<f64>(s.as_bytes())
+                        .ok()
+                        .and_then(NumCast::from)
+                        .ok_or_else(|| {
                             ArrowError::JsonError(format!(
-                                "Failed to convert {v} to {}",
+                                "failed to parse {s} as {}",
                                 self.data_type
                             ))
-                        })?),
-                        Ok(None) => None,
-                        // Fallback to using Parser
-                        Err(_) => match serde_json::from_str(v).ok().and_then(P::parse) {
-                            Some(s) => Some(s),
-                            None => {
-                                return Err(ArrowError::JsonError(format!(
-                                    "Failed to parse {v} as {}",
-                                    self.data_type
-                                )))
-                            }
-                        },
-                    };
-                    builder.append_option(value);
+                        })?;
+
+                    builder.append_value(value)
                 }
-                None => builder.append_null(),
+                d => return Err(tape_error(d, "primitive")),
             }
         }
 

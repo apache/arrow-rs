@@ -25,7 +25,6 @@
 pub mod reader;
 pub mod writer;
 
-#[cfg(feature = "raw")]
 pub mod raw;
 
 pub use self::reader::Reader;

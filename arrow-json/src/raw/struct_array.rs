@@ -1,9 +1,7 @@
-use crate::raw::{make_decoder, ArrayDecoder};
+use crate::raw::tape::{Tape, TapeElement};
+use crate::raw::{make_decoder, tape_error, ArrayDecoder};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
-use serde::de::{MapAccess, Visitor};
-use serde::Deserializer;
-use serde_json::value::RawValue;
 
 pub struct StructArrayDecoder {
     data_type: DataType,
@@ -15,7 +13,7 @@ impl StructArrayDecoder {
         let decoders = struct_fields(&data_type)
             .iter()
             .map(|f| make_decoder(f.data_type().clone()))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, ArrowError>>()?;
 
         Ok(Self {
             data_type,
@@ -25,34 +23,43 @@ impl StructArrayDecoder {
 }
 
 impl ArrayDecoder for StructArrayDecoder {
-    fn decode(&mut self, values: &[Option<&RawValue>]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
         let fields = struct_fields(&self.data_type);
-        let mut children: Vec<Vec<Option<&RawValue>>> = (0..fields.len())
-            .map(|_| vec![None; values.len()])
-            .collect();
+        let mut child_pos: Vec<_> =
+            (0..fields.len()).map(|_| vec![0; pos.len()]).collect();
 
-        for (row, value) in values.iter().enumerate() {
-            match value {
-                Some(v) => {
-                    let mut reader = serde_json::de::Deserializer::from_str(v.get());
+        for (row, p) in pos.iter().enumerate() {
+            let end_idx = match tape.get(*p) {
+                TapeElement::StartObject(end_idx) => end_idx,
+                d => return Err(tape_error(d, "object")),
+            };
 
-                    let visitor = StructVisitor {
-                        fields,
-                        row,
-                        output: &mut children,
-                    };
+            let mut cur_idx = *p + 1;
+            while cur_idx < end_idx {
+                // Read field name
+                let field_name = match tape.get(cur_idx) {
+                    TapeElement::String(s) => tape.get_string(s),
+                    d => return Err(tape_error(d, "field name")),
+                };
 
-                    reader.deserialize_map(visitor).map_err(|_| {
-                        ArrowError::JsonError(format!(
-                            "Failed to parse \"{}\" as struct",
-                            v.get()
-                        ))
-                    })?;
+                // Update child pos if match found
+                if let Some(field_idx) =
+                    fields.iter().position(|x| x.name() == field_name)
+                {
+                    child_pos[field_idx][row] = cur_idx + 1;
                 }
-                None => {
-                    return Err(ArrowError::NotYetImplemented(
-                        "Struct containing nested nulls is not yet supported".to_string(),
-                    ))
+
+                // Advance to next field
+                cur_idx = match tape.get(cur_idx + 1) {
+                    TapeElement::String(_)
+                    | TapeElement::Number(_)
+                    | TapeElement::True
+                    | TapeElement::False
+                    | TapeElement::Null => cur_idx + 2,
+                    TapeElement::StartObject(end_idx) => end_idx + 1,
+                    d @ TapeElement::EndObject(_) => {
+                        return Err(tape_error(d, "field value"))
+                    }
                 }
             }
         }
@@ -60,50 +67,22 @@ impl ArrayDecoder for StructArrayDecoder {
         let child_data = self
             .decoders
             .iter_mut()
-            .zip(&children)
-            .map(|(decoder, values)| decoder.decode(values))
-            .collect::<Result<Vec<_>, _>>()?;
+            .zip(child_pos)
+            .map(|(d, pos)| d.decode(tape, &pos))
+            .collect::<Result<Vec<_>, ArrowError>>()?;
 
         // Sanity check
         child_data
             .iter()
-            .for_each(|x| assert_eq!(x.len(), values.len()));
+            .for_each(|x| assert_eq!(x.len(), pos.len()));
 
         let data = ArrayDataBuilder::new(self.data_type.clone())
-            .len(values.len())
+            .len(pos.len())
             .child_data(child_data);
 
         // Safety
         // Validated lengths above
         Ok(unsafe { data.build_unchecked() })
-    }
-}
-
-struct StructVisitor<'de, 'a> {
-    fields: &'a [Field],
-    output: &'a mut [Vec<Option<&'de RawValue>>],
-    row: usize,
-}
-
-impl<'de, 'a> Visitor<'de> for StructVisitor<'de, 'a> {
-    type Value = ();
-
-    // Format a message stating what data this Visitor expects to receive.
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("an object")
-    }
-
-    fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
-    where
-        M: MapAccess<'de>,
-    {
-        while let Some((key, value)) = access.next_entry::<&'de str, &'de RawValue>()? {
-            // Optimize for the common case of a few fields with short names
-            if let Some(field_idx) = self.fields.iter().position(|x| x.name() == key) {
-                self.output[field_idx][self.row] = Some(value);
-            }
-        }
-        Ok(())
     }
 }
 
