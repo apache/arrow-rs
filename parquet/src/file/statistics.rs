@@ -252,10 +252,12 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
         (None, None)
     };
 
-    if stats.is_min_max_deprecated() {
-        thrift_stats.min = min;
-        thrift_stats.max = max;
-    } else {
+    if stats.is_min_max_backwards_compatible() {
+        thrift_stats.min = min.clone();
+        thrift_stats.max = max.clone();
+    }
+
+    if !stats.is_min_max_deprecated() {
         thrift_stats.min_value = min;
         thrift_stats.max_value = max;
     }
@@ -327,6 +329,12 @@ impl Statistics {
     /// [`SortOrder`](crate::basic::SortOrder) for more information.
     pub fn is_min_max_deprecated(&self) -> bool {
         statistics_enum_func![self, is_min_max_deprecated]
+    }
+
+    /// Returns `true` if the statistics are backwards compatible with the
+    /// deprecated `min` and `max` fields
+    pub fn is_min_max_backwards_compatible(&self) -> bool {
+        statistics_enum_func![self, is_min_max_backwards_compatible]
     }
 
     /// Returns optional value of number of distinct values occurring.
@@ -405,7 +413,13 @@ pub struct ValueStatistics<T> {
     // Distinct count could be omitted in some cases
     distinct_count: Option<u64>,
     null_count: u64,
+
+    /// If `true` populate the deprecated `min` and `max` fields instead of
+    /// `min_value` and `max_value`
     is_min_max_deprecated: bool,
+
+    /// If `true` should always write deprecated `min` and `max` fields
+    is_min_max_backwards_compatible: bool,
 }
 
 impl<T: ParquetValueType> ValueStatistics<T> {
@@ -423,6 +437,15 @@ impl<T: ParquetValueType> ValueStatistics<T> {
             distinct_count,
             null_count,
             is_min_max_deprecated,
+            is_min_max_backwards_compatible: is_min_max_deprecated,
+        }
+    }
+
+    /// Set whether to write the deprecated `min` and `max` fields
+    pub fn with_backwards_compatible_min_max(self, backwards_compatible: bool) -> Self {
+        Self {
+            is_min_max_backwards_compatible: backwards_compatible,
+            ..self
         }
     }
 
@@ -478,6 +501,12 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     fn is_min_max_deprecated(&self) -> bool {
         self.is_min_max_deprecated
     }
+
+    /// Returns `true` if the statistics are backwards compatible
+    /// with the deprecated `min` and `max` fields
+    pub fn is_min_max_backwards_compatible(&self) -> bool {
+        self.is_min_max_backwards_compatible
+    }
 }
 
 impl<T: ParquetValueType> fmt::Display for ValueStatistics<T> {
@@ -509,12 +538,13 @@ impl<T: ParquetValueType> fmt::Debug for ValueStatistics<T> {
         write!(
             f,
             "{{min: {:?}, max: {:?}, distinct_count: {:?}, null_count: {}, \
-             min_max_deprecated: {}}}",
+             min_max_deprecated: {}, min_max_backwards_compatible: {}}}",
             self.min,
             self.max,
             self.distinct_count,
             self.null_count,
-            self.is_min_max_deprecated
+            self.is_min_max_deprecated,
+            self.is_min_max_backwards_compatible
         )
     }
 }
@@ -569,14 +599,14 @@ mod tests {
         assert_eq!(
             format!("{:?}", stats),
             "Int32({min: Some(1), max: Some(12), distinct_count: None, null_count: 12, \
-             min_max_deprecated: true})"
+             min_max_deprecated: true, min_max_backwards_compatible: true})"
         );
 
         let stats = Statistics::int32(None, None, None, 7, false);
         assert_eq!(
             format!("{:?}", stats),
             "Int32({min: None, max: None, distinct_count: None, null_count: 7, \
-             min_max_deprecated: false})"
+             min_max_deprecated: false, min_max_backwards_compatible: false})"
         )
     }
 
