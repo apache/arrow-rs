@@ -2074,7 +2074,7 @@ mod tests {
 
     #[test]
     fn test_null_boolean() {
-        let csv = "true,false\nFalse,True\n,True\n";
+        let csv = "true,false\nFalse,True\n,True\nFalse,";
         let b = ReaderBuilder::new()
             .build_buffered(Cursor::new(csv.as_bytes()))
             .unwrap()
@@ -2082,7 +2082,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(b.num_rows(), 3);
+        assert_eq!(b.num_rows(), 4);
         assert_eq!(b.num_columns(), 2);
 
         let c = as_boolean_array(b.column(0));
@@ -2090,11 +2090,13 @@ mod tests {
         assert!(c.value(0));
         assert!(!c.value(1));
         assert!(c.is_null(2));
+        assert!(!c.value(3));
 
         let c = as_boolean_array(b.column(1));
-        assert_eq!(c.null_count(), 0);
+        assert_eq!(c.null_count(), 1);
         assert!(!c.value(0));
         assert!(c.value(1));
         assert!(c.value(2));
+        assert!(c.is_null(3));
     }
 }
