@@ -121,8 +121,13 @@ enum Error {
     #[snafu(display("Missing bucket name"))]
     MissingBucketName {},
 
-    #[snafu(display("Missing service account path"))]
-    MissingServiceAccountPath,
+    #[snafu(display("Missing service account path or key"))]
+    MissingServiceAccountPathOrKey,
+
+    #[snafu(display(
+        "One of service account path or service account key may be provided."
+    ))]
+    ServiceAccountPathAndKeyProvided,
 
     #[snafu(display("GCP credential error: {}", source))]
     Credential { source: credential::Error },
@@ -800,14 +805,15 @@ pub struct GoogleCloudStorageBuilder {
     bucket_name: Option<String>,
     url: Option<String>,
     service_account_path: Option<String>,
+    service_account_key: Option<String>,
     retry_config: RetryConfig,
     client_options: ClientOptions,
 }
 
 /// Configuration keys for [`GoogleCloudStorageBuilder`]
 ///
-/// Configuration via keys can be dome via the [`try_with_option`](GoogleCloudStorageBuilder::try_with_option)
-/// or [`with_options`](GoogleCloudStorageBuilder::try_with_options) methods on the builder.
+/// Configuration via keys can be done via the [`try_with_option`](GoogleCloudStorageBuilder::try_with_option)
+/// or [`try_with_options`](GoogleCloudStorageBuilder::try_with_options) methods on the builder.
 ///
 /// # Example
 /// ```
@@ -835,7 +841,16 @@ pub enum GoogleConfigKey {
     /// Supported keys:
     /// - `google_service_account`
     /// - `service_account`
+    /// - `google_service_account_path`
+    /// - `service_account_path`
     ServiceAccount,
+
+    /// The serialized service account key.
+    ///
+    /// Supported keys:
+    /// - `google_service_account_key`
+    /// - `service_account_key`
+    ServiceAccountKey,
 
     /// Bucket name
     ///
@@ -853,6 +868,7 @@ impl AsRef<str> for GoogleConfigKey {
     fn as_ref(&self) -> &str {
         match self {
             Self::ServiceAccount => "google_service_account",
+            Self::ServiceAccountKey => "google_service_account_key",
             Self::Bucket => "google_bucket",
         }
     }
@@ -863,7 +879,13 @@ impl FromStr for GoogleConfigKey {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "google_service_account" | "service_account" => Ok(Self::ServiceAccount),
+            "google_service_account"
+            | "service_account"
+            | "google_service_account_path"
+            | "service_account_path" => Ok(Self::ServiceAccount),
+            "google_service_account_key" | "service_account_key" => {
+                Ok(Self::ServiceAccountKey)
+            }
             "google_bucket" | "google_bucket_name" | "bucket" | "bucket_name" => {
                 Ok(Self::Bucket)
             }
@@ -877,6 +899,7 @@ impl Default for GoogleCloudStorageBuilder {
         Self {
             bucket_name: None,
             service_account_path: None,
+            service_account_key: None,
             retry_config: Default::default(),
             client_options: ClientOptions::new().with_allow_http(true),
             url: None,
@@ -894,13 +917,17 @@ impl GoogleCloudStorageBuilder {
     ///
     /// Variables extracted from environment:
     /// * GOOGLE_SERVICE_ACCOUNT: location of service account file
+    /// * GOOGLE_SERVICE_ACCOUNT_PATH: (alias) location of service account file
     /// * SERVICE_ACCOUNT: (alias) location of service account file
+    /// * GOOGLE_SERVICE_ACCOUNT_KEY: JSON serialized service account key
+    /// * GOOGLE_BUCKET: bucket name
+    /// * GOOGLE_BUCKET_NAME: (alias) bucket name
     ///
     /// # Example
     /// ```
     /// use object_store::gcp::GoogleCloudStorageBuilder;
     ///
-    /// let azure = GoogleCloudStorageBuilder::from_env()
+    /// let gcs = GoogleCloudStorageBuilder::from_env()
     ///     .with_bucket_name("foo")
     ///     .build();
     /// ```
@@ -957,6 +984,9 @@ impl GoogleCloudStorageBuilder {
             GoogleConfigKey::ServiceAccount => {
                 self.service_account_path = Some(value.into())
             }
+            GoogleConfigKey::ServiceAccountKey => {
+                self.service_account_key = Some(value.into())
+            }
             GoogleConfigKey::Bucket => self.bucket_name = Some(value.into()),
         };
         Ok(self)
@@ -1001,8 +1031,12 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
-    /// Set the path to the service account file (required). Example
-    /// `"/tmp/gcs.json"`
+    /// Set the path to the service account file.
+    ///
+    /// This or [`GoogleCloudStorageBuilder::with_service_account_key`] must be
+    /// set.
+    ///
+    /// Example `"/tmp/gcs.json"`.
     ///
     /// Example contents of `gcs.json`:
     ///
@@ -1019,6 +1053,19 @@ impl GoogleCloudStorageBuilder {
         service_account_path: impl Into<String>,
     ) -> Self {
         self.service_account_path = Some(service_account_path.into());
+        self
+    }
+
+    /// Set the service account key. The service account must be in the JSON
+    /// format.
+    ///
+    /// This or [`GoogleCloudStorageBuilder::with_service_account_path`] must be
+    /// set.
+    pub fn with_service_account_key(
+        mut self,
+        service_account: impl Into<String>,
+    ) -> Self {
+        self.service_account_key = Some(service_account.into());
         self
     }
 
@@ -1048,12 +1095,19 @@ impl GoogleCloudStorageBuilder {
         }
 
         let bucket_name = self.bucket_name.ok_or(Error::MissingBucketName {})?;
-        let service_account_path = self
-            .service_account_path
-            .ok_or(Error::MissingServiceAccountPath)?;
 
         let client = self.client_options.client()?;
-        let credentials = reader_credentials_file(service_account_path)?;
+
+        let credentials = match (self.service_account_path, self.service_account_key) {
+            (Some(path), None) => reader_credentials_file(path)?,
+            (None, Some(key)) => {
+                serde_json::from_str(&key).context(DecodeCredentialsSnafu)?
+            }
+            (None, None) => return Err(Error::MissingServiceAccountPathOrKey.into()),
+            (Some(_), Some(_)) => {
+                return Err(Error::ServiceAccountPathAndKeyProvided.into())
+            }
+        };
 
         // TODO: https://cloud.google.com/storage/docs/authentication#oauth-scopes
         let scope = "https://www.googleapis.com/auth/devstorage.full_control";
@@ -1110,6 +1164,8 @@ mod test {
     use bytes::Bytes;
     use std::collections::HashMap;
     use std::env;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     use crate::{
         tests::{
@@ -1121,6 +1177,7 @@ mod test {
 
     use super::*;
 
+    const FAKE_KEY: &str = r#"{"private_key": "private_key", "client_email":"client_email", "disable_oauth":true}"#;
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
     // Helper macro to skip tests if TEST_INTEGRATION and the GCP environment variables are not set.
@@ -1278,11 +1335,8 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test_proxy_url() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
         let mut tfile = NamedTempFile::new().unwrap();
-        let creds = r#"{"private_key": "private_key", "client_email":"client_email", "disable_oauth":true}"#;
-        write!(tfile, "{}", creds).unwrap();
+        write!(tfile, "{}", FAKE_KEY).unwrap();
         let service_account_path = tfile.path();
         let gcs = GoogleCloudStorageBuilder::new()
             .with_service_account_path(service_account_path.to_str().unwrap())
@@ -1316,6 +1370,27 @@ mod test {
         for case in err_cases {
             builder.parse_url(case).unwrap_err();
         }
+    }
+
+    #[test]
+    fn gcs_test_service_account_key_only() {
+        let _ = GoogleCloudStorageBuilder::new()
+            .with_service_account_key(FAKE_KEY)
+            .with_bucket_name("foo")
+            .build()
+            .unwrap();
+    }
+
+    #[test]
+    fn gcs_test_service_account_key_and_path() {
+        let mut tfile = NamedTempFile::new().unwrap();
+        write!(tfile, "{}", FAKE_KEY).unwrap();
+        let _ = GoogleCloudStorageBuilder::new()
+            .with_service_account_key(FAKE_KEY)
+            .with_service_account_path(tfile.path().to_str().unwrap())
+            .with_bucket_name("foo")
+            .build()
+            .unwrap_err();
     }
 
     #[test]
@@ -1370,5 +1445,42 @@ mod test {
 
         let builder = GoogleCloudStorageBuilder::new().try_with_options(&options);
         assert!(builder.is_err());
+    }
+
+    #[test]
+    fn gcs_test_config_aliases() {
+        // Service account path
+        for alias in [
+            "google_service_account",
+            "service_account",
+            "google_service_account_path",
+            "service_account_path",
+        ] {
+            let builder = GoogleCloudStorageBuilder::new()
+                .try_with_options([(alias, "/fake/path.json")])
+                .unwrap();
+            assert_eq!("/fake/path.json", builder.service_account_path.unwrap());
+        }
+
+        // Service account key
+        for alias in ["google_service_account_key", "service_account_key"] {
+            let builder = GoogleCloudStorageBuilder::new()
+                .try_with_options([(alias, FAKE_KEY)])
+                .unwrap();
+            assert_eq!(FAKE_KEY, builder.service_account_key.unwrap());
+        }
+
+        // Bucket name
+        for alias in [
+            "google_bucket",
+            "google_bucket_name",
+            "bucket",
+            "bucket_name",
+        ] {
+            let builder = GoogleCloudStorageBuilder::new()
+                .try_with_options([(alias, "fake_bucket")])
+                .unwrap();
+            assert_eq!("fake_bucket", builder.bucket_name.unwrap());
+        }
     }
 }

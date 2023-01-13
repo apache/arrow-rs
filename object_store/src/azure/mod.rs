@@ -34,6 +34,8 @@ use crate::{
     RetryConfig,
 };
 use async_trait::async_trait;
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
@@ -330,7 +332,10 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
                 &self.location,
                 Some(buf.into()),
                 true,
-                &[("comp", "block"), ("blockid", &base64::encode(block_id))],
+                &[
+                    ("comp", "block"),
+                    ("blockid", &BASE64_STANDARD.encode(block_id)),
+                ],
             )
             .await?;
 
@@ -965,10 +970,8 @@ mod tests {
 
     #[tokio::test]
     async fn azure_blob_test() {
-        let use_emulator = env::var("AZURE_USE_EMULATOR").is_ok();
         let integration = maybe_skip_integration!().build().unwrap();
-        // Azurite doesn't support listing with spaces - https://github.com/localstack/localstack/issues/6328
-        put_get_delete_list_opts(&integration, use_emulator).await;
+        put_get_delete_list_opts(&integration, false).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;

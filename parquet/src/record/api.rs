@@ -669,6 +669,9 @@ impl Field {
 
     #[cfg(any(feature = "json", test))]
     pub fn to_json_value(&self) -> Value {
+        use base64::prelude::BASE64_STANDARD;
+        use base64::Engine;
+
         match &self {
             Field::Null => Value::Null,
             Field::Bool(b) => Value::Bool(*b),
@@ -688,7 +691,7 @@ impl Field {
                 .unwrap_or(Value::Null),
             Field::Decimal(n) => Value::String(convert_decimal_to_string(n)),
             Field::Str(s) => Value::String(s.to_owned()),
-            Field::Bytes(b) => Value::String(base64::encode(b.data())),
+            Field::Bytes(b) => Value::String(BASE64_STANDARD.encode(b.data())),
             Field::Date(d) => Value::String(convert_date_to_string(*d)),
             Field::TimestampMillis(ts) => {
                 Value::String(convert_timestamp_millis_to_string(*ts))

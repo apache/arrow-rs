@@ -559,15 +559,15 @@ mod decimal {
     impl DecimalTypeSealed for Decimal256Type {}
 }
 
-/// A trait over the decimal types, used by [`DecimalArray`] to provide a generic
+/// A trait over the decimal types, used by [`PrimitiveArray`] to provide a generic
 /// implementation across the various decimal types
 ///
 /// Implemented by [`Decimal128Type`] and [`Decimal256Type`] for [`Decimal128Array`]
 /// and [`Decimal256Array`] respectively
 ///
-/// [`DecimalArray`]: [crate::array::DecimalArray]
-/// [`Decimal128Array`]: [crate::array::Decimal128Array]
-/// [`Decimal256Array`]: [crate::array::Decimal256Array]
+/// [`PrimitiveArray`]: crate::array::PrimitiveArray
+/// [`Decimal128Array`]: crate::array::Decimal128Array
+/// [`Decimal256Array`]: crate::array::Decimal256Array
 pub trait DecimalType:
     'static + Send + Sync + ArrowPrimitiveType + decimal::DecimalTypeSealed
 {
@@ -767,6 +767,8 @@ pub type LargeBinaryType = GenericBinaryType<i64>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_data::{layout, BufferSpec};
+    use std::mem::size_of;
 
     #[test]
     fn month_day_nano_should_roundtrip() {
@@ -802,5 +804,47 @@ mod tests {
     fn year_month_should_roundtrip_neg() {
         let value = IntervalYearMonthType::make_value(-1, -2);
         assert_eq!(IntervalYearMonthType::to_months(value), -14);
+    }
+
+    fn test_layout<T: ArrowPrimitiveType>() {
+        let layout = layout(&T::DATA_TYPE);
+
+        assert_eq!(layout.buffers.len(), 1);
+
+        let spec = &layout.buffers[0];
+        assert_eq!(
+            spec,
+            &BufferSpec::FixedWidth {
+                byte_width: size_of::<T::Native>()
+            }
+        );
+    }
+
+    #[test]
+    fn test_layouts() {
+        test_layout::<Int8Type>();
+        test_layout::<Int16Type>();
+        test_layout::<Int32Type>();
+        test_layout::<Int64Type>();
+        test_layout::<UInt8Type>();
+        test_layout::<UInt16Type>();
+        test_layout::<UInt32Type>();
+        test_layout::<UInt64Type>();
+        test_layout::<Float16Type>();
+        test_layout::<Float32Type>();
+        test_layout::<Float64Type>();
+        test_layout::<TimestampSecondType>();
+        test_layout::<Date32Type>();
+        test_layout::<Date64Type>();
+        test_layout::<Time32SecondType>();
+        test_layout::<Time32MillisecondType>();
+        test_layout::<Time64MicrosecondType>();
+        test_layout::<Time64NanosecondType>();
+        test_layout::<IntervalMonthDayNanoType>();
+        test_layout::<IntervalDayTimeType>();
+        test_layout::<IntervalYearMonthType>();
+        test_layout::<DurationNanosecondType>();
+        test_layout::<DurationMicrosecondType>();
+        test_layout::<DurationMillisecondType>();
     }
 }

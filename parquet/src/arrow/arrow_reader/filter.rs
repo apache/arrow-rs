@@ -94,7 +94,7 @@ where
 /// leaves 99% of the rows, it may be better to not filter the data from parquet and
 /// apply the filter after the RecordBatch has been fully decoded.
 ///
-/// [`RowSelection`]: [super::selection::RowSelection]
+/// [`RowSelection`]: crate::arrow::arrow_reader::RowSelection
 pub struct RowFilter {
     /// A list of [`ArrowPredicate`]
     pub(crate) predicates: Vec<Box<dyn ArrowPredicate>>,

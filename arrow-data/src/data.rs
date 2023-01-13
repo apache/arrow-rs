@@ -463,6 +463,62 @@ impl ArrayData {
         size
     }
 
+    /// Returns the total number of the bytes of memory occupied by the buffers by this slice of [ArrayData]
+    pub fn get_slice_memory_size(&self) -> Result<usize, ArrowError> {
+        let mut result: usize = 0;
+        let layout = layout(&self.data_type);
+
+        for spec in layout.buffers.iter() {
+            match spec {
+                BufferSpec::FixedWidth { byte_width } => {
+                    let buffer_size =
+                        self.len.checked_mul(*byte_width).ok_or_else(|| {
+                            ArrowError::ComputeError(
+                                "Integer overflow computing buffer size".to_string(),
+                            )
+                        })?;
+                    result += buffer_size;
+                }
+                BufferSpec::VariableWidth => {
+                    let buffer_len: usize;
+                    match self.data_type {
+                        DataType::Utf8 | DataType::Binary => {
+                            let offsets = self.typed_offsets::<i32>()?;
+                            buffer_len = (offsets[self.len] - offsets[0] ) as usize;
+                        }
+                        DataType::LargeUtf8 | DataType::LargeBinary => {
+                            let offsets = self.typed_offsets::<i64>()?;
+                            buffer_len = (offsets[self.len] - offsets[0]) as usize;
+                        }
+                        _ => {
+                            return Err(ArrowError::NotYetImplemented(format!(
+                            "Invalid data type for VariableWidth buffer. Expected Utf8, LargeUtf8, Binary or LargeBinary. Got {}",
+                            self.data_type
+                            )))
+                        }
+                    };
+                    result += buffer_len;
+                }
+                BufferSpec::BitMap => {
+                    let buffer_size = bit_util::ceil(self.len, 8);
+                    result += buffer_size;
+                }
+                BufferSpec::AlwaysNull => {
+                    // Nothing to do
+                }
+            }
+        }
+
+        if self.null_bitmap().is_some() {
+            result += bit_util::ceil(self.len, 8);
+        }
+
+        for child in &self.child_data {
+            result += child.get_slice_memory_size()?;
+        }
+        Ok(result)
+    }
+
     /// Returns the total number of bytes of memory occupied physically by this [ArrayData].
     pub fn get_array_memory_size(&self) -> usize {
         let mut size = mem::size_of_val(self);
@@ -1414,7 +1470,7 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::LargeUtf8 => DataTypeLayout::new_binary(size_of::<i64>()),
         DataType::List(_) => DataTypeLayout::new_fixed_width(size_of::<i32>()),
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
-        DataType::LargeList(_) => DataTypeLayout::new_fixed_width(size_of::<i32>()),
+        DataType::LargeList(_) => DataTypeLayout::new_fixed_width(size_of::<i64>()),
         DataType::Struct(_) => DataTypeLayout::new_empty(), // all in child data,
         DataType::Union(_, _, mode) => {
             let type_ids = BufferSpec::FixedWidth {
@@ -1836,6 +1892,42 @@ mod tests {
         let string_data_slice = string_data.slice(1, 2);
         assert!(string_data_slice.ptr_eq(&string_data_slice));
         assert!(!string_data_slice.ptr_eq(&string_data))
+    }
+
+    #[test]
+    fn test_slice_memory_size() {
+        let mut bit_v: [u8; 2] = [0; 2];
+        bit_util::set_bit(&mut bit_v, 0);
+        bit_util::set_bit(&mut bit_v, 3);
+        bit_util::set_bit(&mut bit_v, 10);
+        let data = ArrayData::builder(DataType::Int32)
+            .len(16)
+            .add_buffer(make_i32_buffer(16))
+            .null_bit_buffer(Some(Buffer::from(bit_v)))
+            .build()
+            .unwrap();
+        let new_data = data.slice(1, 14);
+        assert_eq!(
+            data.get_slice_memory_size().unwrap() - 8,
+            new_data.get_slice_memory_size().unwrap()
+        );
+        let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+        let offsets_buffer = Buffer::from_slice_ref([0_i32, 2_i32, 2_i32, 5_i32]);
+        let string_data = ArrayData::try_new(
+            DataType::Utf8,
+            3,
+            Some(Buffer::from_iter(vec![true, false, true])),
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+        let string_data_slice = string_data.slice(1, 2);
+        //4 bytes of offset and 2 bytes of data reduced by slicing.
+        assert_eq!(
+            string_data.get_slice_memory_size().unwrap() - 6,
+            string_data_slice.get_slice_memory_size().unwrap()
+        );
     }
 
     #[test]

@@ -23,6 +23,8 @@
 //!
 //! The interfaces for converting arrow schema to parquet schema is coming.
 
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -100,7 +102,7 @@ pub(crate) fn parquet_to_array_schema_and_fields(
 
 /// Try to convert Arrow schema metadata into a schema
 fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
-    let decoded = base64::decode(encoded_meta);
+    let decoded = BASE64_STANDARD.decode(encoded_meta);
     match decoded {
         Ok(bytes) => {
             let slice = if bytes.len() > 8 && bytes[0..4] == [255u8; 4] {
@@ -148,7 +150,7 @@ fn encode_arrow_schema(schema: &Schema) -> String {
     len_prefix_schema.append((schema_len as u32).to_le_bytes().to_vec().as_mut());
     len_prefix_schema.append(&mut serialized_schema.ipc_message);
 
-    base64::encode(&len_prefix_schema)
+    BASE64_STANDARD.encode(&len_prefix_schema)
 }
 
 /// Mutates writer metadata by storing the encoded Arrow schema.
@@ -399,21 +401,32 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_length(*length)
                 .build()
         }
-        DataType::Decimal128(precision, scale)
-        | DataType::Decimal256(precision, scale) => {
+        DataType::Decimal128(precision, scale) => {
             // Decimal precision determines the Parquet physical type to use.
-            // TODO(ARROW-12018): Enable the below after ARROW-10818 Decimal support
-            //
-            // let (physical_type, length) = if *precision > 1 && *precision <= 9 {
-            //     (PhysicalType::INT32, -1)
-            // } else if *precision <= 18 {
-            //     (PhysicalType::INT64, -1)
-            // } else {
-            //     (
-            //         PhysicalType::FIXED_LEN_BYTE_ARRAY,
-            //         decimal_length_from_precision(*precision) as i32,
-            //     )
-            // };
+            // Following the: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#decimal
+            let (physical_type, length) = if *precision > 1 && *precision <= 9 {
+                (PhysicalType::INT32, -1)
+            } else if *precision <= 18 {
+                (PhysicalType::INT64, -1)
+            } else {
+                (
+                    PhysicalType::FIXED_LEN_BYTE_ARRAY,
+                    decimal_length_from_precision(*precision) as i32,
+                )
+            };
+            Type::primitive_type_builder(name, physical_type)
+                .with_repetition(repetition)
+                .with_length(length)
+                .with_logical_type(Some(LogicalType::Decimal {
+                    scale: *scale as i32,
+                    precision: *precision as i32,
+                }))
+                .with_precision(*precision as i32)
+                .with_scale(*scale as i32)
+                .build()
+        }
+        DataType::Decimal256(precision, scale) => {
+            // For the decimal256, use the fixed length byte array to store the data
             Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_repetition(repetition)
                 .with_length(decimal_length_from_precision(*precision) as i32)
@@ -627,7 +640,7 @@ mod tests {
             ProjectionMask::all(),
             None,
         )
-        .unwrap();
+            .unwrap();
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
     }
 
@@ -1257,6 +1270,9 @@ mod tests {
             REPEATED INT32   int_list;
             REPEATED BINARY  byte_list;
             REPEATED BINARY  string_list (UTF8);
+            REQUIRED INT32 decimal_int32 (DECIMAL(8,2));
+            REQUIRED INT64 decimal_int64 (DECIMAL(16,2));
+            REQUIRED FIXED_LEN_BYTE_ARRAY (13) decimal_fix_length (DECIMAL(30,2));
         }
         ";
         let parquet_group_type = parse_message_type(message_type).unwrap();
@@ -1326,6 +1342,20 @@ mod tests {
                 ))),
                 false,
             ),
+            Field::new(
+                "decimal_int32",
+                DataType::Decimal128(8, 2),
+                false,
+            ),
+            Field::new(
+                "decimal_int64",
+                DataType::Decimal128(16, 2),
+                false,
+            ),
+            Field::new(
+                "decimal_fix_length",
+                DataType::Decimal128(30, 2),
+                false, ),
         ];
 
         assert_eq!(arrow_fields, converted_arrow_fields);
@@ -1373,6 +1403,9 @@ mod tests {
                 }
             }
             REQUIRED BINARY  dictionary_strings (STRING);
+            REQUIRED INT32 decimal_int32 (DECIMAL(8,2));
+            REQUIRED INT64 decimal_int64 (DECIMAL(16,2));
+            REQUIRED FIXED_LEN_BYTE_ARRAY (13) decimal_fix_length (DECIMAL(30,2));
         }
         ";
         let parquet_group_type = parse_message_type(message_type).unwrap();
@@ -1456,6 +1489,18 @@ mod tests {
             Field::new(
                 "dictionary_strings",
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                false,
+            ),
+            Field::new(
+                "decimal_int32",
+                DataType::Decimal128(8, 2),
+                false),
+            Field::new("decimal_int64",
+                       DataType::Decimal128(16, 2),
+                       false),
+            Field::new(
+                "decimal_fix_length",
+                DataType::Decimal128(30, 2),
                 false,
             ),
         ];
