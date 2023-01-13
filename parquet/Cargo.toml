@@ -56,7 +56,7 @@ chrono = { version = "0.4.23", default-features = false, features = ["alloc"] }
 num = { version = "0.4", default-features = false }
 num-bigint = { version = "0.4", default-features = false }
 base64 = { version = "0.21", default-features = false, features = ["std", ], optional = true }
-clap = { version = "4", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
+clap = { version = "4.1", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 seq-macro = { version = "0.3", default-features = false }

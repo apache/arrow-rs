@@ -67,4 +67,4 @@ Options:
           display usage help
 
   -V, --version
-          Print version information
+          Print version
