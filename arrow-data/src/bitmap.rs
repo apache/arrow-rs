@@ -68,12 +68,23 @@ impl Bitmap {
         self.bits
     }
 
-    /// Returns the total number of bytes of memory occupied by the buffers owned by this [Bitmap].
+    /// Returns the total number of bytes of memory occupied by the
+    /// buffers owned by this [Bitmap].
+    ///
+    /// Note that this [`Bitmap`] may only refer to a subset of the
+    /// data in the underlying [`Buffer`], but the size includes the
+    /// entire size of the buffer.
+    ///
+    /// If multiple [`Bitmap`]s refer to the same underlying
+    /// [`Buffer`] they will both report the same size.
     pub fn get_buffer_memory_size(&self) -> usize {
         self.bits.capacity()
     }
 
-    /// Returns the total number of bytes of memory occupied physically by this [Bitmap].
+    /// Returns the total number of bytes of memory occupied
+    /// physically by this [Bitmap] and its [`Buffer`]s.
+    ///
+    /// Equivalent to: `size_of_val(self)` + [`Self::get_buffer_memory_size`]
     pub fn get_array_memory_size(&self) -> usize {
         self.bits.capacity() + mem::size_of_val(self)
     }
