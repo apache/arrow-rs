@@ -499,9 +499,11 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
             self.assert_previous_writer_closed()?;
 
             let column_chunks = std::mem::take(&mut self.column_chunks);
+            let total_bytes_size =
+                column_chunks.iter().map(|c| c.uncompressed_size()).sum();
             let row_group_metadata = RowGroupMetaData::builder(self.descr.clone())
                 .set_column_metadata(column_chunks)
-                .set_total_byte_size(self.total_bytes_written as i64)
+                .set_total_byte_size(total_bytes_size)
                 .set_num_rows(self.total_rows_written.unwrap_or(0) as i64)
                 .set_sorting_columns(self.props.sorting_columns().cloned())
                 .build()?;
