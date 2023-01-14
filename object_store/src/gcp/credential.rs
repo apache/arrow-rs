@@ -108,7 +108,6 @@ struct TokenResponse {
 #[derive(Debug)]
 pub struct OAuthProvider {
     issuer: String,
-    scope: String,
     audience: String,
     key_pair: RsaKeyPair,
     jwt_header: String,
@@ -120,7 +119,6 @@ impl OAuthProvider {
     pub fn new(
         issuer: String,
         private_key_pem: String,
-        scope: String,
         audience: String,
     ) -> Result<Self> {
         let key_pair = decode_first_rsa_key(private_key_pem)?;
@@ -132,7 +130,6 @@ impl OAuthProvider {
         Ok(Self {
             issuer,
             key_pair,
-            scope,
             audience,
             jwt_header,
             random: ring::rand::SystemRandom::new(),
@@ -142,6 +139,7 @@ impl OAuthProvider {
     /// Fetch a fresh token
     pub async fn fetch_token(
         &self,
+        scope: &str,
         client: &Client,
         retry: &RetryConfig,
     ) -> Result<TemporaryToken<String>> {
@@ -150,7 +148,7 @@ impl OAuthProvider {
 
         let claims = TokenClaims {
             iss: &self.issuer,
-            scope: &self.scope,
+            scope: scope,
             aud: &self.audience,
             exp,
             iat: now,

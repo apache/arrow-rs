@@ -32,7 +32,9 @@ all-features = true
 async-trait = "0.1.53"
 bytes = "1.0"
 chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
+dirs = "4.0"
 futures = "0.3"
+gcp_auth = "0.7.5"
 itertools = "0.10.1"
 parking_lot = { version = "0.12" }
 percent-encoding = "2.1"

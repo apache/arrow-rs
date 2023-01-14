@@ -29,8 +29,9 @@
 //! to abort the upload and drop those unneeded parts. In addition, you may wish to
 //! consider implementing automatic clean up of unused parts that are older than one
 //! week.
+use futures::lock::Mutex;
+use gcp_auth::AuthenticationManager;
 use std::collections::BTreeSet;
-use std::env;
 use std::fs::File;
 use std::io::{self, BufReader};
 use std::ops::Range;
@@ -156,6 +157,9 @@ enum Error {
 
     #[snafu(display("Configuration key: '{}' is not known.", key))]
     UnknownConfigurationKey { key: String },
+
+    #[snafu(display("Error generating token: {}", source))]
+    Token { source: gcp_auth::Error },
 }
 
 impl From<Error> for super::Error {
@@ -202,16 +206,6 @@ struct ServiceAccountCredentials {
     /// Disable oauth and use empty tokens.
     #[serde(default = "default_disable_oauth")]
     pub disable_oauth: bool,
-}
-
-/// A deserialized `application_default_credentials.json`-file.
-#[derive(serde::Deserialize, Debug)]
-struct ApplicationDefaultCredentials {
-    pub client_id: String,
-    pub client_secret: String,
-    pub refresh_token: String,
-    #[serde(rename = "type")]
-    pub type_: String,
 }
 
 fn default_gcs_base_url() -> String {
@@ -273,6 +267,22 @@ impl std::fmt::Display for GoogleCloudStorage {
     }
 }
 
+/// Control the authentication manager:
+///   - disable when configured (during testing)
+///   - delay initialization since an async context is needed
+///   - implement Debug
+struct AuthenticationManagerW {
+    disabled: bool,
+    inner: Mutex<Option<AuthenticationManager>>,
+}
+impl std::fmt::Debug for AuthenticationManagerW {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("AuthenticationManager")
+            .field(&self.disabled)
+            .finish()
+    }
+}
+
 #[derive(Debug)]
 struct GoogleCloudStorageClient {
     client: Client,
@@ -280,6 +290,7 @@ struct GoogleCloudStorageClient {
 
     oauth_provider: Option<OAuthProvider>,
     token_cache: TokenCache<String>,
+    authentication_manager: AuthenticationManagerW,
 
     bucket_name: String,
     bucket_name_encoded: String,
@@ -292,17 +303,33 @@ struct GoogleCloudStorageClient {
 }
 
 impl GoogleCloudStorageClient {
-    async fn get_token(&self) -> Result<String> {
-        if let Some(oauth_provider) = &self.oauth_provider {
-            Ok(self
+    async fn get_token(&self, scope: Option<&str>) -> Result<String> {
+        let scope =
+            scope.unwrap_or("https://www.googleapis.com/auth/devstorage.full_control");
+        match &self.oauth_provider {
+            Some(oauth_provider) => Ok(self
                 .token_cache
                 .get_or_insert_with(|| {
-                    oauth_provider.fetch_token(&self.client, &self.retry_config)
+                    oauth_provider.fetch_token(scope, &self.client, &self.retry_config)
                 })
                 .await
-                .context(CredentialSnafu)?)
-        } else {
-            Ok("".to_owned())
+                .context(CredentialSnafu)?),
+            None if !self.authentication_manager.disabled => {
+                let mut locked = self.authentication_manager.inner.lock().await;
+                if locked.as_ref().is_none() {
+                    *locked =
+                        Some(AuthenticationManager::new().await.context(TokenSnafu)?);
+                }
+                Ok(locked
+                    .as_ref()
+                    .unwrap()
+                    .get_token(&[scope])
+                    .await
+                    .context(TokenSnafu)?
+                    .as_str()
+                    .to_owned())
+            }
+            _ => Ok("".to_owned()),
         }
     }
 
@@ -322,7 +349,7 @@ impl GoogleCloudStorageClient {
         range: Option<Range<usize>>,
         head: bool,
     ) -> Result<Response> {
-        let token = self.get_token().await?;
+        let token = self.get_token(None).await?;
         let url = self.object_url(path);
 
         let mut builder = self.client.request(Method::GET, url);
@@ -350,7 +377,7 @@ impl GoogleCloudStorageClient {
 
     /// Perform a put request <https://cloud.google.com/storage/docs/json_api/v1/objects/insert>
     async fn put_request(&self, path: &Path, payload: Bytes) -> Result<()> {
-        let token = self.get_token().await?;
+        let token = self.get_token(None).await?;
         let url = format!(
             "{}/upload/storage/v1/b/{}/o",
             self.base_url, self.bucket_name_encoded
@@ -377,7 +404,7 @@ impl GoogleCloudStorageClient {
 
     /// Initiate a multi-part upload <https://cloud.google.com/storage/docs/xml-api/post-object-multipart>
     async fn multipart_initiate(&self, path: &Path) -> Result<MultipartId> {
-        let token = self.get_token().await?;
+        let token = self.get_token(None).await?;
         let url = format!("{}/{}/{}", self.base_url, self.bucket_name_encoded, path);
 
         let content_type = self
@@ -415,7 +442,7 @@ impl GoogleCloudStorageClient {
         path: &str,
         multipart_id: &MultipartId,
     ) -> Result<()> {
-        let token = self.get_token().await?;
+        let token = self.get_token(None).await?;
         let url = format!("{}/{}/{}", self.base_url, self.bucket_name_encoded, path);
 
         self.client
@@ -433,7 +460,7 @@ impl GoogleCloudStorageClient {
 
     /// Perform a delete request <https://cloud.google.com/storage/docs/json_api/v1/objects/delete>
     async fn delete_request(&self, path: &Path) -> Result<()> {
-        let token = self.get_token().await?;
+        let token = self.get_token(None).await?;
         let url = self.object_url(path);
 
         let builder = self.client.request(Method::DELETE, url);
@@ -455,7 +482,7 @@ impl GoogleCloudStorageClient {
         to: &Path,
         if_not_exists: bool,
     ) -> Result<()> {
-        let token = self.get_token().await?;
+        let token = self.get_token(None).await?;
 
         let source =
             percent_encoding::utf8_percent_encode(from.as_ref(), NON_ALPHANUMERIC);
@@ -508,7 +535,7 @@ impl GoogleCloudStorageClient {
         delimiter: bool,
         page_token: Option<&str>,
     ) -> Result<ListResponse> {
-        let token = self.get_token().await?;
+        let token = self.get_token(None).await?;
 
         let url = format!(
             "{}/storage/v1/b/{}/o",
@@ -587,7 +614,7 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
 
         let token = self
             .client
-            .get_token()
+            .get_token(None)
             .await
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
@@ -641,7 +668,7 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
 
         let token = self
             .client
-            .get_token()
+            .get_token(None)
             .await
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
@@ -790,13 +817,12 @@ impl ObjectStore for GoogleCloudStorage {
     }
 }
 
-fn read_credentials_file<T>(credentials_path: impl AsRef<std::path::Path>) -> Result<T>
-where
-    T: serde::de::DeserializeOwned,
-{
-    let file = File::open(credentials_path).context(OpenCredentialsSnafu)?;
+fn reader_credentials_file(
+    service_account_path: impl AsRef<std::path::Path>,
+) -> Result<ServiceAccountCredentials> {
+    let file = File::open(service_account_path).context(OpenCredentialsSnafu)?;
     let reader = BufReader::new(file);
-    Ok(serde_json::from_reader::<_, T>(reader).context(DecodeCredentialsSnafu)?)
+    Ok(serde_json::from_reader(reader).context(DecodeCredentialsSnafu)?)
 }
 
 /// Configure a connection to Google Cloud Storage using the specified
@@ -838,7 +864,7 @@ pub struct GoogleCloudStorageBuilder {
 /// let typed_options = vec![
 ///     (GoogleConfigKey::Bucket, "my-bucket"),
 /// ];
-/// let gcs = GoogleCloudStorageBuilder::new()
+/// let azure = GoogleCloudStorageBuilder::new()
 ///     .try_with_options(options)
 ///     .unwrap()
 ///     .try_with_options(typed_options)
@@ -1111,30 +1137,34 @@ impl GoogleCloudStorageBuilder {
         let client = self.client_options.client()?;
 
         let credentials = match (self.service_account_path, self.service_account_key) {
-            (Some(path), None) => {
-                read_credentials_file::<ServiceAccountCredentials>(path)?
-            }
+            (Some(path), None) => Some(reader_credentials_file(path)?),
             (None, Some(key)) => {
-                serde_json::from_str(&key).context(DecodeCredentialsSnafu)?
+                Some(serde_json::from_str(&key).context(DecodeCredentialsSnafu)?)
             }
-            (None, None) => return Err(Error::MissingServiceAccountPathOrKey.into()),
+            (None, None) => None,
             (Some(_), Some(_)) => {
                 return Err(Error::ServiceAccountPathAndKeyProvided.into())
             }
         };
 
         // TODO: https://cloud.google.com/storage/docs/authentication#oauth-scopes
-        let scope = "https://www.googleapis.com/auth/devstorage.full_control";
         let audience = "https://www.googleapis.com/oauth2/v4/token".to_string();
 
-        let oauth_provider = (!credentials.disable_oauth)
-            .then(|| {
-                OAuthProvider::new(
-                    credentials.client_email,
-                    credentials.private_key,
-                    scope.to_string(),
-                    audience,
-                )
+        let disable_oauth = credentials
+            .as_ref()
+            .map(|c| c.disable_oauth)
+            .unwrap_or(false);
+        let base_url = credentials.as_ref()
+            .map(|c| c.gcs_base_url.clone())
+            .unwrap_or_else(|| default_gcs_base_url());
+
+        let oauth_provider = credentials
+            .and_then(|c| {
+                if c.disable_oauth {
+                    None
+                } else {
+                    Some(OAuthProvider::new(c.client_email, c.private_key, audience))
+                }
             })
             .transpose()
             .context(CredentialSnafu)?;
@@ -1148,8 +1178,12 @@ impl GoogleCloudStorageBuilder {
         Ok(GoogleCloudStorage {
             client: Arc::new(GoogleCloudStorageClient {
                 client,
-                base_url: credentials.gcs_base_url,
+                base_url,
                 oauth_provider,
+                authentication_manager: AuthenticationManagerW {
+                    disabled: disable_oauth,
+                    inner: Mutex::new(None),
+                },
                 token_cache: Default::default(),
                 bucket_name,
                 bucket_name_encoded: encoded_bucket_name,
