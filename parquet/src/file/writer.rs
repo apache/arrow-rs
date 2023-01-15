@@ -382,6 +382,7 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     buf: &'a mut TrackedWrite<W>,
     total_rows_written: Option<u64>,
     total_bytes_written: u64,
+    total_uncompressed_bytes: i64,
     column_index: usize,
     row_group_metadata: Option<RowGroupMetaDataPtr>,
     column_chunks: Vec<ColumnChunkMetaData>,
@@ -418,6 +419,7 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
             column_indexes: Vec::with_capacity(num_columns),
             offset_indexes: Vec::with_capacity(num_columns),
             total_bytes_written: 0,
+            total_uncompressed_bytes: 0,
         }
     }
 
@@ -443,6 +445,7 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
         let page_writer = Box::new(SerializedPageWriter::new(self.buf));
 
         let total_bytes_written = &mut self.total_bytes_written;
+        let total_uncompressed_bytes = &mut self.total_uncompressed_bytes;
         let total_rows_written = &mut self.total_rows_written;
         let column_chunks = &mut self.column_chunks;
         let column_indexes = &mut self.column_indexes;
@@ -452,6 +455,7 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
         let on_close = |r: ColumnCloseResult| {
             // Update row group writer metrics
             *total_bytes_written += r.bytes_written;
+            *total_uncompressed_bytes += r.metadata.uncompressed_size();
             column_chunks.push(r.metadata);
             bloom_filters.push(r.bloom_filter);
             column_indexes.push(r.column_index);
@@ -499,11 +503,9 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
             self.assert_previous_writer_closed()?;
 
             let column_chunks = std::mem::take(&mut self.column_chunks);
-            let total_bytes_size =
-                column_chunks.iter().map(|c| c.uncompressed_size()).sum();
             let row_group_metadata = RowGroupMetaData::builder(self.descr.clone())
                 .set_column_metadata(column_chunks)
-                .set_total_byte_size(total_bytes_size)
+                .set_total_byte_size(self.total_uncompressed_bytes)
                 .set_num_rows(self.total_rows_written.unwrap_or(0) as i64)
                 .set_sorting_columns(self.props.sorting_columns().cloned())
                 .build()?;
@@ -1303,6 +1305,14 @@ mod tests {
             let row_group_reader = reader.get_row_group(i).unwrap();
             let iter = row_group_reader.get_row_iter(None).unwrap();
             let res: Vec<_> = iter.map(&value).collect();
+            let row_group_size = row_group_reader.metadata().total_byte_size();
+            let uncompressed_size: i64 = row_group_reader
+                .metadata()
+                .columns()
+                .iter()
+                .map(|v| v.uncompressed_size())
+                .sum();
+            assert_eq!(row_group_size, uncompressed_size);
             assert_eq!(res, *item);
         }
         file_metadata
