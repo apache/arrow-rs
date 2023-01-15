@@ -824,6 +824,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 self.column_metrics.num_column_nulls,
                 false,
             );
+
+            // Some common readers only support the deprecated statistics
+            // format so we also write them out if possible
+            // See https://github.com/apache/arrow-rs/issues/799
             let statistics = statistics
                 .with_backwards_compatible_min_max(self.descr.sort_order().is_signed())
                 .into();
@@ -1896,6 +1900,8 @@ mod tests {
     fn test_bool_statistics() {
         let stats = statistics_roundtrip::<BoolType>(&[true, false, false, true]);
         assert!(stats.has_min_max_set());
+        // Booleans have an unsigned sort order and so are not compatible
+        // with the deprecated `min` and `max` statistics
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Boolean(stats) = stats {
             assert_eq!(stats.min(), &false);

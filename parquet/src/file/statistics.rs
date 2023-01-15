@@ -331,8 +331,16 @@ impl Statistics {
         statistics_enum_func![self, is_min_max_deprecated]
     }
 
-    /// Returns `true` if the statistics are backwards compatible with the
-    /// deprecated `min` and `max` fields
+    /// Old versions of parquet stored statistics in `min` and `max` fields, ordered
+    /// using signed comparison. This resulted in an undefined ordering for unsigned
+    /// quantities, such as booleans and unsigned integers.
+    ///
+    /// These fields were therefore deprecated in favour of `min_value` and `max_value`,
+    /// which have a type-defined sort order.
+    ///
+    /// However, not all readers have been updated. For backwards compatibility, this method
+    /// returns `true` if the statistics within this have a signed sort order, that is
+    /// compatible with being stored in the deprecated `min` and `max` fields
     pub fn is_min_max_backwards_compatible(&self) -> bool {
         statistics_enum_func![self, is_min_max_backwards_compatible]
     }
@@ -418,7 +426,9 @@ pub struct ValueStatistics<T> {
     /// `min_value` and `max_value`
     is_min_max_deprecated: bool,
 
-    /// If `true` should always write deprecated `min` and `max` fields
+    /// If `true` should always write deprecated `min` and `max` fields,
+    /// potentially in addition to `min_value` and `max_value` if not
+    /// `is_min_max_deprecated`
     is_min_max_backwards_compatible: bool,
 }
 
@@ -442,6 +452,10 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     }
 
     /// Set whether to write the deprecated `min` and `max` fields
+    /// for compatibility with older parquet writers
+    ///
+    /// This should only be enabled if the field is signed,
+    /// see [`Self::is_min_max_backwards_compatible`]
     pub fn with_backwards_compatible_min_max(self, backwards_compatible: bool) -> Self {
         Self {
             is_min_max_backwards_compatible: backwards_compatible,
@@ -502,8 +516,16 @@ impl<T: ParquetValueType> ValueStatistics<T> {
         self.is_min_max_deprecated
     }
 
-    /// Returns `true` if the statistics are backwards compatible
-    /// with the deprecated `min` and `max` fields
+    /// Old versions of parquet stored statistics in `min` and `max` fields, ordered
+    /// using signed comparison. This resulted in an undefined ordering for unsigned
+    /// quantities, such as booleans and unsigned integers.
+    ///
+    /// These fields were therefore deprecated in favour of `min_value` and `max_value`,
+    /// which have a type-defined sort order.
+    ///
+    /// However, not all readers have been updated. For backwards compatibility, this method
+    /// returns `true` if the statistics within this have a signed sort order, that is
+    /// compatible with being stored in the deprecated `min` and `max` fields
     pub fn is_min_max_backwards_compatible(&self) -> bool {
         self.is_min_max_backwards_compatible
     }
