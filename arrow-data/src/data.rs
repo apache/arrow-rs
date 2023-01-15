@@ -612,7 +612,7 @@ impl ArrayData {
 
     /// Creates a zero-copy slice of itself. This creates a new
     /// [ArrayData] pointing at the same underlying [`Buffer`]s with a
-    /// different offset, len and a shifted null bitmap.
+    /// different offset and len
     ///
     /// # Panics
     ///
