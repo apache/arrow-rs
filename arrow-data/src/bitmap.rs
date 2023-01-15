@@ -72,7 +72,7 @@ impl Bitmap {
     /// buffers owned by this [Bitmap].
     ///
     /// Note that this [`Bitmap`] may only refer to a subset of the
-    /// data in the underlying [`Buffer`], but the size includes the
+    /// data in the underlying [`Buffer`] (it is a slice)  but the return value includes the
     /// entire size of the buffer.
     ///
     /// If multiple [`Bitmap`]s refer to the same underlying

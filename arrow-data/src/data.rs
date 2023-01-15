@@ -250,8 +250,8 @@ pub(crate) fn into_buffers(
 ///
 /// `ArrayData` has references to one or more underlying data buffers
 /// and optional child ArrayDatas, depending on type as illustrated
-/// below. Bitmaps are not shown for similicity but they are stored
-/// similiarly to the buffers.
+/// below. Bitmaps are not shown for simplicity but they are stored
+/// similarly to the buffers.
 ///
 /// ```text
 ///                        offset
@@ -290,13 +290,13 @@ pub struct ArrayData {
     /// The data type for this array data
     data_type: DataType,
 
-    /// The number of elements in this array data.
+    /// The number of elements in this array data
     len: usize,
 
     /// The number of null elements in this array data
     null_count: usize,
 
-    /// The offset into this array data, in number of items.
+    /// The offset into this array data, in number of items
     offset: usize,
 
     /// The buffers for this array data. Note that depending on the array types, this
@@ -433,7 +433,7 @@ impl ArrayData {
     }
 
     /// Returns a slice of children [`ArrayData`]. This will be non
-    /// empty for type susch as lists and structs.
+    /// empty for type such as lists and structs.
     pub fn child_data(&self) -> &[ArrayData] {
         &self.child_data[..]
     }
