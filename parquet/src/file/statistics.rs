@@ -253,6 +253,7 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
     };
 
     if stats.is_min_max_backwards_compatible() {
+        // Copy to deprecated min, max values for compatibility with older readers
         thrift_stats.min = min.clone();
         thrift_stats.max = max.clone();
     }
@@ -426,9 +427,8 @@ pub struct ValueStatistics<T> {
     /// `min_value` and `max_value`
     is_min_max_deprecated: bool,
 
-    /// If `true` should always write deprecated `min` and `max` fields,
-    /// potentially in addition to `min_value` and `max_value` if not
-    /// `is_min_max_deprecated`
+    /// If `true` the statistics are compatible with the deprecated `min` and
+    /// `max` fields. See [`ValueStatistics::is_min_max_backwards_compatible`]
     is_min_max_backwards_compatible: bool,
 }
 
