@@ -726,6 +726,7 @@ mod tests {
     };
     use crate::format::SortingColumn;
     use crate::record::{Row, RowAccessor};
+    use crate::schema::parser::parse_message_type;
     use crate::schema::types::{ColumnDescriptor, ColumnPath};
     use crate::util::memory::ByteBufferPtr;
 
@@ -1427,5 +1428,60 @@ mod tests {
         test_kv_metadata(Some(vec![]), Some(vec![]));
         test_kv_metadata(Some(vec![kv1]), Some(vec![]));
         test_kv_metadata(None, Some(vec![]));
+    }
+
+    #[test]
+    fn test_backwards_compatible_statistics() {
+        let message_type = "
+            message test_schema {
+                REQUIRED INT32 decimal1 (DECIMAL(8,2));
+                REQUIRED INT32 i32 (INTEGER(32,true));
+                REQUIRED INT32 u32 (INTEGER(32,false));
+            }
+        ";
+
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let props = Arc::new(WriterProperties::builder().build());
+        let mut writer = SerializedFileWriter::new(vec![], schema, props).unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
+
+        for _ in 0..3 {
+            let mut writer = row_group_writer.next_column().unwrap().unwrap();
+            writer
+                .typed::<Int32Type>()
+                .write_batch(&[1, 2, 3], None, None)
+                .unwrap();
+            writer.close().unwrap();
+        }
+        let metadata = row_group_writer.close().unwrap();
+        writer.close().unwrap();
+
+        let thrift = metadata.to_thrift();
+        let encoded_stats: Vec<_> = thrift
+            .columns
+            .into_iter()
+            .map(|x| x.meta_data.unwrap().statistics.unwrap())
+            .collect();
+
+        // decimal
+        let s = &encoded_stats[0];
+        assert_eq!(s.min.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
+        assert_eq!(s.max.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
+        assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
+        assert_eq!(s.max_value.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
+
+        // i32
+        let s = &encoded_stats[1];
+        assert_eq!(s.min.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
+        assert_eq!(s.max.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
+        assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
+        assert_eq!(s.max_value.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
+
+        // u32
+        let s = &encoded_stats[2];
+        assert_eq!(s.min.as_deref(), None);
+        assert_eq!(s.max.as_deref(), None);
+        assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
+        assert_eq!(s.max_value.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
     }
 }

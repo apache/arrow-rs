@@ -330,6 +330,13 @@ pub enum SortOrder {
     UNDEFINED,
 }
 
+impl SortOrder {
+    /// Returns true if this is [`Self::SIGNED`]
+    pub fn is_signed(&self) -> bool {
+        matches!(self, Self::SIGNED)
+    }
+}
+
 /// Column order that specifies what method was used to aggregate min/max values for
 /// statistics.
 ///

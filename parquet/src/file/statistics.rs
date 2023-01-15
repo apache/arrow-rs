@@ -252,10 +252,13 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
         (None, None)
     };
 
-    if stats.is_min_max_deprecated() {
-        thrift_stats.min = min;
-        thrift_stats.max = max;
-    } else {
+    if stats.is_min_max_backwards_compatible() {
+        // Copy to deprecated min, max values for compatibility with older readers
+        thrift_stats.min = min.clone();
+        thrift_stats.max = max.clone();
+    }
+
+    if !stats.is_min_max_deprecated() {
         thrift_stats.min_value = min;
         thrift_stats.max_value = max;
     }
@@ -327,6 +330,20 @@ impl Statistics {
     /// [`SortOrder`](crate::basic::SortOrder) for more information.
     pub fn is_min_max_deprecated(&self) -> bool {
         statistics_enum_func![self, is_min_max_deprecated]
+    }
+
+    /// Old versions of parquet stored statistics in `min` and `max` fields, ordered
+    /// using signed comparison. This resulted in an undefined ordering for unsigned
+    /// quantities, such as booleans and unsigned integers.
+    ///
+    /// These fields were therefore deprecated in favour of `min_value` and `max_value`,
+    /// which have a type-defined sort order.
+    ///
+    /// However, not all readers have been updated. For backwards compatibility, this method
+    /// returns `true` if the statistics within this have a signed sort order, that is
+    /// compatible with being stored in the deprecated `min` and `max` fields
+    pub fn is_min_max_backwards_compatible(&self) -> bool {
+        statistics_enum_func![self, is_min_max_backwards_compatible]
     }
 
     /// Returns optional value of number of distinct values occurring.
@@ -405,7 +422,14 @@ pub struct ValueStatistics<T> {
     // Distinct count could be omitted in some cases
     distinct_count: Option<u64>,
     null_count: u64,
+
+    /// If `true` populate the deprecated `min` and `max` fields instead of
+    /// `min_value` and `max_value`
     is_min_max_deprecated: bool,
+
+    /// If `true` the statistics are compatible with the deprecated `min` and
+    /// `max` fields. See [`ValueStatistics::is_min_max_backwards_compatible`]
+    is_min_max_backwards_compatible: bool,
 }
 
 impl<T: ParquetValueType> ValueStatistics<T> {
@@ -423,6 +447,19 @@ impl<T: ParquetValueType> ValueStatistics<T> {
             distinct_count,
             null_count,
             is_min_max_deprecated,
+            is_min_max_backwards_compatible: is_min_max_deprecated,
+        }
+    }
+
+    /// Set whether to write the deprecated `min` and `max` fields
+    /// for compatibility with older parquet writers
+    ///
+    /// This should only be enabled if the field is signed,
+    /// see [`Self::is_min_max_backwards_compatible`]
+    pub fn with_backwards_compatible_min_max(self, backwards_compatible: bool) -> Self {
+        Self {
+            is_min_max_backwards_compatible: backwards_compatible,
+            ..self
         }
     }
 
@@ -478,6 +515,20 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     fn is_min_max_deprecated(&self) -> bool {
         self.is_min_max_deprecated
     }
+
+    /// Old versions of parquet stored statistics in `min` and `max` fields, ordered
+    /// using signed comparison. This resulted in an undefined ordering for unsigned
+    /// quantities, such as booleans and unsigned integers.
+    ///
+    /// These fields were therefore deprecated in favour of `min_value` and `max_value`,
+    /// which have a type-defined sort order.
+    ///
+    /// However, not all readers have been updated. For backwards compatibility, this method
+    /// returns `true` if the statistics within this have a signed sort order, that is
+    /// compatible with being stored in the deprecated `min` and `max` fields
+    pub fn is_min_max_backwards_compatible(&self) -> bool {
+        self.is_min_max_backwards_compatible
+    }
 }
 
 impl<T: ParquetValueType> fmt::Display for ValueStatistics<T> {
@@ -509,12 +560,13 @@ impl<T: ParquetValueType> fmt::Debug for ValueStatistics<T> {
         write!(
             f,
             "{{min: {:?}, max: {:?}, distinct_count: {:?}, null_count: {}, \
-             min_max_deprecated: {}}}",
+             min_max_deprecated: {}, min_max_backwards_compatible: {}}}",
             self.min,
             self.max,
             self.distinct_count,
             self.null_count,
-            self.is_min_max_deprecated
+            self.is_min_max_deprecated,
+            self.is_min_max_backwards_compatible
         )
     }
 }
@@ -569,14 +621,14 @@ mod tests {
         assert_eq!(
             format!("{:?}", stats),
             "Int32({min: Some(1), max: Some(12), distinct_count: None, null_count: 12, \
-             min_max_deprecated: true})"
+             min_max_deprecated: true, min_max_backwards_compatible: true})"
         );
 
         let stats = Statistics::int32(None, None, None, 7, false);
         assert_eq!(
             format!("{:?}", stats),
             "Int32({min: None, max: None, distinct_count: None, null_count: 7, \
-             min_max_deprecated: false})"
+             min_max_deprecated: false, min_max_backwards_compatible: false})"
         )
     }
 

@@ -22,7 +22,8 @@ use std::{collections::HashMap, convert::From, fmt, sync::Arc};
 use crate::format::SchemaElement;
 
 use crate::basic::{
-    ConvertedType, LogicalType, Repetition, TimeUnit, Type as PhysicalType,
+    ColumnOrder, ConvertedType, LogicalType, Repetition, SortOrder, TimeUnit,
+    Type as PhysicalType,
 };
 use crate::errors::{ParquetError, Result};
 
@@ -845,6 +846,15 @@ impl ColumnDescriptor {
             Type::PrimitiveType { scale, .. } => *scale,
             _ => panic!("Expected primitive type!"),
         }
+    }
+
+    /// Returns the sort order for this column
+    pub fn sort_order(&self) -> SortOrder {
+        ColumnOrder::get_sort_order(
+            self.logical_type(),
+            self.converted_type(),
+            self.physical_type(),
+        )
     }
 }
 
