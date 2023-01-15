@@ -611,7 +611,7 @@ impl ArrayData {
     }
 
     /// Creates a zero-copy slice of itself. This creates a new
-    /// [ArrayData] pointing at the same underlying [`Buffer`]s with a
+    /// [`ArrayData`] pointing at the same underlying [`Buffer`]s with a
     /// different offset and len
     ///
     /// # Panics
