@@ -258,10 +258,10 @@ pub(crate) fn into_buffers(
 ///                       points to
 /// ┌───────────────────┐ start of  ┌───────┐       Different
 /// │                   │   data    │       │     ArrayData may
-/// │ArrayData {        │           │....   │     also refer to
+/// │ArrayData {        │           │....   │     also refers to
 /// │  data_type: ...   │   ─ ─ ─ ─▶│1234   │  ┌ ─  the same
 /// │  offset: ... ─ ─ ─│─ ┘        │4372   │      underlying
-/// │  len: ...    ─ ─ ─│─ ┐        │4888   │  │     buffer
+/// │  len: ...    ─ ─ ─│─ ┐        │4888   │  │     buffer with different offset/len
 /// │  buffers: [       │           │5882   │◀─
 /// │    ...            │  │        │4323   │
 /// │  ]                │   ─ ─ ─ ─▶│4859   │
@@ -490,13 +490,13 @@ impl ArrayData {
     }
 
     /// Returns the total number of bytes of memory occupied by the
-    /// buffers owned by this [ArrayData] and all of its
-    /// children. (See also diagram on [ArrayData]).
+    /// buffers owned by this [`ArrayData`] and all of its
+    /// children. (See also diagram on [`ArrayData`]).
     ///
     /// Note that this [`ArrayData`] may only refer to a subset of the
     /// data in the underlying [`Buffer`]s (due to `offset` and
     /// `length`), but the size returned includes the entire size of
-    /// the buffer.
+    /// the buffers.
     ///
     /// If multiple [`ArrayData`]s refer to the same underlying
     /// [`Buffer`]s they will both report the same size.
@@ -515,7 +515,7 @@ impl ArrayData {
     }
 
     /// Returns the total number of the bytes of memory occupied by
-    /// the buffers by this slice of [ArrayData] (See also diagram on [ArrayData]).
+    /// the buffers by this slice of [`ArrayData`] (See also diagram on [`ArrayData`]).
     ///
     /// This is approximately the number of bytes if a new
     /// [`ArrayData`] was formed by creating new [`Buffer`]s with
@@ -582,8 +582,8 @@ impl ArrayData {
     }
 
     /// Returns the total number of bytes of memory occupied
-    /// physically by this [ArrayData] and all its [`Buffer`]s and
-    /// children. (See also diagram on [ArrayData]).
+    /// physically by this [`ArrayData`] and all its [`Buffer`]s and
+    /// children. (See also diagram on [`ArrayData`]).
     ///
     /// Equivalent to:
     ///  `size_of_val(self)` +
