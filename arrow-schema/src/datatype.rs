@@ -254,7 +254,7 @@ pub enum DataType {
     ///
     /// These child arrays are prescribed the standard names of "run_ends" and "values"
     /// respectively.
-    RunEndEncodedType(Box<Field>, Box<Field>),
+    RunEndEncoded(Box<Field>, Box<Field>),
 }
 
 /// An absolute length of time in seconds, milliseconds, microseconds or nanoseconds.
@@ -451,7 +451,7 @@ impl DataType {
                         + (std::mem::size_of::<Field>() * fields.capacity())
                 }
                 DataType::Dictionary(dt1, dt2) => dt1.size() + dt2.size(),
-                DataType::RunEndEncodedType(run_ends, values) => {
+                DataType::RunEndEncoded(run_ends, values) => {
                     run_ends.size() - std::mem::size_of_val(run_ends) + values.size()
                         - std::mem::size_of_val(values)
                 }

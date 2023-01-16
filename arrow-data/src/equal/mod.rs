@@ -137,7 +137,7 @@ fn equal_values(
         },
         DataType::Float16 => primitive_equal::<f16>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Map(_, _) => list_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
-        DataType::RunEndEncodedType(_, _) => todo!(),
+        DataType::RunEndEncoded(_, _) => todo!(),
     }
 }
 

@@ -230,7 +230,7 @@ fn build_extend(array: &ArrayData) -> Extend {
             UnionMode::Sparse => union::build_extend_sparse(array),
             UnionMode::Dense => union::build_extend_dense(array),
         },
-        DataType::RunEndEncodedType(_, _) => todo!(),
+        DataType::RunEndEncoded(_, _) => todo!(),
     }
 }
 
@@ -282,7 +282,7 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
             UnionMode::Sparse => union::extend_nulls_sparse,
             UnionMode::Dense => union::extend_nulls_dense,
         },
-        DataType::RunEndEncodedType(_, _) => todo!(),
+        DataType::RunEndEncoded(_, _) => todo!(),
     })
 }
 
@@ -475,7 +475,7 @@ impl<'a> MutableArrayData<'a> {
                     })
                     .collect::<Vec<_>>(),
             },
-            DataType::RunEndEncodedType(_, _) => {
+            DataType::RunEndEncoded(_, _) => {
                 let run_ends_child = arrays
                     .iter()
                     .map(|array| &array.child_data()[0])

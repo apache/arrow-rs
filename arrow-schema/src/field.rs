@@ -410,7 +410,7 @@ impl Field {
             | DataType::List(_)
             | DataType::Map(_, _)
             | DataType::Dictionary(_, _)
-            | DataType::RunEndEncodedType(_, _)
+            | DataType::RunEndEncoded(_, _)
             | DataType::FixedSizeList(_, _)
             | DataType::FixedSizeBinary(_)
             | DataType::Utf8
