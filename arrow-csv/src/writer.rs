@@ -65,12 +65,16 @@
 
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_cast::display::{array_value_to_string, lexical_to_string};
+use arrow_cast::display::{lexical_to_string, array_value_to_string, datetime_array_value_to_string};
 use arrow_schema::*;
 use std::io::Write;
 
 use crate::map_csv_error;
 
+const DEFAULT_DATE_FORMAT: &str = "%F";
+const DEFAULT_TIME_FORMAT: &str = "%T";
+const DEFAULT_TIMESTAMP_FORMAT: &str = "%FT%H:%M:%S.%9f";
+const DEFAULT_TIMESTAMP_TZ_FORMAT: &str = "%FT%H:%M:%S.%9f%:z";
 const DEFAULT_NULL_VALUE: &str = "";
 
 fn write_primitive_value<T>(array: &ArrayRef, i: usize) -> String
@@ -108,6 +112,18 @@ pub struct Writer<W: Write> {
     writer: csv::Writer<W>,
     /// Whether file should be written with headers. Defaults to `true`
     has_headers: bool,
+    /// The date format for date arrays
+    date_format: String,
+    /// The datetime format for datetime arrays
+    datetime_format: String,
+    /// The timestamp format for timestamp arrays
+    #[allow(dead_code)]
+    timestamp_format: String,
+    /// The timestamp format for timestamp (with timezone) arrays
+    #[allow(dead_code)]
+    timestamp_tz_format: String,
+    /// The time format for time arrays
+    time_format: String,
     /// Is the beginning-of-writer
     beginning: bool,
     /// The value to represent null entries
@@ -123,6 +139,11 @@ impl<W: Write> Writer<W> {
         Writer {
             writer,
             has_headers: true,
+            date_format: DEFAULT_DATE_FORMAT.to_string(),
+            datetime_format: DEFAULT_TIMESTAMP_FORMAT.to_string(),
+            time_format: DEFAULT_TIME_FORMAT.to_string(),
+            timestamp_format: DEFAULT_TIMESTAMP_FORMAT.to_string(),
+            timestamp_tz_format: DEFAULT_TIMESTAMP_TZ_FORMAT.to_string(),
             beginning: true,
             null_value: DEFAULT_NULL_VALUE.to_string(),
         }
@@ -157,26 +178,23 @@ impl<W: Write> Writer<W> {
                 DataType::Boolean => array_value_to_string(col, row_index)?.to_string(),
                 DataType::Utf8 => array_value_to_string(col, row_index)?.to_string(),
                 DataType::LargeUtf8 => array_value_to_string(col, row_index)?.to_string(),
-                DataType::Date32 => array_value_to_string(col, row_index)?.to_string(),
-                DataType::Date64 => array_value_to_string(col, row_index)?.to_string(),
-                DataType::Time32(TimeUnit::Second) => {
-                    array_value_to_string(col, row_index)?.to_string()
+                DataType::Date32 => datetime_array_value_to_string(col, row_index, &self.date_format)?.to_string(),
+                DataType::Date64 => datetime_array_value_to_string(col, row_index, &self.datetime_format)?.to_string(),
+                DataType::Time32(TimeUnit::Second) => datetime_array_value_to_string(col, row_index, &self.time_format)?.to_string(),
+                DataType::Time32(TimeUnit::Millisecond) => datetime_array_value_to_string(col, row_index, &self.time_format)?.to_string(),
+                DataType::Time64(TimeUnit::Microsecond) => datetime_array_value_to_string(col, row_index, &self.time_format)?.to_string(),
+                DataType::Time64(TimeUnit::Nanosecond) => datetime_array_value_to_string(col, row_index, &self.time_format)?.to_string(),
+                DataType::Timestamp(_, time_zone) => {
+                    match time_zone {
+                        Some(_tz) => {
+                            datetime_array_value_to_string(col, row_index, &self.timestamp_tz_format)?.to_string()
+                        },
+                        None => {
+                            datetime_array_value_to_string(col, row_index, &self.timestamp_format)?.to_string()
+                        }
+                    }
                 }
-                DataType::Time32(TimeUnit::Millisecond) => {
-                    array_value_to_string(col, row_index)?.to_string()
-                }
-                DataType::Time64(TimeUnit::Microsecond) => {
-                    array_value_to_string(col, row_index)?.to_string()
-                }
-                DataType::Time64(TimeUnit::Nanosecond) => {
-                    array_value_to_string(col, row_index)?.to_string()
-                }
-                DataType::Timestamp(_, _) => {
-                    array_value_to_string(col, row_index)?.to_string()
-                }
-                DataType::Decimal128(..) => {
-                    array_value_to_string(col, row_index)?.to_string()
-                }
+                DataType::Decimal128(..) => array_value_to_string(col, row_index)?.to_string(),
                 t => {
                     // List and Struct arrays not supported by the writer, any
                     // other type needs to be implemented
@@ -239,6 +257,16 @@ pub struct WriterBuilder {
     delimiter: Option<u8>,
     /// Whether to write column names as file headers. Defaults to `true`
     has_headers: bool,
+    /// Optional date format for date arrays
+    date_format: Option<String>,
+    /// Optional datetime format for datetime arrays
+    datetime_format: Option<String>,
+    /// Optional timestamp format for timestamp arrays
+    timestamp_format: Option<String>,
+    /// Optional timestamp format for timestamp with timezone arrays
+    timestamp_tz_format: Option<String>,
+    /// Optional time format for time arrays
+    time_format: Option<String>,
     /// Optional value to represent null
     null_value: Option<String>,
 }
@@ -248,6 +276,11 @@ impl Default for WriterBuilder {
         Self {
             has_headers: true,
             delimiter: None,
+            date_format: Some(DEFAULT_DATE_FORMAT.to_string()),
+            datetime_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
+            time_format: Some(DEFAULT_TIME_FORMAT.to_string()),
+            timestamp_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
+            timestamp_tz_format: Some(DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
             null_value: Some(DEFAULT_NULL_VALUE.to_string()),
         }
     }
@@ -290,6 +323,30 @@ impl WriterBuilder {
         self
     }
 
+    /// Set the CSV file's date format
+    pub fn with_date_format(mut self, format: String) -> Self {
+        self.date_format = Some(format);
+        self
+    }
+
+    /// Set the CSV file's datetime format
+    pub fn with_datetime_format(mut self, format: String) -> Self {
+        self.datetime_format = Some(format);
+        self
+    }
+
+    /// Set the CSV file's time format
+    pub fn with_time_format(mut self, format: String) -> Self {
+        self.time_format = Some(format);
+        self
+    }
+
+    /// Set the CSV file's timestamp format
+    pub fn with_timestamp_format(mut self, format: String) -> Self {
+        self.timestamp_format = Some(format);
+        self
+    }
+
     /// Set the value to represent null in output
     pub fn with_null(mut self, null_value: String) -> Self {
         self.null_value = Some(null_value);
@@ -304,6 +361,21 @@ impl WriterBuilder {
         Writer {
             writer,
             has_headers: self.has_headers,
+            date_format: self
+                .date_format
+                .unwrap_or_else(|| DEFAULT_DATE_FORMAT.to_string()),
+            datetime_format: self
+                .datetime_format
+                .unwrap_or_else(|| DEFAULT_TIMESTAMP_FORMAT.to_string()),
+            time_format: self
+                .time_format
+                .unwrap_or_else(|| DEFAULT_TIME_FORMAT.to_string()),
+            timestamp_format: self
+                .timestamp_format
+                .unwrap_or_else(|| DEFAULT_TIMESTAMP_FORMAT.to_string()),
+            timestamp_tz_format: self
+                .timestamp_tz_format
+                .unwrap_or_else(|| DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
             beginning: true,
             null_value: self
                 .null_value

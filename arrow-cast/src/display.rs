@@ -184,6 +184,17 @@ macro_rules! make_string_datetime_with_tz {
     }};
 }
 
+macro_rules! make_string_datetime_with_format {
+    ($array_type:ty, $format: ident, $column: ident, $row: ident) => {{
+        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
+
+        Ok(array
+            .value_as_datetime($row)
+            .map(|d| d.format($format).to_string())
+            .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
+    }};
+}
+
 // It's not possible to do array.value($row).to_string() for &[u8], let's format it as hex
 macro_rules! make_string_hex {
     ($array_type:ty, $column: ident, $row: ident) => {{
@@ -323,9 +334,10 @@ fn append_map_field_string(
 ///
 /// Note this function is quite inefficient and is unlikely to be
 /// suitable for converting large arrays or record batches.
-pub fn array_value_to_string(
+fn array_value_to_string_internal(
     column: &ArrayRef,
     row: usize,
+    datetime_format: Option<&String>
 ) -> Result<String, ArrowError> {
     if column.is_null(row) {
         return Ok("".to_string());
@@ -352,14 +364,22 @@ pub fn array_value_to_string(
         DataType::Float64 => make_string!(array::Float64Array, column, row),
         DataType::Decimal128(..) => make_string_from_decimal(column, row),
         DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Second => {
-            match tz_string_opt {
-                Some(tz_string) => make_string_datetime_with_tz!(
+            match datetime_format {
+                Some(format) => make_string_datetime_with_format!(
                     array::TimestampSecondArray,
-                    tz_string,
+                    format,
                     column,
                     row
                 ),
-                None => make_string_datetime!(array::TimestampSecondArray, column, row),
+                None => match tz_string_opt {
+                    Some(tz_string) => make_string_datetime_with_tz!(
+                        array::TimestampSecondArray,
+                        tz_string,
+                        column,
+                        row
+                    ),
+                    None => make_string_datetime!(array::TimestampSecondArray, column, row),
+                },
             }
         }
         DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Millisecond => {
@@ -522,6 +542,21 @@ pub fn array_value_to_string(
             column.data_type()
         ))),
     }
+}
+
+pub fn array_value_to_string(
+    column: &ArrayRef,
+    row: usize,
+) -> Result<String, ArrowError> {
+        array_value_to_string_internal(column, row, None)
+}
+
+pub fn datetime_array_value_to_string(
+    column: &ArrayRef,
+    row: usize,
+    format: &String,
+) -> Result<String, ArrowError> {
+    array_value_to_string_internal(column, row, Some(format))
 }
 
 /// Converts the value of the union array at `row` to a String
