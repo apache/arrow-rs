@@ -53,7 +53,7 @@ ring = { version = "0.16", default-features = false, features = ["std"], optiona
 rustls-pemfile = { version = "1.0", default-features = false, optional = true }
 
 # AWS Profile support
-aws-types = { version = "0.52", optional = true }
+aws-types = { version = "0.53", optional = true }
 aws-config = { version = "0.52", optional = true }
 
 [features]
