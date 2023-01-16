@@ -485,7 +485,7 @@ impl<'a> MutableArrayData<'a> {
                     .map(|array| &array.child_data()[1])
                     .collect::<Vec<_>>();
                 vec![
-                    MutableArrayData::new(run_ends_child, use_nulls, array_capacity),
+                    MutableArrayData::new(run_ends_child, false, array_capacity),
                     MutableArrayData::new(value_child, use_nulls, array_capacity),
                 ]
             }
