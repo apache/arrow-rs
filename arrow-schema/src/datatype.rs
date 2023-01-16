@@ -242,6 +242,19 @@ pub enum DataType {
     /// child fields may be respectively "entries", "key", and "value", but this is
     /// not enforced.
     Map(Box<Field>, bool),
+
+    /// A run-end encoding (REE) array is a variation of run-length encoding (RLE). These
+    /// encodings are well-suited for representing data containing sequences of the
+    /// same value, called runs. Each run is represented as a value and an integer giving
+    /// the index in the array where the run ends.
+    ///
+    /// A run-end encoded array has no buffers by itself, but has two child arrays. The
+    /// first child array, called the run ends array, holds either 16, 32, or 64-bit
+    /// signed integers. The actual values of each run are held in the second child array.
+    ///
+    /// These child arrays are prescribed the standard names of "run_ends" and "values"
+    /// respectively.
+    RunEndEncodedType(Box<Field>, Box<Field>),
 }
 
 /// An absolute length of time in seconds, milliseconds, microseconds or nanoseconds.
@@ -438,6 +451,10 @@ impl DataType {
                         + (std::mem::size_of::<Field>() * fields.capacity())
                 }
                 DataType::Dictionary(dt1, dt2) => dt1.size() + dt2.size(),
+                DataType::RunEndEncodedType(run_ends, values) => {
+                    run_ends.size() - std::mem::size_of_val(run_ends) + values.size()
+                        - std::mem::size_of_val(values)
+                }
             }
     }
 }

@@ -737,6 +737,7 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
             new_null_sized_decimal(data_type, length, std::mem::size_of::<i128>())
         }
         DataType::Decimal256(_, _) => new_null_sized_decimal(data_type, length, 32),
+        DataType::RunEndEncodedType(_, _) => todo!(),
     }
 }
 

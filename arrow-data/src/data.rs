@@ -198,9 +198,9 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             ],
             _ => unreachable!(),
         },
-        DataType::FixedSizeList(_, _) | DataType::Struct(_) => {
-            [empty_buffer, MutableBuffer::new(0)]
-        }
+        DataType::FixedSizeList(_, _)
+        | DataType::Struct(_)
+        | DataType::RunEndEncodedType(_, _) => [empty_buffer, MutableBuffer::new(0)],
         DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => [
             MutableBuffer::new(capacity * mem::size_of::<u8>()),
             empty_buffer,
@@ -653,6 +653,12 @@ impl ArrayData {
                 .collect(),
             DataType::Dictionary(_, data_type) => {
                 vec![Self::new_empty(data_type)]
+            }
+            DataType::RunEndEncodedType(run_ends, values) => {
+                vec![
+                    Self::new_empty(run_ends.data_type()),
+                    Self::new_empty(values.data_type()),
+                ]
             }
         };
 
@@ -1508,6 +1514,7 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
             // same as ListType
             DataTypeLayout::new_fixed_width(size_of::<i32>())
         }
+        DataType::RunEndEncodedType(_, _) => DataTypeLayout::new_empty(), // all in child data,
     }
 }
 

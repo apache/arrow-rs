@@ -357,6 +357,7 @@ pub fn data_type_to_json(data_type: &DataType) -> serde_json::Value {
         DataType::Map(_, keys_sorted) => {
             json!({"name": "map", "keysSorted": keys_sorted})
         }
+        DataType::RunEndEncodedType(_, _) => todo!(),
     }
 }
 
