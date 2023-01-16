@@ -18,6 +18,10 @@
 # tests for arrow crate
 name: arrow
 
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
 on:
   # always trigger
   push:

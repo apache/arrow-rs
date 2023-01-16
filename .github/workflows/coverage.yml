@@ -17,6 +17,10 @@
 
 name: coverage
 
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
 # Trigger only on pushes to master, not pull requests
 on:
   push:
