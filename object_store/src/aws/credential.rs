@@ -518,7 +518,7 @@ mod profile {
     use super::*;
     use aws_config::profile::ProfileFileCredentialsProvider;
     use aws_config::provider_config::ProviderConfig;
-    use aws_types::credentials::ProvideCredentials;
+    use aws_credential_types::provider::ProvideCredentials;
     use aws_types::region::Region;
     use std::time::SystemTime;
 
