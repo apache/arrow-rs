@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains `ArrayData`, a generic representation of Arrow array data which encapsulates
+//! Contains [`ArrayData`], a generic representation of Arrow array data which encapsulates
 //! common attributes and operations for Arrow array.
 
 use crate::{bit_iterator::BitSliceIterator, bitmap::Bitmap};
@@ -245,6 +245,46 @@ pub(crate) fn into_buffers(
 /// An generic representation of Arrow array data which encapsulates common attributes and
 /// operations for Arrow array. Specific operations for different arrays types (e.g.,
 /// primitive, list, struct) are implemented in `Array`.
+///
+/// # Memory Layout
+///
+/// `ArrayData` has references to one or more underlying data buffers
+/// and optional child ArrayDatas, depending on type as illustrated
+/// below. Bitmaps are not shown for simplicity but they are stored
+/// similarly to the buffers.
+///
+/// ```text
+///                        offset
+///                       points to
+/// ┌───────────────────┐ start of  ┌───────┐       Different
+/// │                   │   data    │       │     ArrayData may
+/// │ArrayData {        │           │....   │     also refers to
+/// │  data_type: ...   │   ─ ─ ─ ─▶│1234   │  ┌ ─  the same
+/// │  offset: ... ─ ─ ─│─ ┘        │4372   │      underlying
+/// │  len: ...    ─ ─ ─│─ ┐        │4888   │  │     buffer with different offset/len
+/// │  buffers: [       │           │5882   │◀─
+/// │    ...            │  │        │4323   │
+/// │  ]                │   ─ ─ ─ ─▶│4859   │
+/// │  child_data: [    │           │....   │
+/// │    ...            │           │       │
+/// │  ]                │           └───────┘
+/// │}                  │
+/// │                   │            Shared Buffer uses
+/// │               │   │            bytes::Bytes to hold
+/// └───────────────────┘            actual data values
+///           ┌ ─ ─ ┘
+///
+///           ▼
+/// ┌───────────────────┐
+/// │ArrayData {        │
+/// │  ...              │
+/// │}                  │
+/// │                   │
+/// └───────────────────┘
+///
+/// Child ArrayData may also have its own buffers and children
+/// ```
+
 #[derive(Debug, Clone)]
 pub struct ArrayData {
     /// The data type for this array data
@@ -375,24 +415,25 @@ impl ArrayData {
         Ok(new_self)
     }
 
-    /// Returns a builder to construct a `ArrayData` instance.
+    /// Returns a builder to construct a [`ArrayData`] instance of the same [`DataType`]
     #[inline]
     pub const fn builder(data_type: DataType) -> ArrayDataBuilder {
         ArrayDataBuilder::new(data_type)
     }
 
-    /// Returns a reference to the data type of this array data
+    /// Returns a reference to the [`DataType`] of this [`ArrayData`]
     #[inline]
     pub const fn data_type(&self) -> &DataType {
         &self.data_type
     }
 
-    /// Returns a slice of buffers for this array data
+    /// Returns a slice of the [`Buffer`]s that hold the data.
     pub fn buffers(&self) -> &[Buffer] {
         &self.buffers[..]
     }
 
-    /// Returns a slice of children data arrays
+    /// Returns a slice of children [`ArrayData`]. This will be non
+    /// empty for type such as lists and structs.
     pub fn child_data(&self) -> &[ArrayData] {
         &self.child_data[..]
     }
@@ -405,13 +446,13 @@ impl ArrayData {
         false
     }
 
-    /// Returns a reference to the null bitmap of this array data
+    /// Returns a reference to the null bitmap of this [`ArrayData`]
     #[inline]
     pub const fn null_bitmap(&self) -> Option<&Bitmap> {
         self.null_bitmap.as_ref()
     }
 
-    /// Returns a reference to the null buffer of this array data.
+    /// Returns a reference to the null buffer of this [`ArrayData`].
     pub fn null_buffer(&self) -> Option<&Buffer> {
         self.null_bitmap().as_ref().map(|b| b.buffer_ref())
     }
@@ -424,19 +465,19 @@ impl ArrayData {
         true
     }
 
-    /// Returns the length (i.e., number of elements) of this array
+    /// Returns the length (i.e., number of elements) of this [`ArrayData`].
     #[inline]
     pub const fn len(&self) -> usize {
         self.len
     }
 
-    // Returns whether array data is empty
+    /// Returns whether this [`ArrayData`] is empty
     #[inline]
     pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    /// Returns the offset of this array
+    /// Returns the offset of this [`ArrayData`]
     #[inline]
     pub const fn offset(&self) -> usize {
         self.offset
@@ -448,7 +489,17 @@ impl ArrayData {
         self.null_count
     }
 
-    /// Returns the total number of bytes of memory occupied by the buffers owned by this [ArrayData].
+    /// Returns the total number of bytes of memory occupied by the
+    /// buffers owned by this [`ArrayData`] and all of its
+    /// children. (See also diagram on [`ArrayData`]).
+    ///
+    /// Note that this [`ArrayData`] may only refer to a subset of the
+    /// data in the underlying [`Buffer`]s (due to `offset` and
+    /// `length`), but the size returned includes the entire size of
+    /// the buffers.
+    ///
+    /// If multiple [`ArrayData`]s refer to the same underlying
+    /// [`Buffer`]s they will both report the same size.
     pub fn get_buffer_memory_size(&self) -> usize {
         let mut size = 0;
         for buffer in &self.buffers {
@@ -463,7 +514,18 @@ impl ArrayData {
         size
     }
 
-    /// Returns the total number of the bytes of memory occupied by the buffers by this slice of [ArrayData]
+    /// Returns the total number of the bytes of memory occupied by
+    /// the buffers by this slice of [`ArrayData`] (See also diagram on [`ArrayData`]).
+    ///
+    /// This is approximately the number of bytes if a new
+    /// [`ArrayData`] was formed by creating new [`Buffer`]s with
+    /// exactly the data needed.
+    ///
+    /// For example, a [`DataType::Int64`] with `100` elements,
+    /// [`Self::get_slice_memory_size`] would return `100 * 8 = 800`. If
+    /// the [`ArrayData`] was then [`Self::slice`]ed to refer to its
+    /// first `20` elements, then [`Self::get_slice_memory_size`] on the
+    /// sliced [`ArrayData`] would return `20 * 8 = 160`.
     pub fn get_slice_memory_size(&self) -> Result<usize, ArrowError> {
         let mut result: usize = 0;
         let layout = layout(&self.data_type);
@@ -519,7 +581,14 @@ impl ArrayData {
         Ok(result)
     }
 
-    /// Returns the total number of bytes of memory occupied physically by this [ArrayData].
+    /// Returns the total number of bytes of memory occupied
+    /// physically by this [`ArrayData`] and all its [`Buffer`]s and
+    /// children. (See also diagram on [`ArrayData`]).
+    ///
+    /// Equivalent to:
+    ///  `size_of_val(self)` +
+    ///  [`Self::get_buffer_memory_size`] +
+    ///  `size_of_val(child)` for all children
     pub fn get_array_memory_size(&self) -> usize {
         let mut size = mem::size_of_val(self);
 
@@ -541,8 +610,9 @@ impl ArrayData {
         size
     }
 
-    /// Creates a zero-copy slice of itself. This creates a new [ArrayData]
-    /// with a different offset, len and a shifted null bitmap.
+    /// Creates a zero-copy slice of itself. This creates a new
+    /// [`ArrayData`] pointing at the same underlying [`Buffer`]s with a
+    /// different offset and len
     ///
     /// # Panics
     ///
