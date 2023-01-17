@@ -1,0 +1,6 @@
+message arrow_schema {
+  required binary city (STRING);
+  required double lat;
+  required double lng;
+}
+

@@ -1241,12 +1241,18 @@ mod tests {
     fn test_roundtrip_i32<W, R>(
         file: W,
         data: Vec<Vec<i32>>,
+        compression: Compression,
     ) -> crate::format::FileMetaData
     where
         W: Write,
         R: ChunkReader + From<W> + 'static,
     {
-        test_roundtrip::<W, R, Int32Type, _>(file, data, |r| r.get_int(0).unwrap())
+        test_roundtrip::<W, R, Int32Type, _>(
+            file,
+            data,
+            |r| r.get_int(0).unwrap(),
+            compression,
+        )
     }
 
     /// Tests roundtrip of data of type `D` written using `W` and read using `R`
@@ -1255,6 +1261,7 @@ mod tests {
         mut file: W,
         data: Vec<Vec<D::T>>,
         value: F,
+        compression: Compression,
     ) -> crate::format::FileMetaData
     where
         W: Write,
@@ -1273,7 +1280,11 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_compression(compression)
+                .build(),
+        );
         let mut file_writer =
             SerializedFileWriter::new(&mut file, schema, props).unwrap();
         let mut rows: i64 = 0;
@@ -1324,31 +1335,52 @@ mod tests {
         file: File,
         data: Vec<Vec<i32>>,
     ) -> crate::format::FileMetaData {
-        test_roundtrip_i32::<File, File>(file, data)
+        test_roundtrip_i32::<File, File>(file, data, Compression::UNCOMPRESSED)
     }
 
     #[test]
     fn test_bytes_writer_empty_row_groups() {
-        test_bytes_roundtrip(vec![]);
+        test_bytes_roundtrip(vec![], Compression::UNCOMPRESSED);
     }
 
     #[test]
     fn test_bytes_writer_single_row_group() {
-        test_bytes_roundtrip(vec![vec![1, 2, 3, 4, 5]]);
+        test_bytes_roundtrip(vec![vec![1, 2, 3, 4, 5]], Compression::UNCOMPRESSED);
     }
 
     #[test]
     fn test_bytes_writer_multiple_row_groups() {
-        test_bytes_roundtrip(vec![
-            vec![1, 2, 3, 4, 5],
-            vec![1, 2, 3],
-            vec![1],
-            vec![1, 2, 3, 4, 5, 6],
-        ]);
+        test_bytes_roundtrip(
+            vec![
+                vec![1, 2, 3, 4, 5],
+                vec![1, 2, 3],
+                vec![1],
+                vec![1, 2, 3, 4, 5, 6],
+            ],
+            Compression::UNCOMPRESSED,
+        );
     }
 
-    fn test_bytes_roundtrip(data: Vec<Vec<i32>>) {
-        test_roundtrip_i32::<Vec<u8>, Bytes>(Vec::with_capacity(1024), data);
+    #[test]
+    fn test_bytes_writer_single_row_group_compressed() {
+        test_bytes_roundtrip(vec![vec![1, 2, 3, 4, 5]], Compression::SNAPPY);
+    }
+
+    #[test]
+    fn test_bytes_writer_multiple_row_groups_compressed() {
+        test_bytes_roundtrip(
+            vec![
+                vec![1, 2, 3, 4, 5],
+                vec![1, 2, 3],
+                vec![1],
+                vec![1, 2, 3, 4, 5, 6],
+            ],
+            Compression::SNAPPY,
+        );
+    }
+
+    fn test_bytes_roundtrip(data: Vec<Vec<i32>>, compression: Compression) {
+        test_roundtrip_i32::<Vec<u8>, Bytes>(Vec::with_capacity(1024), data, compression);
     }
 
     #[test]
@@ -1358,6 +1390,18 @@ mod tests {
             Vec::with_capacity(1024),
             vec![my_bool_values],
             |r| r.get_bool(0).unwrap(),
+            Compression::UNCOMPRESSED,
+        );
+    }
+
+    #[test]
+    fn test_boolean_compressed_roundtrip() {
+        let my_bool_values: Vec<_> = (0..2049).map(|idx| idx % 2 == 0).collect();
+        test_roundtrip::<Vec<u8>, Bytes, BoolType, _>(
+            Vec::with_capacity(1024),
+            vec![my_bool_values],
+            |r| r.get_bool(0).unwrap(),
+            Compression::SNAPPY,
         );
     }
 
