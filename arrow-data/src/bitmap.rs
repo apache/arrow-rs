@@ -71,10 +71,6 @@ impl Bitmap {
     /// Returns the total number of bytes of memory occupied by the
     /// buffers owned by this [Bitmap].
     ///
-    /// Note that this [`Bitmap`] may only refer to a subset of the
-    /// data in the underlying [`Buffer`] (it is a slice)  but the return value includes the
-    /// entire size of the buffer.
-    ///
     /// If multiple [`Bitmap`]s refer to the same underlying
     /// [`Buffer`] they will both report the same size.
     pub fn get_buffer_memory_size(&self) -> usize {
