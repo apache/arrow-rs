@@ -157,8 +157,10 @@ macro_rules! make_string_date_with_format {
 macro_rules! handle_string_date {
     ($array_type:ty, $format: ident, $column: ident, $row: ident) => {{
         match $format {
-            Some(format) => make_string_date_with_format!($array_type, format, $column, $row),
-            None => make_string_date!($array_type, $column, $row)
+            Some(format) => {
+                make_string_date_with_format!($array_type, format, $column, $row)
+            }
+            None => make_string_date!($array_type, $column, $row),
         }
     }};
 }
@@ -190,9 +192,9 @@ macro_rules! handle_string_time {
             Some(format) => {
                 make_string_time_with_format!($array_type, format, $column, $row)
             }
-            None => make_string_time!($array_type, $column, $row)
+            None => make_string_time!($array_type, $column, $row),
         }
-    }
+    };
 }
 
 macro_rules! make_string_datetime {
@@ -249,7 +251,7 @@ macro_rules! handle_string_datetime {
                 None => make_string_datetime!($array_type, $column, $row),
             },
         }
-    }
+    };
 }
 
 // It's not possible to do array.value($row).to_string() for &[u8], let's format it as hex
@@ -326,8 +328,6 @@ macro_rules! make_string_from_duration {
     }};
 }
 
-
-
 #[inline(always)]
 pub fn make_string_from_decimal(
     column: &Arc<dyn Array>,
@@ -396,7 +396,7 @@ fn append_map_field_string(
 fn array_value_to_string_internal(
     column: &ArrayRef,
     row: usize,
-    datetime_format_opt: &Option<String>
+    datetime_format_opt: &Option<String>,
 ) -> Result<String, ArrowError> {
     if column.is_null(row) {
         return Ok("".to_string());
@@ -422,47 +422,79 @@ fn array_value_to_string_internal(
         DataType::Float32 => make_string!(array::Float32Array, column, row),
         DataType::Float64 => make_string!(array::Float64Array, column, row),
         DataType::Decimal128(..) => make_string_from_decimal(column, row),
-        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Second => handle_string_datetime!(
-            array::TimestampSecondArray,
-            datetime_format_opt,
-            tz_string_opt,
-            column,
-            row
-        ),
-        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Millisecond => handle_string_datetime!(
-            array::TimestampMillisecondArray,
-            datetime_format_opt,
-            tz_string_opt,
-            column,
-            row
-        ),
-        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Microsecond => handle_string_datetime!(
-            array::TimestampMicrosecondArray,
-            datetime_format_opt,
-            tz_string_opt,
-            column,
-            row
-        ),
-        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Nanosecond => handle_string_datetime!(
-            array::TimestampNanosecondArray,
-            datetime_format_opt,
-            tz_string_opt,
-            column,
-            row
-        ),
-        DataType::Date32 => handle_string_date!(array::Date32Array, datetime_format_opt, column, row),
-        DataType::Date64 => handle_string_date!(array::Date64Array, datetime_format_opt, column, row),
+        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Second => {
+            handle_string_datetime!(
+                array::TimestampSecondArray,
+                datetime_format_opt,
+                tz_string_opt,
+                column,
+                row
+            )
+        }
+        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Millisecond => {
+            handle_string_datetime!(
+                array::TimestampMillisecondArray,
+                datetime_format_opt,
+                tz_string_opt,
+                column,
+                row
+            )
+        }
+        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Microsecond => {
+            handle_string_datetime!(
+                array::TimestampMicrosecondArray,
+                datetime_format_opt,
+                tz_string_opt,
+                column,
+                row
+            )
+        }
+        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Nanosecond => {
+            handle_string_datetime!(
+                array::TimestampNanosecondArray,
+                datetime_format_opt,
+                tz_string_opt,
+                column,
+                row
+            )
+        }
+        DataType::Date32 => {
+            handle_string_date!(array::Date32Array, datetime_format_opt, column, row)
+        }
+        DataType::Date64 => {
+            handle_string_date!(array::Date64Array, datetime_format_opt, column, row)
+        }
         DataType::Time32(unit) if *unit == TimeUnit::Second => {
-            handle_string_time!(array::Time32SecondArray, datetime_format_opt, column, row)
+            handle_string_time!(
+                array::Time32SecondArray,
+                datetime_format_opt,
+                column,
+                row
+            )
         }
         DataType::Time32(unit) if *unit == TimeUnit::Millisecond => {
-            handle_string_time!(array::Time32MillisecondArray, datetime_format_opt, column, row)
+            handle_string_time!(
+                array::Time32MillisecondArray,
+                datetime_format_opt,
+                column,
+                row
+            )
         }
         DataType::Time64(unit) if *unit == TimeUnit::Microsecond => {
-            handle_string_time!(array::Time64MicrosecondArray, datetime_format_opt, column, row)
+            handle_string_time!(
+                array::Time64MicrosecondArray,
+                datetime_format_opt,
+                column,
+                row
+            )
         }
         DataType::Time64(unit) if *unit == TimeUnit::Nanosecond => {
-            handle_string_time!(array::Time64NanosecondArray, datetime_format_opt, column, row)
+            handle_string_time!(
+                array::Time64NanosecondArray,
+                datetime_format_opt,
+                column,
+                row
+            )
         }
         DataType::Interval(unit) => match unit {
             IntervalUnit::DayTime => {
@@ -577,7 +609,7 @@ pub fn array_value_to_string(
     column: &ArrayRef,
     row: usize,
 ) -> Result<String, ArrowError> {
-        array_value_to_string_internal(column, row, &None)
+    array_value_to_string_internal(column, row, &None)
 }
 
 pub fn datetime_array_value_to_string(

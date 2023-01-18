@@ -65,7 +65,9 @@
 
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_cast::display::{lexical_to_string, array_value_to_string, datetime_array_value_to_string};
+use arrow_cast::display::{
+    array_value_to_string, datetime_array_value_to_string, lexical_to_string,
+};
 use arrow_schema::*;
 use std::io::Write;
 
@@ -145,7 +147,7 @@ impl<W: Write> Writer<W> {
             timestamp_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
             timestamp_tz_format: Some(DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
             beginning: true,
-            null_value: DEFAULT_NULL_VALUE.to_string()
+            null_value: DEFAULT_NULL_VALUE.to_string(),
         }
     }
 
@@ -178,23 +180,47 @@ impl<W: Write> Writer<W> {
                 DataType::Boolean => array_value_to_string(col, row_index)?.to_string(),
                 DataType::Utf8 => array_value_to_string(col, row_index)?.to_string(),
                 DataType::LargeUtf8 => array_value_to_string(col, row_index)?.to_string(),
-                DataType::Date32 => datetime_array_value_to_string(col, row_index, &self.date_format)?.to_string(),
-                DataType::Date64 => datetime_array_value_to_string(col, row_index, &self.datetime_format)?.to_string(),
-                DataType::Time32(TimeUnit::Second) => datetime_array_value_to_string(col, row_index, &self.time_format)?.to_string(),
-                DataType::Time32(TimeUnit::Millisecond) => datetime_array_value_to_string(col, row_index, &self.time_format)?.to_string(),
-                DataType::Time64(TimeUnit::Microsecond) => datetime_array_value_to_string(col, row_index, &self.time_format)?.to_string(),
-                DataType::Time64(TimeUnit::Nanosecond) => datetime_array_value_to_string(col, row_index, &self.time_format)?.to_string(),
-                DataType::Timestamp(_, time_zone) => {
-                    match time_zone {
-                        Some(_tz) => {
-                            datetime_array_value_to_string(col, row_index, &self.timestamp_tz_format)?.to_string()
-                        },
-                        None => {
-                            datetime_array_value_to_string(col, row_index, &self.timestamp_format)?.to_string()
-                        }
-                    }
+                DataType::Date32 => {
+                    datetime_array_value_to_string(col, row_index, &self.date_format)?
+                        .to_string()
                 }
-                DataType::Decimal128(..) => array_value_to_string(col, row_index)?.to_string(),
+                DataType::Date64 => {
+                    datetime_array_value_to_string(col, row_index, &self.datetime_format)?
+                        .to_string()
+                }
+                DataType::Time32(TimeUnit::Second) => {
+                    datetime_array_value_to_string(col, row_index, &self.time_format)?
+                        .to_string()
+                }
+                DataType::Time32(TimeUnit::Millisecond) => {
+                    datetime_array_value_to_string(col, row_index, &self.time_format)?
+                        .to_string()
+                }
+                DataType::Time64(TimeUnit::Microsecond) => {
+                    datetime_array_value_to_string(col, row_index, &self.time_format)?
+                        .to_string()
+                }
+                DataType::Time64(TimeUnit::Nanosecond) => {
+                    datetime_array_value_to_string(col, row_index, &self.time_format)?
+                        .to_string()
+                }
+                DataType::Timestamp(_, time_zone) => match time_zone {
+                    Some(_tz) => datetime_array_value_to_string(
+                        col,
+                        row_index,
+                        &self.timestamp_tz_format,
+                    )?
+                    .to_string(),
+                    None => datetime_array_value_to_string(
+                        col,
+                        row_index,
+                        &self.timestamp_format,
+                    )?
+                    .to_string(),
+                },
+                DataType::Decimal128(..) => {
+                    array_value_to_string(col, row_index)?.to_string()
+                }
                 t => {
                     // List and Struct arrays not supported by the writer, any
                     // other type needs to be implemented
@@ -270,7 +296,7 @@ pub struct WriterBuilder {
     /// Optional value to represent null
     null_value: Option<String>,
     /// Whether to use RFC3339 format for timestamps. Defaults to `false`
-    use_rfc3339: bool
+    use_rfc3339: bool,
 }
 
 impl Default for WriterBuilder {
@@ -284,7 +310,7 @@ impl Default for WriterBuilder {
             timestamp_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
             timestamp_tz_format: Some(DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
             null_value: Some(DEFAULT_NULL_VALUE.to_string()),
-            use_rfc3339: false
+            use_rfc3339: false,
         }
     }
 }
