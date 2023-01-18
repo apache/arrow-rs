@@ -1324,12 +1324,15 @@ impl ArrayData {
                     _ => unreachable!(),
                 }
             }
-            DataType::RunEndEncoded(run_ends, _values) => match run_ends.data_type() {
-                DataType::Int16 => self.check_run_ends::<i16>(),
-                DataType::Int32 => self.check_run_ends::<i32>(),
-                DataType::Int64 => self.check_run_ends::<i64>(),
-                _ => unreachable!(),
-            },
+            DataType::RunEndEncoded(run_ends, _values) => {
+                let run_ends_data = self.child_data()[0].clone();
+                match run_ends.data_type() {
+                    DataType::Int16 => run_ends_data.check_run_ends::<i16>(),
+                    DataType::Int32 => run_ends_data.check_run_ends::<i32>(),
+                    DataType::Int64 => run_ends_data.check_run_ends::<i64>(),
+                    _ => unreachable!(),
+                }
+            }
             _ => {
                 // No extra validation check required for other types
                 Ok(())
@@ -1495,8 +1498,34 @@ impl ArrayData {
     where
         T: ArrowNativeType + TryInto<i64> + num::Num + std::fmt::Display,
     {
-        //todo!();
-        Ok(())
+        let values = self.typed_buffer::<T>(0, self.len())?;
+        let mut prev_value: i64 = 0_i64;
+        values.iter().enumerate().try_for_each(|(ix, &inp_value)| {
+            let value: i64 = inp_value.try_into().map_err(|_| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Value at position {} out of bounds: {} (can not convert to i64)",
+                    ix, inp_value
+                ))
+            })?;
+            if value <= 0_i64 {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "The values in run_ends array should be strictly positive. Found value {} at index {} that does not match the criteria.",
+                    value,
+                    ix
+                )));
+            }
+            if ix > 0 && value <= prev_value {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "The values in run_ends array should be strictly increasing. Found value {} at index {} with previous value {} that does not match the criteria.",
+                    value,
+                    ix,
+                    prev_value
+                )));
+            }
+
+            prev_value = value;
+            Ok(())
+        })
     }
     /// Returns true if this `ArrayData` is equal to `other`, using pointer comparisons
     /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may

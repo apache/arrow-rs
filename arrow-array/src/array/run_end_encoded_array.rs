@@ -478,6 +478,36 @@ mod tests {
     }
 
     #[test]
+    fn test_ree_array_run_ends_with_zeroes() {
+        let values: StringArray = [Some("foo"), Some("bar"), Some("baz")]
+            .into_iter()
+            .collect();
+        let run_ends: Int32Array = [Some(0), Some(1), Some(3)].into_iter().collect();
+
+        let actual = RunEndEncodedArray::<Int32Type>::try_new(&run_ends, &values);
+        let expected = ArrowError::InvalidArgumentError("The values in run_ends array should be strictly positive. Found value 0 at index 0 that does not match the criteria.".to_string());
+        assert_eq!(
+            format!("{}", expected),
+            format!("{}", actual.err().unwrap())
+        );
+    }
+
+    #[test]
+    fn test_ree_array_run_ends_non_increasing() {
+        let values: StringArray = [Some("foo"), Some("bar"), Some("baz")]
+            .into_iter()
+            .collect();
+        let run_ends: Int32Array = [Some(1), Some(4), Some(4)].into_iter().collect();
+
+        let actual = RunEndEncodedArray::<Int32Type>::try_new(&run_ends, &values);
+        let expected = ArrowError::InvalidArgumentError("The values in run_ends array should be strictly increasing. Found value 4 at index 2 with previous value 4 that does not match the criteria.".to_string());
+        assert_eq!(
+            format!("{}", expected),
+            format!("{}", actual.err().unwrap())
+        );
+    }
+
+    #[test]
     #[should_panic(
         expected = "Data type mismatch for run_ends array, expected Int64 got Int32"
     )]
