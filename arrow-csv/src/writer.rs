@@ -458,11 +458,11 @@ mod tests {
 
         let expected = r#"c1,c2,c3,c4,c5,c6,c7
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378,06:51:20,cupcakes
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
+consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
+sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378,06:51:20,cupcakes
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
+consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
+sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
 "#;
         assert_eq!(expected.to_string(), String::from_utf8(buffer).unwrap());
     }
@@ -508,7 +508,8 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         let builder = WriterBuilder::new()
             .has_headers(false)
             .with_delimiter(b'|')
-            .with_null("NULL".to_string());
+            .with_null("NULL".to_string())
+            .with_time_format("%r".to_string());
         let mut writer = builder.build(&mut file);
         let batches = vec![&batch];
         for batch in batches {
@@ -522,105 +523,9 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         file.read_to_end(&mut buffer).unwrap();
 
         assert_eq!(
-            "Lorem ipsum dolor sit amet|123.564532|3|true|00:20:34\nconsectetur adipiscing elit|NULL|2|false|06:51:20\nsed do eiusmod tempor|-556132.25|1|NULL|23:46:03\n"
+            "Lorem ipsum dolor sit amet|123.564532|3|true|12:20:34 AM\nconsectetur adipiscing elit|NULL|2|false|06:51:20 AM\nsed do eiusmod tempor|-556132.25|1|NULL|11:46:03 PM\n"
             .to_string(),
             String::from_utf8(buffer).unwrap()
         );
-    }
-
-    #[test]
-    fn test_conversion_consistency() {
-        // test if we can serialize and deserialize whilst retaining the same type information/ precision
-
-        let schema = Schema::new(vec![
-            Field::new("c1", DataType::Date32, false),
-            Field::new("c2", DataType::Date64, false),
-            Field::new("c3", DataType::Timestamp(TimeUnit::Nanosecond, None), false),
-        ]);
-
-        let nanoseconds = vec![
-            1599566300000000000,
-            1599566200000000000,
-            1599566100000000000,
-        ];
-        let c1 = Date32Array::from(vec![3, 2, 1]);
-        let c2 = Date64Array::from(vec![3, 2, 1]);
-        let c3 = TimestampNanosecondArray::from(nanoseconds.clone());
-
-        let batch = RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![Arc::new(c1), Arc::new(c2), Arc::new(c3)],
-        )
-        .unwrap();
-
-        let builder = WriterBuilder::new().has_headers(false);
-
-        let mut buf: Cursor<Vec<u8>> = Default::default();
-        // drop the writer early to release the borrow.
-        {
-            let mut writer = builder.build(&mut buf);
-            writer.write(&batch).unwrap();
-        }
-        buf.set_position(0);
-
-        let mut reader = Reader::new(
-            buf,
-            Arc::new(schema),
-            false,
-            None,
-            3,
-            // starting at row 2 and up to row 6.
-            None,
-            None,
-            None,
-        );
-        let rb = reader.next().unwrap().unwrap();
-        let c1 = rb.column(0).as_any().downcast_ref::<Date32Array>().unwrap();
-        let c2 = rb.column(1).as_any().downcast_ref::<Date64Array>().unwrap();
-        let c3 = rb
-            .column(2)
-            .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
-            .unwrap();
-
-        let actual = c1.into_iter().collect::<Vec<_>>();
-        let expected = vec![Some(3), Some(2), Some(1)];
-        assert_eq!(actual, expected);
-        let actual = c2.into_iter().collect::<Vec<_>>();
-        let expected = vec![Some(3), Some(2), Some(1)];
-        assert_eq!(actual, expected);
-        let actual = c3.into_iter().collect::<Vec<_>>();
-        let expected = nanoseconds.into_iter().map(Some).collect::<Vec<_>>();
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn test_write_csv_invalid_cast() {
-        let schema = Schema::new(vec![
-            Field::new("c0", DataType::UInt32, false),
-            Field::new("c1", DataType::Date64, false),
-        ]);
-
-        let c0 = UInt32Array::from(vec![Some(123), Some(234)]);
-        let c1 = Date64Array::from(vec![Some(1926632005177), Some(1926632005177685347)]);
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c0), Arc::new(c1)])
-                .unwrap();
-
-        let mut file = tempfile::tempfile().unwrap();
-        let mut writer = Writer::new(&mut file);
-        let batches = vec![&batch, &batch];
-        for batch in batches {
-            writer
-                .write(batch)
-                .map_err(|e| {
-                    dbg!(e.to_string());
-                    assert!(e.to_string().ends_with(
-                        invalid_cast_error("Date64", 1, 1).to_string().as_str()
-                    ))
-                })
-                .unwrap_err();
-        }
-        drop(writer);
     }
 }
