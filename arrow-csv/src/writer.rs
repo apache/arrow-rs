@@ -113,21 +113,23 @@ pub struct Writer<W: Write> {
     /// Whether file should be written with headers. Defaults to `true`
     has_headers: bool,
     /// The date format for date arrays
-    date_format: String,
+    date_format: Option<String>,
     /// The datetime format for datetime arrays
-    datetime_format: String,
+    datetime_format: Option<String>,
     /// The timestamp format for timestamp arrays
     #[allow(dead_code)]
-    timestamp_format: String,
+    timestamp_format: Option<String>,
     /// The timestamp format for timestamp (with timezone) arrays
     #[allow(dead_code)]
-    timestamp_tz_format: String,
+    timestamp_tz_format: Option<String>,
     /// The time format for time arrays
-    time_format: String,
+    time_format: Option<String>,
     /// Is the beginning-of-writer
     beginning: bool,
     /// The value to represent null entries
     null_value: String,
+    /// Is using RFC3339 format for date/time/timestamps
+    use_rfc3339: bool
 }
 
 impl<W: Write> Writer<W> {
@@ -139,13 +141,14 @@ impl<W: Write> Writer<W> {
         Writer {
             writer,
             has_headers: true,
-            date_format: DEFAULT_DATE_FORMAT.to_string(),
-            datetime_format: DEFAULT_TIMESTAMP_FORMAT.to_string(),
-            time_format: DEFAULT_TIME_FORMAT.to_string(),
-            timestamp_format: DEFAULT_TIMESTAMP_FORMAT.to_string(),
-            timestamp_tz_format: DEFAULT_TIMESTAMP_TZ_FORMAT.to_string(),
+            date_format: Some(DEFAULT_DATE_FORMAT.to_string()),
+            datetime_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
+            time_format: Some(DEFAULT_TIME_FORMAT.to_string()),
+            timestamp_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
+            timestamp_tz_format: Some(DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
             beginning: true,
             null_value: DEFAULT_NULL_VALUE.to_string(),
+            use_rfc3339: false
         }
     }
 
@@ -269,6 +272,8 @@ pub struct WriterBuilder {
     time_format: Option<String>,
     /// Optional value to represent null
     null_value: Option<String>,
+    /// Whether to use RFC3339 format for timestamps. Defaults to `false`
+    use_rfc3339: bool
 }
 
 impl Default for WriterBuilder {
@@ -282,6 +287,7 @@ impl Default for WriterBuilder {
             timestamp_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
             timestamp_tz_format: Some(DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
             null_value: Some(DEFAULT_NULL_VALUE.to_string()),
+            use_rfc3339: false
         }
     }
 }
@@ -353,33 +359,47 @@ impl WriterBuilder {
         self
     }
 
+    /// Whether to use RFC3339 format for date/time/timestamps
+    pub fn with_rfc3339_format(mut self, use_rfc3339: bool) -> Self {
+        self.use_rfc3339 = use_rfc3339;
+        self
+    }
+
     /// Create a new `Writer`
     pub fn build<W: Write>(self, writer: W) -> Writer<W> {
         let delimiter = self.delimiter.unwrap_or(b',');
         let mut builder = csv::WriterBuilder::new();
         let writer = builder.delimiter(delimiter).from_writer(writer);
-        Writer {
-            writer,
-            has_headers: self.has_headers,
-            date_format: self
-                .date_format
-                .unwrap_or_else(|| DEFAULT_DATE_FORMAT.to_string()),
-            datetime_format: self
-                .datetime_format
-                .unwrap_or_else(|| DEFAULT_TIMESTAMP_FORMAT.to_string()),
-            time_format: self
-                .time_format
-                .unwrap_or_else(|| DEFAULT_TIME_FORMAT.to_string()),
-            timestamp_format: self
-                .timestamp_format
-                .unwrap_or_else(|| DEFAULT_TIMESTAMP_FORMAT.to_string()),
-            timestamp_tz_format: self
-                .timestamp_tz_format
-                .unwrap_or_else(|| DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
-            beginning: true,
-            null_value: self
-                .null_value
-                .unwrap_or_else(|| DEFAULT_NULL_VALUE.to_string()),
+        if self.use_rfc3339 {
+            Writer {
+                writer,
+                has_headers: self.has_headers,
+                date_format: None,
+                datetime_format: None,
+                time_format: None,
+                timestamp_format: None,
+                timestamp_tz_format: None,
+                beginning: true,
+                null_value: self
+                    .null_value
+                    .unwrap_or_else(|| DEFAULT_NULL_VALUE.to_string()),
+                use_rfc3339: self.use_rfc3339
+            }
+        } else {
+            Writer {
+                writer,
+                has_headers: self.has_headers,
+                date_format: self.date_format,
+                datetime_format: self.datetime_format,
+                time_format: self.time_format,
+                timestamp_format: self.timestamp_format,
+                timestamp_tz_format: self.timestamp_tz_format,
+                beginning: true,
+                null_value: self
+                    .null_value
+                    .unwrap_or_else(|| DEFAULT_NULL_VALUE.to_string()),
+                use_rfc3339: self.use_rfc3339
+            }
         }
     }
 }

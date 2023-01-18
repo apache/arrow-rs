@@ -396,7 +396,7 @@ fn append_map_field_string(
 fn array_value_to_string_internal(
     column: &ArrayRef,
     row: usize,
-    datetime_format_opt: Option<&String>
+    datetime_format_opt: &Option<String>
 ) -> Result<String, ArrowError> {
     if column.is_null(row) {
         return Ok("".to_string());
@@ -577,15 +577,15 @@ pub fn array_value_to_string(
     column: &ArrayRef,
     row: usize,
 ) -> Result<String, ArrowError> {
-        array_value_to_string_internal(column, row, None)
+        array_value_to_string_internal(column, row, &None)
 }
 
 pub fn datetime_array_value_to_string(
     column: &ArrayRef,
     row: usize,
-    format: &String,
+    format: &Option<String>,
 ) -> Result<String, ArrowError> {
-    array_value_to_string_internal(column, row, Some(format))
+    array_value_to_string_internal(column, row, format)
 }
 
 /// Converts the value of the union array at `row` to a String
