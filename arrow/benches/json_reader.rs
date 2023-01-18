@@ -81,15 +81,27 @@ fn large_bench_primitive(c: &mut Criterion) {
         Field::new("c1", DataType::Utf8, true),
         Field::new("c2", DataType::Int32, true),
         Field::new("c3", DataType::UInt32, true),
+        Field::new("c4", DataType::Utf8, true),
+        Field::new("c5", DataType::Utf8, true),
+        Field::new("c6", DataType::Float32, true),
     ]));
 
     let c1 = Arc::new(create_string_array::<i32>(4096, 0.));
     let c2 = Arc::new(create_primitive_array::<Int32Type>(4096, 0.));
     let c3 = Arc::new(create_primitive_array::<UInt32Type>(4096, 0.));
+    let c4 = Arc::new(create_string_array::<i32>(4096, 0.2));
+    let c5 = Arc::new(create_string_array::<i32>(4096, 0.2));
+    let c6 = Arc::new(create_primitive_array::<Float32Type>(4096, 0.2));
 
-    let batch =
-        RecordBatch::try_from_iter([("c1", c1 as _), ("c2", c2 as _), ("c3", c3 as _)])
-            .unwrap();
+    let batch = RecordBatch::try_from_iter([
+        ("c1", c1 as _),
+        ("c2", c2 as _),
+        ("c3", c3 as _),
+        ("c4", c4 as _),
+        ("c5", c5 as _),
+        ("c6", c6 as _),
+    ])
+    .unwrap();
 
     let mut out = Vec::with_capacity(1024);
     LineDelimitedWriter::new(&mut out).write(batch).unwrap();
