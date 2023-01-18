@@ -200,7 +200,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
                 .await?;
 
             let mut buf = Vec::with_capacity(metadata_len);
-            self.read_to_end(&mut buf).await?;
+            self.take(metadata_len as _).read_to_end(&mut buf).await?;
 
             Ok(Arc::new(decode_metadata(&buf)?))
         }
