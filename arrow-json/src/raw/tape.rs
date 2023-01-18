@@ -46,15 +46,6 @@ impl Display for TapeElement {
     }
 }
 
-impl TapeElement {
-    fn close_object(&mut self, idx: u32) {
-        match self {
-            Self::StartObject(x) => *x = idx,
-            _ => unreachable!(),
-        }
-    }
-}
-
 /// A decoded JSON tape based on <https://github.com/simdjson/simdjson/blob/master/doc/tape.md>
 ///
 /// The first element is always [`TapeElement::Null`]
@@ -210,7 +201,8 @@ impl TapeDecoder {
                         b'}' => {
                             let start_idx = *start_idx;
                             let end_idx = self.elements.len() as u32;
-                            self.elements[start_idx as usize].close_object(end_idx);
+                            self.elements[start_idx as usize] =
+                                TapeElement::StartObject(end_idx);
                             self.elements.push(TapeElement::EndObject(start_idx));
                             self.stack.pop();
                             self.num_rows += self.stack.is_empty() as usize;
@@ -224,9 +216,7 @@ impl TapeDecoder {
                     self.bytes.extend_from_slice(s);
 
                     match next!(iter) {
-                        b'\\' => {
-                            self.stack.push(DecoderState::Escape);
-                        }
+                        b'\\' => self.stack.push(DecoderState::Escape),
                         b'"' => {
                             let idx = self.offsets.len() - 1;
                             self.elements.push(TapeElement::String(idx as _));
@@ -236,9 +226,9 @@ impl TapeDecoder {
                         b => unreachable!("{}", b),
                     }
                 }
-                Some(DecoderState::AnyValue) => {
+                Some(state @ DecoderState::AnyValue) => {
                     iter.skip_whitespace();
-                    *self.stack.last_mut().unwrap() = match next!(iter) {
+                    *state = match next!(iter) {
                         b'"' => DecoderState::String,
                         b @ b'-' | b @ b'0'..=b'9' => {
                             self.bytes.push(b);

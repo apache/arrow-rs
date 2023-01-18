@@ -18,7 +18,9 @@
 use criterion::*;
 
 use arrow::datatypes::*;
-use arrow::util::bench_util::{create_primitive_array, create_string_array};
+use arrow::util::bench_util::{
+    create_primitive_array, create_string_array, create_string_array_with_len,
+};
 use arrow_array::RecordBatch;
 use arrow_json::raw::RawReaderBuilder;
 use arrow_json::{LineDelimitedWriter, ReaderBuilder};
@@ -89,8 +91,8 @@ fn large_bench_primitive(c: &mut Criterion) {
     let c1 = Arc::new(create_string_array::<i32>(4096, 0.));
     let c2 = Arc::new(create_primitive_array::<Int32Type>(4096, 0.));
     let c3 = Arc::new(create_primitive_array::<UInt32Type>(4096, 0.));
-    let c4 = Arc::new(create_string_array::<i32>(4096, 0.2));
-    let c5 = Arc::new(create_string_array::<i32>(4096, 0.2));
+    let c4 = Arc::new(create_string_array_with_len::<i32>(4096, 0.2, 10));
+    let c5 = Arc::new(create_string_array_with_len::<i32>(4096, 0.2, 20));
     let c6 = Arc::new(create_primitive_array::<Float32Type>(4096, 0.2));
 
     let batch = RecordBatch::try_from_iter([
