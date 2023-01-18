@@ -240,13 +240,13 @@ macro_rules! make_string_datetime_with_format {
 
 macro_rules! handle_string_datetime {
     ($array_type:ty, $format: ident, $tz_string: ident, $column: ident, $row: ident) => {
-        match $format {
-            Some(format) => {
-                make_string_datetime_with_format!($array_type, format, $column, $row)
+        match $tz_string {
+            Some(tz_string) => {
+                make_string_datetime_with_tz!($array_type, tz_string, $column, $row)
             }
-            None => match $tz_string {
-                Some(tz_string) => {
-                    make_string_datetime_with_tz!($array_type, tz_string, $column, $row)
+            None => match $format {
+                Some(format) => {
+                    make_string_datetime_with_format!($array_type, format, $column, $row)
                 }
                 None => make_string_datetime!($array_type, $column, $row),
             },
