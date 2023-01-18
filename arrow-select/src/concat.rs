@@ -30,11 +30,16 @@
 //! assert_eq!(arr.len(), 3);
 //! ```
 
+use crate::dictionary::merge_dictionaries;
+use arrow_array::builder::PrimitiveBuilder;
+use arrow_array::cast::as_dictionary_array;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_data::transform::{Capacities, MutableArrayData};
+use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, SchemaRef};
+use std::sync::Arc;
 
 fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
     let mut item_capacity = 0;
@@ -52,6 +57,62 @@ fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
     }
 
     Capacities::Binary(item_capacity, Some(bytes_capacity))
+}
+
+fn concat_dictionaries<K: ArrowDictionaryKeyType>(
+    arrays: &[&dyn Array],
+) -> Result<DictionaryArray<K>, ArrowError> {
+    let first_values = &arrays[0].data().child_data()[0];
+    let single_dictionary = arrays
+        .iter()
+        .skip(1)
+        .all(|a| ArrayData::ptr_eq(&a.data().child_data()[0], first_values));
+
+    let (keys, values) = match single_dictionary {
+        true => {
+            // All arrays share same dictionary, just concatenate keys
+            let keys: Vec<_> = arrays
+                .iter()
+                .map(|a| as_dictionary_array::<K>(*a).keys() as _)
+                .collect();
+
+            (concat(&keys)?.data().clone(), first_values.clone())
+        }
+
+        false => {
+            let dictionaries: Vec<_> = arrays
+                .iter()
+                .map(|a| (as_dictionary_array::<K>(*a), None))
+                .collect();
+
+            let (mappings, values) = merge_dictionaries(&dictionaries)?;
+            let capacity = dictionaries.iter().map(|(d, _)| d.len()).sum();
+            let mut keys = PrimitiveBuilder::<K>::with_capacity(capacity);
+
+            for ((d, _), mapping) in dictionaries.iter().zip(mappings) {
+                for key in d.keys_iter() {
+                    keys.append_option(key.map(|x| mapping[x]));
+                }
+            }
+            (keys.finish().into_data(), values.data().clone())
+        }
+    };
+
+    // Sanity check
+    assert_eq!(keys.data_type(), &K::DATA_TYPE);
+
+    let builder = keys
+        .into_builder()
+        .data_type(arrays[0].data_type().clone())
+        .child_data(vec![values]);
+
+    return Ok(DictionaryArray::from(unsafe { builder.build_unchecked() }));
+}
+
+macro_rules! dict_helper {
+    ($t:ty, $arrays:expr) => {
+        return Ok(Arc::new(concat_dictionaries::<$t>($arrays)?) as _)
+    };
 }
 
 /// Concatenate multiple [Array] of the same type into a single [ArrayRef].
@@ -78,6 +139,10 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         DataType::LargeUtf8 => binary_capacity::<LargeUtf8Type>(arrays),
         DataType::Binary => binary_capacity::<BinaryType>(arrays),
         DataType::LargeBinary => binary_capacity::<LargeBinaryType>(arrays),
+        DataType::Dictionary(k, v) if v.is_byte_array() => downcast_integer! {
+            k.as_ref() => (dict_helper, arrays),
+            _ => unreachable!("illegal dictionary key type {k}")
+        },
         _ => Capacities::Array(arrays.iter().map(|a| a.len()).sum()),
     };
 
