@@ -136,6 +136,11 @@ impl FlightSqlServiceClient {
         &mut self.flight_client
     }
 
+    /// Consume this client and return the underlying [`FlightServiceClient`]
+    pub fn into_inner(self) -> FlightServiceClient<Channel> {
+        self.flight_client
+    }
+
     async fn get_flight_info_for_command<M: ProstMessageExt>(
         &mut self,
         cmd: M,
