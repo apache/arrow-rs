@@ -199,10 +199,10 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             self.seek(SeekFrom::End(-FOOTER_SIZE_I64 - metadata_len as i64))
                 .await?;
 
-            let mut buf_meta = Vec::with_capacity(metadata_len);
+            let mut buf = Vec::with_capacity(metadata_len);
             self.take(metadata_len as _).read_to_end(&mut buf).await?;
 
-            Ok(Arc::new(decode_metadata(&buf_meta)?))
+            Ok(Arc::new(decode_metadata(&buf)?))
         }
         .boxed()
     }
