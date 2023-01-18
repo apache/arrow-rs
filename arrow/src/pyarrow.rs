@@ -24,7 +24,7 @@ use std::sync::Arc;
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::import_exception;
 use pyo3::prelude::*;
-use pyo3::types::{PyList, PyTuple};
+use pyo3::types::{PyDict, PyList, PyTuple};
 
 use crate::array::{make_array, Array, ArrayData};
 use crate::datatypes::{DataType, Field, Schema};
@@ -196,9 +196,10 @@ impl PyArrowConvert for RecordBatch {
 
         let module = py.import("pyarrow")?;
         let class = module.getattr("RecordBatch")?;
-        let record = class
-            .call_method1("from_arrays", (py_arrays, None::<PyObject>, py_schema))?;
 
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("schema", py_schema)?;
+        let record = class.call_method("from_arrays", (py_arrays,), Some(kwargs))?;
         Ok(PyObject::from(record))
     }
 }
