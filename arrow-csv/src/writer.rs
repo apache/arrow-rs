@@ -128,8 +128,6 @@ pub struct Writer<W: Write> {
     beginning: bool,
     /// The value to represent null entries
     null_value: String,
-    /// Is using RFC3339 format for date/time/timestamps
-    use_rfc3339: bool
 }
 
 impl<W: Write> Writer<W> {
@@ -147,8 +145,7 @@ impl<W: Write> Writer<W> {
             timestamp_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
             timestamp_tz_format: Some(DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
             beginning: true,
-            null_value: DEFAULT_NULL_VALUE.to_string(),
-            use_rfc3339: false
+            null_value: DEFAULT_NULL_VALUE.to_string()
         }
     }
 
@@ -360,7 +357,7 @@ impl WriterBuilder {
     }
 
     /// Whether to use RFC3339 format for date/time/timestamps
-    pub fn with_rfc3339_format(mut self, use_rfc3339: bool) -> Self {
+    pub fn with_rfc3339(mut self, use_rfc3339: bool) -> Self {
         self.use_rfc3339 = use_rfc3339;
         self
     }
@@ -383,7 +380,6 @@ impl WriterBuilder {
                 null_value: self
                     .null_value
                     .unwrap_or_else(|| DEFAULT_NULL_VALUE.to_string()),
-                use_rfc3339: self.use_rfc3339
             }
         } else {
             Writer {
@@ -398,7 +394,6 @@ impl WriterBuilder {
                 null_value: self
                     .null_value
                     .unwrap_or_else(|| DEFAULT_NULL_VALUE.to_string()),
-                use_rfc3339: self.use_rfc3339
             }
         }
     }
@@ -529,7 +524,8 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
             .has_headers(false)
             .with_delimiter(b'|')
             .with_null("NULL".to_string())
-            .with_time_format("%r".to_string());
+            .with_time_format("%r".to_string())
+            .with_rfc3339(true);
         let mut writer = builder.build(&mut file);
         let batches = vec![&batch];
         for batch in batches {
@@ -543,7 +539,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         file.read_to_end(&mut buffer).unwrap();
 
         assert_eq!(
-            "Lorem ipsum dolor sit amet|123.564532|3|true|12:20:34 AM\nconsectetur adipiscing elit|NULL|2|false|06:51:20 AM\nsed do eiusmod tempor|-556132.25|1|NULL|11:46:03 PM\n"
+            "Lorem ipsum dolor sit amet|123.564532|3|true|00:20:34\nconsectetur adipiscing elit|NULL|2|false|06:51:20\nsed do eiusmod tempor|-556132.25|1|NULL|23:46:03\n"
             .to_string(),
             String::from_utf8(buffer).unwrap()
         );
