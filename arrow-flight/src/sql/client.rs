@@ -126,6 +126,16 @@ impl FlightSqlServiceClient {
         }
     }
 
+    /// Return a reference to the underlying [`FlightServiceClient`]
+    pub fn inner(&self) -> &FlightServiceClient<Channel> {
+        &self.flight_client
+    }
+
+    /// Return a mutable reference to the underlying [`FlightServiceClient`]
+    pub fn inner_mut(&mut self) -> &mut FlightServiceClient<Channel> {
+        &mut self.flight_client
+    }
+
     async fn get_flight_info_for_command<M: ProstMessageExt>(
         &mut self,
         cmd: M,
