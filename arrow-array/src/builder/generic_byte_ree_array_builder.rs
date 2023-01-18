@@ -28,7 +28,7 @@ use super::{GenericByteBuilder, PrimitiveBuilder};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 
-/// Array builder for [`RunEndEndEncodedArray`] for String and Binary types.
+/// Array builder for [`RunEndEncodedArray`] for String and Binary types.
 ///
 /// # Example:
 ///
