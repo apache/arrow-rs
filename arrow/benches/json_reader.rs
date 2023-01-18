@@ -44,8 +44,8 @@ fn do_bench(c: &mut Criterion, name: &str, json: &str, schema: SchemaRef) {
         b.iter(|| {
             let cursor = Cursor::new(black_box(json));
             let builder = RawReaderBuilder::new(schema.clone()).with_batch_size(64);
-            let mut reader = builder.build(cursor).unwrap();
-            while let Some(next) = reader.next() {
+            let reader = builder.build(cursor).unwrap();
+            for next in reader {
                 next.unwrap();
             }
         })
