@@ -123,7 +123,7 @@ where
     R: ArrowRunEndIndexType,
     V: ByteArrayType,
 {
-    /// Appends Option<V> to the logical array encoded by the RunEndEncodedArray.
+    /// Appends optional value to the logical array encoded by the RunEndEncodedArray.
     pub fn append_option(
         &mut self,
         input_value: Option<impl AsRef<V::Native>>,

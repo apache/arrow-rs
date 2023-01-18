@@ -113,7 +113,7 @@ where
     R: ArrowRunEndIndexType,
     V: ArrowPrimitiveType,
 {
-    /// Appends Option<V> to the logical array encoded by the RunEndEncodedArray.
+    /// Appends optional value to the logical array encoded by the RunEndEncodedArray.
     pub fn append_option(&mut self, value: Option<V::Native>) -> Result<(), ArrowError> {
         if self.current_run_end_index == 0 {
             self.current_run_end_index = 1;
