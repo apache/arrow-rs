@@ -45,6 +45,7 @@ fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
             .downcast_ref::<GenericByteArray<T>>()
             .unwrap();
 
+        // Guaranteed to always have at least one element
         let offsets = a.value_offsets();
         bytes_capacity += offsets[offsets.len() - 1].as_usize() - offsets[0].as_usize();
         item_capacity += a.len()
@@ -671,15 +672,21 @@ mod tests {
 
         let a = concat(&[&a, &b]).unwrap();
         let data = a.data();
+        // (100 + 4 + 1) * size_of<i32>()
         assert_eq!(data.buffers()[0].len(), 420);
         assert_eq!(data.buffers()[0].capacity(), 448); // Nearest multiple of 64
+
+        // len("foo") * 100 + len("bingo") + len("bongo") + len("lorem")
         assert_eq!(data.buffers()[1].len(), 315);
         assert_eq!(data.buffers()[1].capacity(), 320); // Nearest multiple of 64
 
         let a = concat(&[&a.slice(10, 40), &b]).unwrap();
         let data = a.data();
+        // (40 + 4 + 5) * size_of<i32>()
         assert_eq!(data.buffers()[0].len(), 180);
         assert_eq!(data.buffers()[0].capacity(), 192); // Nearest multiple of 64
+
+        // len("foo") * 40 + len("bingo") + len("bongo") + len("lorem")
         assert_eq!(data.buffers()[1].len(), 135);
         assert_eq!(data.buffers()[1].capacity(), 192); // Nearest multiple of 64
 
@@ -689,15 +696,19 @@ mod tests {
 
         let a = concat(&[&a, &b]).unwrap();
         let data = a.data();
+        // (100 + 10 + 1) * size_of<i64>()
         assert_eq!(data.buffers()[0].len(), 888);
         assert_eq!(data.buffers()[0].capacity(), 896); // Nearest multiple of 64
+        // len("foo") * 100 + len("cupcakes") * 10
         assert_eq!(data.buffers()[1].len(), 380);
         assert_eq!(data.buffers()[1].capacity(), 384); // Nearest multiple of 64
 
         let a = concat(&[&a.slice(10, 40), &b]).unwrap();
         let data = a.data();
+        // (40 + 10 + 1) * size_of<i64>()
         assert_eq!(data.buffers()[0].len(), 408);
         assert_eq!(data.buffers()[0].capacity(), 448); // Nearest multiple of 64
+        // len("foo") * 40 + len("cupcakes") * 10
         assert_eq!(data.buffers()[1].len(), 200);
         assert_eq!(data.buffers()[1].capacity(), 256); // Nearest multiple of 64
     }
