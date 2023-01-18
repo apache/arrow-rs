@@ -1493,7 +1493,7 @@ impl ArrayData {
         })
     }
 
-    /// Validates that each value in run_ends array is posittive and strictly increasing.
+    /// Validates that each value in run_ends array is positive and strictly increasing.
     fn check_run_ends<T>(&self) -> Result<(), ArrowError>
     where
         T: ArrowNativeType + TryInto<i64> + num::Num + std::fmt::Display,

@@ -43,15 +43,15 @@ use crate::{
 ///   ┌─────────────────┐  ┌─────────┐       ┌─────────────────┐
 /// │ │        A        │  │    2    │ │     │        A        │     
 ///   ├─────────────────┤  ├─────────┤       ├─────────────────┤
-/// │ │        D        │  │    3    │ │     │        A        │    run length of 'A' = keys[0] - 0 = 2
+/// │ │        D        │  │    3    │ │     │        A        │    run length of 'A' = runs_ends[0] - 0 = 2
 ///   ├─────────────────┤  ├─────────┤       ├─────────────────┤
-/// │ │        B        │  │    6    │ │     │        D        │    run length of 'D' = keys[1] - keys[0] = 1
+/// │ │        B        │  │    6    │ │     │        D        │    run length of 'D' = run_ends[1] - run_ends[0] = 1
 ///   └─────────────────┘  └─────────┘       ├─────────────────┤
 /// │        values          run_ends  │     │        B        │     
 ///                                          ├─────────────────┤
 /// └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘     │        B        │     
 ///                                          ├─────────────────┤
-///           RunEndEncodedArray             │        B        │    run length of 'B' = keys[2] - keys[1] = 3
+///           RunEndEncodedArray             │        B        │    run length of 'B' = run_ends[2] - run_ends[1] = 3
 ///               length = 3                 └─────────────────┘
 ///  
 ///                                             Logical array
@@ -236,6 +236,7 @@ impl<'a, T: ArrowRunEndIndexType> FromIterator<&'a str> for RunEndEncodedArray<T
         builder.finish()
     }
 }
+
 ///
 /// A [`RunEndEncodedArray`] array where run ends are stored using `i16` data type.
 ///

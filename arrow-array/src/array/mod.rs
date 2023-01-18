@@ -593,7 +593,7 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
                 DataType::Int64 => {
                     Arc::new(RunEndEncodedArray::<Int64Type>::from(data)) as ArrayRef
                 }
-                _ => unreachable!(),
+                dt => panic!("Unexpected data type for run_ends array {:?}", dt),
             }
         }
         DataType::Null => Arc::new(NullArray::from(data)) as ArrayRef,

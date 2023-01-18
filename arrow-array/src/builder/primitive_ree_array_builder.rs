@@ -132,42 +132,46 @@ where
 
         Ok(())
     }
+
     /// Appends value to the logical array encoded by the run-ends array.
     pub fn append_value(&mut self, value: V::Native) -> Result<(), ArrowError> {
         self.append_option(Some(value))
     }
+
     /// Appends null to the logical array encoded by the run-ends array.
     pub fn append_null(&mut self) -> Result<(), ArrowError> {
         self.append_option(None)
     }
+
     /// Creates the RunEndEncodedArray and resets the builder.
     /// Panics if RunEndEncodedArray cannot be built.
     pub fn finish(&mut self) -> RunEndEncodedArray<R> {
-        //write the last run end to the array.
+        // write the last run end to the array.
         self.append_run_end().unwrap();
 
-        //reset the run index to zero.
+        // reset the run index to zero.
         self.current_value = None;
         self.current_run_end_index = 0;
 
-        //build the run encoded array by adding run_ends and values array as its children.
+        // build the run encoded array by adding run_ends and values array as its children.
         let run_ends_array = self.run_ends_builder.finish();
         let values_array = self.values_builder.finish();
         RunEndEncodedArray::<R>::try_new(&run_ends_array, &values_array).unwrap()
     }
+
     /// Creates the RunEndEncodedArray and without resetting the builder.
     /// Panics if RunEndEncodedArray cannot be built.
     pub fn finish_cloned(&mut self) -> RunEndEncodedArray<R> {
-        //write the last run end to the array.
+        // write the last run end to the array.
         self.append_run_end().unwrap();
 
-        //build the run encoded array by adding run_ends and values array as its children.
+        // build the run encoded array by adding run_ends and values array as its children.
         let run_ends_array = self.run_ends_builder.finish_cloned();
         let values_array = self.values_builder.finish_cloned();
         RunEndEncodedArray::<R>::try_new(&run_ends_array, &values_array).unwrap()
     }
 
-    //Appends the current run to the array
+    // Appends the current run to the array
     fn append_run_end(&mut self) -> Result<(), ArrowError> {
         let run_end_index = R::Native::from_usize(self.current_run_end_index)
             .ok_or_else(|| {
