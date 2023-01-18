@@ -173,7 +173,7 @@ impl<R: ArrowRunEndIndexType> std::fmt::Debug for RunEndEncodedArray<R> {
 ///
 /// # Example:
 /// ```
-/// use arrow_array::{RunEndEncodedArray, PrimitiveArray, StringArray, types::Int8Type};
+/// use arrow_array::{RunEndEncodedArray, PrimitiveArray, StringArray, types::Int16Type};
 ///
 /// let test = vec!["a", "a", "b", "c", "c"];
 /// let array: RunEndEncodedArray<Int16Type> = test
@@ -213,12 +213,12 @@ impl<'a, T: ArrowRunEndIndexType> FromIterator<Option<&'a str>>
 /// # Example:
 ///
 /// ```
-/// use arrow_array::{RunEndEncodedArray, PrimitiveArray, StringArray, types::Int8Type};
+/// use arrow_array::{RunEndEncodedArray, PrimitiveArray, StringArray, types::Int16Type};
 ///
 /// let test = vec!["a", "a", "b", "c"];
 /// let array: RunEndEncodedArray<Int16Type> = test.into_iter().collect();
 /// assert_eq!(
-///     "RunEndEncodedArray {run_ends: PrimitiveArray<Int16>\n[\n  2,\n  3,\n  5,\n], values: StringArray\n[\n  \"a\",\n  \"b\",\n  \"c\",\n]}\n",
+///     "RunEndEncodedArray {run_ends: PrimitiveArray<Int16>\n[\n  2,\n  3,\n  4,\n], values: StringArray\n[\n  \"a\",\n  \"b\",\n  \"c\",\n]}\n",
 ///     format!("{:?}", array)
 /// );
 /// ```
@@ -237,7 +237,7 @@ impl<'a, T: ArrowRunEndIndexType> FromIterator<&'a str> for RunEndEncodedArray<T
     }
 }
 ///
-/// A [`RunEndEncodedArray`] array where indexes of run ends is defined using `i16` data type.
+/// A [`RunEndEncodedArray`] array where run ends are stored using `i16` data type.
 ///
 /// # Example: Using `collect`
 /// ```
@@ -252,7 +252,7 @@ impl<'a, T: ArrowRunEndIndexType> FromIterator<&'a str> for RunEndEncodedArray<T
 pub type Int16RunEndEncodedArray = RunEndEncodedArray<Int16Type>;
 
 ///
-/// A [`RunEndEncodedArray`] array where indexes of run ends is defined using `i32` data type.
+/// A [`RunEndEncodedArray`] array where run ends are stored using `i32` data type.
 ///
 /// # Example: Using `collect`
 /// ```
@@ -267,7 +267,7 @@ pub type Int16RunEndEncodedArray = RunEndEncodedArray<Int16Type>;
 pub type Int32RunEndEncodedArray = RunEndEncodedArray<Int32Type>;
 
 ///
-/// A [`RunEndEncodedArray`] array where indexes of run ends is defined using `i64` data type.
+/// A [`RunEndEncodedArray`] array where run ends are stored using `i64` data type.
 ///
 /// # Example: Using `collect`
 /// ```
@@ -276,7 +276,7 @@ pub type Int32RunEndEncodedArray = RunEndEncodedArray<Int32Type>;
 ///
 /// let array: Int64RunEndEncodedArray = vec!["a", "a", "b", "c", "c"].into_iter().collect();
 /// let values: Arc<dyn Array> = Arc::new(StringArray::from(vec!["a", "b", "c"]));
-/// assert_eq!(array.run_ends(), &Int16Array::from(vec![2, 3, 5]));
+/// assert_eq!(array.run_ends(), &Int64Array::from(vec![2, 3, 5]));
 /// assert_eq!(array.values(), &values);
 /// ```
 pub type Int64RunEndEncodedArray = RunEndEncodedArray<Int64Type>;
@@ -317,7 +317,7 @@ mod tests {
         let value_type = Field::new("values", DataType::Int8, true);
         let ree_array_type =
             DataType::RunEndEncoded(Box::new(run_ends_type), Box::new(value_type));
-        let dict_data = ArrayData::builder(ree_array_type.clone())
+        let dict_data = ArrayData::builder(ree_array_type)
             .add_child_data(run_ends_data.clone())
             .add_child_data(value_data.clone())
             .build()
