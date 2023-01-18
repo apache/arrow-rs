@@ -699,6 +699,7 @@ mod tests {
         // (100 + 10 + 1) * size_of<i64>()
         assert_eq!(data.buffers()[0].len(), 888);
         assert_eq!(data.buffers()[0].capacity(), 896); // Nearest multiple of 64
+
         // len("foo") * 100 + len("cupcakes") * 10
         assert_eq!(data.buffers()[1].len(), 380);
         assert_eq!(data.buffers()[1].capacity(), 384); // Nearest multiple of 64
@@ -708,6 +709,7 @@ mod tests {
         // (40 + 10 + 1) * size_of<i64>()
         assert_eq!(data.buffers()[0].len(), 408);
         assert_eq!(data.buffers()[0].capacity(), 448); // Nearest multiple of 64
+
         // len("foo") * 40 + len("cupcakes") * 10
         assert_eq!(data.buffers()[1].len(), 200);
         assert_eq!(data.buffers()[1].capacity(), 256); // Nearest multiple of 64
