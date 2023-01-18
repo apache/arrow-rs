@@ -268,7 +268,7 @@ where
         let keys = self.keys_builder.finish();
 
         let data_type =
-            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(DataType::Utf8));
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
 
         let builder = keys
             .into_data()
@@ -285,7 +285,7 @@ where
         let keys = self.keys_builder.finish_cloned();
 
         let data_type =
-            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(DataType::Utf8));
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
 
         let builder = keys
             .into_data()
