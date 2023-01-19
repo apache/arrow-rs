@@ -102,7 +102,7 @@ impl Display for ArrowError {
 
 impl Error for ArrowError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        if let ArrowError::ExternalError(e) = self {
+        if let Self::ExternalError(e) = self {
             Some(e.as_ref())
         } else {
             None
