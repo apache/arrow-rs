@@ -65,19 +65,22 @@ where
     K: ArrowDictionaryKeyType,
     K::Native: Integer,
 {
-    let first_values = &arrays[0].data().child_data()[0];
-    let mut total_values = first_values.len();
-    let mut total_keys = arrays[0].len();
-    let mut total_nulls = 0;
+    let first_array = &arrays[0].data();
+    let first_values = &first_array.child_data()[0];
 
-    let single_dictionary = arrays.iter().skip(1).all(|a| {
+    let mut single_dictionary = true;
+    let mut total_keys = first_array.len();
+    let mut total_values = first_values.len();
+    let mut total_nulls = first_array.null_count();
+    for a in arrays.iter().skip(1) {
         let data = a.data();
-        let values = &data.child_data()[0];
         total_keys += data.len();
         total_nulls += data.null_count();
+
+        let values = &data.child_data()[0];
         total_values += values.len();
-        ArrayData::ptr_eq(values, first_values)
-    });
+        single_dictionary &= ArrayData::ptr_eq(values, first_values);
+    }
 
     let concatenate_dictionaries =
         total_values < total_keys && K::Native::from_usize(total_values).is_some();
@@ -673,7 +676,7 @@ mod tests {
     fn test_dictionary_concat_reuse() {
         let array: DictionaryArray<Int8Type> =
             vec!["a", "a", "b", "c"].into_iter().collect();
-        let copy: DictionaryArray<Int8Type> = array.data().clone().into();
+        let copy: DictionaryArray<Int8Type> = array.clone();
 
         // dictionary is "a", "b", "c"
         assert_eq!(
@@ -684,11 +687,7 @@ mod tests {
 
         // concatenate it with itself
         let combined = concat(&[&copy as _, &array as _]).unwrap();
-
-        let combined = combined
-            .as_any()
-            .downcast_ref::<DictionaryArray<Int8Type>>()
-            .unwrap();
+        let combined = as_dictionary_array::<Int8Type>(combined.as_ref());
 
         assert_eq!(
             combined.values(),
