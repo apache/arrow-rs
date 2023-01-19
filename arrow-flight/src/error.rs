@@ -32,7 +32,7 @@ pub enum FlightError {
     ProtocolError(String),
     /// An error occured during decoding
     DecodeError(String),
-    /// Some other (opaque) error
+    /// External error that can provide source of error by calling `Error::source`.
     ExternalError(Box<dyn Error + Send + Sync>),
 }
 
