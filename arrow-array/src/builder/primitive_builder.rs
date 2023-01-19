@@ -238,6 +238,10 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     }
 
     /// Appends values from a slice of type `T` and a validity boolean slice
+    ///
+    /// # Panics
+    ///
+    /// Panics if `values` and `is_valid` have different lengths
     #[inline]
     pub fn append_values(&mut self, values: &[T::Native], is_valid: &[bool]) {
         assert_eq!(

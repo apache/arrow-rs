@@ -193,10 +193,32 @@ where
         Ok(key)
     }
 
+    /// Infallibly append a value to this builder
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    pub fn append_value(&mut self, value: V::Native) {
+        self.append(value).expect("dictionary key overflow");
+    }
+
     /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
         self.keys_builder.append_null()
+    }
+
+    /// Append an `Option` value into the builder
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    #[inline]
+    pub fn append_option(&mut self, value: Option<V::Native>) {
+        match value {
+            None => self.append_null(),
+            Some(v) => self.append_value(v),
+        };
     }
 
     /// Builds the `DictionaryArray` and reset this builder.
@@ -232,6 +254,17 @@ where
             .child_data(vec![values.into_data()]);
 
         DictionaryArray::from(unsafe { builder.build_unchecked() })
+    }
+}
+
+impl<K: ArrowPrimitiveType, P: ArrowPrimitiveType> Extend<Option<P::Native>>
+    for PrimitiveDictionaryBuilder<K, P>
+{
+    #[inline]
+    fn extend<T: IntoIterator<Item = Option<P::Native>>>(&mut self, iter: T) {
+        for v in iter {
+            self.append_option(v)
+        }
     }
 }
 

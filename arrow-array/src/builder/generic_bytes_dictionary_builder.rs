@@ -214,7 +214,7 @@ where
     K: ArrowDictionaryKeyType,
     T: ByteArrayType,
 {
-    /// Append a primitive value to the array. Return an existing index
+    /// Append a value to the array. Return an existing index
     /// if already present in the values array or a new index if the
     /// value is appended to the values array.
     ///
@@ -255,10 +255,32 @@ where
         Ok(key)
     }
 
+    /// Infallibly append a value to this builder
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
+        self.append(value).expect("dictionary key overflow");
+    }
+
     /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
         self.keys_builder.append_null()
+    }
+
+    /// Append an `Option` value into the builder
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    #[inline]
+    pub fn append_option(&mut self, value: Option<impl AsRef<T::Native>>) {
+        match value {
+            None => self.append_null(),
+            Some(v) => self.append_value(v),
+        };
     }
 
     /// Builds the `DictionaryArray` and reset this builder.
@@ -294,6 +316,17 @@ where
             .child_data(vec![values.into_data()]);
 
         DictionaryArray::from(unsafe { builder.build_unchecked() })
+    }
+}
+
+impl<K: ArrowDictionaryKeyType, T: ByteArrayType, V: AsRef<T::Native>> Extend<Option<V>>
+    for GenericByteDictionaryBuilder<K, T>
+{
+    #[inline]
+    fn extend<I: IntoIterator<Item = Option<V>>>(&mut self, iter: I) {
+        for v in iter {
+            self.append_option(v)
+        }
     }
 }
 

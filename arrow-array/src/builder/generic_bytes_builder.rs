@@ -82,6 +82,10 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     }
 
     /// Appends a value into the builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of [`Self::values_slice`] would exceed `T::Offset::MAX`
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
         self.value_builder.append_slice(value.as_ref().as_ref());

@@ -111,6 +111,10 @@ where
     }
 
     /// Finish the current variable-length list array slot
+    ///
+    /// # Panics
+    ///
+    /// Panics if the length of [`Self::values`] exceeds `OffsetSize::MAX`
     #[inline]
     pub fn append(&mut self, is_valid: bool) {
         self.offsets_builder
