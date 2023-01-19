@@ -90,8 +90,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     };
 
     /// Returns a reference to the values of this list.
-    pub fn values(&self) -> ArrayRef {
-        self.values.clone()
+    pub fn values(&self) -> &ArrayRef {
+        &self.values
     }
 
     /// Returns a clone of the value type of this list.
