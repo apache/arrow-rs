@@ -31,13 +31,13 @@
 //! ```
 
 use crate::dictionary::merge_dictionaries;
-use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
+use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::cast::as_dictionary_array;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_data::transform::{Capacities, MutableArrayData};
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use num::Integer;
 use std::sync::Arc;
@@ -60,7 +60,7 @@ fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
     Capacities::Binary(item_capacity, Some(bytes_capacity))
 }
 
-fn concat_dictionaries<K>(arrays: &[&dyn Array]) -> Result<DictionaryArray<K>, ArrowError>
+fn concat_dictionaries<K>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError>
 where
     K: ArrowDictionaryKeyType,
     K::Native: Integer,
@@ -71,99 +71,57 @@ where
     let mut single_dictionary = true;
     let mut total_keys = first_array.len();
     let mut total_values = first_values.len();
-    let mut total_nulls = first_array.null_count();
     for a in arrays.iter().skip(1) {
         let data = a.data();
         total_keys += data.len();
-        total_nulls += data.null_count();
 
         let values = &data.child_data()[0];
         total_values += values.len();
         single_dictionary &= ArrayData::ptr_eq(values, first_values);
     }
 
-    let concatenate_dictionaries =
-        total_values < total_keys && K::Native::from_usize(total_values).is_some();
+    // This is a weak heuristic to only perform expensive dictionary merging
+    // when it is guaranteed to yield at least some return over the naive
+    // approach used by MutableArrayData
+    let fallback = single_dictionary
+        || (total_values < total_keys && K::Native::from_usize(total_values).is_some());
 
-    let (keys, values) = match (single_dictionary, concatenate_dictionaries) {
-        (true, _) => {
-            // All arrays share same dictionary, just concatenate keys
-            let keys: Vec<_> = arrays
-                .iter()
-                .map(|a| as_dictionary_array::<K>(*a).keys() as _)
-                .collect();
+    if fallback {
+        return concat_fallback(arrays, Capacities::Array(total_keys));
+    }
 
-            (concat(&keys)?.data().clone(), first_values.clone())
+    // Recompute dictionaries
+    let dictionaries: Vec<_> = arrays
+        .iter()
+        .map(|a| (as_dictionary_array::<K>(*a), None))
+        .collect();
+
+    let (mappings, values) = merge_dictionaries(&dictionaries)?;
+
+    // Recompute keys
+    let capacity = dictionaries.iter().map(|(d, _)| d.len()).sum();
+    let mut keys = PrimitiveBuilder::<K>::with_capacity(capacity);
+
+    for ((d, _), mapping) in dictionaries.iter().zip(mappings) {
+        for key in d.keys_iter() {
+            keys.append_option(key.map(|x| mapping[x]));
         }
-        (false, true) => {
-            // Concatenate dictionary values together
-            let mut all_values = Vec::with_capacity(arrays.len());
-            let mut nulls =
-                (total_nulls != 0).then(|| BooleanBufferBuilder::new(total_keys));
-
-            let mut new_keys = BufferBuilder::<K::Native>::new(total_keys);
-            let mut key_offset = K::Native::from_usize(0).unwrap();
-            for a in arrays {
-                let dictionary = as_dictionary_array::<K>(*a);
-                let keys = dictionary.keys();
-                let values = dictionary.values().as_ref();
-
-                all_values.push(values);
-                new_keys.extend(keys.values().iter().map(|x| *x + key_offset));
-                if let Some(nulls) = nulls.as_mut() {
-                    let data = keys.data();
-                    match data.null_buffer() {
-                        Some(b) => {
-                            let range = data.offset()..data.offset() + data.len();
-                            nulls.append_packed_range(range, b.as_ref())
-                        }
-                        None => nulls.append_n(data.len(), true),
-                    }
-                }
-                key_offset = key_offset + K::Native::from_usize(values.len()).unwrap();
-            }
-
-            let new_values = concat(&all_values)?.data().clone();
-
-            let builder = ArrayDataBuilder::new(K::DATA_TYPE)
-                .len(total_keys)
-                .null_count(total_nulls)
-                .null_bit_buffer(nulls.as_mut().map(|x| x.finish()))
-                .add_buffer(new_keys.finish());
-
-            (unsafe { builder.build_unchecked() }, new_values)
-        }
-        (false, false) => {
-            // Recompute dictionaries
-            let dictionaries: Vec<_> = arrays
-                .iter()
-                .map(|a| (as_dictionary_array::<K>(*a), None))
-                .collect();
-
-            let (mappings, values) = merge_dictionaries(&dictionaries)?;
-            let capacity = dictionaries.iter().map(|(d, _)| d.len()).sum();
-            let mut keys = PrimitiveBuilder::<K>::with_capacity(capacity);
-
-            for ((d, _), mapping) in dictionaries.iter().zip(mappings) {
-                for key in d.keys_iter() {
-                    keys.append_option(key.map(|x| mapping[x]));
-                }
-            }
-            (keys.finish().into_data(), values.data().clone())
-        }
-    };
+    }
+    let keys = keys.finish().into_data();
 
     // Sanity check
-    assert_eq!(keys.data_type(), &K::DATA_TYPE);
     assert_eq!(keys.len(), total_keys);
-    assert_eq!(keys.null_count(), total_nulls);
 
     let builder = keys
         .into_builder()
-        .data_type(arrays[0].data_type().clone())
-        .child_data(vec![values]);
+        .data_type(DataType::Dictionary(
+            Box::new(K::DATA_TYPE),
+            Box::new(values.data_type().clone()),
+        ))
+        .child_data(vec![values.data().clone()]);
 
-    return Ok(DictionaryArray::from(unsafe { builder.build_unchecked() }));
+    let data = unsafe { builder.build_unchecked() };
+    Ok(Arc::new(DictionaryArray::<K>::from(data)))
 }
 
 macro_rules! dict_helper {
@@ -203,6 +161,13 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         _ => Capacities::Array(arrays.iter().map(|a| a.len()).sum()),
     };
 
+    concat_fallback(arrays, capacity)
+}
+
+fn concat_fallback(
+    arrays: &[&dyn Array],
+    capacity: Capacities,
+) -> Result<ArrayRef, ArrowError> {
     let array_data = arrays.iter().map(|a| a.data()).collect::<Vec<_>>();
     let mut mutable = MutableArrayData::with_capacities(array_data, false, capacity);
 
