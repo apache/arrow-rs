@@ -328,6 +328,15 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     }
 }
 
+impl<P: ArrowPrimitiveType> Extend<Option<P::Native>> for PrimitiveBuilder<P> {
+    #[inline]
+    fn extend<T: IntoIterator<Item = Option<P::Native>>>(&mut self, iter: T) {
+        for v in iter {
+            self.append_option(v)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -211,6 +211,15 @@ impl ArrayBuilder for BooleanBuilder {
     }
 }
 
+impl Extend<Option<bool>> for BooleanBuilder {
+    #[inline]
+    fn extend<T: IntoIterator<Item = Option<bool>>>(&mut self, iter: T) {
+        for v in iter {
+            self.append_option(v)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

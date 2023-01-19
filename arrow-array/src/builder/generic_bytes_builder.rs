@@ -216,6 +216,15 @@ impl<T: ByteArrayType> ArrayBuilder for GenericByteBuilder<T> {
     }
 }
 
+impl<T: ByteArrayType, V: AsRef<T::Native>> Extend<Option<V>> for GenericByteBuilder<T> {
+    #[inline]
+    fn extend<I: IntoIterator<Item = Option<V>>>(&mut self, iter: I) {
+        for v in iter {
+            self.append_option(v)
+        }
+    }
+}
+
 ///  Array builder for [`GenericStringArray`][crate::GenericStringArray]
 pub type GenericStringBuilder<O> = GenericByteBuilder<GenericStringType<O>>;
 
