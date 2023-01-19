@@ -43,6 +43,7 @@ arrow-data = { version = "31.0.0", path = "../arrow-data" }
 arrow-schema = { version = "31.0.0", path = "../arrow-schema" }
 arrow-array = { version = "31.0.0", path = "../arrow-array" }
 num = { version = "0.4", default-features = false, features = ["std"] }
+ahash = { version = "0.8", default-features = false}
 
 [features]
 default = []

@@ -1,4 +1,5 @@
 use crate::interleave::interleave;
+use ahash::RandomState;
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::{as_generic_binary_array, as_largestring_array, as_string_array};
 use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
@@ -6,12 +7,54 @@ use arrow_array::{Array, ArrayRef, DictionaryArray, GenericByteArray};
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::bit_iterator::BitIndexIterator;
 use arrow_schema::{ArrowError, DataType};
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+
+/// A best effort interner that maintains a fixed number of buckets
+/// and interns keys based on their hash value
+///
+/// Hash collisions will result in replacement
+struct Interner<'a, V> {
+    state: RandomState,
+    buckets: Vec<Option<(&'a [u8], V)>>,
+    shift: u32,
+}
+
+impl<'a, V> Interner<'a, V> {
+    fn new(capacity: usize) -> Self {
+        // Add 64 additional buckets to help reduce collisions
+        let shift = (capacity as u64 + 64).leading_zeros();
+        let num_buckets = (u64::MAX >> shift) as usize;
+        let buckets = (0..num_buckets.saturating_add(1)).map(|_| None).collect();
+        Self {
+            // A fixed seed to ensure deterministic behaviour
+            state: RandomState::with_seed(60587897),
+            buckets,
+            shift,
+        }
+    }
+
+    fn intern<F: FnOnce() -> Result<V, E>, E>(
+        &mut self,
+        new: &'a [u8],
+        f: F,
+    ) -> Result<&V, E> {
+        let bucket_idx = self.state.hash_one(new) >> self.shift;
+        Ok(match &mut self.buckets[bucket_idx as usize] {
+            Some((current, v)) => {
+                if *current != new {
+                    *v = f()?;
+                    *current = new;
+                }
+                v
+            }
+            slot => &slot.insert((new, f()?)).1,
+        })
+    }
+}
 
 /// Given an array of dictionaries and an optional row mask compute a values array
-/// containing all unique, reference values, along with mappings from the [`DictionaryArray`]
-/// keys to the new keys within this values array
+/// containing referenced values, along with mappings from the [`DictionaryArray`]
+/// keys to the new keys within this values array. Best-effort will be made to ensure
+/// that the dictionary values are unique
 pub fn merge_dictionaries<K: ArrowDictionaryKeyType>(
     dictionaries: &[(&DictionaryArray<K>, Option<&[u8]>)],
 ) -> Result<(Vec<Vec<K::Native>>, ArrayRef), ArrowError> {
@@ -35,7 +78,7 @@ pub fn merge_dictionaries<K: ArrowDictionaryKeyType>(
     }
 
     // Map from value to new index
-    let mut interner = HashMap::with_capacity(num_values);
+    let mut interner = Interner::new(num_values);
     // Interleave indices for new values array
     let mut indices = Vec::with_capacity(num_values);
 
@@ -47,17 +90,17 @@ pub fn merge_dictionaries<K: ArrowDictionaryKeyType>(
         .map(|((dictionary_idx, (dictionary, _)), values)| {
             let zero = K::Native::from_usize(0).unwrap();
             let mut mapping = vec![zero; dictionary.values().len()];
+
             for (value_idx, value) in values {
-                mapping[value_idx] = match interner.entry(value) {
-                    Entry::Vacant(v) => {
-                        let idx = K::Native::from_usize(indices.len())
-                            .ok_or_else(|| ArrowError::DictionaryKeyOverflowError)?;
-                        indices.push((dictionary_idx, value_idx));
-                        v.insert(idx);
-                        idx
+                mapping[value_idx] = *interner.intern(value, || {
+                    match K::Native::from_usize(indices.len()) {
+                        Some(idx) => {
+                            indices.push((dictionary_idx, value_idx));
+                            Ok(idx)
+                        }
+                        None => Err(ArrowError::DictionaryKeyOverflowError),
                     }
-                    Entry::Occupied(o) => *o.get(),
-                }
+                })?;
             }
             Ok(mapping)
         })
