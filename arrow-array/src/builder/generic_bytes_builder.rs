@@ -81,13 +81,18 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         }
     }
 
+    #[inline]
+    fn next_offset(&self) -> T::Offset {
+        T::Offset::from_usize(self.value_builder.len())
+            .expect("byte array offset overflow")
+    }
+
     /// Appends a value into the builder.
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
         self.value_builder.append_slice(value.as_ref().as_ref());
         self.null_buffer_builder.append(true);
-        self.offsets_builder
-            .append(T::Offset::from_usize(self.value_builder.len()).unwrap());
+        self.offsets_builder.append(self.next_offset());
     }
 
     /// Append an `Option` value into the builder.
@@ -103,8 +108,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     #[inline]
     pub fn append_null(&mut self) {
         self.null_buffer_builder.append(false);
-        self.offsets_builder
-            .append(T::Offset::from_usize(self.value_builder.len()).unwrap());
+        self.offsets_builder.append(self.next_offset());
     }
 
     /// Builds the [`GenericByteArray`] and reset this builder.
@@ -116,8 +120,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .add_buffer(self.value_builder.finish())
             .null_bit_buffer(self.null_buffer_builder.finish());
 
-        self.offsets_builder
-            .append(T::Offset::from_usize(0).unwrap());
+        self.offsets_builder.append(self.next_offset());
         let array_data = unsafe { array_builder.build_unchecked() };
         GenericByteArray::from(array_data)
     }
