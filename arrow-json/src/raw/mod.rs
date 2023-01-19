@@ -63,7 +63,7 @@ impl RawReaderBuilder {
 
     /// Create with the provided [`BufRead`]
     pub fn build<R: BufRead>(self, reader: R) -> Result<RawReader<R>, ArrowError> {
-        let decoder = make_decoder(DataType::Struct(self.schema.fields.clone()))?;
+        let decoder = make_decoder(DataType::Struct(self.schema.fields.clone()), false)?;
         // TODO: This should probably include nested fields
         let num_fields = self.schema.fields().len();
 
@@ -177,7 +177,10 @@ macro_rules! primitive_decoder {
     };
 }
 
-fn make_decoder(data_type: DataType) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
+fn make_decoder(
+    data_type: DataType,
+    is_nullable: bool,
+) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
     downcast_integer! {
         data_type => (primitive_decoder, data_type),
         DataType::Float32 => primitive_decoder!(Float32Type, data_type),
@@ -185,9 +188,9 @@ fn make_decoder(data_type: DataType) -> Result<Box<dyn ArrayDecoder>, ArrowError
         DataType::Boolean => Ok(Box::<BooleanArrayDecoder>::default()),
         DataType::Utf8 => Ok(Box::<StringArrayDecoder::<i32>>::default()),
         DataType::LargeUtf8 => Ok(Box::<StringArrayDecoder::<i64>>::default()),
-        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type)?)),
-        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type)?)),
-        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type)?)),
+        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, is_nullable)?)),
+        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, is_nullable)?)),
+        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, is_nullable)?)),
         DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
             Err(ArrowError::JsonError(format!("{} is not supported by JSON", data_type)))
         }
@@ -301,6 +304,7 @@ mod tests {
         let buf = r#"
            {"list": [], "nested": {"a": 1, "b": 2}, "nested_list": {"list2": [{"c": 3}, {"c": 4}]}}
            {"list": [5, 6], "nested": {"a": 7}, "nested_list": {"list2": []}}
+           {"list": null, "nested": {"a": null}}
         "#;
 
         let schema = Arc::new(Schema::new(vec![
@@ -326,7 +330,7 @@ mod tests {
                         DataType::Struct(vec![Field::new("c", DataType::Int32, false)]),
                         false,
                     ))),
-                    false,
+                    true,
                 )]),
                 true,
             ),
@@ -336,24 +340,31 @@ mod tests {
         assert_eq!(batches.len(), 1);
 
         let list = as_list_array(batches[0].column(0).as_ref());
-        assert_eq!(list.value_offsets(), &[0, 0, 2]);
+        assert_eq!(list.value_offsets(), &[0, 0, 2, 0]);
+        assert_eq!(list.null_count(), 1);
+        assert!(list.is_null(4));
         let list_v = list.values();
         let list_values = as_primitive_array::<Int32Type>(list_v.as_ref());
         assert_eq!(list_values.values(), &[5, 6]);
 
         let nested = as_struct_array(batches[0].column(1).as_ref());
         let a = as_primitive_array::<Int32Type>(nested.column(0).as_ref());
-        assert_eq!(a.values(), &[1, 7]);
+        assert_eq!(list.null_count(), 1);
+        assert_eq!(a.values(), &[1, 7, 0]);
+        assert!(list.is_null(2));
 
         let b = as_primitive_array::<Int32Type>(nested.column(1).as_ref());
-        assert_eq!(b.null_count(), 1);
-        assert_eq!(b.len(), 2);
+        assert_eq!(b.null_count(), 2);
+        assert_eq!(b.len(), 3);
         assert_eq!(b.value(0), 2);
         assert!(b.is_null(1));
+        assert!(b.is_null(2));
 
         let nested_list = as_struct_array(batches[0].column(2).as_ref());
         let list2 = as_list_array(nested_list.column(0).as_ref());
-        assert_eq!(list2.value_offsets(), &[0, 2, 2]);
+        assert_eq!(list2.null_count(), 1);
+        assert_eq!(list2.value_offsets(), &[0, 2, 2, 0]);
+        assert!(list2.is_null(3));
 
         let list2_v = list2.values();
         let list2_values = as_struct_array(list2_v.as_ref());

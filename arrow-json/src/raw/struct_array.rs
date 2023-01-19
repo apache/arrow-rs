@@ -17,24 +17,27 @@
 
 use crate::raw::tape::{Tape, TapeElement};
 use crate::raw::{make_decoder, tape_error, ArrayDecoder};
+use arrow_array::builder::BooleanBufferBuilder;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
 pub struct StructArrayDecoder {
     data_type: DataType,
     decoders: Vec<Box<dyn ArrayDecoder>>,
+    is_nullable: bool,
 }
 
 impl StructArrayDecoder {
-    pub fn new(data_type: DataType) -> Result<Self, ArrowError> {
+    pub fn new(data_type: DataType, is_nullable: bool) -> Result<Self, ArrowError> {
         let decoders = struct_fields(&data_type)
             .iter()
-            .map(|f| make_decoder(f.data_type().clone()))
+            .map(|f| make_decoder(f.data_type().clone(), f.is_nullable()))
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
         Ok(Self {
             data_type,
             decoders,
+            is_nullable,
         })
     }
 }
@@ -45,11 +48,24 @@ impl ArrayDecoder for StructArrayDecoder {
         let mut child_pos: Vec<_> =
             (0..fields.len()).map(|_| vec![0; pos.len()]).collect();
 
+        let mut null_count = 0;
+        let mut nulls = self
+            .is_nullable
+            .then(|| BooleanBufferBuilder::new(pos.len()));
+
         for (row, p) in pos.iter().enumerate() {
-            // TODO: Handle nulls
-            let end_idx = match tape.get(*p) {
-                TapeElement::StartObject(end_idx) => end_idx,
-                d => return Err(tape_error(d, "{")),
+            let end_idx = match (tape.get(*p), nulls.as_mut()) {
+                (TapeElement::StartObject(end_idx), None) => end_idx,
+                (TapeElement::StartObject(end_idx), Some(nulls)) => {
+                    nulls.append(true);
+                    end_idx
+                }
+                (TapeElement::Null, Some(nulls)) => {
+                    nulls.append(false);
+                    null_count += 1;
+                    continue;
+                }
+                (d, _) => return Err(tape_error(d, "{")),
             };
 
             let mut cur_idx = *p + 1;
@@ -95,6 +111,8 @@ impl ArrayDecoder for StructArrayDecoder {
 
         let data = ArrayDataBuilder::new(self.data_type.clone())
             .len(pos.len())
+            .null_count(null_count)
+            .null_bit_buffer(nulls.as_mut().map(|x| x.finish()))
             .child_data(child_data);
 
         // Safety

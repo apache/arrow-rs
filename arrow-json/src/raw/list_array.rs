@@ -17,7 +17,7 @@
 
 use crate::raw::tape::{Tape, TapeElement};
 use crate::raw::{make_decoder, tape_error, ArrayDecoder};
-use arrow_array::builder::BufferBuilder;
+use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_array::OffsetSizeTrait;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
@@ -27,21 +27,23 @@ pub struct ListArrayDecoder<O> {
     data_type: DataType,
     decoder: Box<dyn ArrayDecoder>,
     phantom: PhantomData<O>,
+    is_nullable: bool,
 }
 
 impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
-    pub fn new(data_type: DataType) -> Result<Self, ArrowError> {
-        let field_type = match &data_type {
-            DataType::List(f) if !O::IS_LARGE => f.data_type().clone(),
-            DataType::LargeList(f) if O::IS_LARGE => f.data_type().clone(),
+    pub fn new(data_type: DataType, is_nullable: bool) -> Result<Self, ArrowError> {
+        let field = match &data_type {
+            DataType::List(f) if !O::IS_LARGE => f,
+            DataType::LargeList(f) if O::IS_LARGE => f,
             _ => unreachable!(),
         };
-        let decoder = make_decoder(field_type)?;
+        let decoder = make_decoder(field.data_type().clone(), field.is_nullable())?;
 
         Ok(Self {
             data_type,
             decoder,
             phantom: Default::default(),
+            is_nullable,
         })
     }
 }
@@ -52,11 +54,24 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
         let mut offsets = BufferBuilder::<O>::new(pos.len() + 1);
         offsets.append(O::from_usize(0).unwrap());
 
+        let mut null_count = 0;
+        let mut nulls = self
+            .is_nullable
+            .then(|| BooleanBufferBuilder::new(pos.len()));
+
         for p in pos {
-            // TODO: Handle nulls
-            let end_idx = match tape.get(*p) {
-                TapeElement::StartList(end_idx) => end_idx,
-                d => return Err(tape_error(d, "[")),
+            let end_idx = match (tape.get(*p), nulls.as_mut()) {
+                (TapeElement::StartList(end_idx), None) => end_idx,
+                (TapeElement::StartList(end_idx), Some(nulls)) => {
+                    nulls.append(true);
+                    end_idx
+                }
+                (TapeElement::Null, Some(nulls)) => {
+                    nulls.append(false);
+                    null_count += 1;
+                    continue;
+                }
+                (d, _) => return Err(tape_error(d, "[")),
             };
 
             let mut cur_idx = *p + 1;
@@ -85,6 +100,8 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
 
         let data = ArrayDataBuilder::new(self.data_type.clone())
             .len(pos.len())
+            .null_bit_buffer(nulls.as_mut().map(|x| x.finish()))
+            .null_count(null_count)
             .add_buffer(offsets.finish())
             .child_data(vec![child_data]);
 
