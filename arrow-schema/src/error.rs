@@ -100,4 +100,42 @@ impl Display for ArrowError {
     }
 }
 
-impl Error for ArrowError {}
+impl Error for ArrowError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        if let Self::ExternalError(e) = self {
+            Some(e.as_ref())
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn error_source() {
+        let e1 = ArrowError::DivideByZero;
+        assert!(e1.source().is_none());
+
+        // one level of wrapping
+        let e2 = ArrowError::ExternalError(Box::new(e1));
+        let source = e2.source().unwrap().downcast_ref::<ArrowError>().unwrap();
+        assert!(matches!(source, ArrowError::DivideByZero));
+
+        // two levels of wrapping
+        let e3 = ArrowError::ExternalError(Box::new(e2));
+        let source = e3
+            .source()
+            .unwrap()
+            .downcast_ref::<ArrowError>()
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<ArrowError>()
+            .unwrap();
+
+        assert!(matches!(source, ArrowError::DivideByZero));
+    }
+}
