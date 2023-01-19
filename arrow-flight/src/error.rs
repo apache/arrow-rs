@@ -129,15 +129,10 @@ mod test {
         let e3 = FlightError::ExternalError(Box::new(e2));
 
         // ensure we can find the lowest level error by following source()
-
         let mut root_error: &dyn Error = &e3;
-        loop {
-            match root_error.source() {
-                // walk the next level
-                Some(source) => root_error = source,
-                // at root (as much as we know)
-                None => break,
-            }
+        while let Some(source) = root_error.source() {
+            // walk the next level
+            root_error = source;
         }
 
         let source = root_error.downcast_ref::<FlightError>().unwrap();
