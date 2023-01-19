@@ -28,6 +28,7 @@ use rand::{
     distributions::{Alphanumeric, Distribution, Standard},
     prelude::StdRng,
 };
+use std::ops::Range;
 
 /// Creates an random (but fixed-seeded) array of a given size and null density
 pub fn create_primitive_array<T>(size: usize, null_density: f32) -> PrimitiveArray<T>
@@ -205,15 +206,33 @@ where
     Standard: Distribution<K::Native>,
     K::Native: SampleUniform,
 {
+    let min_key = K::Native::from_usize(0).unwrap();
+    let max_key = K::Native::from_usize(values.len()).unwrap();
+    create_sparse_dict_from_values(size, null_density, values, min_key..max_key)
+}
+
+/// Creates a random (but fixed-seeded) dictionary array of a given size and null density
+/// with the provided values array and key range
+pub fn create_sparse_dict_from_values<K>(
+    size: usize,
+    null_density: f32,
+    values: &dyn Array,
+    key_range: Range<K::Native>,
+) -> DictionaryArray<K>
+where
+    K: ArrowDictionaryKeyType,
+    Standard: Distribution<K::Native>,
+    K::Native: SampleUniform,
+{
     let mut rng = seedable_rng();
     let data_type = DataType::Dictionary(
         Box::new(K::DATA_TYPE),
         Box::new(values.data_type().clone()),
     );
 
-    let min_key = K::Native::from_usize(0).unwrap();
-    let max_key = K::Native::from_usize(values.len()).unwrap();
-    let keys: Buffer = (0..size).map(|_| rng.gen_range(min_key..max_key)).collect();
+    let keys: Buffer = (0..size)
+        .map(|_| rng.gen_range(key_range.clone()))
+        .collect();
 
     let nulls: Option<Buffer> = (null_density != 0.)
         .then(|| (0..size).map(|_| rng.gen_bool(null_density as _)).collect());
