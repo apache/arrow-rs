@@ -4709,8 +4709,7 @@ mod tests {
         assert_eq!(1, arr.value_length(2));
         assert_eq!(1, arr.value_length(3));
         assert_eq!(1, arr.value_length(4));
-        let values = arr.values();
-        let c = values.as_any().downcast_ref::<Int32Array>().unwrap();
+        let c = as_primitive_array::<Int32Type>(arr.values());
         assert_eq!(5, c.value(0));
         assert_eq!(6, c.value(1));
         assert_eq!(7, c.value(2));
@@ -4736,8 +4735,8 @@ mod tests {
         assert_eq!(1, arr.value_length(2));
         assert_eq!(1, arr.value_length(3));
         assert_eq!(1, arr.value_length(4));
-        let values = arr.values();
-        let c = values.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        let c = as_primitive_array::<Int32Type>(arr.values());
         assert_eq!(1, c.null_count());
         assert_eq!(5, c.value(0));
         assert!(!c.is_valid(1));
@@ -4764,8 +4763,7 @@ mod tests {
         assert_eq!(1, arr.value_length(1));
         assert_eq!(1, arr.value_length(2));
         assert_eq!(1, arr.value_length(3));
-        let values = arr.values();
-        let c = values.as_any().downcast_ref::<Float64Array>().unwrap();
+        let c = as_primitive_array::<Float64Type>(arr.values());
         assert_eq!(1, c.null_count());
         assert_eq!(7.0, c.value(0));
         assert_eq!(8.0, c.value(1));
@@ -4914,9 +4912,8 @@ mod tests {
         assert_eq!(2, array.value_length(2));
 
         // expect 4 nulls: negative numbers and overflow
-        let values = array.values();
-        assert_eq!(4, values.null_count());
-        let u16arr = values.as_any().downcast_ref::<UInt16Array>().unwrap();
+        let u16arr = as_primitive_array::<UInt16Type>(array.values());
+        assert_eq!(4, u16arr.null_count());
 
         // expect 4 nulls: negative numbers and overflow
         let expected: UInt16Array =

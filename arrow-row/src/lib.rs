@@ -512,7 +512,7 @@ impl Codec {
                     DataType::LargeList(_) => as_large_list_array(array).values(),
                     _ => unreachable!(),
                 };
-                let rows = converter.convert_columns(&[values])?;
+                let rows = converter.convert_columns(&[values.clone()])?;
                 Ok(Encoder::List(rows))
             }
         }
