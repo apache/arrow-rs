@@ -436,8 +436,8 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     }
 }
 
-impl <T: ArrowNativeType> Extend<T> for BufferBuilder<T> {
-    fn extend<I: IntoIterator<Item=T>>(&mut self, iter: I) {
+impl<T: ArrowNativeType> Extend<T> for BufferBuilder<T> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
         self.buffer.extend(iter)
     }
 }
