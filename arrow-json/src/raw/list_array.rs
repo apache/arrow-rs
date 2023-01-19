@@ -17,95 +17,79 @@
 
 use crate::raw::tape::{Tape, TapeElement};
 use crate::raw::{make_decoder, tape_error, ArrayDecoder};
+use arrow_array::builder::BufferBuilder;
+use arrow_array::OffsetSizeTrait;
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, Field};
+use arrow_schema::{ArrowError, DataType};
+use std::marker::PhantomData;
 
-pub struct StructArrayDecoder {
+pub struct ListArrayDecoder<O> {
     data_type: DataType,
-    decoders: Vec<Box<dyn ArrayDecoder>>,
+    decoder: Box<dyn ArrayDecoder>,
+    phantom: PhantomData<O>,
 }
 
-impl StructArrayDecoder {
+impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
     pub fn new(data_type: DataType) -> Result<Self, ArrowError> {
-        let decoders = struct_fields(&data_type)
-            .iter()
-            .map(|f| make_decoder(f.data_type().clone()))
-            .collect::<Result<Vec<_>, ArrowError>>()?;
+        let field_type = match &data_type {
+            DataType::List(f) if !O::IS_LARGE => f.data_type().clone(),
+            DataType::LargeList(f) if O::IS_LARGE => f.data_type().clone(),
+            _ => unreachable!(),
+        };
+        let decoder = make_decoder(field_type)?;
 
         Ok(Self {
             data_type,
-            decoders,
+            decoder,
+            phantom: Default::default(),
         })
     }
 }
 
-impl ArrayDecoder for StructArrayDecoder {
+impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
-        let fields = struct_fields(&self.data_type);
-        let mut child_pos: Vec<_> =
-            (0..fields.len()).map(|_| vec![0; pos.len()]).collect();
+        let mut child_pos = Vec::with_capacity(pos.len());
+        let mut offsets = BufferBuilder::<O>::new(pos.len() + 1);
+        offsets.append(O::from_usize(0).unwrap());
 
-        for (row, p) in pos.iter().enumerate() {
+        for p in pos {
             // TODO: Handle nulls
             let end_idx = match tape.get(*p) {
-                TapeElement::StartObject(end_idx) => end_idx,
-                d => return Err(tape_error(d, "{")),
+                TapeElement::StartList(end_idx) => end_idx,
+                d => return Err(tape_error(d, "[")),
             };
 
             let mut cur_idx = *p + 1;
             while cur_idx < end_idx {
-                // Read field name
-                let field_name = match tape.get(cur_idx) {
-                    TapeElement::String(s) => tape.get_string(s),
-                    d => return Err(tape_error(d, "field name")),
-                };
-
-                // Update child pos if match found
-                if let Some(field_idx) =
-                    fields.iter().position(|x| x.name() == field_name)
-                {
-                    child_pos[field_idx][row] = cur_idx + 1;
-                }
+                child_pos.push(cur_idx);
 
                 // Advance to next field
-                cur_idx = match tape.get(cur_idx + 1) {
+                cur_idx = match tape.get(cur_idx) {
                     TapeElement::String(_)
                     | TapeElement::Number(_)
                     | TapeElement::True
                     | TapeElement::False
-                    | TapeElement::Null => cur_idx + 2,
+                    | TapeElement::Null => cur_idx + 1,
                     TapeElement::StartList(end_idx) => end_idx + 1,
                     TapeElement::StartObject(end_idx) => end_idx + 1,
-                    d => return Err(tape_error(d, "field value")),
+                    d => return Err(tape_error(d, "list value")),
                 }
             }
+
+            let offset = O::from_usize(child_pos.len())
+                .ok_or_else(|| ArrowError::JsonError(format!("offset overflow")))?;
+            offsets.append(offset)
         }
 
-        let child_data = self
-            .decoders
-            .iter_mut()
-            .zip(child_pos)
-            .map(|(d, pos)| d.decode(tape, &pos))
-            .collect::<Result<Vec<_>, ArrowError>>()?;
-
-        // Sanity check
-        child_data
-            .iter()
-            .for_each(|x| assert_eq!(x.len(), pos.len()));
+        let child_data = self.decoder.decode(tape, &child_pos).unwrap();
 
         let data = ArrayDataBuilder::new(self.data_type.clone())
             .len(pos.len())
-            .child_data(child_data);
+            .add_buffer(offsets.finish())
+            .child_data(vec![child_data]);
 
         // Safety
         // Validated lengths above
         Ok(unsafe { data.build_unchecked() })
-    }
-}
-
-fn struct_fields(data_type: &DataType) -> &[Field] {
-    match &data_type {
-        DataType::Struct(f) => f,
-        _ => unreachable!(),
     }
 }

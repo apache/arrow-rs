@@ -18,6 +18,7 @@
 //! An alternative JSON reader that interprets bytes in place
 
 use crate::raw::boolean_array::BooleanArrayDecoder;
+use crate::raw::list_array::ListArrayDecoder;
 use crate::raw::primitive_array::PrimitiveArrayDecoder;
 use crate::raw::string_array::StringArrayDecoder;
 use crate::raw::struct_array::StructArrayDecoder;
@@ -29,6 +30,7 @@ use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::io::BufRead;
 
 mod boolean_array;
+mod list_array;
 mod primitive_array;
 mod string_array;
 mod struct_array;
@@ -78,8 +80,7 @@ impl RawReaderBuilder {
 /// A [`RecordBatchReader`] that reads newline-delimited JSON data with a known schema
 /// directly into the corresponding arrow arrays
 ///
-/// This makes it significantly faster than [`Reader`], however, it currently
-/// does not support nested data
+/// This makes it significantly faster than [`Reader`]
 ///
 /// Lines consisting solely of ASCII whitespace are ignored
 ///
@@ -184,6 +185,8 @@ fn make_decoder(data_type: DataType) -> Result<Box<dyn ArrayDecoder>, ArrowError
         DataType::Boolean => Ok(Box::<BooleanArrayDecoder>::default()),
         DataType::Utf8 => Ok(Box::<StringArrayDecoder::<i32>>::default()),
         DataType::LargeUtf8 => Ok(Box::<StringArrayDecoder::<i64>>::default()),
+        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type)?)),
+        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type)?)),
         DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type)?)),
         DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
             Err(ArrowError::JsonError(format!("{} is not supported by JSON", data_type)))
@@ -200,7 +203,8 @@ fn tape_error(d: TapeElement, expected: &str) -> ArrowError {
 mod tests {
     use super::*;
     use arrow_array::cast::{
-        as_boolean_array, as_largestring_array, as_primitive_array, as_string_array,
+        as_boolean_array, as_largestring_array, as_list_array, as_primitive_array,
+        as_string_array, as_struct_array,
     };
     use arrow_array::types::Int32Type;
     use arrow_array::Array;
@@ -290,5 +294,71 @@ mod tests {
         assert_eq!(col2.value(2), "\t😁foo");
         assert!(col2.is_null(3));
         assert_eq!(col2.value(4), "");
+    }
+
+    #[test]
+    fn test_complex() {
+        let buf = r#"
+           {"list": [], "nested": {"a": 1, "b": 2}, "nested_list": {"list2": [{"c": 3}, {"c": 4}]}}
+           {"list": [5, 6], "nested": {"a": 7}, "nested_list": {"list2": []}}
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "list",
+                DataType::List(Box::new(Field::new("element", DataType::Int32, false))),
+                true,
+            ),
+            Field::new(
+                "nested",
+                DataType::Struct(vec![
+                    Field::new("a", DataType::Int32, false),
+                    Field::new("b", DataType::Int32, false),
+                ]),
+                true,
+            ),
+            Field::new(
+                "nested_list",
+                DataType::Struct(vec![Field::new(
+                    "list2",
+                    DataType::List(Box::new(Field::new(
+                        "element",
+                        DataType::Struct(vec![Field::new("c", DataType::Int32, false)]),
+                        false,
+                    ))),
+                    false,
+                )]),
+                true,
+            ),
+        ]));
+
+        let batches = do_read(buf, 1024, schema);
+        assert_eq!(batches.len(), 1);
+
+        let list = as_list_array(batches[0].column(0).as_ref());
+        assert_eq!(list.value_offsets(), &[0, 0, 2]);
+        let list_v = list.values();
+        let list_values = as_primitive_array::<Int32Type>(list_v.as_ref());
+        assert_eq!(list_values.values(), &[5, 6]);
+
+        let nested = as_struct_array(batches[0].column(1).as_ref());
+        let a = as_primitive_array::<Int32Type>(nested.column(0).as_ref());
+        assert_eq!(a.values(), &[1, 7]);
+
+        let b = as_primitive_array::<Int32Type>(nested.column(1).as_ref());
+        assert_eq!(b.null_count(), 1);
+        assert_eq!(b.len(), 2);
+        assert_eq!(b.value(0), 2);
+        assert!(b.is_null(1));
+
+        let nested_list = as_struct_array(batches[0].column(2).as_ref());
+        let list2 = as_list_array(nested_list.column(0).as_ref());
+        assert_eq!(list2.value_offsets(), &[0, 2, 2]);
+
+        let list2_v = list2.values();
+        let list2_values = as_struct_array(list2_v.as_ref());
+
+        let c = as_primitive_array::<Int32Type>(list2_values.column(0));
+        assert_eq!(c.values(), &[3, 4]);
     }
 }

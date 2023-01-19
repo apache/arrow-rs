@@ -112,7 +112,7 @@ fn large_bench_primitive(c: &mut Criterion) {
     do_bench(c, "large_bench_primitive", json, schema)
 }
 
-fn small_bench_list() {
+fn small_bench_list(c: &mut Criterion) {
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "c1",
@@ -135,8 +135,7 @@ fn small_bench_list() {
             true,
         ),
     ]));
-    let builder = ReaderBuilder::new().with_schema(schema).with_batch_size(64);
-    let json_content = r#"
+    let json = r#"
         {"c1": ["eleven"], "c2": [6.2222222225, -3.2, null], "c3": [5.0, 6], "c4": [false, true]}
         {"c1": ["twelve"], "c2": [-55555555555555.2, 12500000.0], "c3": [3, 4, 5]}
         {"c1": null, "c2": [3], "c3": [125, 127, 129], "c4": [null, false, true]}
@@ -150,16 +149,13 @@ fn small_bench_list() {
         {"c1": ["fifteen"], "c2": [null, 2.1, 1.5, -3], "c4": [true, false, null]}
         {"c1": ["fifteen"], "c2": [], "c4": [true, false, null]}
         "#;
-    let cursor = Cursor::new(black_box(json_content));
-    let mut reader = builder.build(cursor).unwrap();
-    reader.next().unwrap();
+    do_bench(c, "small_bench_list", json, schema)
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("small_bench_list", |b| b.iter(small_bench_list));
-
     small_bench_primitive(c);
     large_bench_primitive(c);
+    small_bench_list(c);
 }
 
 criterion_group!(benches, criterion_benchmark);

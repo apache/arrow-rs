@@ -25,6 +25,8 @@ use std::fmt::{Display, Formatter};
 pub enum TapeElement {
     StartObject(u32),
     EndObject(u32),
+    StartList(u32),
+    EndList(u32),
     String(u32),
     Number(u32),
     True,
@@ -37,6 +39,8 @@ impl Display for TapeElement {
         match self {
             TapeElement::StartObject(_) => write!(f, "{{"),
             TapeElement::EndObject(_) => write!(f, "}}"),
+            TapeElement::StartList(_) => write!(f, "["),
+            TapeElement::EndList(_) => write!(f, "]"),
             TapeElement::String(_) => write!(f, "string"),
             TapeElement::Number(_) => write!(f, "number"),
             TapeElement::True => write!(f, "true"),
@@ -82,6 +86,10 @@ enum DecoderState {
     ///
     /// Contains index of start [`TapeElement::StartObject`]
     Object(u32),
+    /// Decoding a list
+    ///
+    /// Contains index of start [`TapeElement::StartList`]
+    List(u32),
     String,
     AnyValue,
     Number,
@@ -210,6 +218,23 @@ impl TapeDecoder {
                         b => return Err(err(b, "parsing object")),
                     }
                 }
+                // Decoding a list
+                Some(DecoderState::List(start_idx)) => {
+                    iter.advance_until(|b| !json_whitespace(b) && b != b',');
+                    match iter.peek() {
+                        Some(b']') => {
+                            iter.next();
+                            let start_idx = *start_idx;
+                            let end_idx = self.elements.len() as u32;
+                            self.elements[start_idx as usize] =
+                                TapeElement::StartList(end_idx);
+                            self.elements.push(TapeElement::EndList(start_idx));
+                            self.stack.pop();
+                        }
+                        Some(_) => self.stack.push(DecoderState::AnyValue),
+                        None => {}
+                    }
+                }
                 // Decoding a string
                 Some(DecoderState::String) => {
                     let s = iter.advance_until(|b| matches!(b, b'\\' | b'"'));
@@ -237,6 +262,11 @@ impl TapeDecoder {
                         b'n' => DecoderState::Literal(Literal::Null, 1),
                         b'f' => DecoderState::Literal(Literal::False, 1),
                         b't' => DecoderState::Literal(Literal::True, 1),
+                        b'[' => {
+                            let idx = self.elements.len() as u32;
+                            self.elements.push(TapeElement::StartList(u32::MAX));
+                            DecoderState::List(idx)
+                        }
                         b'{' => {
                             let idx = self.elements.len() as u32;
                             self.elements.push(TapeElement::StartObject(u32::MAX));
@@ -395,6 +425,10 @@ impl<'a> BufIter<'a> {
         self.0.len() == 0
     }
 
+    fn peek(&self) -> Option<u8> {
+        self.0.as_slice().first().copied()
+    }
+
     fn advance(&mut self, skip: usize) {
         for _ in 0..skip {
             self.0.next();
@@ -491,6 +525,8 @@ mod tests {
         {"a": "", "": "a"}
 
         {"a": "b", "object": {"nested": "hello", "foo": 23}, "b": {}, "c": {"foo": null }}
+
+        {"a": ["", "foo", ["bar", "c"]], "b": {"1": []}, "c": {"2": [1, 2, 3]} }
         "#;
         let mut decoder = TapeDecoder::new(16, 2);
         decoder.decode(a.as_bytes()).unwrap();
@@ -500,67 +536,94 @@ mod tests {
             finished.elements,
             &[
                 TapeElement::Null,
-                TapeElement::StartObject(8),
-                TapeElement::String(0),
-                TapeElement::String(1),
-                TapeElement::String(2),
-                TapeElement::Number(3),
-                TapeElement::String(4),
-                TapeElement::Number(5),
+                TapeElement::StartObject(8), // {"hello": "world", "foo": 2, "bar": 45}
+                TapeElement::String(0),      // "hello"
+                TapeElement::String(1),      // "world"
+                TapeElement::String(2),      // "foo"
+                TapeElement::Number(3),      // 2
+                TapeElement::String(4),      // "bar"
+                TapeElement::Number(5),      // 45
                 TapeElement::EndObject(1),
-                TapeElement::StartObject(12),
-                TapeElement::String(6),
-                TapeElement::String(7),
+                TapeElement::StartObject(12), // {"foo": "bar"}
+                TapeElement::String(6),       // "foo"
+                TapeElement::String(7),       // "bar"
                 TapeElement::EndObject(9),
-                TapeElement::StartObject(16),
-                TapeElement::String(8),
-                TapeElement::Null,
+                TapeElement::StartObject(16), // {"fiz": null}
+                TapeElement::String(8),       // "fiz
+                TapeElement::Null,            // null
                 TapeElement::EndObject(13),
-                TapeElement::StartObject(24),
-                TapeElement::String(9),
-                TapeElement::True,
-                TapeElement::String(10),
-                TapeElement::False,
-                TapeElement::String(11),
-                TapeElement::Null,
+                TapeElement::StartObject(24), // {"a": true, "b": false, "c": null}
+                TapeElement::String(9),       // "a"
+                TapeElement::True,            // true
+                TapeElement::String(10),      // "b"
+                TapeElement::False,           // false
+                TapeElement::String(11),      // "c"
+                TapeElement::Null,            // null
                 TapeElement::EndObject(17),
-                TapeElement::StartObject(30),
-                TapeElement::String(12),
-                TapeElement::String(13),
-                TapeElement::String(14),
-                TapeElement::String(15),
+                TapeElement::StartObject(30), // {"a": "", "": "a"}
+                TapeElement::String(12),      // "a"
+                TapeElement::String(13),      // ""
+                TapeElement::String(14),      // ""
+                TapeElement::String(15),      // "a"
                 TapeElement::EndObject(25),
-                TapeElement::StartObject(49),
-                TapeElement::String(16),
-                TapeElement::String(17),
-                TapeElement::String(18),
-                TapeElement::StartObject(40),
-                TapeElement::String(19),
-                TapeElement::String(20),
-                TapeElement::String(21),
-                TapeElement::Number(22),
+                TapeElement::StartObject(49), // {"a": "b", "object": {"nested": "hello", "foo": 23}, "b": {}, "c": {"foo": null }}
+                TapeElement::String(16),      // "a"
+                TapeElement::String(17),      // "b"
+                TapeElement::String(18),      // "object"
+                TapeElement::StartObject(40), // {"nested": "hello", "foo": 23}
+                TapeElement::String(19),      // "nested"
+                TapeElement::String(20),      // "hello"
+                TapeElement::String(21),      // "foo"
+                TapeElement::Number(22),      // 23
                 TapeElement::EndObject(35),
-                TapeElement::String(23),
-                TapeElement::StartObject(43),
+                TapeElement::String(23),      // "b"
+                TapeElement::StartObject(43), // {}
                 TapeElement::EndObject(42),
-                TapeElement::String(24),
-                TapeElement::StartObject(48),
-                TapeElement::String(25),
-                TapeElement::Null,
+                TapeElement::String(24),      // "c"
+                TapeElement::StartObject(48), // {"foo": null }
+                TapeElement::String(25),      // "foo"
+                TapeElement::Null,            // null
                 TapeElement::EndObject(45),
-                TapeElement::EndObject(31)
+                TapeElement::EndObject(31),
+                TapeElement::StartObject(75), // {"a": ["", "foo", ["bar", "c"]], "b": {"1": []}, "c": {"2": [1, 2, 3]} }
+                TapeElement::String(26),      // "a"
+                TapeElement::StartList(59),   // ["", "foo", ["bar", "c"]]
+                TapeElement::String(27),      // ""
+                TapeElement::String(28),      // "foo"
+                TapeElement::StartList(58),   // ["bar", "c"]
+                TapeElement::String(29),      // "bar"
+                TapeElement::String(30),      // "c"
+                TapeElement::EndList(55),
+                TapeElement::EndList(52),
+                TapeElement::String(31),      // "b"
+                TapeElement::StartObject(65), // {"1": []}
+                TapeElement::String(32),      // "1"
+                TapeElement::StartList(64),   // []
+                TapeElement::EndList(63),
+                TapeElement::EndObject(61),
+                TapeElement::String(33),      // "c"
+                TapeElement::StartObject(74), // {"2": [1, 2, 3]}
+                TapeElement::String(34),      // "2"
+                TapeElement::StartList(73),   // [1, 2, 3]
+                TapeElement::Number(35),      // 1
+                TapeElement::Number(36),      // 2
+                TapeElement::Number(37),      // 3
+                TapeElement::EndList(69),
+                TapeElement::EndObject(67),
+                TapeElement::EndObject(50)
             ]
         );
 
         assert_eq!(
             finished.strings,
-            "helloworldfoo2bar45foobarfizabcaaabobjectnestedhellofoo23bcfoo"
+            "helloworldfoo2bar45foobarfizabcaaabobjectnestedhellofoo23bcfooafoobarcb1c2123"
         );
         assert_eq!(
             &finished.string_offsets,
             &[
                 0, 5, 10, 13, 14, 17, 19, 22, 25, 28, 29, 30, 31, 32, 32, 32, 33, 34, 35,
-                41, 47, 52, 55, 57, 58, 59, 62
+                41, 47, 52, 55, 57, 58, 59, 62, 63, 63, 66, 69, 70, 71, 72, 73, 74, 75,
+                76, 77
             ]
         )
     }
