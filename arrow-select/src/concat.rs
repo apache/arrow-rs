@@ -31,14 +31,15 @@
 //! ```
 
 use crate::dictionary::merge_dictionaries;
-use arrow_array::builder::PrimitiveBuilder;
+use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
 use arrow_array::cast::as_dictionary_array;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_data::transform::{Capacities, MutableArrayData};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
+use num::Integer;
 use std::sync::Arc;
 
 fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
@@ -59,17 +60,30 @@ fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
     Capacities::Binary(item_capacity, Some(bytes_capacity))
 }
 
-fn concat_dictionaries<K: ArrowDictionaryKeyType>(
-    arrays: &[&dyn Array],
-) -> Result<DictionaryArray<K>, ArrowError> {
+fn concat_dictionaries<K>(arrays: &[&dyn Array]) -> Result<DictionaryArray<K>, ArrowError>
+where
+    K: ArrowDictionaryKeyType,
+    K::Native: Integer,
+{
     let first_values = &arrays[0].data().child_data()[0];
-    let single_dictionary = arrays
-        .iter()
-        .skip(1)
-        .all(|a| ArrayData::ptr_eq(&a.data().child_data()[0], first_values));
+    let mut total_values = first_values.len();
+    let mut total_keys = arrays[0].len();
+    let mut total_nulls = 0;
 
-    let (keys, values) = match single_dictionary {
-        true => {
+    let single_dictionary = arrays.iter().skip(1).all(|a| {
+        let data = a.data();
+        let values = &data.child_data()[0];
+        total_keys += data.len();
+        total_nulls += data.null_count();
+        total_values += values.len();
+        ArrayData::ptr_eq(values, first_values)
+    });
+
+    let concatenate_dictionaries =
+        total_values < total_keys && K::Native::from_usize(total_values).is_some();
+
+    let (keys, values) = match (single_dictionary, concatenate_dictionaries) {
+        (true, _) => {
             // All arrays share same dictionary, just concatenate keys
             let keys: Vec<_> = arrays
                 .iter()
@@ -78,8 +92,46 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
 
             (concat(&keys)?.data().clone(), first_values.clone())
         }
+        (false, true) => {
+            // Concatenate dictionary values together
+            let mut all_values = Vec::with_capacity(arrays.len());
+            let mut nulls =
+                (total_nulls != 0).then(|| BooleanBufferBuilder::new(total_keys));
 
-        false => {
+            let mut new_keys = BufferBuilder::<K::Native>::new(total_keys);
+            let mut key_offset = K::Native::from_usize(0).unwrap();
+            for a in arrays {
+                let dictionary = as_dictionary_array::<K>(*a);
+                let keys = dictionary.keys();
+                let values = dictionary.values().as_ref();
+
+                all_values.push(values);
+                new_keys.extend(keys.values().iter().map(|x| *x + key_offset));
+                if let Some(nulls) = nulls.as_mut() {
+                    let data = keys.data();
+                    match data.null_buffer() {
+                        Some(b) => {
+                            let range = data.offset()..data.offset() + data.len();
+                            nulls.append_packed_range(range, b.as_ref())
+                        }
+                        None => nulls.append_n(data.len(), true),
+                    }
+                }
+                key_offset = key_offset + K::Native::from_usize(values.len()).unwrap();
+            }
+
+            let new_values = concat(&all_values)?.data().clone();
+
+            let builder = ArrayDataBuilder::new(K::DATA_TYPE)
+                .len(total_keys)
+                .null_count(total_nulls)
+                .null_bit_buffer(nulls.as_mut().map(|x| x.finish()))
+                .add_buffer(new_keys.finish());
+
+            (unsafe { builder.build_unchecked() }, new_values)
+        }
+        (false, false) => {
+            // Recompute dictionaries
             let dictionaries: Vec<_> = arrays
                 .iter()
                 .map(|a| (as_dictionary_array::<K>(*a), None))
@@ -100,6 +152,8 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
 
     // Sanity check
     assert_eq!(keys.data_type(), &K::DATA_TYPE);
+    assert_eq!(keys.len(), total_keys);
+    assert_eq!(keys.null_count(), total_nulls);
 
     let builder = keys
         .into_builder()
@@ -192,6 +246,7 @@ pub fn concat_batches<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::builder::StringDictionaryBuilder;
     use arrow_schema::{Field, Schema};
     use std::sync::Arc;
 
@@ -512,29 +567,10 @@ mod tests {
     }
 
     fn collect_string_dictionary(
-        dictionary: &DictionaryArray<Int32Type>,
-    ) -> Vec<Option<String>> {
-        let values = dictionary.values();
-        let values = values.as_any().downcast_ref::<StringArray>().unwrap();
-
-        dictionary
-            .keys()
-            .iter()
-            .map(|key| key.map(|key| values.value(key as _).to_string()))
-            .collect()
-    }
-
-    fn concat_dictionary(
-        input_1: DictionaryArray<Int32Type>,
-        input_2: DictionaryArray<Int32Type>,
-    ) -> Vec<Option<String>> {
-        let concat = concat(&[&input_1 as _, &input_2 as _]).unwrap();
-        let concat = concat
-            .as_any()
-            .downcast_ref::<DictionaryArray<Int32Type>>()
-            .unwrap();
-
-        collect_string_dictionary(concat)
+        array: &DictionaryArray<Int32Type>,
+    ) -> Vec<Option<&str>> {
+        let concrete = array.downcast_dict::<StringArray>().unwrap();
+        concrete.into_iter().collect()
     }
 
     #[test]
@@ -553,11 +589,19 @@ mod tests {
             "E",
         ]
         .into_iter()
-        .map(|x| Some(x.to_string()))
+        .map(Some)
         .collect();
 
-        let concat = concat_dictionary(input_1, input_2);
-        assert_eq!(concat, expected);
+        let concat = concat(&[&input_1 as _, &input_2 as _]).unwrap();
+        let dictionary = as_dictionary_array::<Int32Type>(concat.as_ref());
+        let actual = collect_string_dictionary(dictionary);
+        assert_eq!(actual, expected);
+
+        // Should have concatenated inputs together
+        assert_eq!(
+            dictionary.values().len(),
+            input_1.values().len() + input_2.values().len(),
+        )
     }
 
     #[test]
@@ -567,16 +611,45 @@ mod tests {
                 .into_iter()
                 .collect();
         let input_2: DictionaryArray<Int32Type> = vec![None].into_iter().collect();
-        let expected = vec![
-            Some("foo".to_string()),
-            Some("bar".to_string()),
-            None,
-            Some("fiz".to_string()),
-            None,
-        ];
+        let expected = vec![Some("foo"), Some("bar"), None, Some("fiz"), None];
 
-        let concat = concat_dictionary(input_1, input_2);
-        assert_eq!(concat, expected);
+        let concat = concat(&[&input_1 as _, &input_2 as _]).unwrap();
+        let dictionary = as_dictionary_array::<Int32Type>(concat.as_ref());
+        let actual = collect_string_dictionary(dictionary);
+        assert_eq!(actual, expected);
+
+        // Should have concatenated inputs together
+        assert_eq!(
+            dictionary.values().len(),
+            input_1.values().len() + input_2.values().len(),
+        )
+    }
+
+    #[test]
+    fn test_string_dictionary_merge() {
+        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+        for i in 0..20 {
+            builder.append(&i.to_string()).unwrap();
+        }
+        let input_1 = builder.finish();
+
+        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+        for i in 0..30 {
+            builder.append(&i.to_string()).unwrap();
+        }
+        let input_2 = builder.finish();
+
+        let expected: Vec<_> = (0..20).chain(0..30).map(|x| x.to_string()).collect();
+        let expected: Vec<_> = expected.iter().map(|x| Some(x.as_str())).collect();
+
+        let concat = concat(&[&input_1 as _, &input_2 as _]).unwrap();
+        let dictionary = as_dictionary_array::<Int32Type>(concat.as_ref());
+        let actual = collect_string_dictionary(dictionary);
+        assert_eq!(actual, expected);
+
+        // Should have merged inputs together
+        // Not 30 as this is done on a best-effort basis
+        assert_eq!(dictionary.values().len(), 33)
     }
 
     #[test]

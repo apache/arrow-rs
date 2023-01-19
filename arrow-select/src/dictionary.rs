@@ -20,13 +20,13 @@ struct Interner<'a, V> {
 
 impl<'a, V> Interner<'a, V> {
     fn new(capacity: usize) -> Self {
-        // Add 64 additional buckets to help reduce collisions
-        let shift = (capacity as u64 + 64).leading_zeros();
+        // Add additional buckets to help reduce collisions
+        let shift = (capacity as u64 + 128).leading_zeros();
         let num_buckets = (u64::MAX >> shift) as usize;
         let buckets = (0..num_buckets.saturating_add(1)).map(|_| None).collect();
         Self {
             // A fixed seed to ensure deterministic behaviour
-            state: RandomState::with_seed(60587897),
+            state: RandomState::with_seeds(0, 0, 0, 0),
             buckets,
             shift,
         }
@@ -37,7 +37,8 @@ impl<'a, V> Interner<'a, V> {
         new: &'a [u8],
         f: F,
     ) -> Result<&V, E> {
-        let bucket_idx = self.state.hash_one(new) >> self.shift;
+        let hash = self.state.hash_one(new);
+        let bucket_idx = hash >> self.shift;
         Ok(match &mut self.buckets[bucket_idx as usize] {
             Some((current, v)) => {
                 if *current != new {
