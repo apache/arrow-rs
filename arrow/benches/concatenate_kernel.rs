@@ -61,15 +61,21 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_concat(&v1, &v2))
     });
 
-    let v1 = create_string_dict_array::<Int32Type>(1024, 0.0, 20);
-    let v2 = create_string_dict_array::<Int32Type>(1024, 0.0, 20);
-    c.bench_function("concat str_dict 1024", |b| b.iter(|| bench_concat(&v1, &v2)));
+    let v1 = create_string_array_with_len::<i32>(10, 0.0, 20);
+    let v1 = create_dict_from_values::<Int32Type>(1024, 0.0, &v1);
+    let v2 = create_string_array_with_len::<i32>(10, 0.0, 20);
+    let v2 = create_dict_from_values::<Int32Type>(1024, 0.0, &v2);
+    c.bench_function("concat str_dict 1024", |b| {
+        b.iter(|| bench_concat(&v1, &v2))
+    });
 
     let v1 = create_string_array_with_len::<i32>(1024, 0.0, 20);
     let v1 = create_sparse_dict_from_values::<Int32Type>(1024, 0.0, &v1, 10..20);
     let v2 = create_string_array_with_len::<i32>(1024, 0.0, 20);
     let v2 = create_sparse_dict_from_values::<Int32Type>(1024, 0.0, &v2, 30..40);
-    c.bench_function("concat str_dict 1024", |b| b.iter(|| bench_concat(&v1, &v2)));
+    c.bench_function("concat str_dict_sparse 1024", |b| {
+        b.iter(|| bench_concat(&v1, &v2))
+    });
 
     let v1 = create_string_array::<i32>(1024, 0.5);
     let v2 = create_string_array::<i32>(1024, 0.5);
