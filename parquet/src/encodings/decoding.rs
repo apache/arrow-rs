@@ -1946,11 +1946,12 @@ mod tests {
         let decoder = get_decoder::<T>(descr, encoding);
         match err {
             Some(parquet_error) => {
-                assert!(decoder.is_err());
-                assert_eq!(decoder.err().unwrap(), parquet_error);
+                assert_eq!(
+                    decoder.err().unwrap().to_string(),
+                    parquet_error.to_string()
+                );
             }
             None => {
-                assert!(decoder.is_ok());
                 assert_eq!(decoder.unwrap().encoding(), encoding);
             }
         }

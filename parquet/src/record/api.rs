@@ -1536,16 +1536,16 @@ mod tests {
         ]);
 
         assert_eq!(
-            ParquetError::General("Cannot access Group as Float".to_string()),
-            row.get_float(0).unwrap_err()
+            row.get_float(0).unwrap_err().to_string(),
+            "Parquet error: Cannot access Group as Float"
         );
         assert_eq!(
-            ParquetError::General("Cannot access ListInternal as Float".to_string()),
-            row.get_float(1).unwrap_err()
+            row.get_float(1).unwrap_err().to_string(),
+            "Parquet error: Cannot access ListInternal as Float"
         );
         assert_eq!(
-            ParquetError::General("Cannot access MapInternal as Float".to_string()),
-            row.get_float(2).unwrap_err()
+            row.get_float(2).unwrap_err().to_string(),
+            "Parquet error: Cannot access MapInternal as Float",
         );
     }
 
@@ -1680,8 +1680,8 @@ mod tests {
             ("Y".to_string(), Field::Int(2)),
         ]))]);
         assert_eq!(
-            general_err!("Cannot access Group as Float".to_string()),
-            list.get_float(0).unwrap_err()
+            list.get_float(0).unwrap_err().to_string(),
+            "Parquet error: Cannot access Group as Float"
         );
 
         let list = make_list(vec![Field::ListInternal(make_list(vec![
@@ -1691,8 +1691,8 @@ mod tests {
             Field::Int(12),
         ]))]);
         assert_eq!(
-            general_err!("Cannot access ListInternal as Float".to_string()),
-            list.get_float(0).unwrap_err()
+            list.get_float(0).unwrap_err().to_string(),
+            "Parquet error: Cannot access ListInternal as Float"
         );
 
         let list = make_list(vec![Field::MapInternal(make_map(vec![
@@ -1701,8 +1701,8 @@ mod tests {
             (Field::Int(3), Field::Float(2.3)),
         ]))]);
         assert_eq!(
-            general_err!("Cannot access MapInternal as Float".to_string()),
-            list.get_float(0).unwrap_err()
+            list.get_float(0).unwrap_err().to_string(),
+            "Parquet error: Cannot access MapInternal as Float",
         );
     }
 

@@ -1085,7 +1085,7 @@ mod tests {
                 .unwrap();
 
         let struct_null_level =
-            calculate_array_levels(batch.column(0), batch.schema().field(0));
+            calculate_array_levels(batch.column(0), batch.schema().field(0)).unwrap();
 
         // create second batch
         // define schema
@@ -1108,7 +1108,7 @@ mod tests {
                 .unwrap();
 
         let struct_non_null_level =
-            calculate_array_levels(batch.column(0), batch.schema().field(0));
+            calculate_array_levels(batch.column(0), batch.schema().field(0)).unwrap();
 
         // The 2 levels should not be the same
         if struct_non_null_level == struct_null_level {
