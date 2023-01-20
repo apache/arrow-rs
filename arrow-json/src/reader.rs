@@ -46,6 +46,7 @@
 //! let batch = json.next().unwrap().unwrap();
 //! ```
 
+use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
@@ -239,10 +240,16 @@ impl<'a, R: Read> Iterator for ValueIter<'a, R> {
                         continue;
                     }
 
-                    self.record_count += 1;
-                    return Some(serde_json::from_str(trimmed_s).map_err(|e| {
-                        ArrowError::JsonError(format!("Not valid JSON: {}", e))
-                    }));
+                    return match serde_json::from_str(trimmed_s) {
+                        Ok(s) => {
+                            self.record_count += 1;
+                            Some(Ok(s))
+                        }
+                        Err(e) => Some(Err(ArrowError::JsonError(format!(
+                            "Not valid JSON: {}",
+                            e
+                        )))),
+                    };
                 }
             }
         }
@@ -590,6 +597,8 @@ pub struct Decoder {
     schema: SchemaRef,
     /// This is a collection of options for json decoder
     options: DecoderOptions,
+    /// record the wrong json information
+    error_json: RefCell<Option<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -646,7 +655,11 @@ impl Decoder {
     /// iterator over [`serde_json::Value`]s (aka implements the
     /// `Iterator<Item=Result<Value>>` trait).
     pub fn new(schema: SchemaRef, options: DecoderOptions) -> Self {
-        Self { schema, options }
+        Self {
+            schema,
+            options,
+            error_json: RefCell::new(None),
+        }
     }
 
     /// Returns the schema of the reader, useful for getting the schema without reading
@@ -683,11 +696,21 @@ impl Decoder {
     where
         I: Iterator<Item = Result<Value, ArrowError>>,
     {
+        if let Some(s) = self.error_json.take() {
+            return Err(ArrowError::JsonError(s));
+        }
         let batch_size = self.options.batch_size;
         let mut rows: Vec<Value> = Vec::with_capacity(batch_size);
 
         for value in value_iter.by_ref().take(batch_size) {
-            let v = value?;
+            let v = match value {
+                Ok(v) => v,
+                Err(ArrowError::JsonError(s)) => {
+                    *self.error_json.borrow_mut() = Some(s);
+                    break;
+                }
+                Err(e) => return Err(e),
+            };
             match v {
                 Value::Object(_) => rows.push(v),
                 _ => {
@@ -699,7 +722,9 @@ impl Decoder {
             }
         }
         if rows.is_empty() {
-            // reached end of file
+            if let Some(s) = self.error_json.take() {
+                return Err(ArrowError::JsonError(s));
+            }
             return Ok(None);
         }
 
@@ -1943,6 +1968,38 @@ mod tests {
             .unwrap();
         assert_eq!(2.0, bb.value(0));
         assert_eq!(-3.5, bb.value(1));
+    }
+
+    #[test]
+    fn test_json_error_line_skip() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Float32, false),
+            Field::new("c", DataType::Boolean, false),
+            Field::new("d", DataType::Utf8, false),
+        ]);
+        let file = File::open("test/data/err_line.json").unwrap();
+        let build = ReaderBuilder::new().with_schema(Arc::new(schema));
+        let reader = build.build::<File>(file);
+
+        let mut lines = 0;
+        for batch in reader.unwrap() {
+            match batch {
+                Ok(n) => {
+                    lines += n.num_rows();
+                }
+                Err(ArrowError::JsonError(ref s)) => {
+                    // record error json pos
+                    assert_eq!(lines + 1, 4);
+                    assert_eq!(
+                        s,
+                        "Not valid JSON: EOF while parsing an object at line 1 column 13"
+                    );
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(lines, 7)
     }
 
     #[test]
