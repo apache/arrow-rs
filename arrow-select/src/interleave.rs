@@ -230,7 +230,7 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
     // Recompute keys
     let mut keys = PrimitiveBuilder::<K>::with_capacity(indices.len());
     for (a, b) in indices {
-        let old_keys: &PrimitiveArray<K> = &dictionaries[*a].0.keys();
+        let old_keys: &PrimitiveArray<K> = dictionaries[*a].0.keys();
         match old_keys.is_valid(*b) {
             true => {
                 let old_key = old_keys.values()[*b];
