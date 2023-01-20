@@ -103,9 +103,11 @@ impl Args {
                 Index::INT96(v) => print_index(&v.indexes, offset_index, &row_counts)?,
                 Index::FLOAT(v) => print_index(&v.indexes, offset_index, &row_counts)?,
                 Index::DOUBLE(v) => print_index(&v.indexes, offset_index, &row_counts)?,
-                Index::BYTE_ARRAY(_) => println!("BYTE_ARRAY not supported"),
-                Index::FIXED_LEN_BYTE_ARRAY(_) => {
-                    println!("FIXED_LEN_BYTE_ARRAY not supported")
+                Index::BYTE_ARRAY(v) => {
+                    print_index(&v.indexes, offset_index, &row_counts)?
+                }
+                Index::FIXED_LEN_BYTE_ARRAY(v) => {
+                    print_index(&v.indexes, offset_index, &row_counts)?
                 }
             }
         }
@@ -130,7 +132,7 @@ fn compute_row_counts(offset_index: &[PageLocation], rows: i64) -> Vec<i64> {
 }
 
 /// Prints index information for a single column chunk
-fn print_index<T: std::fmt::Display>(
+fn print_index<T: std::fmt::Debug>(
     column_index: &[PageIndex<T>],
     offset_index: &[PageLocation],
     row_counts: &[i64],
@@ -154,12 +156,12 @@ fn print_index<T: std::fmt::Display>(
             idx, o.offset, o.compressed_page_size, row_count
         );
         match &c.min {
-            Some(m) => print!(", min {:>10}", m),
+            Some(m) => print!(", min {:>10?}", m),
             None => print!(", min {:>10}", "NONE"),
         }
 
         match &c.max {
-            Some(m) => print!(", max {:>10}", m),
+            Some(m) => print!(", max {:>10?}", m),
             None => print!(", max {:>10}", "NONE"),
         }
         println!()
