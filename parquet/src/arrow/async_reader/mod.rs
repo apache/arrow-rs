@@ -179,7 +179,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let mut buffer = Vec::with_capacity(to_read);
             let read = self.take(to_read as u64).read_to_end(&mut buffer).await?;
             if read != to_read {
-                eof_err!("expected to read {} bytes, got {}", to_read, read);
+                return Err(eof_err!("expected to read {} bytes, got {}", to_read, read));
             }
 
             Ok(buffer.into())
