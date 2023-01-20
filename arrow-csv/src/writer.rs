@@ -89,30 +89,20 @@ where
 }
 
 fn invalid_cast_error(dt: String, col_index: usize, row_index: usize) -> ArrowError {
-    let mut s = String::new();
-    s.push_str("Cannot cast to ");
-    s.push_str(&dt);
-    s.push_str(" at col index: ");
-    s.push_str(col_index.to_string().as_str());
-    s.push_str(" row index: ");
-    s.push_str(row_index.to_string().as_str());
-    ArrowError::CastError(s)
+    ArrowError::CastError(format!(
+        "Cannot cast to {} at col index: {} row index: {}",
+        dt, col_index, row_index
+    ))
 }
 
 macro_rules! write_temporal_value {
-    ($array:expr, $tpe: ident, $format: expr, $col_index: expr, $row_index: expr, $f: ident) => {{
-        let type_name = &std::any::type_name::<$tpe>().to_string();
+    ($array:expr, $tpe: ident, $format: expr, $col_index: expr, $row_index: expr, $cast_func: ident, $tpe_name: expr) => {{
         $array
             .as_any()
             .downcast_ref::<$tpe>()
-            .ok_or_else(|| {
-                invalid_cast_error(type_name.to_string(), $col_index, $row_index)
-            })?
-            .$f($row_index)
-            //.value_as_datetime($row_index)
-            .ok_or_else(|| {
-                invalid_cast_error(type_name.to_string(), $col_index, $row_index)
-            })?
+            .ok_or_else(|| invalid_cast_error($tpe_name, $col_index, $row_index))?
+            .$cast_func($row_index)
+            .ok_or_else(|| invalid_cast_error($tpe_name, $col_index, $row_index))?
             .format($format)
             .to_string()
     }};
@@ -206,7 +196,8 @@ impl<W: Write> Writer<W> {
                         &self.date_format,
                         col_index,
                         row_index,
-                        value_as_datetime
+                        value_as_datetime,
+                        "Date32".to_owned()
                     )
                 }
                 DataType::Date64 => {
@@ -216,7 +207,8 @@ impl<W: Write> Writer<W> {
                         &self.datetime_format,
                         col_index,
                         row_index,
-                        value_as_datetime
+                        value_as_datetime,
+                        "Date64".to_owned()
                     )
                 }
                 DataType::Time32(TimeUnit::Second) => {
@@ -226,7 +218,8 @@ impl<W: Write> Writer<W> {
                         &self.time_format,
                         col_index,
                         row_index,
-                        value_as_time
+                        value_as_time,
+                        "Time32".to_owned()
                     )
                 }
                 DataType::Time32(TimeUnit::Millisecond) => {
@@ -236,7 +229,8 @@ impl<W: Write> Writer<W> {
                         &self.time_format,
                         col_index,
                         row_index,
-                        value_as_time
+                        value_as_time,
+                        "Time32".to_owned()
                     )
                 }
                 DataType::Time64(TimeUnit::Microsecond) => {
@@ -246,7 +240,8 @@ impl<W: Write> Writer<W> {
                         &self.time_format,
                         col_index,
                         row_index,
-                        value_as_time
+                        value_as_time,
+                        "Time64".to_owned()
                     )
                 }
                 DataType::Time64(TimeUnit::Nanosecond) => {
@@ -256,7 +251,8 @@ impl<W: Write> Writer<W> {
                         &self.time_format,
                         col_index,
                         row_index,
-                        value_as_time
+                        value_as_time,
+                        "Time64".to_owned()
                     )
                 }
                 DataType::Timestamp(time_unit, time_zone) => {
@@ -728,7 +724,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         let mut writer = Writer::new(&mut file);
         let batches = vec![&batch, &batch];
         for batch in batches {
-            writer.write(batch).map_err(|e| { dbg!(e.to_string()); assert!(e.to_string().ends_with(invalid_cast_error("arrow_array::array::primitive_array::PrimitiveArray<arrow_array::types::Date64Type>".to_owned(), 1, 1).to_string().as_str()))}).unwrap_err();
+            writer.write(batch).map_err(|e| { dbg!(e.to_string()); assert!(e.to_string().ends_with(invalid_cast_error("Date64".to_owned(), 1, 1).to_string().as_str()))}).unwrap_err();
         }
         drop(writer);
     }
