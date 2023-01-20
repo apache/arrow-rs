@@ -44,7 +44,7 @@ use crate::format::Statistics as TStatistics;
 use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
-use crate::util::bit_util::from_ne_slice;
+use crate::util::bit_util::from_le_slice;
 
 pub(crate) mod private {
     use super::*;
@@ -181,11 +181,11 @@ pub fn from_thrift(
                     // min/max statistics for INT96 columns.
                     let min = min.map(|data| {
                         assert_eq!(data.len(), 12);
-                        from_ne_slice::<Int96>(&data)
+                        from_le_slice::<Int96>(&data)
                     });
                     let max = max.map(|data| {
                         assert_eq!(data.len(), 12);
-                        from_ne_slice::<Int96>(&data)
+                        from_le_slice::<Int96>(&data)
                     });
                     Statistics::int96(min, max, distinct_count, null_count, old_format)
                 }
