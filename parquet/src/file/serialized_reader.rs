@@ -830,8 +830,8 @@ mod tests {
     use crate::format::BoundaryOrder;
 
     use crate::basic::{self, ColumnOrder};
-    use crate::data_type::AsBytes;
     use crate::data_type::private::ParquetValueType;
+    use crate::data_type::AsBytes;
     use crate::file::page_index::index::{Index, NativeIndex};
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;

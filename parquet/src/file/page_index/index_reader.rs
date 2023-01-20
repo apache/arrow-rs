@@ -154,15 +154,15 @@ pub(crate) fn deserialize_column_index(
     let index = ColumnIndex::read_from_in_protocol(&mut prot)?;
 
     let index = match column_type {
-        Type::BOOLEAN => Index::BOOLEAN(NativeIndex::<bool>::try_new(index, column_type)?),
+        Type::BOOLEAN => {
+            Index::BOOLEAN(NativeIndex::<bool>::try_new(index, column_type)?)
+        }
         Type::INT32 => Index::INT32(NativeIndex::<i32>::try_new(index, column_type)?),
         Type::INT64 => Index::INT64(NativeIndex::<i64>::try_new(index, column_type)?),
         Type::INT96 => Index::INT96(NativeIndex::<Int96>::try_new(index, column_type)?),
         Type::FLOAT => Index::FLOAT(NativeIndex::<f32>::try_new(index, column_type)?),
         Type::DOUBLE => Index::DOUBLE(NativeIndex::<f64>::try_new(index, column_type)?),
-        Type::BYTE_ARRAY => {
-            Index::BYTE_ARRAY(NativeIndex::try_new(index, column_type)?)
-        }
+        Type::BYTE_ARRAY => Index::BYTE_ARRAY(NativeIndex::try_new(index, column_type)?),
         Type::FIXED_LEN_BYTE_ARRAY => {
             Index::FIXED_LEN_BYTE_ARRAY(NativeIndex::try_new(index, column_type)?)
         }
