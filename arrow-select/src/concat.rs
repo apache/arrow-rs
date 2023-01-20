@@ -30,14 +30,13 @@
 //! assert_eq!(arr.len(), 3);
 //! ```
 
-use crate::dictionary::merge_dictionaries;
+use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::cast::as_dictionary_array;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_data::transform::{Capacities, MutableArrayData};
-use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use num::Integer;
 use std::sync::Arc;
@@ -65,29 +64,9 @@ where
     K: ArrowDictionaryKeyType,
     K::Native: Integer,
 {
-    let first_array = &arrays[0].data();
-    let first_values = &first_array.child_data()[0];
-
-    let mut single_dictionary = true;
-    let mut total_keys = first_array.len();
-    let mut total_values = first_values.len();
-    for a in arrays.iter().skip(1) {
-        let data = a.data();
-        total_keys += data.len();
-
-        let values = &data.child_data()[0];
-        total_values += values.len();
-        single_dictionary &= ArrayData::ptr_eq(values, first_values);
-    }
-
-    // This is a weak heuristic to only perform expensive dictionary merging
-    // when it is guaranteed to yield at least some return over the naive
-    // approach used by MutableArrayData
-    let fallback = single_dictionary
-        || (total_values < total_keys && K::Native::from_usize(total_values).is_some());
-
-    if fallback {
-        return concat_fallback(arrays, Capacities::Array(total_keys));
+    let output_len = arrays.iter().map(|x| x.len()).sum();
+    if !should_merge_dictionary_values::<K>(arrays, output_len) {
+        return concat_fallback(arrays, Capacities::Array(output_len));
     }
 
     // Recompute dictionaries
@@ -96,11 +75,10 @@ where
         .map(|a| (as_dictionary_array::<K>(*a), None))
         .collect();
 
-    let merged = merge_dictionaries(&dictionaries)?;
+    let merged = merge_dictionary_values(&dictionaries)?;
 
     // Recompute keys
-    let capacity = dictionaries.iter().map(|(d, _)| d.len()).sum();
-    let mut keys = PrimitiveBuilder::<K>::with_capacity(capacity);
+    let mut keys = PrimitiveBuilder::<K>::with_capacity(output_len);
 
     for ((d, _), mapping) in dictionaries.iter().zip(merged.key_mappings) {
         for key in d.keys_iter() {
@@ -110,7 +88,7 @@ where
     let keys = keys.finish().into_data();
 
     // Sanity check
-    assert_eq!(keys.len(), total_keys);
+    assert_eq!(keys.len(), output_len);
 
     let builder = keys
         .into_builder()

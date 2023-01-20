@@ -23,6 +23,7 @@ use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
 use arrow_array::{Array, ArrayRef, DictionaryArray, GenericByteArray};
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::bit_iterator::BitIndexIterator;
+use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 
 /// A best effort interner that maintains a fixed number of buckets
@@ -76,11 +77,39 @@ pub struct MergedDictionaries<K: ArrowDictionaryKeyType> {
     pub values: ArrayRef,
 }
 
+/// A weak heuristic of whether to merge dictionary values that aims to only
+/// perform the expensive computation when is likely to yield at least
+/// some return over the naive approach used by MutableArrayData
+///
+/// `len` is the total length of the merged output
+pub fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
+    arrays: &[&dyn Array],
+    len: usize,
+) -> bool {
+    let first_array = &arrays[0].data();
+    let first_values = &first_array.child_data()[0];
+
+    let mut single_dictionary = true;
+    let mut total_values = first_values.len();
+    for a in arrays.iter().skip(1) {
+        let data = a.data();
+
+        let values = &data.child_data()[0];
+        total_values += values.len();
+        single_dictionary &= ArrayData::ptr_eq(values, first_values);
+    }
+
+    let overflow = K::Native::from_usize(total_values).is_none();
+    let values_exceed_length = total_values >= len;
+
+    !single_dictionary && (overflow || values_exceed_length)
+}
+
 /// Given an array of dictionaries and an optional row mask compute a values array
 /// containing referenced values, along with mappings from the [`DictionaryArray`]
 /// keys to the new keys within this values array. Best-effort will be made to ensure
 /// that the dictionary values are unique
-pub fn merge_dictionaries<K: ArrowDictionaryKeyType>(
+pub fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
     dictionaries: &[(&DictionaryArray<K>, Option<&[u8]>)],
 ) -> Result<MergedDictionaries<K>, ArrowError> {
     let mut num_values = 0;
@@ -189,7 +218,7 @@ fn masked_bytes<'a, T: ByteArrayType>(
 
 #[cfg(test)]
 mod tests {
-    use crate::dictionary::merge_dictionaries;
+    use crate::dictionary::merge_dictionary_values;
     use arrow_array::cast::{as_dictionary_array, as_string_array};
     use arrow_array::types::Int32Type;
     use arrow_array::{Array, DictionaryArray};
@@ -200,7 +229,7 @@ mod tests {
         let a =
             DictionaryArray::<Int32Type>::from_iter(["a", "b", "a", "b", "d", "c", "e"]);
         let b = DictionaryArray::<Int32Type>::from_iter(["c", "f", "c", "d", "a", "d"]);
-        let merged = merge_dictionaries(&[(&a, None), (&b, None)]).unwrap();
+        let merged = merge_dictionary_values(&[(&a, None), (&b, None)]).unwrap();
 
         let values = as_string_array(merged.values.as_ref());
         let actual: Vec<_> = values.iter().map(Option::unwrap).collect();
@@ -211,7 +240,7 @@ mod tests {
         assert_eq!(&merged.key_mappings[1], &[3, 5, 2, 0]);
 
         let a_slice = a.slice(1, 4);
-        let merged = merge_dictionaries(&[
+        let merged = merge_dictionary_values(&[
             (as_dictionary_array::<Int32Type>(a_slice.as_ref()), None),
             (&b, None),
         ])
@@ -227,7 +256,7 @@ mod tests {
 
         // Mask out only ["b", "b", "d"] from a
         let mask = Buffer::from_iter([false, true, false, true, true, false, false]);
-        let merged = merge_dictionaries(&[(&a, Some(&mask)), (&b, None)]).unwrap();
+        let merged = merge_dictionary_values(&[(&a, Some(&mask)), (&b, None)]).unwrap();
 
         let values = as_string_array(merged.values.as_ref());
         let actual: Vec<_> = values.iter().map(Option::unwrap).collect();
