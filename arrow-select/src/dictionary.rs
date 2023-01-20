@@ -69,13 +69,20 @@ impl<'a, V> Interner<'a, V> {
     }
 }
 
+pub struct MergedDictionaries<K: ArrowDictionaryKeyType> {
+    /// Provides `key_mappings[`array_idx`][`old_key`] -> new_key`
+    pub key_mappings: Vec<Vec<K::Native>>,
+    /// The new values
+    pub values: ArrayRef,
+}
+
 /// Given an array of dictionaries and an optional row mask compute a values array
 /// containing referenced values, along with mappings from the [`DictionaryArray`]
 /// keys to the new keys within this values array. Best-effort will be made to ensure
 /// that the dictionary values are unique
 pub fn merge_dictionaries<K: ArrowDictionaryKeyType>(
     dictionaries: &[(&DictionaryArray<K>, Option<&[u8]>)],
-) -> Result<(Vec<Vec<K::Native>>, ArrayRef), ArrowError> {
+) -> Result<MergedDictionaries<K>, ArrowError> {
     let mut num_values = 0;
 
     let mut values = Vec::with_capacity(dictionaries.len());
@@ -101,7 +108,7 @@ pub fn merge_dictionaries<K: ArrowDictionaryKeyType>(
     let mut indices = Vec::with_capacity(num_values);
 
     // Compute the mapping for each dictionary
-    let mappings = dictionaries
+    let key_mappings = dictionaries
         .iter()
         .enumerate()
         .zip(value_slices)
@@ -124,8 +131,10 @@ pub fn merge_dictionaries<K: ArrowDictionaryKeyType>(
         })
         .collect::<Result<Vec<_>, ArrowError>>()?;
 
-    let array = interleave(&values, &indices)?;
-    Ok((mappings, array))
+    Ok(MergedDictionaries {
+        key_mappings,
+        values: interleave(&values, &indices)?,
+    })
 }
 
 /// Return a mask identifying the values that are referenced by keys in `dictionary`
@@ -191,42 +200,41 @@ mod tests {
         let a =
             DictionaryArray::<Int32Type>::from_iter(["a", "b", "a", "b", "d", "c", "e"]);
         let b = DictionaryArray::<Int32Type>::from_iter(["c", "f", "c", "d", "a", "d"]);
-        let (mappings, combined) = merge_dictionaries(&[(&a, None), (&b, None)]).unwrap();
+        let merged = merge_dictionaries(&[(&a, None), (&b, None)]).unwrap();
 
-        let values = as_string_array(combined.as_ref());
+        let values = as_string_array(merged.values.as_ref());
         let actual: Vec<_> = values.iter().map(Option::unwrap).collect();
         assert_eq!(&actual, &["a", "b", "d", "c", "e", "f"]);
 
-        assert_eq!(mappings.len(), 2);
-        assert_eq!(&mappings[0], &[0, 1, 2, 3, 4]);
-        assert_eq!(&mappings[1], &[3, 5, 2, 0]);
+        assert_eq!(merged.key_mappings.len(), 2);
+        assert_eq!(&merged.key_mappings[0], &[0, 1, 2, 3, 4]);
+        assert_eq!(&merged.key_mappings[1], &[3, 5, 2, 0]);
 
         let a_slice = a.slice(1, 4);
-        let (mappings, combined) = merge_dictionaries(&[
+        let merged = merge_dictionaries(&[
             (as_dictionary_array::<Int32Type>(a_slice.as_ref()), None),
             (&b, None),
         ])
         .unwrap();
 
-        let values = as_string_array(combined.as_ref());
+        let values = as_string_array(merged.values.as_ref());
         let actual: Vec<_> = values.iter().map(Option::unwrap).collect();
         assert_eq!(&actual, &["a", "b", "d", "c", "f"]);
 
-        assert_eq!(mappings.len(), 2);
-        assert_eq!(&mappings[0], &[0, 1, 2, 0, 0]);
-        assert_eq!(&mappings[1], &[3, 4, 2, 0]);
+        assert_eq!(merged.key_mappings.len(), 2);
+        assert_eq!(&merged.key_mappings[0], &[0, 1, 2, 0, 0]);
+        assert_eq!(&merged.key_mappings[1], &[3, 4, 2, 0]);
 
         // Mask out only ["b", "b", "d"] from a
         let mask = Buffer::from_iter([false, true, false, true, true, false, false]);
-        let (mappings, combined) =
-            merge_dictionaries(&[(&a, Some(&mask)), (&b, None)]).unwrap();
+        let merged = merge_dictionaries(&[(&a, Some(&mask)), (&b, None)]).unwrap();
 
-        let values = as_string_array(combined.as_ref());
+        let values = as_string_array(merged.values.as_ref());
         let actual: Vec<_> = values.iter().map(Option::unwrap).collect();
         assert_eq!(&actual, &["b", "d", "c", "f", "a"]);
 
-        assert_eq!(mappings.len(), 2);
-        assert_eq!(&mappings[0], &[0, 0, 1, 0, 0]);
-        assert_eq!(&mappings[1], &[2, 3, 1, 4]);
+        assert_eq!(merged.key_mappings.len(), 2);
+        assert_eq!(&merged.key_mappings[0], &[0, 0, 1, 0, 0]);
+        assert_eq!(&merged.key_mappings[1], &[2, 3, 1, 4]);
     }
 }

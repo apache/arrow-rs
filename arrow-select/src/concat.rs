@@ -96,13 +96,13 @@ where
         .map(|a| (as_dictionary_array::<K>(*a), None))
         .collect();
 
-    let (mappings, values) = merge_dictionaries(&dictionaries)?;
+    let merged = merge_dictionaries(&dictionaries)?;
 
     // Recompute keys
     let capacity = dictionaries.iter().map(|(d, _)| d.len()).sum();
     let mut keys = PrimitiveBuilder::<K>::with_capacity(capacity);
 
-    for ((d, _), mapping) in dictionaries.iter().zip(mappings) {
+    for ((d, _), mapping) in dictionaries.iter().zip(merged.key_mappings) {
         for key in d.keys_iter() {
             keys.append_option(key.map(|x| mapping[x]));
         }
@@ -116,9 +116,9 @@ where
         .into_builder()
         .data_type(DataType::Dictionary(
             Box::new(K::DATA_TYPE),
-            Box::new(values.data_type().clone()),
+            Box::new(merged.values.data_type().clone()),
         ))
-        .child_data(vec![values.data().clone()]);
+        .child_data(vec![merged.values.data().clone()]);
 
     let data = unsafe { builder.build_unchecked() };
     Ok(Arc::new(DictionaryArray::<K>::from(data)))
