@@ -830,8 +830,9 @@ mod tests {
     use crate::format::BoundaryOrder;
 
     use crate::basic::{self, ColumnOrder};
+    use crate::data_type::AsBytes;
     use crate::data_type::private::ParquetValueType;
-    use crate::file::page_index::index::{ByteArrayIndex, Index, NativeIndex};
+    use crate::file::page_index::index::{Index, NativeIndex};
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
     use crate::util::bit_util::from_le_slice;
@@ -1363,8 +1364,8 @@ mod tests {
         let page0 = &index_in_pages[0];
         let min = page0.min.as_ref().unwrap();
         let max = page0.max.as_ref().unwrap();
-        assert_eq!("Hello", std::str::from_utf8(min.as_slice()).unwrap());
-        assert_eq!("today", std::str::from_utf8(max.as_slice()).unwrap());
+        assert_eq!("Hello", std::str::from_utf8(min.as_bytes()).unwrap());
+        assert_eq!("today", std::str::from_utf8(max.as_bytes()).unwrap());
 
         let offset_indexes = metadata.offset_indexes().unwrap();
         // only one row group
@@ -1502,7 +1503,7 @@ mod tests {
         //col9->date_string_col: BINARY UNCOMPRESSED DO:0 FPO:332847 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 01/01/09, max: 12/31/10, num_nulls: 0]
         assert!(!&page_indexes[0][8].is_sorted());
         if let Index::BYTE_ARRAY(index) = &page_indexes[0][8] {
-            check_bytes_page_index(
+            check_native_page_index(
                 index,
                 974,
                 get_row_group_min_max_bytes(row_group_metadata, 8),
@@ -1515,7 +1516,7 @@ mod tests {
         //col10->string_col: BINARY UNCOMPRESSED DO:0 FPO:444795 SZ:45298/45298/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
         assert!(&page_indexes[0][9].is_sorted());
         if let Index::BYTE_ARRAY(index) = &page_indexes[0][9] {
-            check_bytes_page_index(
+            check_native_page_index(
                 index,
                 352,
                 get_row_group_min_max_bytes(row_group_metadata, 9),
@@ -1572,20 +1573,6 @@ mod tests {
         row_group_index.indexes.iter().all(|x| {
             x.min.as_ref().unwrap() >= &from_le_slice::<T>(min_max.0)
                 && x.max.as_ref().unwrap() <= &from_le_slice::<T>(min_max.1)
-        });
-    }
-
-    fn check_bytes_page_index(
-        row_group_index: &ByteArrayIndex,
-        page_size: usize,
-        min_max: (&[u8], &[u8]),
-        boundary_order: BoundaryOrder,
-    ) {
-        assert_eq!(row_group_index.indexes.len(), page_size);
-        assert_eq!(row_group_index.boundary_order, boundary_order);
-        row_group_index.indexes.iter().all(|x| {
-            x.min.as_ref().unwrap().as_slice() >= min_max.0
-                && x.max.as_ref().unwrap().as_slice() <= min_max.1
         });
     }
 

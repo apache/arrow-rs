@@ -17,34 +17,34 @@
 
 use std::{cmp, mem::size_of};
 
-use crate::data_type::AsBytes;
+use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
+use crate::errors::{ParquetError, Result};
 use crate::util::bit_pack::{unpack16, unpack32, unpack64, unpack8};
 use crate::util::memory::ByteBufferPtr;
 
 #[inline]
 pub fn from_ne_slice<T: FromBytes>(bs: &[u8]) -> T {
-    let mut b = T::Buffer::default();
-    {
-        let b = b.as_mut();
-        let bs = &bs[..b.len()];
-        b.copy_from_slice(bs);
-    }
-    T::from_ne_bytes(b)
+    T::from_ne_bytes(T::buffer_from_slice(bs).unwrap())
 }
 
 #[inline]
 pub fn from_le_slice<T: FromBytes>(bs: &[u8]) -> T {
-    let mut b = T::Buffer::default();
-    {
-        let b = b.as_mut();
-        let bs = &bs[..b.len()];
-        b.copy_from_slice(bs);
-    }
-    T::from_le_bytes(b)
+    T::from_le_bytes(T::buffer_from_slice(bs).unwrap())
+}
+
+fn array_from_slice<const N: usize>(bs: &[u8]) -> Result<[u8; N]> {
+    bs.try_into().map_err(|_| {
+        general_err!(
+            "error converting value, expected {} bytes got {}",
+            N,
+            bs.len()
+        )
+    })
 }
 
 pub trait FromBytes: Sized {
     type Buffer: AsMut<[u8]> + Default;
+    fn buffer_from_slice(b: &[u8]) -> Result<Self::Buffer>;
     fn from_le_bytes(bs: Self::Buffer) -> Self;
     fn from_be_bytes(bs: Self::Buffer) -> Self;
     fn from_ne_bytes(bs: Self::Buffer) -> Self;
@@ -55,6 +55,9 @@ macro_rules! from_le_bytes {
         $(
         impl FromBytes for $ty {
             type Buffer = [u8; size_of::<Self>()];
+            fn buffer_from_slice(b: &[u8]) -> Result<Self::Buffer> {
+                array_from_slice(b)
+            }
             fn from_le_bytes(bs: Self::Buffer) -> Self {
                 <$ty>::from_le_bytes(bs)
             }
@@ -71,6 +74,10 @@ macro_rules! from_le_bytes {
 
 impl FromBytes for bool {
     type Buffer = [u8; 1];
+
+    fn buffer_from_slice(b: &[u8]) -> Result<Self::Buffer> {
+        array_from_slice(b)
+    }
     fn from_le_bytes(bs: Self::Buffer) -> Self {
         Self::from_ne_bytes(bs)
     }
@@ -78,11 +85,71 @@ impl FromBytes for bool {
         Self::from_ne_bytes(bs)
     }
     fn from_ne_bytes(bs: Self::Buffer) -> Self {
-        match bs[0] {
-            0 => false,
-            1 => true,
-            _ => panic!("Invalid byte when reading bool"),
-        }
+        bs[0] != 0
+    }
+}
+
+impl FromBytes for Int96 {
+    type Buffer = [u8; 12];
+
+    fn buffer_from_slice(b: &[u8]) -> Result<Self::Buffer> {
+        array_from_slice(b)
+    }
+
+    fn from_le_bytes(bs: Self::Buffer) -> Self {
+        let mut i = Int96::new();
+        i.set_data(
+            from_le_slice(&bs[0..4]),
+            from_le_slice(&bs[4..8]),
+            from_le_slice(&bs[8..12]),
+        );
+        i
+    }
+    fn from_be_bytes(_bs: Self::Buffer) -> Self {
+        unimplemented!()
+    }
+    fn from_ne_bytes(bs: Self::Buffer) -> Self {
+        let mut i = Int96::new();
+        i.set_data(
+            from_ne_slice(&bs[0..4]),
+            from_ne_slice(&bs[4..8]),
+            from_ne_slice(&bs[8..12]),
+        );
+        i
+    }
+}
+
+impl FromBytes for ByteArray {
+    type Buffer = Vec<u8>;
+
+    fn buffer_from_slice(b: &[u8]) -> Result<Self::Buffer> {
+        Ok(b.to_vec())
+    }
+    fn from_le_bytes(bs: Self::Buffer) -> Self {
+        bs.into()
+    }
+    fn from_be_bytes(_bs: Self::Buffer) -> Self {
+        unreachable!()
+    }
+    fn from_ne_bytes(bs: Self::Buffer) -> Self {
+        bs.into()
+    }
+}
+
+impl FromBytes for FixedLenByteArray {
+    type Buffer = Vec<u8>;
+
+    fn buffer_from_slice(b: &[u8]) -> Result<Self::Buffer> {
+        Ok(b.to_vec())
+    }
+    fn from_le_bytes(bs: Self::Buffer) -> Self {
+        bs.into()
+    }
+    fn from_be_bytes(_bs: Self::Buffer) -> Self {
+        unreachable!()
+    }
+    fn from_ne_bytes(bs: Self::Buffer) -> Self {
+        bs.into()
     }
 }
 
