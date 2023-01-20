@@ -127,7 +127,7 @@ fn compute_row_counts(offset_index: &[PageLocation], rows: i64) -> Vec<i64> {
         out.push(o.first_row_index - last);
         last = o.first_row_index;
     }
-    out.push(rows);
+    out.push(rows - last);
     out
 }
 
