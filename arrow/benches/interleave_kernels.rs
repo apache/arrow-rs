@@ -37,14 +37,21 @@ fn do_bench(
     base: &dyn Array,
     slices: &[Range<usize>],
 ) {
-    let mut rng = seedable_rng();
-
     let arrays: Vec<_> = slices
         .iter()
         .map(|r| base.slice(r.start, r.end - r.start))
         .collect();
     let values: Vec<_> = arrays.iter().map(|x| x.as_ref()).collect();
+    bench_values(
+        c,
+        &format!("interleave {} {} {:?}", prefix, len, slices),
+        len,
+        &values,
+    );
+}
 
+fn bench_values(c: &mut Criterion, name: &str, len: usize, values: &[&dyn Array]) {
+    let mut rng = seedable_rng();
     let indices: Vec<_> = (0..len)
         .map(|_| {
             let array_idx = rng.gen_range(0..values.len());
@@ -53,10 +60,9 @@ fn do_bench(
         })
         .collect();
 
-    c.bench_function(
-        &format!("interleave {} {} {:?}", prefix, len, slices),
-        |b| b.iter(|| criterion::black_box(interleave(&values, &indices).unwrap())),
-    );
+    c.bench_function(name, |b| {
+        b.iter(|| criterion::black_box(interleave(&values, &indices).unwrap()))
+    });
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -64,12 +70,20 @@ fn add_benchmark(c: &mut Criterion) {
     let i32_opt = create_primitive_array::<Int32Type>(1024, 0.5);
     let string = create_string_array_with_len::<i32>(1024, 0., 20);
     let string_opt = create_string_array_with_len::<i32>(1024, 0.5, 20);
+    let values = create_string_array_with_len::<i32>(10, 0.0, 20);
+    let dict = create_dict_from_values::<Int32Type>(1024, 0.0, &values);
+
+    let values = create_string_array_with_len::<i32>(1024, 0.0, 20);
+    let sparse_dict =
+        create_sparse_dict_from_values::<Int32Type>(1024, 0.0, &values, 10..20);
 
     let cases: &[(&str, &dyn Array)] = &[
         ("i32(0.0)", &i32),
         ("i32(0.5)", &i32_opt),
         ("str(20, 0.0)", &string),
         ("str(20, 0.5)", &string_opt),
+        ("dict(20, 0.0)", &dict),
+        ("dict_sparse(20, 0.0)", &sparse_dict),
     ];
 
     for (prefix, base) in cases {
@@ -83,6 +97,15 @@ fn add_benchmark(c: &mut Criterion) {
         for (len, slice) in slices {
             do_bench(c, prefix, *len, *base, slice);
         }
+    }
+
+    for len in [100, 1024, 2048] {
+        bench_values(
+            c,
+            &format!("interleave dict_distinct {len}"),
+            100,
+            &[&dict, &sparse_dict],
+        );
     }
 }
 

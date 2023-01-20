@@ -38,7 +38,6 @@ use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
-use num::Integer;
 use std::sync::Arc;
 
 fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
@@ -59,11 +58,9 @@ fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
     Capacities::Binary(item_capacity, Some(bytes_capacity))
 }
 
-fn concat_dictionaries<K>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError>
-where
-    K: ArrowDictionaryKeyType,
-    K::Native: Integer,
-{
+fn concat_dictionaries<K: ArrowDictionaryKeyType>(
+    arrays: &[&dyn Array],
+) -> Result<ArrayRef, ArrowError> {
     let output_len = arrays.iter().map(|x| x.len()).sum();
     if !should_merge_dictionary_values::<K>(arrays, output_len) {
         return concat_fallback(arrays, Capacities::Array(output_len));
@@ -132,7 +129,7 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         DataType::LargeUtf8 => binary_capacity::<LargeUtf8Type>(arrays),
         DataType::Binary => binary_capacity::<BinaryType>(arrays),
         DataType::LargeBinary => binary_capacity::<LargeBinaryType>(arrays),
-        DataType::Dictionary(k, v) if v.is_byte_array() => downcast_integer! {
+        DataType::Dictionary(k, _) => downcast_integer! {
             k.as_ref() => (dict_helper, arrays),
             _ => unreachable!("illegal dictionary key type {k}")
         },

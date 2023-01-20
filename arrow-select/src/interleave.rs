@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
+use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
+use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
+use arrow_array::cast::as_dictionary_array;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
@@ -27,6 +29,12 @@ use std::sync::Arc;
 macro_rules! primitive_helper {
     ($t:ty, $values:ident, $indices:ident, $data_type:ident) => {
         interleave_primitive::<$t>($values, $indices, $data_type)
+    };
+}
+
+macro_rules! dict_helper {
+    ($t:ty, $values:expr, $indices:expr) => {
+        Ok(Arc::new(interleave_dictionaries::<$t>($values, $indices)?) as _)
     };
 }
 
@@ -87,6 +95,10 @@ pub fn interleave(
         DataType::LargeUtf8 => interleave_bytes::<LargeUtf8Type>(values, indices),
         DataType::Binary => interleave_bytes::<BinaryType>(values, indices),
         DataType::LargeBinary => interleave_bytes::<LargeBinaryType>(values, indices),
+        DataType::Dictionary(k, _) => downcast_integer! {
+            k.as_ref() => (dict_helper, values, indices),
+            _ => unreachable!("illegal dictionary key type {k}")
+        },
         _ => interleave_fallback(values, indices)
     }
 }
@@ -188,6 +200,59 @@ fn interleave_bytes<T: ByteArrayType>(
     Ok(Arc::new(GenericByteArray::<T>::from(data)))
 }
 
+fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
+    arrays: &[&dyn Array],
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef, ArrowError> {
+    if !should_merge_dictionary_values::<K>(arrays, indices.len()) {
+        return interleave_fallback(arrays, indices);
+    }
+
+    let dictionaries: Vec<_> = arrays
+        .iter()
+        .enumerate()
+        .map(|(a_idx, a)| {
+            let dictionary = as_dictionary_array::<K>(*a);
+            let mut key_mask = BooleanBufferBuilder::new_from_buffer(
+                MutableBuffer::new_null(dictionary.len()),
+                dictionary.len(),
+            );
+
+            for (_, key_idx) in indices.iter().filter(|(a, _)| *a == a_idx) {
+                key_mask.set_bit(*key_idx, true);
+            }
+            (dictionary, Some(key_mask.finish()))
+        })
+        .collect();
+
+    let merged = merge_dictionary_values(&dictionaries)?;
+
+    // Recompute keys
+    let mut keys = PrimitiveBuilder::<K>::with_capacity(indices.len());
+    for (a, b) in indices {
+        let old_keys: &PrimitiveArray<K> = &dictionaries[*a].0.keys();
+        match old_keys.is_valid(*b) {
+            true => {
+                let old_key = old_keys.values()[*b];
+                keys.append_value(merged.key_mappings[*a][old_key.as_usize()])
+            }
+            false => keys.append_null(),
+        }
+    }
+    let keys = keys.finish().into_data();
+
+    let builder = keys
+        .into_builder()
+        .data_type(DataType::Dictionary(
+            Box::new(K::DATA_TYPE),
+            Box::new(merged.values.data_type().clone()),
+        ))
+        .child_data(vec![merged.values.data().clone()]);
+
+    let data = unsafe { builder.build_unchecked() };
+    Ok(Arc::new(DictionaryArray::<K>::from(data)))
+}
+
 /// Fallback implementation of interleave using [`MutableArrayData`]
 fn interleave_fallback(
     values: &[&dyn Array],
@@ -279,6 +344,32 @@ mod tests {
                 Some("b")
             ]
         )
+    }
+
+    #[test]
+    fn test_interleave_dictionary() {
+        let a = DictionaryArray::<Int32Type>::from_iter(["a", "b", "c", "a", "b"]);
+        let b = DictionaryArray::<Int32Type>::from_iter(["a", "c", "a", "c", "a"]);
+
+        // Should not recompute dictionary
+        let values =
+            interleave(&[&a, &b], &[(0, 2), (0, 2), (0, 2), (1, 0), (1, 1), (0, 1)])
+                .unwrap();
+        let v = as_dictionary_array::<Int32Type>(values.as_ref());
+        assert_eq!(v.values().len(), 5);
+
+        let vc = v.downcast_dict::<StringArray>().unwrap();
+        let collected: Vec<_> = vc.into_iter().map(Option::unwrap).collect();
+        assert_eq!(&collected, &["c", "c", "c", "a", "c", "b"]);
+
+        // Should recompute dictionary
+        let values = interleave(&[&a, &b], &[(0, 2), (0, 2), (1, 1)]).unwrap();
+        let v = as_dictionary_array::<Int32Type>(values.as_ref());
+        assert_eq!(v.values().len(), 1);
+
+        let vc = v.downcast_dict::<StringArray>().unwrap();
+        let collected: Vec<_> = vc.into_iter().map(Option::unwrap).collect();
+        assert_eq!(&collected, &["c", "c", "c"]);
     }
 
     #[test]

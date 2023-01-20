@@ -101,8 +101,9 @@ pub fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
 
     let overflow = K::Native::from_usize(total_values).is_none();
     let values_exceed_length = total_values >= len;
+    let is_supported = first_values.data_type().is_byte_array();
 
-    !single_dictionary && (overflow || values_exceed_length)
+    !single_dictionary && is_supported && (overflow || values_exceed_length)
 }
 
 /// Given an array of dictionaries and an optional row mask compute a values array
@@ -110,7 +111,7 @@ pub fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
 /// keys to the new keys within this values array. Best-effort will be made to ensure
 /// that the dictionary values are unique
 pub fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
-    dictionaries: &[(&DictionaryArray<K>, Option<&[u8]>)],
+    dictionaries: &[(&DictionaryArray<K>, Option<Buffer>)],
 ) -> Result<MergedDictionaries<K>, ArrowError> {
     let mut num_values = 0;
 
@@ -256,7 +257,7 @@ mod tests {
 
         // Mask out only ["b", "b", "d"] from a
         let mask = Buffer::from_iter([false, true, false, true, true, false, false]);
-        let merged = merge_dictionary_values(&[(&a, Some(&mask)), (&b, None)]).unwrap();
+        let merged = merge_dictionary_values(&[(&a, Some(mask)), (&b, None)]).unwrap();
 
         let values = as_string_array(merged.values.as_ref());
         let actual: Vec<_> = values.iter().map(Option::unwrap).collect();
