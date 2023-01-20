@@ -1364,8 +1364,8 @@ mod tests {
         let page0 = &index_in_pages[0];
         let min = page0.min.as_ref().unwrap();
         let max = page0.max.as_ref().unwrap();
-        assert_eq!("Hello", std::str::from_utf8(min.as_bytes()).unwrap());
-        assert_eq!("today", std::str::from_utf8(max.as_bytes()).unwrap());
+        assert_eq!(b"Hello", min.as_bytes());
+        assert_eq!(b"today", max.as_bytes());
 
         let offset_indexes = metadata.offset_indexes().unwrap();
         // only one row group
