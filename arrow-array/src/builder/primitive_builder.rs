@@ -591,4 +591,13 @@ mod tests {
     fn test_invalid_with_data_type() {
         Int32Builder::new().with_data_type(DataType::Int64);
     }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = PrimitiveBuilder::<Int16Type>::new();
+        builder.extend([1, 2, 3, 5, 2, 4, 4].into_iter().map(Some));
+        builder.extend([2, 4, 6, 2].into_iter().map(Some));
+        let array = builder.finish();
+        assert_eq!(array.values(), &[1, 2, 3, 5, 2, 4, 4, 2, 4, 6, 2]);
+    }
 }

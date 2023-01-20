@@ -275,7 +275,7 @@ mod tests {
     use crate::array::Array;
     use crate::array::UInt32Array;
     use crate::array::UInt8Array;
-    use crate::types::{UInt32Type, UInt8Type};
+    use crate::types::{Int32Type, UInt32Type, UInt8Type};
 
     #[test]
     fn test_primitive_dictionary_builder() {
@@ -301,6 +301,19 @@ mod tests {
         assert!(!array.is_null(2));
 
         assert_eq!(avs, &[12345678, 22345678]);
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([1, 2, 3, 1, 2, 3, 1, 2, 3].into_iter().map(Some));
+        builder.extend([4, 5, 1, 3, 1].into_iter().map(Some));
+        let dict = builder.finish();
+        assert_eq!(
+            dict.keys().values(),
+            &[0, 1, 2, 0, 1, 2, 0, 1, 2, 3, 4, 0, 2, 0]
+        );
+        assert_eq!(dict.values().len(), 5);
     }
 
     #[test]

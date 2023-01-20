@@ -430,4 +430,14 @@ mod tests {
     fn test_large_string_array_builder_finish_cloned() {
         _test_generic_string_array_builder_finish_cloned::<i64>()
     }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = GenericStringBuilder::<i32>::new();
+        builder.extend(["a", "b", "c", "", "a", "b", "c"].into_iter().map(Some));
+        builder.extend(["d", "cupcakes", "hello"].into_iter().map(Some));
+        let array = builder.finish();
+        assert_eq!(array.value_offsets(), &[0, 1, 2, 3, 3, 4, 5, 6, 7, 15, 20]);
+        assert_eq!(array.value_data(), b"abcabcdcupcakeshello");
+    }
 }

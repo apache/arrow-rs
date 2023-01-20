@@ -438,7 +438,7 @@ mod tests {
 
     use crate::array::Array;
     use crate::array::Int8Array;
-    use crate::types::{Int16Type, Int8Type};
+    use crate::types::{Int16Type, Int32Type, Int8Type, Utf8Type};
     use crate::{BinaryArray, StringArray};
 
     fn test_bytes_dictionary_builder<T>(values: Vec<&T::Native>)
@@ -654,5 +654,15 @@ mod tests {
             BinaryArray::from(values),
             vec![b"abc", b"def"],
         );
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
+        builder.extend(["a", "b", "c", "a", "b", "c"].into_iter().map(Some));
+        builder.extend(["c", "d", "a"].into_iter().map(Some));
+        let dict = builder.finish();
+        assert_eq!(dict.keys().values(), &[0, 1, 2, 0, 1, 2, 2, 3, 0]);
+        assert_eq!(dict.values().len(), 4);
     }
 }
