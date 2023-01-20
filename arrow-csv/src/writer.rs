@@ -724,7 +724,17 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         let mut writer = Writer::new(&mut file);
         let batches = vec![&batch, &batch];
         for batch in batches {
-            writer.write(batch).map_err(|e| { dbg!(e.to_string()); assert!(e.to_string().ends_with(invalid_cast_error("Date64".to_owned(), 1, 1).to_string().as_str()))}).unwrap_err();
+            writer
+                .write(batch)
+                .map_err(|e| {
+                    dbg!(e.to_string());
+                    assert!(e.to_string().ends_with(
+                        invalid_cast_error("Date64".to_owned(), 1, 1)
+                            .to_string()
+                            .as_str()
+                    ))
+                })
+                .unwrap_err();
         }
         drop(writer);
     }
