@@ -554,8 +554,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
             .has_headers(false)
             .with_delimiter(b'|')
             .with_null("NULL".to_string())
-            .with_time_format("%r".to_string())
-            .with_rfc3339(true);
+            .with_time_format("%r".to_string());
         let mut writer = builder.build(&mut file);
         let batches = vec![&batch];
         for batch in batches {
@@ -569,7 +568,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         file.read_to_end(&mut buffer).unwrap();
 
         assert_eq!(
-            "Lorem ipsum dolor sit amet|123.564532|3|true|00:20:34\nconsectetur adipiscing elit|NULL|2|false|06:51:20\nsed do eiusmod tempor|-556132.25|1|NULL|23:46:03\n"
+            "Lorem ipsum dolor sit amet|123.564532|3|true|12:20:34 AM\nconsectetur adipiscing elit|NULL|2|false|06:51:20 AM\nsed do eiusmod tempor|-556132.25|1|NULL|11:46:03 PM\n"
             .to_string(),
             String::from_utf8(buffer).unwrap()
         );

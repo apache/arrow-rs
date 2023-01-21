@@ -28,6 +28,7 @@ use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
 use chrono::prelude::SecondsFormat;
+use chrono::{DateTime, Utc};
 
 macro_rules! make_string {
     ($array_type:ty, $column: ident, $row: ident) => {{
@@ -198,28 +199,25 @@ macro_rules! handle_string_time {
 }
 
 macro_rules! make_string_datetime {
-    ($array_type:ty, $column: ident, $row: ident) => {{
-        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
-
-        Ok(array
-            .value_as_datetime($row)
-            .map(|d| format!("{:?}", d))
-            .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
-    }};
-}
-
-macro_rules! make_string_datetime_with_tz {
     ($array_type:ty, $tz_string: ident, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
-        let s = match $tz_string.parse::<Tz>() {
-            Ok(tz) => array
-                .value_as_datetime_with_tz($row, tz)
-                .map(|d| format!("{}", d.to_rfc3339_opts(SecondsFormat::AutoSi, true)))
-                .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()),
-            Err(_) => array
+        let s = match $tz_string {
+            Some(tz_string) => match tz_string.parse::<Tz>() {
+                Ok(tz) => array
+                    .value_as_datetime_with_tz($row, tz)
+                    .map(|d| {
+                        format!("{}", d.to_rfc3339_opts(SecondsFormat::AutoSi, true))
+                    })
+                    .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()),
+                Err(_) => array
+                    .value_as_datetime($row)
+                    .map(|d| format!("{:?} (Unknown Time Zone '{}')", d, tz_string))
+                    .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()),
+            },
+            None => array
                 .value_as_datetime($row)
-                .map(|d| format!("{:?} (Unknown Time Zone '{}')", d, $tz_string))
+                .map(|d| format!("{:?}", d))
                 .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()),
         };
 
@@ -228,28 +226,39 @@ macro_rules! make_string_datetime_with_tz {
 }
 
 macro_rules! make_string_datetime_with_format {
-    ($array_type:ty, $format: ident, $column: ident, $row: ident) => {{
+    ($array_type:ty, $format: ident, $tz_string: ident, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
+        let datetime = array.value_as_datetime($row);
 
-        Ok(array
-            .value_as_datetime($row)
-            .map(|d| d.format($format).to_string())
-            .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
+        let s = match $tz_string {
+            Some(tz_string) => match tz_string.parse::<Tz>() {
+                Ok(tz) => {
+                    let utc_time = DateTime::<Utc>::from_utc(datetime.unwrap(), Utc);
+                    let local_time = utc_time.with_timezone(&tz);
+                    local_time.format($format).to_string()
+                }
+                Err(_) => datetime
+                    .map(|d| format!("{:?} (Unknown Time Zone '{}')", d, tz_string))
+                    .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()),
+            },
+            None => datetime.unwrap().format($format).to_string(),
+        };
+
+        Ok(s)
     }};
 }
 
 macro_rules! handle_string_datetime {
     ($array_type:ty, $format: ident, $tz_string: ident, $column: ident, $row: ident) => {
-        match $tz_string {
-            Some(tz_string) => {
-                make_string_datetime_with_tz!($array_type, tz_string, $column, $row)
-            }
-            None => match $format {
-                Some(format) => {
-                    make_string_datetime_with_format!($array_type, format, $column, $row)
-                }
-                None => make_string_datetime!($array_type, $column, $row),
-            },
+        match $format {
+            Some(format) => make_string_datetime_with_format!(
+                $array_type,
+                format,
+                $tz_string,
+                $column,
+                $row
+            ),
+            None => make_string_datetime!($array_type, $tz_string, $column, $row),
         }
     };
 }
