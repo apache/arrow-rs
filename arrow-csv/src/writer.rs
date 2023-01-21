@@ -573,4 +573,57 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
             String::from_utf8(buffer).unwrap()
         );
     }
+
+    #[test]
+    fn test_write_csv_using_rfc3339() {
+        let schema = Schema::new(vec![
+            Field::new(
+                "c1",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".to_string())),
+                true,
+            ),
+            Field::new("c2", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+            Field::new("c3", DataType::Date32, false),
+            Field::new("c4", DataType::Time32(TimeUnit::Second), false),
+        ]);
+
+        let c1 = TimestampMillisecondArray::from(vec![
+            Some(1555584887378),
+            Some(1635577147000),
+        ])
+        .with_timezone("+00:00".to_string());
+        let c2 = TimestampMillisecondArray::from(vec![
+            Some(1555584887378),
+            Some(1635577147000),
+        ]);
+        let c3 = Date32Array::from(vec![3, 2]);
+        let c4 = Time32SecondArray::from(vec![1234, 24680]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(c1), Arc::new(c2), Arc::new(c3), Arc::new(c4)],
+        )
+        .unwrap();
+
+        let mut file = tempfile::tempfile().unwrap();
+
+        let builder = WriterBuilder::new().with_rfc3339(true);
+        let mut writer = builder.build(&mut file);
+        let batches = vec![&batch];
+        for batch in batches {
+            writer.write(batch).unwrap();
+        }
+        drop(writer);
+
+        file.rewind().unwrap();
+        let mut buffer: Vec<u8> = vec![];
+        file.read_to_end(&mut buffer).unwrap();
+
+        assert_eq!(
+            "c1,c2,c3,c4
+2019-04-18T10:54:47.378Z,2019-04-18T10:54:47.378,1970-01-04,00:20:34
+2021-10-30T06:59:07Z,2021-10-30T06:59:07,1970-01-03,06:51:20\n",
+            String::from_utf8(buffer).unwrap()
+        );
+    }
 }
