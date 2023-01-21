@@ -467,3 +467,65 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
             .await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::mock_server::MockServer;
+    use hyper::{Body, Response};
+    use reqwest::{Client, Method};
+
+    #[tokio::test]
+    async fn test_managed_identity() {
+        let server = MockServer::new();
+
+        std::env::set_var(MSI_SECRET_ENV_KEY, "env-secret");
+
+        let endpoint = server.url();
+        let client = Client::new();
+        let retry_config = RetryConfig::default();
+
+        // Test IMDS
+        server.push_fn(|req| {
+            assert_eq!(req.uri().path(), "/metadata/identity/oauth2/token");
+            assert!(req.uri().query().unwrap().contains("client_id=client_id"));
+            assert_eq!(req.method(), &Method::GET);
+            let t = req
+                .headers()
+                .get("x-identity-header")
+                .unwrap()
+                .to_str()
+                .unwrap();
+            assert_eq!(t, "env-secret");
+            let t = req.headers().get("metadata").unwrap().to_str().unwrap();
+            assert_eq!(t, "true");
+            Response::new(Body::from(
+                r#"
+            {
+                "access_token": "TOKEN",
+                "refresh_token": "",
+                "expires_in": "3599",
+                "expires_on": "1506484173",
+                "not_before": "1506480273",
+                "resource": "https://management.azure.com/",
+                "token_type": "Bearer"
+              }
+            "#,
+            ))
+        });
+
+        let credential = ImdsManagedIdentityOAuthProvider::new(
+            Some("client_id".into()),
+            None,
+            None,
+            Some(format!("{}/metadata/identity/oauth2/token", endpoint)),
+        );
+
+        let token = credential
+            .fetch_token(&client, &retry_config)
+            .await
+            .unwrap();
+
+        assert_eq!(&token, "TOKEN");
+    }
+}
