@@ -180,41 +180,57 @@ impl<W: Write> Writer<W> {
                 DataType::Boolean => array_value_to_string(col, row_index)?.to_string(),
                 DataType::Utf8 => array_value_to_string(col, row_index)?.to_string(),
                 DataType::LargeUtf8 => array_value_to_string(col, row_index)?.to_string(),
-                DataType::Date32 => {
-                    datetime_array_value_to_string(col, row_index, &self.date_format)?
-                        .to_string()
-                }
-                DataType::Date64 => {
-                    datetime_array_value_to_string(col, row_index, &self.datetime_format)?
-                        .to_string()
-                }
-                DataType::Time32(TimeUnit::Second) => {
-                    datetime_array_value_to_string(col, row_index, &self.time_format)?
-                        .to_string()
-                }
+                DataType::Date32 => datetime_array_value_to_string(
+                    col,
+                    row_index,
+                    self.date_format.as_deref(),
+                )?
+                .to_string(),
+                DataType::Date64 => datetime_array_value_to_string(
+                    col,
+                    row_index,
+                    self.datetime_format.as_deref(),
+                )?
+                .to_string(),
+                DataType::Time32(TimeUnit::Second) => datetime_array_value_to_string(
+                    col,
+                    row_index,
+                    self.time_format.as_deref(),
+                )?
+                .to_string(),
                 DataType::Time32(TimeUnit::Millisecond) => {
-                    datetime_array_value_to_string(col, row_index, &self.time_format)?
-                        .to_string()
+                    datetime_array_value_to_string(
+                        col,
+                        row_index,
+                        self.time_format.as_deref(),
+                    )?
+                    .to_string()
                 }
                 DataType::Time64(TimeUnit::Microsecond) => {
-                    datetime_array_value_to_string(col, row_index, &self.time_format)?
-                        .to_string()
+                    datetime_array_value_to_string(
+                        col,
+                        row_index,
+                        self.time_format.as_deref(),
+                    )?
+                    .to_string()
                 }
-                DataType::Time64(TimeUnit::Nanosecond) => {
-                    datetime_array_value_to_string(col, row_index, &self.time_format)?
-                        .to_string()
-                }
+                DataType::Time64(TimeUnit::Nanosecond) => datetime_array_value_to_string(
+                    col,
+                    row_index,
+                    self.time_format.as_deref(),
+                )?
+                .to_string(),
                 DataType::Timestamp(_, time_zone) => match time_zone {
                     Some(_tz) => datetime_array_value_to_string(
                         col,
                         row_index,
-                        &self.timestamp_tz_format,
+                        self.timestamp_tz_format.as_deref(),
                     )?
                     .to_string(),
                     None => datetime_array_value_to_string(
                         col,
                         row_index,
-                        &self.timestamp_format,
+                        self.timestamp_format.as_deref(),
                     )?
                     .to_string(),
                 },
@@ -295,8 +311,6 @@ pub struct WriterBuilder {
     time_format: Option<String>,
     /// Optional value to represent null
     null_value: Option<String>,
-    /// Whether to use RFC3339 format for timestamps. Defaults to `false`
-    use_rfc3339: bool,
 }
 
 impl Default for WriterBuilder {
@@ -310,7 +324,6 @@ impl Default for WriterBuilder {
             timestamp_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
             timestamp_tz_format: Some(DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
             null_value: Some(DEFAULT_NULL_VALUE.to_string()),
-            use_rfc3339: false,
         }
     }
 }
@@ -382,9 +395,16 @@ impl WriterBuilder {
         self
     }
 
-    /// Whether to use RFC3339 format for date/time/timestamps
+    /// Use RFC3339 format for date/time/timestamps by clearing all
+    /// date/time specific formats.
     pub fn with_rfc3339(mut self, use_rfc3339: bool) -> Self {
-        self.use_rfc3339 = use_rfc3339;
+        if use_rfc3339 {
+            self.date_format = None;
+            self.datetime_format = None;
+            self.time_format = None;
+            self.timestamp_format = None;
+            self.timestamp_tz_format = None;
+        }
         self
     }
 
@@ -393,34 +413,18 @@ impl WriterBuilder {
         let delimiter = self.delimiter.unwrap_or(b',');
         let mut builder = csv::WriterBuilder::new();
         let writer = builder.delimiter(delimiter).from_writer(writer);
-        if self.use_rfc3339 {
-            Writer {
-                writer,
-                has_headers: self.has_headers,
-                date_format: None,
-                datetime_format: None,
-                time_format: None,
-                timestamp_format: None,
-                timestamp_tz_format: None,
-                beginning: true,
-                null_value: self
-                    .null_value
-                    .unwrap_or_else(|| DEFAULT_NULL_VALUE.to_string()),
-            }
-        } else {
-            Writer {
-                writer,
-                has_headers: self.has_headers,
-                date_format: self.date_format,
-                datetime_format: self.datetime_format,
-                time_format: self.time_format,
-                timestamp_format: self.timestamp_format,
-                timestamp_tz_format: self.timestamp_tz_format,
-                beginning: true,
-                null_value: self
-                    .null_value
-                    .unwrap_or_else(|| DEFAULT_NULL_VALUE.to_string()),
-            }
+        Writer {
+            writer,
+            has_headers: self.has_headers,
+            date_format: self.date_format,
+            datetime_format: self.datetime_format,
+            time_format: self.time_format,
+            timestamp_format: self.timestamp_format,
+            timestamp_tz_format: self.timestamp_tz_format,
+            beginning: true,
+            null_value: self
+                .null_value
+                .unwrap_or_else(|| DEFAULT_NULL_VALUE.to_string()),
         }
     }
 }
