@@ -399,6 +399,7 @@ pub struct MicrosoftAzureBuilder {
     use_managed_identity: bool,
     object_id: Option<String>,
     msi_resource_id: Option<String>,
+    federated_token_file: Option<String>,
     retry_config: RetryConfig,
     client_options: ClientOptions,
 }
@@ -532,6 +533,13 @@ pub enum AzureConfigKey {
     /// - `azure_msi_resource_id`
     /// - `msi_resource_id`
     MsiResourceId,
+
+    /// File containing token for Azure AD workload identity federation
+    ///
+    /// Supported keys:
+    /// - `azure_federated_token_file`
+    /// - `federated_token_file`
+    FederatedTokenFile,
 }
 
 impl AsRef<str> for AzureConfigKey {
@@ -549,6 +557,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::UseManagedIdentity => "azure_use_managed_identity",
             Self::ObjectId => "azure_object_id",
             Self::MsiResourceId => "azure_msi_resource_id",
+            Self::FederatedTokenFile => "azure_federated_token_file",
         }
     }
 }
@@ -589,6 +598,9 @@ impl FromStr for AzureConfigKey {
             | "msi_endpoint" => Ok(Self::MsiEndpoint),
             "azure_object_id" | "object_id" => Ok(Self::ObjectId),
             "azure_msi_resource_id" | "msi_resource_id" => Ok(Self::MsiResourceId),
+            "azure_federated_token_file" | "federated_token_file" => {
+                Ok(Self::FederatedTokenFile)
+            }
             "azure_use_managed_identity" | "use_managed_identity" => {
                 Ok(Self::UseManagedIdentity)
             }
@@ -703,6 +715,9 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::MsiEndpoint => self.msi_endpoint = Some(value.into()),
             AzureConfigKey::ObjectId => self.object_id = Some(value.into()),
             AzureConfigKey::MsiResourceId => self.msi_resource_id = Some(value.into()),
+            AzureConfigKey::FederatedTokenFile => {
+                self.federated_token_file = Some(value.into())
+            }
             AzureConfigKey::UseManagedIdentity => {
                 self.use_managed_identity = str_is_truthy(&value.into())
             }
@@ -805,6 +820,24 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// Sets the client id for use in client secret or k8s federated credential flow
+    pub fn with_client_id(mut self, client_id: impl Into<String>) -> Self {
+        self.client_id = Some(client_id.into());
+        self
+    }
+
+    /// Sets the client secret for use in client secret flow
+    pub fn with_client_secret(mut self, client_secret: impl Into<String>) -> Self {
+        self.client_secret = Some(client_secret.into());
+        self
+    }
+
+    /// Sets the tenant id for use in client secret or k8s federated credential flow
+    pub fn with_tenant_id(mut self, tenant_id: impl Into<String>) -> Self {
+        self.tenant_id = Some(tenant_id.into());
+        self
+    }
+
     /// Set query pairs appended to the url for shared access signature authorization
     pub fn with_sas_authorization(
         mut self,
@@ -871,6 +904,17 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// Sets a file path for acquiring azure federated identity token in k8s
+    ///
+    /// requires `client_id` and `tenant_id` to be set
+    pub fn with_federated_token_file(
+        mut self,
+        federated_token_file: impl Into<String>,
+    ) -> Self {
+        self.federated_token_file = Some(federated_token_file.into());
+        self
+    }
+
     /// Configure a connection to container with given name on Microsoft Azure
     /// Blob store.
     pub fn build(mut self) -> Result<MicrosoftAzure> {
@@ -913,8 +957,20 @@ impl MicrosoftAzureBuilder {
                 Ok(credential::CredentialProvider::TokenCredential(Box::new(
                     msi_credential,
                 )))
+            } else if let (Some(client_id), Some(tenant_id), Some(federated_token_file)) =
+                (&self.client_id, &self.tenant_id, self.federated_token_file)
+            {
+                let client_credential = credential::WorkloadIdentityOAuthProvider::new(
+                    client_id,
+                    federated_token_file,
+                    tenant_id,
+                    self.authority_host,
+                );
+                Ok(credential::CredentialProvider::TokenCredential(Box::new(
+                    client_credential,
+                )))
             } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
-                (self.client_id, self.client_secret, self.tenant_id)
+                (self.client_id, self.client_secret, &self.tenant_id)
             {
                 let client_credential = credential::ClientSecretOAuthProvider::new(
                     client_id,

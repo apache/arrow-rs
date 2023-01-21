@@ -17,8 +17,9 @@
 
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
-use crate::util::hmac_sha256;
-use crate::RetryConfig;
+use crate::local::open_file;
+use crate::util::{hmac_sha256, maybe_spawn_blocking};
+use crate::{GetResult, RetryConfig};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use chrono::Utc;
@@ -58,6 +59,9 @@ pub enum Error {
 
     #[snafu(display("Error getting token response body: {}", source))]
     TokenResponseBody { source: reqwest::Error },
+
+    #[snafu(display("Error reading federated token file "))]
+    FederatedTokenFile,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -302,14 +306,18 @@ impl ClientSecretOAuthProvider {
     pub fn new(
         client_id: String,
         client_secret: String,
-        tenant_id: String,
+        tenant_id: impl AsRef<str>,
         authority_host: Option<String>,
     ) -> Self {
         let authority_host = authority_host
             .unwrap_or_else(|| authority_hosts::AZURE_PUBLIC_CLOUD.to_owned());
 
         Self {
-            token_url: format!("{}/{}/oauth2/v2.0/token", authority_host, tenant_id),
+            token_url: format!(
+                "{}/{}/oauth2/v2.0/token",
+                authority_host,
+                tenant_id.as_ref()
+            ),
             client_id,
             client_secret,
             cache: TokenCache::default(),
@@ -460,6 +468,99 @@ impl ImdsManagedIdentityOAuthProvider {
 
 #[async_trait::async_trait]
 impl TokenCredential for ImdsManagedIdentityOAuthProvider {
+    /// Fetch a token
+    async fn fetch_token(&self, client: &Client, retry: &RetryConfig) -> Result<String> {
+        self.cache
+            .get_or_insert_with(|| self.fetch_token_inner(client, retry))
+            .await
+    }
+}
+
+/// Credential for using workload identity dfederation
+///
+/// <https://learn.microsoft.com/en-us/azure/active-directory/develop/workload-identity-federation>
+#[derive(Debug)]
+pub struct WorkloadIdentityOAuthProvider {
+    token_url: String,
+    client_id: String,
+    federated_token_file: String,
+    cache: TokenCache<String>,
+}
+
+impl WorkloadIdentityOAuthProvider {
+    /// Create a new [`WorkloadIdentityOAuthProvider`] for an azure backed store
+    pub fn new(
+        client_id: impl Into<String>,
+        federated_token_file: impl Into<String>,
+        tenant_id: impl AsRef<str>,
+        authority_host: Option<String>,
+    ) -> Self {
+        let authority_host = authority_host
+            .unwrap_or_else(|| authority_hosts::AZURE_PUBLIC_CLOUD.to_owned());
+
+        Self {
+            token_url: format!(
+                "{}/{}/oauth2/v2.0/token",
+                authority_host,
+                tenant_id.as_ref()
+            ),
+            client_id: client_id.into(),
+            federated_token_file: federated_token_file.into(),
+            cache: TokenCache::default(),
+        }
+    }
+
+    /// Fetch a fresh token
+    async fn fetch_token_inner(
+        &self,
+        client: &Client,
+        retry: &RetryConfig,
+    ) -> Result<TemporaryToken<String>> {
+        let federated_token_file = std::path::PathBuf::from(&self.federated_token_file);
+        let federated_token = maybe_spawn_blocking(move || {
+            let file = open_file(&federated_token_file)?;
+            Ok(GetResult::File(file, federated_token_file))
+        })
+        .await
+        .map_err(|_| Error::FederatedTokenFile)?
+        .bytes()
+        .await
+        .map_err(|_| Error::FederatedTokenFile)?;
+        let token_str = String::from_utf8(federated_token.to_vec())
+            .map_err(|_| Error::FederatedTokenFile)?;
+
+        // https://learn.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-client-creds-grant-flow#third-case-access-token-request-with-a-federated-credential
+        let response: TokenResponse = client
+            .request(Method::POST, &self.token_url)
+            .header(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_JSON))
+            .form(&[
+                ("client_id", self.client_id.as_str()),
+                (
+                    "client_assertion_type",
+                    "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                ),
+                ("client_assertion", token_str.as_str()),
+                ("scope", AZURE_STORAGE_SCOPE),
+                ("grant_type", "client_credentials"),
+            ])
+            .send_retry(retry)
+            .await
+            .context(TokenRequestSnafu)?
+            .json()
+            .await
+            .context(TokenResponseBodySnafu)?;
+
+        let token = TemporaryToken {
+            token: response.access_token,
+            expiry: Instant::now() + Duration::from_secs(response.expires_in),
+        };
+
+        Ok(token)
+    }
+}
+
+#[async_trait::async_trait]
+impl TokenCredential for WorkloadIdentityOAuthProvider {
     /// Fetch a token
     async fn fetch_token(&self, client: &Client, retry: &RetryConfig) -> Result<String> {
         self.cache
