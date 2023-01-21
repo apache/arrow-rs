@@ -18,6 +18,7 @@
 [workspace]
 members = [
     "arrow",
+    "arrow-adbc",
     "arrow-arith",
     "arrow-array",
     "arrow-buffer",
