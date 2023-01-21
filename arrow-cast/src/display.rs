@@ -149,7 +149,7 @@ macro_rules! make_string_date_with_format {
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
         Ok(array
-            .value_as_date($row)
+            .value_as_datetime($row)
             .map(|d| d.format($format).to_string())
             .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
     }};
