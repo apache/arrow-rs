@@ -88,7 +88,7 @@ where
     lexical_to_string(c.value(i))
 }
 
-fn invalid_cast_error(dt: String, col_index: usize, row_index: usize) -> ArrowError {
+fn invalid_cast_error(dt: &str, col_index: usize, row_index: usize) -> ArrowError {
     ArrowError::CastError(format!(
         "Cannot cast to {} at col index: {} row index: {}",
         dt, col_index, row_index
@@ -107,6 +107,7 @@ macro_rules! write_temporal_value {
             .to_string()
     }};
 }
+
 /// A CSV writer
 #[derive(Debug)]
 pub struct Writer<W: Write> {
@@ -196,8 +197,8 @@ impl<W: Write> Writer<W> {
                         &self.date_format,
                         col_index,
                         row_index,
-                        value_as_datetime,
-                        "Date32".to_owned()
+                        value_as_date,
+                        "Date32"
                     )
                 }
                 DataType::Date64 => {
@@ -208,7 +209,7 @@ impl<W: Write> Writer<W> {
                         col_index,
                         row_index,
                         value_as_datetime,
-                        "Date64".to_owned()
+                        "Date64"
                     )
                 }
                 DataType::Time32(TimeUnit::Second) => {
@@ -219,7 +220,7 @@ impl<W: Write> Writer<W> {
                         col_index,
                         row_index,
                         value_as_time,
-                        "Time32".to_owned()
+                        "Time32"
                     )
                 }
                 DataType::Time32(TimeUnit::Millisecond) => {
@@ -230,7 +231,7 @@ impl<W: Write> Writer<W> {
                         col_index,
                         row_index,
                         value_as_time,
-                        "Time32".to_owned()
+                        "Time32"
                     )
                 }
                 DataType::Time64(TimeUnit::Microsecond) => {
@@ -241,7 +242,7 @@ impl<W: Write> Writer<W> {
                         col_index,
                         row_index,
                         value_as_time,
-                        "Time64".to_owned()
+                        "Time64"
                     )
                 }
                 DataType::Time64(TimeUnit::Nanosecond) => {
@@ -252,7 +253,7 @@ impl<W: Write> Writer<W> {
                         col_index,
                         row_index,
                         value_as_time,
-                        "Time64".to_owned()
+                        "Time64"
                     )
                 }
                 DataType::Timestamp(time_unit, time_zone) => {
@@ -729,9 +730,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
                 .map_err(|e| {
                     dbg!(e.to_string());
                     assert!(e.to_string().ends_with(
-                        invalid_cast_error("Date64".to_owned(), 1, 1)
-                            .to_string()
-                            .as_str()
+                        invalid_cast_error("Date64", 1, 1).to_string().as_str()
                     ))
                 })
                 .unwrap_err();
