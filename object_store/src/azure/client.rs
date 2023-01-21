@@ -169,7 +169,7 @@ impl AzureClient {
             CredentialProvider::AccessKey(key) => {
                 Ok(AzureCredential::AccessKey(key.to_owned()))
             }
-            CredentialProvider::ClientSecret(cred) => {
+            CredentialProvider::TokenCredential(cred) => {
                 let token = cred
                     .fetch_token(&self.client, &self.config.retry_config)
                     .await

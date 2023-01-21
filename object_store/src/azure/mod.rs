@@ -65,6 +65,8 @@ const EMULATOR_ACCOUNT: &str = "devstoreaccount1";
 const EMULATOR_ACCOUNT_KEY: &str =
     "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
 
+const MSI_ENDPOINT_ENV_KEY: &str = "IDENTITY_ENDPOINT";
+
 /// A specialized `Error` for Azure object store-related errors
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
@@ -393,6 +395,10 @@ pub struct MicrosoftAzureBuilder {
     authority_host: Option<String>,
     url: Option<String>,
     use_emulator: bool,
+    msi_endpoint: Option<String>,
+    use_managed_identity: bool,
+    object_id: Option<String>,
+    msi_resource_id: Option<String>,
     retry_config: RetryConfig,
     client_options: ClientOptions,
 }
@@ -496,6 +502,36 @@ pub enum AzureConfigKey {
     /// - `object_store_use_emulator`
     /// - `use_emulator`
     UseEmulator,
+
+    /// Endpoint to request a imds managed identity token
+    ///
+    /// Supported keys:
+    /// - `azure_msi_endpoint`
+    /// - `azure_identity_endpoint`
+    /// - `identity_endpoint`
+    /// - `msi_endpoint`
+    MsiEndpoint,
+
+    /// Whether a managed identity should be used
+    ///
+    /// Supported keys:
+    /// - `azure_use_managed_identity`
+    /// - `use_managed_identity`
+    UseManagedIdentity,
+
+    /// Object id for use with managed identity authentication
+    ///
+    /// Supported keys:
+    /// - `azure_object_id`
+    /// - `object_id`
+    ObjectId,
+
+    /// Msi resource id for use with managed identity authentication
+    ///
+    /// Supported keys:
+    /// - `azure_msi_resource_id`
+    /// - `msi_resource_id`
+    MsiResourceId,
 }
 
 impl AsRef<str> for AzureConfigKey {
@@ -509,6 +545,10 @@ impl AsRef<str> for AzureConfigKey {
             Self::SasKey => "azure_storage_sas_key",
             Self::Token => "azure_storage_token",
             Self::UseEmulator => "azure_storage_use_emulator",
+            Self::MsiEndpoint => "azure_msi_endpoint",
+            Self::UseManagedIdentity => "azure_use_managed_identity",
+            Self::ObjectId => "azure_object_id",
+            Self::MsiResourceId => "azure_msi_resource_id",
         }
     }
 }
@@ -543,6 +583,15 @@ impl FromStr for AzureConfigKey {
             | "sas_token" => Ok(Self::SasKey),
             "azure_storage_token" | "bearer_token" | "token" => Ok(Self::Token),
             "azure_storage_use_emulator" | "use_emulator" => Ok(Self::UseEmulator),
+            "azure_msi_endpoint"
+            | "azure_identity_endpoint"
+            | "identity_endpoint"
+            | "msi_endpoint" => Ok(Self::MsiEndpoint),
+            "azure_object_id" | "object_id" => Ok(Self::ObjectId),
+            "azure_msi_resource_id" | "msi_resource_id" => Ok(Self::MsiResourceId),
+            "azure_use_managed_identity" | "use_managed_identity" => {
+                Ok(Self::UseManagedIdentity)
+            }
             _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
         }
     }
@@ -590,6 +639,9 @@ impl MicrosoftAzureBuilder {
                         AzureConfigKey::from_str(&key.to_ascii_lowercase())
                     {
                         builder = builder.try_with_option(config_key, value).unwrap();
+                        if config_key == AzureConfigKey::MsiEndpoint {
+                            builder = builder.with_use_managed_identity(true);
+                        }
                     }
                 }
             }
@@ -598,6 +650,10 @@ impl MicrosoftAzureBuilder {
         if let Ok(text) = std::env::var("AZURE_ALLOW_HTTP") {
             builder.client_options =
                 builder.client_options.with_allow_http(str_is_truthy(&text));
+        }
+
+        if let Ok(text) = std::env::var(MSI_ENDPOINT_ENV_KEY) {
+            builder = builder.with_msi_endpoint(text);
         }
 
         builder
@@ -644,6 +700,12 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::AuthorityId => self.tenant_id = Some(value.into()),
             AzureConfigKey::SasKey => self.sas_key = Some(value.into()),
             AzureConfigKey::Token => self.bearer_token = Some(value.into()),
+            AzureConfigKey::MsiEndpoint => self.msi_endpoint = Some(value.into()),
+            AzureConfigKey::ObjectId => self.object_id = Some(value.into()),
+            AzureConfigKey::MsiResourceId => self.msi_resource_id = Some(value.into()),
+            AzureConfigKey::UseManagedIdentity => {
+                self.use_managed_identity = str_is_truthy(&value.into())
+            }
             AzureConfigKey::UseEmulator => {
                 self.use_emulator = str_is_truthy(&value.into())
             }
@@ -769,8 +831,8 @@ impl MicrosoftAzureBuilder {
     /// Sets an alternative authority host for OAuth based authorization
     /// common hosts for azure clouds are defined in [authority_hosts].
     /// Defaults to <https://login.microsoftonline.com>
-    pub fn with_authority_host(mut self, authority_host: String) -> Self {
-        self.authority_host = Some(authority_host);
+    pub fn with_authority_host(mut self, authority_host: impl Into<String>) -> Self {
+        self.authority_host = Some(authority_host.into());
         self
     }
 
@@ -789,6 +851,23 @@ impl MicrosoftAzureBuilder {
     /// Sets the client options, overriding any already set
     pub fn with_client_options(mut self, options: ClientOptions) -> Self {
         self.client_options = options;
+        self
+    }
+
+    /// Attempts authentication using a managed identity that has been assigned to the deployment environment.
+    ///
+    /// This authentication type works in Azure VMs, App Service and Azure Functions applications, as well as the Azure Cloud Shell
+    /// To use a user assigned identity, `client_id`, `object_id`, or `msi_resource_id` must be specified.
+    /// Otherwise, the system assigned identity will be used.
+    pub fn with_use_managed_identity(mut self, use_msi: bool) -> Self {
+        self.use_managed_identity = use_msi;
+        self
+    }
+
+    /// Sets the enddpoint for acquiring managed identity token
+    pub fn with_msi_endpoint(mut self, msi_endpoint: impl Into<String>) -> Self {
+        self.msi_endpoint = Some(msi_endpoint.into());
+        self.use_managed_identity = true;
         self
     }
 
@@ -824,6 +903,16 @@ impl MicrosoftAzureBuilder {
                 Ok(credential::CredentialProvider::AccessKey(bearer_token))
             } else if let Some(access_key) = self.access_key {
                 Ok(credential::CredentialProvider::AccessKey(access_key))
+            } else if self.use_managed_identity {
+                let msi_credential = credential::ImdsManagedIdentityOAuthProvider::new(
+                    self.client_id,
+                    self.object_id,
+                    self.msi_resource_id,
+                    self.msi_endpoint,
+                );
+                Ok(credential::CredentialProvider::TokenCredential(Box::new(
+                    msi_credential,
+                )))
             } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
                 (self.client_id, self.client_secret, self.tenant_id)
             {
@@ -833,9 +922,9 @@ impl MicrosoftAzureBuilder {
                     tenant_id,
                     self.authority_host,
                 );
-                Ok(credential::CredentialProvider::ClientSecret(
+                Ok(credential::CredentialProvider::TokenCredential(Box::new(
                     client_credential,
-                ))
+                )))
             } else if let Some(query_pairs) = self.sas_query_pairs {
                 Ok(credential::CredentialProvider::SASToken(query_pairs))
             } else if let Some(sas) = self.sas_key {

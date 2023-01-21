@@ -31,6 +31,7 @@ use reqwest::{
     },
     Client, Method, RequestBuilder,
 };
+use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::borrow::Cow;
 use std::str;
@@ -44,8 +45,11 @@ pub(crate) static DELETE_SNAPSHOTS: HeaderName =
     HeaderName::from_static("x-ms-delete-snapshots");
 pub(crate) static COPY_SOURCE: HeaderName = HeaderName::from_static("x-ms-copy-source");
 static CONTENT_MD5: HeaderName = HeaderName::from_static("content-md5");
-pub(crate) static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
+pub(crate) const RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
 const CONTENT_TYPE_JSON: &str = "application/json";
+const MSI_SECRET_ENV_KEY: &str = "IDENTITY_HEADER";
+const MSI_API_VERSION: &str = "2019-08-01";
+const AZURE_STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -63,7 +67,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub enum CredentialProvider {
     AccessKey(String),
     SASToken(Vec<(String, String)>),
-    ClientSecret(ClientSecretOAuthProvider),
+    TokenCredential(Box<dyn TokenCredential>),
 }
 
 pub(crate) enum AzureCredential {
@@ -273,7 +277,12 @@ fn lexy_sort<'a>(
     values
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[async_trait::async_trait]
+pub trait TokenCredential: std::fmt::Debug + Send + Sync + 'static {
+    async fn fetch_token(&self, client: &Client, retry: &RetryConfig) -> Result<String>;
+}
+
+#[derive(Deserialize, Debug)]
 struct TokenResponse {
     access_token: String,
     expires_in: u64,
@@ -282,7 +291,6 @@ struct TokenResponse {
 /// Encapsulates the logic to perform an OAuth token challenge
 #[derive(Debug)]
 pub struct ClientSecretOAuthProvider {
-    scope: String,
     token_url: String,
     client_id: String,
     client_secret: String,
@@ -301,23 +309,11 @@ impl ClientSecretOAuthProvider {
             .unwrap_or_else(|| authority_hosts::AZURE_PUBLIC_CLOUD.to_owned());
 
         Self {
-            scope: "https://storage.azure.com/.default".to_owned(),
             token_url: format!("{}/{}/oauth2/v2.0/token", authority_host, tenant_id),
             client_id,
             client_secret,
             cache: TokenCache::default(),
         }
-    }
-
-    /// Fetch a token
-    pub async fn fetch_token(
-        &self,
-        client: &Client,
-        retry: &RetryConfig,
-    ) -> Result<String> {
-        self.cache
-            .get_or_insert_with(|| self.fetch_token_inner(client, retry))
-            .await
     }
 
     /// Fetch a fresh token
@@ -332,7 +328,7 @@ impl ClientSecretOAuthProvider {
             .form(&[
                 ("client_id", self.client_id.as_str()),
                 ("client_secret", self.client_secret.as_str()),
-                ("scope", self.scope.as_str()),
+                ("scope", AZURE_STORAGE_SCOPE),
                 ("grant_type", "client_credentials"),
             ])
             .send_retry(retry)
@@ -348,5 +344,126 @@ impl ClientSecretOAuthProvider {
         };
 
         Ok(token)
+    }
+}
+
+#[async_trait::async_trait]
+impl TokenCredential for ClientSecretOAuthProvider {
+    /// Fetch a token
+    async fn fetch_token(&self, client: &Client, retry: &RetryConfig) -> Result<String> {
+        self.cache
+            .get_or_insert_with(|| self.fetch_token_inner(client, retry))
+            .await
+    }
+}
+
+fn expires_in_string<'de, D>(deserializer: D) -> std::result::Result<u64, D::Error>
+where
+    D: serde::de::Deserializer<'de>,
+{
+    let v = String::deserialize(deserializer)?;
+    v.parse::<u64>().map_err(serde::de::Error::custom)
+}
+
+// NOTE: expires_on is a String version of unix epoch time, not an integer.
+// <https://learn.microsoft.com/en-gb/azure/active-directory/managed-identities-azure-resources/how-to-use-vm-token#get-a-token-using-http>
+#[derive(Debug, Clone, Deserialize)]
+struct MsiTokenResponse {
+    pub access_token: String,
+    #[serde(deserialize_with = "expires_in_string")]
+    pub expires_in: u64,
+}
+
+/// Attempts authentication using a managed identity that has been assigned to the deployment environment.
+///
+/// This authentication type works in Azure VMs, App Service and Azure Functions applications, as well as the Azure Cloud Shell
+/// <https://learn.microsoft.com/en-gb/azure/active-directory/managed-identities-azure-resources/how-to-use-vm-token#get-a-token-using-http>
+#[derive(Debug)]
+pub struct ImdsManagedIdentityOAuthProvider {
+    msi_endpoint: String,
+    client_id: Option<String>,
+    object_id: Option<String>,
+    msi_res_id: Option<String>,
+    cache: TokenCache<String>,
+}
+
+impl ImdsManagedIdentityOAuthProvider {
+    /// Create a new [`ImdsManagedIdentityOAuthProvider`] for an azure backed store
+    pub fn new(
+        client_id: Option<String>,
+        object_id: Option<String>,
+        msi_res_id: Option<String>,
+        msi_endpoint: Option<String>,
+    ) -> Self {
+        let msi_endpoint = msi_endpoint.unwrap_or_else(|| {
+            "http://169.254.169.254/metadata/identity/oauth2/token".to_owned()
+        });
+
+        Self {
+            msi_endpoint,
+            client_id,
+            object_id,
+            msi_res_id,
+            cache: TokenCache::default(),
+        }
+    }
+
+    /// Fetch a fresh token
+    async fn fetch_token_inner(
+        &self,
+        client: &Client,
+        retry: &RetryConfig,
+    ) -> Result<TemporaryToken<String>> {
+        let mut query_items = vec![
+            ("api-version", MSI_API_VERSION),
+            ("resource", AZURE_STORAGE_SCOPE),
+        ];
+
+        match (
+            self.object_id.as_ref(),
+            self.client_id.as_ref(),
+            self.msi_res_id.as_ref(),
+        ) {
+            (Some(object_id), None, None) => query_items.push(("object_id", object_id)),
+            (None, Some(client_id), None) => query_items.push(("client_id", client_id)),
+            (None, None, Some(msi_res_id)) => {
+                query_items.push(("msi_res_id", msi_res_id))
+            }
+            _ => (),
+        }
+
+        let mut builder = client
+            .request(Method::GET, &self.msi_endpoint)
+            .header("metadata", "true")
+            .query(&query_items);
+
+        if let Ok(val) = std::env::var(MSI_SECRET_ENV_KEY) {
+            builder = builder.header("x-identity-header", val);
+        };
+
+        let response: MsiTokenResponse = builder
+            .send_retry(retry)
+            .await
+            .context(TokenRequestSnafu)?
+            .json()
+            .await
+            .context(TokenResponseBodySnafu)?;
+
+        let token = TemporaryToken {
+            token: response.access_token,
+            expiry: Instant::now() + Duration::from_secs(response.expires_in),
+        };
+
+        Ok(token)
+    }
+}
+
+#[async_trait::async_trait]
+impl TokenCredential for ImdsManagedIdentityOAuthProvider {
+    /// Fetch a token
+    async fn fetch_token(&self, client: &Client, retry: &RetryConfig) -> Result<String> {
+        self.cache
+            .get_or_insert_with(|| self.fetch_token_inner(client, retry))
+            .await
     }
 }
