@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{types::ArrowRunEndIndexType, ArrowPrimitiveType, RunEndEncodedArray};
+use crate::{types::RunEndIndexType, ArrowPrimitiveType, RunEndEncodedArray};
 
 use super::PrimitiveBuilder;
 
@@ -61,7 +61,7 @@ use arrow_schema::ArrowError;
 #[derive(Debug)]
 pub struct PrimitiveREEArrayBuilder<R, V>
 where
-    R: ArrowRunEndIndexType,
+    R: RunEndIndexType,
     V: ArrowPrimitiveType,
 {
     run_ends_builder: PrimitiveBuilder<R>,
@@ -72,7 +72,7 @@ where
 
 impl<R, V> Default for PrimitiveREEArrayBuilder<R, V>
 where
-    R: ArrowRunEndIndexType,
+    R: RunEndIndexType,
     V: ArrowPrimitiveType,
 {
     fn default() -> Self {
@@ -82,7 +82,7 @@ where
 
 impl<R, V> PrimitiveREEArrayBuilder<R, V>
 where
-    R: ArrowRunEndIndexType,
+    R: RunEndIndexType,
     V: ArrowPrimitiveType,
 {
     /// Creates a new `PrimitiveREEArrayBuilder`
@@ -110,7 +110,7 @@ where
 
 impl<R, V> PrimitiveREEArrayBuilder<R, V>
 where
-    R: ArrowRunEndIndexType,
+    R: RunEndIndexType,
     V: ArrowPrimitiveType,
 {
     /// Appends optional value to the logical array encoded by the RunEndEncodedArray.

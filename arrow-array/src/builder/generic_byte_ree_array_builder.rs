@@ -17,7 +17,7 @@
 
 use crate::{
     types::{
-        ArrowRunEndIndexType, BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type,
+        BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, RunEndIndexType,
         Utf8Type,
     },
     ArrowPrimitiveType, RunEndEncodedArray,
@@ -120,7 +120,7 @@ where
 
 impl<R, V> GenericByteREEArrayBuilder<R, V>
 where
-    R: ArrowRunEndIndexType,
+    R: RunEndIndexType,
     V: ByteArrayType,
 {
     /// Appends optional value to the logical array encoded by the RunEndEncodedArray.

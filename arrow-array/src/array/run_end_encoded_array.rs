@@ -23,18 +23,18 @@ use arrow_schema::{ArrowError, DataType, Field};
 use crate::{
     builder::StringREEArrayBuilder,
     make_array,
-    types::{ArrowRunEndIndexType, Int16Type, Int32Type, Int64Type},
+    types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
     Array, ArrayRef, PrimitiveArray,
 };
 
 ///
 /// A run-end encoding (REE) is a variation of [run-length encoding (RLE)](https://en.wikipedia.org/wiki/Run-length_encoding).
-/// This encoding is good for representing data containing same values repeated consecutively
-/// called runs. Each run is represented by the value of data and the index at which the run ends.
 ///
-/// [`RunEndEncodedArray`] has `run_ends` array and `values` array of same length.
+/// This encoding is good for representing data containing same values repeated consecutively.
+///
+/// [`RunEndEncodedArray`] contains `run_ends` array and `values` array of same length.
 /// The `run_ends` array stores the indexes at which the run ends. The `values` array
-/// stores the value of the run. Below example illustrates how a logical array is represented in
+/// stores the value of each run. Below example illustrates how a logical array is represented in
 /// [`RunEndEncodedArray`]
 ///
 ///
@@ -58,13 +58,13 @@ use crate::{
 ///                                                Contents
 /// ```
 
-pub struct RunEndEncodedArray<R: ArrowRunEndIndexType> {
+pub struct RunEndEncodedArray<R: RunEndIndexType> {
     data: ArrayData,
     run_ends: PrimitiveArray<R>,
     values: ArrayRef,
 }
 
-impl<R: ArrowRunEndIndexType> RunEndEncodedArray<R> {
+impl<R: RunEndIndexType> RunEndEncodedArray<R> {
     /// Attempts to create RunEndEncodedArray using given run_ends (index where a run ends)
     /// and the values (value of the run). Returns an error if the given data is not compatible
     /// with RunEndEncoded specification.
@@ -86,9 +86,11 @@ impl<R: ArrowRunEndIndexType> RunEndEncodedArray<R> {
         let array_data = unsafe { builder.build_unchecked() };
 
         // Safety: `validate_data` checks below
-        //    1. run_ends array does not have null values
-        //    2. run_ends array has non-zero and strictly increasing values.
-        //    3. The length of run_ends array and values array are the same.
+        //    1. The given array data has exactly two child arrays.
+        //    2. The first child array (run_ends) has valid data type.
+        //    3. run_ends array does not have null values
+        //    4. run_ends array has non-zero and strictly increasing values.
+        //    5. The length of run_ends array and values array are the same.
         array_data.validate_data()?;
 
         Ok(array_data.into())
@@ -104,7 +106,7 @@ impl<R: ArrowRunEndIndexType> RunEndEncodedArray<R> {
     }
 }
 
-impl<R: ArrowRunEndIndexType> From<ArrayData> for RunEndEncodedArray<R> {
+impl<R: RunEndIndexType> From<ArrayData> for RunEndEncodedArray<R> {
     fn from(data: ArrayData) -> Self {
         match data.data_type() {
             DataType::RunEndEncoded(run_ends_data_type, _) => {
@@ -121,14 +123,6 @@ impl<R: ArrowRunEndIndexType> From<ArrayData> for RunEndEncodedArray<R> {
             }
         }
 
-        // Safety: `validate_data` checks below
-        //    1. The given array data has exactly two child arrays.
-        //    2. The first child array (run_ends) has valid data type.
-        //    3. run_ends array does not have null values
-        //    4. run_ends array has non-zero and strictly increasing values.
-        //    5. The length of run_ends array and values array are the same.
-        data.validate_data().unwrap();
-
         let run_ends = PrimitiveArray::<R>::from(data.child_data()[0].clone());
         let values = make_array(data.child_data()[1].clone());
         Self {
@@ -139,13 +133,13 @@ impl<R: ArrowRunEndIndexType> From<ArrayData> for RunEndEncodedArray<R> {
     }
 }
 
-impl<R: ArrowRunEndIndexType> From<RunEndEncodedArray<R>> for ArrayData {
+impl<R: RunEndIndexType> From<RunEndEncodedArray<R>> for ArrayData {
     fn from(array: RunEndEncodedArray<R>) -> Self {
         array.data
     }
 }
 
-impl<T: ArrowRunEndIndexType> Array for RunEndEncodedArray<T> {
+impl<T: RunEndIndexType> Array for RunEndEncodedArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -159,7 +153,7 @@ impl<T: ArrowRunEndIndexType> Array for RunEndEncodedArray<T> {
     }
 }
 
-impl<R: ArrowRunEndIndexType> std::fmt::Debug for RunEndEncodedArray<R> {
+impl<R: RunEndIndexType> std::fmt::Debug for RunEndEncodedArray<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         writeln!(
             f,
@@ -185,9 +179,7 @@ impl<R: ArrowRunEndIndexType> std::fmt::Debug for RunEndEncodedArray<R> {
 ///     format!("{:?}", array)
 /// );
 /// ```
-impl<'a, T: ArrowRunEndIndexType> FromIterator<Option<&'a str>>
-    for RunEndEncodedArray<T>
-{
+impl<'a, T: RunEndIndexType> FromIterator<Option<&'a str>> for RunEndEncodedArray<T> {
     fn from_iter<I: IntoIterator<Item = Option<&'a str>>>(iter: I) -> Self {
         let it = iter.into_iter();
         let (lower, _) = it.size_hint();
@@ -222,7 +214,7 @@ impl<'a, T: ArrowRunEndIndexType> FromIterator<Option<&'a str>>
 ///     format!("{:?}", array)
 /// );
 /// ```
-impl<'a, T: ArrowRunEndIndexType> FromIterator<&'a str> for RunEndEncodedArray<T> {
+impl<'a, T: RunEndIndexType> FromIterator<&'a str> for RunEndEncodedArray<T> {
     fn from_iter<I: IntoIterator<Item = &'a str>>(iter: I) -> Self {
         let it = iter.into_iter();
         let (lower, _) = it.size_hint();
@@ -288,30 +280,23 @@ mod tests {
 
     use super::*;
     use crate::builder::PrimitiveREEArrayBuilder;
-    use crate::types::{Int16Type, Int32Type, UInt32Type};
+    use crate::types::{Int16Type, Int32Type, Int8Type, UInt32Type};
     use crate::{Array, Int16Array, Int32Array, StringArray};
-    use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_schema::Field;
 
     #[test]
     fn test_ree_array() {
         // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int8)
-            .len(8)
-            .add_buffer(Buffer::from(
-                &[10_i8, 11, 12, 13, 14, 15, 16, 17].to_byte_slice(),
-            ))
-            .build()
-            .unwrap();
+        let value_data = PrimitiveArray::<Int8Type>::from_iter_values([
+            10_i8, 11, 12, 13, 14, 15, 16, 17,
+        ])
+        .into_data();
 
         // Construct a run_ends array:
-        let run_ends_data = ArrayData::builder(DataType::Int16)
-            .len(8)
-            .add_buffer(Buffer::from(
-                &[4_i16, 6, 7, 9, 13, 18, 20, 22].to_byte_slice(),
-            ))
-            .build()
-            .unwrap();
+        let run_ends_data = PrimitiveArray::<Int16Type>::from_iter_values([
+            4_i16, 6, 7, 9, 13, 18, 20, 22,
+        ])
+        .into_data();
 
         // Construct a run ends encoded array from the above two
         let run_ends_type = Field::new("run_ends", DataType::Int16, false);

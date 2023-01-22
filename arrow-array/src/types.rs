@@ -32,10 +32,6 @@ use half::f16;
 use std::marker::PhantomData;
 use std::ops::{Add, Sub};
 
-mod private {
-    pub trait Sealed {}
-}
-
 // BooleanType is special: its bit-width is not the size of the primitive type, and its `index`
 // operation assumes bit-packing.
 /// A boolean datatype
@@ -244,21 +240,30 @@ impl ArrowDictionaryKeyType for UInt32Type {}
 
 impl ArrowDictionaryKeyType for UInt64Type {}
 
+mod run {
+    use super::*;
+
+    pub trait RunEndTypeSealed {}
+
+    impl RunEndTypeSealed for Int16Type {}
+
+    impl RunEndTypeSealed for Int32Type {}
+
+    impl RunEndTypeSealed for Int64Type {}
+}
+
 /// A subtype of primitive type that is used as run-ends index
 /// in RunEndEncodedArray.
 /// See <https://arrow.apache.org/docs/format/Columnar.html>
 ///
-/// # Sealed: The implementation of this trait is sealed to avoid accidental misuse.
-pub trait ArrowRunEndIndexType: ArrowPrimitiveType + private::Sealed {}
+/// Note: The implementation of this trait is sealed to avoid accidental misuse.
+pub trait RunEndIndexType: ArrowPrimitiveType + run::RunEndTypeSealed {}
 
-impl private::Sealed for Int16Type {}
-impl ArrowRunEndIndexType for Int16Type {}
+impl RunEndIndexType for Int16Type {}
 
-impl private::Sealed for Int32Type {}
-impl ArrowRunEndIndexType for Int32Type {}
+impl RunEndIndexType for Int32Type {}
 
-impl private::Sealed for Int64Type {}
-impl ArrowRunEndIndexType for Int64Type {}
+impl RunEndIndexType for Int64Type {}
 
 /// A subtype of primitive type that represents temporal values.
 pub trait ArrowTemporalType: ArrowPrimitiveType {}
