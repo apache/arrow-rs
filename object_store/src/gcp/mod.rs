@@ -30,10 +30,10 @@
 //! consider implementing automatic clean up of unused parts that are older than one
 //! week.
 use std::collections::BTreeSet;
+use std::io;
 use std::ops::Range;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::io;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
@@ -58,14 +58,15 @@ use crate::{
     RetryConfig,
 };
 
-
-use self::credential::{default_gcs_base_url, InstanceCredentialProvider, ServiceAccountCredentials, TokenProvider, ApplicationDefaultCredentials};
+use self::credential::{
+    default_gcs_base_url, ApplicationDefaultCredentials, InstanceCredentialProvider,
+    ServiceAccountCredentials, TokenProvider,
+};
 
 mod credential;
 
 #[derive(Debug, Snafu)]
 enum Error {
-
     #[snafu(display("Got invalid XML response for {} {}: {}", method, url, source))]
     InvalidXMLResponse {
         source: quick_xml::de::DeError,
@@ -748,7 +749,6 @@ impl ObjectStore for GoogleCloudStorage {
     }
 }
 
-
 /// Configure a connection to Google Cloud Storage using the specified
 /// credentials.
 ///
@@ -1045,7 +1045,7 @@ impl GoogleCloudStorageBuilder {
 
     /// Set the path to the application credentials file.
     ///
-    /// https://cloud.google.com/docs/authentication/provide-credentials-adc
+    /// <https://cloud.google.com/docs/authentication/provide-credentials-adc>
     pub fn with_application_credentials(
         mut self,
         application_credentials_path: impl Into<String>,
@@ -1084,21 +1084,26 @@ impl GoogleCloudStorageBuilder {
         let client = self.client_options.client()?;
 
         // First try to initialize from the service account information.
-        let service_account_credentials = match (self.service_account_path, self.service_account_key) {
-            (Some(path), None) => Some(ServiceAccountCredentials::from_file(path).context(CredentialSnafu)?),
-            (None, Some(key)) => Some(
-                ServiceAccountCredentials::from_key(&key).context(CredentialSnafu)?
-            ),
-            (None, None) => None,
-            (Some(_), Some(_)) => {
-                return Err(Error::ServiceAccountPathAndKeyProvided.into())
-            }
-        };
+        let service_account_credentials =
+            match (self.service_account_path, self.service_account_key) {
+                (Some(path), None) => Some(
+                    ServiceAccountCredentials::from_file(path)
+                        .context(CredentialSnafu)?,
+                ),
+                (None, Some(key)) => Some(
+                    ServiceAccountCredentials::from_key(&key).context(CredentialSnafu)?,
+                ),
+                (None, None) => None,
+                (Some(_), Some(_)) => {
+                    return Err(Error::ServiceAccountPathAndKeyProvided.into())
+                }
+            };
 
         // Then try to initialize from the application credentials file, or the environment.
         let application_default_credentials = ApplicationDefaultCredentials::new(
             self.application_credentials_path.as_deref(),
-        ).context(CredentialSnafu)?;
+        )
+        .context(CredentialSnafu)?;
 
         let disable_oauth = service_account_credentials
             .as_ref()
@@ -1110,12 +1115,9 @@ impl GoogleCloudStorageBuilder {
             .map(|c| c.gcs_base_url.clone())
             .unwrap_or_else(default_gcs_base_url);
 
-        
-
         // TODO: https://cloud.google.com/storage/docs/authentication#oauth-scopes
         let scope = "https://www.googleapis.com/auth/devstorage.full_control";
         let audience = "https://www.googleapis.com/oauth2/v4/token";
-
 
         let token_provider = if disable_oauth {
             None
@@ -1124,7 +1126,10 @@ impl GoogleCloudStorageBuilder {
                 .map(|credentials| credentials.token_provider(scope, audience))
                 .transpose()
                 .context(CredentialSnafu)?
-                .or_else(|| application_default_credentials.map(|a| Box::new(a) as Box<dyn TokenProvider>))
+                .or_else(|| {
+                    application_default_credentials
+                        .map(|a| Box::new(a) as Box<dyn TokenProvider>)
+                })
                 .or_else(|| Some(Box::new(InstanceCredentialProvider::new(audience))));
 
             // A provider is required at this point, bail out if we don't have one.

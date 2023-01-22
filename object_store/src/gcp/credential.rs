@@ -328,7 +328,6 @@ fn b64_encode_obj<T: serde::Serialize>(obj: &T) -> Result<String> {
     Ok(BASE64_URL_SAFE_NO_PAD.encode(string))
 }
 
-
 /// A provider that uses the Google Cloud Platform metadata server to fetch a token.
 #[derive(Debug, Default)]
 pub struct InstanceCredentialProvider {
