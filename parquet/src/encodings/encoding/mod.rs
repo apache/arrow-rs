@@ -1081,13 +1081,12 @@ mod tests {
         let encoder = get_encoder::<T>(encoding);
         match err {
             Some(parquet_error) => {
-                assert!(encoder.is_err());
-                assert_eq!(encoder.err().unwrap(), parquet_error);
+                assert_eq!(
+                    encoder.err().unwrap().to_string(),
+                    parquet_error.to_string()
+                )
             }
-            None => {
-                assert!(encoder.is_ok());
-                assert_eq!(encoder.unwrap().encoding(), encoding);
-            }
+            None => assert_eq!(encoder.unwrap().encoding(), encoding),
         }
     }
 
