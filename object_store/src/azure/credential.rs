@@ -573,8 +573,11 @@ impl TokenCredential for WorkloadIdentityOAuthProvider {
 mod tests {
     use super::*;
     use crate::client::mock_server::MockServer;
+    use crate::local::LocalFileSystem;
+    use crate::ObjectStore;
     use hyper::{Body, Response};
     use reqwest::{Client, Method};
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_managed_identity() {
@@ -620,6 +623,59 @@ mod tests {
             None,
             None,
             Some(format!("{}/metadata/identity/oauth2/token", endpoint)),
+        );
+
+        let token = credential
+            .fetch_token(&client, &retry_config)
+            .await
+            .unwrap();
+
+        assert_eq!(&token, "TOKEN");
+    }
+
+    #[tokio::test]
+    async fn test_workload_identity() {
+        let server = MockServer::new();
+
+        let root = TempDir::new().unwrap();
+        let fs = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let tenant = "tenant";
+        let tokenfile = root.path().join("tokenfile");
+        fs.put(
+            &crate::path::Path::from("tokenfile"),
+            bytes::Bytes::from("federated-token"),
+        )
+        .await
+        .unwrap();
+
+        let endpoint = server.url();
+        let client = Client::new();
+        let retry_config = RetryConfig::default();
+
+        // Test IMDS
+        server.push_fn(move |req| {
+            assert_eq!(req.uri().path(), format!("/{}/oauth2/v2.0/token", tenant));
+            assert_eq!(req.method(), &Method::POST);
+            Response::new(Body::from(
+                r#"
+            {
+                "access_token": "TOKEN",
+                "refresh_token": "",
+                "expires_in": 3599,
+                "expires_on": "1506484173",
+                "not_before": "1506480273",
+                "resource": "https://management.azure.com/",
+                "token_type": "Bearer"
+              }
+            "#,
+            ))
+        });
+
+        let credential = WorkloadIdentityOAuthProvider::new(
+            "client_id",
+            tokenfile.to_str().unwrap(),
+            tenant,
+            Some(endpoint.to_string()),
         );
 
         let token = credential
