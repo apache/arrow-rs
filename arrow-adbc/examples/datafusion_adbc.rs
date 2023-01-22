@@ -1,11 +1,29 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 //! Example of implementing ADBC on top of DataFusion.
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use arrow_adbc::error::AdbcStatusCode;
-use arrow_adbc::interface::{AdbcConnection, AdbcDatabase, AdbcError, AdbcStatement};
+use arrow_adbc::error::{AdbcError, AdbcStatusCode};
+use arrow_adbc::ffi::AdbcObjectDepth;
+use arrow_adbc::interface::{AdbcConnection, AdbcDatabase, AdbcStatement};
 
 enum Error {
     NotImplemented(&'static str),
@@ -92,6 +110,55 @@ impl AdbcConnection for Connection {
             ))
         }
     }
+
+    fn get_info(
+        &self,
+        info_codes: &[u32],
+    ) -> Result<Box<dyn arrow::record_batch::RecordBatchReader>, Self::Error> {
+        Err(Error::NotImplemented("get_info"))
+    }
+
+    fn get_objects(
+        &self,
+        depth: AdbcObjectDepth,
+        catalog: Option<&str>,
+        db_schema: Option<&str>,
+        table_name: Option<&str>,
+        table_type: &[&str],
+        column_name: Option<&str>,
+    ) -> Result<Box<dyn arrow::record_batch::RecordBatchReader>, Self::Error> {
+        Err(Error::NotImplemented("get_objects"))
+    }
+
+    fn get_table_schema(
+        &self,
+        catalog: Option<&str>,
+        db_schema: Option<&str>,
+        table_name: &str,
+    ) -> Result<arrow::datatypes::Schema, Self::Error> {
+        Err(Error::NotImplemented("get_table_schema"))
+    }
+
+    fn get_table_types(
+        &self,
+    ) -> Result<Box<dyn arrow::record_batch::RecordBatchReader>, Self::Error> {
+        Err(Error::NotImplemented("get_table_types"))
+    }
+
+    fn commit(&self) -> Result<(), Self::Error> {
+        Err(Error::NotImplemented("commit"))
+    }
+
+    fn rollback(&self) -> Result<(), Self::Error> {
+        Err(Error::NotImplemented("commit"))
+    }
+
+    fn read_partition(
+        &self,
+        partition: &[u8],
+    ) -> Result<Box<dyn arrow::record_batch::RecordBatchReader>, Self::Error> {
+        Err(Error::NotImplemented("commit"))
+    }
 }
 
 struct Statement {
@@ -106,11 +173,11 @@ impl AdbcStatement for Statement {
         Self { conn }
     }
 
-    fn set_option(&mut self, key: String, value: String) -> Result<(), Self::Error> {
+    fn set_option(&mut self, key: &str, value: &str) -> Result<(), Self::Error> {
         Err(Error::NotImplemented(""))
     }
 
-    fn set_sql_query(&mut self, query: String) -> Result<(), Self::Error> {
+    fn set_sql_query(&mut self, query: &str) -> Result<(), Self::Error> {
         Err(Error::NotImplemented(""))
     }
 

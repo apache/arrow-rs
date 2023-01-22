@@ -1,3 +1,19 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
 #![doc(hidden)]
 
 use std::{
@@ -18,8 +34,8 @@ use crate::{
     check_err,
     error::{AdbcStatusCode, FFI_AdbcError},
     ffi::{
-        FFI_AdbcConnection, FFI_AdbcDatabase, FFI_AdbcDriver, FFI_AdbcPartitions,
-        FFI_AdbcStatement,
+        AdbcObjectDepth, FFI_AdbcConnection, FFI_AdbcDatabase, FFI_AdbcDriver,
+        FFI_AdbcPartitions, FFI_AdbcStatement,
     },
 };
 
@@ -117,9 +133,9 @@ impl AdbcError for AdbcFFIError {
 /// The FFI types for Database, Connection, and Statements use a c_void pointer
 /// labelled "private_data" to store the implementation struct. This trait
 /// handles storing, retrieving, and dropping some struct (Inner) in that field.
-/// 
+///
 /// # Safety
-/// 
+///
 /// This trait will dereference arbitrary data stored in a `c_void` pointer. For
 /// a given instance, the `Inner` type parameter must **always** be consistent.
 unsafe trait PrivateDataWrapper {
@@ -359,7 +375,7 @@ unsafe fn get_maybe_str<'a>(
 
 unsafe extern "C" fn connection_get_objects<ConnectionType: Default + AdbcConnection>(
     connection: *mut FFI_AdbcConnection,
-    depth: ::std::os::raw::c_int,
+    depth: AdbcObjectDepth,
     catalog: *const ::std::os::raw::c_char,
     db_schema: *const ::std::os::raw::c_char,
     table_name: *const ::std::os::raw::c_char,
@@ -421,6 +437,17 @@ unsafe extern "C" fn connection_get_table_schema<
     let catalog = check_err!(get_maybe_str(catalog), error);
     let db_schema = check_err!(get_maybe_str(db_schema), error);
     let table_name = check_err!(get_maybe_str(table_name), error);
+
+    let table_name = if let Some(table_name) = table_name {
+        table_name
+    } else {
+        FFI_AdbcError::set_message(
+            error,
+            "Passed nullptr to table_name in GetTableSchema.",
+        );
+        return AdbcStatusCode::InvalidArguments;
+    };
+
     let schema = check_err!(
         inner.get_table_schema(catalog, db_schema, table_name),
         error
