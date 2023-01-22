@@ -30,11 +30,10 @@
 //! consider implementing automatic clean up of unused parts that are older than one
 //! week.
 use std::collections::BTreeSet;
-use std::fs::File;
-use std::io::{self, BufReader};
 use std::ops::Range;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::io;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
@@ -59,17 +58,13 @@ use crate::{
     RetryConfig,
 };
 
-use credential::OAuthProvider;
+
+use self::credential::{default_gcs_base_url, InstanceCredentialProvider, ServiceAccountCredentials, TokenProvider, ApplicationDefaultCredentials};
 
 mod credential;
 
 #[derive(Debug, Snafu)]
 enum Error {
-    #[snafu(display("Unable to open service account file: {}", source))]
-    OpenCredentials { source: std::io::Error },
-
-    #[snafu(display("Unable to decode service account file: {}", source))]
-    DecodeCredentials { source: serde_json::Error },
 
     #[snafu(display("Got invalid XML response for {} {}: {}", method, url, source))]
     InvalidXMLResponse {
@@ -121,8 +116,8 @@ enum Error {
     #[snafu(display("Missing bucket name"))]
     MissingBucketName {},
 
-    #[snafu(display("Missing service account path or key"))]
-    MissingServiceAccountPathOrKey,
+    #[snafu(display("Could not find either metadata credentials or configuration properties to initialize GCS credentials."))]
+    MissingCredentials,
 
     #[snafu(display(
         "One of service account path or service account key may be provided."
@@ -185,32 +180,6 @@ impl From<Error> for super::Error {
     }
 }
 
-/// A deserialized `service-account-********.json`-file.
-#[derive(serde::Deserialize, Debug)]
-struct ServiceAccountCredentials {
-    /// The private key in RSA format.
-    pub private_key: String,
-
-    /// The email address associated with the service account.
-    pub client_email: String,
-
-    /// Base URL for GCS
-    #[serde(default = "default_gcs_base_url")]
-    pub gcs_base_url: String,
-
-    /// Disable oauth and use empty tokens.
-    #[serde(default = "default_disable_oauth")]
-    pub disable_oauth: bool,
-}
-
-fn default_gcs_base_url() -> String {
-    "https://storage.googleapis.com".to_owned()
-}
-
-fn default_disable_oauth() -> bool {
-    false
-}
-
 #[derive(serde::Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct ListResponse {
@@ -267,7 +236,7 @@ struct GoogleCloudStorageClient {
     client: Client,
     base_url: String,
 
-    oauth_provider: Option<OAuthProvider>,
+    token_provider: Option<Arc<Box<dyn TokenProvider>>>,
     token_cache: TokenCache<String>,
 
     bucket_name: String,
@@ -282,11 +251,11 @@ struct GoogleCloudStorageClient {
 
 impl GoogleCloudStorageClient {
     async fn get_token(&self) -> Result<String> {
-        if let Some(oauth_provider) = &self.oauth_provider {
+        if let Some(token_provider) = &self.token_provider {
             Ok(self
                 .token_cache
                 .get_or_insert_with(|| {
-                    oauth_provider.fetch_token(&self.client, &self.retry_config)
+                    token_provider.fetch_token(&self.client, &self.retry_config)
                 })
                 .await
                 .context(CredentialSnafu)?)
@@ -779,13 +748,6 @@ impl ObjectStore for GoogleCloudStorage {
     }
 }
 
-fn reader_credentials_file(
-    service_account_path: impl AsRef<std::path::Path>,
-) -> Result<ServiceAccountCredentials> {
-    let file = File::open(service_account_path).context(OpenCredentialsSnafu)?;
-    let reader = BufReader::new(file);
-    Ok(serde_json::from_reader(reader).context(DecodeCredentialsSnafu)?)
-}
 
 /// Configure a connection to Google Cloud Storage using the specified
 /// credentials.
@@ -806,6 +768,7 @@ pub struct GoogleCloudStorageBuilder {
     url: Option<String>,
     service_account_path: Option<String>,
     service_account_key: Option<String>,
+    application_credentials_path: Option<String>,
     retry_config: RetryConfig,
     client_options: ClientOptions,
 }
@@ -862,6 +825,11 @@ pub enum GoogleConfigKey {
     /// - `bucket`
     /// - `bucket_name`
     Bucket,
+
+    /// Application credentials path
+    ///
+    /// See [`GoogleCloudStorageBuilder::with_application_credentials`].
+    ApplicationCredentials,
 }
 
 impl AsRef<str> for GoogleConfigKey {
@@ -870,6 +838,7 @@ impl AsRef<str> for GoogleConfigKey {
             Self::ServiceAccount => "google_service_account",
             Self::ServiceAccountKey => "google_service_account_key",
             Self::Bucket => "google_bucket",
+            Self::ApplicationCredentials => "google_application_credentials",
         }
     }
 }
@@ -889,6 +858,7 @@ impl FromStr for GoogleConfigKey {
             "google_bucket" | "google_bucket_name" | "bucket" | "bucket_name" => {
                 Ok(Self::Bucket)
             }
+            "google_application_credentials" => Ok(Self::ApplicationCredentials),
             _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
         }
     }
@@ -900,6 +870,7 @@ impl Default for GoogleCloudStorageBuilder {
             bucket_name: None,
             service_account_path: None,
             service_account_key: None,
+            application_credentials_path: None,
             retry_config: Default::default(),
             client_options: ClientOptions::new().with_allow_http(true),
             url: None,
@@ -988,6 +959,9 @@ impl GoogleCloudStorageBuilder {
                 self.service_account_key = Some(value.into())
             }
             GoogleConfigKey::Bucket => self.bucket_name = Some(value.into()),
+            GoogleConfigKey::ApplicationCredentials => {
+                self.application_credentials_path = Some(value.into())
+            }
         };
         Ok(self)
     }
@@ -1069,6 +1043,17 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
+    /// Set the path to the application credentials file.
+    ///
+    /// https://cloud.google.com/docs/authentication/provide-credentials-adc
+    pub fn with_application_credentials(
+        mut self,
+        application_credentials_path: impl Into<String>,
+    ) -> Self {
+        self.application_credentials_path = Some(application_credentials_path.into());
+        self
+    }
+
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
         self.retry_config = retry_config;
@@ -1098,44 +1083,66 @@ impl GoogleCloudStorageBuilder {
 
         let client = self.client_options.client()?;
 
-        let credentials = match (self.service_account_path, self.service_account_key) {
-            (Some(path), None) => reader_credentials_file(path)?,
-            (None, Some(key)) => {
-                serde_json::from_str(&key).context(DecodeCredentialsSnafu)?
-            }
-            (None, None) => return Err(Error::MissingServiceAccountPathOrKey.into()),
+        // First try to initialize from the service account information.
+        let service_account_credentials = match (self.service_account_path, self.service_account_key) {
+            (Some(path), None) => Some(ServiceAccountCredentials::from_file(path).context(CredentialSnafu)?),
+            (None, Some(key)) => Some(
+                ServiceAccountCredentials::from_key(&key).context(CredentialSnafu)?
+            ),
+            (None, None) => None,
             (Some(_), Some(_)) => {
                 return Err(Error::ServiceAccountPathAndKeyProvided.into())
             }
         };
 
+        // Then try to initialize from the application credentials file, or the environment.
+        let application_default_credentials = ApplicationDefaultCredentials::new(
+            self.application_credentials_path.as_deref(),
+        ).context(CredentialSnafu)?;
+
+        let disable_oauth = service_account_credentials
+            .as_ref()
+            .map(|c| c.disable_oauth)
+            .unwrap_or(false);
+
+        let gcs_base_url = service_account_credentials
+            .as_ref()
+            .map(|c| c.gcs_base_url.clone())
+            .unwrap_or_else(default_gcs_base_url);
+
+        
+
         // TODO: https://cloud.google.com/storage/docs/authentication#oauth-scopes
         let scope = "https://www.googleapis.com/auth/devstorage.full_control";
-        let audience = "https://www.googleapis.com/oauth2/v4/token".to_string();
+        let audience = "https://www.googleapis.com/oauth2/v4/token";
 
-        let oauth_provider = (!credentials.disable_oauth)
-            .then(|| {
-                OAuthProvider::new(
-                    credentials.client_email,
-                    credentials.private_key,
-                    scope.to_string(),
-                    audience,
-                )
-            })
-            .transpose()
-            .context(CredentialSnafu)?;
+
+        let token_provider = if disable_oauth {
+            None
+        } else {
+            let best_provider = service_account_credentials
+                .map(|credentials| credentials.token_provider(scope, audience))
+                .transpose()
+                .context(CredentialSnafu)?
+                .or_else(|| application_default_credentials.map(|a| Box::new(a) as Box<dyn TokenProvider>))
+                .or_else(|| Some(Box::new(InstanceCredentialProvider::new(audience))));
+
+            // A provider is required at this point, bail out if we don't have one.
+            if best_provider.is_some() {
+                best_provider
+            } else {
+                return Err(Error::MissingCredentials.into());
+            }
+        };
 
         let encoded_bucket_name =
             percent_encode(bucket_name.as_bytes(), NON_ALPHANUMERIC).to_string();
 
-        // The cloud storage crate currently only supports authentication via
-        // environment variables. Set the environment variable explicitly so
-        // that we can optionally accept command line arguments instead.
         Ok(GoogleCloudStorage {
             client: Arc::new(GoogleCloudStorageClient {
                 client,
-                base_url: credentials.gcs_base_url,
-                oauth_provider,
+                base_url: gcs_base_url,
+                token_provider: token_provider.map(Arc::new),
                 token_cache: Default::default(),
                 bucket_name,
                 bucket_name_encoded: encoded_bucket_name,
