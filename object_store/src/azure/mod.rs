@@ -397,7 +397,6 @@ pub struct MicrosoftAzureBuilder {
     url: Option<String>,
     use_emulator: bool,
     msi_endpoint: Option<String>,
-    use_managed_identity: bool,
     object_id: Option<String>,
     msi_resource_id: Option<String>,
     federated_token_file: Option<String>,
@@ -514,13 +513,6 @@ pub enum AzureConfigKey {
     /// - `msi_endpoint`
     MsiEndpoint,
 
-    /// Whether a managed identity should be used
-    ///
-    /// Supported keys:
-    /// - `azure_use_managed_identity`
-    /// - `use_managed_identity`
-    UseManagedIdentity,
-
     /// Object id for use with managed identity authentication
     ///
     /// Supported keys:
@@ -555,7 +547,6 @@ impl AsRef<str> for AzureConfigKey {
             Self::Token => "azure_storage_token",
             Self::UseEmulator => "azure_storage_use_emulator",
             Self::MsiEndpoint => "azure_msi_endpoint",
-            Self::UseManagedIdentity => "azure_use_managed_identity",
             Self::ObjectId => "azure_object_id",
             Self::MsiResourceId => "azure_msi_resource_id",
             Self::FederatedTokenFile => "azure_federated_token_file",
@@ -601,9 +592,6 @@ impl FromStr for AzureConfigKey {
             "azure_msi_resource_id" | "msi_resource_id" => Ok(Self::MsiResourceId),
             "azure_federated_token_file" | "federated_token_file" => {
                 Ok(Self::FederatedTokenFile)
-            }
-            "azure_use_managed_identity" | "use_managed_identity" => {
-                Ok(Self::UseManagedIdentity)
             }
             _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
         }
@@ -652,9 +640,6 @@ impl MicrosoftAzureBuilder {
                         AzureConfigKey::from_str(&key.to_ascii_lowercase())
                     {
                         builder = builder.try_with_option(config_key, value).unwrap();
-                        if config_key == AzureConfigKey::MsiEndpoint {
-                            builder = builder.with_use_managed_identity(true);
-                        }
                     }
                 }
             }
@@ -718,9 +703,6 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::MsiResourceId => self.msi_resource_id = Some(value.into()),
             AzureConfigKey::FederatedTokenFile => {
                 self.federated_token_file = Some(value.into())
-            }
-            AzureConfigKey::UseManagedIdentity => {
-                self.use_managed_identity = str_is_truthy(&value.into())
             }
             AzureConfigKey::UseEmulator => {
                 self.use_emulator = str_is_truthy(&value.into())
@@ -888,20 +870,9 @@ impl MicrosoftAzureBuilder {
         self
     }
 
-    /// Attempts authentication using a managed identity that has been assigned to the deployment environment.
-    ///
-    /// This authentication type works in Azure VMs, App Service and Azure Functions applications, as well as the Azure Cloud Shell
-    /// To use a user assigned identity, `client_id`, `object_id`, or `msi_resource_id` must be specified.
-    /// Otherwise, the system assigned identity will be used.
-    pub fn with_use_managed_identity(mut self, use_msi: bool) -> Self {
-        self.use_managed_identity = use_msi;
-        self
-    }
-
     /// Sets the endpoint for acquiring managed identity token
     pub fn with_msi_endpoint(mut self, msi_endpoint: impl Into<String>) -> Self {
         self.msi_endpoint = Some(msi_endpoint.into());
-        self.use_managed_identity = true;
         self
     }
 
@@ -948,20 +919,6 @@ impl MicrosoftAzureBuilder {
                 credential::CredentialProvider::AccessKey(bearer_token)
             } else if let Some(access_key) = self.access_key {
                 credential::CredentialProvider::AccessKey(access_key)
-            } else if self.use_managed_identity {
-                let client =
-                    self.client_options.clone().with_allow_http(true).client()?;
-                let msi_credential = credential::ImdsManagedIdentityOAuthProvider::new(
-                    self.client_id,
-                    self.object_id,
-                    self.msi_resource_id,
-                    self.msi_endpoint,
-                    client,
-                );
-                credential::CredentialProvider::TokenCredential(
-                    TokenCache::default(),
-                    Box::new(msi_credential),
-                )
             } else if let (Some(client_id), Some(tenant_id), Some(federated_token_file)) =
                 (&self.client_id, &self.tenant_id, self.federated_token_file)
             {
