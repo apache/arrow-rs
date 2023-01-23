@@ -898,7 +898,7 @@ impl MicrosoftAzureBuilder {
         self
     }
 
-    /// Sets the enddpoint for acquiring managed identity token
+    /// Sets the endpoint for acquiring managed identity token
     pub fn with_msi_endpoint(mut self, msi_endpoint: impl Into<String>) -> Self {
         self.msi_endpoint = Some(msi_endpoint.into());
         self.use_managed_identity = true;
