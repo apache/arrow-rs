@@ -945,9 +945,9 @@ impl MicrosoftAzureBuilder {
             let url = Url::parse(&account_url)
                 .context(UnableToParseUrlSnafu { url: account_url })?;
             let credential = if let Some(bearer_token) = self.bearer_token {
-                Ok(credential::CredentialProvider::AccessKey(bearer_token))
+                credential::CredentialProvider::AccessKey(bearer_token)
             } else if let Some(access_key) = self.access_key {
-                Ok(credential::CredentialProvider::AccessKey(access_key))
+                credential::CredentialProvider::AccessKey(access_key)
             } else if self.use_managed_identity {
                 let client =
                     self.client_options.clone().with_allow_http(true).client()?;
@@ -958,10 +958,10 @@ impl MicrosoftAzureBuilder {
                     self.msi_endpoint,
                     client,
                 );
-                Ok(credential::CredentialProvider::TokenCredential(
+                credential::CredentialProvider::TokenCredential(
                     TokenCache::default(),
                     Box::new(msi_credential),
-                ))
+                )
             } else if let (Some(client_id), Some(tenant_id), Some(federated_token_file)) =
                 (&self.client_id, &self.tenant_id, self.federated_token_file)
             {
@@ -971,30 +971,42 @@ impl MicrosoftAzureBuilder {
                     tenant_id,
                     self.authority_host,
                 );
-                Ok(credential::CredentialProvider::TokenCredential(
+                credential::CredentialProvider::TokenCredential(
                     TokenCache::default(),
                     Box::new(client_credential),
-                ))
+                )
             } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
-                (self.client_id, self.client_secret, &self.tenant_id)
+                (&self.client_id, self.client_secret, &self.tenant_id)
             {
                 let client_credential = credential::ClientSecretOAuthProvider::new(
-                    client_id,
+                    client_id.clone(),
                     client_secret,
                     tenant_id,
                     self.authority_host,
                 );
-                Ok(credential::CredentialProvider::TokenCredential(
+                credential::CredentialProvider::TokenCredential(
                     TokenCache::default(),
                     Box::new(client_credential),
-                ))
+                )
             } else if let Some(query_pairs) = self.sas_query_pairs {
-                Ok(credential::CredentialProvider::SASToken(query_pairs))
+                credential::CredentialProvider::SASToken(query_pairs)
             } else if let Some(sas) = self.sas_key {
-                Ok(credential::CredentialProvider::SASToken(split_sas(&sas)?))
+                credential::CredentialProvider::SASToken(split_sas(&sas)?)
             } else {
-                Err(Error::MissingCredentials {})
-            }?;
+                let client =
+                    self.client_options.clone().with_allow_http(true).client()?;
+                let msi_credential = credential::ImdsManagedIdentityOAuthProvider::new(
+                    self.client_id,
+                    self.object_id,
+                    self.msi_resource_id,
+                    self.msi_endpoint,
+                    client,
+                );
+                credential::CredentialProvider::TokenCredential(
+                    TokenCache::default(),
+                    Box::new(msi_credential),
+                )
+            };
             (false, url, credential, account_name)
         };
 
