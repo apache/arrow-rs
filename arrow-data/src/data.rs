@@ -1327,9 +1327,9 @@ impl ArrayData {
             DataType::RunEndEncoded(run_ends, _values) => {
                 let run_ends_data = self.child_data()[0].clone();
                 match run_ends.data_type() {
-                    DataType::Int16 => run_ends_data.check_run_ends::<i16>(),
-                    DataType::Int32 => run_ends_data.check_run_ends::<i32>(),
-                    DataType::Int64 => run_ends_data.check_run_ends::<i64>(),
+                    DataType::Int16 => run_ends_data.check_run_ends::<i16>(self.len()),
+                    DataType::Int32 => run_ends_data.check_run_ends::<i32>(self.len()),
+                    DataType::Int64 => run_ends_data.check_run_ends::<i64>(self.len()),
                     _ => unreachable!(),
                 }
             }
@@ -1494,7 +1494,7 @@ impl ArrayData {
     }
 
     /// Validates that each value in run_ends array is positive and strictly increasing.
-    fn check_run_ends<T>(&self) -> Result<(), ArrowError>
+    fn check_run_ends<T>(&self, array_len: usize) -> Result<(), ArrowError>
     where
         T: ArrowNativeType + TryInto<i64> + num::Num + std::fmt::Display,
     {
@@ -1525,8 +1525,18 @@ impl ArrayData {
 
             prev_value = value;
             Ok(())
-        })
+        })?;
+
+        if prev_value.as_usize() != array_len {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "The length of array does not match the last value in the run_ends array. The last value of run_ends array is {} and length of array is {}.",
+                prev_value,
+                array_len
+            )));
+        }
+        Ok(())
     }
+    
     /// Returns true if this `ArrayData` is equal to `other`, using pointer comparisons
     /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may
     /// return false when the arrays are logically equal
