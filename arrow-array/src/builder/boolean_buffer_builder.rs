@@ -38,7 +38,12 @@ impl BooleanBufferBuilder {
     /// Creates a new `BooleanBufferBuilder` from [`MutableBuffer`] of `len`
     pub fn new_from_buffer(buffer: MutableBuffer, len: usize) -> Self {
         assert!(len <= buffer.len() * 8);
-        Self { buffer, len }
+        let mut s = Self {
+            len: buffer.len() * 8,
+            buffer,
+        };
+        s.truncate(len);
+        s
     }
 
     /// Returns the length of the buffer
@@ -86,6 +91,26 @@ impl BooleanBufferBuilder {
         self.len = new_len;
     }
 
+    /// Truncates the builder to the given length
+    ///
+    /// If `len` is greater than the buffer's current length, this has no effect
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        if len > self.len {
+            return;
+        }
+
+        let new_len_bytes = bit_util::ceil(len, 8);
+        self.buffer.truncate(new_len_bytes);
+        self.len = len;
+
+        let remainder = self.len % 8;
+        if remainder != 0 {
+            let mask = (1_u8 << remainder).wrapping_sub(1);
+            *self.buffer.as_mut().last_mut().unwrap() &= mask;
+        }
+    }
+
     /// Reserve space to at least `additional` new bits.
     /// Capacity will be `>= self.len() + additional`.
     /// New bytes are uninitialized and reading them is undefined behavior.
@@ -103,9 +128,10 @@ impl BooleanBufferBuilder {
     /// growing it (potentially reallocating it) and writing `false` in the newly available bits.
     #[inline]
     pub fn resize(&mut self, len: usize) {
-        let len_bytes = bit_util::ceil(len, 8);
-        self.buffer.resize(len_bytes, 0);
-        self.len = len;
+        match len.checked_sub(self.len) {
+            Some(delta) => self.advance(delta),
+            None => self.truncate(len),
+        }
     }
 
     /// Appends a boolean `v` into the buffer
@@ -381,6 +407,45 @@ mod tests {
         builder.append_n(4, true);
         assert_eq!(builder.len(), 9);
         assert_eq!(builder.as_slice(), &[0b11101111, 0b00000001]);
+    }
+
+    #[test]
+    fn test_truncate() {
+        let b = MutableBuffer::from_iter([true, true, true, true]);
+        let mut builder = BooleanBufferBuilder::new_from_buffer(b, 2);
+        builder.advance(2);
+        let finished = builder.finish();
+        assert_eq!(finished.as_slice(), &[0b00000011]);
+
+        let mut builder = BooleanBufferBuilder::new(10);
+        builder.append_n(5, true);
+        builder.resize(3);
+        builder.advance(2);
+        let finished = builder.finish();
+        assert_eq!(finished.as_slice(), &[0b00000111]);
+
+        let mut builder = BooleanBufferBuilder::new(10);
+        builder.append_n(16, true);
+        assert_eq!(builder.as_slice(), &[0xFF, 0xFF]);
+        builder.truncate(20);
+        assert_eq!(builder.as_slice(), &[0xFF, 0xFF]);
+        builder.truncate(14);
+        assert_eq!(builder.as_slice(), &[0xFF, 0b00111111]);
+        builder.append(false);
+        builder.append(true);
+        assert_eq!(builder.as_slice(), &[0xFF, 0b10111111]);
+        builder.append_packed_range(0..3, &[0xFF]);
+        assert_eq!(builder.as_slice(), &[0xFF, 0b10111111, 0b00000111]);
+        builder.truncate(17);
+        assert_eq!(builder.as_slice(), &[0xFF, 0b10111111, 0b00000001]);
+        builder.append_packed_range(0..2, &[2]);
+        assert_eq!(builder.as_slice(), &[0xFF, 0b10111111, 0b0000101]);
+        builder.truncate(8);
+        assert_eq!(builder.as_slice(), &[0xFF]);
+        builder.resize(14);
+        assert_eq!(builder.as_slice(), &[0xFF, 0x00]);
+        builder.truncate(0);
+        assert_eq!(builder.as_slice(), &[]);
     }
 
     #[test]
