@@ -22,7 +22,6 @@ use crate::{types::RunEndIndexType, ArrayRef, ArrowPrimitiveType, RunArray};
 use super::{ArrayBuilder, PrimitiveBuilder};
 
 use arrow_buffer::ArrowNativeType;
-use arrow_schema::ArrowError;
 
 /// Array builder for [`RunArray`] that encodes primitive values.
 ///
@@ -37,12 +36,12 @@ use arrow_schema::ArrowError;
 ///
 /// let mut builder =
 /// PrimitiveRunBuilder::<Int16Type, UInt32Type>::new();
-/// builder.append_value(1234).unwrap();
-/// builder.append_value(1234).unwrap();
-/// builder.append_value(1234).unwrap();
-/// builder.append_null().unwrap();
-/// builder.append_value(5678).unwrap();
-/// builder.append_value(5678).unwrap();
+/// builder.append_value(1234);
+/// builder.append_value(1234);
+/// builder.append_value(1234);
+/// builder.append_null();
+/// builder.append_value(5678);
+/// builder.append_value(5678);
 /// let array = builder.finish();
 ///
 /// assert_eq!(
@@ -166,32 +165,27 @@ where
     V: ArrowPrimitiveType,
 {
     /// Appends optional value to the logical array encoded by the RunArray.
-    pub fn append_option(&mut self, value: Option<V::Native>) -> Result<(), ArrowError> {
+    pub fn append_option(&mut self, value: Option<V::Native>) {
         if self.current_run_end_index == 0 {
             self.current_run_end_index = 1;
             self.current_value = value;
-            return Ok(());
+            return;
         }
         if self.current_value != value {
-            self.append_run_end()?;
+            self.append_run_end();
             self.current_value = value;
         }
 
-        self.current_run_end_index = self
-            .current_run_end_index
-            .checked_add(1)
-            .ok_or(ArrowError::RunEndIndexOverflowError)?;
-
-        Ok(())
+        self.current_run_end_index += 1;
     }
 
     /// Appends value to the logical array encoded by the run-ends array.
-    pub fn append_value(&mut self, value: V::Native) -> Result<(), ArrowError> {
+    pub fn append_value(&mut self, value: V::Native) {
         self.append_option(Some(value))
     }
 
     /// Appends null to the logical array encoded by the run-ends array.
-    pub fn append_null(&mut self) -> Result<(), ArrowError> {
+    pub fn append_null(&mut self) {
         self.append_option(None)
     }
 
@@ -199,7 +193,7 @@ where
     /// Panics if RunArray cannot be built.
     pub fn finish(&mut self) -> RunArray<R> {
         // write the last run end to the array.
-        self.append_run_end().unwrap();
+        self.append_run_end();
 
         // reset the run index to zero.
         self.current_value = None;
@@ -221,8 +215,7 @@ where
         if self.prev_run_end_index != self.current_run_end_index {
             let mut run_end_builder = run_ends_array.into_builder().unwrap();
             let mut values_builder = values_array.into_builder().unwrap();
-            self.append_run_end_with_builders(&mut run_end_builder, &mut values_builder)
-                .unwrap();
+            self.append_run_end_with_builders(&mut run_end_builder, &mut values_builder);
             run_ends_array = run_end_builder.finish();
             values_array = values_builder.finish();
         }
@@ -233,25 +226,22 @@ where
     // Appends the current run to the array. There are scenarios where this function can be called
     // multiple times before getting a new value. e.g. appending different value immediately following
     // finish_cloned.
-    fn append_run_end(&mut self) -> Result<(), ArrowError> {
+    fn append_run_end(&mut self) {
         // empty array or the function called without appending any value.
         if self.current_run_end_index == 0
             || self.prev_run_end_index == self.current_run_end_index
         {
-            return Ok(());
+            return;
         }
-        let run_end_index = R::Native::from_usize(self.current_run_end_index)
-            .ok_or_else(|| {
-                ArrowError::ParseError(format!(
-                    "Cannot convert the value {} from `usize` to native form of arrow datatype {}",
-                    self.current_run_end_index,
-                    R::DATA_TYPE
-                ))
-            })?;
+        let run_end_index =  R::Native::from_usize(self.current_run_end_index)
+            .unwrap_or_else(|| panic!(
+            "Cannot convert the value {} from `usize` to native form of arrow datatype {}",
+            self.current_run_end_index,
+            R::DATA_TYPE
+            ));
         self.run_ends_builder.append_value(run_end_index);
         self.values_builder.append_option(self.current_value);
         self.prev_run_end_index = self.current_run_end_index;
-        Ok(())
     }
 
     // Similar to `append_run_end` but on custom builders.
@@ -259,18 +249,15 @@ where
         &self,
         run_ends_builder: &mut PrimitiveBuilder<R>,
         values_builder: &mut PrimitiveBuilder<V>,
-    ) -> Result<(), ArrowError> {
+    ) {
         let run_end_index = R::Native::from_usize(self.current_run_end_index)
-            .ok_or_else(|| {
-                ArrowError::ParseError(format!(
+            .unwrap_or_else(|| panic!(
                     "Cannot convert the value {} from `usize` to native form of arrow datatype {}",
                     self.current_run_end_index,
                     R::DATA_TYPE
-                ))
-            })?;
+            ));
         run_ends_builder.append_value(run_end_index);
         values_builder.append_option(self.current_value);
-        Ok(())
     }
 }
 
@@ -283,12 +270,12 @@ mod tests {
     #[test]
     fn test_primitive_ree_array_builder() {
         let mut builder = PrimitiveRunBuilder::<Int16Type, UInt32Type>::new();
-        builder.append_value(1234).unwrap();
-        builder.append_value(1234).unwrap();
-        builder.append_value(1234).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(5678).unwrap();
-        builder.append_value(5678).unwrap();
+        builder.append_value(1234);
+        builder.append_value(1234);
+        builder.append_value(1234);
+        builder.append_null();
+        builder.append_value(5678);
+        builder.append_value(5678);
         let array = builder.finish();
 
         assert_eq!(

@@ -182,13 +182,9 @@ impl<'a, T: RunEndIndexType> FromIterator<Option<&'a str>> for RunArray<T> {
         let mut builder = StringRunBuilder::with_capacity(lower, 256);
         it.for_each(|i| {
             if let Some(i) = i {
-                builder
-                    .append_value(i)
-                    .expect("Unable to append a value to a run end encoded array.");
+                builder.append_value(i);
             } else {
-                builder
-                    .append_null()
-                    .expect("Unable to append null value to run end encoded array.");
+                builder.append_null();
             }
         });
 
@@ -216,9 +212,7 @@ impl<'a, T: RunEndIndexType> FromIterator<&'a str> for RunArray<T> {
         let (lower, _) = it.size_hint();
         let mut builder = StringRunBuilder::with_capacity(lower, 256);
         it.for_each(|i| {
-            builder
-                .append_value(i)
-                .expect("Unable to append a value to a dictionary array.");
+            builder.append_value(i);
         });
 
         builder.finish()
@@ -318,9 +312,9 @@ mod tests {
     #[test]
     fn test_run_array_fmt_debug() {
         let mut builder = PrimitiveRunBuilder::<Int16Type, UInt32Type>::with_capacity(3);
-        builder.append_value(12345678).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(22345678).unwrap();
+        builder.append_value(12345678);
+        builder.append_null();
+        builder.append_value(22345678);
         let array = builder.finish();
         assert_eq!(
             "RunArray {run_ends: PrimitiveArray<Int16>\n[\n  1,\n  2,\n  3,\n], values: PrimitiveArray<UInt32>\n[\n  12345678,\n  null,\n  22345678,\n]}\n",
@@ -329,7 +323,7 @@ mod tests {
 
         let mut builder = PrimitiveRunBuilder::<Int16Type, UInt32Type>::with_capacity(20);
         for _ in 0..20 {
-            builder.append_value(1).unwrap();
+            builder.append_value(1);
         }
         let array = builder.finish();
         assert_eq!(

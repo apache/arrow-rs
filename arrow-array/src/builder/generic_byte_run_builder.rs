@@ -29,7 +29,6 @@ use crate::{
 use super::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder};
 
 use arrow_buffer::ArrowNativeType;
-use arrow_schema::ArrowError;
 
 /// Array builder for [`RunArray`] for String and Binary types.
 ///
@@ -44,10 +43,10 @@ use arrow_schema::ArrowError;
 ///
 /// let mut builder =
 /// GenericByteRunBuilder::<Int16Type, BinaryType>::new();
-/// builder.append_value(b"abc").unwrap();
-/// builder.append_value(b"abc").unwrap();
-/// builder.append_null().unwrap();
-/// builder.append_value(b"def").unwrap();
+/// builder.append_value(b"abc");
+/// builder.append_value(b"abc");
+/// builder.append_null();
+/// builder.append_value(b"def");
 /// let array = builder.finish();
 ///
 /// assert_eq!(
@@ -179,58 +178,43 @@ where
     V: ByteArrayType,
 {
     /// Appends optional value to the logical array encoded by the RunArray.
-    pub fn append_option(
-        &mut self,
-        input_value: Option<impl AsRef<V::Native>>,
-    ) -> Result<(), ArrowError> {
+    pub fn append_option(&mut self, input_value: Option<impl AsRef<V::Native>>) {
         match input_value {
-            Some(value) => self.append_value(value)?,
-            None => self.append_null()?,
+            Some(value) => self.append_value(value),
+            None => self.append_null(),
         }
-        Ok(())
     }
 
     /// Appends value to the logical array encoded by the RunArray.
-    pub fn append_value(
-        &mut self,
-        input_value: impl AsRef<V::Native>,
-    ) -> Result<(), ArrowError> {
+    pub fn append_value(&mut self, input_value: impl AsRef<V::Native>) {
         let value: &[u8] = input_value.as_ref().as_ref();
         if !self.has_current_value {
-            self.append_run_end()?;
+            self.append_run_end();
             self.current_value.extend_from_slice(value);
             self.has_current_value = true;
         } else if self.current_value.as_slice() != value {
-            self.append_run_end()?;
+            self.append_run_end();
             self.current_value.clear();
             self.current_value.extend_from_slice(value);
         }
-        self.current_run_end_index = self
-            .current_run_end_index
-            .checked_add(1)
-            .ok_or(ArrowError::RunEndIndexOverflowError)?;
-        Ok(())
+        self.current_run_end_index += 1;
     }
 
     /// Appends null to the logical array encoded by the RunArray.
-    pub fn append_null(&mut self) -> Result<(), ArrowError> {
+    pub fn append_null(&mut self) {
         if self.has_current_value {
-            self.append_run_end()?;
+            self.append_run_end();
             self.current_value.clear();
             self.has_current_value = false;
         }
-        self.current_run_end_index = self
-            .current_run_end_index
-            .checked_add(1)
-            .ok_or(ArrowError::RunEndIndexOverflowError)?;
-        Ok(())
+        self.current_run_end_index += 1;
     }
 
     /// Creates the RunArray and resets the builder.
     /// Panics if RunArray cannot be built.
     pub fn finish(&mut self) -> RunArray<R> {
         // write the last run end to the array.
-        self.append_run_end().unwrap();
+        self.append_run_end();
 
         // reset the run end index to zero.
         self.current_value.clear();
@@ -254,8 +238,7 @@ where
         if self.prev_run_end_index != self.current_run_end_index {
             let mut run_end_builder = run_ends_array.into_builder().unwrap();
             let mut values_builder = values_array.into_builder().unwrap();
-            self.append_run_end_with_builders(&mut run_end_builder, &mut values_builder)
-                .unwrap();
+            self.append_run_end_with_builders(&mut run_end_builder, &mut values_builder);
             run_ends_array = run_end_builder.finish();
             values_array = values_builder.finish();
         }
@@ -264,31 +247,32 @@ where
     }
 
     // Appends the current run to the array.
-    fn append_run_end(&mut self) -> Result<(), ArrowError> {
+    fn append_run_end(&mut self) {
         // empty array or the function called without appending any value.
         if self.current_run_end_index == 0
             || self.prev_run_end_index == self.current_run_end_index
         {
-            return Ok(());
+            return;
         }
         let run_end_index = R::Native::from_usize(self.current_run_end_index)
-            .ok_or_else(|| {
-                ArrowError::ParseError(format!(
+            .unwrap_or_else(|| panic!(
                     "Cannot convert the value {} from `usize` to native form of arrow datatype {}",
                     self.current_run_end_index,
                     R::DATA_TYPE
-                ))
-            })?;
+                ));
         self.run_ends_builder.append_value(run_end_index);
         if self.has_current_value {
             let slice = self.current_value.as_slice();
-            let native = unsafe { V::Native::from_bytes_unchecked(slice) };
+            let native = unsafe {
+                // As self.current_value is created from V::Native. The value V::Native can be
+                // built back from the bytes without validations
+                V::Native::from_bytes_unchecked(slice)
+            };
             self.values_builder.append_value(native);
         } else {
             self.values_builder.append_null();
         }
         self.prev_run_end_index = self.current_run_end_index;
-        Ok(())
     }
 
     // Similar to `append_run_end` but on custom builders.
@@ -296,24 +280,25 @@ where
         &self,
         run_ends_builder: &mut PrimitiveBuilder<R>,
         values_builder: &mut GenericByteBuilder<V>,
-    ) -> Result<(), ArrowError> {
+    ) {
         let run_end_index = R::Native::from_usize(self.current_run_end_index)
-            .ok_or_else(|| {
-                ArrowError::ParseError(format!(
+            .unwrap_or_else(|| panic!(
                     "Cannot convert the value {} from `usize` to native form of arrow datatype {}",
                     self.current_run_end_index,
                     R::DATA_TYPE
-                ))
-            })?;
+                ));
         run_ends_builder.append_value(run_end_index);
         if self.has_current_value {
             let slice = self.current_value.as_slice();
-            let native = unsafe { V::Native::from_bytes_unchecked(slice) };
+            let native = unsafe {
+                // As self.current_value is created from V::Native. The value V::Native can be
+                // built back from the bytes without validations
+                V::Native::from_bytes_unchecked(slice)
+            };
             values_builder.append_value(native);
         } else {
             values_builder.append_null();
         }
-        Ok(())
     }
 }
 
@@ -330,11 +315,11 @@ where
 /// let mut builder = StringRunBuilder::<Int16Type>::new();
 ///
 /// // The builder builds the dictionary value by value
-/// builder.append_value("abc").unwrap();
+/// builder.append_value("abc");
 /// builder.append_null();
-/// builder.append_value("def").unwrap();
-/// builder.append_value("def").unwrap();
-/// builder.append_value("abc").unwrap();
+/// builder.append_value("def");
+/// builder.append_value("def");
+/// builder.append_value("abc");
 /// let array = builder.finish();
 ///
 /// assert_eq!(
@@ -370,11 +355,11 @@ pub type LargeStringRunBuilder<K> = GenericByteRunBuilder<K, LargeUtf8Type>;
 /// let mut builder = BinaryRunBuilder::<Int16Type>::new();
 ///
 /// // The builder builds the dictionary value by value
-/// builder.append_value(b"abc").unwrap();
+/// builder.append_value(b"abc");
 /// builder.append_null();
-/// builder.append_value(b"def").unwrap();
-/// builder.append_value(b"def").unwrap();
-/// builder.append_value(b"abc").unwrap();
+/// builder.append_value(b"def");
+/// builder.append_value(b"def");
+/// builder.append_value(b"abc");
 /// let array = builder.finish();
 ///
 /// assert_eq!(
@@ -415,13 +400,13 @@ mod tests {
         <T as ByteArrayType>::Native: AsRef<<T as ByteArrayType>::Native>,
     {
         let mut builder = GenericByteRunBuilder::<Int16Type, T>::new();
-        builder.append_value(values[0]).unwrap();
-        builder.append_value(values[0]).unwrap();
-        builder.append_value(values[0]).unwrap();
-        builder.append_null().unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(values[1]).unwrap();
-        builder.append_value(values[1]).unwrap();
+        builder.append_value(values[0]);
+        builder.append_value(values[0]);
+        builder.append_value(values[0]);
+        builder.append_null();
+        builder.append_null();
+        builder.append_value(values[1]);
+        builder.append_value(values[1]);
         let array = builder.finish();
 
         assert_eq!(
@@ -457,11 +442,11 @@ mod tests {
     {
         let mut builder = GenericByteRunBuilder::<Int16Type, T>::new();
 
-        builder.append_value(values[0]).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(values[1]).unwrap();
-        builder.append_value(values[1]).unwrap();
-        builder.append_value(values[0]).unwrap();
+        builder.append_value(values[0]);
+        builder.append_null();
+        builder.append_value(values[1]);
+        builder.append_value(values[1]);
+        builder.append_value(values[0]);
         let mut array: Int16RunArray = builder.finish_cloned();
 
         assert_eq!(
@@ -479,9 +464,9 @@ mod tests {
         assert_eq!(ava.value(2), values[1]);
         assert_eq!(ava.value(3), values[0]);
 
-        builder.append_value(values[0]).unwrap();
-        builder.append_value(values[0]).unwrap();
-        builder.append_value(values[1]).unwrap();
+        builder.append_value(values[0]);
+        builder.append_value(values[0]);
+        builder.append_value(values[1]);
 
         array = builder.finish();
 
