@@ -1536,7 +1536,7 @@ impl ArrayData {
         }
         Ok(())
     }
-    
+
     /// Returns true if this `ArrayData` is equal to `other`, using pointer comparisons
     /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may
     /// return false when the arrays are logically equal
