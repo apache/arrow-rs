@@ -64,8 +64,8 @@ pub use struct_array::*;
 mod union_array;
 pub use union_array::*;
 
-mod run_end_encoded_array;
-pub use run_end_encoded_array::*;
+mod run_array;
+pub use run_array::*;
 
 /// Trait for dealing with different types of array at runtime when the type of the
 /// array is not known in advance.
