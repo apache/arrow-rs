@@ -831,8 +831,10 @@ mod tests {
 
     use crate::basic::{self, ColumnOrder};
     use crate::data_type::private::ParquetValueType;
-    use crate::data_type::AsBytes;
+    use crate::data_type::{AsBytes, FixedLenByteArrayType};
     use crate::file::page_index::index::{Index, NativeIndex};
+    use crate::file::properties::WriterProperties;
+    use crate::file::writer::SerializedFileWriter;
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
     use crate::util::bit_util::from_le_slice;
@@ -1728,5 +1730,58 @@ mod tests {
         assert!(column_page_reader.get_next_page().unwrap().is_none());
 
         assert_eq!(vec.len(), 352);
+    }
+
+    #[test]
+    fn test_fixed_length_index() {
+        let message_type = "
+        message test_schema {
+          OPTIONAL FIXED_LEN_BYTE_ARRAY (11) value (DECIMAL(25,2));
+        }
+        ";
+
+        let schema = parse_message_type(message_type).unwrap();
+        let mut out = Vec::with_capacity(1024);
+        let mut writer = SerializedFileWriter::new(
+            &mut out,
+            Arc::new(schema),
+            Arc::new(WriterProperties::builder().build()),
+        )
+        .unwrap();
+
+        let mut r = writer.next_row_group().unwrap();
+        let mut c = r.next_column().unwrap().unwrap();
+        c.typed::<FixedLenByteArrayType>()
+            .write_batch(
+                &[vec![0; 11].into(), vec![5; 11].into(), vec![3; 11].into()],
+                Some(&[1, 1, 0, 1]),
+                None,
+            )
+            .unwrap();
+        c.close().unwrap();
+        r.close().unwrap();
+        writer.close().unwrap();
+
+        let b = Bytes::from(out);
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(b, options).unwrap();
+        let index = reader.metadata().page_indexes().unwrap();
+
+        // 1 row group
+        assert_eq!(index.len(), 1);
+        let c = &index[0];
+        // 1 column
+        assert_eq!(c.len(), 1);
+
+        match &c[0] {
+            Index::FIXED_LEN_BYTE_ARRAY(v) => {
+                assert_eq!(v.indexes.len(), 1);
+                let page_idx = &v.indexes[0];
+                assert_eq!(page_idx.null_count.unwrap(), 1);
+                assert_eq!(page_idx.min.as_ref().unwrap().as_ref(), &[0; 11]);
+                assert_eq!(page_idx.max.as_ref().unwrap().as_ref(), &[5; 11]);
+            }
+            _ => unreachable!(),
+        }
     }
 }
