@@ -17,9 +17,8 @@
 
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
-use crate::local::open_file;
-use crate::util::{hmac_sha256, maybe_spawn_blocking};
-use crate::{GetResult, RetryConfig};
+use crate::util::hmac_sha256;
+use crate::RetryConfig;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use chrono::Utc;
@@ -71,7 +70,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub enum CredentialProvider {
     AccessKey(String),
     SASToken(Vec<(String, String)>),
-    TokenCredential(Box<dyn TokenCredential>),
+    TokenCredential(TokenCache<String>, Box<dyn TokenCredential>),
 }
 
 pub(crate) enum AzureCredential {
@@ -283,7 +282,11 @@ fn lexy_sort<'a>(
 
 #[async_trait::async_trait]
 pub trait TokenCredential: std::fmt::Debug + Send + Sync + 'static {
-    async fn fetch_token(&self, client: &Client, retry: &RetryConfig) -> Result<String>;
+    async fn fetch_token(
+        &self,
+        client: &Client,
+        retry: &RetryConfig,
+    ) -> Result<TemporaryToken<String>>;
 }
 
 #[derive(Deserialize, Debug)]
@@ -298,7 +301,6 @@ pub struct ClientSecretOAuthProvider {
     token_url: String,
     client_id: String,
     client_secret: String,
-    cache: TokenCache<String>,
 }
 
 impl ClientSecretOAuthProvider {
@@ -320,12 +322,14 @@ impl ClientSecretOAuthProvider {
             ),
             client_id,
             client_secret,
-            cache: TokenCache::default(),
         }
     }
+}
 
-    /// Fetch a fresh token
-    async fn fetch_token_inner(
+#[async_trait::async_trait]
+impl TokenCredential for ClientSecretOAuthProvider {
+    /// Fetch a token
+    async fn fetch_token(
         &self,
         client: &Client,
         retry: &RetryConfig,
@@ -352,16 +356,6 @@ impl ClientSecretOAuthProvider {
         };
 
         Ok(token)
-    }
-}
-
-#[async_trait::async_trait]
-impl TokenCredential for ClientSecretOAuthProvider {
-    /// Fetch a token
-    async fn fetch_token(&self, client: &Client, retry: &RetryConfig) -> Result<String> {
-        self.cache
-            .get_or_insert_with(|| self.fetch_token_inner(client, retry))
-            .await
     }
 }
 
@@ -392,7 +386,7 @@ pub struct ImdsManagedIdentityOAuthProvider {
     client_id: Option<String>,
     object_id: Option<String>,
     msi_res_id: Option<String>,
-    cache: TokenCache<String>,
+    client: Client,
 }
 
 impl ImdsManagedIdentityOAuthProvider {
@@ -402,6 +396,7 @@ impl ImdsManagedIdentityOAuthProvider {
         object_id: Option<String>,
         msi_res_id: Option<String>,
         msi_endpoint: Option<String>,
+        client: Client,
     ) -> Self {
         let msi_endpoint = msi_endpoint.unwrap_or_else(|| {
             "http://169.254.169.254/metadata/identity/oauth2/token".to_owned()
@@ -412,14 +407,17 @@ impl ImdsManagedIdentityOAuthProvider {
             client_id,
             object_id,
             msi_res_id,
-            cache: TokenCache::default(),
+            client,
         }
     }
+}
 
-    /// Fetch a fresh token
-    async fn fetch_token_inner(
+#[async_trait::async_trait]
+impl TokenCredential for ImdsManagedIdentityOAuthProvider {
+    /// Fetch a token
+    async fn fetch_token(
         &self,
-        client: &Client,
+        _client: &Client,
         retry: &RetryConfig,
     ) -> Result<TemporaryToken<String>> {
         let mut query_items = vec![
@@ -440,7 +438,8 @@ impl ImdsManagedIdentityOAuthProvider {
             _ => (),
         }
 
-        let mut builder = client
+        let mut builder = self
+            .client
             .request(Method::GET, &self.msi_endpoint)
             .header("metadata", "true")
             .query(&query_items);
@@ -466,16 +465,6 @@ impl ImdsManagedIdentityOAuthProvider {
     }
 }
 
-#[async_trait::async_trait]
-impl TokenCredential for ImdsManagedIdentityOAuthProvider {
-    /// Fetch a token
-    async fn fetch_token(&self, client: &Client, retry: &RetryConfig) -> Result<String> {
-        self.cache
-            .get_or_insert_with(|| self.fetch_token_inner(client, retry))
-            .await
-    }
-}
-
 /// Credential for using workload identity dfederation
 ///
 /// <https://learn.microsoft.com/en-us/azure/active-directory/develop/workload-identity-federation>
@@ -484,7 +473,6 @@ pub struct WorkloadIdentityOAuthProvider {
     token_url: String,
     client_id: String,
     federated_token_file: String,
-    cache: TokenCache<String>,
 }
 
 impl WorkloadIdentityOAuthProvider {
@@ -506,27 +494,19 @@ impl WorkloadIdentityOAuthProvider {
             ),
             client_id: client_id.into(),
             federated_token_file: federated_token_file.into(),
-            cache: TokenCache::default(),
         }
     }
+}
 
-    /// Fetch a fresh token
-    async fn fetch_token_inner(
+#[async_trait::async_trait]
+impl TokenCredential for WorkloadIdentityOAuthProvider {
+    /// Fetch a token
+    async fn fetch_token(
         &self,
         client: &Client,
         retry: &RetryConfig,
     ) -> Result<TemporaryToken<String>> {
-        let federated_token_file = std::path::PathBuf::from(&self.federated_token_file);
-        let federated_token = maybe_spawn_blocking(move || {
-            let file = open_file(&federated_token_file)?;
-            Ok(GetResult::File(file, federated_token_file))
-        })
-        .await
-        .map_err(|_| Error::FederatedTokenFile)?
-        .bytes()
-        .await
-        .map_err(|_| Error::FederatedTokenFile)?;
-        let token_str = String::from_utf8(federated_token.to_vec())
+        let token_str = std::fs::read_to_string(&self.federated_token_file)
             .map_err(|_| Error::FederatedTokenFile)?;
 
         // https://learn.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-client-creds-grant-flow#third-case-access-token-request-with-a-federated-credential
@@ -559,25 +539,15 @@ impl WorkloadIdentityOAuthProvider {
     }
 }
 
-#[async_trait::async_trait]
-impl TokenCredential for WorkloadIdentityOAuthProvider {
-    /// Fetch a token
-    async fn fetch_token(&self, client: &Client, retry: &RetryConfig) -> Result<String> {
-        self.cache
-            .get_or_insert_with(|| self.fetch_token_inner(client, retry))
-            .await
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::client::mock_server::MockServer;
-    use crate::local::LocalFileSystem;
-    use crate::ObjectStore;
+    use futures::executor::block_on;
+    use hyper::body::to_bytes;
     use hyper::{Body, Response};
     use reqwest::{Client, Method};
-    use tempfile::TempDir;
+    use tempfile::NamedTempFile;
 
     #[tokio::test]
     async fn test_managed_identity() {
@@ -623,6 +593,7 @@ mod tests {
             None,
             None,
             Some(format!("{}/metadata/identity/oauth2/token", endpoint)),
+            client.clone(),
         );
 
         let token = credential
@@ -630,23 +601,15 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(&token, "TOKEN");
+        assert_eq!(&token.token, "TOKEN");
     }
 
     #[tokio::test]
     async fn test_workload_identity() {
         let server = MockServer::new();
-
-        let root = TempDir::new().unwrap();
-        let fs = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let tokenfile = NamedTempFile::new().unwrap();
         let tenant = "tenant";
-        let tokenfile = root.path().join("tokenfile");
-        fs.put(
-            &crate::path::Path::from("tokenfile"),
-            bytes::Bytes::from("federated-token"),
-        )
-        .await
-        .unwrap();
+        std::fs::write(tokenfile.path(), "federated-token").unwrap();
 
         let endpoint = server.url();
         let client = Client::new();
@@ -656,6 +619,9 @@ mod tests {
         server.push_fn(move |req| {
             assert_eq!(req.uri().path(), format!("/{}/oauth2/v2.0/token", tenant));
             assert_eq!(req.method(), &Method::POST);
+            let body = block_on(to_bytes(req.into_body())).unwrap();
+            let body = String::from_utf8(body.to_vec()).unwrap();
+            assert!(body.contains("federated-token"));
             Response::new(Body::from(
                 r#"
             {
@@ -673,7 +639,7 @@ mod tests {
 
         let credential = WorkloadIdentityOAuthProvider::new(
             "client_id",
-            tokenfile.to_str().unwrap(),
+            tokenfile.path().to_str().unwrap(),
             tenant,
             Some(endpoint.to_string()),
         );
@@ -683,6 +649,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(&token, "TOKEN");
+        assert_eq!(&token.token, "TOKEN");
     }
 }

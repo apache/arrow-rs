@@ -785,7 +785,7 @@ fn read_range(file: &mut File, path: &PathBuf, range: Range<usize>) -> Result<By
     Ok(buf.into())
 }
 
-pub(crate) fn open_file(path: &PathBuf) -> Result<File> {
+fn open_file(path: &PathBuf) -> Result<File> {
     let file = File::open(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::NotFound {

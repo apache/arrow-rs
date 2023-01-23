@@ -27,6 +27,7 @@
 //! a way to drop old blocks. Instead unused blocks are automatically cleaned up
 //! after 7 days.
 use self::client::{BlockId, BlockList};
+use crate::client::token::TokenCache;
 use crate::{
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::Path,
@@ -948,15 +949,19 @@ impl MicrosoftAzureBuilder {
             } else if let Some(access_key) = self.access_key {
                 Ok(credential::CredentialProvider::AccessKey(access_key))
             } else if self.use_managed_identity {
+                let client =
+                    self.client_options.clone().with_allow_http(true).client()?;
                 let msi_credential = credential::ImdsManagedIdentityOAuthProvider::new(
                     self.client_id,
                     self.object_id,
                     self.msi_resource_id,
                     self.msi_endpoint,
+                    client,
                 );
-                Ok(credential::CredentialProvider::TokenCredential(Box::new(
-                    msi_credential,
-                )))
+                Ok(credential::CredentialProvider::TokenCredential(
+                    TokenCache::default(),
+                    Box::new(msi_credential),
+                ))
             } else if let (Some(client_id), Some(tenant_id), Some(federated_token_file)) =
                 (&self.client_id, &self.tenant_id, self.federated_token_file)
             {
@@ -966,9 +971,10 @@ impl MicrosoftAzureBuilder {
                     tenant_id,
                     self.authority_host,
                 );
-                Ok(credential::CredentialProvider::TokenCredential(Box::new(
-                    client_credential,
-                )))
+                Ok(credential::CredentialProvider::TokenCredential(
+                    TokenCache::default(),
+                    Box::new(client_credential),
+                ))
             } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
                 (self.client_id, self.client_secret, &self.tenant_id)
             {
@@ -978,9 +984,10 @@ impl MicrosoftAzureBuilder {
                     tenant_id,
                     self.authority_host,
                 );
-                Ok(credential::CredentialProvider::TokenCredential(Box::new(
-                    client_credential,
-                )))
+                Ok(credential::CredentialProvider::TokenCredential(
+                    TokenCache::default(),
+                    Box::new(client_credential),
+                ))
             } else if let Some(query_pairs) = self.sas_query_pairs {
                 Ok(credential::CredentialProvider::SASToken(query_pairs))
             } else if let Some(sas) = self.sas_key {
