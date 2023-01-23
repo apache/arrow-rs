@@ -265,6 +265,18 @@ where
     }
 }
 
+impl<R, V> Extend<Option<V::Native>> for PrimitiveRunBuilder<R, V>
+where
+    R: RunEndIndexType,
+    V: ArrowPrimitiveType,
+{
+    fn extend<T: IntoIterator<Item = Option<V::Native>>>(&mut self, iter: T) {
+        for elem in iter {
+            self.append_option(elem);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::builder::PrimitiveRunBuilder;
@@ -307,5 +319,24 @@ mod tests {
         let ava: &UInt32Array = as_primitive_array::<UInt32Type>(av.as_ref());
 
         assert_eq!(ava, &UInt32Array::from(vec![Some(1234), None, Some(5678)]));
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = PrimitiveRunBuilder::<Int16Type, Int16Type>::new();
+        builder.extend([1, 2, 2, 5, 5, 4, 4].into_iter().map(Some));
+        builder.extend([4, 4, 6, 2].into_iter().map(Some));
+        let array = builder.finish();
+
+        assert_eq!(array.len(), 11);
+        assert_eq!(array.null_count(), 0);
+        assert_eq!(
+            as_primitive_array::<Int16Type>(array.run_ends()).values(),
+            &[1, 3, 5, 9, 10, 11]
+        );
+        assert_eq!(
+            as_primitive_array::<Int16Type>(array.values().as_ref()).values(),
+            &[1, 2, 5, 4, 6, 2]
+        );
     }
 }

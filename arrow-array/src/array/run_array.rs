@@ -24,8 +24,9 @@ use arrow_schema::{ArrowError, DataType, Field};
 use crate::{
     builder::StringRunBuilder,
     make_array,
+    run_iterator::RunArrayIter,
     types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
-    Array, ArrayRef, PrimitiveArray,
+    Array, ArrayAccessor, ArrayRef, PrimitiveArray,
 };
 
 ///
@@ -119,6 +120,27 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// Returns a reference to values array
     pub fn values(&self) -> &ArrayRef {
         &self.values
+    }
+
+    /// Downcast this dictionary to a [`TypedRunArray`]
+    ///
+    /// ```
+    /// use arrow_array::{Array, ArrayAccessor, RunArray, StringArray, types::Int32Type};
+    ///
+    /// let orig = [Some("a"), Some("b"), None];
+    /// let run_array = RunArray::<Int32Type>::from_iter(orig);
+    /// let typed = run_array.downcast_ref::<StringArray>().unwrap();
+    /// assert_eq!(typed.value(0), "a");
+    /// assert_eq!(typed.value(1), "b");
+    /// assert!(typed.values().is_null(2));
+    /// ```
+    ///
+    pub fn downcast_ref<V: 'static>(&self) -> Option<TypedRunArray<'_, R, V>> {
+        let values = self.values.as_any().downcast_ref()?;
+        Some(TypedRunArray {
+            run_array: self,
+            values,
+        })
     }
 }
 
@@ -272,6 +294,150 @@ pub type Int32RunArray = RunArray<Int32Type>;
 /// assert_eq!(array.values(), &values);
 /// ```
 pub type Int64RunArray = RunArray<Int64Type>;
+
+/// The trait defines functions that helps access the run array
+/// properties and values
+pub trait RunArrayAccessor {
+    /// Length of the physical array in [`RunArray`]
+    fn physical_len(&self) -> usize;
+
+    /// The logical index at which the `physical_index` run ends.
+    /// i.e. value at the index `physical_index` in run_ends array.
+    fn run_end_index(&self, physical_index: usize) -> Option<usize>;
+
+    /// Returns true if the value is null in the `physical_index`
+    fn is_value_null(&self, physical_index: usize) -> bool;
+}
+
+/// A strongly-typed wrapper around a [`RunArray`] that implements [`ArrayAccessor`]
+/// and [`IntoIterator`] allowing fast access to its elements
+///
+/// ```
+/// use arrow_array::{RunArray, StringArray, types::Int32Type};
+///
+/// let orig = ["a", "b", "a", "b"];
+/// let ree_array = RunArray::<Int32Type>::from_iter(orig);
+///
+/// // `TypedRunArray` allows you to access the values directly
+/// let typed = ree_array.downcast_ref::<StringArray>().unwrap();
+///
+/// for (maybe_val, orig) in typed.into_iter().zip(orig) {
+///     assert_eq!(maybe_val.unwrap(), orig)
+/// }
+/// ```
+pub struct TypedRunArray<'a, R: RunEndIndexType, V> {
+    /// The ree array
+    run_array: &'a RunArray<R>,
+    /// The values of the run_array
+    values: &'a V,
+}
+
+// Manually implement `Clone` to avoid `V: Clone` type constraint
+impl<'a, R: RunEndIndexType, V> Clone for TypedRunArray<'a, R, V> {
+    fn clone(&self) -> Self {
+        Self {
+            run_array: self.run_array,
+            values: self.values,
+        }
+    }
+}
+
+impl<'a, R: RunEndIndexType, V> Copy for TypedRunArray<'a, R, V> {}
+
+impl<'a, R: RunEndIndexType, V> std::fmt::Debug for TypedRunArray<'a, R, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        writeln!(f, "TypedRunArray({:?})", self.run_array)
+    }
+}
+
+impl<'a, R: RunEndIndexType, V> TypedRunArray<'a, R, V> {
+    /// Returns the run_ends of this [`TypedRunArray`]
+    pub fn run_ends(&self) -> &'a PrimitiveArray<R> {
+        self.run_array.run_ends()
+    }
+
+    /// Returns the values of this [`TypedRunArray`]
+    pub fn values(&self) -> &'a V {
+        self.values
+    }
+}
+
+impl<'a, R: RunEndIndexType, V: Sync> Array for TypedRunArray<'a, R, V> {
+    fn as_any(&self) -> &dyn Any {
+        self.run_array
+    }
+
+    fn data(&self) -> &ArrayData {
+        &self.run_array.data
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.run_array.into_data()
+    }
+}
+
+impl<R: RunEndIndexType, V> RunArrayAccessor for TypedRunArray<'_, R, V> {
+    fn physical_len(&self) -> usize {
+        self.run_ends().len()
+    }
+
+    fn run_end_index(&self, physical_index: usize) -> Option<usize> {
+        if physical_index >= self.run_ends().len() {
+            None
+        } else {
+            Some(unsafe {
+                // Safety:
+                // As the physical_index bounds is checked above
+                // The array can be accessed without validation
+                self.run_ends().value_unchecked(physical_index).as_usize()
+            })
+        }
+    }
+
+    fn is_value_null(&self, physical_index: usize) -> bool {
+        self.run_array.values().is_null(physical_index)
+    }
+}
+
+// The array accessor returns value based on physical array index.
+// Its the responsibility of the caller of this function to convert from
+// logical index to physical index.
+impl<'a, R, V> ArrayAccessor for TypedRunArray<'a, R, V>
+where
+    R: RunEndIndexType,
+    V: Sync + Send,
+    &'a V: ArrayAccessor,
+    <&'a V as ArrayAccessor>::Item: Default,
+{
+    type Item = <&'a V as ArrayAccessor>::Item;
+
+    fn value(&self, index: usize) -> Self::Item {
+        assert!(
+            index < self.len(),
+            "Trying to access an element at index {} from a TypedRunArray of length {}",
+            index,
+            self.len()
+        );
+        unsafe { self.value_unchecked(index) }
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        self.values.value_unchecked(index)
+    }
+}
+
+impl<'a, R, V> IntoIterator for TypedRunArray<'a, R, V>
+where
+    R: RunEndIndexType,
+    Self: ArrayAccessor,
+{
+    type Item = Option<<Self as ArrayAccessor>::Item>;
+    type IntoIter = RunArrayIter<Self>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        RunArrayIter::new(self)
+    }
+}
 
 #[cfg(test)]
 mod tests {
