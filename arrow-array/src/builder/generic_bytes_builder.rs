@@ -99,15 +99,6 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         self.offsets_builder.append(self.next_offset());
     }
 
-    /// Appends a byte array slice into the builder.
-    #[inline]
-    pub fn append_slice(&mut self, value: &[u8]) {
-        self.value_builder.append_slice(value);
-        self.null_buffer_builder.append(true);
-        self.offsets_builder
-            .append(T::Offset::from_usize(self.value_builder.len()).unwrap());
-    }
-
     /// Append an `Option` value into the builder.
     #[inline]
     pub fn append_option(&mut self, value: Option<impl AsRef<T::Native>>) {

@@ -15,25 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{types::RunEndIndexType, ArrowPrimitiveType, RunEndEncodedArray};
+use std::{any::Any, sync::Arc};
 
-use super::PrimitiveBuilder;
+use crate::{types::RunEndIndexType, ArrayRef, ArrowPrimitiveType, RunArray};
+
+use super::{ArrayBuilder, PrimitiveBuilder};
 
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 
-/// Array builder for [`RunEndEncodedArray`] that encodes primitive values.
+/// Array builder for [`RunArray`] that encodes primitive values.
 ///
 /// # Example:
 ///
 /// ```
 ///
-/// # use arrow_array::builder::PrimitiveREEArrayBuilder;
+/// # use arrow_array::builder::PrimitiveRunBuilder;
 /// # use arrow_array::types::{UInt32Type, Int16Type};
 /// # use arrow_array::{Array, UInt32Array, Int16Array};
 ///
 /// let mut builder =
-/// PrimitiveREEArrayBuilder::<Int16Type, UInt32Type>::new();
+/// PrimitiveRunBuilder::<Int16Type, UInt32Type>::new();
 /// builder.append_value(1234).unwrap();
 /// builder.append_value(1234).unwrap();
 /// builder.append_value(1234).unwrap();
@@ -59,7 +61,7 @@ use arrow_schema::ArrowError;
 /// assert_eq!(ava, &UInt32Array::from(vec![Some(1234), None, Some(5678)]));
 /// ```
 #[derive(Debug)]
-pub struct PrimitiveREEArrayBuilder<R, V>
+pub struct PrimitiveRunBuilder<R, V>
 where
     R: RunEndIndexType,
     V: ArrowPrimitiveType,
@@ -68,9 +70,10 @@ where
     values_builder: PrimitiveBuilder<V>,
     current_value: Option<V::Native>,
     current_run_end_index: usize,
+    prev_run_end_index: usize,
 }
 
-impl<R, V> Default for PrimitiveREEArrayBuilder<R, V>
+impl<R, V> Default for PrimitiveRunBuilder<R, V>
 where
     R: RunEndIndexType,
     V: ArrowPrimitiveType,
@@ -80,22 +83,23 @@ where
     }
 }
 
-impl<R, V> PrimitiveREEArrayBuilder<R, V>
+impl<R, V> PrimitiveRunBuilder<R, V>
 where
     R: RunEndIndexType,
     V: ArrowPrimitiveType,
 {
-    /// Creates a new `PrimitiveREEArrayBuilder`
+    /// Creates a new `PrimitiveRunBuilder`
     pub fn new() -> Self {
         Self {
             run_ends_builder: PrimitiveBuilder::new(),
             values_builder: PrimitiveBuilder::new(),
             current_value: None,
             current_run_end_index: 0,
+            prev_run_end_index: 0,
         }
     }
 
-    /// Creates a new `PrimitiveREEArrayBuilder` with the provided capacity
+    /// Creates a new `PrimitiveRunBuilder` with the provided capacity
     ///
     /// `capacity`: the expected number of run-end encoded values.
     pub fn with_capacity(capacity: usize) -> Self {
@@ -104,16 +108,63 @@ where
             values_builder: PrimitiveBuilder::with_capacity(capacity),
             current_value: None,
             current_run_end_index: 0,
+            prev_run_end_index: 0,
         }
     }
 }
 
-impl<R, V> PrimitiveREEArrayBuilder<R, V>
+impl<R, V> ArrayBuilder for PrimitiveRunBuilder<R, V>
 where
     R: RunEndIndexType,
     V: ArrowPrimitiveType,
 {
-    /// Appends optional value to the logical array encoded by the RunEndEncodedArray.
+    /// Returns the builder as a non-mutable `Any` reference.
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Returns the builder as a mutable `Any` reference.
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    /// Returns the boxed builder as a box of `Any`.
+    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+
+    /// Returns the number of array slots in the builder
+    fn len(&self) -> usize {
+        let mut len = self.run_ends_builder.len();
+        // If there is an ongoing run yet to be added, include it in the len
+        if self.prev_run_end_index != self.current_run_end_index {
+            len += 1;
+        }
+        len
+    }
+
+    /// Returns whether the number of array slots is zero
+    fn is_empty(&self) -> bool {
+        self.current_run_end_index == 0
+    }
+
+    /// Builds the array and reset this builder.
+    fn finish(&mut self) -> ArrayRef {
+        Arc::new(self.finish())
+    }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> ArrayRef {
+        Arc::new(self.finish_cloned())
+    }
+}
+
+impl<R, V> PrimitiveRunBuilder<R, V>
+where
+    R: RunEndIndexType,
+    V: ArrowPrimitiveType,
+{
+    /// Appends optional value to the logical array encoded by the RunArray.
     pub fn append_option(&mut self, value: Option<V::Native>) -> Result<(), ArrowError> {
         if self.current_run_end_index == 0 {
             self.current_run_end_index = 1;
@@ -143,9 +194,9 @@ where
         self.append_option(None)
     }
 
-    /// Creates the RunEndEncodedArray and resets the builder.
-    /// Panics if RunEndEncodedArray cannot be built.
-    pub fn finish(&mut self) -> RunEndEncodedArray<R> {
+    /// Creates the RunArray and resets the builder.
+    /// Panics if RunArray cannot be built.
+    pub fn finish(&mut self) -> RunArray<R> {
         // write the last run end to the array.
         self.append_run_end().unwrap();
 
@@ -156,23 +207,38 @@ where
         // build the run encoded array by adding run_ends and values array as its children.
         let run_ends_array = self.run_ends_builder.finish();
         let values_array = self.values_builder.finish();
-        RunEndEncodedArray::<R>::try_new(&run_ends_array, &values_array).unwrap()
+        RunArray::<R>::try_new(&run_ends_array, &values_array).unwrap()
     }
 
-    /// Creates the RunEndEncodedArray and without resetting the builder.
-    /// Panics if RunEndEncodedArray cannot be built.
-    pub fn finish_cloned(&mut self) -> RunEndEncodedArray<R> {
-        // write the last run end to the array.
-        self.append_run_end().unwrap();
+    /// Creates the RunArray and without resetting the builder.
+    /// Panics if RunArray cannot be built.
+    pub fn finish_cloned(&self) -> RunArray<R> {
+        let mut run_ends_array = self.run_ends_builder.finish_cloned();
+        let mut values_array = self.values_builder.finish_cloned();
 
-        // build the run encoded array by adding run_ends and values array as its children.
-        let run_ends_array = self.run_ends_builder.finish_cloned();
-        let values_array = self.values_builder.finish_cloned();
-        RunEndEncodedArray::<R>::try_new(&run_ends_array, &values_array).unwrap()
+        // Add current run if one exists
+        if self.prev_run_end_index != self.current_run_end_index {
+            let mut run_end_builder = run_ends_array.into_builder().unwrap();
+            let mut values_builder = values_array.into_builder().unwrap();
+            self.append_run_end_with_builders(&mut run_end_builder, &mut values_builder)
+                .unwrap();
+            run_ends_array = run_end_builder.finish();
+            values_array = values_builder.finish();
+        }
+
+        RunArray::try_new(&run_ends_array, &values_array).unwrap()
     }
 
-    // Appends the current run to the array
+    // Appends the current run to the array. There are scenarios where this function can be called
+    // multiple times before getting a new value. e.g. appending different value immediately following
+    // finish_cloned.
     fn append_run_end(&mut self) -> Result<(), ArrowError> {
+        // empty array or the function called without appending any value.
+        if self.current_run_end_index == 0
+            || self.prev_run_end_index == self.current_run_end_index
+        {
+            return Ok(());
+        }
         let run_end_index = R::Native::from_usize(self.current_run_end_index)
             .ok_or_else(|| {
                 ArrowError::ParseError(format!(
@@ -183,18 +249,38 @@ where
             })?;
         self.run_ends_builder.append_value(run_end_index);
         self.values_builder.append_option(self.current_value);
+        self.prev_run_end_index = self.current_run_end_index;
+        Ok(())
+    }
+
+    // Similar to `append_run_end` but on custom builders.
+    fn append_run_end_with_builders(
+        &self,
+        run_ends_builder: &mut PrimitiveBuilder<R>,
+        values_builder: &mut PrimitiveBuilder<V>,
+    ) -> Result<(), ArrowError> {
+        let run_end_index = R::Native::from_usize(self.current_run_end_index)
+            .ok_or_else(|| {
+                ArrowError::ParseError(format!(
+                    "Cannot convert the value {} from `usize` to native form of arrow datatype {}",
+                    self.current_run_end_index,
+                    R::DATA_TYPE
+                ))
+            })?;
+        run_ends_builder.append_value(run_end_index);
+        values_builder.append_option(self.current_value);
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::builder::PrimitiveREEArrayBuilder;
+    use crate::builder::PrimitiveRunBuilder;
     use crate::types::{Int16Type, UInt32Type};
     use crate::{Int16Array, UInt32Array};
     #[test]
     fn test_primitive_ree_array_builder() {
-        let mut builder = PrimitiveREEArrayBuilder::<Int16Type, UInt32Type>::new();
+        let mut builder = PrimitiveRunBuilder::<Int16Type, UInt32Type>::new();
         builder.append_value(1234).unwrap();
         builder.append_value(1234).unwrap();
         builder.append_value(1234).unwrap();

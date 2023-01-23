@@ -358,9 +358,9 @@ impl DataType {
         )
     }
 
-    /// Returns true if this type is valid for run-ends array in RunEndEncodedArray
+    /// Returns true if this type is valid for run-ends array in RunArray
     #[inline]
-    pub fn is_ree_run_ends_type(&self) -> bool {
+    pub fn is_run_ends_type(&self) -> bool {
         use DataType::*;
         matches!(self, Int16 | Int32 | Int64)
     }

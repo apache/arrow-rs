@@ -585,13 +585,13 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::RunEndEncoded(ref run_ends_type, _) => {
             match run_ends_type.data_type() {
                 DataType::Int16 => {
-                    Arc::new(RunEndEncodedArray::<Int16Type>::from(data)) as ArrayRef
+                    Arc::new(RunArray::<Int16Type>::from(data)) as ArrayRef
                 }
                 DataType::Int32 => {
-                    Arc::new(RunEndEncodedArray::<Int32Type>::from(data)) as ArrayRef
+                    Arc::new(RunArray::<Int32Type>::from(data)) as ArrayRef
                 }
                 DataType::Int64 => {
-                    Arc::new(RunEndEncodedArray::<Int64Type>::from(data)) as ArrayRef
+                    Arc::new(RunArray::<Int64Type>::from(data)) as ArrayRef
                 }
                 dt => panic!("Unexpected data type for run_ends array {:?}", dt),
             }

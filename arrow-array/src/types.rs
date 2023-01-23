@@ -253,7 +253,7 @@ mod run {
 }
 
 /// A subtype of primitive type that is used as run-ends index
-/// in RunEndEncodedArray.
+/// in [`RunArray`].
 /// See <https://arrow.apache.org/docs/format/Columnar.html>
 ///
 /// Note: The implementation of this trait is sealed to avoid accidental misuse.

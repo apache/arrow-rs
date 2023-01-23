@@ -21,7 +21,7 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
 use crate::{
-    builder::StringREEArrayBuilder,
+    builder::StringRunBuilder,
     make_array,
     types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
     Array, ArrayRef, PrimitiveArray,
@@ -32,10 +32,10 @@ use crate::{
 ///
 /// This encoding is good for representing data containing same values repeated consecutively.
 ///
-/// [`RunEndEncodedArray`] contains `run_ends` array and `values` array of same length.
+/// [`RunArray`] contains `run_ends` array and `values` array of same length.
 /// The `run_ends` array stores the indexes at which the run ends. The `values` array
 /// stores the value of each run. Below example illustrates how a logical array is represented in
-/// [`RunEndEncodedArray`]
+/// [`RunArray`]
 ///
 ///
 /// ```text
@@ -51,21 +51,21 @@ use crate::{
 ///                                          ├─────────────────┤
 /// └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘     │        B        │     
 ///                                          ├─────────────────┤
-///           RunEndEncodedArray             │        B        │    run length of 'B' = run_ends[2] - run_ends[1] = 3
+///                RunArray                  │        B        │    run length of 'B' = run_ends[2] - run_ends[1] = 3
 ///               length = 3                 └─────────────────┘
 ///  
 ///                                             Logical array
 ///                                                Contents
 /// ```
 
-pub struct RunEndEncodedArray<R: RunEndIndexType> {
+pub struct RunArray<R: RunEndIndexType> {
     data: ArrayData,
     run_ends: PrimitiveArray<R>,
     values: ArrayRef,
 }
 
-impl<R: RunEndIndexType> RunEndEncodedArray<R> {
-    /// Attempts to create RunEndEncodedArray using given run_ends (index where a run ends)
+impl<R: RunEndIndexType> RunArray<R> {
+    /// Attempts to create RunArray using given run_ends (index where a run ends)
     /// and the values (value of the run). Returns an error if the given data is not compatible
     /// with RunEndEncoded specification.
     pub fn try_new(
@@ -106,20 +106,13 @@ impl<R: RunEndIndexType> RunEndEncodedArray<R> {
     }
 }
 
-impl<R: RunEndIndexType> From<ArrayData> for RunEndEncodedArray<R> {
+impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
+    // The method assumes the caller already validated the data using `ArrayData::validate_data()`
     fn from(data: ArrayData) -> Self {
         match data.data_type() {
-            DataType::RunEndEncoded(run_ends_data_type, _) => {
-                assert_eq!(
-                    &R::DATA_TYPE,
-                    run_ends_data_type.data_type(),
-                    "Data type mismatch for run_ends array, expected {} got {}",
-                    R::DATA_TYPE,
-                    run_ends_data_type.data_type()
-                );
-            }
+            DataType::RunEndEncoded(_, _) => {}
             _ => {
-                panic!("Invalid data type for RunEndEncodedArray. The data type should be DataType::RunEndEncoded");
+                panic!("Invalid data type for RunArray. The data type should be DataType::RunEndEncoded");
             }
         }
 
@@ -133,13 +126,13 @@ impl<R: RunEndIndexType> From<ArrayData> for RunEndEncodedArray<R> {
     }
 }
 
-impl<R: RunEndIndexType> From<RunEndEncodedArray<R>> for ArrayData {
-    fn from(array: RunEndEncodedArray<R>) -> Self {
+impl<R: RunEndIndexType> From<RunArray<R>> for ArrayData {
+    fn from(array: RunArray<R>) -> Self {
         array.data
     }
 }
 
-impl<T: RunEndIndexType> Array for RunEndEncodedArray<T> {
+impl<T: RunEndIndexType> Array for RunArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -153,37 +146,37 @@ impl<T: RunEndIndexType> Array for RunEndEncodedArray<T> {
     }
 }
 
-impl<R: RunEndIndexType> std::fmt::Debug for RunEndEncodedArray<R> {
+impl<R: RunEndIndexType> std::fmt::Debug for RunArray<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         writeln!(
             f,
-            "RunEndEncodedArray {{run_ends: {:?}, values: {:?}}}",
+            "RunArray {{run_ends: {:?}, values: {:?}}}",
             self.run_ends, self.values
         )
     }
 }
 
-/// Constructs a `RunEndEncodedArray` from an iterator of optional strings.
+/// Constructs a `RunArray` from an iterator of optional strings.
 ///
 /// # Example:
 /// ```
-/// use arrow_array::{RunEndEncodedArray, PrimitiveArray, StringArray, types::Int16Type};
+/// use arrow_array::{RunArray, PrimitiveArray, StringArray, types::Int16Type};
 ///
 /// let test = vec!["a", "a", "b", "c", "c"];
-/// let array: RunEndEncodedArray<Int16Type> = test
+/// let array: RunArray<Int16Type> = test
 ///     .iter()
 ///     .map(|&x| if x == "b" { None } else { Some(x) })
 ///     .collect();
 /// assert_eq!(
-///     "RunEndEncodedArray {run_ends: PrimitiveArray<Int16>\n[\n  2,\n  3,\n  5,\n], values: StringArray\n[\n  \"a\",\n  null,\n  \"c\",\n]}\n",
+///     "RunArray {run_ends: PrimitiveArray<Int16>\n[\n  2,\n  3,\n  5,\n], values: StringArray\n[\n  \"a\",\n  null,\n  \"c\",\n]}\n",
 ///     format!("{:?}", array)
 /// );
 /// ```
-impl<'a, T: RunEndIndexType> FromIterator<Option<&'a str>> for RunEndEncodedArray<T> {
+impl<'a, T: RunEndIndexType> FromIterator<Option<&'a str>> for RunArray<T> {
     fn from_iter<I: IntoIterator<Item = Option<&'a str>>>(iter: I) -> Self {
         let it = iter.into_iter();
         let (lower, _) = it.size_hint();
-        let mut builder = StringREEArrayBuilder::with_capacity(lower, 256);
+        let mut builder = StringRunBuilder::with_capacity(lower, 256);
         it.for_each(|i| {
             if let Some(i) = i {
                 builder
@@ -200,25 +193,25 @@ impl<'a, T: RunEndIndexType> FromIterator<Option<&'a str>> for RunEndEncodedArra
     }
 }
 
-/// Constructs a `RunEndEncodedArray` from an iterator of strings.
+/// Constructs a `RunArray` from an iterator of strings.
 ///
 /// # Example:
 ///
 /// ```
-/// use arrow_array::{RunEndEncodedArray, PrimitiveArray, StringArray, types::Int16Type};
+/// use arrow_array::{RunArray, PrimitiveArray, StringArray, types::Int16Type};
 ///
 /// let test = vec!["a", "a", "b", "c"];
-/// let array: RunEndEncodedArray<Int16Type> = test.into_iter().collect();
+/// let array: RunArray<Int16Type> = test.into_iter().collect();
 /// assert_eq!(
-///     "RunEndEncodedArray {run_ends: PrimitiveArray<Int16>\n[\n  2,\n  3,\n  4,\n], values: StringArray\n[\n  \"a\",\n  \"b\",\n  \"c\",\n]}\n",
+///     "RunArray {run_ends: PrimitiveArray<Int16>\n[\n  2,\n  3,\n  4,\n], values: StringArray\n[\n  \"a\",\n  \"b\",\n  \"c\",\n]}\n",
 ///     format!("{:?}", array)
 /// );
 /// ```
-impl<'a, T: RunEndIndexType> FromIterator<&'a str> for RunEndEncodedArray<T> {
+impl<'a, T: RunEndIndexType> FromIterator<&'a str> for RunArray<T> {
     fn from_iter<I: IntoIterator<Item = &'a str>>(iter: I) -> Self {
         let it = iter.into_iter();
         let (lower, _) = it.size_hint();
-        let mut builder = StringREEArrayBuilder::with_capacity(lower, 256);
+        let mut builder = StringRunBuilder::with_capacity(lower, 256);
         it.for_each(|i| {
             builder
                 .append_value(i)
@@ -230,62 +223,62 @@ impl<'a, T: RunEndIndexType> FromIterator<&'a str> for RunEndEncodedArray<T> {
 }
 
 ///
-/// A [`RunEndEncodedArray`] array where run ends are stored using `i16` data type.
+/// A [`RunArray`] array where run ends are stored using `i16` data type.
 ///
 /// # Example: Using `collect`
 /// ```
-/// # use arrow_array::{Array, Int16RunEndEncodedArray, Int16Array, StringArray};
+/// # use arrow_array::{Array, Int16RunArray, Int16Array, StringArray};
 /// # use std::sync::Arc;
 ///
-/// let array: Int16RunEndEncodedArray = vec!["a", "a", "b", "c", "c"].into_iter().collect();
+/// let array: Int16RunArray = vec!["a", "a", "b", "c", "c"].into_iter().collect();
 /// let values: Arc<dyn Array> = Arc::new(StringArray::from(vec!["a", "b", "c"]));
 /// assert_eq!(array.run_ends(), &Int16Array::from(vec![2, 3, 5]));
 /// assert_eq!(array.values(), &values);
 /// ```
-pub type Int16RunEndEncodedArray = RunEndEncodedArray<Int16Type>;
+pub type Int16RunArray = RunArray<Int16Type>;
 
 ///
-/// A [`RunEndEncodedArray`] array where run ends are stored using `i32` data type.
+/// A [`RunArray`] array where run ends are stored using `i32` data type.
 ///
 /// # Example: Using `collect`
 /// ```
-/// # use arrow_array::{Array, Int32RunEndEncodedArray, Int32Array, StringArray};
+/// # use arrow_array::{Array, Int32RunArray, Int32Array, StringArray};
 /// # use std::sync::Arc;
 ///
-/// let array: Int32RunEndEncodedArray = vec!["a", "a", "b", "c", "c"].into_iter().collect();
+/// let array: Int32RunArray = vec!["a", "a", "b", "c", "c"].into_iter().collect();
 /// let values: Arc<dyn Array> = Arc::new(StringArray::from(vec!["a", "b", "c"]));
 /// assert_eq!(array.run_ends(), &Int32Array::from(vec![2, 3, 5]));
 /// assert_eq!(array.values(), &values);
 /// ```
-pub type Int32RunEndEncodedArray = RunEndEncodedArray<Int32Type>;
+pub type Int32RunArray = RunArray<Int32Type>;
 
 ///
-/// A [`RunEndEncodedArray`] array where run ends are stored using `i64` data type.
+/// A [`RunArray`] array where run ends are stored using `i64` data type.
 ///
 /// # Example: Using `collect`
 /// ```
-/// # use arrow_array::{Array, Int64RunEndEncodedArray, Int64Array, StringArray};
+/// # use arrow_array::{Array, Int64RunArray, Int64Array, StringArray};
 /// # use std::sync::Arc;
 ///
-/// let array: Int64RunEndEncodedArray = vec!["a", "a", "b", "c", "c"].into_iter().collect();
+/// let array: Int64RunArray = vec!["a", "a", "b", "c", "c"].into_iter().collect();
 /// let values: Arc<dyn Array> = Arc::new(StringArray::from(vec!["a", "b", "c"]));
 /// assert_eq!(array.run_ends(), &Int64Array::from(vec![2, 3, 5]));
 /// assert_eq!(array.values(), &values);
 /// ```
-pub type Int64RunEndEncodedArray = RunEndEncodedArray<Int64Type>;
+pub type Int64RunArray = RunArray<Int64Type>;
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::builder::PrimitiveREEArrayBuilder;
+    use crate::builder::PrimitiveRunBuilder;
     use crate::types::{Int16Type, Int32Type, Int8Type, UInt32Type};
     use crate::{Array, Int16Array, Int32Array, StringArray};
     use arrow_schema::Field;
 
     #[test]
-    fn test_ree_array() {
+    fn test_run_array() {
         // Construct a value array
         let value_data = PrimitiveArray::<Int8Type>::from_iter_values([
             10_i8, 11, 12, 13, 14, 15, 16, 17,
@@ -308,7 +301,7 @@ mod tests {
             .add_child_data(value_data.clone())
             .build()
             .unwrap();
-        let ree_array = Int16RunEndEncodedArray::from(dict_data);
+        let ree_array = Int16RunArray::from(dict_data);
 
         let values = ree_array.values();
         assert_eq!(&value_data, values.data());
@@ -320,53 +313,51 @@ mod tests {
     }
 
     #[test]
-    fn test_ree_array_fmt_debug() {
-        let mut builder =
-            PrimitiveREEArrayBuilder::<Int16Type, UInt32Type>::with_capacity(3);
+    fn test_run_array_fmt_debug() {
+        let mut builder = PrimitiveRunBuilder::<Int16Type, UInt32Type>::with_capacity(3);
         builder.append_value(12345678).unwrap();
         builder.append_null().unwrap();
         builder.append_value(22345678).unwrap();
         let array = builder.finish();
         assert_eq!(
-            "RunEndEncodedArray {run_ends: PrimitiveArray<Int16>\n[\n  1,\n  2,\n  3,\n], values: PrimitiveArray<UInt32>\n[\n  12345678,\n  null,\n  22345678,\n]}\n",
+            "RunArray {run_ends: PrimitiveArray<Int16>\n[\n  1,\n  2,\n  3,\n], values: PrimitiveArray<UInt32>\n[\n  12345678,\n  null,\n  22345678,\n]}\n",
             format!("{:?}", array)
         );
 
-        let mut builder =
-            PrimitiveREEArrayBuilder::<Int16Type, UInt32Type>::with_capacity(20);
+        let mut builder = PrimitiveRunBuilder::<Int16Type, UInt32Type>::with_capacity(20);
         for _ in 0..20 {
             builder.append_value(1).unwrap();
         }
         let array = builder.finish();
         assert_eq!(
-            "RunEndEncodedArray {run_ends: PrimitiveArray<Int16>\n[\n  20,\n], values: PrimitiveArray<UInt32>\n[\n  1,\n]}\n",
+            "RunArray {run_ends: PrimitiveArray<Int16>\n[\n  20,\n], values: PrimitiveArray<UInt32>\n[\n  1,\n]}\n",
             format!("{:?}", array)
         );
     }
 
     #[test]
-    fn test_ree_array_from_iter() {
+    fn test_run_array_from_iter() {
         let test = vec!["a", "a", "b", "c"];
-        let array: RunEndEncodedArray<Int16Type> = test
+        let array: RunArray<Int16Type> = test
             .iter()
             .map(|&x| if x == "b" { None } else { Some(x) })
             .collect();
         assert_eq!(
-            "RunEndEncodedArray {run_ends: PrimitiveArray<Int16>\n[\n  2,\n  3,\n  4,\n], values: StringArray\n[\n  \"a\",\n  null,\n  \"c\",\n]}\n",
+            "RunArray {run_ends: PrimitiveArray<Int16>\n[\n  2,\n  3,\n  4,\n], values: StringArray\n[\n  \"a\",\n  null,\n  \"c\",\n]}\n",
             format!("{:?}", array)
         );
 
-        let array: RunEndEncodedArray<Int16Type> = test.into_iter().collect();
+        let array: RunArray<Int16Type> = test.into_iter().collect();
         assert_eq!(
-            "RunEndEncodedArray {run_ends: PrimitiveArray<Int16>\n[\n  2,\n  3,\n  4,\n], values: StringArray\n[\n  \"a\",\n  \"b\",\n  \"c\",\n]}\n",
+            "RunArray {run_ends: PrimitiveArray<Int16>\n[\n  2,\n  3,\n  4,\n], values: StringArray\n[\n  \"a\",\n  \"b\",\n  \"c\",\n]}\n",
             format!("{:?}", array)
         );
     }
 
     #[test]
-    fn test_ree_array_run_ends_as_primitive_array() {
+    fn test_run_array_run_ends_as_primitive_array() {
         let test = vec!["a", "b", "c", "a"];
-        let array: RunEndEncodedArray<Int16Type> = test.into_iter().collect();
+        let array: RunArray<Int16Type> = test.into_iter().collect();
 
         let run_ends = array.run_ends();
         assert_eq!(&DataType::Int16, run_ends.data_type());
@@ -375,9 +366,9 @@ mod tests {
     }
 
     #[test]
-    fn test_ree_array_as_primitive_array_with_null() {
+    fn test_run_array_as_primitive_array_with_null() {
         let test = vec![Some("a"), None, Some("b"), None, None, Some("a")];
-        let array: RunEndEncodedArray<Int32Type> = test.into_iter().collect();
+        let array: RunArray<Int32Type> = test.into_iter().collect();
 
         let run_ends = array.run_ends();
         assert_eq!(&DataType::Int32, run_ends.data_type());
@@ -391,9 +382,9 @@ mod tests {
     }
 
     #[test]
-    fn test_ree_array_all_nulls() {
+    fn test_run_array_all_nulls() {
         let test = vec![None, None, None];
-        let array: RunEndEncodedArray<Int32Type> = test.into_iter().collect();
+        let array: RunArray<Int32Type> = test.into_iter().collect();
 
         let run_ends = array.run_ends();
         assert_eq!(1, run_ends.len());
@@ -404,14 +395,14 @@ mod tests {
     }
 
     #[test]
-    fn test_ree_array_try_new() {
+    fn test_run_array_try_new() {
         let values: StringArray = [Some("foo"), Some("bar"), None, Some("baz")]
             .into_iter()
             .collect();
         let run_ends: Int32Array =
             [Some(1), Some(2), Some(3), Some(4)].into_iter().collect();
 
-        let array = RunEndEncodedArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
         assert_eq!(array.run_ends().data_type(), &DataType::Int32);
         assert_eq!(array.values().data_type(), &DataType::Utf8);
 
@@ -419,28 +410,35 @@ mod tests {
         assert_eq!(array.values().null_count(), 1);
 
         assert_eq!(
-            "RunEndEncodedArray {run_ends: PrimitiveArray<Int32>\n[\n  1,\n  2,\n  3,\n  4,\n], values: StringArray\n[\n  \"foo\",\n  \"bar\",\n  null,\n  \"baz\",\n]}\n",
+            "RunArray {run_ends: PrimitiveArray<Int32>\n[\n  1,\n  2,\n  3,\n  4,\n], values: StringArray\n[\n  \"foo\",\n  \"bar\",\n  null,\n  \"baz\",\n]}\n",
             format!("{:?}", array)
         );
     }
 
     #[test]
-    fn test_ree_array_int16_type_definition() {
-        let array: Int16RunEndEncodedArray =
-            vec!["a", "a", "b", "c", "c"].into_iter().collect();
+    fn test_run_array_int16_type_definition() {
+        let array: Int16RunArray = vec!["a", "a", "b", "c", "c"].into_iter().collect();
         let values: Arc<dyn Array> = Arc::new(StringArray::from(vec!["a", "b", "c"]));
         assert_eq!(array.run_ends(), &Int16Array::from(vec![2, 3, 5]));
         assert_eq!(array.values(), &values);
     }
 
     #[test]
-    fn test_ree_array_length_mismatch() {
+    fn test_run_array_empty_string() {
+        let array: Int16RunArray = vec!["a", "a", "", "", "c"].into_iter().collect();
+        let values: Arc<dyn Array> = Arc::new(StringArray::from(vec!["a", "", "c"]));
+        assert_eq!(array.run_ends(), &Int16Array::from(vec![2, 4, 5]));
+        assert_eq!(array.values(), &values);
+    }
+
+    #[test]
+    fn test_run_array_length_mismatch() {
         let values: StringArray = [Some("foo"), Some("bar"), None, Some("baz")]
             .into_iter()
             .collect();
         let run_ends: Int32Array = [Some(1), Some(2), Some(3)].into_iter().collect();
 
-        let actual = RunEndEncodedArray::<Int32Type>::try_new(&run_ends, &values);
+        let actual = RunArray::<Int32Type>::try_new(&run_ends, &values);
         let expected = ArrowError::InvalidArgumentError("The run_ends array length should be the same as values array length. Run_ends array length is 3, values array length is 4".to_string());
         assert_eq!(
             format!("{}", expected),
@@ -449,13 +447,13 @@ mod tests {
     }
 
     #[test]
-    fn test_ree_array_run_ends_with_null() {
+    fn test_run_array_run_ends_with_null() {
         let values: StringArray = [Some("foo"), Some("bar"), Some("baz")]
             .into_iter()
             .collect();
         let run_ends: Int32Array = [Some(1), None, Some(3)].into_iter().collect();
 
-        let actual = RunEndEncodedArray::<Int32Type>::try_new(&run_ends, &values);
+        let actual = RunArray::<Int32Type>::try_new(&run_ends, &values);
         let expected = ArrowError::InvalidArgumentError("Found null values in run_ends array. The run_ends array should not have null values.".to_string());
         assert_eq!(
             format!("{}", expected),
@@ -464,13 +462,13 @@ mod tests {
     }
 
     #[test]
-    fn test_ree_array_run_ends_with_zeroes() {
+    fn test_run_array_run_ends_with_zeroes() {
         let values: StringArray = [Some("foo"), Some("bar"), Some("baz")]
             .into_iter()
             .collect();
         let run_ends: Int32Array = [Some(0), Some(1), Some(3)].into_iter().collect();
 
-        let actual = RunEndEncodedArray::<Int32Type>::try_new(&run_ends, &values);
+        let actual = RunArray::<Int32Type>::try_new(&run_ends, &values);
         let expected = ArrowError::InvalidArgumentError("The values in run_ends array should be strictly positive. Found value 0 at index 0 that does not match the criteria.".to_string());
         assert_eq!(
             format!("{}", expected),
@@ -479,13 +477,13 @@ mod tests {
     }
 
     #[test]
-    fn test_ree_array_run_ends_non_increasing() {
+    fn test_run_array_run_ends_non_increasing() {
         let values: StringArray = [Some("foo"), Some("bar"), Some("baz")]
             .into_iter()
             .collect();
         let run_ends: Int32Array = [Some(1), Some(4), Some(4)].into_iter().collect();
 
-        let actual = RunEndEncodedArray::<Int32Type>::try_new(&run_ends, &values);
+        let actual = RunArray::<Int32Type>::try_new(&run_ends, &values);
         let expected = ArrowError::InvalidArgumentError("The values in run_ends array should be strictly increasing. Found value 4 at index 2 with previous value 4 that does not match the criteria.".to_string());
         assert_eq!(
             format!("{}", expected),
@@ -495,10 +493,10 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Data type mismatch for run_ends array, expected Int64 got Int32"
+        expected = "PrimitiveArray expected ArrayData with type Int64 got Int32"
     )]
-    fn test_ree_array_run_ends_data_type_mismatch() {
-        let a = RunEndEncodedArray::<Int32Type>::from_iter(["32"]);
-        let _ = RunEndEncodedArray::<Int64Type>::from(a.into_data());
+    fn test_run_array_run_ends_data_type_mismatch() {
+        let a = RunArray::<Int32Type>::from_iter(["32"]);
+        let _ = RunArray::<Int64Type>::from(a.into_data());
     }
 }

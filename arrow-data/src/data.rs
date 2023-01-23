@@ -865,9 +865,9 @@ impl ArrayData {
                         "The nullable should be set to false for the field defining run_ends array.".to_string()
                     ));
                 }
-                if !DataType::is_ree_run_ends_type(run_ends_type.data_type()) {
+                if !DataType::is_run_ends_type(run_ends_type.data_type()) {
                     return Err(ArrowError::InvalidArgumentError(format!(
-                        "RunEndEncodedArray run_ends types must be Int16, Int32 or Int64, but was {}",
+                        "RunArray run_ends types must be Int16, Int32 or Int64, but was {}",
                         run_ends_type.data_type()
                     )));
                 }
