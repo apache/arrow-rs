@@ -425,17 +425,18 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
             ("resource", AZURE_STORAGE_SCOPE),
         ];
 
-        match (
-            self.object_id.as_ref(),
-            self.client_id.as_ref(),
-            self.msi_res_id.as_ref(),
-        ) {
-            (Some(object_id), None, None) => query_items.push(("object_id", object_id)),
-            (None, Some(client_id), None) => query_items.push(("client_id", client_id)),
-            (None, None, Some(msi_res_id)) => {
-                query_items.push(("msi_res_id", msi_res_id))
-            }
-            _ => (),
+        let mut identity = None;
+        if let Some(client_id) = &self.client_id {
+            identity = Some(("client_id", client_id));
+        }
+        if let Some(object_id) = &self.object_id {
+            identity = Some(("object_id", object_id));
+        }
+        if let Some(msi_res_id) = &self.msi_res_id {
+            identity = Some(("msi_res_id", msi_res_id));
+        }
+        if let Some((key, value)) = identity {
+            query_items.push((key, value));
         }
 
         let mut builder = self
