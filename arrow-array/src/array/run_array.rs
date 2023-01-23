@@ -96,6 +96,9 @@ impl<R: RunEndIndexType> RunArray<R> {
         Ok(array_data.into())
     }
     /// Returns a reference to run_ends array
+    /// 
+    /// Note: any slicing of this array is not applied to the returned array
+    /// and must be handled separately
     pub fn run_ends(&self) -> &PrimitiveArray<R> {
         &self.run_ends
     }
