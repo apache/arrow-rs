@@ -66,7 +66,6 @@ pub struct RunArray<R: RunEndIndexType> {
 }
 
 impl<R: RunEndIndexType> RunArray<R> {
-    
     // calculates the logical length of the array encoded
     // by the given run_ends array.
     fn logical_len(run_ends: &PrimitiveArray<R>) -> usize {
