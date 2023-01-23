@@ -121,6 +121,7 @@ use std::{
 };
 
 use arrow_buffer::i256;
+use arrow_data::Bitmap;
 use arrow_schema::UnionMode;
 use bitflags::bitflags;
 
@@ -679,7 +680,7 @@ pub trait ArrowArrayRef {
                 data_type,
                 len,
                 Some(null_count),
-                null_bit_buffer,
+                null_bit_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, len)),
                 offset,
                 buffers,
                 child_data,
@@ -967,6 +968,7 @@ mod tests {
     use arrow_array::builder::UnionBuilder;
     use arrow_array::types::{Float64Type, Int32Type};
     use arrow_array::{Float64Array, UnionArray};
+    use arrow_data::Bitmap;
     use std::convert::TryFrom;
 
     #[test]
@@ -1342,7 +1344,11 @@ mod tests {
             DataType::FixedSizeList(Box::new(Field::new("f", DataType::Int32, false)), 3);
         let list_data = ArrayData::builder(list_data_type.clone())
             .len(3)
-            .null_bit_buffer(Some(Buffer::from(validity_bits)))
+            .null_bitmap(Some(Bitmap::new_from_buffer(
+                Buffer::from(validity_bits),
+                0,
+                3,
+            )))
             .add_child_data(value_data)
             .build()?;
 
@@ -1373,7 +1379,11 @@ mod tests {
 
         let expected_list_data = ArrayData::builder(list_data_type)
             .len(6)
-            .null_bit_buffer(Some(Buffer::from(expected_validity_bits)))
+            .null_bitmap(Some(Bitmap::new_from_buffer(
+                Buffer::from(expected_validity_bits),
+                0,
+                6,
+            )))
             .add_child_data(expected_value_data)
             .build()?;
         let expected_array = FixedSizeListArray::from(expected_list_data);

@@ -20,6 +20,7 @@ use super::{
     ArrayData, ArrayDataBuilder,
 };
 use crate::bit_mask::set_bits;
+use crate::Bitmap;
 use arrow_buffer::{bit_util, i256, ArrowNativeType, MutableBuffer};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
 use half::f16;
@@ -82,7 +83,11 @@ impl<'a> _MutableArrayData<'a> {
             .null_count(self.null_count)
             .buffers(buffers)
             .child_data(child_data)
-            .null_bit_buffer((self.null_count > 0).then(|| self.null_buffer.into()))
+            .null_bitmap(
+                (self.null_count > 0).then(|| {
+                    Bitmap::new_from_buffer(self.null_buffer.into(), 0, self.len)
+                }),
+            )
     }
 }
 

@@ -24,7 +24,7 @@ use arrow::array::{
 use arrow::datatypes::{Int16Type, Int32Type};
 use arrow_array::builder::{StringBuilder, StructBuilder};
 use arrow_buffer::{Buffer, ToByteSlice};
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_data::{ArrayData, ArrayDataBuilder, Bitmap};
 use arrow_schema::{DataType, Field};
 use std::sync::Arc;
 
@@ -408,7 +408,11 @@ fn test_empty_offsets_list_equal() {
     .len(0)
     .add_buffer(Buffer::from(&empty_offsets))
     .add_child_data(values.data().clone())
-    .null_bit_buffer(Some(Buffer::from(&empty_offsets)))
+    .null_bitmap(Some(Bitmap::new_from_buffer(
+        Buffer::from(&empty_offsets),
+        0,
+        0,
+    )))
     .build()
     .unwrap();
 
@@ -420,7 +424,11 @@ fn test_empty_offsets_list_equal() {
     .len(0)
     .add_buffer(Buffer::from(&empty_offsets))
     .add_child_data(values.data().clone())
-    .null_bit_buffer(Some(Buffer::from(&empty_offsets)))
+    .null_bitmap(Some(Bitmap::new_from_buffer(
+        Buffer::from(&empty_offsets),
+        0,
+        0,
+    )))
     .build()
     .unwrap();
 
@@ -438,7 +446,11 @@ fn test_empty_offsets_list_equal() {
             .data()
             .clone(),
     )
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
+    .null_bitmap(Some(Bitmap::new_from_buffer(
+        Buffer::from(vec![0b00001001]),
+        0,
+        0,
+    )))
     .build()
     .unwrap();
 
@@ -475,7 +487,11 @@ fn test_list_null() {
     .len(6)
     .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
     .add_child_data(c_values.into_data())
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
+    .null_bitmap(Some(Bitmap::new_from_buffer(
+        Buffer::from(vec![0b00001001]),
+        0,
+        6,
+    )))
     .build()
     .unwrap();
 
@@ -497,7 +513,11 @@ fn test_list_null() {
     .len(6)
     .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
     .add_child_data(d_values.into_data())
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
+    .null_bitmap(Some(Bitmap::new_from_buffer(
+        Buffer::from(vec![0b00001001]),
+        0,
+        6,
+    )))
     .build()
     .unwrap();
     test_equal(&c, &d, true);
@@ -843,7 +863,11 @@ fn test_struct_equal_null() {
         Field::new("f1", DataType::Utf8, true),
         Field::new("f2", DataType::Int32, true),
     ]))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001011])))
+    .null_bitmap(Some(Bitmap::new_from_buffer(
+        Buffer::from(vec![0b00001011]),
+        0,
+        5,
+    )))
     .len(5)
     .add_child_data(strings.data_ref().clone())
     .add_child_data(ints.data_ref().clone())
@@ -855,7 +879,11 @@ fn test_struct_equal_null() {
         Field::new("f1", DataType::Utf8, true),
         Field::new("f2", DataType::Int32, true),
     ]))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001011])))
+    .null_bitmap(Some(Bitmap::new_from_buffer(
+        Buffer::from(vec![0b00001011]),
+        0,
+        5,
+    )))
     .len(5)
     .add_child_data(strings.data_ref().clone())
     .add_child_data(ints_non_null.data_ref().clone())
@@ -871,7 +899,11 @@ fn test_struct_equal_null() {
         Field::new("f1", DataType::Utf8, true),
         Field::new("f2", DataType::Int32, true),
     ]))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001011])))
+    .null_bitmap(Some(Bitmap::new_from_buffer(
+        Buffer::from(vec![0b00001011]),
+        0,
+        5,
+    )))
     .len(5)
     .add_child_data(strings.data_ref().clone())
     .add_child_data(c_ints_non_null.data_ref().clone())
@@ -887,7 +919,11 @@ fn test_struct_equal_null() {
         a.data_type().clone(),
         true,
     )]))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00011110])))
+    .null_bitmap(Some(Bitmap::new_from_buffer(
+        Buffer::from(vec![0b00011110]),
+        0,
+        5,
+    )))
     .len(5)
     .add_child_data(a.data_ref().clone())
     .build()
@@ -906,7 +942,11 @@ fn test_struct_equal_null() {
         Field::new("f1", DataType::Utf8, true),
         Field::new("f2", DataType::Int32, true),
     ]))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001011])))
+    .null_bitmap(Some(Bitmap::new_from_buffer(
+        Buffer::from(vec![0b00001011]),
+        0,
+        5,
+    )))
     .len(5)
     .add_child_data(strings.data_ref().clone())
     .add_child_data(ints_non_null.data_ref().clone())
@@ -918,7 +958,11 @@ fn test_struct_equal_null() {
         b.data_type().clone(),
         true,
     )]))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00011110])))
+    .null_bitmap(Some(Bitmap::new_from_buffer(
+        Buffer::from(vec![0b00011110]),
+        0,
+        5,
+    )))
     .len(5)
     .add_child_data(b)
     .build()
@@ -951,7 +995,11 @@ fn test_struct_equal_null_variable_size() {
         DataType::Utf8,
         true,
     )]))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001010])))
+    .null_bitmap(Some(Bitmap::new_from_buffer(
+        Buffer::from(vec![0b00001010]),
+        0,
+        5,
+    )))
     .len(5)
     .add_child_data(strings1.data_ref().clone())
     .build()
@@ -963,7 +1011,11 @@ fn test_struct_equal_null_variable_size() {
         DataType::Utf8,
         true,
     )]))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001010])))
+    .null_bitmap(Some(Bitmap::new_from_buffer(
+        Buffer::from(vec![0b00001010]),
+        0,
+        5,
+    )))
     .len(5)
     .add_child_data(strings2.data_ref().clone())
     .build()
@@ -985,7 +1037,11 @@ fn test_struct_equal_null_variable_size() {
         DataType::Utf8,
         true,
     )]))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001011])))
+    .null_bitmap(Some(Bitmap::new_from_buffer(
+        Buffer::from(vec![0b00001011]),
+        0,
+        5,
+    )))
     .len(5)
     .add_child_data(strings3.data_ref().clone())
     .build()

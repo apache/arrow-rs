@@ -90,8 +90,8 @@ pub(super) fn list_equal<T: ArrowNativeType + Integer>(
     let lhs_values = &lhs.child_data()[0];
     let rhs_values = &rhs.child_data()[0];
 
-    let lhs_null_count = count_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
-    let rhs_null_count = count_nulls(rhs.null_buffer(), rhs_start + rhs.offset(), len);
+    let lhs_null_count = count_nulls(lhs.null_bitmap(), lhs_start + lhs.offset(), len);
+    let rhs_null_count = count_nulls(rhs.null_bitmap(), rhs_start + rhs.offset(), len);
 
     if lhs_null_count != rhs_null_count {
         return false;

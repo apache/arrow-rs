@@ -19,7 +19,7 @@ use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, UInt8BufferBuilder};
 use crate::{ArrayRef, FixedSizeBinaryArray};
 use arrow_buffer::Buffer;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
@@ -99,7 +99,11 @@ impl FixedSizeBinaryBuilder {
         let array_data_builder =
             ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
                 .add_buffer(self.values_builder.finish())
-                .null_bit_buffer(self.null_buffer_builder.finish())
+                .null_bitmap(
+                    self.null_buffer_builder
+                        .finish()
+                        .map(|buf| Bitmap::new_from_buffer(buf, 0, array_length)),
+                )
                 .len(array_length);
         let array_data = unsafe { array_data_builder.build_unchecked() };
         FixedSizeBinaryArray::from(array_data)
@@ -112,11 +116,9 @@ impl FixedSizeBinaryBuilder {
         let array_data_builder =
             ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
                 .add_buffer(values_buffer)
-                .null_bit_buffer(
-                    self.null_buffer_builder
-                        .as_slice()
-                        .map(Buffer::from_slice_ref),
-                )
+                .null_bitmap(self.null_buffer_builder.as_slice().map(|buf| {
+                    Bitmap::new_from_buffer(Buffer::from_slice_ref(buf), 0, array_length)
+                }))
                 .len(array_length);
         let array_data = unsafe { array_data_builder.build_unchecked() };
         FixedSizeBinaryArray::from(array_data)

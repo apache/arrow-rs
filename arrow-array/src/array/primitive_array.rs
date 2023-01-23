@@ -27,7 +27,7 @@ use crate::types::*;
 use crate::{print_long_array, Array, ArrayAccessor};
 use arrow_buffer::{i256, ArrowNativeType, Buffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::{ArrowError, DataType};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use half::f16;
@@ -437,7 +437,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         let len = self.len();
         let null_count = self.null_count();
 
-        let null_buffer = data.null_buffer().map(|b| b.bit_slice(data.offset(), len));
+        let null_buffer = data.null_bitmap().map(|b| b.clone());
         let values = self.values().iter().map(|v| op(*v));
         // JUSTIFICATION
         //  Benefit
@@ -505,12 +505,14 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             return Ok(unsafe { build_primitive_array(len, buffer, 0, None) });
         }
 
-        let null_buffer = data.null_buffer().map(|b| b.bit_slice(data.offset(), len));
+        let null_buffer = data.null_bitmap().map(|b| b.clone());
         let mut buffer = BufferBuilder::<O::Native>::new(len);
         buffer.append_n_zeroed(len);
         let slice = buffer.as_slice_mut();
 
-        try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+        let nulls = null_buffer.as_ref().map(|buf| buf.as_ref());
+
+        try_for_each_valid_idx(len, 0, null_count, nulls, |idx| {
             unsafe { *slice.get_unchecked_mut(idx) = op(self.value_unchecked(idx))? };
             Ok::<_, E>(())
         })?;
@@ -604,7 +606,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
                 len,
                 buffer.finish(),
                 out_null_count,
-                Some(null_builder.finish()),
+                Some(Bitmap::new_from_buffer(null_builder.finish(), 0, len)),
             )
         }
     }
@@ -659,7 +661,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
                 let builder = ArrayData::builder(T::DATA_TYPE)
                     .len(len)
                     .add_buffer(buffer)
-                    .null_bit_buffer(null_bit_buffer);
+                    .null_bitmap(
+                        null_bit_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, len)),
+                    );
 
                 let array_data = unsafe { builder.build_unchecked() };
                 let array = PrimitiveArray::<T>::from(array_data);
@@ -675,7 +679,7 @@ unsafe fn build_primitive_array<O: ArrowPrimitiveType>(
     len: usize,
     buffer: Buffer,
     null_count: usize,
-    null_buffer: Option<Buffer>,
+    null_buffer: Option<Bitmap>,
 ) -> PrimitiveArray<O> {
     PrimitiveArray::from(ArrayData::new_unchecked(
         O::DATA_TYPE,
@@ -915,7 +919,7 @@ impl<T: ArrowPrimitiveType, Ptr: Into<NativeAdapter<T>>> FromIterator<Ptr>
                 T::DATA_TYPE,
                 len,
                 None,
-                Some(null_builder.into()),
+                Some(Bitmap::new_from_buffer(null_builder.into(), 0, len)),
                 0,
                 vec![buffer],
                 vec![],
@@ -946,7 +950,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             T::DATA_TYPE,
             len,
             None,
-            Some(null),
+            Some(Bitmap::new_from_buffer(null, 0, len)),
             0,
             vec![buffer],
             vec![],

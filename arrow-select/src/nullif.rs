@@ -20,6 +20,7 @@ use arrow_array::{make_array, Array, ArrayRef, BooleanArray};
 use arrow_buffer::buffer::{
     bitwise_bin_op_helper, bitwise_unary_op_helper, buffer_bin_and,
 };
+use arrow_data::Bitmap;
 use arrow_schema::ArrowError;
 
 /// Copies original array, setting validity bit to false if a secondary comparison
@@ -108,7 +109,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     let data = left_data
         .clone()
         .into_builder()
-        .null_bit_buffer(Some(null_buffer))
+        .null_bitmap(Some(Bitmap::new_from_buffer(null_buffer, 0, len)))
         .null_count(null_count);
 
     // SAFETY:

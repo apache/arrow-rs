@@ -18,7 +18,7 @@
 use crate::types::GenericBinaryType;
 use crate::{Array, GenericByteArray, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::DataType;
 
 /// See [`BinaryArray`] and [`LargeBinaryArray`] for storing
@@ -75,7 +75,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
             .offset(v.offset())
             .add_buffer(v.data_ref().buffers()[0].clone())
             .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
-            .null_bit_buffer(v.data_ref().null_buffer().cloned());
+            .null_bitmap(v.data_ref().null_bitmap().cloned());
 
         let data = unsafe { builder.build_unchecked() };
         Self::from(data)
@@ -194,7 +194,7 @@ where
             .len(data_len)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
-            .null_bit_buffer(Some(null_buf.into()));
+            .null_bitmap(Some(Bitmap::new_from_buffer(null_buf.into(), 0, data_len)));
         let array_data = unsafe { array_data.build_unchecked() };
         Self::from(array_data)
     }

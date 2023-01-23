@@ -19,7 +19,7 @@ use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::*;
 use arrow_data::bit_mask::combine_option_bitmap;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::*;
 use arrow_select::take::take;
 use regex::Regex;
@@ -617,7 +617,7 @@ where
             DataType::Boolean,
             left.len(),
             None,
-            null_bit_buffer,
+            null_bit_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, left.len())),
             0,
             vec![result.finish()],
             vec![],

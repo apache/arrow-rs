@@ -20,7 +20,7 @@ use crate::{null_sentinel, Rows};
 use arrow_array::builder::BufferBuilder;
 use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
 use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_data::{ArrayData, ArrayDataBuilder, Bitmap};
 use arrow_schema::{DataType, SortOptions};
 use half::f16;
 
@@ -281,7 +281,7 @@ pub fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
         .len(rows.len())
         .null_count(null_count)
         .add_buffer(values.into())
-        .null_bit_buffer(Some(nulls.into()));
+        .null_bitmap(Some(Bitmap::new_from_buffer(nulls.into(), 0, rows.len())));
 
     // SAFETY:
     // Buffers are the correct length
@@ -328,7 +328,7 @@ unsafe fn decode_fixed<T: FixedLengthEncoding + ArrowNativeType>(
         .len(len)
         .null_count(null_count)
         .add_buffer(values.finish())
-        .null_bit_buffer(Some(nulls));
+        .null_bitmap(Some(Bitmap::new_from_buffer(nulls, 0, len)));
 
     // SAFETY: Buffers correct length
     builder.build_unchecked()
@@ -377,7 +377,7 @@ pub fn decode_fixed_size_binary(
         .len(len)
         .null_count(null_count)
         .add_buffer(values.into())
-        .null_bit_buffer(Some(nulls));
+        .null_bitmap(Some(Bitmap::new_from_buffer(nulls, 0, len)));
 
     // SAFETY: Buffers correct length
     unsafe { builder.build_unchecked().into() }

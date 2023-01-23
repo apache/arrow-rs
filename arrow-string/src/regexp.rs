@@ -21,7 +21,7 @@
 use arrow_array::builder::{BooleanBufferBuilder, GenericStringBuilder, ListBuilder};
 use arrow_array::*;
 use arrow_data::bit_mask::combine_option_bitmap;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::{ArrowError, DataType};
 use regex::Regex;
 use std::collections::HashMap;
@@ -105,7 +105,7 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
             DataType::Boolean,
             array.len(),
             None,
-            null_bit_buffer,
+            null_bit_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, array.len())),
             0,
             vec![result.finish()],
             vec![],
@@ -123,7 +123,7 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     regex: &str,
     flag: Option<&str>,
 ) -> Result<BooleanArray, ArrowError> {
-    let null_bit_buffer = array.data().null_buffer().cloned();
+    let null_bit_buffer = array.data().null_bitmap().cloned();
     let mut result = BooleanBufferBuilder::new(array.len());
 
     let pattern = match flag {

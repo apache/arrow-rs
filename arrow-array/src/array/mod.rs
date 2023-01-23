@@ -21,7 +21,7 @@ mod binary_array;
 
 use crate::types::*;
 use arrow_buffer::{Buffer, MutableBuffer, ToByteSlice};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;
 use std::sync::Arc;
@@ -622,12 +622,13 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
         DataType::Null => Arc::new(NullArray::new(length)),
         DataType::Boolean => {
             let null_buf: Buffer = MutableBuffer::new_null(length).into();
+            let bitmap = Bitmap::new_from_buffer(null_buf.clone(), 0, length);
             make_array(unsafe {
                 ArrayData::new_unchecked(
                     data_type.clone(),
                     length,
                     Some(length),
-                    Some(null_buf.clone()),
+                    Some(bitmap),
                     0,
                     vec![null_buf],
                     vec![],
@@ -669,7 +670,11 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
                 data_type.clone(),
                 length,
                 Some(length),
-                Some(MutableBuffer::new_null(length).into()),
+                Some(Bitmap::new_from_buffer(
+                    MutableBuffer::new_null(length).into(),
+                    0,
+                    length,
+                )),
                 0,
                 vec![Buffer::from(vec![0u8; *value_len as usize * length])],
                 vec![],
@@ -692,7 +697,11 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
                 data_type.clone(),
                 length,
                 Some(length),
-                Some(MutableBuffer::new_null(length).into()),
+                Some(Bitmap::new_from_buffer(
+                    MutableBuffer::new_null(length).into(),
+                    0,
+                    length,
+                )),
                 0,
                 vec![],
                 vec![
@@ -726,7 +735,7 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
                     data_type.clone(),
                     length,
                     Some(length),
-                    keys.null_buffer().cloned(),
+                    keys.null_bitmap().cloned(),
                     0,
                     keys.buffers().into(),
                     vec![new_empty_array(value.as_ref()).into_data()],
@@ -751,7 +760,11 @@ fn new_null_list_array<OffsetSize: OffsetSizeTrait>(
             data_type.clone(),
             length,
             Some(length),
-            Some(MutableBuffer::new_null(length).into()),
+            Some(Bitmap::new_from_buffer(
+                MutableBuffer::new_null(length).into(),
+                0,
+                length,
+            )),
             0,
             vec![Buffer::from(
                 vec![OffsetSize::zero(); length + 1].to_byte_slice(),
@@ -771,7 +784,11 @@ fn new_null_binary_array<OffsetSize: OffsetSizeTrait>(
             data_type.clone(),
             length,
             Some(length),
-            Some(MutableBuffer::new_null(length).into()),
+            Some(Bitmap::new_from_buffer(
+                MutableBuffer::new_null(length).into(),
+                0,
+                length,
+            )),
             0,
             vec![
                 Buffer::from(vec![OffsetSize::zero(); length + 1].to_byte_slice()),
@@ -792,7 +809,11 @@ fn new_null_sized_array<T: ArrowPrimitiveType>(
             data_type.clone(),
             length,
             Some(length),
-            Some(MutableBuffer::new_null(length).into()),
+            Some(Bitmap::new_from_buffer(
+                MutableBuffer::new_null(length).into(),
+                0,
+                length,
+            )),
             0,
             vec![Buffer::from(vec![0u8; length * T::get_byte_width()])],
             vec![],
@@ -811,7 +832,11 @@ fn new_null_sized_decimal(
             data_type.clone(),
             length,
             Some(length),
-            Some(MutableBuffer::new_null(length).into()),
+            Some(Bitmap::new_from_buffer(
+                MutableBuffer::new_null(length).into(),
+                0,
+                length,
+            )),
             0,
             vec![Buffer::from(vec![0u8; length * byte_width])],
             vec![],

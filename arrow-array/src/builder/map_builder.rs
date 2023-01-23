@@ -19,7 +19,7 @@ use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::{Array, ArrayRef, MapArray, StructArray};
 use arrow_buffer::Buffer;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::{ArrowError, DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
@@ -147,7 +147,10 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         let values_arr = self.value_builder.finish();
         let offset_buffer = self.offsets_builder.finish();
         self.offsets_builder.append(0);
-        let null_bit_buffer = self.null_buffer_builder.finish();
+        let null_bit_buffer = self
+            .null_buffer_builder
+            .finish()
+            .map(|buf| Bitmap::new_from_buffer(buf, 0, len));
 
         self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer, len)
     }
@@ -162,7 +165,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         let null_bit_buffer = self
             .null_buffer_builder
             .as_slice()
-            .map(Buffer::from_slice_ref);
+            .map(|buf| Bitmap::new_from_buffer(Buffer::from_slice_ref(buf), 0, len));
 
         self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer, len)
     }
@@ -172,7 +175,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         keys_arr: Arc<dyn Array>,
         values_arr: Arc<dyn Array>,
         offset_buffer: Buffer,
-        null_bit_buffer: Option<Buffer>,
+        null_bit_buffer: Option<Bitmap>,
         len: usize,
     ) -> MapArray {
         assert!(
@@ -204,7 +207,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(struct_array.into_data())
-            .null_bit_buffer(null_bit_buffer);
+            .null_bitmap(null_bit_buffer);
 
         let array_data = unsafe { array_data.build_unchecked() };
 

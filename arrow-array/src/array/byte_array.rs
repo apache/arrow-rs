@@ -23,7 +23,7 @@ use crate::types::bytes::ByteArrayNativeType;
 use crate::types::ByteArrayType;
 use crate::{Array, ArrayAccessor, OffsetSizeTrait};
 use arrow_buffer::ArrowNativeType;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::DataType;
 use std::any::Any;
 
@@ -216,7 +216,9 @@ impl<T: ByteArrayType> GenericByteArray<T> {
                     .len(len)
                     .add_buffer(offset_buffer)
                     .add_buffer(value_buffer)
-                    .null_bit_buffer(null_bit_buffer);
+                    .null_bitmap(
+                        null_bit_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, len)),
+                    );
 
                 let array_data = unsafe { builder.build_unchecked() };
                 let array = GenericByteArray::<T>::from(array_data);

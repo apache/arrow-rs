@@ -254,10 +254,10 @@ impl<K: ArrowPrimitiveType> DictionaryArray<K> {
             .add_buffer(keys.data().buffers()[0].clone())
             .add_child_data(values.data().clone());
 
-        match keys.data().null_buffer() {
+        match keys.data().null_bitmap() {
             Some(buffer) if keys.data().null_count() > 0 => {
                 data = data
-                    .null_bit_buffer(Some(buffer.clone()))
+                    .null_bitmap(Some(buffer.clone()))
                     .null_count(keys.data().null_count());
             }
             _ => data = data.null_count(0),
@@ -435,7 +435,7 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for DictionaryArray<T> {
                     T::DATA_TYPE,
                     data.len(),
                     Some(data.null_count()),
-                    data.null_buffer().cloned(),
+                    data.null_bitmap().cloned(),
                     data.offset(),
                     data.buffers().to_vec(),
                     vec![],

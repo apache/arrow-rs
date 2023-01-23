@@ -30,7 +30,7 @@ use arrow_buffer::buffer::{
 };
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::bit_mask::combine_option_bitmap;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::{ArrowError, DataType};
 
 /// Updates null buffer based on data buffer and null buffer of the operand at other side
@@ -211,7 +211,7 @@ where
             DataType::Boolean,
             len,
             None,
-            null_bit_buffer,
+            null_bit_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, len)),
             0,
             vec![values],
             vec![],
@@ -353,10 +353,7 @@ pub fn not(left: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     let len = left.len();
 
     let data = left.data_ref();
-    let null_bit_buffer = data
-        .null_bitmap()
-        .as_ref()
-        .map(|b| b.buffer().bit_slice(left_offset, len));
+    let null_bit_buffer = data.null_bitmap().map(|b| b.clone());
 
     let values = buffer_unary_not(&data.buffers()[0], left_offset, len);
 

@@ -20,7 +20,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::transform::MutableArrayData;
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayDataBuilder, Bitmap};
 use arrow_schema::{ArrowError, DataType};
 use std::sync::Arc;
 
@@ -149,7 +149,11 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
     let builder = ArrayDataBuilder::new(data_type.clone())
         .len(indices.len())
         .add_buffer(values.finish())
-        .null_bit_buffer(interleaved.nulls)
+        .null_bitmap(
+            interleaved
+                .nulls
+                .map(|buf| Bitmap::new_from_buffer(buf, 0, indices.len())),
+        )
         .null_count(interleaved.null_count);
 
     let data = unsafe { builder.build_unchecked() };
@@ -181,7 +185,11 @@ fn interleave_bytes<T: ByteArrayType>(
         .len(indices.len())
         .add_buffer(offsets.finish())
         .add_buffer(values.into())
-        .null_bit_buffer(interleaved.nulls)
+        .null_bitmap(
+            interleaved
+                .nulls
+                .map(|buf| Bitmap::new_from_buffer(buf, 0, indices.len())),
+        )
         .null_count(interleaved.null_count);
 
     let data = unsafe { builder.build_unchecked() };

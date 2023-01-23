@@ -18,7 +18,7 @@
 use crate::{make_array, Array, ArrayRef};
 use arrow_buffer::buffer::buffer_bin_or;
 use arrow_buffer::Buffer;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::{ArrowError, DataType, Field};
 use std::{any::Any, ops::Index};
 
@@ -180,7 +180,7 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
 
         let builder = ArrayData::builder(DataType::Struct(fields))
             .len(len)
-            .null_bit_buffer(null)
+            .null_bitmap(null.map(|buf| Bitmap::new_from_buffer(buf, 0, len)))
             .child_data(child_data);
 
         let array_data = unsafe { builder.build_unchecked() };
@@ -284,7 +284,7 @@ impl From<(Vec<(Field, ArrayRef)>, Buffer)> for StructArray {
         );
 
         let array_data = ArrayData::builder(DataType::Struct(field_types))
-            .null_bit_buffer(Some(pair.1))
+            .null_bitmap(Some(Bitmap::new_from_buffer(pair.1, 0, length)))
             .child_data(field_values.into_iter().map(|a| a.into_data()).collect())
             .len(length);
         let array_data = unsafe { array_data.build_unchecked() };

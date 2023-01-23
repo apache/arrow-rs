@@ -59,7 +59,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_cast::parse::Parser;
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_data::{ArrayData, ArrayDataBuilder, Bitmap};
 use arrow_schema::*;
 
 #[derive(Debug, Clone)]
@@ -1082,7 +1082,11 @@ impl Decoder {
                     ArrayData::builder(list_field.data_type().clone())
                         .len(valid_len)
                         .add_buffer(bool_values.into())
-                        .null_bit_buffer(Some(bool_nulls.into()))
+                        .null_bitmap(Some(Bitmap::new_from_buffer(
+                            bool_nulls.into(),
+                            0,
+                            valid_len,
+                        )))
                         .build_unchecked()
                 }
             }
@@ -1161,7 +1165,7 @@ impl Decoder {
                 unsafe {
                     ArrayDataBuilder::new(data_type)
                         .len(rows.len())
-                        .null_bit_buffer(Some(buf))
+                        .null_bitmap(Some(Bitmap::new_from_buffer(buf, 0, rows.len())))
                         .child_data(arrays.into_iter().map(|a| a.into_data()).collect())
                         .build_unchecked()
                 }
@@ -1178,7 +1182,11 @@ impl Decoder {
             .len(list_len)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_child_data(array_data)
-            .null_bit_buffer(Some(list_nulls.into()));
+            .null_bitmap(Some(Bitmap::new_from_buffer(
+                list_nulls.into(),
+                0,
+                list_len,
+            )));
         let list_data = unsafe { list_data.build_unchecked() };
         Ok(Arc::new(GenericListArray::<OffsetSize>::from(list_data)))
     }
@@ -1372,7 +1380,11 @@ impl Decoder {
                         let data_type = DataType::Struct(fields.clone());
                         let data = ArrayDataBuilder::new(data_type)
                             .len(len)
-                            .null_bit_buffer(Some(null_buffer.into()))
+                            .null_bitmap(Some(Bitmap::new_from_buffer(
+                                null_buffer.into(),
+                                0,
+                                len,
+                            )))
                             .child_data(
                                 arrays.into_iter().map(|a| a.into_data()).collect(),
                             );
@@ -1472,7 +1484,7 @@ impl Decoder {
                 map_type.clone(),
                 rows_len,
                 None,
-                Some(list_bitmap.into()),
+                Some(Bitmap::new_from_buffer(list_bitmap.into(), 0, rows_len)),
                 0,
                 vec![Buffer::from_slice_ref(&list_offsets)],
                 vec![ArrayData::new_unchecked(

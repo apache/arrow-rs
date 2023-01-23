@@ -20,9 +20,10 @@ use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::types::*;
 use crate::{ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow_buffer::{Buffer, MutableBuffer};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::DataType;
 use std::any::Any;
+use std::ptr::null;
 use std::sync::Arc;
 
 /// A signed 8-bit integer array builder.
@@ -276,11 +277,14 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Builds the [`PrimitiveArray`] and reset this builder.
     pub fn finish(&mut self) -> PrimitiveArray<T> {
         let len = self.len();
-        let null_bit_buffer = self.null_buffer_builder.finish();
+        let null_bitmap = self
+            .null_buffer_builder
+            .finish()
+            .map(|buf| Bitmap::new_from_buffer(buf, 0, len));
         let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
             .add_buffer(self.values_builder.finish())
-            .null_bit_buffer(null_bit_buffer);
+            .null_bitmap(null_bitmap);
 
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
@@ -289,15 +293,15 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Builds the [`PrimitiveArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> PrimitiveArray<T> {
         let len = self.len();
-        let null_bit_buffer = self
+        let null_bitmap = self
             .null_buffer_builder
             .as_slice()
-            .map(Buffer::from_slice_ref);
+            .map(|buf| Bitmap::new_from_buffer(Buffer::from_slice_ref(buf), 0, len));
         let values_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
         let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
             .add_buffer(values_buffer)
-            .null_bit_buffer(null_bit_buffer);
+            .null_bitmap(null_bitmap);
 
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)

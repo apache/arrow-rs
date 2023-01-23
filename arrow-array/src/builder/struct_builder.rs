@@ -19,7 +19,8 @@ use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::*;
 use crate::{Array, ArrayRef, StructArray};
 use arrow_buffer::Buffer;
-use arrow_data::ArrayData;
+use arrow_data::BufferSpec::BitMap;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
 use std::any::Any;
 use std::sync::Arc;
@@ -232,12 +233,15 @@ impl StructBuilder {
             child_data.push(arr.data().clone());
         }
         let length = self.len();
-        let null_bit_buffer = self.null_buffer_builder.finish();
+        let null_bitmap = self
+            .null_buffer_builder
+            .finish()
+            .map(|buf| Bitmap::new_from_buffer(buf, 0, length));
 
         let builder = ArrayData::builder(DataType::Struct(self.fields.clone()))
             .len(length)
             .child_data(child_data)
-            .null_bit_buffer(null_bit_buffer);
+            .null_bitmap(null_bitmap);
 
         let array_data = unsafe { builder.build_unchecked() };
         StructArray::from(array_data)
@@ -253,15 +257,15 @@ impl StructBuilder {
             child_data.push(arr.data().clone());
         }
         let length = self.len();
-        let null_bit_buffer = self
+        let null_bitmap = self
             .null_buffer_builder
             .as_slice()
-            .map(Buffer::from_slice_ref);
+            .map(|buf| Bitmap::new_from_buffer(Buffer::from_slice_ref(buf), 0, length));
 
         let builder = ArrayData::builder(DataType::Struct(self.fields.clone()))
             .len(length)
             .child_data(child_data)
-            .null_bit_buffer(null_bit_buffer);
+            .null_bitmap(null_bitmap);
 
         let array_data = unsafe { builder.build_unchecked() };
         StructArray::from(array_data)

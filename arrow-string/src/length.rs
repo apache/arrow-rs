@@ -37,10 +37,7 @@ macro_rules! unary_offsets {
         //      `values` come from a slice iterator with a known size.
         let buffer = unsafe { Buffer::from_trusted_len_iter(lengths) };
 
-        let null_bit_buffer = $array
-            .data_ref()
-            .null_buffer()
-            .map(|b| b.bit_slice($array.offset(), $array.len()));
+        let null_bit_buffer = $array.data_ref().null_bitmap().cloned();
 
         let data = unsafe {
             ArrayData::new_unchecked(

@@ -21,6 +21,7 @@ use arrow_buffer::bit_util;
 use arrow_schema::ArrowError;
 use std::mem;
 
+use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use arrow_buffer::buffer::{buffer_bin_and, buffer_bin_or, Buffer};
 use std::ops::{BitAnd, BitOr};
 
@@ -31,6 +32,12 @@ use std::ops::{BitAnd, BitOr};
 /// This is called a "validity bitmap" in the Arrow documentation.
 pub struct Bitmap {
     pub(crate) bits: Buffer,
+
+    /// The offset into the bitmap.
+    offset: usize,
+
+    /// Bit length of the bitmap.
+    length: usize,
 }
 
 impl Bitmap {
@@ -39,12 +46,30 @@ impl Bitmap {
         let len = bit_util::round_upto_multiple_of_64(num_bytes);
         Bitmap {
             bits: Buffer::from(&vec![0xFF; len]),
+            offset: 0,
+            length: num_bits,
         }
+    }
+
+    pub fn new_from_buffer(buf: Buffer, offset: usize, length: usize) -> Self {
+        assert!(
+            offset + length <= buf.len() * 8,
+            "the offset + length of the new Bitmap cannot exceed the bit length of the Buffer"
+        );
+        Bitmap {
+            bits: buf,
+            offset,
+            length,
+        }
+    }
+
+    pub fn offset(&self) -> usize {
+        self.offset
     }
 
     /// Return the length of this Bitmap in bits (not bytes)
     pub fn bit_len(&self) -> usize {
-        self.bits.len() * 8
+        self.length
     }
 
     pub fn is_empty(&self) -> bool {
@@ -52,15 +77,18 @@ impl Bitmap {
     }
 
     pub fn is_set(&self, i: usize) -> bool {
-        assert!(i < (self.bits.len() << 3));
-        unsafe { bit_util::get_bit_raw(self.bits.as_ptr(), i) }
+        assert!(i < self.length);
+        unsafe { bit_util::get_bit_raw(self.bits.as_ptr().add(self.offset), i) }
     }
 
+    #[deprecated(note = "Direct access to bitmap's buffer is deprecated.")]
     pub fn buffer(&self) -> &Buffer {
         &self.bits
     }
 
+    #[deprecated(note = "Direct access to bitmap's buffer is deprecated.")]
     pub fn buffer_ref(&self) -> &Buffer {
+        assert!(self.offset == 0);
         &self.bits
     }
 
@@ -84,6 +112,52 @@ impl Bitmap {
     pub fn get_array_memory_size(&self) -> usize {
         self.bits.capacity() + mem::size_of_val(self)
     }
+
+    /// Returns a new [`Bitmap`] that is a slice of this bitmap starting at `offset`.
+    /// Doing so allows the same memory region to be shared between bitmaps.
+    /// # Panics
+    /// Panics iff `offset` is larger than `bit_len`.
+    pub fn slice(&self, offset: usize) -> Self {
+        assert!(
+            offset <= self.bit_len(),
+            "the offset of the new Bitmap cannot exceed the existing bit length"
+        );
+        Self {
+            bits: self.bits.clone(),
+            offset: self.offset + offset,
+            length: self.length - offset,
+        }
+    }
+
+    /// Returns a new [`Bitmap`] that is a slice of this buffer starting at `offset`,
+    /// with `length` bits.
+    /// Doing so allows the same memory region to be shared between bitmaps.
+    /// # Panics
+    /// Panics iff `(offset + length)` is larger than the existing bit_len.
+    pub fn slice_with_length(&self, offset: usize, length: usize) -> Self {
+        assert!(
+            offset + length <= self.bit_len(),
+            "the offset of the new Bitmap cannot exceed the existing bit length"
+        );
+        Self {
+            bits: self.bits.clone(),
+            offset: self.offset + offset,
+            length,
+        }
+    }
+
+    /// Returns the number of 1-bits in this bitmap, starting from `offset` with `len` bits
+    /// inspected. Note that both `offset` and `len` are measured in bits.
+    /// # Panics
+    /// Panics iff `(offset + len)` is larger than the existing bit_len.
+    pub fn count_set_bits_offset(&self, offset: usize, len: usize) -> usize {
+        assert!(
+            offset + len <= self.bit_len(),
+            "the offset plus len cannot exceed the existing bit length"
+        );
+        UnalignedBitChunk::new(self.bits.as_slice(), self.offset + offset, len)
+            .count_ones()
+    }
 }
 
 impl<'a, 'b> BitAnd<&'b Bitmap> for &'a Bitmap {
@@ -92,16 +166,20 @@ impl<'a, 'b> BitAnd<&'b Bitmap> for &'a Bitmap {
     fn bitand(self, rhs: &'b Bitmap) -> Result<Bitmap, ArrowError> {
         if self.bits.len() != rhs.bits.len() {
             return Err(ArrowError::ComputeError(
-                "Buffers must be the same size to apply Bitwise AND.".to_string(),
+                "Bitmaps must be the same size to apply Bitwise AND.".to_string(),
             ));
         }
-        Ok(Bitmap::from(buffer_bin_and(
-            &self.bits,
-            0,
-            &rhs.bits,
+        Ok(Bitmap::new_from_buffer(
+            buffer_bin_and(
+                &self.bits,
+                self.offset,
+                &rhs.bits,
+                rhs.offset,
+                self.bit_len(),
+            ),
             0,
             self.bit_len(),
-        )))
+        ))
     }
 }
 
@@ -109,24 +187,22 @@ impl<'a, 'b> BitOr<&'b Bitmap> for &'a Bitmap {
     type Output = Result<Bitmap, ArrowError>;
 
     fn bitor(self, rhs: &'b Bitmap) -> Result<Bitmap, ArrowError> {
-        if self.bits.len() != rhs.bits.len() {
+        if self.bit_len() != rhs.bit_len() {
             return Err(ArrowError::ComputeError(
-                "Buffers must be the same size to apply Bitwise OR.".to_string(),
+                "Bitmaps must be the same size to apply Bitwise OR.".to_string(),
             ));
         }
-        Ok(Bitmap::from(buffer_bin_or(
-            &self.bits,
-            0,
-            &rhs.bits,
+        Ok(Bitmap::new_from_buffer(
+            buffer_bin_or(
+                &self.bits,
+                self.offset,
+                &rhs.bits,
+                rhs.offset,
+                self.bit_len(),
+            ),
             0,
             self.bit_len(),
-        )))
-    }
-}
-
-impl From<Buffer> for Bitmap {
-    fn from(buf: Buffer) -> Self {
-        Self { bits: buf }
+        ))
     }
 }
 
@@ -134,12 +210,19 @@ impl PartialEq for Bitmap {
     fn eq(&self, other: &Self) -> bool {
         // buffer equality considers capacity, but here we want to only compare
         // actual data contents
-        let self_len = self.bits.len();
-        let other_len = other.bits.len();
+        let self_len = self.bit_len();
+        let other_len = other.bit_len();
         if self_len != other_len {
             return false;
         }
-        self.bits.as_slice()[..self_len] == other.bits.as_slice()[..self_len]
+        self.bits.as_slice()[self.offset..self_len]
+            == other.bits.as_slice()[other.offset..self_len]
+    }
+}
+
+impl AsRef<[u8]> for Bitmap {
+    fn as_ref(&self) -> &[u8] {
+        self.bits.as_ref()
     }
 }
 
@@ -156,27 +239,27 @@ mod tests {
 
     #[test]
     fn test_bitwise_and() {
-        let bitmap1 = Bitmap::from(Buffer::from([0b01101010]));
-        let bitmap2 = Bitmap::from(Buffer::from([0b01001110]));
+        let bitmap1 = Bitmap::new_from_buffer(Buffer::from([0b01101010]), 0, 9);
+        let bitmap2 = Bitmap::new_from_buffer(Buffer::from([0b01001110]), 0, 9);
         assert_eq!(
-            Bitmap::from(Buffer::from([0b01001010])),
+            Bitmap::from(Buffer::new_from_buffer([0b01001010], 0, 9)),
             (&bitmap1 & &bitmap2).unwrap()
         );
     }
 
     #[test]
     fn test_bitwise_or() {
-        let bitmap1 = Bitmap::from(Buffer::from([0b01101010]));
-        let bitmap2 = Bitmap::from(Buffer::from([0b01001110]));
+        let bitmap1 = Bitmap::new_from_buffer(Buffer::from([0b01101010]), 0, 9);
+        let bitmap2 = Bitmap::new_from_buffer(Buffer::from([0b01001110]), 0, 9);
         assert_eq!(
-            Bitmap::from(Buffer::from([0b01101110])),
+            Bitmap::new_from_buffer(Buffer::new_from_buffer([0b01101110]), 0, 9),
             (&bitmap1 | &bitmap2).unwrap()
         );
     }
 
     #[test]
     fn test_bitmap_is_set() {
-        let bitmap = Bitmap::from(Buffer::from([0b01001010]));
+        let bitmap = Bitmap::new_from_buffer(Buffer::from([0b01001010]), 0, 9);
         assert!(!bitmap.is_set(0));
         assert!(bitmap.is_set(1));
         assert!(!bitmap.is_set(2));

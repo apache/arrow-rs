@@ -20,7 +20,7 @@ use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::BufferBuilder;
 use crate::{make_array, ArrowPrimitiveType, UnionArray};
 use arrow_buffer::{ArrowNativeType, Buffer};
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayDataBuilder, Bitmap};
 use arrow_schema::{ArrowError, DataType, Field};
 use std::any::Any;
 use std::collections::HashMap;
@@ -292,7 +292,11 @@ impl UnionBuilder {
             let arr_data_builder = ArrayDataBuilder::new(data_type.clone())
                 .add_buffer(buffer)
                 .len(slots)
-                .null_bit_buffer(bitmap_builder.finish());
+                .null_bitmap(
+                    bitmap_builder
+                        .finish()
+                        .map(|buf| Bitmap::new_from_buffer(buf, 0, slots)),
+                );
 
             let arr_data_ref = unsafe { arr_data_builder.build_unchecked() };
             let array_ref = make_array(arr_data_ref);

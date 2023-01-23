@@ -21,7 +21,7 @@ use crate::raw_pointer::RawPtrBox;
 use crate::{print_long_array, Array, ArrayAccessor};
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_data::bit_mask::combine_option_bitmap;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::DataType;
 use std::any::Any;
 
@@ -189,10 +189,7 @@ impl BooleanArray {
     where
         F: FnMut(T::Item) -> bool,
     {
-        let null_bit_buffer = left
-            .data()
-            .null_buffer()
-            .map(|b| b.bit_slice(left.offset(), left.len()));
+        let null_bit_buffer = left.data().null_bitmap().map(|b| b.clone());
 
         let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
             // SAFETY: i in range 0..len
@@ -252,7 +249,7 @@ impl BooleanArray {
                 DataType::Boolean,
                 left.len(),
                 None,
-                null_bit_buffer,
+                null_bit_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, left.len())),
                 0,
                 vec![Buffer::from(buffer)],
                 vec![],
@@ -387,7 +384,7 @@ impl<Ptr: std::borrow::Borrow<Option<bool>>> FromIterator<Ptr> for BooleanArray 
                 DataType::Boolean,
                 data_len,
                 None,
-                Some(null_builder.into()),
+                Some(Bitmap::new_from_buffer(null_builder.into(), 0, data_len)),
                 0,
                 vec![val_builder.into()],
                 vec![],

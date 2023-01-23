@@ -23,7 +23,7 @@ use arrow_array::*;
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::bit_mask::combine_option_bitmap;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::ArrowError;
 use std::sync::Arc;
 
@@ -38,7 +38,7 @@ unsafe fn build_primitive_array<O: ArrowPrimitiveType>(
         O::DATA_TYPE,
         len,
         Some(null_count),
-        null_buffer,
+        null_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, len)),
         0,
         vec![buffer],
         vec![],
@@ -294,7 +294,7 @@ where
         .data()
         .clone()
         .into_builder()
-        .null_bit_buffer(null_buffer)
+        .null_bitmap(null_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, len)))
         .null_count(null_count);
 
     let array_data = unsafe { array_builder.build_unchecked() };
@@ -424,7 +424,7 @@ where
             .data()
             .clone()
             .into_builder()
-            .null_bit_buffer(null_buffer)
+            .null_bitmap(null_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, len)))
             .null_count(null_count);
 
         let array_data = unsafe { array_builder.build_unchecked() };

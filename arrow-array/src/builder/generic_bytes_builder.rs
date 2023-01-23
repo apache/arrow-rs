@@ -20,7 +20,7 @@ use crate::builder::{ArrayBuilder, BufferBuilder, UInt8BufferBuilder};
 use crate::types::{ByteArrayType, GenericBinaryType, GenericStringType};
 use crate::{ArrayRef, GenericByteArray, OffsetSizeTrait};
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayDataBuilder, Bitmap};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -122,7 +122,11 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .len(self.len())
             .add_buffer(self.offsets_builder.finish())
             .add_buffer(self.value_builder.finish())
-            .null_bit_buffer(self.null_buffer_builder.finish());
+            .null_bitmap(
+                self.null_buffer_builder
+                    .finish()
+                    .map(|buf| Bitmap::new_from_buffer(buf, 0, self.len())),
+            );
 
         self.offsets_builder.append(self.next_offset());
         let array_data = unsafe { array_builder.build_unchecked() };
@@ -138,11 +142,9 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .len(self.len())
             .add_buffer(offset_buffer)
             .add_buffer(value_buffer)
-            .null_bit_buffer(
-                self.null_buffer_builder
-                    .as_slice()
-                    .map(Buffer::from_slice_ref),
-            );
+            .null_bitmap(self.null_buffer_builder.as_slice().map(|buf| {
+                Bitmap::new_from_buffer(Buffer::from_slice_ref(buf), 0, self.len())
+            }));
 
         let array_data = unsafe { array_builder.build_unchecked() };
         GenericByteArray::from(array_data)

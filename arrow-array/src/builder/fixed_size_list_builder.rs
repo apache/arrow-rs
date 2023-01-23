@@ -19,7 +19,7 @@ use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::ArrayBuilder;
 use crate::{ArrayRef, FixedSizeListArray};
 use arrow_buffer::Buffer;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::{DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
@@ -167,14 +167,17 @@ where
             len,
         );
 
-        let null_bit_buffer = self.null_buffer_builder.finish();
+        let null_bit_buffer = self
+            .null_buffer_builder
+            .finish()
+            .map(|buf| Bitmap::new_from_buffer(buf, 0, len));
         let array_data = ArrayData::builder(DataType::FixedSizeList(
             Box::new(Field::new("item", values_data.data_type().clone(), true)),
             self.list_len,
         ))
         .len(len)
         .add_child_data(values_data.clone())
-        .null_bit_buffer(null_bit_buffer);
+        .null_bitmap(null_bit_buffer);
 
         let array_data = unsafe { array_data.build_unchecked() };
 
@@ -198,14 +201,14 @@ where
         let null_bit_buffer = self
             .null_buffer_builder
             .as_slice()
-            .map(Buffer::from_slice_ref);
+            .map(|buf| Bitmap::new_from_buffer(Buffer::from_slice_ref(buf), 0, len));
         let array_data = ArrayData::builder(DataType::FixedSizeList(
             Box::new(Field::new("item", values_data.data_type().clone(), true)),
             self.list_len,
         ))
         .len(len)
         .add_child_data(values_data.clone())
-        .null_bit_buffer(null_bit_buffer);
+        .null_bitmap(null_bit_buffer);
 
         let array_data = unsafe { array_data.build_unchecked() };
 

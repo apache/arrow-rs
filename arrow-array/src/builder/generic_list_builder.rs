@@ -19,7 +19,7 @@ use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::{ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::Buffer;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::Field;
 use std::any::Any;
 use std::sync::Arc;
@@ -129,7 +129,10 @@ where
         let values_data = values_arr.data();
 
         let offset_buffer = self.offsets_builder.finish();
-        let null_bit_buffer = self.null_buffer_builder.finish();
+        let null_bit_buffer = self
+            .null_buffer_builder
+            .finish()
+            .map(|buf| Bitmap::new_from_buffer(buf, 0, len));
         self.offsets_builder.append(OffsetSize::zero());
         let field = Box::new(Field::new(
             "item",
@@ -141,7 +144,7 @@ where
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(values_data.clone())
-            .null_bit_buffer(null_bit_buffer);
+            .null_bitmap(null_bit_buffer);
 
         let array_data = unsafe { array_data_builder.build_unchecked() };
 
@@ -158,7 +161,7 @@ where
         let null_bit_buffer = self
             .null_buffer_builder
             .as_slice()
-            .map(Buffer::from_slice_ref);
+            .map(|buf| Bitmap::new_from_buffer(Buffer::from_slice_ref(buf), 0, len));
         let field = Box::new(Field::new(
             "item",
             values_data.data_type().clone(),
@@ -169,7 +172,7 @@ where
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(values_data.clone())
-            .null_bit_buffer(null_bit_buffer);
+            .null_bitmap(null_bit_buffer);
 
         let array_data = unsafe { array_data_builder.build_unchecked() };
 

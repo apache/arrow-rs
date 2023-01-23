@@ -60,8 +60,8 @@ pub(super) fn variable_sized_equal<T: ArrowNativeType + Integer>(
     let lhs_values = lhs.buffers()[1].as_slice();
     let rhs_values = rhs.buffers()[1].as_slice();
 
-    let lhs_null_count = count_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
-    let rhs_null_count = count_nulls(rhs.null_buffer(), rhs_start + rhs.offset(), len);
+    let lhs_null_count = count_nulls(lhs.null_bitmap(), lhs_start + lhs.offset(), len);
+    let rhs_null_count = count_nulls(rhs.null_bitmap(), rhs_start + rhs.offset(), len);
 
     if lhs_null_count == 0
         && rhs_null_count == 0

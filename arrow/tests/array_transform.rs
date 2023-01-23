@@ -24,7 +24,7 @@ use arrow::array::{
 use arrow::datatypes::Int16Type;
 use arrow_buffer::Buffer;
 use arrow_data::transform::MutableArrayData;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::{DataType, Field};
 use std::sync::Arc;
 
@@ -640,7 +640,11 @@ fn test_list_nulls_append() {
     let expected_list_data = ArrayData::try_new(
         DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
         12,
-        Some(Buffer::from(&[0b11011011, 0b1110])),
+        Some(Bitmap::new_from_buffer(
+            Buffer::from(&[0b11011011, 0b1110]),
+            0,
+            12,
+        )),
         0,
         vec![list_value_offsets],
         vec![expected_int_array.into_data()],
@@ -786,7 +790,11 @@ fn test_map_nulls_append() {
             false,
         ),
         12,
-        Some(Buffer::from(&[0b11011011, 0b1110])),
+        Some(Bitmap::new_from_buffer(
+            Buffer::from(&[0b11011011, 0b1110]),
+            0,
+            12,
+        )),
         0,
         vec![map_offsets],
         vec![expected_entry_array.into_data()],

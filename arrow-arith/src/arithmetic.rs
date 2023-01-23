@@ -26,6 +26,7 @@ use crate::arity::*;
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
+use arrow_data::Bitmap;
 use arrow_schema::*;
 use num::traits::Pow;
 use std::sync::Arc;
@@ -136,7 +137,7 @@ where
             T::DATA_TYPE,
             len,
             None,
-            null_bit_buffer,
+            null_bit_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, len)),
             0,
             vec![buffer],
             vec![],

@@ -19,7 +19,7 @@ use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BooleanBufferBuilder};
 use crate::{ArrayRef, BooleanArray};
 use arrow_buffer::Buffer;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
@@ -146,11 +146,14 @@ impl BooleanBuilder {
     /// Builds the [BooleanArray] and reset this builder.
     pub fn finish(&mut self) -> BooleanArray {
         let len = self.len();
-        let null_bit_buffer = self.null_buffer_builder.finish();
+        let null_bitmap = self
+            .null_buffer_builder
+            .finish()
+            .map(|buf| Bitmap::new_from_buffer(buf, 0, len));
         let builder = ArrayData::builder(DataType::Boolean)
             .len(len)
             .add_buffer(self.values_builder.finish())
-            .null_bit_buffer(null_bit_buffer);
+            .null_bitmap(null_bitmap);
 
         let array_data = unsafe { builder.build_unchecked() };
         BooleanArray::from(array_data)
@@ -159,15 +162,15 @@ impl BooleanBuilder {
     /// Builds the [BooleanArray] without resetting the builder.
     pub fn finish_cloned(&self) -> BooleanArray {
         let len = self.len();
-        let null_bit_buffer = self
+        let null_bitmap = self
             .null_buffer_builder
             .as_slice()
-            .map(Buffer::from_slice_ref);
+            .map(|buf| Bitmap::new_from_buffer(Buffer::from_slice_ref(buf), 0, len));
         let value_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
         let builder = ArrayData::builder(DataType::Boolean)
             .len(len)
             .add_buffer(value_buffer)
-            .null_bit_buffer(null_bit_buffer);
+            .null_bitmap(null_bitmap);
 
         let array_data = unsafe { builder.build_unchecked() };
         BooleanArray::from(array_data)

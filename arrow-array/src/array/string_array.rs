@@ -20,7 +20,7 @@ use crate::{
     Array, GenericBinaryArray, GenericByteArray, GenericListArray, OffsetSizeTrait,
 };
 use arrow_buffer::{bit_util, MutableBuffer};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::DataType;
 
 /// Generic struct for \[Large\]StringArray
@@ -84,7 +84,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
             .offset(v.offset())
             .add_buffer(v.data().buffers()[0].clone())
             .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
-            .null_bit_buffer(v.data().null_buffer().cloned());
+            .null_bitmap(v.data().null_bitmap().cloned());
 
         Self::from(builder.build().unwrap())
     }
@@ -198,7 +198,7 @@ where
             .len(data_len)
             .add_buffer(offsets.into())
             .add_buffer(values.into())
-            .null_bit_buffer(Some(null_buf.into()));
+            .null_bitmap(Some(Bitmap::new_from_buffer(null_buf.into(), 0, data_len)));
         let array_data = unsafe { array_data.build_unchecked() };
         Self::from(array_data)
     }

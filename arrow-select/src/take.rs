@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_data::{ArrayData, ArrayDataBuilder, Bitmap};
 use arrow_schema::{ArrowError, DataType, Field};
 
 use arrow_array::cast::{as_generic_binary_array, as_largestring_array, as_string_array};
@@ -468,7 +468,7 @@ where
             values.data_type().clone(),
             indices.len(),
             None,
-            nulls,
+            nulls.map(|buf| Bitmap::new_from_buffer(buf, 0, indices.len())),
             0,
             vec![buffer],
             vec![],
@@ -554,7 +554,7 @@ where
             DataType::Boolean,
             indices.len(),
             None,
-            null_buf,
+            null_buf.map(|buf| Bitmap::new_from_buffer(buf, 0, indices.len())),
             0,
             vec![val_buf],
             vec![],
@@ -666,7 +666,7 @@ where
         .len(data_len)
         .add_buffer(offsets_buffer.into())
         .add_buffer(values.into())
-        .null_bit_buffer(nulls);
+        .null_bitmap(nulls.map(|buf| Bitmap::new_from_buffer(buf, 0, data_len)));
 
     let array_data = unsafe { array_data.build_unchecked() };
 
@@ -699,7 +699,11 @@ where
     // create a new list with taken data and computed null information
     let list_data = ArrayDataBuilder::new(values.data_type().clone())
         .len(indices.len())
-        .null_bit_buffer(Some(null_buf.into()))
+        .null_bitmap(Some(Bitmap::new_from_buffer(
+            null_buf.into(),
+            0,
+            indices.len(),
+        )))
         .offset(0)
         .add_child_data(taken.into_data())
         .add_buffer(value_offsets);
@@ -742,7 +746,11 @@ where
 
     let list_data = ArrayDataBuilder::new(values.data_type().clone())
         .len(indices.len())
-        .null_bit_buffer(Some(null_buf.into()))
+        .null_bitmap(Some(Bitmap::new_from_buffer(
+            null_buf.into(),
+            0,
+            indices.len(),
+        )))
         .offset(0)
         .add_child_data(taken.into_data());
 
@@ -800,7 +808,7 @@ where
             values.data_type().clone(),
             new_keys.len(),
             Some(new_keys_data.null_count()),
-            new_keys_data.null_buffer().cloned(),
+            new_keys_data.null_bitmap().cloned(),
             0,
             new_keys_data.buffers().to_vec(),
             values.data().child_data().to_vec(),

@@ -20,7 +20,7 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::MutableBuffer;
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayDataBuilder, Bitmap};
 use arrow_schema::{DataType, SortOptions};
 
 /// The block size of the variable length encoding
@@ -206,7 +206,7 @@ pub fn decode_binary<I: OffsetSizeTrait>(
     let builder = ArrayDataBuilder::new(d)
         .len(len)
         .null_count(null_count)
-        .null_bit_buffer(Some(nulls.into()))
+        .null_bitmap(Some(Bitmap::new_from_buffer(nulls.into(), 0, len)))
         .add_buffer(offsets.finish())
         .add_buffer(values.into());
 

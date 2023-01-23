@@ -47,11 +47,11 @@ pub(crate) fn contains_nulls(
 
 #[inline]
 pub(crate) fn count_nulls(
-    null_bit_buffer: Option<&Buffer>,
+    null_bitmap: Option<&Bitmap>,
     offset: usize,
     len: usize,
 ) -> usize {
-    if let Some(buf) = null_bit_buffer {
+    if let Some(buf) = null_bitmap {
         len - buf.count_set_bits_offset(offset, len)
     } else {
         0
@@ -319,7 +319,7 @@ impl ArrayData {
     /// Create a new ArrayData instance;
     ///
     /// If `null_count` is not specified, the number of nulls in
-    /// null_bit_buffer is calculated.
+    /// null_bitmap is calculated.
     ///
     /// If the number of nulls is 0 then the null_bit_buffer
     /// is set to `None`.
@@ -337,16 +337,16 @@ impl ArrayData {
         data_type: DataType,
         len: usize,
         null_count: Option<usize>,
-        null_bit_buffer: Option<Buffer>,
+        null_bitmap: Option<Bitmap>,
         offset: usize,
         buffers: Vec<Buffer>,
         child_data: Vec<ArrayData>,
     ) -> Self {
         let null_count = match null_count {
-            None => count_nulls(null_bit_buffer.as_ref(), offset, len),
+            None => count_nulls(null_bitmap.as_ref(), offset, len),
             Some(null_count) => null_count,
         };
-        let null_bitmap = null_bit_buffer.filter(|_| null_count > 0).map(Bitmap::from);
+        let null_bitmap = null_bitmap.filter(|_| null_count > 0).map(Bitmap::from);
         let new_self = Self {
             data_type,
             len,
@@ -366,7 +366,7 @@ impl ArrayData {
     /// Create a new ArrayData, validating that the provided buffers form a valid
     /// Arrow array of the specified data type.
     ///
-    /// If the number of nulls in `null_bit_buffer` is 0 then the null_bit_buffer
+    /// If the number of nulls in `null_bitmap` is 0 then the null_bit_buffer
     /// is set to `None`.
     ///
     /// Internally this calls through to [`Self::validate_data`]
@@ -376,7 +376,7 @@ impl ArrayData {
     pub fn try_new(
         data_type: DataType,
         len: usize,
-        null_bit_buffer: Option<Buffer>,
+        null_bitmap: Option<Bitmap>,
         offset: usize,
         buffers: Vec<Buffer>,
         child_data: Vec<ArrayData>,
@@ -384,13 +384,12 @@ impl ArrayData {
         // we must check the length of `null_bit_buffer` first
         // because we use this buffer to calculate `null_count`
         // in `Self::new_unchecked`.
-        if let Some(null_bit_buffer) = null_bit_buffer.as_ref() {
-            let needed_len = bit_util::ceil(len + offset, 8);
-            if null_bit_buffer.len() < needed_len {
+        if let Some(null_bitmap) = null_bitmap.as_ref() {
+            if null_bitmap.bit_len() < len {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "null_bit_buffer size too small. got {} needed {}",
-                    null_bit_buffer.len(),
-                    needed_len
+                    "null_bitmap size too small. got {} needed {}",
+                    null_bitmap.bit_len(),
+                    len
                 )));
             }
         }
@@ -400,7 +399,7 @@ impl ArrayData {
                 data_type,
                 len,
                 None,
-                null_bit_buffer,
+                null_bitmap,
                 offset,
                 buffers,
                 child_data,
@@ -453,6 +452,7 @@ impl ArrayData {
     }
 
     /// Returns a reference to the null buffer of this [`ArrayData`].
+    #[deprecated(note = "Use null_bitmap instead.")]
     pub fn null_buffer(&self) -> Option<&Buffer> {
         self.null_bitmap().as_ref().map(|b| b.buffer_ref())
     }
@@ -626,7 +626,7 @@ impl ArrayData {
             let new_data = ArrayData {
                 data_type: self.data_type().clone(),
                 len: length,
-                null_count: count_nulls(self.null_buffer(), new_offset, length),
+                null_count: count_nulls(self.null_bitmap(), new_offset, length),
                 offset: new_offset,
                 buffers: self.buffers.clone(),
                 // Slice child data, to propagate offsets down to them
@@ -635,7 +635,9 @@ impl ArrayData {
                     .iter()
                     .map(|data| data.slice(offset, length))
                     .collect(),
-                null_bitmap: self.null_bitmap().cloned(),
+                null_bitmap: self.null_bitmap.as_ref().map(|bitmap| {
+                    bitmap.slice_with_length(bitmap.offset() + offset, length)
+                }),
             };
 
             new_data
@@ -645,8 +647,13 @@ impl ArrayData {
             new_data.len = length;
             new_data.offset = offset + self.offset;
 
-            new_data.null_count =
-                count_nulls(new_data.null_buffer(), new_data.offset, new_data.len);
+            new_data.null_bitmap = self
+                .null_bitmap
+                .as_ref()
+                .map(|bitmap| bitmap.slice_with_length(bitmap.offset() + offset, length));
+
+            // new offset is pushed into sliced bitmap.
+            new_data.null_count = count_nulls(new_data.null_bitmap(), 0, length);
 
             new_data
         }
@@ -818,13 +825,11 @@ impl ArrayData {
 
         // check null bit buffer size
         if let Some(null_bit_map) = self.null_bitmap.as_ref() {
-            let null_bit_buffer = null_bit_map.buffer_ref();
-            let needed_len = bit_util::ceil(len_plus_offset, 8);
-            if null_bit_buffer.len() < needed_len {
+            if null_bit_map.bit_len() < self.len {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "null_bit_buffer size too small. got {} needed {}",
-                    null_bit_buffer.len(),
-                    needed_len
+                    "null_bit_map size too small. got {} needed {}",
+                    null_bit_map.bit_len(),
+                    self.len
                 )));
             }
         } else if self.null_count > 0 {
@@ -1137,7 +1142,7 @@ impl ArrayData {
     /// Validates the the null count is correct and that any
     /// nullability requirements of its children are correct
     pub fn validate_nulls(&self) -> Result<(), ArrowError> {
-        let nulls = self.null_buffer();
+        let nulls = self.null_bitmap();
 
         let actual_null_count = count_nulls(nulls, self.offset, self.len);
         if actual_null_count != self.null_count {
@@ -1154,7 +1159,7 @@ impl ArrayData {
         match &self.data_type {
             DataType::List(f) | DataType::LargeList(f) | DataType::Map(f, _) => {
                 if !f.is_nullable() {
-                    self.validate_non_nullable(None, 0, &self.child_data[0])?
+                    self.validate_non_nullable(None, &self.child_data[0])?
                 }
             }
             DataType::FixedSizeList(field, len) => {
@@ -1168,8 +1173,9 @@ impl ArrayData {
 
                             // Expand each bit within `null_mask` into `element_len`
                             // bits, constructing the implicit mask of the child elements
-                            for i in 0..self.len {
-                                if !bit_util::get_bit(nulls.as_ref(), self.offset + i) {
+                            for i in 0..nulls.bit_len() {
+                                if !bit_util::get_bit(nulls.as_ref(), nulls.offset() + i)
+                                {
                                     continue;
                                 }
                                 for j in 0..element_len {
@@ -1179,17 +1185,21 @@ impl ArrayData {
                                     )
                                 }
                             }
-                            let mask = buffer.into();
-                            self.validate_non_nullable(Some(&mask), 0, child)?;
+                            let mask = Bitmap::new_from_buffer(
+                                buffer.into(),
+                                0,
+                                element_len * self.len,
+                            );
+                            self.validate_non_nullable(Some(&mask), child)?;
                         }
-                        None => self.validate_non_nullable(None, 0, child)?,
+                        None => self.validate_non_nullable(None, child)?,
                     }
                 }
             }
             DataType::Struct(fields) => {
                 for (field, child) in fields.iter().zip(&self.child_data) {
                     if !field.is_nullable() {
-                        self.validate_non_nullable(nulls, self.offset, child)?
+                        self.validate_non_nullable(nulls, child)?
                     }
                 }
             }
@@ -1202,11 +1212,10 @@ impl ArrayData {
     /// Verifies that `child` contains no nulls not present in `mask`
     fn validate_non_nullable(
         &self,
-        mask: Option<&Buffer>,
-        offset: usize,
+        mask: Option<&Bitmap>,
         data: &ArrayData,
     ) -> Result<(), ArrowError> {
-        let mask = match mask {
+        let mask_bits = match mask {
             Some(mask) => mask.as_ref(),
             None => return match data.null_count {
                 0 => Ok(()),
@@ -1218,10 +1227,14 @@ impl ArrayData {
             },
         };
 
-        match data.null_buffer() {
+        let mask_offset = mask.unwrap().offset();
+        let mask_length = mask.unwrap().bit_len();
+
+        match data.null_bitmap() {
             Some(nulls) => {
-                let mask = BitChunks::new(mask, offset, data.len);
-                let nulls = BitChunks::new(nulls.as_ref(), data.offset, data.len);
+                let mask = BitChunks::new(mask_bits, mask_offset, mask_length);
+                let nulls =
+                    BitChunks::new(nulls.as_ref(), nulls.offset(), nulls.bit_len());
                 mask
                     .iter()
                     .zip(nulls.iter())
@@ -1660,7 +1673,7 @@ pub struct ArrayDataBuilder {
     data_type: DataType,
     len: usize,
     null_count: Option<usize>,
-    null_bit_buffer: Option<Buffer>,
+    null_bitmap: Option<Bitmap>,
     offset: usize,
     buffers: Vec<Buffer>,
     child_data: Vec<ArrayData>,
@@ -1673,7 +1686,7 @@ impl ArrayDataBuilder {
             data_type,
             len: 0,
             null_count: None,
-            null_bit_buffer: None,
+            null_bitmap: None,
             offset: 0,
             buffers: vec![],
             child_data: vec![],
@@ -1696,8 +1709,8 @@ impl ArrayDataBuilder {
         self
     }
 
-    pub fn null_bit_buffer(mut self, buf: Option<Buffer>) -> Self {
-        self.null_bit_buffer = buf;
+    pub fn null_bitmap(mut self, bitmap: Option<Bitmap>) -> Self {
+        self.null_bitmap = bitmap;
         self
     }
 
@@ -1738,7 +1751,7 @@ impl ArrayDataBuilder {
             self.data_type,
             self.len,
             self.null_count,
-            self.null_bit_buffer,
+            self.null_bitmap,
             self.offset,
             self.buffers,
             self.child_data,
@@ -1750,7 +1763,7 @@ impl ArrayDataBuilder {
         ArrayData::try_new(
             self.data_type,
             self.len,
-            self.null_bit_buffer,
+            self.null_bitmap,
             self.offset,
             self.buffers,
             self.child_data,
@@ -1760,10 +1773,9 @@ impl ArrayDataBuilder {
 
 impl From<ArrayData> for ArrayDataBuilder {
     fn from(d: ArrayData) -> Self {
-        // TODO: Store Bitmap on ArrayData (#1799)
-        let null_bit_buffer = d.null_buffer().cloned();
+        let null_bitmap = d.null_bitmap().cloned();
         Self {
-            null_bit_buffer,
+            null_bitmap,
             data_type: d.data_type,
             len: d.len,
             null_count: Some(d.null_count),
@@ -2002,11 +2014,12 @@ mod tests {
 
     #[test]
     fn test_count_nulls() {
-        let null_buffer = Some(Buffer::from(vec![0b00010110, 0b10011111]));
-        let count = count_nulls(null_buffer.as_ref(), 0, 16);
+        let null_bitmap =
+            Some(Buffer::from(vec![0b00010110, 0b10011111])).map(|buf| Bitmap::from(buf));
+        let count = count_nulls(null_bitmap.as_ref(), 0, 16);
         assert_eq!(count, 7);
 
-        let count = count_nulls(null_buffer.as_ref(), 4, 8);
+        let count = count_nulls(null_bitmap.as_ref(), 4, 8);
         assert_eq!(count, 3);
     }
 

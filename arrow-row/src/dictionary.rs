@@ -23,7 +23,7 @@ use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, MutableBuffer, ToByteSlice};
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_data::{ArrayData, ArrayDataBuilder, Bitmap};
 use arrow_schema::{ArrowError, DataType, SortOptions};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -184,7 +184,7 @@ pub unsafe fn decode_dictionary<K: ArrowDictionaryKeyType>(
 
     let builder = ArrayDataBuilder::new(data_type)
         .len(len)
-        .null_bit_buffer(Some(null_builder.finish()))
+        .null_bitmap(Some(Bitmap::new_from_buffer(null_builder.finish(), 0, len)))
         .null_count(null_count)
         .add_buffer(keys.finish())
         .add_child_data(child);

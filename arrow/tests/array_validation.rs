@@ -22,7 +22,7 @@ use arrow::array::{
 };
 use arrow_array::Decimal128Array;
 use arrow_buffer::{ArrowNativeType, Buffer};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::{DataType, Field, UnionMode};
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -68,7 +68,7 @@ fn test_fixed_width_overflow() {
 #[should_panic(expected = "null_bit_buffer size too small. got 1 needed 2")]
 fn test_bitmap_too_small() {
     let buffer = make_i32_buffer(9);
-    let null_bit_buffer = Buffer::from(vec![0b11111111]);
+    let null_bit_buffer = Bitmap::new_from_buffer(Buffer::from(vec![0b11111111]), 0, 9);
 
     ArrayData::try_new(
         DataType::Int32,
@@ -946,7 +946,7 @@ fn test_try_new_sliced_struct() {
     let cloned_data = ArrayData::try_new(
         struct_array_slice.data_type().clone(),
         struct_array_slice.len(),
-        struct_array_data.null_buffer().cloned(),
+        struct_array_data.null_bitmap().cloned(),
         struct_array_slice.offset(),
         struct_array_data.buffers().to_vec(),
         struct_array_data.child_data().to_vec(),
@@ -988,7 +988,7 @@ fn test_string_data_from_foreign() {
     let data = ArrayData::try_new(
         DataType::Utf8,
         4,
-        Some(null_buffer),
+        Some(Bitmap::new_from_buffer(null_buffer, 0, 4)),
         0,
         vec![offsets_buffer, strings_buffer],
         vec![],

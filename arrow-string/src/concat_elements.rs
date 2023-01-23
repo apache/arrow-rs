@@ -18,7 +18,7 @@
 use arrow_array::builder::BufferBuilder;
 use arrow_array::*;
 use arrow_data::bit_mask::combine_option_bitmap;
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayDataBuilder, Bitmap};
 use arrow_schema::ArrowError;
 
 /// Returns the elementwise concatenation of a [`StringArray`].
@@ -76,7 +76,9 @@ pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
         .len(left.len())
         .add_buffer(output_offsets.finish())
         .add_buffer(output_values.finish())
-        .null_bit_buffer(output_bitmap);
+        .null_bitmap(
+            output_bitmap.map(|buf| Bitmap::new_from_buffer(buf, 0, left.len())),
+        );
 
     // SAFETY - offsets valid by construction
     Ok(unsafe { builder.build_unchecked() }.into())
@@ -151,7 +153,7 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
         .len(size)
         .add_buffer(output_offsets.finish())
         .add_buffer(output_values.finish())
-        .null_bit_buffer(output_bitmap);
+        .null_bitmap(output_bitmap.map(|buf| Bitmap::new_from_buffer(buf, 0, size)));
 
     // SAFETY - offsets valid by construction
     Ok(unsafe { builder.build_unchecked() }.into())

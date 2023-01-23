@@ -29,7 +29,7 @@ use std::sync::Arc;
 use arrow_array::*;
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_cast::cast;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
@@ -412,7 +412,9 @@ fn create_primitive_array(
             ArrayData::builder(data_type.clone())
                 .len(length)
                 .buffers(buffers[1..3].to_vec())
-                .null_bit_buffer(null_buffer)
+                .null_bitmap(
+                    null_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, length)),
+                )
                 .build()?
         }
         FixedSizeBinary(_) => {
@@ -420,7 +422,9 @@ fn create_primitive_array(
             ArrayData::builder(data_type.clone())
                 .len(length)
                 .add_buffer(buffers[1].clone())
-                .null_bit_buffer(null_buffer)
+                .null_bitmap(
+                    null_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, length)),
+                )
                 .build()?
         }
         Int8
@@ -437,7 +441,9 @@ fn create_primitive_array(
                 let data = ArrayData::builder(DataType::Int64)
                     .len(length)
                     .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer)
+                    .null_bitmap(
+                        null_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, length)),
+                    )
                     .build()?;
                 let values = Arc::new(Int64Array::from(data)) as ArrayRef;
                 let casted = cast(&values, data_type)?;
@@ -446,7 +452,9 @@ fn create_primitive_array(
                 ArrayData::builder(data_type.clone())
                     .len(length)
                     .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer)
+                    .null_bitmap(
+                        null_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, length)),
+                    )
                     .build()?
             }
         }
@@ -456,7 +464,9 @@ fn create_primitive_array(
                 let data = ArrayData::builder(DataType::Float64)
                     .len(length)
                     .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer)
+                    .null_bitmap(
+                        null_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, length)),
+                    )
                     .build()?;
                 let values = Arc::new(Float64Array::from(data)) as ArrayRef;
                 let casted = cast(&values, data_type)?;
@@ -465,7 +475,9 @@ fn create_primitive_array(
                 ArrayData::builder(data_type.clone())
                     .len(length)
                     .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer)
+                    .null_bitmap(
+                        null_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, length)),
+                    )
                     .build()?
             }
         }
@@ -480,7 +492,7 @@ fn create_primitive_array(
         | Interval(IntervalUnit::DayTime) => ArrayData::builder(data_type.clone())
             .len(length)
             .add_buffer(buffers[1].clone())
-            .null_bit_buffer(null_buffer)
+            .null_bitmap(null_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, length)))
             .build()?,
         Interval(IntervalUnit::MonthDayNano) | Decimal128(_, _) => {
             let buffer = get_aligned_buffer::<i128>(&buffers[1], length);
@@ -489,7 +501,9 @@ fn create_primitive_array(
             ArrayData::builder(data_type.clone())
                 .len(length)
                 .add_buffer(buffer)
-                .null_bit_buffer(null_buffer)
+                .null_bitmap(
+                    null_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, length)),
+                )
                 .build()?
         }
         Decimal256(_, _) => {
@@ -499,7 +513,9 @@ fn create_primitive_array(
             ArrayData::builder(data_type.clone())
                 .len(length)
                 .add_buffer(buffer)
-                .null_bit_buffer(null_buffer)
+                .null_bitmap(
+                    null_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, length)),
+                )
                 .build()?
         }
         t => unreachable!("Data type {:?} either unsupported or not primitive", t),
@@ -542,12 +558,12 @@ fn create_list_array(
             .len(length)
             .add_buffer(buffers[1].clone())
             .add_child_data(child_data)
-            .null_bit_buffer(null_buffer),
+            .null_bitmap(null_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, length))),
 
         FixedSizeList(_, _) => ArrayData::builder(data_type.clone())
             .len(length)
             .add_child_data(child_data)
-            .null_bit_buffer(null_buffer),
+            .null_bitmap(null_buffer.map(|buf| Bitmap::new_from_buffer(buf, 0, length))),
 
         _ => unreachable!("Cannot create list or map array from {:?}", data_type),
     };
@@ -568,7 +584,9 @@ fn create_dictionary_array(
             .len(field_node.length() as usize)
             .add_buffer(buffers[1].clone())
             .add_child_data(value_array.into_data())
-            .null_bit_buffer(null_buffer);
+            .null_bitmap(null_buffer.map(|buf| {
+                Bitmap::new_from_buffer(buf, 0, field_node.length() as usize)
+            }));
 
         Ok(make_array(builder.build()?))
     } else {

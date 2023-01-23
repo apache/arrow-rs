@@ -93,6 +93,7 @@ mod tests {
         datatypes::{DataType, Field},
         ffi::ArrowArray,
     };
+    use arrow_data::Bitmap;
     use std::convert::TryFrom;
     use std::sync::Arc;
 
@@ -255,7 +256,11 @@ mod tests {
             DataType::FixedSizeList(Box::new(Field::new("f", DataType::Int16, false)), 2);
         let list_data = ArrayData::builder(list_data_type)
             .len(8)
-            .null_bit_buffer(Some(Buffer::from(validity_bits)))
+            .null_bitmap(Some(Bitmap::new_from_buffer(
+                Buffer::from(validity_bits),
+                0,
+                8,
+            )))
             .add_child_data(value_data)
             .build()?;
         let array = FixedSizeListArray::from(list_data);
@@ -292,7 +297,11 @@ mod tests {
         );
         let list_data = ArrayData::builder(list_data_type)
             .len(4)
-            .null_bit_buffer(Some(Buffer::from(validity_bits)))
+            .null_bitmap(Some(Bitmap::new_from_buffer(
+                Buffer::from(validity_bits),
+                0,
+                4,
+            )))
             .add_child_data(inner_list_data)
             .build()?;
 

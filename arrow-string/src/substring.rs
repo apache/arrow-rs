@@ -210,10 +210,7 @@ pub fn substring_by_char<OffsetSize: OffsetSizeTrait>(
             GenericStringArray::<OffsetSize>::DATA_TYPE,
             array.len(),
             None,
-            array
-                .data_ref()
-                .null_buffer()
-                .map(|b| b.bit_slice(array.offset(), array.len())),
+            array.data_ref().null_bitmap().cloned(),
             0,
             vec![new_offsets.finish(), vals.finish()],
             vec![],
@@ -297,10 +294,7 @@ fn binary_substring<OffsetSize: OffsetSizeTrait>(
             GenericBinaryArray::<OffsetSize>::DATA_TYPE,
             array.len(),
             None,
-            array
-                .data_ref()
-                .null_buffer()
-                .map(|b| b.bit_slice(array.offset(), array.len())),
+            array.data_ref().null_bitmap().cloned(),
             0,
             vec![Buffer::from_slice_ref(&new_offsets), new_values.into()],
             vec![],
@@ -345,10 +339,7 @@ fn fixed_size_binary_substring(
             DataType::FixedSizeBinary(new_len),
             num_of_elements,
             None,
-            array
-                .data_ref()
-                .null_buffer()
-                .map(|b| b.bit_slice(array.offset(), num_of_elements)),
+            array.data_ref().null_bitmap().cloned(),
             0,
             vec![new_values.into()],
             vec![],
@@ -428,10 +419,7 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
             GenericStringArray::<OffsetSize>::DATA_TYPE,
             array.len(),
             None,
-            array
-                .data_ref()
-                .null_buffer()
-                .map(|b| b.bit_slice(array.offset(), array.len())),
+            array.data_ref().null_bitmap().cloned(),
             0,
             vec![Buffer::from_slice_ref(&new_offsets), new_values.into()],
             vec![],

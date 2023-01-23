@@ -27,7 +27,7 @@ use arrow_buffer::bit_util;
 use arrow_buffer::{buffer::buffer_bin_and, Buffer, MutableBuffer};
 use arrow_data::bit_iterator::{BitIndexIterator, BitSliceIterator};
 use arrow_data::transform::MutableArrayData;
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_data::{ArrayData, ArrayDataBuilder, Bitmap};
 use arrow_schema::*;
 
 /// If the filter selects more than this fraction of rows, use
@@ -475,7 +475,9 @@ fn filter_boolean(values: &BooleanArray, predicate: &FilterPredicate) -> Boolean
         .add_buffer(values);
 
     if let Some((null_count, nulls)) = filter_null_mask(data, predicate) {
-        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
+        builder = builder
+            .null_count(null_count)
+            .null_bitmap(Some(Bitmap::new_from_buffer(nulls, 0, data.len())));
     }
 
     let data = unsafe { builder.build_unchecked() };
@@ -535,7 +537,9 @@ where
         .add_buffer(buffer.into());
 
     if let Some((null_count, nulls)) = filter_null_mask(data, predicate) {
-        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
+        builder = builder
+            .null_count(null_count)
+            .null_bitmap(Some(Bitmap::new_from_buffer(nulls, 0, data.len())));
     }
 
     let data = unsafe { builder.build_unchecked() };
@@ -656,7 +660,9 @@ where
         .add_buffer(filter.dst_values.into());
 
     if let Some((null_count, nulls)) = filter_null_mask(data, predicate) {
-        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
+        builder = builder
+            .null_count(null_count)
+            .null_bitmap(Some(Bitmap::new_from_buffer(nulls, 0, data.len())));
     }
 
     let data = unsafe { builder.build_unchecked() };

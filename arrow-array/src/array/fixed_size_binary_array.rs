@@ -19,7 +19,7 @@ use crate::iterator::FixedSizeBinaryIter;
 use crate::raw_pointer::RawPtrBox;
 use crate::{print_long_array, Array, ArrayAccessor, FixedSizeListArray};
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, Bitmap};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 
@@ -191,7 +191,7 @@ impl FixedSizeBinaryArray {
                 DataType::FixedSizeBinary(size as i32),
                 len,
                 None,
-                Some(null_buf.into()),
+                Some(Bitmap::new_from_buffer(null_buf.into(), 0, len)),
                 0,
                 vec![buffer.into()],
                 vec![],
@@ -271,7 +271,7 @@ impl FixedSizeBinaryArray {
                 DataType::FixedSizeBinary(size),
                 len,
                 None,
-                Some(null_buf.into()),
+                Some(Bitmap::new_from_buffer(null_buf.into(), 0, len)),
                 0,
                 vec![buffer.into()],
                 vec![],
@@ -408,7 +408,7 @@ impl From<FixedSizeListArray> for FixedSizeBinaryArray {
             .len(v.len())
             .offset(v.offset())
             .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
-            .null_bit_buffer(v.data_ref().null_buffer().cloned());
+            .null_bitmap(v.data_ref().null_bitmap().cloned());
 
         let data = unsafe { builder.build_unchecked() };
         Self::from(data)

@@ -132,7 +132,7 @@ use std::sync::Arc;
 use arrow_array::cast::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayDataBuilder, Bitmap};
 use arrow_schema::*;
 
 use crate::dictionary::{
@@ -1231,7 +1231,7 @@ unsafe fn decode_column(
             let builder = ArrayDataBuilder::new(field.data_type.clone())
                 .len(rows.len())
                 .null_count(null_count)
-                .null_bit_buffer(Some(nulls))
+                .null_bitmap(Some(Bitmap::new_from_buffer(nulls, 0, rows.len())))
                 .child_data(child_data);
 
             Arc::new(StructArray::from(builder.build_unchecked()))

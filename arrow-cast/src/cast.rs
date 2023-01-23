@@ -3165,11 +3165,7 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
                     to_type.clone(),
                     cast_keys.len(),
                     Some(cast_keys.null_count()),
-                    cast_keys
-                        .data()
-                        .null_bitmap()
-                        .cloned()
-                        .map(|bitmap| bitmap.into_buffer()),
+                    cast_keys.data().null_bitmap().cloned(),
                     cast_keys.data().offset(),
                     cast_keys.data().buffers().to_vec(),
                     vec![cast_values.into_data()],
@@ -3403,11 +3399,7 @@ fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
             to_type.clone(),
             array.len(),
             Some(cast_array.null_count()),
-            cast_array
-                .data()
-                .null_bitmap()
-                .cloned()
-                .map(|bitmap| bitmap.into_buffer()),
+            cast_array.data().null_bitmap().cloned(),
             0,
             vec![offsets.into()],
             vec![cast_array.into_data()],
@@ -3434,9 +3426,7 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
             to_type.clone(),
             array.len(),
             Some(data.null_count()),
-            data.null_bitmap()
-                .cloned()
-                .map(|bitmap| bitmap.into_buffer()),
+            data.null_bitmap().map(|buf| buf.clone()),
             array.offset(),
             // reuse offset buffer
             data.buffers().to_vec(),
@@ -3486,7 +3476,7 @@ where
         .len(array.len())
         .add_buffer(offset_buffer)
         .add_buffer(str_values_buf)
-        .null_bit_buffer(data.null_buffer().cloned());
+        .null_bitmap(data.null_bitmap().cloned());
 
     let array_data = unsafe { builder.build_unchecked() };
 
@@ -3563,7 +3553,7 @@ where
         .len(array.len())
         .add_buffer(offset_buffer)
         .add_child_data(value_data)
-        .null_bit_buffer(data.null_buffer().cloned());
+        .null_bitmap(data.null_bitmap().cloned());
 
     let array_data = unsafe { builder.build_unchecked() };
     Ok(make_array(array_data))
