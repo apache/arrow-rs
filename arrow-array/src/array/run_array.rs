@@ -17,6 +17,7 @@
 
 use std::any::Any;
 
+use arrow_buffer::ArrowNativeType;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
@@ -65,6 +66,17 @@ pub struct RunArray<R: RunEndIndexType> {
 }
 
 impl<R: RunEndIndexType> RunArray<R> {
+    
+    // calculates the logical length of the array encoded
+    // by the given run_ends array.
+    fn logical_len(run_ends: &PrimitiveArray<R>) -> usize {
+        let len = run_ends.len();
+        if len == 0 {
+            return 0;
+        }
+        run_ends.value(len - 1).as_usize()
+    }
+
     /// Attempts to create RunArray using given run_ends (index where a run ends)
     /// and the values (value of the run). Returns an error if the given data is not compatible
     /// with RunEndEncoded specification.
@@ -78,7 +90,9 @@ impl<R: RunEndIndexType> RunArray<R> {
             Box::new(Field::new("run_ends", run_ends_type, false)),
             Box::new(Field::new("values", values_type, true)),
         );
+        let len = RunArray::logical_len(run_ends);
         let builder = ArrayDataBuilder::new(ree_array_type)
+            .len(len)
             .add_child_data(run_ends.data().clone())
             .add_child_data(values.data().clone());
 
@@ -181,11 +195,7 @@ impl<'a, T: RunEndIndexType> FromIterator<Option<&'a str>> for RunArray<T> {
         let (lower, _) = it.size_hint();
         let mut builder = StringRunBuilder::with_capacity(lower, 256);
         it.for_each(|i| {
-            if let Some(i) = i {
-                builder.append_value(i);
-            } else {
-                builder.append_null();
-            }
+            builder.append_option(i);
         });
 
         builder.finish()
@@ -272,40 +282,32 @@ mod tests {
     use crate::builder::PrimitiveRunBuilder;
     use crate::types::{Int16Type, Int32Type, Int8Type, UInt32Type};
     use crate::{Array, Int16Array, Int32Array, StringArray};
-    use arrow_schema::Field;
 
     #[test]
     fn test_run_array() {
         // Construct a value array
         let value_data = PrimitiveArray::<Int8Type>::from_iter_values([
             10_i8, 11, 12, 13, 14, 15, 16, 17,
-        ])
-        .into_data();
+        ]);
 
         // Construct a run_ends array:
         let run_ends_data = PrimitiveArray::<Int16Type>::from_iter_values([
             4_i16, 6, 7, 9, 13, 18, 20, 22,
-        ])
-        .into_data();
+        ]);
 
         // Construct a run ends encoded array from the above two
-        let run_ends_type = Field::new("run_ends", DataType::Int16, false);
-        let value_type = Field::new("values", DataType::Int8, true);
-        let ree_array_type =
-            DataType::RunEndEncoded(Box::new(run_ends_type), Box::new(value_type));
-        let dict_data = ArrayData::builder(ree_array_type)
-            .add_child_data(run_ends_data.clone())
-            .add_child_data(value_data.clone())
-            .build()
-            .unwrap();
-        let ree_array = Int16RunArray::from(dict_data);
+        let ree_array =
+            RunArray::<Int16Type>::try_new(&run_ends_data, &value_data).unwrap();
+
+        assert_eq!(ree_array.len(), 22);
+        assert_eq!(ree_array.null_count(), 0);
 
         let values = ree_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(&value_data.into_data(), values.data());
         assert_eq!(&DataType::Int8, values.data_type());
 
         let run_ends = ree_array.run_ends();
-        assert_eq!(&run_ends_data, run_ends.data());
+        assert_eq!(&run_ends_data.into_data(), run_ends.data());
         assert_eq!(&DataType::Int16, run_ends.data_type());
     }
 
@@ -326,6 +328,10 @@ mod tests {
             builder.append_value(1);
         }
         let array = builder.finish();
+
+        assert_eq!(array.len(), 20);
+        assert_eq!(array.null_count(), 0);
+
         assert_eq!(
             "RunArray {run_ends: PrimitiveArray<Int16>\n[\n  20,\n], values: PrimitiveArray<UInt32>\n[\n  1,\n]}\n",
             format!("{:?}", array)
@@ -344,6 +350,9 @@ mod tests {
             format!("{:?}", array)
         );
 
+        assert_eq!(array.len(), 4);
+        assert_eq!(array.null_count(), 0);
+
         let array: RunArray<Int16Type> = test.into_iter().collect();
         assert_eq!(
             "RunArray {run_ends: PrimitiveArray<Int16>\n[\n  2,\n  3,\n  4,\n], values: StringArray\n[\n  \"a\",\n  \"b\",\n  \"c\",\n]}\n",
@@ -356,6 +365,9 @@ mod tests {
         let test = vec!["a", "b", "c", "a"];
         let array: RunArray<Int16Type> = test.into_iter().collect();
 
+        assert_eq!(array.len(), 4);
+        assert_eq!(array.null_count(), 0);
+
         let run_ends = array.run_ends();
         assert_eq!(&DataType::Int16, run_ends.data_type());
         assert_eq!(0, run_ends.null_count());
@@ -366,6 +378,9 @@ mod tests {
     fn test_run_array_as_primitive_array_with_null() {
         let test = vec![Some("a"), None, Some("b"), None, None, Some("a")];
         let array: RunArray<Int32Type> = test.into_iter().collect();
+
+        assert_eq!(array.len(), 6);
+        assert_eq!(array.null_count(), 0);
 
         let run_ends = array.run_ends();
         assert_eq!(&DataType::Int32, run_ends.data_type());
@@ -382,6 +397,9 @@ mod tests {
     fn test_run_array_all_nulls() {
         let test = vec![None, None, None];
         let array: RunArray<Int32Type> = test.into_iter().collect();
+
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.null_count(), 0);
 
         let run_ends = array.run_ends();
         assert_eq!(1, run_ends.len());
@@ -403,6 +421,8 @@ mod tests {
         assert_eq!(array.run_ends().data_type(), &DataType::Int32);
         assert_eq!(array.values().data_type(), &DataType::Utf8);
 
+        assert_eq!(array.null_count(), 0);
+        assert_eq!(array.len(), 4);
         assert_eq!(array.run_ends.null_count(), 0);
         assert_eq!(array.values().null_count(), 1);
 
@@ -437,10 +457,7 @@ mod tests {
 
         let actual = RunArray::<Int32Type>::try_new(&run_ends, &values);
         let expected = ArrowError::InvalidArgumentError("The run_ends array length should be the same as values array length. Run_ends array length is 3, values array length is 4".to_string());
-        assert_eq!(
-            format!("{}", expected),
-            format!("{}", actual.err().unwrap())
-        );
+        assert_eq!(expected.to_string(), actual.err().unwrap().to_string());
     }
 
     #[test]
@@ -452,10 +469,7 @@ mod tests {
 
         let actual = RunArray::<Int32Type>::try_new(&run_ends, &values);
         let expected = ArrowError::InvalidArgumentError("Found null values in run_ends array. The run_ends array should not have null values.".to_string());
-        assert_eq!(
-            format!("{}", expected),
-            format!("{}", actual.err().unwrap())
-        );
+        assert_eq!(expected.to_string(), actual.err().unwrap().to_string());
     }
 
     #[test]
@@ -467,10 +481,7 @@ mod tests {
 
         let actual = RunArray::<Int32Type>::try_new(&run_ends, &values);
         let expected = ArrowError::InvalidArgumentError("The values in run_ends array should be strictly positive. Found value 0 at index 0 that does not match the criteria.".to_string());
-        assert_eq!(
-            format!("{}", expected),
-            format!("{}", actual.err().unwrap())
-        );
+        assert_eq!(expected.to_string(), actual.err().unwrap().to_string());
     }
 
     #[test]
@@ -482,10 +493,7 @@ mod tests {
 
         let actual = RunArray::<Int32Type>::try_new(&run_ends, &values);
         let expected = ArrowError::InvalidArgumentError("The values in run_ends array should be strictly increasing. Found value 4 at index 2 with previous value 4 that does not match the criteria.".to_string());
-        assert_eq!(
-            format!("{}", expected),
-            format!("{}", actual.err().unwrap())
-        );
+        assert_eq!(expected.to_string(), actual.err().unwrap().to_string());
     }
 
     #[test]

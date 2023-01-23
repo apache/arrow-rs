@@ -111,6 +111,17 @@ where
             prev_run_end_index: 0,
         }
     }
+
+    /// Returns the physical length of the encoded array
+    pub fn physical_len(&self) -> usize {
+        let mut len = self.run_ends_builder.len();
+
+        // If there is an ongoing run yet to be added, include it in the len
+        if self.prev_run_end_index != self.current_run_end_index {
+            len += 1;
+        }
+        len
+    }
 }
 
 impl<R, V> ArrayBuilder for PrimitiveRunBuilder<R, V>
@@ -133,14 +144,10 @@ where
         self
     }
 
-    /// Returns the number of array slots in the builder
+    /// Returns the length of logical array encoded by
+    /// the eventual runs array.
     fn len(&self) -> usize {
-        let mut len = self.run_ends_builder.len();
-        // If there is an ongoing run yet to be added, include it in the len
-        if self.prev_run_end_index != self.current_run_end_index {
-            len += 1;
-        }
-        len
+        self.current_run_end_index
     }
 
     /// Returns whether the number of array slots is zero
@@ -228,17 +235,10 @@ where
     // finish_cloned.
     fn append_run_end(&mut self) {
         // empty array or the function called without appending any value.
-        if self.current_run_end_index == 0
-            || self.prev_run_end_index == self.current_run_end_index
-        {
+        if self.prev_run_end_index == self.current_run_end_index {
             return;
         }
-        let run_end_index =  R::Native::from_usize(self.current_run_end_index)
-            .unwrap_or_else(|| panic!(
-            "Cannot convert the value {} from `usize` to native form of arrow datatype {}",
-            self.current_run_end_index,
-            R::DATA_TYPE
-            ));
+        let run_end_index = self.run_end_index_as_native();
         self.run_ends_builder.append_value(run_end_index);
         self.values_builder.append_option(self.current_value);
         self.prev_run_end_index = self.current_run_end_index;
@@ -250,14 +250,18 @@ where
         run_ends_builder: &mut PrimitiveBuilder<R>,
         values_builder: &mut PrimitiveBuilder<V>,
     ) {
-        let run_end_index = R::Native::from_usize(self.current_run_end_index)
-            .unwrap_or_else(|| panic!(
-                    "Cannot convert the value {} from `usize` to native form of arrow datatype {}",
-                    self.current_run_end_index,
-                    R::DATA_TYPE
-            ));
+        let run_end_index = self.run_end_index_as_native();
         run_ends_builder.append_value(run_end_index);
         values_builder.append_option(self.current_value);
+    }
+
+    fn run_end_index_as_native(&self) -> R::Native {
+        R::Native::from_usize(self.current_run_end_index)
+        .unwrap_or_else(|| panic!(
+                "Cannot convert the value {} from `usize` to native form of arrow datatype {}",
+                self.current_run_end_index,
+                R::DATA_TYPE
+        ))
     }
 }
 
@@ -266,17 +270,27 @@ mod tests {
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::as_primitive_array;
     use crate::types::{Int16Type, UInt32Type};
-    use crate::{Int16Array, UInt32Array};
+    use crate::{Array, Int16Array, UInt32Array};
     #[test]
     fn test_primitive_ree_array_builder() {
         let mut builder = PrimitiveRunBuilder::<Int16Type, UInt32Type>::new();
         builder.append_value(1234);
         builder.append_value(1234);
         builder.append_value(1234);
+
+        assert_eq!(builder.physical_len(), 1);
+
         builder.append_null();
+        assert_eq!(builder.physical_len(), 2);
+
         builder.append_value(5678);
         builder.append_value(5678);
+        assert_eq!(builder.physical_len(), 3);
+
         let array = builder.finish();
+
+        assert_eq!(array.null_count(), 0);
+        assert_eq!(array.len(), 6);
 
         assert_eq!(
             array.run_ends(),

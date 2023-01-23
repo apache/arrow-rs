@@ -124,6 +124,17 @@ where
             prev_run_end_index: 0,
         }
     }
+
+    /// Returns the physical length of the encoded array
+    pub fn physical_len(&self) -> usize {
+        let mut len = self.run_ends_builder.len();
+
+        // If there is an ongoing run yet to be added, include it in the len
+        if self.prev_run_end_index != self.current_run_end_index {
+            len += 1;
+        }
+        len
+    }
 }
 
 impl<R, V> ArrayBuilder for GenericByteRunBuilder<R, V>
@@ -146,14 +157,10 @@ where
         self
     }
 
-    /// Returns the number of array slots in the builder
+    /// Returns the length of logical array encoded by
+    /// the eventual runs array.
     fn len(&self) -> usize {
-        let mut len = self.run_ends_builder.len();
-        // If there is an ongoing run yet to be added, include it in the len
-        if self.prev_run_end_index != self.current_run_end_index {
-            len += 1;
-        }
-        len
+        self.current_run_end_index
     }
 
     /// Returns whether the number of array slots is zero
@@ -249,9 +256,7 @@ where
     // Appends the current run to the array.
     fn append_run_end(&mut self) {
         // empty array or the function called without appending any value.
-        if self.current_run_end_index == 0
-            || self.prev_run_end_index == self.current_run_end_index
-        {
+        if self.prev_run_end_index == self.current_run_end_index {
             return;
         }
         let run_end_index = R::Native::from_usize(self.current_run_end_index)
@@ -264,6 +269,7 @@ where
         if self.has_current_value {
             let slice = self.current_value.as_slice();
             let native = unsafe {
+                // Safety:
                 // As self.current_value is created from V::Native. The value V::Native can be
                 // built back from the bytes without validations
                 V::Native::from_bytes_unchecked(slice)
@@ -291,6 +297,7 @@ where
         if self.has_current_value {
             let slice = self.current_value.as_slice();
             let native = unsafe {
+                // Safety:
                 // As self.current_value is created from V::Native. The value V::Native can be
                 // built back from the bytes without validations
                 V::Native::from_bytes_unchecked(slice)
@@ -407,11 +414,18 @@ mod tests {
         builder.append_null();
         builder.append_value(values[1]);
         builder.append_value(values[1]);
+        builder.append_value(values[2]);
+        builder.append_value(values[2]);
+        builder.append_value(values[2]);
+        builder.append_value(values[2]);
         let array = builder.finish();
+
+        assert_eq!(array.len(), 11);
+        assert_eq!(array.null_count(), 0);
 
         assert_eq!(
             array.run_ends(),
-            &Int16Array::from(vec![Some(3), Some(5), Some(7)])
+            &Int16Array::from(vec![Some(3), Some(5), Some(7), Some(11)])
         );
 
         // Values are polymorphic and so require a downcast.
@@ -422,16 +436,22 @@ mod tests {
         assert_eq!(*ava.value(0), *values[0]);
         assert!(ava.is_null(1));
         assert_eq!(*ava.value(2), *values[1]);
+        assert_eq!(*ava.value(3), *values[2]);
     }
 
     #[test]
     fn test_string_run_buider() {
-        test_bytes_run_buider::<Utf8Type>(vec!["abc", "def"]);
+        test_bytes_run_buider::<Utf8Type>(vec!["abc", "def", "ghi"]);
+    }
+
+    #[test]
+    fn test_string_run_buider_with_empty_strings() {
+        test_bytes_run_buider::<Utf8Type>(vec!["abc", "", "ghi"]);
     }
 
     #[test]
     fn test_binary_run_buider() {
-        test_bytes_run_buider::<BinaryType>(vec![b"abc", b"def"]);
+        test_bytes_run_buider::<BinaryType>(vec![b"abc", b"def", b"ghi"]);
     }
 
     fn test_bytes_run_buider_finish_cloned<T>(values: Vec<&T::Native>)
@@ -444,10 +464,19 @@ mod tests {
 
         builder.append_value(values[0]);
         builder.append_null();
+
+        assert_eq!(builder.physical_len(), 2);
+
         builder.append_value(values[1]);
+
+        assert_eq!(builder.physical_len(), 3);
+
         builder.append_value(values[1]);
         builder.append_value(values[0]);
         let mut array: Int16RunArray = builder.finish_cloned();
+
+        assert_eq!(array.len(), 5);
+        assert_eq!(array.null_count(), 0);
 
         assert_eq!(
             array.run_ends(),
@@ -464,11 +493,20 @@ mod tests {
         assert_eq!(ava.value(2), values[1]);
         assert_eq!(ava.value(3), values[0]);
 
+        // Append last value before `finish_cloned` (`value[0]`) again and ensure it has only
+        // one entry in final output.
         builder.append_value(values[0]);
+
+        assert_eq!(builder.physical_len(), 4);
+
         builder.append_value(values[0]);
         builder.append_value(values[1]);
+        assert_eq!(builder.physical_len(), 5);
 
         array = builder.finish();
+
+        assert_eq!(array.len(), 8);
+        assert_eq!(array.null_count(), 0);
 
         assert_eq!(
             array.run_ends(),
@@ -483,6 +521,7 @@ mod tests {
         assert_eq!(ava2.value(0), values[0]);
         assert!(ava2.is_null(1));
         assert_eq!(ava2.value(2), values[1]);
+        // The value appended before and after `finish_cloned` has only one entry.
         assert_eq!(ava2.value(3), values[0]);
         assert_eq!(ava2.value(4), values[1]);
     }
