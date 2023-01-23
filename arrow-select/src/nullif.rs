@@ -474,7 +474,7 @@ mod tests {
             })
             .collect();
 
-        let r = nullif(values, &filter).unwrap();
+        let r = nullif(values, filter).unwrap();
         r.data().validate().unwrap();
 
         assert_eq!(expected.data(), r.data());
@@ -486,7 +486,7 @@ mod tests {
 
         let arrays = [
             Int32Array::from(vec![0; 128]),
-            (0..128).map(|_| rng.gen_bool(0.5).then(|| 0)).collect(),
+            (0..128).map(|_| rng.gen_bool(0.5).then_some(0)).collect(),
         ];
 
         for a in arrays {
@@ -506,7 +506,7 @@ mod tests {
                     let b = b.slice(b_start_offset, a_length);
                     let b = as_boolean_array(b.as_ref());
 
-                    test_nullif(a, &b);
+                    test_nullif(a, b);
                 }
             }
         }
