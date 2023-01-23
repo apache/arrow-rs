@@ -37,7 +37,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
         ));
     }
     let len = left_data.len();
-    let left_offset = left_data.offset();
+    let l_offset = left_data.offset();
 
     if len == 0 {
         return Ok(make_array(left_data.clone()));
@@ -53,7 +53,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     //              OR left null bitmap & !(right_values & right_bitmap)
 
     // Compute right_values & right_bitmap
-    let (right, right_offset) = match right_data.null_buffer() {
+    let (right, r_offset) = match right_data.null_buffer() {
         Some(buffer) => (
             buffer_bin_and(
                 &right_data.buffers()[0],
@@ -68,27 +68,26 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     };
 
     // Compute left null bitmap & !right
-    let mut valid_count = 0;
-    let combined = match left_data.null_buffer() {
+
+    let (combined, null_count) = match left_data.null_buffer() {
         Some(left) => {
-            bitwise_bin_op_helper(left, left_offset, &right, right_offset, len, |l, r| {
-                let t = l & !r;
-                valid_count += t.count_ones() as usize;
-                t
-            })
+            let mut valid_count = 0;
+            let b =
+                bitwise_bin_op_helper(left, l_offset, &right, r_offset, len, |l, r| {
+                    let t = l & !r;
+                    valid_count += t.count_ones() as usize;
+                    t
+                });
+            (b, len - valid_count)
         }
         None => {
-            let buffer = bitwise_unary_op_helper(&right, right_offset, len, |b| {
+            let mut null_count = 0;
+            let buffer = bitwise_unary_op_helper(&right, r_offset, len, |b| {
                 let t = !b;
-                valid_count += t.count_ones() as usize;
+                null_count += t.count_zeros() as usize;
                 t
             });
-            // We need to compensate for the additional bits read from the end
-            let remainder_len = len % 64;
-            if remainder_len != 0 {
-                valid_count -= 64 - remainder_len
-            }
-            buffer
+            (buffer, null_count)
         }
     };
 
@@ -96,15 +95,14 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     let null_buffer = match left_data.offset() {
         0 => combined,
         _ => {
-            let mut builder = BooleanBufferBuilder::new(len + left_offset);
+            let mut builder = BooleanBufferBuilder::new(len + l_offset);
             // Pad with 0s up to offset
-            builder.resize(left_offset);
+            builder.resize(l_offset);
             builder.append_packed_range(0..len, &combined);
             builder.finish()
         }
     };
 
-    let null_count = len - valid_count;
     let data = left_data
         .clone()
         .into_builder()
@@ -125,6 +123,7 @@ mod tests {
     use arrow_array::{Int32Array, StringArray, StructArray};
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
+    use rand::{thread_rng, Rng};
 
     #[test]
     fn test_nullif_int_array() {
@@ -463,5 +462,53 @@ mod tests {
         let mask = BooleanArray::from(ArrayData::new_empty(&DataType::Boolean));
         let res = nullif(&a, &mask).unwrap();
         assert_eq!(res.as_ref(), &a);
+    }
+
+    fn test_nullif(values: &Int32Array, filter: &BooleanArray) {
+        let expected: Int32Array = values
+            .iter()
+            .zip(filter.iter())
+            .map(|(a, b)| match b {
+                Some(true) => None,
+                Some(false) | None => a,
+            })
+            .collect();
+
+        let r = nullif(values, &filter).unwrap();
+        r.data().validate().unwrap();
+
+        assert_eq!(expected.data(), r.data());
+    }
+
+    #[test]
+    fn nullif_fuzz() {
+        let mut rng = thread_rng();
+
+        let arrays = [
+            Int32Array::from(vec![0; 128]),
+            (0..128).map(|_| rng.gen_bool(0.5).then(|| 0)).collect(),
+        ];
+
+        for a in arrays {
+            let a_slices = [(0, 128), (64, 64), (0, 64), (32, 32), (0, 0), (32, 0)];
+
+            for (a_offset, a_length) in a_slices {
+                let a = a.slice(a_offset, a_length);
+                let a = as_primitive_array::<Int32Type>(a.as_ref());
+
+                for i in 1..65 {
+                    let b_start_offset = rng.gen_range(0..i);
+                    let b_end_offset = rng.gen_range(0..i);
+
+                    let b: BooleanArray = (0..a_length + b_start_offset + b_end_offset)
+                        .map(|_| rng.gen_bool(0.5).then(|| rng.gen_bool(0.5)))
+                        .collect();
+                    let b = b.slice(b_start_offset, a_length);
+                    let b = as_boolean_array(b.as_ref());
+
+                    test_nullif(a, &b);
+                }
+            }
+        }
     }
 }
