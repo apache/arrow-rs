@@ -3467,7 +3467,7 @@ where
     FROM: ByteArrayType,
     TO: ByteArrayType,
     FROM::Offset: OffsetSizeTrait + ToPrimitive,
-    TO::Offset: OffsetSizeTrait + NumCast + ArrowNativeType,
+    TO::Offset: OffsetSizeTrait + NumCast,
 {
     let data = array.data();
     assert_eq!(data.data_type(), &FROM::DATA_TYPE);
