@@ -101,11 +101,11 @@ async fn test_zero_batches_no_schema() {
     let stream = FlightDataEncoderBuilder::default().build(futures::stream::iter(vec![]));
 
     let mut decoder = FlightRecordBatchStream::new_from_flight_data(stream);
-    assert!(!decoder.schema().is_some());
+    assert!(decoder.schema().is_none());
     // No batches come out
     assert!(decoder.next().await.is_none());
     // schema has not been received
-    assert!(!decoder.schema().is_some());
+    assert!(decoder.schema().is_none());
 }
 
 #[tokio::test]
@@ -116,7 +116,7 @@ async fn test_zero_batches_schema_specified() {
         .build(futures::stream::iter(vec![]));
 
     let mut decoder = FlightRecordBatchStream::new_from_flight_data(stream);
-    assert!(!decoder.schema().is_some());
+    assert!(decoder.schema().is_none());
     // No batches come out
     assert!(decoder.next().await.is_none());
     // But schema has been received correctly
