@@ -198,7 +198,7 @@ impl FlightDataEncoder {
 
         // If schema is known up front, enqueue it immediately
         if let Some(schema) = schema {
-            encoder.encode_schema(schema);
+            encoder.encode_schema(&schema);
         }
         encoder
     }
@@ -217,10 +217,10 @@ impl FlightDataEncoder {
 
     /// Encodes schema as a [`FlightData`] in self.queue.
     /// Updates `self.schema` and returns the new schema
-    fn encode_schema(&mut self, schema: SchemaRef) -> SchemaRef {
+    fn encode_schema(&mut self, schema: &SchemaRef) -> SchemaRef {
         // The first message is the schema message, and all
         // batches have the same schema
-        let schema = Arc::new(prepare_schema_for_flight(&schema));
+        let schema = Arc::new(prepare_schema_for_flight(schema));
         let mut schema_flight_data = self.encoder.encode_schema(&schema);
 
         // attach any metadata requested
@@ -238,7 +238,7 @@ impl FlightDataEncoder {
         let schema = match &self.schema {
             Some(schema) => schema.clone(),
             // encode the schema if this is the first time we have seen it
-            None => self.encode_schema(batch.schema()),
+            None => self.encode_schema(&batch.schema()),
         };
 
         // encode the batch
