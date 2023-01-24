@@ -43,7 +43,7 @@ arrow-buffer = { version = "31.0.0", path = "../arrow-buffer" }
 arrow-cast = { version = "31.0.0", path = "../arrow-cast" }
 arrow-data = { version = "31.0.0", path = "../arrow-data" }
 arrow-schema = { version = "31.0.0", path = "../arrow-schema" }
-flatbuffers = { version = "22.9.2", default-features = false, features = ["thiserror"] }
+flatbuffers = { version = "23.1.21", default-features = false }
 lz4 = { version = "1.23", default-features = false, optional = true }
 zstd = { version = "0.12.0", default-features = false, optional = true }
 
