@@ -109,8 +109,16 @@ impl ClientOptions {
     }
     /// Allows connections to invalid SSL certificates
     /// * false (default):  Only valid HTTPS certificates are allowed
-    /// * true:  All HTTPS certificates are allowed. Only for testing purposes
-    pub fn with_allow_insecure(mut self, allow_insecure: bool) -> Self {
+    /// * true:  All HTTPS certificates are allowed
+    ///
+    /// # Warning
+    ///
+    /// You should think very carefully before using this method. If
+    /// invalid certificates are trusted, *any* certificate for *any* site
+    /// will be trusted for use. This includes expired certificates. This
+    /// introduces significant vulnerabilities, and should only be used
+    /// as a last resort or for testing
+    pub fn with_allow_invalid_certificates(mut self, allow_insecure: bool) -> Self {
         self.allow_insecure = allow_insecure;
         self
     }
