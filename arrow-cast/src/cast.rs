@@ -1122,7 +1122,7 @@ pub fn cast_with_options(
             ))),
         },
         (Utf8, _) => match to_type {
-            LargeUtf8 => cast_byte_container::<Utf8Type, LargeUtf8Type>(&**array),
+            LargeUtf8 => cast_byte_container::<Utf8Type, LargeUtf8Type, _>(&**array),
             UInt8 => cast_string_to_numeric::<UInt8Type, i32>(array, cast_options),
             UInt16 => cast_string_to_numeric::<UInt16Type, i32>(array, cast_options),
             UInt32 => cast_string_to_numeric::<UInt32Type, i32>(array, cast_options),
@@ -1135,8 +1135,8 @@ pub fn cast_with_options(
             Float64 => cast_string_to_numeric::<Float64Type, i32>(array, cast_options),
             Date32 => cast_string_to_date32::<i32>(&**array, cast_options),
             Date64 => cast_string_to_date64::<i32>(&**array, cast_options),
-            Binary => cast_byte_container::<Utf8Type, BinaryType>(array),
-            LargeBinary => cast_byte_container::<Utf8Type, LargeBinaryType>(array),
+            Binary => cast_byte_container::<Utf8Type, BinaryType, _>(array),
+            LargeBinary => cast_byte_container::<Utf8Type, LargeBinaryType, _>(array),
             Time32(TimeUnit::Second) => {
                 cast_string_to_time32second::<i32>(&**array, cast_options)
             }
@@ -1158,7 +1158,7 @@ pub fn cast_with_options(
             ))),
         },
         (_, Utf8) => match from_type {
-            LargeUtf8 => cast_byte_container::<LargeUtf8Type, Utf8Type>(&**array),
+            LargeUtf8 => cast_byte_container::<LargeUtf8Type, Utf8Type, _>(&**array),
             UInt8 => cast_numeric_to_string::<UInt8Type, i32>(array),
             UInt16 => cast_numeric_to_string::<UInt16Type, i32>(array),
             UInt32 => cast_numeric_to_string::<UInt32Type, i32>(array),
@@ -1285,8 +1285,10 @@ pub fn cast_with_options(
             Float64 => cast_string_to_numeric::<Float64Type, i64>(array, cast_options),
             Date32 => cast_string_to_date32::<i64>(&**array, cast_options),
             Date64 => cast_string_to_date64::<i64>(&**array, cast_options),
-            Binary => cast_byte_container::<LargeUtf8Type, BinaryType>(array),
-            LargeBinary => cast_byte_container::<LargeUtf8Type, LargeBinaryType>(array),
+            Binary => cast_byte_container::<LargeUtf8Type, BinaryType, _>(array),
+            LargeBinary => {
+                cast_byte_container::<LargeUtf8Type, LargeBinaryType, _>(array)
+            }
             Time32(TimeUnit::Second) => {
                 cast_string_to_time32second::<i64>(&**array, cast_options)
             }
@@ -1308,14 +1310,16 @@ pub fn cast_with_options(
             ))),
         },
         (Binary, _) => match to_type {
-            LargeBinary => cast_byte_container::<BinaryType, LargeBinaryType>(&**array),
+            LargeBinary => {
+                cast_byte_container::<BinaryType, LargeBinaryType, _>(&**array)
+            }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {:?} to {:?} not supported",
                 from_type, to_type,
             ))),
         },
         (LargeBinary, _) => match to_type {
-            Binary => cast_byte_container::<LargeBinaryType, BinaryType>(&**array),
+            Binary => cast_byte_container::<LargeBinaryType, BinaryType, _>(&**array),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {:?} to {:?} not supported",
                 from_type, to_type,
@@ -3462,10 +3466,10 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
 
 /// Helper function to cast from one `ByteArrayType` to another and vice versa.
 /// If the target one (e.g., `LargeUtf8`) is too large for the source array it will return an Error.
-fn cast_byte_container<FROM, TO>(array: &dyn Array) -> Result<ArrayRef, ArrowError>
+fn cast_byte_container<FROM, TO, N>(array: &dyn Array) -> Result<ArrayRef, ArrowError>
 where
-    FROM: ByteArrayType,
-    TO: ByteArrayType,
+    FROM: ByteArrayType<Native = N>,
+    TO: ByteArrayType<Native = N>,
     FROM::Offset: OffsetSizeTrait + ToPrimitive,
     TO::Offset: OffsetSizeTrait + NumCast,
 {
