@@ -127,7 +127,7 @@ impl FlightDataEncoderBuilder {
 
     /// Specify a schema for the RecordBatches being sent. If a schema
     /// is not specified, an encoded Schema message will be sent when
-    /// the first [`RecordBatch`], if any, encoded. Some clients
+    /// the first [`RecordBatch`], if any, is encoded. Some clients
     /// expect a Schema message even if there is no data sent.
     pub fn with_schema(mut self, schema: SchemaRef) -> Self {
         self.schema = Some(schema);
@@ -163,7 +163,6 @@ impl FlightDataEncoderBuilder {
 pub struct FlightDataEncoder {
     /// Input stream
     inner: BoxStream<'static, Result<RecordBatch>>,
-
     /// schema, set after the first batch
     schema: Option<SchemaRef>,
     /// Target maximum size of flight data
@@ -197,6 +196,7 @@ impl FlightDataEncoder {
             done: false,
         };
 
+        // If schema is known up front, enqueue it immediately
         if let Some(schema) = schema {
             encoder.encode_schema(schema);
         }
