@@ -91,8 +91,12 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
                 }
             }
 
-            let offset = O::from_usize(child_pos.len())
-                .ok_or_else(|| ArrowError::JsonError(format!("offset overflow")))?;
+            let offset = O::from_usize(child_pos.len()).ok_or_else(|| {
+                ArrowError::JsonError(format!(
+                    "offset overflow decoding {}",
+                    self.data_type
+                ))
+            })?;
             offsets.append(offset)
         }
 
