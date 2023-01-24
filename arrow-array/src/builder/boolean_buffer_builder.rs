@@ -146,12 +146,27 @@ impl BooleanBufferBuilder {
     /// Appends n `additional` bits of value `v` into the buffer
     #[inline]
     pub fn append_n(&mut self, additional: usize, v: bool) {
-        self.advance(additional);
-        if additional > 0 && v {
-            let offset = self.len() - additional;
-            (0..additional).for_each(|i| unsafe {
-                bit_util::set_bit_raw(self.buffer.as_mut_ptr(), offset + i)
-            })
+        match v {
+            true => {
+                let new_len = self.len + additional;
+                let new_len_bytes = bit_util::ceil(new_len, 8);
+                let cur_remainder = self.len % 8;
+                let new_remainder = new_len % 8;
+
+                if cur_remainder != 0 {
+                    // Pad last byte with 1s
+                    *self.buffer.as_slice_mut().last_mut().unwrap() |=
+                        !((1 << cur_remainder) - 1)
+                }
+                self.buffer.resize(new_len_bytes, 0xFF);
+                if new_remainder != 0 {
+                    // Clear remaining bits
+                    *self.buffer.as_slice_mut().last_mut().unwrap() &=
+                        (1 << new_remainder) - 1
+                }
+                self.len = new_len;
+            }
+            false => self.advance(additional),
         }
     }
 
