@@ -40,6 +40,7 @@ use arrow_buffer::ArrowNativeType;
 /// # use arrow_array::{GenericByteArray, BinaryArray};
 /// # use arrow_array::types::{BinaryType, Int16Type};
 /// # use arrow_array::{Array, Int16Array};
+/// # use arrow_array::cast::as_generic_binary_array;
 ///
 /// let mut builder =
 /// GenericByteRunBuilder::<Int16Type, BinaryType>::new();
@@ -61,7 +62,7 @@ use arrow_buffer::ArrowNativeType;
 /// assert!(!av.is_null(2));
 ///
 /// // Values are polymorphic and so require a downcast.
-/// let ava: &BinaryArray = av.as_any().downcast_ref::<BinaryArray>().unwrap();
+/// let ava: &BinaryArray = as_generic_binary_array(av.as_ref());
 ///
 /// assert_eq!(ava.value(0), b"abc");
 /// assert_eq!(ava.value(2), b"def");
@@ -123,17 +124,6 @@ where
             current_run_end_index: 0,
             prev_run_end_index: 0,
         }
-    }
-
-    /// Returns the physical length of the encoded array
-    pub fn physical_len(&self) -> usize {
-        let mut len = self.run_ends_builder.len();
-
-        // If there is an ongoing run yet to be added, include it in the len
-        if self.prev_run_end_index != self.current_run_end_index {
-            len += 1;
-        }
-        len
     }
 }
 
@@ -259,12 +249,7 @@ where
         if self.prev_run_end_index == self.current_run_end_index {
             return;
         }
-        let run_end_index = R::Native::from_usize(self.current_run_end_index)
-            .unwrap_or_else(|| panic!(
-                    "Cannot convert the value {} from `usize` to native form of arrow datatype {}",
-                    self.current_run_end_index,
-                    R::DATA_TYPE
-                ));
+        let run_end_index = self.run_end_index_as_native();
         self.run_ends_builder.append_value(run_end_index);
         if self.has_current_value {
             let slice = self.current_value.as_slice();
@@ -282,17 +267,13 @@ where
     }
 
     // Similar to `append_run_end` but on custom builders.
+    // Used in `finish_cloned` which is not suppose to mutate `self`.
     fn append_run_end_with_builders(
         &self,
         run_ends_builder: &mut PrimitiveBuilder<R>,
         values_builder: &mut GenericByteBuilder<V>,
     ) {
-        let run_end_index = R::Native::from_usize(self.current_run_end_index)
-            .unwrap_or_else(|| panic!(
-                    "Cannot convert the value {} from `usize` to native form of arrow datatype {}",
-                    self.current_run_end_index,
-                    R::DATA_TYPE
-                ));
+        let run_end_index = self.run_end_index_as_native();
         run_ends_builder.append_value(run_end_index);
         if self.has_current_value {
             let slice = self.current_value.as_slice();
@@ -307,6 +288,15 @@ where
             values_builder.append_null();
         }
     }
+
+    fn run_end_index_as_native(&self) -> R::Native {
+        R::Native::from_usize(self.current_run_end_index)
+        .unwrap_or_else(|| panic!(
+                "Cannot convert the value {} from `usize` to native form of arrow datatype {}",
+                self.current_run_end_index,
+                R::DATA_TYPE
+        ))
+    }
 }
 
 /// Array builder for [`RunArray`] that encodes strings ([`Utf8Type`]).
@@ -318,6 +308,7 @@ where
 /// # use arrow_array::builder::StringRunBuilder;
 /// # use arrow_array::{Int16Array, StringArray};
 /// # use arrow_array::types::Int16Type;
+/// # use arrow_array::cast::as_string_array;
 ///
 /// let mut builder = StringRunBuilder::<Int16Type>::new();
 ///
@@ -336,7 +327,7 @@ where
 ///
 /// // Values are polymorphic and so require a downcast.
 /// let av = array.values();
-/// let ava: &StringArray = av.as_any().downcast_ref::<StringArray>().unwrap();
+/// let ava: &StringArray = as_string_array(av.as_ref());
 ///
 /// assert_eq!(ava.value(0), "abc");
 /// assert!(av.is_null(1));
@@ -358,6 +349,7 @@ pub type LargeStringRunBuilder<K> = GenericByteRunBuilder<K, LargeUtf8Type>;
 /// # use arrow_array::builder::BinaryRunBuilder;
 /// # use arrow_array::{BinaryArray, Int16Array};
 /// # use arrow_array::types::Int16Type;
+/// # use arrow_array::cast::as_generic_binary_array;
 ///
 /// let mut builder = BinaryRunBuilder::<Int16Type>::new();
 ///
@@ -376,7 +368,7 @@ pub type LargeStringRunBuilder<K> = GenericByteRunBuilder<K, LargeUtf8Type>;
 ///
 /// // Values are polymorphic and so require a downcast.
 /// let av = array.values();
-/// let ava: &BinaryArray = av.as_any().downcast_ref::<BinaryArray>().unwrap();
+/// let ava: &BinaryArray = as_generic_binary_array::<i32>(av.as_ref());
 ///
 /// assert_eq!(ava.value(0), b"abc");
 /// assert!(av.is_null(1));
@@ -464,13 +456,7 @@ mod tests {
 
         builder.append_value(values[0]);
         builder.append_null();
-
-        assert_eq!(builder.physical_len(), 2);
-
         builder.append_value(values[1]);
-
-        assert_eq!(builder.physical_len(), 3);
-
         builder.append_value(values[1]);
         builder.append_value(values[0]);
         let mut array: Int16RunArray = builder.finish_cloned();
@@ -496,13 +482,8 @@ mod tests {
         // Append last value before `finish_cloned` (`value[0]`) again and ensure it has only
         // one entry in final output.
         builder.append_value(values[0]);
-
-        assert_eq!(builder.physical_len(), 4);
-
         builder.append_value(values[0]);
         builder.append_value(values[1]);
-        assert_eq!(builder.physical_len(), 5);
-
         array = builder.finish();
 
         assert_eq!(array.len(), 8);

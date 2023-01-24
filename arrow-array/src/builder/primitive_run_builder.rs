@@ -111,17 +111,6 @@ where
             prev_run_end_index: 0,
         }
     }
-
-    /// Returns the physical length of the encoded array
-    pub fn physical_len(&self) -> usize {
-        let mut len = self.run_ends_builder.len();
-
-        // If there is an ongoing run yet to be added, include it in the len
-        if self.prev_run_end_index != self.current_run_end_index {
-            len += 1;
-        }
-        len
-    }
 }
 
 impl<R, V> ArrayBuilder for PrimitiveRunBuilder<R, V>
@@ -230,9 +219,7 @@ where
         RunArray::try_new(&run_ends_array, &values_array).unwrap()
     }
 
-    // Appends the current run to the array. There are scenarios where this function can be called
-    // multiple times before getting a new value. e.g. appending different value immediately following
-    // finish_cloned.
+    // Appends the current run to the array.
     fn append_run_end(&mut self) {
         // empty array or the function called without appending any value.
         if self.prev_run_end_index == self.current_run_end_index {
@@ -245,6 +232,7 @@ where
     }
 
     // Similar to `append_run_end` but on custom builders.
+    // Used in `finish_cloned` which is not suppose to mutate `self`.
     fn append_run_end_with_builders(
         &self,
         run_ends_builder: &mut PrimitiveBuilder<R>,
@@ -277,15 +265,9 @@ mod tests {
         builder.append_value(1234);
         builder.append_value(1234);
         builder.append_value(1234);
-
-        assert_eq!(builder.physical_len(), 1);
-
         builder.append_null();
-        assert_eq!(builder.physical_len(), 2);
-
         builder.append_value(5678);
         builder.append_value(5678);
-        assert_eq!(builder.physical_len(), 3);
 
         let array = builder.finish();
 
