@@ -96,14 +96,18 @@ impl<R: BufRead> RawReader<R> {
     fn read(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
         loop {
             let buf = self.reader.fill_buf()?;
+            if buf.is_empty() {
+                break;
+            }
             let read = buf.len();
-            let decoded = self.decoder.decode(buf)?;
 
+            let decoded = self.decoder.decode(buf)?;
             self.reader.consume(decoded);
-            if decoded == read {
-                return self.decoder.flush();
+            if decoded != read {
+                break;
             }
         }
+        self.decoder.flush()
     }
 }
 
@@ -178,17 +182,23 @@ impl RawDecoder {
     ///     batch_size: usize,
     /// ) -> Result<impl Iterator<Item = Result<RecordBatch, ArrowError>>, ArrowError> {
     ///     let mut decoder = RawDecoder::try_new(schema, batch_size)?;
-    ///     let mut next = move || loop {
-    ///         // RawDecoder is agnostic that buf doesn't contain whole records
-    ///         let buf = reader.fill_buf()?;
-    ///         let read = buf.len();
-    ///         let decoded = decoder.decode(buf)?;
+    ///     let mut next = move || {
+    ///         loop {
+    ///             // RawDecoder is agnostic that buf doesn't contain whole records
+    ///             let buf = reader.fill_buf()?;
+    ///             if buf.is_empty() {
+    ///                 break; // Input exhausted
+    ///             }
+    ///             let read = buf.len();
+    ///             let decoded = decoder.decode(buf)?;
     ///
-    ///         // Consume the number of bytes read
-    ///         reader.consume(decoded);
-    ///         if decoded == read {
-    ///             return decoder.flush();
+    ///             // Consume the number of bytes read
+    ///             reader.consume(decoded);
+    ///             if decoded != read {
+    ///                 break; // Read batch size
+    ///             }
     ///         }
+    ///         decoder.flush()
     ///     };
     ///     Ok(std::iter::from_fn(move || next().transpose()))
     /// }
@@ -286,16 +296,27 @@ mod tests {
     use arrow_array::types::Int32Type;
     use arrow_array::Array;
     use arrow_schema::{DataType, Field, Schema};
-    use std::io::Cursor;
+    use std::io::{BufReader, Cursor};
     use std::sync::Arc;
 
     fn do_read(buf: &str, batch_size: usize, schema: SchemaRef) -> Vec<RecordBatch> {
-        RawReaderBuilder::new(schema)
+        let unbuffered = RawReaderBuilder::new(schema.clone())
             .with_batch_size(batch_size)
             .build(Cursor::new(buf.as_bytes()))
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
-            .unwrap()
+            .unwrap();
+
+        for b in [1, 3, 5] {
+            let buffered = RawReaderBuilder::new(schema.clone())
+                .with_batch_size(batch_size)
+                .build(BufReader::with_capacity(b, Cursor::new(buf.as_bytes())))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(unbuffered, buffered);
+        }
+        unbuffered
     }
 
     #[test]

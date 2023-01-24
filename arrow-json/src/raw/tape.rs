@@ -189,7 +189,7 @@ impl TapeDecoder {
     pub fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
         let mut iter = BufIter::new(buf);
 
-        while self.num_rows < self.batch_size {
+        while !iter.is_empty() {
             match self.stack.last_mut() {
                 // Start of row
                 None => {
@@ -221,6 +221,9 @@ impl TapeDecoder {
                             self.elements.push(TapeElement::EndObject(start_idx));
                             self.stack.pop();
                             self.num_rows += self.stack.is_empty() as usize;
+                            if self.num_rows >= self.batch_size {
+                                break;
+                            }
                         }
                         b => return Err(err(b, "parsing object")),
                     }
@@ -239,7 +242,7 @@ impl TapeDecoder {
                             self.stack.pop();
                         }
                         Some(_) => self.stack.push(DecoderState::AnyValue),
-                        None => {}
+                        None => break,
                     }
                 }
                 // Decoding a string
