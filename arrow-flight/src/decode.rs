@@ -17,7 +17,7 @@
 
 use crate::{utils::flight_data_to_arrow_batch, FlightData};
 use arrow_array::{ArrayRef, RecordBatch};
-use arrow_schema::Schema;
+use arrow_schema::{Schema, SchemaRef};
 use bytes::Bytes;
 use futures::{ready, stream::BoxStream, Stream, StreamExt};
 use std::{
@@ -82,16 +82,12 @@ use crate::error::{FlightError, Result};
 #[derive(Debug)]
 pub struct FlightRecordBatchStream {
     inner: FlightDataDecoder,
-    got_schema: bool,
 }
 
 impl FlightRecordBatchStream {
     /// Create a new [`FlightRecordBatchStream`] from a decoded stream
     pub fn new(inner: FlightDataDecoder) -> Self {
-        Self {
-            inner,
-            got_schema: false,
-        }
+        Self { inner }
     }
 
     /// Create a new [`FlightRecordBatchStream`] from a stream of [`FlightData`]
@@ -101,13 +97,12 @@ impl FlightRecordBatchStream {
     {
         Self {
             inner: FlightDataDecoder::new(inner),
-            got_schema: false,
         }
     }
 
-    /// Has a message defining the schema been received yet?
-    pub fn got_schema(&self) -> bool {
-        self.got_schema
+    /// Return schema for the stream, if it has been received
+    pub fn schema(&self) -> Option<SchemaRef> {
+        self.inner.schema()
     }
 
     /// Consume self and return the wrapped [`FlightDataDecoder`]
@@ -125,6 +120,7 @@ impl futures::Stream for FlightRecordBatchStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
+            let had_schema = self.schema().is_some();
             let res = ready!(self.inner.poll_next_unpin(cx));
             match res {
                 // Inner exhausted
@@ -136,13 +132,12 @@ impl futures::Stream for FlightRecordBatchStream {
                 }
                 // translate data
                 Some(Ok(data)) => match data.payload {
-                    DecodedPayload::Schema(_) if self.got_schema => {
+                    DecodedPayload::Schema(_) if had_schema => {
                         return Poll::Ready(Some(Err(FlightError::protocol(
                             "Unexpectedly saw multiple Schema messages in FlightData stream",
                         ))));
                     }
                     DecodedPayload::Schema(_) => {
-                        self.got_schema = true;
                         // Need next message, poll inner again
                     }
                     DecodedPayload::RecordBatch(batch) => {
@@ -217,6 +212,11 @@ impl FlightDataDecoder {
             response: response.boxed(),
             done: false,
         }
+    }
+
+    /// Returns the current schema for this stream
+    pub fn schema(&self) -> Option<SchemaRef> {
+        self.state.as_ref().map(|state| state.schema.clone())
     }
 
     /// Extracts flight data from the next message, updating decoding
@@ -343,7 +343,7 @@ impl futures::Stream for FlightDataDecoder {
 /// streaming flight response.
 #[derive(Debug)]
 struct FlightStreamState {
-    schema: Arc<Schema>,
+    schema: SchemaRef,
     dictionaries_by_field: HashMap<i64, ArrayRef>,
 }
 
@@ -362,7 +362,7 @@ impl DecodedFlightData {
         }
     }
 
-    pub fn new_schema(inner: FlightData, schema: Arc<Schema>) -> Self {
+    pub fn new_schema(inner: FlightData, schema: SchemaRef) -> Self {
         Self {
             inner,
             payload: DecodedPayload::Schema(schema),
@@ -389,7 +389,7 @@ pub enum DecodedPayload {
     None,
 
     /// A decoded Schema message
-    Schema(Arc<Schema>),
+    Schema(SchemaRef),
 
     /// A decoded Record batch.
     RecordBatch(RecordBatch),

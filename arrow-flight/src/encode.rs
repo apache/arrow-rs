@@ -70,6 +70,8 @@ pub struct FlightDataEncoderBuilder {
     options: IpcWriteOptions,
     /// Metadata to add to the schema message
     app_metadata: Bytes,
+    /// Optional schema, if known before data.
+    schema: Option<SchemaRef>,
 }
 
 /// Default target size for encoded [`FlightData`].
@@ -84,6 +86,7 @@ impl Default for FlightDataEncoderBuilder {
             max_flight_data_size: GRPC_TARGET_MAX_FLIGHT_SIZE_BYTES,
             options: IpcWriteOptions::default(),
             app_metadata: Bytes::new(),
+            schema: None,
         }
     }
 }
@@ -122,6 +125,15 @@ impl FlightDataEncoderBuilder {
         self
     }
 
+    /// Specify a schema for the RecordBatches being sent. If a schema
+    /// is not specified, an encoded Schema message will be sent when
+    /// the first [`RecordBatch`], if any, encoded. Some clients
+    /// expect a Schema message even if there is no data sent.
+    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+
     /// Return a [`Stream`](futures::Stream) of [`FlightData`],
     /// consuming self. More details on [`FlightDataEncoder`]
     pub fn build<S>(self, input: S) -> FlightDataEncoder
@@ -132,9 +144,16 @@ impl FlightDataEncoderBuilder {
             max_flight_data_size,
             options,
             app_metadata,
+            schema,
         } = self;
 
-        FlightDataEncoder::new(input.boxed(), max_flight_data_size, options, app_metadata)
+        FlightDataEncoder::new(
+            input.boxed(),
+            schema,
+            max_flight_data_size,
+            options,
+            app_metadata,
+        )
     }
 }
 
@@ -144,6 +163,7 @@ impl FlightDataEncoderBuilder {
 pub struct FlightDataEncoder {
     /// Input stream
     inner: BoxStream<'static, Result<RecordBatch>>,
+
     /// schema, set after the first batch
     schema: Option<SchemaRef>,
     /// Target maximum size of flight data
@@ -162,11 +182,12 @@ pub struct FlightDataEncoder {
 impl FlightDataEncoder {
     fn new(
         inner: BoxStream<'static, Result<RecordBatch>>,
+        schema: Option<SchemaRef>,
         max_flight_data_size: usize,
         options: IpcWriteOptions,
         app_metadata: Bytes,
     ) -> Self {
-        Self {
+        let mut encoder = Self {
             inner,
             schema: None,
             max_flight_data_size,
@@ -174,7 +195,12 @@ impl FlightDataEncoder {
             app_metadata: Some(app_metadata),
             queue: VecDeque::new(),
             done: false,
+        };
+
+        if let Some(schema) = schema {
+            encoder.encode_schema(schema);
         }
+        encoder
     }
 
     /// Place the `FlightData` in the queue to send
@@ -189,26 +215,30 @@ impl FlightDataEncoder {
         }
     }
 
+    /// Encodes schema as a [`FlightData`] in self.queue.
+    /// Updates `self.schema` and returns the new schema
+    fn encode_schema(&mut self, schema: SchemaRef) -> SchemaRef {
+        // The first message is the schema message, and all
+        // batches have the same schema
+        let schema = Arc::new(prepare_schema_for_flight(&schema));
+        let mut schema_flight_data = self.encoder.encode_schema(&schema);
+
+        // attach any metadata requested
+        if let Some(app_metadata) = self.app_metadata.take() {
+            schema_flight_data.app_metadata = app_metadata;
+        }
+        self.queue_message(schema_flight_data);
+        // remember schema
+        self.schema = Some(schema.clone());
+        schema
+    }
+
     /// Encodes batch into one or more `FlightData` messages in self.queue
     fn encode_batch(&mut self, batch: RecordBatch) -> Result<()> {
         let schema = match &self.schema {
             Some(schema) => schema.clone(),
-            None => {
-                let batch_schema = batch.schema();
-                // The first message is the schema message, and all
-                // batches have the same schema
-                let schema = Arc::new(prepare_schema_for_flight(&batch_schema));
-                let mut schema_flight_data = self.encoder.encode_schema(&schema);
-
-                // attach any metadata requested
-                if let Some(app_metadata) = self.app_metadata.take() {
-                    schema_flight_data.app_metadata = app_metadata;
-                }
-                self.queue_message(schema_flight_data);
-                // remember schema
-                self.schema = Some(schema.clone());
-                schema
-            }
+            // encode the schema if this is the first time we have seen it
+            None => self.encode_schema(batch.schema()),
         };
 
         // encode the batch
@@ -250,9 +280,8 @@ impl Stream for FlightDataEncoder {
                 None => {
                     // inner is done
                     self.done = true;
-                    // queue must also be empty so we are done
-                    assert!(self.queue.is_empty());
-                    return Poll::Ready(None);
+                    // queue might still have a message (if the stream
+                    // was empty but schema was specified), so loop again
                 }
                 Some(Err(e)) => {
                     // error from inner
