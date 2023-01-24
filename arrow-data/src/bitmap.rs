@@ -31,6 +31,12 @@ use std::ops::{BitAnd, BitOr};
 /// This is called a "validity bitmap" in the Arrow documentation.
 pub struct Bitmap {
     pub(crate) bits: Buffer,
+
+    /// The offset into the bitmap.
+    offset: usize,
+
+    /// Bit length of the bitmap.
+    length: usize,
 }
 
 impl Bitmap {
@@ -39,21 +45,28 @@ impl Bitmap {
         let len = bit_util::round_upto_multiple_of_64(num_bytes);
         Bitmap {
             bits: Buffer::from(&vec![0xFF; len]),
+            offset: 0,
+            length: num_bits,
         }
+    }
+
+    /// Return the offset of this Bitmap in bits (not bytes)
+    pub fn offset(&self) -> usize {
+        self.offset
     }
 
     /// Return the length of this Bitmap in bits (not bytes)
     pub fn bit_len(&self) -> usize {
-        self.bits.len() * 8
+        self.length
     }
 
     pub fn is_empty(&self) -> bool {
-        self.bits.is_empty()
+        self.length == 0
     }
 
     pub fn is_set(&self, i: usize) -> bool {
-        assert!(i < (self.bits.len() << 3));
-        unsafe { bit_util::get_bit_raw(self.bits.as_ptr(), i) }
+        assert!(i < self.length);
+        unsafe { bit_util::get_bit_raw(self.bits.as_ptr().add(self.offset), i) }
     }
 
     pub fn buffer(&self) -> &Buffer {
@@ -84,22 +97,55 @@ impl Bitmap {
     pub fn get_array_memory_size(&self) -> usize {
         self.bits.capacity() + mem::size_of_val(self)
     }
+
+    /// Returns a new [`Bitmap`] that is a slice of this bitmap starting at `offset`.
+    /// Doing so allows the same memory region to be shared between bitmaps.
+    /// # Panics
+    /// Panics iff `offset` is larger than `bit_len`.
+    pub fn slice(&self, offset: usize) -> Self {
+        assert!(
+            offset <= self.bit_len(),
+            "the offset of the new Bitmap cannot exceed the existing bit length"
+        );
+        Self {
+            bits: self.bits.clone(),
+            offset: self.offset + offset,
+            length: self.length - offset,
+        }
+    }
+
+    /// Returns a new [`Bitmap`] that is a slice of this buffer starting at `offset`,
+    /// with `length` bits.
+    /// Doing so allows the same memory region to be shared between bitmaps.
+    /// # Panics
+    /// Panics iff `(offset + length)` is larger than the existing bit_len.
+    pub fn slice_with_length(&self, offset: usize, length: usize) -> Self {
+        assert!(
+            offset + length <= self.bit_len(),
+            "the offset of the new Bitmap cannot exceed the existing bit length"
+        );
+        Self {
+            bits: self.bits.clone(),
+            offset: self.offset + offset,
+            length,
+        }
+    }
 }
 
 impl<'a, 'b> BitAnd<&'b Bitmap> for &'a Bitmap {
     type Output = Result<Bitmap, ArrowError>;
 
     fn bitand(self, rhs: &'b Bitmap) -> Result<Bitmap, ArrowError> {
-        if self.bits.len() != rhs.bits.len() {
+        if self.bit_len() != rhs.bit_len() {
             return Err(ArrowError::ComputeError(
-                "Buffers must be the same size to apply Bitwise AND.".to_string(),
+                "Bitmaps must be the same size to apply Bitwise AND.".to_string(),
             ));
         }
         Ok(Bitmap::from(buffer_bin_and(
             &self.bits,
-            0,
+            self.offset,
             &rhs.bits,
-            0,
+            rhs.offset,
             self.bit_len(),
         )))
     }
@@ -109,16 +155,16 @@ impl<'a, 'b> BitOr<&'b Bitmap> for &'a Bitmap {
     type Output = Result<Bitmap, ArrowError>;
 
     fn bitor(self, rhs: &'b Bitmap) -> Result<Bitmap, ArrowError> {
-        if self.bits.len() != rhs.bits.len() {
+        if self.bit_len() != rhs.bit_len() {
             return Err(ArrowError::ComputeError(
-                "Buffers must be the same size to apply Bitwise OR.".to_string(),
+                "Bitmaps must be the same size to apply Bitwise OR.".to_string(),
             ));
         }
         Ok(Bitmap::from(buffer_bin_or(
             &self.bits,
-            0,
+            self.offset,
             &rhs.bits,
-            0,
+            rhs.offset,
             self.bit_len(),
         )))
     }
@@ -126,7 +172,12 @@ impl<'a, 'b> BitOr<&'b Bitmap> for &'a Bitmap {
 
 impl From<Buffer> for Bitmap {
     fn from(buf: Buffer) -> Self {
-        Self { bits: buf }
+        let length = buf.len() * 8;
+        Self {
+            bits: buf,
+            offset: 0,
+            length,
+        }
     }
 }
 
@@ -134,12 +185,13 @@ impl PartialEq for Bitmap {
     fn eq(&self, other: &Self) -> bool {
         // buffer equality considers capacity, but here we want to only compare
         // actual data contents
-        let self_len = self.bits.len();
-        let other_len = other.bits.len();
+        let self_len = self.bit_len();
+        let other_len = other.bit_len();
         if self_len != other_len {
             return false;
         }
-        self.bits.as_slice()[..self_len] == other.bits.as_slice()[..self_len]
+        self.bits.as_slice()[self.offset..self_len]
+            == other.bits.as_slice()[other.offset..self_len]
     }
 }
 

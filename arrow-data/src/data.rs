@@ -635,7 +635,9 @@ impl ArrayData {
                     .iter()
                     .map(|data| data.slice(offset, length))
                     .collect(),
-                null_bitmap: self.null_bitmap().cloned(),
+                null_bitmap: self
+                    .null_bitmap()
+                    .map(|bitmap| bitmap.slice_with_length(offset, length)),
             };
 
             new_data
@@ -645,8 +647,21 @@ impl ArrayData {
             new_data.len = length;
             new_data.offset = offset + self.offset;
 
-            new_data.null_count =
-                count_nulls(new_data.null_buffer(), new_data.offset, new_data.len);
+            new_data.null_bitmap = self
+                .null_bitmap
+                .as_ref()
+                .map(|bitmap| bitmap.slice_with_length(bitmap.offset() + offset, length));
+
+            let bitmap_offset =
+                new_data.null_bitmap.as_ref().map(|bitmap| bitmap.offset());
+            new_data.null_count = count_nulls(
+                new_data
+                    .null_bitmap
+                    .as_ref()
+                    .map(|bitmap| bitmap.buffer_ref()),
+                bitmap_offset.unwrap_or(0),
+                length,
+            );
 
             new_data
         }
@@ -816,15 +831,13 @@ impl ArrayData {
             )));
         }
 
-        // check null bit buffer size
+        // check null bit bitmap size
         if let Some(null_bit_map) = self.null_bitmap.as_ref() {
-            let null_bit_buffer = null_bit_map.buffer_ref();
-            let needed_len = bit_util::ceil(len_plus_offset, 8);
-            if null_bit_buffer.len() < needed_len {
+            if null_bit_map.bit_len() < self.len {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "null_bit_buffer size too small. got {} needed {}",
-                    null_bit_buffer.len(),
-                    needed_len
+                    "null_bit_map size too small. got {} needed {}",
+                    null_bit_map.bit_len(),
+                    self.len
                 )));
             }
         } else if self.null_count > 0 {
