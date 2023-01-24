@@ -414,7 +414,7 @@ mod tests {
         assert_eq!(batches.len(), 1);
 
         let list = as_list_array(batches[0].column(0).as_ref());
-        assert_eq!(list.value_offsets(), &[0, 0, 2, 0]);
+        assert_eq!(list.value_offsets(), &[0, 0, 2, 2]);
         assert_eq!(list.null_count(), 1);
         assert!(list.is_null(4));
         let list_v = list.values();
@@ -437,7 +437,7 @@ mod tests {
         let nested_list = as_struct_array(batches[0].column(2).as_ref());
         let list2 = as_list_array(nested_list.column(0).as_ref());
         assert_eq!(list2.null_count(), 1);
-        assert_eq!(list2.value_offsets(), &[0, 2, 2, 0]);
+        assert_eq!(list2.value_offsets(), &[0, 2, 2, 2]);
         assert!(list2.is_null(3));
 
         let list2_v = list2.values();

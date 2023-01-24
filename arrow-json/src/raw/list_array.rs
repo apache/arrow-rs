@@ -69,7 +69,7 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
                 (TapeElement::Null, Some(nulls)) => {
                     nulls.append(false);
                     null_count += 1;
-                    continue;
+                    *p + 1
                 }
                 (d, _) => return Err(tape_error(d, "[")),
             };
