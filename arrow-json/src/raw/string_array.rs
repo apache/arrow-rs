@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow_array::builder::GenericStringBuilder;
-use arrow_array::{Array, OffsetSizeTrait};
+use arrow_array::{Array, GenericStringArray, OffsetSizeTrait};
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 use std::marker::PhantomData;
@@ -40,6 +40,13 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
                 TapeElement::Null => {}
                 d => return Err(tape_error(d, "string")),
             }
+        }
+
+        if O::from_usize(data_capacity).is_none() {
+            return Err(ArrowError::JsonError(format!(
+                "offset overflow decoding {}",
+                GenericStringArray::<O>::DATA_TYPE
+            )));
         }
 
         let mut builder =

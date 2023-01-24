@@ -48,6 +48,8 @@ impl RawReaderBuilder {
     ///
     /// This could be obtained using [`infer_json_schema`] if not known
     ///
+    /// Any columns not present in `schema` will be ignored
+    ///
     /// [`infer_json_schema`]: crate::reader::infer_json_schema
     pub fn new(schema: SchemaRef) -> Self {
         Self {
@@ -289,6 +291,8 @@ fn tape_error(d: TapeElement, expected: &str) -> ArrowError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reader::infer_json_schema;
+    use crate::ReaderBuilder;
     use arrow_array::cast::{
         as_boolean_array, as_largestring_array, as_list_array, as_primitive_array,
         as_string_array, as_struct_array,
@@ -296,7 +300,8 @@ mod tests {
     use arrow_array::types::Int32Type;
     use arrow_array::Array;
     use arrow_schema::{DataType, Field, Schema};
-    use std::io::{BufReader, Cursor};
+    use std::fs::File;
+    use std::io::{BufReader, Cursor, Seek};
     use std::sync::Arc;
 
     fn do_read(buf: &str, batch_size: usize, schema: SchemaRef) -> Vec<RecordBatch> {
@@ -466,5 +471,32 @@ mod tests {
 
         let c = as_primitive_array::<Int32Type>(list2_values.column(0));
         assert_eq!(c.values(), &[3, 4]);
+    }
+
+    #[test]
+    fn integration_test() {
+        let files = [
+            "test/data/basic.json",
+            "test/data/basic_nulls.json",
+            "test/data/list_string_dict_nested_nulls.json",
+        ];
+
+        for file in files {
+            let mut f = BufReader::new(File::open(file).unwrap());
+            let schema = Arc::new(infer_json_schema(&mut f, None).unwrap());
+
+            f.rewind().unwrap();
+            let a = ReaderBuilder::new()
+                .with_schema(schema.clone())
+                .build(&mut f)
+                .unwrap();
+            let a_result = a.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
+
+            f.rewind().unwrap();
+            let b = RawReaderBuilder::new(schema).build(f).unwrap();
+            let b_result = b.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
+
+            assert_eq!(a_result, b_result);
+        }
     }
 }
