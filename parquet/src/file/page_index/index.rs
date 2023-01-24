@@ -17,7 +17,7 @@
 
 use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
-use crate::data_type::Int96;
+use crate::data_type::{ByteArray, Int96};
 use crate::errors::ParquetError;
 use crate::format::{BoundaryOrder, ColumnIndex};
 use crate::util::bit_util::from_le_slice;
@@ -53,14 +53,14 @@ pub enum Index {
     /// will only return pageLocations without min_max index,
     /// `NONE` represents this lack of index information
     NONE,
-    BOOLEAN(BooleanIndex),
+    BOOLEAN(NativeIndex<bool>),
     INT32(NativeIndex<i32>),
     INT64(NativeIndex<i64>),
     INT96(NativeIndex<Int96>),
     FLOAT(NativeIndex<f32>),
     DOUBLE(NativeIndex<f64>),
-    BYTE_ARRAY(ByteArrayIndex),
-    FIXED_LEN_BYTE_ARRAY(ByteArrayIndex),
+    BYTE_ARRAY(NativeIndex<ByteArray>),
+    FIXED_LEN_BYTE_ARRAY(NativeIndex<ByteArray>),
 }
 
 impl Index {
@@ -138,102 +138,6 @@ impl<T: ParquetValueType> NativeIndex<T> {
 
         Ok(Self {
             physical_type,
-            indexes,
-            boundary_order: index.boundary_order,
-        })
-    }
-}
-
-/// An index of a column of bytes type
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ByteArrayIndex {
-    /// The physical type
-    pub physical_type: Type,
-    /// The indexes, one item per page
-    pub indexes: Vec<PageIndex<Vec<u8>>>,
-    pub boundary_order: BoundaryOrder,
-}
-
-impl ByteArrayIndex {
-    pub(crate) fn try_new(
-        index: ColumnIndex,
-        physical_type: Type,
-    ) -> Result<Self, ParquetError> {
-        let len = index.min_values.len();
-
-        let null_counts = index
-            .null_counts
-            .map(|x| x.into_iter().map(Some).collect::<Vec<_>>())
-            .unwrap_or_else(|| vec![None; len]);
-
-        let indexes = index
-            .min_values
-            .into_iter()
-            .zip(index.max_values.into_iter())
-            .zip(index.null_pages.into_iter())
-            .zip(null_counts.into_iter())
-            .map(|(((min, max), is_null), null_count)| {
-                let (min, max) = if is_null {
-                    (None, None)
-                } else {
-                    (Some(min), Some(max))
-                };
-                Ok(PageIndex {
-                    min,
-                    max,
-                    null_count,
-                })
-            })
-            .collect::<Result<Vec<_>, ParquetError>>()?;
-
-        Ok(Self {
-            physical_type,
-            indexes,
-            boundary_order: index.boundary_order,
-        })
-    }
-}
-
-/// An index of a column of boolean physical type
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct BooleanIndex {
-    /// The indexes, one item per page
-    pub indexes: Vec<PageIndex<bool>>,
-    pub boundary_order: BoundaryOrder,
-}
-
-impl BooleanIndex {
-    pub(crate) fn try_new(index: ColumnIndex) -> Result<Self, ParquetError> {
-        let len = index.min_values.len();
-
-        let null_counts = index
-            .null_counts
-            .map(|x| x.into_iter().map(Some).collect::<Vec<_>>())
-            .unwrap_or_else(|| vec![None; len]);
-
-        let indexes = index
-            .min_values
-            .into_iter()
-            .zip(index.max_values.into_iter())
-            .zip(index.null_pages.into_iter())
-            .zip(null_counts.into_iter())
-            .map(|(((min, max), is_null), null_count)| {
-                let (min, max) = if is_null {
-                    (None, None)
-                } else {
-                    let min = min[0] != 0;
-                    let max = max[0] == 1;
-                    (Some(min), Some(max))
-                };
-                Ok(PageIndex {
-                    min,
-                    max,
-                    null_count,
-                })
-            })
-            .collect::<Result<Vec<_>, ParquetError>>()?;
-
-        Ok(Self {
             indexes,
             boundary_order: index.boundary_order,
         })

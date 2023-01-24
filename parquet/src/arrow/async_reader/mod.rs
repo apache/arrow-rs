@@ -179,7 +179,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let mut buffer = Vec::with_capacity(to_read);
             let read = self.take(to_read as u64).read_to_end(&mut buffer).await?;
             if read != to_read {
-                eof_err!("expected to read {} bytes, got {}", to_read, read);
+                return Err(eof_err!("expected to read {} bytes, got {}", to_read, read));
             }
 
             Ok(buffer.into())
@@ -200,7 +200,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
                 .await?;
 
             let mut buf = Vec::with_capacity(metadata_len);
-            self.read_to_end(&mut buf).await?;
+            self.take(metadata_len as _).read_to_end(&mut buf).await?;
 
             Ok(Arc::new(decode_metadata(&buf)?))
         }

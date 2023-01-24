@@ -3305,10 +3305,16 @@ fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
             dict_value_type,
             cast_options,
         ),
-        Utf8 => pack_string_to_dictionary::<K>(array, cast_options),
-        LargeUtf8 => pack_string_to_dictionary::<K>(array, cast_options),
-        Binary => pack_binary_to_dictionary::<K>(array, cast_options),
-        LargeBinary => pack_binary_to_dictionary::<K>(array, cast_options),
+        Utf8 => pack_byte_to_dictionary::<K, GenericStringType<i32>>(array, cast_options),
+        LargeUtf8 => {
+            pack_byte_to_dictionary::<K, GenericStringType<i64>>(array, cast_options)
+        }
+        Binary => {
+            pack_byte_to_dictionary::<K, GenericBinaryType<i32>>(array, cast_options)
+        }
+        LargeBinary => {
+            pack_byte_to_dictionary::<K, GenericBinaryType<i64>>(array, cast_options)
+        }
         _ => Err(ArrowError::CastError(format!(
             "Unsupported output type for dictionary packing: {:?}",
             dict_value_type
@@ -3348,42 +3354,23 @@ where
     Ok(Arc::new(b.finish()))
 }
 
-// Packs the data as a StringDictionaryArray, if possible, with the
+// Packs the data as a GenericByteDictionaryBuilder, if possible, with the
 // key types of K
-fn pack_string_to_dictionary<K>(
+fn pack_byte_to_dictionary<K, T>(
     array: &ArrayRef,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
     K: ArrowDictionaryKeyType,
+    T: ByteArrayType,
 {
-    let cast_values = cast_with_options(array, &DataType::Utf8, cast_options)?;
-    let values = cast_values.as_any().downcast_ref::<StringArray>().unwrap();
-    let mut b = StringDictionaryBuilder::<K>::with_capacity(values.len(), 1024, 1024);
-
-    // copy each element one at a time
-    for i in 0..values.len() {
-        if values.is_null(i) {
-            b.append_null();
-        } else {
-            b.append(values.value(i))?;
-        }
-    }
-    Ok(Arc::new(b.finish()))
-}
-
-// Packs the data as a BinaryDictionaryArray, if possible, with the
-// key types of K
-fn pack_binary_to_dictionary<K>(
-    array: &ArrayRef,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError>
-where
-    K: ArrowDictionaryKeyType,
-{
-    let cast_values = cast_with_options(array, &DataType::Binary, cast_options)?;
-    let values = cast_values.as_any().downcast_ref::<BinaryArray>().unwrap();
-    let mut b = BinaryDictionaryBuilder::<K>::with_capacity(values.len(), 1024, 1024);
+    let cast_values = cast_with_options(array, &T::DATA_TYPE, cast_options)?;
+    let values = cast_values
+        .as_any()
+        .downcast_ref::<GenericByteArray<T>>()
+        .unwrap();
+    let mut b =
+        GenericByteDictionaryBuilder::<K, T>::with_capacity(values.len(), 1024, 1024);
 
     // copy each element one at a time
     for i in 0..values.len() {
@@ -4713,8 +4700,7 @@ mod tests {
         assert_eq!(1, arr.value_length(2));
         assert_eq!(1, arr.value_length(3));
         assert_eq!(1, arr.value_length(4));
-        let values = arr.values();
-        let c = values.as_any().downcast_ref::<Int32Array>().unwrap();
+        let c = as_primitive_array::<Int32Type>(arr.values());
         assert_eq!(5, c.value(0));
         assert_eq!(6, c.value(1));
         assert_eq!(7, c.value(2));
@@ -4740,8 +4726,8 @@ mod tests {
         assert_eq!(1, arr.value_length(2));
         assert_eq!(1, arr.value_length(3));
         assert_eq!(1, arr.value_length(4));
-        let values = arr.values();
-        let c = values.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        let c = as_primitive_array::<Int32Type>(arr.values());
         assert_eq!(1, c.null_count());
         assert_eq!(5, c.value(0));
         assert!(!c.is_valid(1));
@@ -4768,8 +4754,7 @@ mod tests {
         assert_eq!(1, arr.value_length(1));
         assert_eq!(1, arr.value_length(2));
         assert_eq!(1, arr.value_length(3));
-        let values = arr.values();
-        let c = values.as_any().downcast_ref::<Float64Array>().unwrap();
+        let c = as_primitive_array::<Float64Type>(arr.values());
         assert_eq!(1, c.null_count());
         assert_eq!(7.0, c.value(0));
         assert_eq!(8.0, c.value(1));
@@ -4918,9 +4903,8 @@ mod tests {
         assert_eq!(2, array.value_length(2));
 
         // expect 4 nulls: negative numbers and overflow
-        let values = array.values();
-        assert_eq!(4, values.null_count());
-        let u16arr = values.as_any().downcast_ref::<UInt16Array>().unwrap();
+        let u16arr = as_primitive_array::<UInt16Type>(array.values());
+        assert_eq!(4, u16arr.null_count());
 
         // expect 4 nulls: negative numbers and overflow
         let expected: UInt16Array =

@@ -1758,6 +1758,10 @@ impl<R: Read> Iterator for Reader<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::cast::{
+        as_boolean_array, as_dictionary_array, as_primitive_array, as_string_array,
+        as_struct_array,
+    };
     use arrow_buffer::ToByteSlice;
     use arrow_schema::DataType::{Dictionary, List};
     use flate2::read::GzDecoder;
@@ -2056,8 +2060,7 @@ mod tests {
             .as_any()
             .downcast_ref::<ListArray>()
             .unwrap();
-        let bb = bb.values();
-        let bb = bb.as_any().downcast_ref::<Float64Array>().unwrap();
+        let bb = as_primitive_array::<Float64Type>(bb.values());
         assert_eq!(9, bb.len());
         assert_eq!(2.0, bb.value(0));
         assert_eq!(-6.1, bb.value(5));
@@ -2068,8 +2071,7 @@ mod tests {
             .as_any()
             .downcast_ref::<ListArray>()
             .unwrap();
-        let cc = cc.values();
-        let cc = cc.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let cc = as_boolean_array(cc.values());
         assert_eq!(6, cc.len());
         assert!(!cc.value(0));
         assert!(!cc.value(4));
@@ -2183,8 +2185,7 @@ mod tests {
                 .as_any()
                 .downcast_ref::<ListArray>()
                 .unwrap();
-            let bb = bb.values();
-            let bb = bb.as_any().downcast_ref::<Float64Array>().unwrap();
+            let bb = as_primitive_array::<Float64Type>(bb.values());
             assert_eq!(10, bb.len());
             assert_eq!(4.0, bb.value(9));
 
@@ -2198,8 +2199,7 @@ mod tests {
                 cc.data().buffers()[0],
                 Buffer::from_slice_ref([0i32, 2, 2, 4, 5])
             );
-            let cc = cc.values();
-            let cc = cc.as_any().downcast_ref::<BooleanArray>().unwrap();
+            let cc = as_boolean_array(cc.values());
             let cc_expected = BooleanArray::from(vec![
                 Some(false),
                 Some(true),
@@ -2219,8 +2219,8 @@ mod tests {
                 dd.data().buffers()[0],
                 Buffer::from_slice_ref([0i32, 1, 1, 2, 6])
             );
-            let dd = dd.values();
-            let dd = dd.as_any().downcast_ref::<StringArray>().unwrap();
+
+            let dd = as_string_array(dd.values());
             // values are 6 because a `d: null` is treated as a null slot
             // and a list's null slot can be omitted from the child (i.e. same offset)
             assert_eq!(6, dd.len());
@@ -2366,16 +2366,8 @@ mod tests {
         // compare list null buffers
         assert_eq!(read.data().null_buffer(), expected.data().null_buffer());
         // build struct from list
-        let struct_values = read.values();
-        let struct_array: &StructArray = struct_values
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap();
-        let expected_struct_values = expected.values();
-        let expected_struct_array = expected_struct_values
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap();
+        let struct_array = as_struct_array(read.values());
+        let expected_struct_array = as_struct_array(expected.values());
 
         assert_eq!(7, struct_array.len());
         assert_eq!(1, struct_array.null_count());
@@ -2694,11 +2686,7 @@ mod tests {
             .as_any()
             .downcast_ref::<ListArray>()
             .unwrap();
-        let evs_list = evs_list.values();
-        let evs_list = evs_list
-            .as_any()
-            .downcast_ref::<DictionaryArray<UInt64Type>>()
-            .unwrap();
+        let evs_list = as_dictionary_array::<UInt64Type>(evs_list.values());
         assert_eq!(6, evs_list.len());
         assert!(evs_list.is_valid(1));
         assert_eq!(DataType::Utf8, evs_list.value_type());
@@ -2755,11 +2743,7 @@ mod tests {
             .as_any()
             .downcast_ref::<ListArray>()
             .unwrap();
-        let evs_list = evs_list.values();
-        let evs_list = evs_list
-            .as_any()
-            .downcast_ref::<DictionaryArray<UInt64Type>>()
-            .unwrap();
+        let evs_list = as_dictionary_array::<UInt64Type>(evs_list.values());
         assert_eq!(8, evs_list.len());
         assert!(evs_list.is_valid(1));
         assert_eq!(DataType::Utf8, evs_list.value_type());

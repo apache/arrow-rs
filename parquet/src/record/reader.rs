@@ -824,7 +824,7 @@ impl Iterator for ReaderIter {
 mod tests {
     use super::*;
 
-    use crate::errors::{ParquetError, Result};
+    use crate::errors::Result;
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::record::api::{Field, Row, RowAccessor, RowFormatter};
     use crate::schema::parser::parse_message_type;
@@ -1452,10 +1452,9 @@ mod tests {
     ";
         let schema = parse_message_type(schema).unwrap();
         let res = test_file_reader_rows("nested_maps.snappy.parquet", Some(schema));
-        assert!(res.is_err());
         assert_eq!(
-            res.unwrap_err(),
-            general_err!("Root schema does not contain projection")
+            res.unwrap_err().to_string(),
+            "Parquet error: Root schema does not contain projection"
         );
     }
 
@@ -1469,10 +1468,9 @@ mod tests {
     ";
         let schema = parse_message_type(schema).unwrap();
         let res = test_row_group_rows("nested_maps.snappy.parquet", Some(schema));
-        assert!(res.is_err());
         assert_eq!(
-            res.unwrap_err(),
-            general_err!("Root schema does not contain projection")
+            res.unwrap_err().to_string(),
+            "Parquet error: Root schema does not contain projection"
         );
     }
 
@@ -1542,10 +1540,9 @@ mod tests {
         let reader = SerializedFileReader::try_from(path.as_path()).unwrap();
         let res = RowIter::from_file_into(Box::new(reader)).project(proj);
 
-        assert!(res.is_err());
         assert_eq!(
-            res.err().unwrap(),
-            general_err!("Root schema does not contain projection")
+            res.err().unwrap().to_string(),
+            "Parquet error: Root schema does not contain projection"
         );
     }
 

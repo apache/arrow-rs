@@ -238,6 +238,10 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     }
 
     /// Appends values from a slice of type `T` and a validity boolean slice
+    ///
+    /// # Panics
+    ///
+    /// Panics if `values` and `is_valid` have different lengths
     #[inline]
     pub fn append_values(&mut self, values: &[T::Native], is_valid: &[bool]) {
         assert_eq!(
@@ -325,6 +329,15 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             self.values_builder.as_slice_mut(),
             self.null_buffer_builder.as_slice_mut(),
         )
+    }
+}
+
+impl<P: ArrowPrimitiveType> Extend<Option<P::Native>> for PrimitiveBuilder<P> {
+    #[inline]
+    fn extend<T: IntoIterator<Item = Option<P::Native>>>(&mut self, iter: T) {
+        for v in iter {
+            self.append_option(v)
+        }
     }
 }
 
@@ -577,5 +590,14 @@ mod tests {
     )]
     fn test_invalid_with_data_type() {
         Int32Builder::new().with_data_type(DataType::Int64);
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = PrimitiveBuilder::<Int16Type>::new();
+        builder.extend([1, 2, 3, 5, 2, 4, 4].into_iter().map(Some));
+        builder.extend([2, 4, 6, 2].into_iter().map(Some));
+        let array = builder.finish();
+        assert_eq!(array.values(), &[1, 2, 3, 5, 2, 4, 4, 2, 4, 6, 2]);
     }
 }

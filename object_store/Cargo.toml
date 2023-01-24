@@ -53,8 +53,9 @@ ring = { version = "0.16", default-features = false, features = ["std"], optiona
 rustls-pemfile = { version = "1.0", default-features = false, optional = true }
 
 # AWS Profile support
-aws-types = { version = "0.52", optional = true }
-aws-config = { version = "0.52", optional = true }
+aws-types = { version = "0.53", optional = true }
+aws-credential-types = { version = "0.53", optional = true }
+aws-config = { version = "0.53", optional = true }
 
 [features]
 cloud = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "base64", "rand", "ring"]
@@ -64,7 +65,7 @@ aws = ["cloud"]
 http = ["cloud"]
 
 # Experimental support for AWS_PROFILE
-aws_profile = ["aws", "aws-config", "aws-types"]
+aws_profile = ["aws", "aws-config", "aws-types", "aws-credential-types"]
 
 [dev-dependencies] # In alphabetical order
 dotenv = "0.15.0"

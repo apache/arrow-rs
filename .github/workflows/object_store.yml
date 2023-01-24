@@ -19,6 +19,10 @@
 # tests for `object_store` crate
 name: object_store
 
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
 # trigger for all PRs that touch certain files and changes to master
 on:
   push:

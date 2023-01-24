@@ -223,7 +223,7 @@ impl IpcDataGenerator {
                 let list = as_list_array(column);
                 self.encode_dictionaries(
                     field,
-                    &list.values(),
+                    list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
@@ -233,7 +233,7 @@ impl IpcDataGenerator {
                 let list = as_large_list_array(column);
                 self.encode_dictionaries(
                     field,
-                    &list.values(),
+                    list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,

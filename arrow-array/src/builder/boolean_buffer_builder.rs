@@ -38,7 +38,12 @@ impl BooleanBufferBuilder {
     /// Creates a new `BooleanBufferBuilder` from [`MutableBuffer`] of `len`
     pub fn new_from_buffer(buffer: MutableBuffer, len: usize) -> Self {
         assert!(len <= buffer.len() * 8);
-        Self { buffer, len }
+        let mut s = Self {
+            len: buffer.len() * 8,
+            buffer,
+        };
+        s.truncate(len);
+        s
     }
 
     /// Returns the length of the buffer
@@ -86,6 +91,26 @@ impl BooleanBufferBuilder {
         self.len = new_len;
     }
 
+    /// Truncates the builder to the given length
+    ///
+    /// If `len` is greater than the buffer's current length, this has no effect
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        if len > self.len {
+            return;
+        }
+
+        let new_len_bytes = bit_util::ceil(len, 8);
+        self.buffer.truncate(new_len_bytes);
+        self.len = len;
+
+        let remainder = self.len % 8;
+        if remainder != 0 {
+            let mask = (1_u8 << remainder).wrapping_sub(1);
+            *self.buffer.as_mut().last_mut().unwrap() &= mask;
+        }
+    }
+
     /// Reserve space to at least `additional` new bits.
     /// Capacity will be `>= self.len() + additional`.
     /// New bytes are uninitialized and reading them is undefined behavior.
@@ -103,9 +128,10 @@ impl BooleanBufferBuilder {
     /// growing it (potentially reallocating it) and writing `false` in the newly available bits.
     #[inline]
     pub fn resize(&mut self, len: usize) {
-        let len_bytes = bit_util::ceil(len, 8);
-        self.buffer.resize(len_bytes, 0);
-        self.len = len;
+        match len.checked_sub(self.len) {
+            Some(delta) => self.advance(delta),
+            None => self.truncate(len),
+        }
     }
 
     /// Appends a boolean `v` into the buffer
@@ -120,12 +146,27 @@ impl BooleanBufferBuilder {
     /// Appends n `additional` bits of value `v` into the buffer
     #[inline]
     pub fn append_n(&mut self, additional: usize, v: bool) {
-        self.advance(additional);
-        if additional > 0 && v {
-            let offset = self.len() - additional;
-            (0..additional).for_each(|i| unsafe {
-                bit_util::set_bit_raw(self.buffer.as_mut_ptr(), offset + i)
-            })
+        match v {
+            true => {
+                let new_len = self.len + additional;
+                let new_len_bytes = bit_util::ceil(new_len, 8);
+                let cur_remainder = self.len % 8;
+                let new_remainder = new_len % 8;
+
+                if cur_remainder != 0 {
+                    // Pad last byte with 1s
+                    *self.buffer.as_slice_mut().last_mut().unwrap() |=
+                        !((1 << cur_remainder) - 1)
+                }
+                self.buffer.resize(new_len_bytes, 0xFF);
+                if new_remainder != 0 {
+                    // Clear remaining bits
+                    *self.buffer.as_slice_mut().last_mut().unwrap() &=
+                        (1 << new_remainder) - 1
+                }
+                self.len = new_len;
+            }
+            false => self.advance(additional),
         }
     }
 
@@ -381,6 +422,45 @@ mod tests {
         builder.append_n(4, true);
         assert_eq!(builder.len(), 9);
         assert_eq!(builder.as_slice(), &[0b11101111, 0b00000001]);
+    }
+
+    #[test]
+    fn test_truncate() {
+        let b = MutableBuffer::from_iter([true, true, true, true]);
+        let mut builder = BooleanBufferBuilder::new_from_buffer(b, 2);
+        builder.advance(2);
+        let finished = builder.finish();
+        assert_eq!(finished.as_slice(), &[0b00000011]);
+
+        let mut builder = BooleanBufferBuilder::new(10);
+        builder.append_n(5, true);
+        builder.resize(3);
+        builder.advance(2);
+        let finished = builder.finish();
+        assert_eq!(finished.as_slice(), &[0b00000111]);
+
+        let mut builder = BooleanBufferBuilder::new(10);
+        builder.append_n(16, true);
+        assert_eq!(builder.as_slice(), &[0xFF, 0xFF]);
+        builder.truncate(20);
+        assert_eq!(builder.as_slice(), &[0xFF, 0xFF]);
+        builder.truncate(14);
+        assert_eq!(builder.as_slice(), &[0xFF, 0b00111111]);
+        builder.append(false);
+        builder.append(true);
+        assert_eq!(builder.as_slice(), &[0xFF, 0b10111111]);
+        builder.append_packed_range(0..3, &[0xFF]);
+        assert_eq!(builder.as_slice(), &[0xFF, 0b10111111, 0b00000111]);
+        builder.truncate(17);
+        assert_eq!(builder.as_slice(), &[0xFF, 0b10111111, 0b00000001]);
+        builder.append_packed_range(0..2, &[2]);
+        assert_eq!(builder.as_slice(), &[0xFF, 0b10111111, 0b0000101]);
+        builder.truncate(8);
+        assert_eq!(builder.as_slice(), &[0xFF]);
+        builder.resize(14);
+        assert_eq!(builder.as_slice(), &[0xFF, 0x00]);
+        builder.truncate(0);
+        assert_eq!(builder.as_slice(), &[]);
     }
 
     #[test]

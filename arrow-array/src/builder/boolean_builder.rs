@@ -211,6 +211,15 @@ impl ArrayBuilder for BooleanBuilder {
     }
 }
 
+impl Extend<Option<bool>> for BooleanBuilder {
+    #[inline]
+    fn extend<T: IntoIterator<Item = Option<bool>>>(&mut self, iter: T) {
+        for v in iter {
+            self.append_option(v)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,5 +312,18 @@ mod tests {
 
         assert_eq!(0, array.null_count());
         assert!(array.data().null_buffer().is_none());
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = BooleanBuilder::new();
+        builder.extend([false, false, true, false, false].into_iter().map(Some));
+        builder.extend([true, true, false].into_iter().map(Some));
+        let array = builder.finish();
+        let values = array.iter().map(|x| x.unwrap()).collect::<Vec<_>>();
+        assert_eq!(
+            &values,
+            &[false, false, true, false, false, true, true, false]
+        )
     }
 }

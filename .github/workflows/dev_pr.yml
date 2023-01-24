@@ -17,6 +17,10 @@
 
 name: dev_pr
 
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
 # Trigger whenever a PR is changed (title as well as new / changed commits)
 on:
   pull_request_target:
