@@ -100,8 +100,14 @@ impl FlightRecordBatchStream {
         }
     }
 
+    /// Has a message defining the schema been received yet?
+    #[deprecated = "use metadata() instead"]
+    pub fn got_schema(&self) -> bool {
+        self.schema().is_some()
+    }
+
     /// Return schema for the stream, if it has been received
-    pub fn schema(&self) -> Option<SchemaRef> {
+    pub fn schema(&self) -> Option<&SchemaRef> {
         self.inner.schema()
     }
 
@@ -215,8 +221,8 @@ impl FlightDataDecoder {
     }
 
     /// Returns the current schema for this stream
-    pub fn schema(&self) -> Option<SchemaRef> {
-        self.state.as_ref().map(|state| state.schema.clone())
+    pub fn schema(&self) -> Option<&SchemaRef> {
+        self.state.as_ref().map(|state| &state.schema)
     }
 
     /// Extracts flight data from the next message, updating decoding

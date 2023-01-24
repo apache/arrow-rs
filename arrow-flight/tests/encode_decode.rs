@@ -120,7 +120,7 @@ async fn test_zero_batches_schema_specified() {
     // No batches come out
     assert!(decoder.next().await.is_none());
     // But schema has been received correctly
-    assert_eq!(decoder.schema(), Some(schema));
+    assert_eq!(decoder.schema(), Some(&schema));
 }
 
 #[tokio::test]
