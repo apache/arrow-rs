@@ -18,9 +18,12 @@
 use arrow_schema::ArrowError;
 use std::fmt::{Display, Formatter};
 
-/// A tape encoding inspired by simdjson
+/// A tape encoding inspired by [simdjson]
 ///
-/// <https://github.com/simdjson/simdjson/blob/master/doc/tape.md>
+/// Uses `u32` for offsets to ensure `TapeElement` is 64-bits. A future
+/// iteration may increase this to a custom `u56` type.
+///
+/// [simdjson]: https://github.com/simdjson/simdjson/blob/master/doc/tape.md
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TapeElement {
     StartObject(u32),
@@ -147,6 +150,9 @@ pub struct TapeDecoder {
 
     num_rows: usize,
 
+    /// Number of rows to read per batch
+    batch_size: usize,
+
     /// A buffer of parsed string data
     ///
     /// Note: if part way through a record, i.e. `stack` is not empty,
@@ -173,6 +179,7 @@ impl TapeDecoder {
         Self {
             offsets,
             elements,
+            batch_size,
             num_rows: 0,
             bytes: Vec::with_capacity(num_fields * 2 * 8),
             stack: Vec::with_capacity(10),
@@ -182,7 +189,7 @@ impl TapeDecoder {
     pub fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
         let mut iter = BufIter::new(buf);
 
-        loop {
+        while self.num_rows < self.batch_size {
             match self.stack.last_mut() {
                 // Start of row
                 None => {
@@ -369,9 +376,17 @@ impl TapeDecoder {
 
     /// Finishes the current [`Tape`]
     pub fn finish(&self) -> Result<Tape<'_>, ArrowError> {
-        assert!(self.stack.is_empty());
-        assert!(self.offsets.len() < u32::MAX as usize, "offset overflow");
-        assert!(self.elements.len() < u32::MAX as usize, "elements overflow");
+        if let Some(b) = self.stack.last() {
+            return Err(ArrowError::JsonError(format!("Record truncated: {:?}", b)));
+        }
+
+        if self.offsets.len() >= u32::MAX as usize {
+            return Err(ArrowError::JsonError(format!("Encountered more than {} bytes of string data, consider using a smaller batch size", u32::MAX)));
+        }
+
+        if self.offsets.len() >= u32::MAX as usize {
+            return Err(ArrowError::JsonError(format!("Encountered more than {} JSON elements, consider using a smaller batch size", u32::MAX)));
+        }
 
         // Sanity check
         assert_eq!(
@@ -401,11 +416,6 @@ impl TapeDecoder {
         self.elements.push(TapeElement::Null);
         self.offsets.clear();
         self.offsets.push(0);
-    }
-
-    /// Returns the number of read rows
-    pub fn num_rows(&self) -> usize {
-        self.num_rows
     }
 }
 
