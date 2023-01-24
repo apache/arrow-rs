@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::types::GenericBinaryType;
-use crate::{Array, GenericByteArray, GenericListArray, OffsetSizeTrait};
+use crate::types::{ByteArrayType, GenericBinaryType};
+use crate::{
+    Array, GenericByteArray, GenericListArray, GenericStringArray, OffsetSizeTrait,
+};
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
@@ -157,6 +159,21 @@ impl<T: OffsetSizeTrait> From<GenericListArray<T>> for GenericBinaryArray<T> {
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> From<GenericStringArray<OffsetSize>>
+    for GenericBinaryArray<OffsetSize>
+{
+    fn from(value: GenericStringArray<OffsetSize>) -> Self {
+        let builder = value
+            .into_data()
+            .into_builder()
+            .data_type(GenericBinaryType::<OffsetSize>::DATA_TYPE);
+
+        // Safety:
+        // A StringArray is a valid BinaryArray
+        Self::from(unsafe { builder.build_unchecked() })
+    }
+}
+
 impl<Ptr, OffsetSize: OffsetSizeTrait> FromIterator<Option<Ptr>>
     for GenericBinaryArray<OffsetSize>
 where
@@ -283,7 +300,7 @@ pub type LargeBinaryArray = GenericBinaryArray<i64>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ListArray;
+    use crate::{ListArray, StringArray};
     use arrow_schema::Field;
 
     #[test]
@@ -696,5 +713,14 @@ mod tests {
         );
         assert_eq!(string.len(), 0);
         assert_eq!(string.value_offsets(), &[0]);
+    }
+
+    #[test]
+    fn test_to_from_string() {
+        let s = StringArray::from_iter_values(["a", "b", "c", "d"]);
+        let b = BinaryArray::from(s.clone());
+        let sa = StringArray::from(b); // Performs UTF-8 validation again
+
+        assert_eq!(s, sa);
     }
 }
