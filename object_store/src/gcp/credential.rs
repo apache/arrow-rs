@@ -17,10 +17,12 @@
 
 use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
+use crate::ClientOptions;
 use crate::RetryConfig;
 use async_trait::async_trait;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine;
+use futures::TryFutureExt;
 use reqwest::{Client, Method};
 use ring::signature::RsaKeyPair;
 use snafu::{ResultExt, Snafu};
@@ -29,6 +31,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 use std::time::{Duration, Instant};
+use tracing::info;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -58,6 +61,12 @@ pub enum Error {
 
     #[snafu(display("Error getting token response body: {}", source))]
     TokenResponseBody { source: reqwest::Error },
+
+    #[snafu(display("A configuration file was passed in but was not used."))]
+    UnusedConfigurationFile,
+
+    #[snafu(display("Error creating client: {}", source))]
+    Client { source: crate::Error },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -116,7 +125,7 @@ struct TokenResponse {
 }
 
 #[async_trait]
-pub(crate) trait TokenProvider: std::fmt::Debug + Send + Sync {
+pub trait TokenProvider: std::fmt::Debug + Send + Sync {
     async fn fetch_token(
         &self,
         client: &Client,
@@ -218,7 +227,7 @@ impl TokenProvider for OAuthProvider {
     }
 }
 
-fn reader_credentials_file<T>(
+fn read_credentials_file<T>(
     service_account_path: impl AsRef<std::path::Path>,
 ) -> Result<T>
 where
@@ -231,7 +240,7 @@ where
 
 /// A deserialized `service-account-********.json`-file.
 #[derive(serde::Deserialize, Debug)]
-pub(crate) struct ServiceAccountCredentials {
+pub struct ServiceAccountCredentials {
     /// The private key in RSA format.
     pub private_key: String,
 
@@ -247,18 +256,18 @@ pub(crate) struct ServiceAccountCredentials {
     pub disable_oauth: bool,
 }
 
-pub(crate) fn default_gcs_base_url() -> String {
+pub fn default_gcs_base_url() -> String {
     "https://storage.googleapis.com".to_owned()
 }
 
-pub(crate) fn default_disable_oauth() -> bool {
+pub fn default_disable_oauth() -> bool {
     false
 }
 
 impl ServiceAccountCredentials {
     /// Create a new [`ServiceAccountCredentials`] from a file.
     pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
-        reader_credentials_file(path)
+        read_credentials_file(path)
     }
 
     /// Create a new [`ServiceAccountCredentials`] from a string.
@@ -278,25 +287,6 @@ impl ServiceAccountCredentials {
             scope.to_string(),
             audience.to_string(),
         )?) as Box<dyn TokenProvider>)
-    }
-}
-
-/// A no-op provider that returns empty tokens
-#[derive(Debug)]
-pub struct NoOpProvider;
-
-#[async_trait]
-impl TokenProvider for NoOpProvider {
-    /// Fetch a fresh token
-    async fn fetch_token(
-        &self,
-        _client: &Client,
-        _retry: &RetryConfig,
-    ) -> Result<TemporaryToken<String>> {
-        Ok(TemporaryToken {
-            token: "".to_string(),
-            expiry: Instant::now(),
-        })
     }
 }
 
@@ -329,39 +319,69 @@ fn b64_encode_obj<T: serde::Serialize>(obj: &T) -> Result<String> {
 }
 
 /// A provider that uses the Google Cloud Platform metadata server to fetch a token.
+///
+/// <https://cloud.google.com/docs/authentication/get-id-token#metadata-server>
 #[derive(Debug, Default)]
 pub struct InstanceCredentialProvider {
     audience: String,
+    client_options: ClientOptions,
 }
 
 impl InstanceCredentialProvider {
-    pub fn new<T: Into<String>>(audience: T) -> Self {
+    /// Create a new [`InstanceCredentialProvider`], we need to control the client in order to enable http access so save the options.
+    pub fn new<T: Into<String>>(audience: T, client_options: ClientOptions) -> Self {
         Self {
             audience: audience.into(),
+            client_options: client_options.with_allow_http(true),
         }
     }
 }
 
+/// Make a request to the metadata server to fetch a token, using a a given hostname.
+async fn make_metadata_request(
+    client: &Client,
+    hostname: &str,
+    retry: &RetryConfig,
+    audience: &str,
+) -> Result<TokenResponse> {
+    let url = format!(
+        "http://{}/computeMetadata/v1/instance/service-accounts/default/token",
+        hostname
+    );
+    println!("gcp/credentials getting token from url: {}", url);
+    let response: TokenResponse = client
+        .request(Method::GET, url)
+        .header("Metadata-Flavor", "Google")
+        .query(&[("audience", audience)])
+        .send_retry(retry)
+        .await
+        .context(TokenRequestSnafu)?
+        .json()
+        .await
+        .context(TokenResponseBodySnafu)?;
+    Ok(response)
+}
+
 #[async_trait]
 impl TokenProvider for InstanceCredentialProvider {
+    /// Fetch a token from the metadata server.
+    /// Since the connection is local we need to enable http access and don't actually use the client object passed in.
     async fn fetch_token(
         &self,
-        client: &Client,
+        _client: &Client,
         retry: &RetryConfig,
     ) -> Result<TemporaryToken<String>> {
-        println!("fetching token from metadata server");
-        const TOKEN_URL: &str =
-            "http://metadata/computeMetadata/v1/instance/service-accounts/default/token";
-        let response: TokenResponse = client
-            .request(Method::GET, TOKEN_URL)
-            .header("Metadata-Flavor", "Google")
-            .query(&[("audience", &self.audience)])
-            .send_retry(retry)
-            .await
-            .context(TokenRequestSnafu)?
-            .json()
-            .await
-            .context(TokenResponseBodySnafu)?;
+        const METADATA_IP: &str = "169.254.169.254";
+        const METADATA_HOST: &str = "metadata";
+
+        info!("fetching token from metadata server");
+        let client = self.client_options.client().context(ClientSnafu)?;
+        let response =
+            make_metadata_request(&client, METADATA_HOST, retry, &self.audience)
+                .or_else(|_| {
+                    make_metadata_request(&client, METADATA_IP, retry, &self.audience)
+                })
+                .await?;
         let token = TemporaryToken {
             token: response.access_token,
             expiry: Instant::now() + Duration::from_secs(response.expires_in),
@@ -371,6 +391,7 @@ impl TokenProvider for InstanceCredentialProvider {
 }
 
 /// A deserialized `application_default_credentials.json`-file.
+/// <https://cloud.google.com/docs/authentication/application-default-credentials#personal>
 #[derive(serde::Deserialize, Debug)]
 pub struct ApplicationDefaultCredentials {
     client_id: String,
@@ -392,20 +413,20 @@ impl ApplicationDefaultCredentials {
     //  2. without argument if the well-known configuration file is present.
     pub fn new(path: Option<&str>) -> Result<Option<Self>, Error> {
         if let Some(path) = path {
-            if let Ok(credentials) = reader_credentials_file::<Self>(path) {
+            if let Ok(credentials) = read_credentials_file::<Self>(path) {
                 if credentials.type_ == Self::EXPECTED_TYPE {
                     return Ok(Some(credentials));
                 }
             }
-            // Other credential mechanisms may be able to use this path.
-            return Ok(None);
+            // Return an error if the path has not been used.
+            return Err(Error::UnusedConfigurationFile);
         }
         if let Some(home) = env::var_os("HOME") {
             let path = Path::new(&home).join(Self::CREDENTIALS_PATH);
 
             // It's expected for this file to not exist unless it has been explicitly configured by the user.
             if path.try_exists().unwrap_or(false) {
-                return reader_credentials_file::<Self>(path).map(Some);
+                return read_credentials_file::<Self>(path).map(Some);
             }
         }
         Ok(None)

@@ -1130,14 +1130,15 @@ impl GoogleCloudStorageBuilder {
                     application_default_credentials
                         .map(|a| Box::new(a) as Box<dyn TokenProvider>)
                 })
-                .or_else(|| Some(Box::new(InstanceCredentialProvider::new(audience))));
+                .or_else(|| {
+                    Some(Box::new(InstanceCredentialProvider::new(
+                        audience,
+                        self.client_options.clone(),
+                    )))
+                });
 
             // A provider is required at this point, bail out if we don't have one.
-            if best_provider.is_some() {
-                best_provider
-            } else {
-                return Err(Error::MissingCredentials.into());
-            }
+            Some(best_provider.ok_or(Error::MissingCredentials)?)
         };
 
         let encoded_bucket_name =
