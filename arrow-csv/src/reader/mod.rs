@@ -444,7 +444,7 @@ impl<R: BufRead> BufReader<R> {
             self.reader.consume(decoded);
         }
 
-        Ok(self.decoder.flush()?)
+        self.decoder.flush()
     }
 }
 
