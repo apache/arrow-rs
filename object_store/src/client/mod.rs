@@ -52,6 +52,7 @@ pub struct ClientOptions {
     default_headers: Option<HeaderMap>,
     proxy_url: Option<String>,
     allow_http: bool,
+    allow_insecure: bool,
     timeout: Option<Duration>,
     connect_timeout: Option<Duration>,
     pool_idle_timeout: Option<Duration>,
@@ -104,6 +105,21 @@ impl ClientOptions {
     /// * true:  HTTP and HTTPS are allowed
     pub fn with_allow_http(mut self, allow_http: bool) -> Self {
         self.allow_http = allow_http;
+        self
+    }
+    /// Allows connections to invalid SSL certificates
+    /// * false (default):  Only valid HTTPS certificates are allowed
+    /// * true:  All HTTPS certificates are allowed
+    ///
+    /// # Warning
+    ///
+    /// You should think very carefully before using this method. If
+    /// invalid certificates are trusted, *any* certificate for *any* site
+    /// will be trusted for use. This includes expired certificates. This
+    /// introduces significant vulnerabilities, and should only be used
+    /// as a last resort or for testing
+    pub fn with_allow_invalid_certificates(mut self, allow_insecure: bool) -> Self {
+        self.allow_insecure = allow_insecure;
         self
     }
 
@@ -257,6 +273,10 @@ impl ClientOptions {
 
         if self.http2_only {
             builder = builder.http2_prior_knowledge()
+        }
+
+        if self.allow_insecure {
+            builder = builder.danger_accept_invalid_certs(self.allow_insecure)
         }
 
         builder
