@@ -421,7 +421,9 @@ fn get_all_types() -> Vec<DataType> {
             vec![
                 Dictionary(Box::new(key_type.clone()), Box::new(Int32)),
                 Dictionary(Box::new(key_type.clone()), Box::new(Utf8)),
+                Dictionary(Box::new(key_type.clone()), Box::new(LargeUtf8)),
                 Dictionary(Box::new(key_type.clone()), Box::new(Binary)),
+                Dictionary(Box::new(key_type.clone()), Box::new(LargeBinary)),
                 Dictionary(Box::new(key_type.clone()), Box::new(Decimal128(38, 0))),
                 Dictionary(Box::new(key_type), Box::new(Decimal256(76, 0))),
             ]
