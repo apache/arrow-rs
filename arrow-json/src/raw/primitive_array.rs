@@ -29,7 +29,8 @@ use crate::raw::{tape_error, ArrayDecoder};
 
 pub struct PrimitiveArrayDecoder<P: ArrowPrimitiveType> {
     data_type: DataType,
-    phantom: PhantomData<P>,
+    // Invariant and Send
+    phantom: PhantomData<fn(P) -> P>,
 }
 
 impl<P: ArrowPrimitiveType> PrimitiveArrayDecoder<P> {
