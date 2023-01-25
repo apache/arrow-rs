@@ -24,8 +24,9 @@ use arrow_schema::{ArrowError, DataType, Field};
 use crate::{
     builder::StringRunBuilder,
     make_array,
+    run_iterator::RunArrayIter,
     types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
-    Array, ArrayRef, PrimitiveArray,
+    Array, ArrayAccessor, ArrayRef, PrimitiveArray,
 };
 
 ///
@@ -120,6 +121,27 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// Returns a reference to values array
     pub fn values(&self) -> &ArrayRef {
         &self.values
+    }
+
+    /// Downcast this dictionary to a [`TypedRunArray`]
+    ///
+    /// ```
+    /// use arrow_array::{Array, ArrayAccessor, RunArray, StringArray, types::Int32Type};
+    ///
+    /// let orig = [Some("a"), Some("b"), None];
+    /// let run_array = RunArray::<Int32Type>::from_iter(orig);
+    /// let typed = run_array.downcast_ref::<StringArray>().unwrap();
+    /// assert_eq!(typed.value(0), "a");
+    /// assert_eq!(typed.value(1), "b");
+    /// assert!(typed.values().is_null(2));
+    /// ```
+    ///
+    pub fn downcast_ref<V: 'static>(&self) -> Option<TypedRunArray<'_, R, V>> {
+        let values = self.values.as_any().downcast_ref()?;
+        Some(TypedRunArray {
+            run_array: self,
+            values,
+        })
     }
 }
 
@@ -274,14 +296,181 @@ pub type Int32RunArray = RunArray<Int32Type>;
 /// ```
 pub type Int64RunArray = RunArray<Int64Type>;
 
+/// A strongly-typed wrapper around a [`RunArray`] that implements [`ArrayAccessor`]
+/// and [`IntoIterator`] allowing fast access to its elements
+///
+/// ```
+/// use arrow_array::{RunArray, StringArray, types::Int32Type};
+///
+/// let orig = ["a", "b", "a", "b"];
+/// let ree_array = RunArray::<Int32Type>::from_iter(orig);
+///
+/// // `TypedRunArray` allows you to access the values directly
+/// let typed = ree_array.downcast_ref::<StringArray>().unwrap();
+///
+/// for (maybe_val, orig) in typed.into_iter().zip(orig) {
+///     assert_eq!(maybe_val.unwrap(), orig)
+/// }
+/// ```
+pub struct TypedRunArray<'a, R: RunEndIndexType, V> {
+    /// The run array
+    run_array: &'a RunArray<R>,
+
+    /// The values of the run_array
+    values: &'a V,
+}
+
+// Manually implement `Clone` to avoid `V: Clone` type constraint
+impl<'a, R: RunEndIndexType, V> Clone for TypedRunArray<'a, R, V> {
+    fn clone(&self) -> Self {
+        Self {
+            run_array: self.run_array,
+            values: self.values,
+        }
+    }
+}
+
+impl<'a, R: RunEndIndexType, V> Copy for TypedRunArray<'a, R, V> {}
+
+impl<'a, R: RunEndIndexType, V> std::fmt::Debug for TypedRunArray<'a, R, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        writeln!(f, "TypedRunArray({:?})", self.run_array)
+    }
+}
+
+impl<'a, R: RunEndIndexType, V> TypedRunArray<'a, R, V> {
+    /// Returns the run_ends of this [`TypedRunArray`]
+    pub fn run_ends(&self) -> &'a PrimitiveArray<R> {
+        self.run_array.run_ends()
+    }
+
+    /// Returns the values of this [`TypedRunArray`]
+    pub fn values(&self) -> &'a V {
+        self.values
+    }
+
+    /// Returns index to the physcial array for the given index to the logical array.
+    /// Performs a binary search on the run_ends array for the input index.
+    #[inline]
+    pub fn get_physical_index(&self, logical_index: usize) -> Option<usize> {
+        if logical_index >= self.run_array.len() {
+            return None;
+        }
+        let mut st: usize = 0;
+        let mut en: usize = self.run_ends().len();
+        while st + 1 < en {
+            let mid: usize = (st + en) / 2;
+            // The check `st + 1 < en` ensures `mid` can never be zero and hence
+            // there is no need to check for underflow for `mid - 1`
+            if logical_index < self.run_ends().value(mid - 1).as_usize() {
+                en = mid
+            } else {
+                st = mid
+            }
+        }
+        Some(st)
+    }
+}
+
+impl<'a, R: RunEndIndexType, V: Sync> Array for TypedRunArray<'a, R, V> {
+    fn as_any(&self) -> &dyn Any {
+        self.run_array
+    }
+
+    fn data(&self) -> &ArrayData {
+        &self.run_array.data
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.run_array.into_data()
+    }
+}
+
+// Array accessor converts the index of logical array to the index of the physical array
+// using binary search. The time complexity is O(log N) where N is number of runs.
+impl<'a, R, V> ArrayAccessor for TypedRunArray<'a, R, V>
+where
+    R: RunEndIndexType,
+    V: Sync + Send,
+    &'a V: ArrayAccessor,
+    <&'a V as ArrayAccessor>::Item: Default,
+{
+    type Item = <&'a V as ArrayAccessor>::Item;
+
+    fn value(&self, logical_index: usize) -> Self::Item {
+        assert!(
+            logical_index < self.len(),
+            "Trying to access an element at index {} from a TypedRunArray of length {}",
+            logical_index,
+            self.len()
+        );
+        unsafe { self.value_unchecked(logical_index) }
+    }
+
+    unsafe fn value_unchecked(&self, logical_index: usize) -> Self::Item {
+        let physical_index = self.get_physical_index(logical_index).unwrap();
+        self.values().value_unchecked(physical_index)
+    }
+}
+
+impl<'a, R, V> IntoIterator for TypedRunArray<'a, R, V>
+where
+    R: RunEndIndexType,
+    V: Sync + Send,
+    &'a V: ArrayAccessor,
+    <&'a V as ArrayAccessor>::Item: Default,
+{
+    type Item = Option<<&'a V as ArrayAccessor>::Item>;
+    type IntoIter = RunArrayIter<'a, R, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        RunArrayIter::new(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+
+    use rand::seq::SliceRandom;
+    use rand::thread_rng;
+    use rand::Rng;
 
     use super::*;
     use crate::builder::PrimitiveRunBuilder;
     use crate::types::{Int16Type, Int32Type, Int8Type, UInt32Type};
     use crate::{Array, Int16Array, Int32Array, StringArray};
+
+    fn build_input_array(approx_size: usize) -> Vec<Option<i32>> {
+        let mut seed: Vec<Option<i32>> = vec![
+            None,
+            None,
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(5),
+            Some(6),
+        ];
+        let mut ix = 0;
+        let mut result: Vec<Option<i32>> = Vec::with_capacity(approx_size);
+        let mut rng = thread_rng();
+        while result.len() < approx_size {
+            if ix == 0 {
+                seed.shuffle(&mut rng);
+            }
+            let num = rand::thread_rng().gen_range(0..8);
+            for _ in 0..num {
+                result.push(seed[ix]);
+            }
+            ix += 1;
+            if ix == 8 {
+                ix = 0
+            }
+        }
+        println!("Size of input array: {}", result.len());
+        result
+    }
 
     #[test]
     fn test_run_array() {
@@ -503,5 +692,31 @@ mod tests {
     fn test_run_array_run_ends_data_type_mismatch() {
         let a = RunArray::<Int32Type>::from_iter(["32"]);
         let _ = RunArray::<Int64Type>::from(a.into_data());
+    }
+
+    #[test]
+    fn test_ree_array_accessor() {
+        let input_array = build_input_array(256);
+
+        // Encode the input_array to ree_array
+        let mut builder =
+            PrimitiveRunBuilder::<Int16Type, Int32Type>::with_capacity(input_array.len());
+        builder.extend(input_array.clone().into_iter());
+        let run_array = builder.finish();
+        let typed = run_array
+            .downcast_ref::<PrimitiveArray<Int32Type>>()
+            .unwrap();
+
+        let len = input_array.len();
+        for i in 0..len {
+            let actual = typed.value(i);
+            match input_array[i] {
+                Some(val) => assert_eq!(val, actual),
+                None => {
+                    // TODO: should `array.is_null` be overwritten to return nullability
+                    // of logical array index?
+                }
+            };
+        }
     }
 }
