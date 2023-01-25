@@ -88,25 +88,6 @@ where
     lexical_to_string(c.value(i))
 }
 
-fn invalid_cast_error(dt: &str, col_index: usize, row_index: usize) -> ArrowError {
-    ArrowError::CastError(format!(
-        "Cannot cast to {dt} at col index: {col_index} row index: {row_index}"
-    ))
-}
-
-macro_rules! write_temporal_value {
-    ($array:expr, $tpe: ident, $format: expr, $col_index: expr, $row_index: expr, $cast_func: ident, $tpe_name: expr) => {{
-        $array
-            .as_any()
-            .downcast_ref::<$tpe>()
-            .ok_or_else(|| invalid_cast_error($tpe_name, $col_index, $row_index))?
-            .$cast_func($row_index)
-            .ok_or_else(|| invalid_cast_error($tpe_name, $col_index, $row_index))?
-            .format($format)
-            .to_string()
-    }};
-}
-
 /// A CSV writer
 #[derive(Debug)]
 pub struct Writer<W: Write> {
