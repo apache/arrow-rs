@@ -249,6 +249,14 @@ impl<OffsetSize: OffsetSizeTrait> From<Vec<&str>> for GenericStringArray<OffsetS
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> From<Vec<Option<String>>>
+    for GenericStringArray<OffsetSize>
+{
+    fn from(v: Vec<Option<String>>) -> Self {
+        v.into_iter().collect()
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> From<Vec<String>> for GenericStringArray<OffsetSize> {
     fn from(v: Vec<String>) -> Self {
         Self::from_iter_values(v)
@@ -439,6 +447,13 @@ mod tests {
 
         assert_eq!(array1.value(0), "hello");
         assert_eq!(array1.value(1), "hello2");
+
+        // Also works with String types.
+        let data2: Vec<String> = vec!["goodbye".into(), "goodbye2".into()];
+        let array2 = StringArray::from_iter_values(data2.iter());
+
+        assert_eq!(array2.value(0), "goodbye");
+        assert_eq!(array2.value(1), "goodbye2");
     }
 
     #[test]
@@ -467,7 +482,7 @@ mod tests {
 
     #[test]
     fn test_string_array_all_null() {
-        let data = vec![None];
+        let data: Vec<Option<&str>> = vec![None];
         let array = StringArray::from(data);
         array
             .data()
@@ -477,7 +492,7 @@ mod tests {
 
     #[test]
     fn test_large_string_array_all_null() {
-        let data = vec![None];
+        let data: Vec<Option<&str>> = vec![None];
         let array = LargeStringArray::from(data);
         array
             .data()

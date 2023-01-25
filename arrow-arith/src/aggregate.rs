@@ -1072,7 +1072,8 @@ mod tests {
 
     #[test]
     fn test_string_min_max_all_nulls() {
-        let a = StringArray::from(vec![None, None]);
+        let v: Vec<Option<&str>> = vec![None, None];
+        let a = StringArray::from(v);
         assert_eq!(None, min_string(&a));
         assert_eq!(None, max_string(&a));
     }

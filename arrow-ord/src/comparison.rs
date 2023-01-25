@@ -3712,7 +3712,8 @@ mod tests {
         // value_offsets = [0, 3, 6, 6]
         let list_array = builder.finish();
 
-        let nulls = StringArray::from(vec![None, None, None, None]);
+        let v: Vec<Option<&str>> = vec![None, None, None, None];
+        let nulls = StringArray::from(v);
         let nulls_result = contains_utf8(&nulls, &list_array).unwrap();
         assert_eq!(
             nulls_result
