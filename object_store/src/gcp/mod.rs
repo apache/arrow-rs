@@ -1122,20 +1122,23 @@ impl GoogleCloudStorageBuilder {
         let token_provider = if disable_oauth {
             None
         } else {
-            let best_provider = service_account_credentials
-                .map(|credentials| credentials.token_provider(scope, audience))
-                .transpose()
-                .context(CredentialSnafu)?
-                .or_else(|| {
-                    application_default_credentials
-                        .map(|a| Box::new(a) as Box<dyn TokenProvider>)
-                })
-                .or_else(|| {
-                    Some(Box::new(InstanceCredentialProvider::new(
+            let best_provider = if let Some(credentials) = service_account_credentials {
+                Some(
+                    credentials
+                        .token_provider(scope, audience)
+                        .context(CredentialSnafu)?,
+                )
+            } else if let Some(credentials) = application_default_credentials {
+                Some(Box::new(credentials) as Box<dyn TokenProvider>)
+            } else {
+                Some(Box::new(
+                    InstanceCredentialProvider::new(
                         audience,
                         self.client_options.clone(),
-                    )))
-                });
+                    )
+                    .context(CredentialSnafu)?,
+                ) as Box<dyn TokenProvider>)
+            };
 
             // A provider is required at this point, bail out if we don't have one.
             Some(best_provider.ok_or(Error::MissingCredentials)?)

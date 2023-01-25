@@ -324,16 +324,23 @@ fn b64_encode_obj<T: serde::Serialize>(obj: &T) -> Result<String> {
 #[derive(Debug, Default)]
 pub struct InstanceCredentialProvider {
     audience: String,
-    client_options: ClientOptions,
+    client: Client,
 }
 
 impl InstanceCredentialProvider {
     /// Create a new [`InstanceCredentialProvider`], we need to control the client in order to enable http access so save the options.
-    pub fn new<T: Into<String>>(audience: T, client_options: ClientOptions) -> Self {
-        Self {
-            audience: audience.into(),
-            client_options: client_options.with_allow_http(true),
-        }
+    pub fn new<T: Into<String>>(
+        audience: T,
+        client_options: ClientOptions,
+    ) -> Result<Self> {
+        client_options
+            .with_allow_http(true)
+            .client()
+            .map(|client| Self {
+                audience: audience.into(),
+                client,
+            })
+            .context(ClientSnafu)
     }
 }
 
@@ -348,7 +355,6 @@ async fn make_metadata_request(
         "http://{}/computeMetadata/v1/instance/service-accounts/default/token",
         hostname
     );
-    println!("gcp/credentials getting token from url: {}", url);
     let response: TokenResponse = client
         .request(Method::GET, url)
         .header("Metadata-Flavor", "Google")
@@ -375,11 +381,15 @@ impl TokenProvider for InstanceCredentialProvider {
         const METADATA_HOST: &str = "metadata";
 
         info!("fetching token from metadata server");
-        let client = self.client_options.client().context(ClientSnafu)?;
         let response =
-            make_metadata_request(&client, METADATA_HOST, retry, &self.audience)
+            make_metadata_request(&self.client, METADATA_HOST, retry, &self.audience)
                 .or_else(|_| {
-                    make_metadata_request(&client, METADATA_IP, retry, &self.audience)
+                    make_metadata_request(
+                        &self.client,
+                        METADATA_IP,
+                        retry,
+                        &self.audience,
+                    )
                 })
                 .await?;
         let token = TemporaryToken {
