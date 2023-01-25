@@ -178,7 +178,7 @@ macro_rules! make_string_time {
 }
 
 macro_rules! make_string_time_with_format {
-    ($array_type:ty,  $format: ident, $column: ident, $row: ident) => {{
+    ($array_type:ty, $format: ident, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
         Ok(array
             .value_as_time($row)
