@@ -360,9 +360,18 @@ impl<'a, R: RunEndIndexType, V> TypedRunArray<'a, R, V> {
         let mut en: usize = self.run_ends().len();
         while st + 1 < en {
             let mid: usize = (st + en) / 2;
-            // The check `st + 1 < en` ensures `mid` can never be zero and hence
-            // there is no need to check for underflow for `mid - 1`
-            if logical_index < self.run_ends().value(mid - 1).as_usize() {
+            if logical_index
+                < unsafe {
+                    // Safety:
+                    // The value of mid will always be between 1 and len - 1,
+                    // where len is length of run ends array.
+                    // This is based on the fact that `st` starts with 0 and
+                    // `en` starts with len. The condition `st + 1 < en` ensures
+                    // `st` and `en` differs atleast by two. So the value of `mid`
+                    // will never be either `st` or `en`
+                    self.run_ends().value_unchecked(mid - 1).as_usize()
+                }
+            {
                 en = mid
             } else {
                 st = mid
