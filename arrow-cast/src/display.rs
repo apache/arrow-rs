@@ -402,10 +402,9 @@ fn append_map_field_string(
 ///
 /// Note this function is quite inefficient and is unlikely to be
 /// suitable for converting large arrays or record batches.
-fn array_value_to_string_internal(
+pub fn array_value_to_string(
     column: &ArrayRef,
     row: usize,
-    datetime_format_opt: Option<&str>,
 ) -> Result<String, ArrowError> {
     if column.is_null(row) {
         return Ok("".to_string());
@@ -431,91 +430,6 @@ fn array_value_to_string_internal(
         DataType::Float32 => make_string!(array::Float32Array, column, row),
         DataType::Float64 => make_string!(array::Float64Array, column, row),
         DataType::Decimal128(..) => make_string_from_decimal(column, row),
-        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Second => {
-            handle_string_datetime!(
-                array::TimestampSecondArray,
-                datetime_format_opt,
-                tz_string_opt,
-                column,
-                row
-            )
-        }
-        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Millisecond => {
-            handle_string_datetime!(
-                array::TimestampMillisecondArray,
-                datetime_format_opt,
-                tz_string_opt,
-                column,
-                row
-            )
-        }
-        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Microsecond => {
-            handle_string_datetime!(
-                array::TimestampMicrosecondArray,
-                datetime_format_opt,
-                tz_string_opt,
-                column,
-                row
-            )
-        }
-        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Nanosecond => {
-            handle_string_datetime!(
-                array::TimestampNanosecondArray,
-                datetime_format_opt,
-                tz_string_opt,
-                column,
-                row
-            )
-        }
-        DataType::Date32 => {
-            handle_string_date!(array::Date32Array, datetime_format_opt, column, row)
-        }
-        DataType::Date64 => {
-            handle_string_date!(array::Date64Array, datetime_format_opt, column, row)
-        }
-        DataType::Time32(unit) if *unit == TimeUnit::Second => {
-            handle_string_time!(
-                array::Time32SecondArray,
-                datetime_format_opt,
-                column,
-                row
-            )
-        }
-        DataType::Time32(unit) if *unit == TimeUnit::Millisecond => {
-            handle_string_time!(
-                array::Time32MillisecondArray,
-                datetime_format_opt,
-                column,
-                row
-            )
-        }
-        DataType::Time64(unit) if *unit == TimeUnit::Microsecond => {
-            handle_string_time!(
-                array::Time64MicrosecondArray,
-                datetime_format_opt,
-                column,
-                row
-            )
-        }
-        DataType::Time64(unit) if *unit == TimeUnit::Nanosecond => {
-            handle_string_time!(
-                array::Time64NanosecondArray,
-                datetime_format_opt,
-                column,
-                row
-            )
-        }
-        DataType::Interval(unit) => match unit {
-            IntervalUnit::DayTime => {
-                make_string_interval_day_time!(column, row)
-            }
-            IntervalUnit::YearMonth => {
-                make_string_interval_year_month!(column, row)
-            }
-            IntervalUnit::MonthDayNano => {
-                make_string_interval_month_day_nano!(column, row)
-            }
-        },
         DataType::List(_) => make_string_from_list!(column, row),
         DataType::LargeList(_) => make_string_from_large_list!(column, row),
         DataType::Dictionary(index_type, _value_type) => match **index_type {
@@ -593,6 +507,87 @@ fn array_value_to_string_internal(
         DataType::Union(field_vec, type_ids, mode) => {
             union_to_string(column, row, field_vec, type_ids, mode)
         }
+        _ => Err(ArrowError::InvalidArgumentError(format!(
+            "Pretty printing not implemented for {:?} type",
+            column.data_type()
+        ))),
+    }
+}
+
+pub fn datetime_array_value_to_string(
+    column: &ArrayRef,
+    row: usize,
+    format: Option<&str>,
+) -> Result<String, ArrowError> {
+    if column.is_null(row) {
+        return Ok("".to_string());
+    }
+    match column.data_type() {
+        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Second => {
+            handle_string_datetime!(
+                array::TimestampSecondArray,
+                format,
+                tz_string_opt,
+                column,
+                row
+            )
+        }
+        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Millisecond => {
+            handle_string_datetime!(
+                array::TimestampMillisecondArray,
+                format,
+                tz_string_opt,
+                column,
+                row
+            )
+        }
+        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Microsecond => {
+            handle_string_datetime!(
+                array::TimestampMicrosecondArray,
+                format,
+                tz_string_opt,
+                column,
+                row
+            )
+        }
+        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Nanosecond => {
+            handle_string_datetime!(
+                array::TimestampNanosecondArray,
+                format,
+                tz_string_opt,
+                column,
+                row
+            )
+        }
+        DataType::Date32 => {
+            handle_string_date!(array::Date32Array, format, column, row)
+        }
+        DataType::Date64 => {
+            handle_string_date!(array::Date64Array, format, column, row)
+        }
+        DataType::Time32(unit) if *unit == TimeUnit::Second => {
+            handle_string_time!(array::Time32SecondArray, format, column, row)
+        }
+        DataType::Time32(unit) if *unit == TimeUnit::Millisecond => {
+            handle_string_time!(array::Time32MillisecondArray, format, column, row)
+        }
+        DataType::Time64(unit) if *unit == TimeUnit::Microsecond => {
+            handle_string_time!(array::Time64MicrosecondArray, format, column, row)
+        }
+        DataType::Time64(unit) if *unit == TimeUnit::Nanosecond => {
+            handle_string_time!(array::Time64NanosecondArray, format, column, row)
+        }
+        DataType::Interval(unit) => match unit {
+            IntervalUnit::DayTime => {
+                make_string_interval_day_time!(column, row)
+            }
+            IntervalUnit::YearMonth => {
+                make_string_interval_year_month!(column, row)
+            }
+            IntervalUnit::MonthDayNano => {
+                make_string_interval_month_day_nano!(column, row)
+            }
+        },
         DataType::Duration(unit) => match *unit {
             TimeUnit::Second => {
                 make_string_from_duration!(array::DurationSecondArray, column, row)
@@ -612,21 +607,6 @@ fn array_value_to_string_internal(
             column.data_type()
         ))),
     }
-}
-
-pub fn array_value_to_string(
-    column: &ArrayRef,
-    row: usize,
-) -> Result<String, ArrowError> {
-    array_value_to_string_internal(column, row, None)
-}
-
-pub fn datetime_array_value_to_string(
-    column: &ArrayRef,
-    row: usize,
-    format: Option<&str>,
-) -> Result<String, ArrowError> {
-    array_value_to_string_internal(column, row, format)
 }
 
 /// Converts the value of the union array at `row` to a String
