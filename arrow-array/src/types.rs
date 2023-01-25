@@ -240,6 +240,31 @@ impl ArrowDictionaryKeyType for UInt32Type {}
 
 impl ArrowDictionaryKeyType for UInt64Type {}
 
+mod run {
+    use super::*;
+
+    pub trait RunEndTypeSealed {}
+
+    impl RunEndTypeSealed for Int16Type {}
+
+    impl RunEndTypeSealed for Int32Type {}
+
+    impl RunEndTypeSealed for Int64Type {}
+}
+
+/// A subtype of primitive type that is used as run-ends index
+/// in `RunArray`.
+/// See <https://arrow.apache.org/docs/format/Columnar.html>
+///
+/// Note: The implementation of this trait is sealed to avoid accidental misuse.
+pub trait RunEndIndexType: ArrowPrimitiveType + run::RunEndTypeSealed {}
+
+impl RunEndIndexType for Int16Type {}
+
+impl RunEndIndexType for Int32Type {}
+
+impl RunEndIndexType for Int64Type {}
+
 /// A subtype of primitive type that represents temporal values.
 pub trait ArrowTemporalType: ArrowPrimitiveType {}
 

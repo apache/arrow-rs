@@ -198,9 +198,9 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             ],
             _ => unreachable!(),
         },
-        DataType::FixedSizeList(_, _) | DataType::Struct(_) => {
-            [empty_buffer, MutableBuffer::new(0)]
-        }
+        DataType::FixedSizeList(_, _)
+        | DataType::Struct(_)
+        | DataType::RunEndEncoded(_, _) => [empty_buffer, MutableBuffer::new(0)],
         DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => [
             MutableBuffer::new(capacity * mem::size_of::<u8>()),
             empty_buffer,
@@ -724,6 +724,12 @@ impl ArrayData {
             DataType::Dictionary(_, data_type) => {
                 vec![Self::new_empty(data_type)]
             }
+            DataType::RunEndEncoded(run_ends, values) => {
+                vec![
+                    Self::new_empty(run_ends.data_type()),
+                    Self::new_empty(values.data_type()),
+                ]
+            }
         };
 
         // Data was constructed correctly above
@@ -850,6 +856,19 @@ impl ArrayData {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "Dictionary key type must be integer, but was {}",
                         key_type
+                    )));
+                }
+            }
+            DataType::RunEndEncoded(run_ends_type, _) => {
+                if run_ends_type.is_nullable() {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "The nullable should be set to false for the field defining run_ends array.".to_string()
+                    ));
+                }
+                if !DataType::is_run_ends_type(run_ends_type.data_type()) {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "RunArray run_ends types must be Int16, Int32 or Int64, but was {}",
+                        run_ends_type.data_type()
                     )));
                 }
             }
@@ -995,6 +1014,25 @@ impl ArrayData {
                             self.data_type, i, field.name(), field_data.len, self.len
                         )));
                     }
+                }
+                Ok(())
+            }
+            DataType::RunEndEncoded(run_ends_field, values_field) => {
+                self.validate_num_child_data(2)?;
+                let run_ends_data =
+                    self.get_valid_child_data(0, run_ends_field.data_type())?;
+                let values_data =
+                    self.get_valid_child_data(1, values_field.data_type())?;
+                if run_ends_data.len != values_data.len {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "The run_ends array length should be the same as values array length. Run_ends array length is {}, values array length is {}",
+                        run_ends_data.len, values_data.len
+                    )));
+                }
+                if run_ends_data.null_count() > 0 {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Found null values in run_ends array. The run_ends array should not have null values.".to_string(),
+                    ));
                 }
                 Ok(())
             }
@@ -1286,6 +1324,15 @@ impl ArrayData {
                     _ => unreachable!(),
                 }
             }
+            DataType::RunEndEncoded(run_ends, _values) => {
+                let run_ends_data = self.child_data()[0].clone();
+                match run_ends.data_type() {
+                    DataType::Int16 => run_ends_data.check_run_ends::<i16>(self.len()),
+                    DataType::Int32 => run_ends_data.check_run_ends::<i32>(self.len()),
+                    DataType::Int64 => run_ends_data.check_run_ends::<i64>(self.len()),
+                    _ => unreachable!(),
+                }
+            }
             _ => {
                 // No extra validation check required for other types
                 Ok(())
@@ -1446,6 +1493,50 @@ impl ArrayData {
         })
     }
 
+    /// Validates that each value in run_ends array is positive and strictly increasing.
+    fn check_run_ends<T>(&self, array_len: usize) -> Result<(), ArrowError>
+    where
+        T: ArrowNativeType + TryInto<i64> + num::Num + std::fmt::Display,
+    {
+        let values = self.typed_buffer::<T>(0, self.len())?;
+        let mut prev_value: i64 = 0_i64;
+        values.iter().enumerate().try_for_each(|(ix, &inp_value)| {
+            let value: i64 = inp_value.try_into().map_err(|_| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Value at position {} out of bounds: {} (can not convert to i64)",
+                    ix, inp_value
+                ))
+            })?;
+            if value <= 0_i64 {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "The values in run_ends array should be strictly positive. Found value {} at index {} that does not match the criteria.",
+                    value,
+                    ix
+                )));
+            }
+            if ix > 0 && value <= prev_value {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "The values in run_ends array should be strictly increasing. Found value {} at index {} with previous value {} that does not match the criteria.",
+                    value,
+                    ix,
+                    prev_value
+                )));
+            }
+
+            prev_value = value;
+            Ok(())
+        })?;
+
+        if prev_value.as_usize() != array_len {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "The length of array does not match the last value in the run_ends array. The last value of run_ends array is {} and length of array is {}.",
+                prev_value,
+                array_len
+            )));
+        }
+        Ok(())
+    }
+
     /// Returns true if this `ArrayData` is equal to `other`, using pointer comparisons
     /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may
     /// return false when the arrays are logically equal
@@ -1542,6 +1633,7 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
         DataType::LargeList(_) => DataTypeLayout::new_fixed_width(size_of::<i64>()),
         DataType::Struct(_) => DataTypeLayout::new_empty(), // all in child data,
+        DataType::RunEndEncoded(_, _) => DataTypeLayout::new_empty(), // all in child data,
         DataType::Union(_, _, mode) => {
             let type_ids = BufferSpec::FixedWidth {
                 byte_width: size_of::<i8>(),
