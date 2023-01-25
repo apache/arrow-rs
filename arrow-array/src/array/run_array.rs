@@ -707,15 +707,15 @@ mod tests {
             .downcast_ref::<PrimitiveArray<Int32Type>>()
             .unwrap();
 
-        let len = input_array.len();
-        for i in 0..len {
-            let actual = typed.value(i);
-            match input_array[i] {
-                Some(val) => assert_eq!(val, actual),
-                None => {
-                    // TODO: should `array.is_null` be overwritten to return nullability
-                    // of logical array index?
-                }
+        for (i, inp_val) in input_array.iter().enumerate() {
+            if let Some(val) = inp_val {
+                let actual = typed.value(i);
+                assert_eq!(*val, actual)
+            } else {
+                // TODO: Check if the value in logical index is null.
+                // It seems, currently, there is no way to check nullability of logical index.
+                // Should `array.is_null` be overwritten to return nullability
+                // of logical index?
             };
         }
     }
