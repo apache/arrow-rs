@@ -169,9 +169,11 @@ impl AzureClient {
             CredentialProvider::AccessKey(key) => {
                 Ok(AzureCredential::AccessKey(key.to_owned()))
             }
-            CredentialProvider::ClientSecret(cred) => {
-                let token = cred
-                    .fetch_token(&self.client, &self.config.retry_config)
+            CredentialProvider::TokenCredential(cache, cred) => {
+                let token = cache
+                    .get_or_insert_with(|| {
+                        cred.fetch_token(&self.client, &self.config.retry_config)
+                    })
                     .await
                     .context(AuthorizationSnafu)?;
                 Ok(AzureCredential::AuthorizationToken(
