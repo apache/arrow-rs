@@ -101,7 +101,7 @@ impl FlightRecordBatchStream {
     }
 
     /// Has a message defining the schema been received yet?
-    #[deprecated = "use metadata() instead"]
+    #[deprecated = "use schema().is_some() instead"]
     pub fn got_schema(&self) -> bool {
         self.schema().is_some()
     }
