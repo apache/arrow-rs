@@ -253,7 +253,7 @@ impl RawDecoder {
     }
 }
 
-trait ArrayDecoder {
+trait ArrayDecoder: Send {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError>;
 }
 
