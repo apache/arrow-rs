@@ -45,50 +45,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
         self.value(i).chars().count()
     }
 
-    /// Convert a list array to a string array.
-    ///
-    /// Note: this performs potentially expensive UTF-8 validation, consider using
-    /// [`StringBuilder`][crate::builder::StringBuilder] to avoid this
-    ///
-    /// # Panics
-    ///
-    /// This method panics if the array contains non-UTF-8 data
-    fn from_list(v: GenericListArray<OffsetSize>) -> Self {
-        assert_eq!(
-            v.data_ref().child_data().len(),
-            1,
-            "StringArray can only be created from list array of u8 values \
-             (i.e. List<PrimitiveArray<u8>>)."
-        );
-        let child_data = &v.data_ref().child_data()[0];
-
-        assert_eq!(
-            child_data.child_data().len(),
-            0,
-            "StringArray can only be created from list array of u8 values \
-             (i.e. List<PrimitiveArray<u8>>)."
-        );
-        assert_eq!(
-            child_data.data_type(),
-            &DataType::UInt8,
-            "StringArray can only be created from List<u8> arrays, mismatched data types."
-        );
-        assert_eq!(
-            child_data.null_count(),
-            0,
-            "The child array cannot contain null values."
-        );
-
-        let builder = ArrayData::builder(Self::DATA_TYPE)
-            .len(v.len())
-            .offset(v.offset())
-            .add_buffer(v.data().buffers()[0].clone())
-            .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
-            .null_bit_buffer(v.data().null_buffer().cloned());
-
-        Self::from(builder.build().unwrap())
-    }
-
     /// Creates a [`GenericStringArray`] based on an iterator of values without nulls
     pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
@@ -208,7 +164,7 @@ impl<OffsetSize: OffsetSizeTrait> From<GenericListArray<OffsetSize>>
     for GenericStringArray<OffsetSize>
 {
     fn from(v: GenericListArray<OffsetSize>) -> Self {
-        GenericStringArray::<OffsetSize>::from_list(v)
+        GenericBinaryArray::<OffsetSize>::from(v).into()
     }
 }
 
@@ -290,7 +246,8 @@ pub type LargeStringArray = GenericStringArray<i64>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{ListBuilder, StringBuilder};
+    use crate::builder::{ListBuilder, PrimitiveBuilder, StringBuilder};
+    use crate::types::UInt8Type;
     use arrow_buffer::Buffer;
     use arrow_schema::Field;
 
@@ -678,7 +635,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "StringArray can only be created from List<u8> arrays, mismatched data types."
+        expected = "BinaryArray can only be created from List<u8> arrays, mismatched data types."
     )]
     fn test_string_array_from_list_array_wrong_type() {
         _test_generic_string_array_from_list_array_wrong_type::<i32>();
@@ -686,10 +643,20 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "StringArray can only be created from List<u8> arrays, mismatched data types."
+        expected = "BinaryArray can only be created from List<u8> arrays, mismatched data types."
     )]
     fn test_large_string_array_from_list_array_wrong_type() {
-        _test_generic_string_array_from_list_array_wrong_type::<i32>();
+        _test_generic_string_array_from_list_array_wrong_type::<i64>();
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid UTF-8 sequence: Utf8Error")]
+    fn test_list_array_utf8_validation() {
+        let mut builder = ListBuilder::new(PrimitiveBuilder::<UInt8Type>::new());
+        builder.values().append_value(0xFF);
+        builder.append(true);
+        let list = builder.finish();
+        let _ = StringArray::from(list);
     }
 
     #[test]
