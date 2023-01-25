@@ -246,7 +246,7 @@ where
     fn run_end_index_as_native(&self) -> R::Native {
         R::Native::from_usize(self.current_run_end_index)
         .unwrap_or_else(|| panic!(
-                "Cannot convert the value {} from `usize` to native form of arrow datatype {}",
+                "Cannot convert `current_run_end_index` {} from `usize` to native form of arrow datatype {}",
                 self.current_run_end_index,
                 R::DATA_TYPE
         ))
@@ -259,6 +259,7 @@ mod tests {
     use crate::cast::as_primitive_array;
     use crate::types::{Int16Type, UInt32Type};
     use crate::{Array, Int16Array, UInt32Array};
+
     #[test]
     fn test_primitive_ree_array_builder() {
         let mut builder = PrimitiveRunBuilder::<Int16Type, UInt32Type>::new();
