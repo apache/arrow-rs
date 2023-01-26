@@ -207,7 +207,7 @@ required-features = ["test_utils", "csv"]
 [[bench]]
 name = "json_reader"
 harness = false
-required-features = ["json"]
+required-features = ["test_utils", "json"]
 
 [[bench]]
 name = "equal"
