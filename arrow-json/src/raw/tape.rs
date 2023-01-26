@@ -218,6 +218,7 @@ pub struct TapeDecoder {
 
 impl TapeDecoder {
     /// Create a new [`TapeDecoder`] with the provided batch size
+    /// and an estimated number of fields in each row
     pub fn new(batch_size: usize, num_fields: usize) -> Self {
         let tokens_per_row = 2 + num_fields * 2;
         let mut offsets = Vec::with_capacity(batch_size * (num_fields * 2) + 1);

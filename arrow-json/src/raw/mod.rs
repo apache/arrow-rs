@@ -76,8 +76,7 @@ impl RawReaderBuilder {
     /// Create a [`RawDecoder`]
     pub fn build_decoder(self) -> Result<RawDecoder, ArrowError> {
         let decoder = make_decoder(DataType::Struct(self.schema.fields.clone()), false)?;
-        // TODO: This should probably include nested fields
-        let num_fields = self.schema.fields().len();
+        let num_fields = self.schema.all_fields().len();
 
         Ok(RawDecoder {
             decoder,
