@@ -815,28 +815,49 @@ mod tests {
     }
 
     #[test]
-    fn test_array_value_to_string_duration() {
+    fn test_temporal_array_value_to_string_duration() {
         let ns_array =
             Arc::new(DurationNanosecondArray::from(vec![Some(1), None])) as ArrayRef;
         assert_eq!(
-            array_value_to_string(&ns_array, 0).unwrap(),
+            temporal_array_value_to_string(&ns_array, 0, 0, None).unwrap(),
             "PT0.000000001S"
         );
-        assert_eq!(array_value_to_string(&ns_array, 1).unwrap(), "");
+        assert_eq!(
+            temporal_array_value_to_string(&ns_array, 0, 1, None).unwrap(),
+            ""
+        );
 
         let us_array =
             Arc::new(DurationMicrosecondArray::from(vec![Some(1), None])) as ArrayRef;
-        assert_eq!(array_value_to_string(&us_array, 0).unwrap(), "PT0.000001S");
-        assert_eq!(array_value_to_string(&us_array, 1).unwrap(), "");
+        assert_eq!(
+            temporal_array_value_to_string(&us_array, 0, 0, None).unwrap(),
+            "PT0.000001S"
+        );
+        assert_eq!(
+            temporal_array_value_to_string(&us_array, 0, 1, None).unwrap(),
+            ""
+        );
 
         let ms_array =
             Arc::new(DurationMillisecondArray::from(vec![Some(1), None])) as ArrayRef;
-        assert_eq!(array_value_to_string(&ms_array, 0).unwrap(), "PT0.001S");
-        assert_eq!(array_value_to_string(&ms_array, 1).unwrap(), "");
+        assert_eq!(
+            temporal_array_value_to_string(&ms_array, 0, 0, None).unwrap(),
+            "PT0.001S"
+        );
+        assert_eq!(
+            temporal_array_value_to_string(&ms_array, 0, 1, None).unwrap(),
+            ""
+        );
 
         let s_array =
             Arc::new(DurationSecondArray::from(vec![Some(1), None])) as ArrayRef;
-        assert_eq!(array_value_to_string(&s_array, 0).unwrap(), "PT1S");
-        assert_eq!(array_value_to_string(&s_array, 1).unwrap(), "");
+        assert_eq!(
+            temporal_array_value_to_string(&s_array, 0, 0, None).unwrap(),
+            "PT1S"
+        );
+        assert_eq!(
+            temporal_array_value_to_string(&s_array, 0, 1, None).unwrap(),
+            ""
+        );
     }
 }
