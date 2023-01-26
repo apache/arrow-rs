@@ -563,6 +563,9 @@ where
 /// converts them to [`RecordBatch`]es. To decode JSON formatted files,
 /// see [`Reader`].
 ///
+/// Note: Consider instead using [`RawDecoder`] which is faster and will
+/// eventually replace this implementation as part of [#3610]
+///
 /// # Examples
 /// ```
 /// use arrow_json::reader::{Decoder, DecoderOptions, ValueIter, infer_json_schema};
@@ -584,6 +587,9 @@ where
 /// assert_eq!(4, batch.num_rows());
 /// assert_eq!(4, batch.num_columns());
 /// ```
+///
+/// [`RawDecoder`]: crate::raw::RawDecoder
+/// [#3610]: https://github.com/apache/arrow-rs/issues/3610
 #[derive(Debug)]
 pub struct Decoder {
     /// Explicit schema for the JSON file
@@ -1607,6 +1613,12 @@ fn flatten_json_string_values(values: &[Value]) -> Vec<Option<String>> {
         .collect::<Vec<Option<_>>>()
 }
 /// JSON file reader
+///
+/// Note: Consider instead using [`RawReader`] which is faster and will
+/// eventually replace this implementation as part of [#3610]
+///
+/// [`RawReader`]: crate::raw::RawReader
+/// [#3610]: https://github.com/apache/arrow-rs/issues/3610
 #[derive(Debug)]
 pub struct Reader<R: Read> {
     reader: BufReader<R>,
@@ -1652,6 +1664,13 @@ impl<R: Read> Reader<R> {
 }
 
 /// JSON file reader builder
+///
+/// Note: Consider instead using [`RawReaderBuilder`] which is faster and will
+/// eventually replace this implementation as part of [#3610]
+///
+/// [`RawReaderBuilder`]: crate::raw::RawReaderBuilder
+/// [#3610]: https://github.com/apache/arrow-rs/issues/3610
+///
 #[derive(Debug, Default)]
 pub struct ReaderBuilder {
     /// Optional schema for the JSON file

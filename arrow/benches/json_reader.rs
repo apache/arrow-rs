@@ -22,7 +22,7 @@ use arrow::util::bench_util::{
     create_primitive_array, create_string_array, create_string_array_with_len,
 };
 use arrow_array::RecordBatch;
-use arrow_json::raw::RawReaderBuilder;
+use arrow_json::RawReaderBuilder;
 use arrow_json::{LineDelimitedWriter, ReaderBuilder};
 use std::io::Cursor;
 use std::sync::Arc;

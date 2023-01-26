@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! An alternative JSON reader that interprets bytes in place
+//! A faster JSON reader that will eventually replace [`Reader`]
+//!
+//! [`Reader`]: crate::reader::Reader
 
 use crate::raw::boolean_array::BooleanArrayDecoder;
 use crate::raw::list_array::ListArrayDecoder;
@@ -75,7 +77,8 @@ impl RawReaderBuilder {
 /// A [`RecordBatchReader`] that reads newline-delimited JSON data with a known schema
 /// directly into the corresponding arrow arrays
 ///
-/// This makes it significantly faster than [`Reader`]
+/// This is significantly faster than [`Reader`] and eventually intended
+/// to replace it ([#3610](https://github.com/apache/arrow-rs/issues/3610))
 ///
 /// Lines consisting solely of ASCII whitespace are ignored
 ///
@@ -138,7 +141,7 @@ impl<R: BufRead> RecordBatchReader for RawReader<R> {
 /// ```
 /// # use std::io::BufRead;
 /// # use arrow_array::RecordBatch;
-/// # use arrow_json::raw::RawDecoder;
+/// # use arrow_json::RawDecoder;
 /// # use arrow_schema::{ArrowError, SchemaRef};
 /// #
 /// fn read_from_json<R: BufRead>(
