@@ -375,13 +375,14 @@ macro_rules! make_string_from_fixed_size_list {
 }
 
 macro_rules! make_string_from_duration {
-    ($array_type:ty, $column: ident, $row: ident) => {{
-        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
-
-        Ok(array
-            .value_as_duration($row)
-            .map(|d| d.to_string())
-            .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
+    ($array_type:ty, $dt:expr, $column:ident, $col_idx:ident, $row_idx: ident) => {{
+        Ok($column
+            .as_any()
+            .downcast_ref::<$array_type>()
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
+            .value_as_duration($row_idx)
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
+            .to_string())
     }};
 }
 
@@ -678,26 +679,38 @@ fn array_value_to_string_internal(
         }
         DataType::Duration(unit) => match *unit {
             TimeUnit::Second => {
-                make_string_from_duration!(array::DurationSecondArray, column, row_idx)
+                make_string_from_duration!(
+                    array::DurationSecondArray,
+                    "Duration",
+                    column,
+                    col_idx,
+                    row_idx
+                )
             }
             TimeUnit::Millisecond => {
                 make_string_from_duration!(
                     array::DurationMillisecondArray,
+                    "Duration",
                     column,
+                    col_idx,
                     row_idx
                 )
             }
             TimeUnit::Microsecond => {
                 make_string_from_duration!(
                     array::DurationMicrosecondArray,
+                    "Duration",
                     column,
+                    col_idx,
                     row_idx
                 )
             }
             TimeUnit::Nanosecond => {
                 make_string_from_duration!(
                     array::DurationNanosecondArray,
+                    "Duration",
                     column,
+                    col_idx,
                     row_idx
                 )
             }
