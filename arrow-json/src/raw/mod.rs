@@ -38,7 +38,7 @@ mod string_array;
 mod struct_array;
 mod tape;
 
-/// A builder for [`RawReader`]
+/// A builder for [`RawReader`] and [`RawDecoder`]
 pub struct RawReaderBuilder {
     batch_size: usize,
 
@@ -65,17 +65,30 @@ impl RawReaderBuilder {
         Self { batch_size, ..self }
     }
 
-    /// Create with the provided [`BufRead`]
+    /// Create a [`RawReader`] with the provided [`BufRead`]
     pub fn build<R: BufRead>(self, reader: R) -> Result<RawReader<R>, ArrowError> {
         Ok(RawReader {
             reader,
-            decoder: RawDecoder::try_new(self.schema, self.batch_size)?,
+            decoder: self.build_decoder()?,
+        })
+    }
+
+    /// Create a [`RawDecoder`]
+    pub fn build_decoder(self) -> Result<RawDecoder, ArrowError> {
+        let decoder = make_decoder(DataType::Struct(self.schema.fields.clone()), false)?;
+        // TODO: This should probably include nested fields
+        let num_fields = self.schema.fields().len();
+
+        Ok(RawDecoder {
+            decoder,
+            tape_decoder: TapeDecoder::new(self.batch_size, num_fields),
+            batch_size: self.batch_size,
+            schema: self.schema,
         })
     }
 }
 
-/// A [`RecordBatchReader`] that reads newline-delimited JSON data with a known schema
-/// directly into the corresponding arrow arrays
+/// Reads JSON data with a known schema directly into arrow [`RecordBatch`]
 ///
 /// This is significantly faster than [`Reader`] and eventually intended
 /// to replace it ([#3610](https://github.com/apache/arrow-rs/issues/3610))
@@ -130,7 +143,7 @@ impl<R: BufRead> RecordBatchReader for RawReader<R> {
     }
 }
 
-/// [`RawDecoder`] provides a low-level interface for reading JSON data from a byte stream
+/// A low-level interface for reading JSON data from a byte stream
 ///
 /// See [`RawReader`] for a higher-level interface for interface with [`BufRead`]
 ///
@@ -141,15 +154,14 @@ impl<R: BufRead> RecordBatchReader for RawReader<R> {
 /// ```
 /// # use std::io::BufRead;
 /// # use arrow_array::RecordBatch;
-/// # use arrow_json::RawDecoder;
+/// # use arrow_json::{RawDecoder, RawReaderBuilder};
 /// # use arrow_schema::{ArrowError, SchemaRef};
 /// #
 /// fn read_from_json<R: BufRead>(
 ///     mut reader: R,
 ///     schema: SchemaRef,
-///     batch_size: usize,
 /// ) -> Result<impl Iterator<Item = Result<RecordBatch, ArrowError>>, ArrowError> {
-///     let mut decoder = RawDecoder::try_new(schema, batch_size)?;
+///     let mut decoder = RawReaderBuilder::new(schema).build_decoder()?;
 ///     let mut next = move || {
 ///         loop {
 ///             // RawDecoder is agnostic that buf doesn't contain whole records
@@ -172,7 +184,7 @@ impl<R: BufRead> RecordBatchReader for RawReader<R> {
 /// }
 /// ```
 pub struct RawDecoder {
-    tape: TapeDecoder,
+    tape_decoder: TapeDecoder,
     decoder: Box<dyn ArrayDecoder>,
     batch_size: usize,
     schema: SchemaRef,
@@ -188,20 +200,6 @@ impl std::fmt::Debug for RawDecoder {
 }
 
 impl RawDecoder {
-    /// Create a [`RawDecoder`] with the provided schema and batch size
-    pub fn try_new(schema: SchemaRef, batch_size: usize) -> Result<Self, ArrowError> {
-        let decoder = make_decoder(DataType::Struct(schema.fields.clone()), false)?;
-        // TODO: This should probably include nested fields
-        let num_fields = schema.fields().len();
-
-        Ok(Self {
-            tape: TapeDecoder::new(batch_size, num_fields),
-            decoder,
-            batch_size,
-            schema,
-        })
-    }
-
     /// Read JSON objects from `buf`, returning the number of bytes read
     ///
     /// This method returns once `batch_size` objects have been parsed since the
@@ -211,7 +209,7 @@ impl RawDecoder {
     /// There is no requirement that `buf` contains a whole number of records, facilitating
     /// integration with arbitrary byte streams, such as that yielded by [`BufRead`]
     pub fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
-        self.tape.decode(buf)
+        self.tape_decoder.decode(buf)
     }
 
     /// Flushes the currently buffered data to a [`RecordBatch`]
@@ -220,7 +218,7 @@ impl RawDecoder {
     ///
     /// Note: if called part way through decoding a record, this will return an error
     pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
-        let tape = self.tape.finish()?;
+        let tape = self.tape_decoder.finish()?;
 
         if tape.num_rows() == 0 {
             return Ok(None);
@@ -239,7 +237,7 @@ impl RawDecoder {
             .collect();
 
         let decoded = self.decoder.decode(&tape, &pos)?;
-        self.tape.clear();
+        self.tape_decoder.clear();
 
         // Sanity check
         assert!(matches!(decoded.data_type(), DataType::Struct(_)));
