@@ -754,7 +754,7 @@ mod tests {
         assert!(res.is_err());
         if let Err(err) = res {
             assert_eq!(
-                format!("{}", err),
+                format!("{err}"),
                 "Parquet error: Column length mismatch: 1 != 0"
             );
         }

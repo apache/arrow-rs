@@ -452,7 +452,7 @@ fn try_to_type_result<T>(
     ty: &str,
 ) -> Result<T, ArrowError> {
     value.ok_or_else(|| {
-        ArrowError::ComputeError(format!("Could not convert {} with {}", right, ty,))
+        ArrowError::ComputeError(format!("Could not convert {right} with {ty}",))
     })
 }
 

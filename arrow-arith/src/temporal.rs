@@ -447,7 +447,7 @@ where
                     let values = time_fraction_dyn(array.values(), name, op)?;
                     Ok(Arc::new(array.with_values(&values)))
                 }
-                dt => return_compute_error_with!(format!("{} does not support", name), dt),
+                dt => return_compute_error_with!(format!("{name} does not support"), dt),
             )
         }
         _ => {
@@ -456,7 +456,7 @@ where
                    time_fraction_internal(array, name, op)
                     .map(|a| Arc::new(a) as ArrayRef)
                 }
-                dt => return_compute_error_with!(format!("{} does not support", name), dt),
+                dt => return_compute_error_with!(format!("{name} does not support"), dt),
             )
         }
     }
@@ -486,7 +486,7 @@ where
             })
         }
         _ => return_compute_error_with!(
-            format!("{} does not support", name),
+            format!("{name} does not support"),
             array.data_type()
         ),
     }

@@ -282,8 +282,7 @@ pub fn sort_to_indices(
             }
             t => {
                 return Err(ArrowError::ComputeError(format!(
-                    "Sort not supported for list type {:?}",
-                    t
+                    "Sort not supported for list type {t:?}"
                 )));
             }
         },
@@ -310,8 +309,7 @@ pub fn sort_to_indices(
             }
             t => {
                 return Err(ArrowError::ComputeError(format!(
-                    "Sort not supported for list type {:?}",
-                    t
+                    "Sort not supported for list type {t:?}"
                 )));
             }
         },
@@ -347,11 +345,11 @@ pub fn sort_to_indices(
                         sort_string_dictionary::<_>(values, &value_indices_map, v, n, &options, limit)
                     },
                     t => return Err(ArrowError::ComputeError(format!(
-                        "Unsupported dictionary value type {}", t
+                        "Unsupported dictionary value type {t}"
                     ))),
                 },
                 t => return Err(ArrowError::ComputeError(format!(
-                    "Unsupported datatype {}", t
+                    "Unsupported datatype {t}"
                 ))),
             )
         }
@@ -361,8 +359,7 @@ pub fn sort_to_indices(
         DataType::LargeBinary => sort_binary::<i64>(values, v, n, &options, limit),
         t => {
             return Err(ArrowError::ComputeError(format!(
-                "Sort not supported for data type {:?}",
-                t
+                "Sort not supported for data type {t:?}"
             )));
         }
     })

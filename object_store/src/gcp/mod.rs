@@ -1271,8 +1271,7 @@ mod test {
 
         assert!(
             matches!(err, ObjectStoreError::NotFound { .. }),
-            "unexpected error type: {}",
-            err
+            "unexpected error type: {err}"
         );
     }
 
@@ -1291,8 +1290,7 @@ mod test {
 
         assert!(
             matches!(err, ObjectStoreError::NotFound { .. }),
-            "unexpected error type: {}",
-            err
+            "unexpected error type: {err}"
         );
     }
 
@@ -1305,8 +1303,7 @@ mod test {
         let err = integration.delete(&location).await.unwrap_err();
         assert!(
             matches!(err, ObjectStoreError::NotFound { .. }),
-            "unexpected error type: {}",
-            err
+            "unexpected error type: {err}"
         );
     }
 
@@ -1322,8 +1319,7 @@ mod test {
         let err = integration.delete(&location).await.unwrap_err();
         assert!(
             matches!(err, ObjectStoreError::NotFound { .. }),
-            "unexpected error type: {}",
-            err
+            "unexpected error type: {err}"
         );
     }
 
@@ -1352,7 +1348,7 @@ mod test {
     #[tokio::test]
     async fn gcs_test_proxy_url() {
         let mut tfile = NamedTempFile::new().unwrap();
-        write!(tfile, "{}", FAKE_KEY).unwrap();
+        write!(tfile, "{FAKE_KEY}").unwrap();
         let service_account_path = tfile.path();
         let gcs = GoogleCloudStorageBuilder::new()
             .with_service_account_path(service_account_path.to_str().unwrap())
@@ -1400,7 +1396,7 @@ mod test {
     #[test]
     fn gcs_test_service_account_key_and_path() {
         let mut tfile = NamedTempFile::new().unwrap();
-        write!(tfile, "{}", FAKE_KEY).unwrap();
+        write!(tfile, "{FAKE_KEY}").unwrap();
         let _ = GoogleCloudStorageBuilder::new()
             .with_service_account_key(FAKE_KEY)
             .with_service_account_path(tfile.path().to_str().unwrap())

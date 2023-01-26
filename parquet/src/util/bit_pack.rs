@@ -106,7 +106,7 @@ mod tests {
             let mut output = [0; 8];
             unpack8(&input, &mut output, i);
             for (idx, out) in output.iter().enumerate() {
-                assert_eq!(out.trailing_ones() as usize, i, "out[{}] = {}", idx, out);
+                assert_eq!(out.trailing_ones() as usize, i, "out[{idx}] = {out}");
             }
         }
 
@@ -114,7 +114,7 @@ mod tests {
             let mut output = [0; 16];
             unpack16(&input, &mut output, i);
             for (idx, out) in output.iter().enumerate() {
-                assert_eq!(out.trailing_ones() as usize, i, "out[{}] = {}", idx, out);
+                assert_eq!(out.trailing_ones() as usize, i, "out[{idx}] = {out}");
             }
         }
 
@@ -122,7 +122,7 @@ mod tests {
             let mut output = [0; 32];
             unpack32(&input, &mut output, i);
             for (idx, out) in output.iter().enumerate() {
-                assert_eq!(out.trailing_ones() as usize, i, "out[{}] = {}", idx, out);
+                assert_eq!(out.trailing_ones() as usize, i, "out[{idx}] = {out}");
             }
         }
 
@@ -130,7 +130,7 @@ mod tests {
             let mut output = [0; 64];
             unpack64(&input, &mut output, i);
             for (idx, out) in output.iter().enumerate() {
-                assert_eq!(out.trailing_ones() as usize, i, "out[{}] = {}", idx, out);
+                assert_eq!(out.trailing_ones() as usize, i, "out[{idx}] = {out}");
             }
         }
     }

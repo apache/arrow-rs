@@ -123,7 +123,7 @@ mod tests {
         };
 
         let assert_fuzzy_eq =
-            |a: f64, b: f64| assert!((b - a).abs() < 0.0001, "{} != {}", a, b);
+            |a: f64, b: f64| assert!((b - a).abs() < 0.0001, "{a} != {b}");
 
         // Create a static rng that takes the minimum of the range
         let rng = Box::new(StepRng::new(0, 0));

@@ -40,7 +40,7 @@ pub fn max_buffer_size(
     match encoding {
         Encoding::RLE => RleEncoder::max_buffer_size(bit_width, num_buffered_values),
         Encoding::BIT_PACKED => ceil(num_buffered_values * bit_width as usize, 8),
-        _ => panic!("Unsupported encoding type {}", encoding),
+        _ => panic!("Unsupported encoding type {encoding}"),
     }
 }
 
@@ -76,7 +76,7 @@ impl LevelEncoder {
                 // `max_buffer_size()` method.
                 LevelEncoder::BitPacked(bit_width, BitWriter::new_from_buf(buffer))
             }
-            _ => panic!("Unsupported encoding type {}", encoding),
+            _ => panic!("Unsupported encoding type {encoding}"),
         }
     }
 
@@ -160,7 +160,7 @@ impl LevelDecoder {
             Encoding::BIT_PACKED => {
                 LevelDecoder::BitPacked(None, bit_width, BitReader::from(Vec::new()))
             }
-            _ => panic!("Unsupported encoding type {}", encoding),
+            _ => panic!("Unsupported encoding type {encoding}"),
         }
     }
 

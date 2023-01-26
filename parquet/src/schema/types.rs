@@ -949,9 +949,10 @@ impl SchemaDescriptor {
             self.leaves.len()
         );
 
-        *self.leaf_to_base.get(leaf).unwrap_or_else(|| {
-            panic!("Expected a value for index {} but found None", leaf)
-        })
+        *self
+            .leaf_to_base
+            .get(leaf)
+            .unwrap_or_else(|| panic!("Expected a value for index {leaf} but found None"))
     }
 
     fn column_root_of(&self, i: usize) -> &TypePtr {
@@ -1279,7 +1280,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Cannot annotate Integer { bit_width: 8, is_signed: true } from INT64 for field 'foo'"
             );
         }
@@ -1292,7 +1293,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: BSON cannot annotate field 'foo' because it is not a BYTE_ARRAY field"
             );
         }
@@ -1306,7 +1307,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: DECIMAL can only annotate INT32, INT64, BYTE_ARRAY and FIXED_LEN_BYTE_ARRAY"
             );
         }
@@ -1323,7 +1324,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: DECIMAL logical type scale 32 must match self.scale -1 for field 'foo'"
             );
         }
@@ -1337,7 +1338,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Invalid DECIMAL precision: -1"
             );
         }
@@ -1351,7 +1352,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Invalid DECIMAL precision: 0"
             );
         }
@@ -1364,7 +1365,7 @@ mod tests {
             .build();
         assert!(result.is_err());
         if let Err(e) = result {
-            assert_eq!(format!("{}", e), "Parquet error: Invalid DECIMAL scale: -1");
+            assert_eq!(format!("{e}"), "Parquet error: Invalid DECIMAL scale: -1");
         }
 
         result = Type::primitive_type_builder("foo", PhysicalType::BYTE_ARRAY)
@@ -1376,7 +1377,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Invalid DECIMAL: scale (2) cannot be greater than precision (1)"
             );
         }
@@ -1399,7 +1400,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Cannot represent INT32 as DECIMAL with precision 18"
             );
         }
@@ -1413,7 +1414,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Cannot represent INT64 as DECIMAL with precision 32"
             );
         }
@@ -1428,7 +1429,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Cannot represent FIXED_LEN_BYTE_ARRAY as DECIMAL with length 5 and precision 12. The max precision can only be 11"
             );
         }
@@ -1440,7 +1441,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: UINT_8 cannot annotate field 'foo' because it is not a INT32 field"
             );
         }
@@ -1452,7 +1453,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: TIME_MICROS cannot annotate field 'foo' because it is not a INT64 field"
             );
         }
@@ -1464,7 +1465,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: INTERVAL cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(12) field"
             );
         }
@@ -1477,7 +1478,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: INTERVAL cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(12) field"
             );
         }
@@ -1489,7 +1490,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: ENUM cannot annotate field 'foo' because it is not a BYTE_ARRAY field"
             );
         }
@@ -1501,7 +1502,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: MAP cannot be applied to primitive field 'foo'"
             );
         }
@@ -1514,7 +1515,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Invalid FIXED_LEN_BYTE_ARRAY length: -1 for field 'foo'"
             );
         }
@@ -1660,8 +1661,8 @@ mod tests {
 
         for i in 0..nleaves {
             let col = descr.column(i);
-            assert_eq!(col.max_def_level(), ex_max_def_levels[i], "{}", i);
-            assert_eq!(col.max_rep_level(), ex_max_rep_levels[i], "{}", i);
+            assert_eq!(col.max_def_level(), ex_max_def_levels[i], "{i}");
+            assert_eq!(col.max_rep_level(), ex_max_rep_levels[i], "{i}");
         }
 
         assert_eq!(descr.column(0).path().string(), "a");
@@ -1989,7 +1990,7 @@ mod tests {
         assert!(thrift_schema.is_err());
         if let Err(e) = thrift_schema {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Root schema must be Group type"
             );
         }

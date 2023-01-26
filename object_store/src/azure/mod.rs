@@ -327,7 +327,7 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
         buf: Vec<u8>,
         part_idx: usize,
     ) -> Result<UploadPart, io::Error> {
-        let content_id = format!("{:20}", part_idx);
+        let content_id = format!("{part_idx:20}");
         let block_id: BlockId = content_id.clone().into();
 
         self.client

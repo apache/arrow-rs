@@ -454,63 +454,49 @@ mod tests {
         // self starts with self
         assert!(
             haystack.prefix_matches(&haystack),
-            "{:?} should have started with {:?}",
-            haystack,
-            haystack
+            "{haystack:?} should have started with {haystack:?}"
         );
 
         // a longer prefix doesn't match
         let needle = needle.child("longer now");
         assert!(
             !haystack.prefix_matches(&needle),
-            "{:?} shouldn't have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} shouldn't have started with {needle:?}"
         );
 
         // one dir prefix matches
         let needle = Path::from_iter(["foo/bar"]);
         assert!(
             haystack.prefix_matches(&needle),
-            "{:?} should have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should have started with {needle:?}"
         );
 
         // two dir prefix matches
         let needle = needle.child("baz%2Ftest");
         assert!(
             haystack.prefix_matches(&needle),
-            "{:?} should have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should have started with {needle:?}"
         );
 
         // partial dir prefix doesn't match
         let needle = Path::from_iter(["f"]);
         assert!(
             !haystack.prefix_matches(&needle),
-            "{:?} should not have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should not have started with {needle:?}"
         );
 
         // one dir and one partial dir doesn't match
         let needle = Path::from_iter(["foo/bar", "baz"]);
         assert!(
             !haystack.prefix_matches(&needle),
-            "{:?} should not have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should not have started with {needle:?}"
         );
 
         // empty prefix matches
         let needle = Path::from("");
         assert!(
             haystack.prefix_matches(&needle),
-            "{:?} should have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should have started with {needle:?}"
         );
     }
 
@@ -524,9 +510,7 @@ mod tests {
 
         assert!(
             !haystack.prefix_matches(&needle),
-            "{:?} should not have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should not have started with {needle:?}"
         );
 
         // All directories match but file name is not a prefix
@@ -534,9 +518,7 @@ mod tests {
 
         assert!(
             !haystack.prefix_matches(&needle),
-            "{:?} should not have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should not have started with {needle:?}"
         );
 
         // Not all directories match; file name is a prefix of the next directory; this
@@ -545,9 +527,7 @@ mod tests {
 
         assert!(
             !haystack.prefix_matches(&needle),
-            "{:?} should not have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should not have started with {needle:?}"
         );
 
         // Not all directories match; file name is NOT a prefix of the next directory;
@@ -556,9 +536,7 @@ mod tests {
 
         assert!(
             !haystack.prefix_matches(&needle),
-            "{:?} should not have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should not have started with {needle:?}"
         );
     }
 

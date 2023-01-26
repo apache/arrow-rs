@@ -123,8 +123,7 @@ where
         Int64 => compare_dict_primitive::<Int64Type, VT>(left, right),
         t => {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Dictionaries do not support keys of type {:?}",
-                t
+                "Dictionaries do not support keys of type {t:?}"
             )));
         }
     })
@@ -255,15 +254,13 @@ pub fn build_compare(
                     Int64 => compare_dict_string::<Int64Type>(left, right),
                     lhs => {
                         return Err(ArrowError::InvalidArgumentError(format!(
-                            "Dictionaries do not support keys of type {:?}",
-                            lhs
+                            "Dictionaries do not support keys of type {lhs:?}"
                         )));
                     }
                 },
                 t => {
                     return Err(ArrowError::InvalidArgumentError(format!(
-                        "Dictionaries of value data type {:?} are not supported",
-                        t
+                        "Dictionaries of value data type {t:?} are not supported"
                     )));
                 }
             }
@@ -278,8 +275,7 @@ pub fn build_compare(
         }
         (lhs, _) => {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "The data type type {:?} has no natural order",
-                lhs
+                "The data type type {lhs:?} has no natural order"
             )));
         }
     })

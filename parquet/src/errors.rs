@@ -48,16 +48,16 @@ impl std::fmt::Display for ParquetError {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
         match &self {
             ParquetError::General(message) => {
-                write!(fmt, "Parquet error: {}", message)
+                write!(fmt, "Parquet error: {message}")
             }
-            ParquetError::NYI(message) => write!(fmt, "NYI: {}", message),
-            ParquetError::EOF(message) => write!(fmt, "EOF: {}", message),
+            ParquetError::NYI(message) => write!(fmt, "NYI: {message}"),
+            ParquetError::EOF(message) => write!(fmt, "EOF: {message}"),
             #[cfg(feature = "arrow")]
-            ParquetError::ArrowError(message) => write!(fmt, "Arrow: {}", message),
+            ParquetError::ArrowError(message) => write!(fmt, "Arrow: {message}"),
             ParquetError::IndexOutOfBound(index, ref bound) => {
-                write!(fmt, "Index {} out of bound: {}", index, bound)
+                write!(fmt, "Index {index} out of bound: {bound}")
             }
-            ParquetError::External(e) => write!(fmt, "External: {}", e),
+            ParquetError::External(e) => write!(fmt, "External: {e}"),
         }
     }
 }
@@ -157,6 +157,6 @@ macro_rules! arrow_err {
 #[cfg(feature = "arrow")]
 impl From<ParquetError> for ArrowError {
     fn from(p: ParquetError) -> Self {
-        Self::ParquetError(format!("{}", p))
+        Self::ParquetError(format!("{p}"))
     }
 }

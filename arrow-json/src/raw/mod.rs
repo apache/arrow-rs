@@ -281,9 +281,9 @@ fn make_decoder(
         DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, is_nullable)?)),
         DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, is_nullable)?)),
         DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
-            Err(ArrowError::JsonError(format!("{} is not supported by JSON", data_type)))
+            Err(ArrowError::JsonError(format!("{data_type} is not supported by JSON")))
         }
-        d => Err(ArrowError::NotYetImplemented(format!("Support for {} in JSON reader", d)))
+        d => Err(ArrowError::NotYetImplemented(format!("Support for {d} in JSON reader")))
     }
 }
 

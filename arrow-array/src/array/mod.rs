@@ -580,7 +580,7 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
             DataType::UInt64 => {
                 Arc::new(DictionaryArray::<UInt64Type>::from(data)) as ArrayRef
             }
-            dt => panic!("Unexpected dictionary key type {:?}", dt),
+            dt => panic!("Unexpected dictionary key type {dt:?}"),
         },
         DataType::RunEndEncoded(ref run_ends_type, _) => {
             match run_ends_type.data_type() {
@@ -593,13 +593,13 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
                 DataType::Int64 => {
                     Arc::new(RunArray::<Int64Type>::from(data)) as ArrayRef
                 }
-                dt => panic!("Unexpected data type for run_ends array {:?}", dt),
+                dt => panic!("Unexpected data type for run_ends array {dt:?}"),
             }
         }
         DataType::Null => Arc::new(NullArray::from(data)) as ArrayRef,
         DataType::Decimal128(_, _) => Arc::new(Decimal128Array::from(data)) as ArrayRef,
         DataType::Decimal256(_, _) => Arc::new(Decimal256Array::from(data)) as ArrayRef,
-        dt => panic!("Unexpected data type {:?}", dt),
+        dt => panic!("Unexpected data type {dt:?}"),
     }
 }
 

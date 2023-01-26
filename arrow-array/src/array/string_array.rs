@@ -363,7 +363,7 @@ mod tests {
         let arr: StringArray = vec!["hello", "arrow"].into();
         assert_eq!(
             "StringArray\n[\n  \"hello\",\n  \"arrow\",\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -372,7 +372,7 @@ mod tests {
         let arr: LargeStringArray = vec!["hello", "arrow"].into();
         assert_eq!(
             "LargeStringArray\n[\n  \"hello\",\n  \"arrow\",\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -420,7 +420,7 @@ mod tests {
             .scan(0usize, |pos, i| {
                 if *pos < 10 {
                     *pos += 1;
-                    Some(Some(format!("value {}", i)))
+                    Some(Some(format!("value {i}")))
                 } else {
                     // actually returns up to 10 values
                     None

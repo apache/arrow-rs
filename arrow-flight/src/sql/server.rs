@@ -586,9 +586,9 @@ where
 }
 
 fn decode_error_to_status(err: prost::DecodeError) -> Status {
-    Status::invalid_argument(format!("{:?}", err))
+    Status::invalid_argument(format!("{err:?}"))
 }
 
 fn arrow_error_to_status(err: arrow_schema::ArrowError) -> Status {
-    Status::internal(format!("{:?}", err))
+    Status::internal(format!("{err:?}"))
 }

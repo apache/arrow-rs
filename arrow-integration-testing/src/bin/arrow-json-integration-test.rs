@@ -62,7 +62,7 @@ fn main() -> Result<()> {
 
 fn json_to_arrow(json_name: &str, arrow_name: &str, verbose: bool) -> Result<()> {
     if verbose {
-        eprintln!("Converting {} to {}", json_name, arrow_name);
+        eprintln!("Converting {json_name} to {arrow_name}");
     }
 
     let json_file = read_json_file(json_name)?;
@@ -81,7 +81,7 @@ fn json_to_arrow(json_name: &str, arrow_name: &str, verbose: bool) -> Result<()>
 
 fn arrow_to_json(arrow_name: &str, json_name: &str, verbose: bool) -> Result<()> {
     if verbose {
-        eprintln!("Converting {} to {}", arrow_name, json_name);
+        eprintln!("Converting {arrow_name} to {json_name}");
     }
 
     let arrow_file = File::open(arrow_name)?;
@@ -155,7 +155,7 @@ fn canonicalize_schema(schema: &Schema) -> Schema {
 
 fn validate(arrow_name: &str, json_name: &str, verbose: bool) -> Result<()> {
     if verbose {
-        eprintln!("Validating {} and {}", arrow_name, json_name);
+        eprintln!("Validating {arrow_name} and {json_name}");
     }
 
     // open JSON file

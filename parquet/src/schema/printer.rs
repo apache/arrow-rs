@@ -62,7 +62,7 @@ pub fn print_parquet_metadata(out: &mut dyn io::Write, metadata: &ParquetMetaDat
     writeln!(out, "row groups:");
     writeln!(out);
     for (i, rg) in metadata.row_groups().iter().enumerate() {
-        writeln!(out, "row group {}:", i);
+        writeln!(out, "row group {i}:");
         print_dashes(out, 80);
         print_row_group_metadata(out, rg);
     }
@@ -75,7 +75,7 @@ pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData
     writeln!(out, "version: {}", file_metadata.version());
     writeln!(out, "num of rows: {}", file_metadata.num_rows());
     if let Some(created_by) = file_metadata.created_by().as_ref() {
-        writeln!(out, "created by: {}", created_by);
+        writeln!(out, "created by: {created_by}");
     }
     if let Some(metadata) = file_metadata.key_value_metadata() {
         writeln!(out, "metadata:");
@@ -102,7 +102,7 @@ pub fn print_schema(out: &mut dyn io::Write, tp: &Type) {
         let mut printer = Printer::new(&mut s);
         printer.print(tp);
     }
-    writeln!(out, "{}", s);
+    writeln!(out, "{s}");
 }
 
 #[allow(unused_must_use)]
@@ -114,7 +114,7 @@ fn print_row_group_metadata(out: &mut dyn io::Write, rg_metadata: &RowGroupMetaD
     writeln!(out, "columns: ");
     for (i, cc) in rg_metadata.columns().iter().enumerate() {
         writeln!(out);
-        writeln!(out, "column {}:", i);
+        writeln!(out, "column {i}:");
         print_dashes(out, 80);
         print_column_chunk_metadata(out, cc);
     }
@@ -130,11 +130,11 @@ fn print_column_chunk_metadata(
     let encoding_strs: Vec<_> = cc_metadata
         .encodings()
         .iter()
-        .map(|e| format!("{}", e))
+        .map(|e| format!("{e}"))
         .collect();
     writeln!(out, "encodings: {}", encoding_strs.join(" "));
     let file_path_str = cc_metadata.file_path().unwrap_or("N/A");
-    writeln!(out, "file path: {}", file_path_str);
+    writeln!(out, "file path: {file_path_str}");
     writeln!(out, "file offset: {}", cc_metadata.file_offset());
     writeln!(out, "num of values: {}", cc_metadata.num_values());
     writeln!(
@@ -152,42 +152,42 @@ fn print_column_chunk_metadata(
         None => "N/A".to_owned(),
         Some(ipo) => ipo.to_string(),
     };
-    writeln!(out, "index page offset: {}", index_page_offset_str);
+    writeln!(out, "index page offset: {index_page_offset_str}");
     let dict_page_offset_str = match cc_metadata.dictionary_page_offset() {
         None => "N/A".to_owned(),
         Some(dpo) => dpo.to_string(),
     };
-    writeln!(out, "dictionary page offset: {}", dict_page_offset_str);
+    writeln!(out, "dictionary page offset: {dict_page_offset_str}");
     let statistics_str = match cc_metadata.statistics() {
         None => "N/A".to_owned(),
         Some(stats) => stats.to_string(),
     };
-    writeln!(out, "statistics: {}", statistics_str);
+    writeln!(out, "statistics: {statistics_str}");
     let bloom_filter_offset_str = match cc_metadata.bloom_filter_offset() {
         None => "N/A".to_owned(),
         Some(bfo) => bfo.to_string(),
     };
-    writeln!(out, "bloom filter offset: {}", bloom_filter_offset_str);
+    writeln!(out, "bloom filter offset: {bloom_filter_offset_str}");
     let offset_index_offset_str = match cc_metadata.offset_index_offset() {
         None => "N/A".to_owned(),
         Some(oio) => oio.to_string(),
     };
-    writeln!(out, "offset index offset: {}", offset_index_offset_str);
+    writeln!(out, "offset index offset: {offset_index_offset_str}");
     let offset_index_length_str = match cc_metadata.offset_index_length() {
         None => "N/A".to_owned(),
         Some(oil) => oil.to_string(),
     };
-    writeln!(out, "offset index length: {}", offset_index_length_str);
+    writeln!(out, "offset index length: {offset_index_length_str}");
     let column_index_offset_str = match cc_metadata.column_index_offset() {
         None => "N/A".to_owned(),
         Some(cio) => cio.to_string(),
     };
-    writeln!(out, "column index offset: {}", column_index_offset_str);
+    writeln!(out, "column index offset: {column_index_offset_str}");
     let column_index_length_str = match cc_metadata.column_index_length() {
         None => "N/A".to_owned(),
         Some(cil) => cil.to_string(),
     };
-    writeln!(out, "column index length: {}", column_index_length_str);
+    writeln!(out, "column index length: {column_index_length_str}");
     writeln!(out);
 }
 
@@ -242,10 +242,10 @@ fn print_logical_and_converted(
                 bit_width,
                 is_signed,
             } => {
-                format!("INTEGER({},{})", bit_width, is_signed)
+                format!("INTEGER({bit_width},{is_signed})")
             }
             LogicalType::Decimal { scale, precision } => {
-                format!("DECIMAL({},{})", precision, scale)
+                format!("DECIMAL({precision},{scale})")
             }
             LogicalType::Timestamp {
                 is_adjusted_to_u_t_c,
@@ -283,15 +283,15 @@ fn print_logical_and_converted(
                     // DECIMAL(9) - DECIMAL
                     let precision_scale = match (precision, scale) {
                         (p, s) if p > 0 && s > 0 => {
-                            format!("({},{})", p, s)
+                            format!("({p},{s})")
                         }
-                        (p, 0) if p > 0 => format!("({})", p),
+                        (p, 0) if p > 0 => format!("({p})"),
                         _ => String::new(),
                     };
-                    format!("{}{}", decimal, precision_scale)
+                    format!("{decimal}{precision_scale}")
                 }
                 other_converted_type => {
-                    format!("{}", other_converted_type)
+                    format!("{other_converted_type}")
                 }
             }
         }
@@ -313,9 +313,9 @@ impl<'a> Printer<'a> {
                 let phys_type_str = match physical_type {
                     PhysicalType::FIXED_LEN_BYTE_ARRAY => {
                         // We need to include length for fixed byte array
-                        format!("{} ({})", physical_type, type_length)
+                        format!("{physical_type} ({type_length})")
                     }
-                    _ => format!("{}", physical_type),
+                    _ => format!("{physical_type}"),
                 };
                 // Also print logical type if it is available
                 // If there is a logical type, do not print converted type
@@ -358,7 +358,7 @@ impl<'a> Printer<'a> {
                         0,
                     );
                     if !logical_str.is_empty() {
-                        write!(self.output, "({}) ", logical_str);
+                        write!(self.output, "({logical_str}) ");
                     }
                     writeln!(self.output, "{{");
                 } else {

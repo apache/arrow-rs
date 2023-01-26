@@ -101,8 +101,7 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
     let size = arrays[0].len();
     if !arrays.iter().all(|array| array.len() == size) {
         return Err(ArrowError::ComputeError(format!(
-            "Arrays must have the same length of {}",
-            size,
+            "Arrays must have the same length of {size}",
         )));
     }
 

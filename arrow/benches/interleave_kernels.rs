@@ -53,10 +53,9 @@ fn do_bench(
         })
         .collect();
 
-    c.bench_function(
-        &format!("interleave {} {} {:?}", prefix, len, slices),
-        |b| b.iter(|| criterion::black_box(interleave(&values, &indices).unwrap())),
-    );
+    c.bench_function(&format!("interleave {prefix} {len} {slices:?}"), |b| {
+        b.iter(|| criterion::black_box(interleave(&values, &indices).unwrap()))
+    });
 }
 
 fn add_benchmark(c: &mut Criterion) {

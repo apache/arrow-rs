@@ -39,8 +39,7 @@ fn parse_fixed_offset(tz: &str) -> Result<FixedOffset, ArrowError> {
     }
 
     Err(ArrowError::ParseError(format!(
-        "Invalid timezone \"{}\": Expected format [+-]XX:XX, [+-]XX, or [+-]XXXX",
-        tz
+        "Invalid timezone \"{tz}\": Expected format [+-]XX:XX, [+-]XX, or [+-]XXXX"
     )))
 }
 
@@ -88,7 +87,7 @@ mod private {
                 Ok(Self(TzInner::Offset(parse_fixed_offset(tz)?)))
             } else {
                 Ok(Self(TzInner::Timezone(tz.parse().map_err(|e| {
-                    ArrowError::ParseError(format!("Invalid timezone \"{}\": {}", tz, e))
+                    ArrowError::ParseError(format!("Invalid timezone \"{tz}\": {e}"))
                 })?)))
             }
         }
@@ -266,8 +265,7 @@ mod private {
                 Ok(Self(parse_fixed_offset(tz)?))
             } else {
                 Err(ArrowError::ParseError(format!(
-                    "Invalid timezone \"{}\": only offset based timezones supported without chrono-tz feature",
-                    tz
+                    "Invalid timezone \"{tz}\": only offset based timezones supported without chrono-tz feature"
                 )))
             }
         }

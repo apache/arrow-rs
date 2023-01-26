@@ -152,8 +152,7 @@ impl<R: BufRead> RecordReader<R> {
             let read = self.fill_buf(to_skip.min(1024))?;
             if read == 0 {
                 return Err(ArrowError::CsvError(format!(
-                    "Failed to skip {} rows only found {}",
-                    to_skip, skipped
+                    "Failed to skip {to_skip} rows only found {skipped}"
                 )));
             }
 
@@ -175,7 +174,7 @@ impl<R: BufRead> RecordReader<R> {
 
         // Need to truncate data to the actual amount of data read
         let data = std::str::from_utf8(&self.data[..last_offset]).map_err(|e| {
-            ArrowError::CsvError(format!("Encountered invalid UTF-8 data: {}", e))
+            ArrowError::CsvError(format!("Encountered invalid UTF-8 data: {e}"))
         })?;
 
         Ok(StringRecords {

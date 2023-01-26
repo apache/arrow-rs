@@ -192,10 +192,7 @@ impl RecordBatch {
 
         if let Some((i, (col_type, field_type))) = not_match {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "column types must match schema types, expected {:?} but found {:?} at column index {}",
-                field_type,
-                col_type,
-                i)));
+                "column types must match schema types, expected {field_type:?} but found {col_type:?} at column index {i}")));
         }
 
         Ok(RecordBatch {

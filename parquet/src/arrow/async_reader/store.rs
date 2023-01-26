@@ -62,7 +62,7 @@ impl AsyncFileReader for ParquetObjectReader {
         self.store
             .get_range(&self.meta.location, range)
             .map_err(|e| {
-                ParquetError::General(format!("AsyncChunkReader::get_bytes error: {}", e))
+                ParquetError::General(format!("AsyncChunkReader::get_bytes error: {e}"))
             })
             .boxed()
     }
@@ -80,8 +80,7 @@ impl AsyncFileReader for ParquetObjectReader {
                 .await
                 .map_err(|e| {
                     ParquetError::General(format!(
-                        "ParquetObjectReader::get_byte_ranges error: {}",
-                        e
+                        "ParquetObjectReader::get_byte_ranges error: {e}"
                     ))
                 })
         }
@@ -96,8 +95,7 @@ impl AsyncFileReader for ParquetObjectReader {
                         .get_range(&self.meta.location, range)
                         .map_err(|e| {
                             ParquetError::General(format!(
-                                "ParquetObjectReader::get_metadata error: {}",
-                                e
+                                "ParquetObjectReader::get_metadata error: {e}"
                             ))
                         })
                 },

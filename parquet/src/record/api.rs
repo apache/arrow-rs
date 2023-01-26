@@ -245,7 +245,7 @@ pub fn make_row(fields: Vec<(String, Field)>) -> Row {
 impl fmt::Display for Row {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{{")?;
-        for (i, &(ref key, ref value)) in self.fields.iter().enumerate() {
+        for (i, (key, value)) in self.fields.iter().enumerate() {
             key.fmt(f)?;
             write!(f, ": ")?;
             value.fmt(f)?;
@@ -724,37 +724,37 @@ impl fmt::Display for Field {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Field::Null => write!(f, "null"),
-            Field::Bool(value) => write!(f, "{}", value),
-            Field::Byte(value) => write!(f, "{}", value),
-            Field::Short(value) => write!(f, "{}", value),
-            Field::Int(value) => write!(f, "{}", value),
-            Field::Long(value) => write!(f, "{}", value),
-            Field::UByte(value) => write!(f, "{}", value),
-            Field::UShort(value) => write!(f, "{}", value),
-            Field::UInt(value) => write!(f, "{}", value),
-            Field::ULong(value) => write!(f, "{}", value),
+            Field::Bool(value) => write!(f, "{value}"),
+            Field::Byte(value) => write!(f, "{value}"),
+            Field::Short(value) => write!(f, "{value}"),
+            Field::Int(value) => write!(f, "{value}"),
+            Field::Long(value) => write!(f, "{value}"),
+            Field::UByte(value) => write!(f, "{value}"),
+            Field::UShort(value) => write!(f, "{value}"),
+            Field::UInt(value) => write!(f, "{value}"),
+            Field::ULong(value) => write!(f, "{value}"),
             Field::Float(value) => {
                 if !(1e-15..=1e19).contains(&value) {
-                    write!(f, "{:E}", value)
+                    write!(f, "{value:E}")
                 } else if value.trunc() == value {
-                    write!(f, "{}.0", value)
+                    write!(f, "{value}.0")
                 } else {
-                    write!(f, "{}", value)
+                    write!(f, "{value}")
                 }
             }
             Field::Double(value) => {
                 if !(1e-15..=1e19).contains(&value) {
-                    write!(f, "{:E}", value)
+                    write!(f, "{value:E}")
                 } else if value.trunc() == value {
-                    write!(f, "{}.0", value)
+                    write!(f, "{value}.0")
                 } else {
-                    write!(f, "{}", value)
+                    write!(f, "{value}")
                 }
             }
             Field::Decimal(ref value) => {
                 write!(f, "{}", convert_decimal_to_string(value))
             }
-            Field::Str(ref value) => write!(f, "\"{}\"", value),
+            Field::Str(ref value) => write!(f, "\"{value}\""),
             Field::Bytes(ref value) => write!(f, "{:?}", value.data()),
             Field::Date(value) => write!(f, "{}", convert_date_to_string(value)),
             Field::TimestampMillis(value) => {
@@ -763,7 +763,7 @@ impl fmt::Display for Field {
             Field::TimestampMicros(value) => {
                 write!(f, "{}", convert_timestamp_micros_to_string(value))
             }
-            Field::Group(ref fields) => write!(f, "{}", fields),
+            Field::Group(ref fields) => write!(f, "{fields}"),
             Field::ListInternal(ref list) => {
                 let elems = &list.elements;
                 write!(f, "[")?;
@@ -778,7 +778,7 @@ impl fmt::Display for Field {
             Field::MapInternal(ref map) => {
                 let entries = &map.entries;
                 write!(f, "{{")?;
-                for (i, &(ref key, ref value)) in entries.iter().enumerate() {
+                for (i, (key, value)) in entries.iter().enumerate() {
                     key.fmt(f)?;
                     write!(f, " -> ")?;
                     value.fmt(f)?;
@@ -1248,7 +1248,7 @@ mod tests {
             ("a".to_string(), Field::Str("abc".to_string())),
         ];
         let row = Field::Group(make_row(fields));
-        assert_eq!(format!("{}", row), "{x: null, Y: 2, z: 3.1, a: \"abc\"}");
+        assert_eq!(format!("{row}"), "{x: null, Y: 2, z: 3.1, a: \"abc\"}");
 
         let row = Field::ListInternal(make_list(vec![
             Field::Int(2),
@@ -1256,14 +1256,14 @@ mod tests {
             Field::Null,
             Field::Int(12),
         ]));
-        assert_eq!(format!("{}", row), "[2, 1, null, 12]");
+        assert_eq!(format!("{row}"), "[2, 1, null, 12]");
 
         let row = Field::MapInternal(make_map(vec![
             (Field::Int(1), Field::Float(1.2)),
             (Field::Int(2), Field::Float(4.5)),
             (Field::Int(3), Field::Float(2.3)),
         ]));
-        assert_eq!(format!("{}", row), "{1 -> 1.2, 2 -> 4.5, 3 -> 2.3}");
+        assert_eq!(format!("{row}"), "{1 -> 1.2, 2 -> 4.5, 3 -> 2.3}");
     }
 
     #[test]

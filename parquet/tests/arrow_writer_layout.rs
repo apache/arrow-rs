@@ -98,8 +98,7 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
                 assert_eq!(
                     page.compressed_page_size as usize,
                     page_layout.compressed_size + page_layout.page_header_size,
-                    "index page {} size mismatch",
-                    idx
+                    "index page {idx} size mismatch"
                 );
                 let next_first_row_index = column_index
                     .get(idx + 1)
@@ -109,8 +108,7 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
                 let num_rows = next_first_row_index - page.first_row_index;
                 assert_eq!(
                     num_rows as usize, page_layout.rows,
-                    "index page {} row count",
-                    idx
+                    "index page {idx} row count"
                 );
             }
         }
@@ -146,8 +144,7 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
                 pages.len(),
                 column_layout.pages.len()
                     + column_layout.dictionary_page.is_some() as usize,
-                "page {} count mismatch",
-                idx
+                "page {idx} count mismatch"
             );
 
             let page_layouts = column_layout
@@ -160,8 +157,7 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
                 assert_eq!(
                     page.buffer().len(),
                     page_layout.compressed_size,
-                    "page {} size mismatch",
-                    idx
+                    "page {idx} size mismatch"
                 );
                 assert_eq!(page.page_type(), page_layout.page_type);
             }
@@ -345,7 +341,7 @@ fn test_primitive() {
 #[test]
 fn test_string() {
     let array = Arc::new(StringArray::from_iter_values(
-        (0..2000).map(|x| format!("{:04}", x)),
+        (0..2000).map(|x| format!("{x:04}")),
     )) as _;
     let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
     let props = WriterProperties::builder()

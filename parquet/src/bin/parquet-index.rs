@@ -86,11 +86,10 @@ impl Args {
             .zip(reader.metadata().row_groups())
             .enumerate()
         {
-            println!("Row Group: {}", row_group_idx);
+            println!("Row Group: {row_group_idx}");
             let offset_index = offset_indices.get(column_idx).ok_or_else(|| {
                 ParquetError::General(format!(
-                    "No offset index for row group {} column chunk {}",
-                    row_group_idx, column_idx
+                    "No offset index for row group {row_group_idx} column chunk {column_idx}"
                 ))
             })?;
 
@@ -156,12 +155,12 @@ fn print_index<T: std::fmt::Display>(
             idx, o.offset, o.compressed_page_size, row_count
         );
         match &c.min {
-            Some(m) => print!(", min {:>10}", m),
+            Some(m) => print!(", min {m:>10}"),
             None => print!(", min {:>10}", "NONE"),
         }
 
         match &c.max {
-            Some(m) => print!(", max {:>10}", m),
+            Some(m) => print!(", max {m:>10}"),
             None => print!(", max {:>10}", "NONE"),
         }
         println!()

@@ -593,7 +593,7 @@ mod tests {
             Some("client_id".into()),
             None,
             None,
-            Some(format!("{}/metadata/identity/oauth2/token", endpoint)),
+            Some(format!("{endpoint}/metadata/identity/oauth2/token")),
             client.clone(),
         );
 
@@ -618,7 +618,7 @@ mod tests {
 
         // Test IMDS
         server.push_fn(move |req| {
-            assert_eq!(req.uri().path(), format!("/{}/oauth2/v2.0/token", tenant));
+            assert_eq!(req.uri().path(), format!("/{tenant}/oauth2/v2.0/token"));
             assert_eq!(req.method(), &Method::POST);
             let body = block_on(to_bytes(req.into_body())).unwrap();
             let body = String::from_utf8(body.to_vec()).unwrap();

@@ -144,7 +144,7 @@ impl Debug for Deallocation {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             Deallocation::Arrow(capacity) => {
-                write!(f, "Deallocation::Arrow {{ capacity: {} }}", capacity)
+                write!(f, "Deallocation::Arrow {{ capacity: {capacity} }}")
             }
             Deallocation::Custom(_) => {
                 write!(f, "Deallocation::Custom {{ capacity: unknown }}")

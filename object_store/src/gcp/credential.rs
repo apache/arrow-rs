@@ -352,8 +352,7 @@ async fn make_metadata_request(
     audience: &str,
 ) -> Result<TokenResponse> {
     let url = format!(
-        "http://{}/computeMetadata/v1/instance/service-accounts/default/token",
-        hostname
+        "http://{hostname}/computeMetadata/v1/instance/service-accounts/default/token"
     );
     let response: TokenResponse = client
         .request(Method::GET, url)
