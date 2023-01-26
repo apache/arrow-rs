@@ -102,6 +102,8 @@ half = { version = "2.1", default-features = false, features = ["num-traits"] }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 tempfile = { version = "3", default-features = false }
 
+
+
 [build-dependencies]
 
 [[example]]
@@ -239,6 +241,14 @@ harness = false
 
 [[bench]]
 name = "string_run_builder"
+harness = false
+
+[[bench]]
+name = "string_run_iterator"
+harness = false
+
+[[bench]]
+name = "primitive_run_accessor"
 harness = false
 
 [[bench]]

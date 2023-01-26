@@ -143,6 +143,58 @@ impl<R: RunEndIndexType> RunArray<R> {
             values,
         })
     }
+
+    /// Returns index to the physical array for the given index to the logical array.
+    /// Performs a binary search on the run_ends array for the input index.
+    #[inline]
+    pub fn get_physical_index(&self, logical_index: usize) -> Option<usize> {
+        if logical_index >= self.len() {
+            return None;
+        }
+        let mut st: usize = 0;
+        let mut en: usize = self.run_ends().len();
+        while st + 1 < en {
+            let mid: usize = (st + en) / 2;
+            if logical_index
+                < unsafe {
+                    // Safety:
+                    // The value of mid will always be between 1 and len - 1,
+                    // where len is length of run ends array.
+                    // This is based on the fact that `st` starts with 0 and
+                    // `en` starts with len. The condition `st + 1 < en` ensures
+                    // `st` and `en` differs atleast by two. So the value of `mid`
+                    // will never be either `st` or `en`
+                    self.run_ends().value_unchecked(mid - 1).as_usize()
+                }
+            {
+                en = mid
+            } else {
+                st = mid
+            }
+        }
+        Some(st)
+    }
+
+    /// Returns the physical indices of input logical indices. Returns error
+    /// if any of the logical index cannot be converted to physical index.
+    #[inline]
+    pub fn get_physical_indices<I>(&self, indices: &[I]) -> Result<Vec<usize>, ArrowError>
+    where
+        I: ArrowNativeType,
+    {
+        let mut result: Vec<usize> = Vec::with_capacity(indices.len());
+        for ix in indices {
+            let logical_index = ix.as_usize();
+            let physical_index =
+                self.get_physical_index(logical_index).ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(
+                        "Cannot convet {logical_index} to physical index".to_string(),
+                    )
+                })?;
+            result.push(physical_index);
+        }
+        Ok(result)
+    }
 }
 
 impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
@@ -348,37 +400,6 @@ impl<'a, R: RunEndIndexType, V> TypedRunArray<'a, R, V> {
     pub fn values(&self) -> &'a V {
         self.values
     }
-
-    /// Returns index to the physcial array for the given index to the logical array.
-    /// Performs a binary search on the run_ends array for the input index.
-    #[inline]
-    pub fn get_physical_index(&self, logical_index: usize) -> Option<usize> {
-        if logical_index >= self.run_array.len() {
-            return None;
-        }
-        let mut st: usize = 0;
-        let mut en: usize = self.run_ends().len();
-        while st + 1 < en {
-            let mid: usize = (st + en) / 2;
-            if logical_index
-                < unsafe {
-                    // Safety:
-                    // The value of mid will always be between 1 and len - 1,
-                    // where len is length of run ends array.
-                    // This is based on the fact that `st` starts with 0 and
-                    // `en` starts with len. The condition `st + 1 < en` ensures
-                    // `st` and `en` differs atleast by two. So the value of `mid`
-                    // will never be either `st` or `en`
-                    self.run_ends().value_unchecked(mid - 1).as_usize()
-                }
-            {
-                en = mid
-            } else {
-                st = mid
-            }
-        }
-        Some(st)
-    }
 }
 
 impl<'a, R: RunEndIndexType, V: Sync> Array for TypedRunArray<'a, R, V> {
@@ -417,7 +438,7 @@ where
     }
 
     unsafe fn value_unchecked(&self, logical_index: usize) -> Self::Item {
-        let physical_index = self.get_physical_index(logical_index).unwrap();
+        let physical_index = self.run_array.get_physical_index(logical_index).unwrap();
         self.values().value_unchecked(physical_index)
     }
 }

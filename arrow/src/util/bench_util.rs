@@ -145,6 +145,23 @@ pub fn create_string_dict_array<K: ArrowDictionaryKeyType>(
     data.iter().map(|x| x.as_deref()).collect()
 }
 
+pub fn create_primitive_run_array<R: RunEndIndexType, V: ArrowPrimitiveType>(
+    logical_array_len: usize,
+    physical_array_len: usize,
+) -> RunArray<R> {
+    let run_len = logical_array_len / physical_array_len;
+    let mut values: Vec<V::Native> = (0..physical_array_len)
+        .flat_map(|s| std::iter::repeat(V::Native::from_usize(s).unwrap()).take(run_len))
+        .collect();
+    while values.len() < logical_array_len {
+        let last_val = values[values.len() - 1];
+        values.push(last_val);
+    }
+    let mut builder = PrimitiveRunBuilder::<R, V>::with_capacity(physical_array_len);
+    builder.extend(values.into_iter().map(Some));
+
+    builder.finish()
+}
 /// Creates an random (but fixed-seeded) binary array of a given size and null density
 pub fn create_binary_array<Offset: OffsetSizeTrait>(
     size: usize,
