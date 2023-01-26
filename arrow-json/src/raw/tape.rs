@@ -781,5 +781,10 @@ mod tests {
         decoder.decode(b"{\"hello\" : \"world\xFF\"}").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Encountered non-UTF-8 data");
+
+        let mut decoder = TapeDecoder::new(16, 2);
+        decoder.decode(b"{\"hello\xe2\" : \"\x96\xa1world\"}").unwrap();
+        let err = decoder.finish().unwrap_err().to_string();
+        assert_eq!(err, "Json error: Encountered non-UTF-8 data");
     }
 }
