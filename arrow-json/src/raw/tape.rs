@@ -96,10 +96,13 @@ pub struct Tape<'a> {
 
 impl<'a> Tape<'a> {
     /// Returns the string for the given string index
+    #[inline]
     pub fn get_string(&self, idx: u32) -> &'a str {
         let end_offset = self.string_offsets[idx as usize + 1];
         let start_offset = self.string_offsets[idx as usize];
-        &self.strings[start_offset..end_offset]
+        // SAFETY:
+        // Verified offsets
+        unsafe { self.strings.get_unchecked(start_offset..end_offset) }
     }
 
     /// Returns the tape element at `idx`
@@ -459,6 +462,14 @@ impl TapeDecoder {
             ArrowError::JsonError("Encountered non-UTF-8 data".to_string())
         })?;
 
+        for offset in self.offsets.iter().copied() {
+            if !strings.is_char_boundary(offset) {
+                return Err(ArrowError::JsonError(
+                    "Encountered truncated UTF-8 sequence".to_string(),
+                ));
+            }
+        }
+
         Ok(Tape {
             strings,
             elements: &self.elements,
@@ -783,8 +794,8 @@ mod tests {
         assert_eq!(err, "Json error: Encountered non-UTF-8 data");
 
         let mut decoder = TapeDecoder::new(16, 2);
-        decoder.decode(b"{\"hello\xe2\" : \"\x96\xa1world\"}").unwrap();
+        decoder.decode(b"{\"\xe2\" : \"\x96\xa1\"}").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
-        assert_eq!(err, "Json error: Encountered non-UTF-8 data");
+        assert_eq!(err, "Json error: Encountered truncated UTF-8 sequence");
     }
 }
