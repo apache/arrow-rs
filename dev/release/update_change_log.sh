@@ -25,7 +25,7 @@
 # arrow-rs/.github_changelog_generator
 #
 # Usage:
-# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log.sh
+# ARROW_GITHUB_API_TOKEN=<TOKEN> ./update_change_log.sh
 
 set -e
 
