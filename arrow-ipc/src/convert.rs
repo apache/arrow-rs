@@ -711,6 +711,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&children[..])),
             }
         }
+        RunEndEncoded(_, _) => todo!(),
         Map(map_field, keys_sorted) => {
             let child = build_field(fbb, map_field);
             let mut field_type = crate::MapBuilder::new(fbb);

@@ -36,18 +36,18 @@
 //! repetition levels and read them to verify write/read correctness.
 //!
 //! ```rust,no_run
-//! use std::{fs, path::Path, sync::Arc};
-//!
-//! use parquet::{
-//!     column::{reader::ColumnReader, writer::ColumnWriter},
-//!     data_type::Int32Type,
-//!     file::{
-//!         properties::WriterProperties,
-//!         reader::{FileReader, SerializedFileReader},
-//!         writer::SerializedFileWriter,
-//!     },
-//!     schema::parser::parse_message_type,
-//! };
+//! # use std::{fs, path::Path, sync::Arc};
+//! #
+//! # use parquet::{
+//! #    column::{reader::ColumnReader, writer::ColumnWriter},
+//! #    data_type::Int32Type,
+//! #    file::{
+//! #        properties::WriterProperties,
+//! #        reader::{FileReader, SerializedFileReader},
+//! #        writer::SerializedFileWriter,
+//! #    },
+//! #    schema::parser::parse_message_type,
+//! # };
 //!
 //! let path = Path::new("/path/to/column_sample.parquet");
 //!
@@ -111,7 +111,7 @@
 //!     }
 //! }
 //!
-//! assert_eq!(res, Ok((3, 5)));
+//! assert_eq!(res.unwrap(), (3, 5));
 //! assert_eq!(values, vec![1, 2, 3, 0, 0, 0, 0, 0]);
 //! assert_eq!(def_levels, vec![3, 3, 3, 2, 2, 0, 0, 0]);
 //! assert_eq!(rep_levels, vec![0, 1, 0, 1, 1, 0, 0, 0]);

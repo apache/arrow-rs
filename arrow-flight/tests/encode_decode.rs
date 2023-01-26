@@ -97,6 +97,33 @@ async fn test_dictionary_many() {
 }
 
 #[tokio::test]
+async fn test_zero_batches_no_schema() {
+    let stream = FlightDataEncoderBuilder::default().build(futures::stream::iter(vec![]));
+
+    let mut decoder = FlightRecordBatchStream::new_from_flight_data(stream);
+    assert!(decoder.schema().is_none());
+    // No batches come out
+    assert!(decoder.next().await.is_none());
+    // schema has not been received
+    assert!(decoder.schema().is_none());
+}
+
+#[tokio::test]
+async fn test_zero_batches_schema_specified() {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let stream = FlightDataEncoderBuilder::default()
+        .with_schema(schema.clone())
+        .build(futures::stream::iter(vec![]));
+
+    let mut decoder = FlightRecordBatchStream::new_from_flight_data(stream);
+    assert!(decoder.schema().is_none());
+    // No batches come out
+    assert!(decoder.next().await.is_none());
+    // But schema has been received correctly
+    assert_eq!(decoder.schema(), Some(&schema));
+}
+
+#[tokio::test]
 async fn test_app_metadata() {
     let input_batch_stream = futures::stream::iter(vec![Ok(make_primative_batch(78))]);
 

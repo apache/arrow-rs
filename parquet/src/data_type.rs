@@ -27,10 +27,7 @@ use crate::basic::Type;
 use crate::column::reader::{ColumnReader, ColumnReaderImpl};
 use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
 use crate::errors::{ParquetError, Result};
-use crate::util::{
-    bit_util::{from_le_slice, from_ne_slice, FromBytes},
-    memory::ByteBufferPtr,
-};
+use crate::util::{bit_util::FromBytes, memory::ByteBufferPtr};
 
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
 /// The type only takes 12 bytes, without extra padding.
@@ -1223,60 +1220,6 @@ impl AsRef<[u8]> for ByteArray {
 impl AsRef<[u8]> for FixedLenByteArray {
     fn as_ref(&self) -> &[u8] {
         self.as_bytes()
-    }
-}
-
-impl FromBytes for Int96 {
-    type Buffer = [u8; 12];
-    fn from_le_bytes(bs: Self::Buffer) -> Self {
-        let mut i = Int96::new();
-        i.set_data(
-            from_le_slice(&bs[0..4]),
-            from_le_slice(&bs[4..8]),
-            from_le_slice(&bs[8..12]),
-        );
-        i
-    }
-    fn from_be_bytes(_bs: Self::Buffer) -> Self {
-        unimplemented!()
-    }
-    fn from_ne_bytes(bs: Self::Buffer) -> Self {
-        let mut i = Int96::new();
-        i.set_data(
-            from_ne_slice(&bs[0..4]),
-            from_ne_slice(&bs[4..8]),
-            from_ne_slice(&bs[8..12]),
-        );
-        i
-    }
-}
-
-// FIXME Needed to satisfy the constraint of many decoding functions but ByteArray does not
-// appear to actual be converted directly from bytes
-impl FromBytes for ByteArray {
-    type Buffer = Vec<u8>;
-    fn from_le_bytes(bs: Self::Buffer) -> Self {
-        ByteArray::from(bs)
-    }
-    fn from_be_bytes(_bs: Self::Buffer) -> Self {
-        unreachable!()
-    }
-    fn from_ne_bytes(bs: Self::Buffer) -> Self {
-        ByteArray::from(bs)
-    }
-}
-
-impl FromBytes for FixedLenByteArray {
-    type Buffer = Vec<u8>;
-
-    fn from_le_bytes(bs: Self::Buffer) -> Self {
-        Self(ByteArray::from(bs))
-    }
-    fn from_be_bytes(_bs: Self::Buffer) -> Self {
-        unreachable!()
-    }
-    fn from_ne_bytes(bs: Self::Buffer) -> Self {
-        Self(ByteArray::from(bs))
     }
 }
 

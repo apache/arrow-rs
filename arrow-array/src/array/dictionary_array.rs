@@ -481,18 +481,7 @@ impl<'a, T: ArrowDictionaryKeyType> FromIterator<Option<&'a str>> for Dictionary
         let it = iter.into_iter();
         let (lower, _) = it.size_hint();
         let mut builder = StringDictionaryBuilder::with_capacity(lower, 256, 1024);
-        it.for_each(|i| {
-            if let Some(i) = i {
-                // Note: impl ... for Result<DictionaryArray<T>> fails with
-                // error[E0117]: only traits defined in the current crate can be implemented for arbitrary types
-                builder
-                    .append(i)
-                    .expect("Unable to append a value to a dictionary array.");
-            } else {
-                builder.append_null();
-            }
-        });
-
+        builder.extend(it);
         builder.finish()
     }
 }

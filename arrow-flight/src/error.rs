@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::error::Error;
+
 use arrow_schema::ArrowError;
 
 /// Errors for the Apache Arrow Flight crate
@@ -30,8 +32,8 @@ pub enum FlightError {
     ProtocolError(String),
     /// An error occured during decoding
     DecodeError(String),
-    /// Some other (opaque) error
-    ExternalError(Box<dyn std::error::Error + Send + Sync>),
+    /// External error that can provide source of error by calling `Error::source`.
+    ExternalError(Box<dyn Error + Send + Sync>),
 }
 
 impl FlightError {
@@ -40,7 +42,7 @@ impl FlightError {
     }
 
     /// Wraps an external error in an `ArrowError`.
-    pub fn from_external_error(error: Box<dyn std::error::Error + Send + Sync>) -> Self {
+    pub fn from_external_error(error: Box<dyn Error + Send + Sync>) -> Self {
         Self::ExternalError(error)
     }
 }
@@ -52,7 +54,15 @@ impl std::fmt::Display for FlightError {
     }
 }
 
-impl std::error::Error for FlightError {}
+impl Error for FlightError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        if let Self::ExternalError(e) = self {
+            Some(e.as_ref())
+        } else {
+            None
+        }
+    }
+}
 
 impl From<tonic::Status> for FlightError {
     fn from(status: tonic::Status) -> Self {
@@ -82,3 +92,50 @@ impl From<FlightError> for tonic::Status {
 }
 
 pub type Result<T> = std::result::Result<T, FlightError>;
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn error_source() {
+        let e1 = FlightError::DecodeError("foo".into());
+        assert!(e1.source().is_none());
+
+        // one level of wrapping
+        let e2 = FlightError::ExternalError(Box::new(e1));
+        let source = e2.source().unwrap().downcast_ref::<FlightError>().unwrap();
+        assert!(matches!(source, FlightError::DecodeError(_)));
+
+        let e3 = FlightError::ExternalError(Box::new(e2));
+        let source = e3
+            .source()
+            .unwrap()
+            .downcast_ref::<FlightError>()
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<FlightError>()
+            .unwrap();
+
+        assert!(matches!(source, FlightError::DecodeError(_)));
+    }
+
+    #[test]
+    fn error_through_arrow() {
+        // flight error that wraps an arrow error that wraps a flight error
+        let e1 = FlightError::DecodeError("foo".into());
+        let e2 = ArrowError::ExternalError(Box::new(e1));
+        let e3 = FlightError::ExternalError(Box::new(e2));
+
+        // ensure we can find the lowest level error by following source()
+        let mut root_error: &dyn Error = &e3;
+        while let Some(source) = root_error.source() {
+            // walk the next level
+            root_error = source;
+        }
+
+        let source = root_error.downcast_ref::<FlightError>().unwrap();
+        assert!(matches!(source, FlightError::DecodeError(_)));
+    }
+}
