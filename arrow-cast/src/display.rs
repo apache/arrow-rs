@@ -229,9 +229,9 @@ macro_rules! handle_string_time {
 macro_rules! make_string_datetime {
     ($array_type:ty, $dt:expr, $tz_string: ident, $column: ident, $col_idx:ident, $row_idx: ident) => {{
         let array = $column
-                        .as_any()
-                        .downcast_ref::<$array_type>()
-                        .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
+            .as_any()
+            .downcast_ref::<$array_type>()
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
 
         let s = match $tz_string {
             Some(tz_string) => match tz_string.parse::<Tz>() {
@@ -249,8 +249,8 @@ macro_rules! make_string_datetime {
             },
             None => {
                 let datetime = array
-                        .value_as_datetime($row_idx)
-                        .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
+                    .value_as_datetime($row_idx)
+                    .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
                 format!("{:?}", datetime)
             }
         };
@@ -262,11 +262,12 @@ macro_rules! make_string_datetime {
 macro_rules! make_string_datetime_with_format {
     ($array_type:ty, $dt:expr, $format: ident, $tz_string: ident, $column: ident, $col_idx:ident, $row_idx: ident) => {{
         let array = $column
-                        .as_any()
-                        .downcast_ref::<$array_type>()
-                        .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;        
-        let datetime = array.value_as_datetime($row_idx)
-                            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
+            .as_any()
+            .downcast_ref::<$array_type>()
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
+        let datetime = array
+            .value_as_datetime($row_idx)
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
 
         let s = match $tz_string {
             Some(tz_string) => match tz_string.parse::<Tz>() {

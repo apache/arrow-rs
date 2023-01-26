@@ -88,13 +88,6 @@ where
     lexical_to_string(c.value(i))
 }
 
-fn invalid_cast_error(dt: &str, col_idx: usize, row_idx: usize) -> ArrowError {
-    ArrowError::CastError(format!(
-        "Cannot cast to {} at col index: {} row index: {}",
-        dt, col_idx, row_idx
-    ))
-}
-
 /// A CSV writer
 #[derive(Debug)]
 pub struct Writer<W: Write> {
@@ -432,6 +425,13 @@ mod tests {
     use crate::Reader;
     use std::io::{Cursor, Read, Seek};
     use std::sync::Arc;
+
+    fn invalid_cast_error(dt: &str, col_idx: usize, row_idx: usize) -> ArrowError {
+        ArrowError::CastError(format!(
+            "Cannot cast to {} at col index: {} row index: {}",
+            dt, col_idx, row_idx
+        ))
+    }
 
     #[test]
     fn test_write_csv() {
