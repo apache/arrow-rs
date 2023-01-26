@@ -134,6 +134,7 @@ async fn test_zero_batches_dictonary_schema_specified() {
         ),
     ]));
 
+    // Expect dictionary to be hydrated in output (#3389)
     let expected_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int64, false),
         Field::new("b", DataType::Utf8, false),
