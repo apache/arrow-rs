@@ -218,6 +218,30 @@ impl IpcDataGenerator {
                     )?;
                 }
             }
+            DataType::RunEndEncoded(run_ends, values) => {
+                if column.data().child_data().len() != 2 {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "The run encoded array should have exactly two chil arrays. Found {}",
+                        column.data().child_data().len()
+                    )));
+                }
+                let run_ends_array = make_array(column.data().child_data()[0].clone());
+                let values_array = make_array(column.data().child_data()[1].clone());
+                self.encode_dictionaries(
+                    run_ends,
+                    &run_ends_array,
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
+                self.encode_dictionaries(
+                    values,
+                    &values_array,
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
+            }
             DataType::List(field) => {
                 let list = as_list_array(column);
                 self.encode_dictionaries(
@@ -967,12 +991,15 @@ fn write_continuation<W: Write>(
 }
 
 /// In V4, null types have no validity bitmap
-/// In V5 and later, null and union types have no validity bitmap
+/// In V5 and later, null, union and run end encoded types have no validity bitmap
 fn has_validity_bitmap(data_type: &DataType, write_options: &IpcWriteOptions) -> bool {
     if write_options.metadata_version < crate::MetadataVersion::V5 {
         !matches!(data_type, DataType::Null)
     } else {
-        !matches!(data_type, DataType::Null | DataType::Union(_, _, _))
+        !matches!(
+            data_type,
+            DataType::Null | DataType::Union(_, _, _) | DataType::RunEndEncoded(_, _)
+        )
     }
 }
 

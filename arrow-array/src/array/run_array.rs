@@ -233,6 +233,54 @@ impl<R: RunEndIndexType> RunArray<R> {
         }
         Ok(physical_indices)
     }
+
+    /// Returns the physical indices of input logical indices. Returns error
+    /// if any of the logical index cannot be converted to physical index.
+    /// TODO: Potential future optimization would be to skip sorting
+    /// if the indices are already in sorted order.
+    #[inline]
+    pub fn get_physical_indices_using_loop<I>(
+        &self,
+        indices: &[I],
+    ) -> Result<Vec<usize>, ArrowError>
+    where
+        I: ArrowNativeType,
+    {
+        let indices_len = indices.len();
+        let mut order: Vec<usize> = (0..indices_len).collect();
+        order.sort_unstable_by(|lhs, rhs| {
+            indices[*lhs].partial_cmp(&indices[*rhs]).unwrap()
+        });
+        let mut physical_indices = vec![0; indices_len];
+
+        let mut physical_index = 0_usize;
+        let mut ordered_index = 0_usize;
+        for (physical_index, run_end) in self.run_ends.values().iter().enumerate() {
+            // Get the run end index of current physical index
+            let run_end_value = run_end.as_usize();
+
+            // All the `logical_indices` that are less than current run end index
+            // belongs to current physical index.
+            while ordered_index < indices_len
+                && logical_indices[ordered_indices[ordered_index]].as_usize()
+                    < run_end_value
+            {
+                physical_indices[ordered_indices[ordered_index]] = physical_index;
+                ordered_index += 1;
+            }
+        }
+
+        // If there are input values >= run_ends.last_value then we'll not be able to convert
+        // all logical indices to physical indices.
+        if ordered_index < logical_indices.len() {
+            let logical_index =
+                logical_indices[ordered_indices[ordered_index]].as_usize();
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Cannot convert all logical indices to physical indices. The logical index cannot be converted is {logical_index}.",
+            )));
+        }
+        Ok(physical_indices)
+    }
 }
 
 impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {

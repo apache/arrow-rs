@@ -194,6 +194,50 @@ fn create_array(
             };
             Arc::new(struct_array)
         }
+        RunEndEncoded(run_ends_field, values_field) => {
+            let run_node = nodes.get(node_index);
+            node_index += 1;
+
+            let run_ends_triple = create_array(
+                nodes,
+                run_ends_field,
+                data,
+                buffers,
+                dictionaries_by_id,
+                node_index,
+                buffer_index,
+                compression_codec,
+                metadata,
+            )?;
+            node_index = run_ends_triple.1;
+            buffer_index = run_ends_triple.2;
+
+            let values_triple = create_array(
+                nodes,
+                values_field,
+                data,
+                buffers,
+                dictionaries_by_id,
+                node_index,
+                buffer_index,
+                compression_codec,
+                metadata,
+            )?;
+            node_index = values_triple.1;
+            buffer_index = values_triple.2;
+
+            let run_array_length = run_node.length() as usize;
+            let run_array_null_count = run_node.null_count() as usize;
+            let data = ArrayData::builder(data_type.clone())
+                .len(run_array_length)
+                .null_count(run_array_null_count)
+                .offset(0)
+                .add_child_data(run_ends_triple.0.into_data())
+                .add_child_data(values_triple.0.into_data())
+                .build()?;
+
+            make_array(data)
+        }
         // Create dictionary array from RecordBatch
         Dictionary(_, _) => {
             let index_node = nodes.get(node_index);
@@ -360,6 +404,17 @@ fn skip_field(
                 node_index = tuple.0;
                 buffer_index = tuple.1;
             }
+        }
+        RunEndEncoded(run_ends_field, values_field) => {
+            node_index += 1;
+
+            let tuple = skip_field(run_ends_field.data_type(), node_index, buffer_index)?;
+            node_index = tuple.0;
+            buffer_index = tuple.1;
+
+            let tuple = skip_field(values_field.data_type(), node_index, buffer_index)?;
+            node_index = tuple.0;
+            buffer_index = tuple.1;
         }
         Dictionary(_, _) => {
             node_index += 1;
@@ -1191,7 +1246,7 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 mod tests {
     use super::*;
 
-    use arrow_array::builder::UnionBuilder;
+    use arrow_array::builder::{PrimitiveRunBuilder, UnionBuilder};
     use arrow_array::types::*;
     use arrow_buffer::ArrowNativeType;
     use arrow_data::ArrayDataBuilder;
@@ -1227,6 +1282,11 @@ mod tests {
         ];
         let struct_data_type = DataType::Struct(struct_fields);
 
+        let run_encoded_data_type = DataType::RunEndEncoded(
+            Box::new(Field::new("run_ends", DataType::Int16, false)),
+            Box::new(Field::new("values", DataType::Int32, true)),
+        );
+
         // define schema
         Schema::new(vec![
             Field::new("f0", DataType::UInt32, false),
@@ -1239,9 +1299,10 @@ mod tests {
             Field::new("f7", DataType::FixedSizeBinary(3), true),
             Field::new("f8", fixed_size_list_data_type, false),
             Field::new("f9", struct_data_type, false),
-            Field::new("f10", DataType::Boolean, false),
-            Field::new("f11", dict_data_type, false),
-            Field::new("f12", DataType::Utf8, false),
+            Field::new("f10", run_encoded_data_type, false),
+            Field::new("f11", DataType::Boolean, false),
+            Field::new("f12", dict_data_type, false),
+            Field::new("f13", DataType::Utf8, false),
         ])
     }
 
@@ -1296,14 +1357,19 @@ mod tests {
             .unwrap();
         let array9: ArrayRef = Arc::new(StructArray::from(array9));
 
-        let array10 = BooleanArray::from(vec![false, false, true]);
+        let array10_input = vec![Some(1_i32), None, None];
+        let mut array10_builder = PrimitiveRunBuilder::<Int16Type, Int32Type>::new();
+        array10_builder.extend(array10_input.into_iter());
+        let array10 = array10_builder.finish();
 
-        let array11_values = StringArray::from(vec!["x", "yy", "zzz"]);
-        let array11_keys = Int8Array::from_iter_values([1, 1, 2]);
-        let array11 =
-            DictionaryArray::<Int8Type>::try_new(&array11_keys, &array11_values).unwrap();
+        let array11 = BooleanArray::from(vec![false, false, true]);
 
-        let array12 = StringArray::from(vec!["a", "bb", "ccc"]);
+        let array12_values = StringArray::from(vec!["x", "yy", "zzz"]);
+        let array12_keys = Int8Array::from_iter_values([1, 1, 2]);
+        let array12 =
+            DictionaryArray::<Int8Type>::try_new(&array12_keys, &array12_values).unwrap();
+
+        let array13 = StringArray::from(vec!["a", "bb", "ccc"]);
 
         // create record batch
         RecordBatch::try_new(
@@ -1322,6 +1388,7 @@ mod tests {
                 Arc::new(array10),
                 Arc::new(array11),
                 Arc::new(array12),
+                Arc::new(array13),
             ],
         )
         .unwrap()
@@ -1508,6 +1575,29 @@ mod tests {
     #[test]
     fn test_roundtrip_sparse_union() {
         check_union_with_builder(UnionBuilder::new_sparse());
+    }
+
+    #[test]
+    fn test_roundtrip_stream_run_array() {
+        let run_array_1: Int32RunArray =
+            vec!["a", "a", "b", "c", "c"].into_iter().collect();
+
+        let run_array_2_inupt = vec![Some(1_i32), None, None, Some(2), Some(2)];
+        let mut run_array_2_builder = PrimitiveRunBuilder::<Int16Type, Int32Type>::new();
+        run_array_2_builder.extend(run_array_2_inupt.into_iter());
+        let run_array_2 = run_array_2_builder.finish();
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("run_array_1", run_array_1.data_type().clone(), false),
+            Field::new("run_array_2", run_array_2.data_type().clone(), false),
+        ]));
+        let input_batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(run_array_1), Arc::new(run_array_2)],
+        )
+        .unwrap();
+        let output_batch = roundtrip_ipc_stream(&input_batch);
+        assert_eq!(input_batch, output_batch);
     }
 
     #[test]
