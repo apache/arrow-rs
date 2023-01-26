@@ -454,7 +454,7 @@ fn array_value_to_string_internal(
     column: &ArrayRef,
     col_idx: usize,
     row_idx: usize,
-    format: Option<&str>
+    format: Option<&str>,
 ) -> Result<String, ArrowError> {
     if column.is_null(row_idx) {
         return Ok("".to_string());
@@ -463,7 +463,9 @@ fn array_value_to_string_internal(
         DataType::Utf8 => make_string!(array::StringArray, column, row_idx),
         DataType::LargeUtf8 => make_string!(array::LargeStringArray, column, row_idx),
         DataType::Binary => make_string_hex!(array::BinaryArray, column, row_idx),
-        DataType::LargeBinary => make_string_hex!(array::LargeBinaryArray, column, row_idx),
+        DataType::LargeBinary => {
+            make_string_hex!(array::LargeBinaryArray, column, row_idx)
+        }
         DataType::FixedSizeBinary(_) => {
             make_string_hex!(array::FixedSizeBinaryArray, column, row_idx)
         }
@@ -611,7 +613,9 @@ fn array_value_to_string_internal(
                 column.data_type()
             ))),
         },
-        DataType::FixedSizeList(_, _) => make_string_from_fixed_size_list!(column, row_idx),
+        DataType::FixedSizeList(_, _) => {
+            make_string_from_fixed_size_list!(column, row_idx)
+        }
         DataType::Struct(_) => {
             let st = column
                 .as_any()
@@ -714,7 +718,10 @@ pub fn temporal_array_value_to_string(
     array_value_to_string_internal(column, col_idx, row_idx, format)
 }
 
-pub fn array_value_to_string(column: &ArrayRef, row_idx: usize) -> Result<String, ArrowError> {
+pub fn array_value_to_string(
+    column: &ArrayRef,
+    row_idx: usize,
+) -> Result<String, ArrowError> {
     array_value_to_string_internal(column, 0, row_idx, None)
 }
 
@@ -820,42 +827,21 @@ mod tests {
             array_value_to_string(&ns_array, 0).unwrap(),
             "PT0.000000001S"
         );
-        assert_eq!(
-            array_value_to_string(&ns_array, 1).unwrap(),
-            ""
-        );
+        assert_eq!(array_value_to_string(&ns_array, 1).unwrap(), "");
 
         let us_array =
             Arc::new(DurationMicrosecondArray::from(vec![Some(1), None])) as ArrayRef;
-        assert_eq!(
-            array_value_to_string(&us_array, 0).unwrap(),
-            "PT0.000001S"
-        );
-        assert_eq!(
-            array_value_to_string(&us_array, 1).unwrap(),
-            ""
-        );
+        assert_eq!(array_value_to_string(&us_array, 0).unwrap(), "PT0.000001S");
+        assert_eq!(array_value_to_string(&us_array, 1).unwrap(), "");
 
         let ms_array =
             Arc::new(DurationMillisecondArray::from(vec![Some(1), None])) as ArrayRef;
-        assert_eq!(
-            array_value_to_string(&ms_array, 0).unwrap(),
-            "PT0.001S"
-        );
-        assert_eq!(
-            array_value_to_string(&ms_array, 1).unwrap(),
-            ""
-        );
+        assert_eq!(array_value_to_string(&ms_array, 0).unwrap(), "PT0.001S");
+        assert_eq!(array_value_to_string(&ms_array, 1).unwrap(), "");
 
         let s_array =
             Arc::new(DurationSecondArray::from(vec![Some(1), None])) as ArrayRef;
-        assert_eq!(
-            array_value_to_string(&s_array, 0).unwrap(),
-            "PT1S"
-        );
-        assert_eq!(
-            array_value_to_string(&s_array, 1).unwrap(),
-            ""
-        );
+        assert_eq!(array_value_to_string(&s_array, 0).unwrap(), "PT1S");
+        assert_eq!(array_value_to_string(&s_array, 1).unwrap(), "");
     }
 }
