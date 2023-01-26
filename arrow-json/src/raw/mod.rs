@@ -129,7 +129,45 @@ impl<R: BufRead> RecordBatchReader for RawReader<R> {
 
 /// [`RawDecoder`] provides a low-level interface for reading JSON data from a byte stream
 ///
-/// See [`RawReader`] for a higher-level interface
+/// See [`RawReader`] for a higher-level interface for interface with [`BufRead`]
+///
+/// The push-based interface facilitates integration with sources that yield arbitrarily
+/// delimited bytes ranges, such as [`BufRead`], or a chunked byte stream received from
+/// object storage
+///
+/// ```
+/// # use std::io::BufRead;
+/// # use arrow_array::RecordBatch;
+/// # use arrow_json::raw::RawDecoder;
+/// # use arrow_schema::{ArrowError, SchemaRef};
+/// #
+/// fn read_from_json<R: BufRead>(
+///     mut reader: R,
+///     schema: SchemaRef,
+///     batch_size: usize,
+/// ) -> Result<impl Iterator<Item = Result<RecordBatch, ArrowError>>, ArrowError> {
+///     let mut decoder = RawDecoder::try_new(schema, batch_size)?;
+///     let mut next = move || {
+///         loop {
+///             // RawDecoder is agnostic that buf doesn't contain whole records
+///             let buf = reader.fill_buf()?;
+///             if buf.is_empty() {
+///                 break; // Input exhausted
+///             }
+///             let read = buf.len();
+///             let decoded = decoder.decode(buf)?;
+///
+///             // Consume the number of bytes read
+///             reader.consume(decoded);
+///             if decoded != read {
+///                 break; // Read batch size
+///             }
+///         }
+///         decoder.flush()
+///     };
+///     Ok(std::iter::from_fn(move || next().transpose()))
+/// }
+/// ```
 pub struct RawDecoder {
     tape: TapeDecoder,
     decoder: Box<dyn ArrayDecoder>,
@@ -169,42 +207,6 @@ impl RawDecoder {
     ///
     /// There is no requirement that `buf` contains a whole number of records, facilitating
     /// integration with arbitrary byte streams, such as that yielded by [`BufRead`]
-    ///
-    /// For example, a similar construction to [`RawReader`] could be implemented with
-    ///
-    /// ```
-    /// # use std::io::BufRead;
-    /// # use arrow_array::RecordBatch;
-    /// # use arrow_json::raw::RawDecoder;
-    /// # use arrow_schema::{ArrowError, SchemaRef};
-    ///
-    /// fn read_from_json<R: BufRead>(
-    ///     mut reader: R,
-    ///     schema: SchemaRef,
-    ///     batch_size: usize,
-    /// ) -> Result<impl Iterator<Item = Result<RecordBatch, ArrowError>>, ArrowError> {
-    ///     let mut decoder = RawDecoder::try_new(schema, batch_size)?;
-    ///     let mut next = move || {
-    ///         loop {
-    ///             // RawDecoder is agnostic that buf doesn't contain whole records
-    ///             let buf = reader.fill_buf()?;
-    ///             if buf.is_empty() {
-    ///                 break; // Input exhausted
-    ///             }
-    ///             let read = buf.len();
-    ///             let decoded = decoder.decode(buf)?;
-    ///
-    ///             // Consume the number of bytes read
-    ///             reader.consume(decoded);
-    ///             if decoded != read {
-    ///                 break; // Read batch size
-    ///             }
-    ///         }
-    ///         decoder.flush()
-    ///     };
-    ///     Ok(std::iter::from_fn(move || next().transpose()))
-    /// }
-    /// ```
     pub fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
         self.tape.decode(buf)
     }
@@ -254,6 +256,7 @@ impl RawDecoder {
 }
 
 trait ArrayDecoder: Send {
+    /// Decode elements from `tape` starting at the indexes contained in `pos`
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError>;
 }
 
@@ -305,22 +308,33 @@ mod tests {
     use std::sync::Arc;
 
     fn do_read(buf: &str, batch_size: usize, schema: SchemaRef) -> Vec<RecordBatch> {
-        let unbuffered = RawReaderBuilder::new(schema.clone())
-            .with_batch_size(batch_size)
-            .build(Cursor::new(buf.as_bytes()))
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
+        let mut unbuffered = vec![];
 
-        for b in [1, 3, 5] {
-            let buffered = RawReaderBuilder::new(schema.clone())
+        // Test with different batch sizes to test for boundary conditions
+        for batch_size in [1, 3, 100, batch_size] {
+            unbuffered = RawReaderBuilder::new(schema.clone())
                 .with_batch_size(batch_size)
-                .build(BufReader::with_capacity(b, Cursor::new(buf.as_bytes())))
+                .build(Cursor::new(buf.as_bytes()))
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
-            assert_eq!(unbuffered, buffered);
+
+            for b in unbuffered.iter().take(unbuffered.len() - 1) {
+                assert_eq!(b.num_rows(), batch_size)
+            }
+
+            // Test with different buffer sizes to test for boundary conditions
+            for b in [1, 3, 5] {
+                let buffered = RawReaderBuilder::new(schema.clone())
+                    .with_batch_size(batch_size)
+                    .build(BufReader::with_capacity(b, Cursor::new(buf.as_bytes())))
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                assert_eq!(unbuffered, buffered);
+            }
         }
+
         unbuffered
     }
 
@@ -443,8 +457,7 @@ mod tests {
         assert_eq!(list.value_offsets(), &[0, 0, 2, 2]);
         assert_eq!(list.null_count(), 1);
         assert!(list.is_null(4));
-        let list_v = list.values();
-        let list_values = as_primitive_array::<Int32Type>(list_v.as_ref());
+        let list_values = as_primitive_array::<Int32Type>(list.values().as_ref());
         assert_eq!(list_values.values(), &[5, 6]);
 
         let nested = as_struct_array(batches[0].column(1).as_ref());
@@ -466,11 +479,66 @@ mod tests {
         assert_eq!(list2.value_offsets(), &[0, 2, 2, 2]);
         assert!(list2.is_null(3));
 
-        let list2_v = list2.values();
-        let list2_values = as_struct_array(list2_v.as_ref());
+        let list2_values = as_struct_array(list2.values().as_ref());
 
         let c = as_primitive_array::<Int32Type>(list2_values.column(0));
         assert_eq!(c.values(), &[3, 4]);
+    }
+
+    #[test]
+    fn test_projection() {
+        let buf = r#"
+           {"list": [], "nested": {"a": 1, "b": 2}, "nested_list": {"list2": [{"c": 3, "d": 5}, {"c": 4}]}}
+           {"list": [5, 6], "nested": {"a": 7}, "nested_list": {"list2": []}}
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "nested",
+                DataType::Struct(vec![Field::new("a", DataType::Int32, false)]),
+                true,
+            ),
+            Field::new(
+                "nested_list",
+                DataType::Struct(vec![Field::new(
+                    "list2",
+                    DataType::List(Box::new(Field::new(
+                        "element",
+                        DataType::Struct(vec![Field::new("d", DataType::Int32, false)]),
+                        false,
+                    ))),
+                    true,
+                )]),
+                true,
+            ),
+        ]));
+
+        let batches = do_read(buf, 1024, schema);
+        assert_eq!(batches.len(), 1);
+
+        let nested = as_struct_array(batches[0].column(0).as_ref());
+        assert_eq!(nested.num_columns(), 1);
+        let a = as_primitive_array::<Int32Type>(nested.column(0).as_ref());
+        assert_eq!(a.null_count(), 0);
+        assert_eq!(a.values(), &[1, 7]);
+
+        let nested_list = as_struct_array(batches[0].column(1).as_ref());
+        assert_eq!(nested_list.num_columns(), 1);
+        assert_eq!(nested_list.null_count(), 0);
+
+        let list2 = as_list_array(nested_list.column(0).as_ref());
+        assert_eq!(list2.value_offsets(), &[0, 2, 2]);
+        assert_eq!(list2.null_count(), 0);
+
+        let child = as_struct_array(list2.values().as_ref());
+        assert_eq!(child.num_columns(), 1);
+        assert_eq!(child.len(), 2);
+        assert_eq!(child.null_count(), 0);
+
+        let c = as_primitive_array::<Int32Type>(child.column(0).as_ref());
+        assert_eq!(c.values(), &[5, 0]);
+        assert_eq!(c.null_count(), 1);
+        assert!(c.is_null(1));
     }
 
     #[test]

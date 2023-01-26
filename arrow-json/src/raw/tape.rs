@@ -18,7 +18,10 @@
 use arrow_schema::ArrowError;
 use std::fmt::{Display, Formatter};
 
-/// A tape encoding inspired by [simdjson]
+/// We decode JSON to a flattened tape representation,
+/// allowing for efficient traversal of the JSON data
+///
+/// This approach is inspired by [simdjson]
 ///
 /// Uses `u32` for offsets to ensure `TapeElement` is 64-bits. A future
 /// iteration may increase this to a custom `u56` type.
@@ -26,14 +29,35 @@ use std::fmt::{Display, Formatter};
 /// [simdjson]: https://github.com/simdjson/simdjson/blob/master/doc/tape.md
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TapeElement {
+    /// The start of an object, i.e. `{`
+    ///
+    /// Contains the offset of the corresponding [`Self::EndObject`]
     StartObject(u32),
+    /// The end of an object, i.e. `}`
+    ///
+    /// Contains the offset of the corresponding [`Self::StartObject`]
     EndObject(u32),
+    /// The start of a list , i.e. `[`
+    ///
+    /// Contains the offset of the corresponding [`Self::EndList`]
     StartList(u32),
+    /// The end of a list , i.e. `]`
+    ///
+    /// Contains the offset of the corresponding [`Self::StartList`]
     EndList(u32),
+    /// A string value
+    ///
+    /// Contains the offset into the [`Tape`] string data
     String(u32),
+    /// A numeric value
+    ///
+    /// Contains the offset into the [`Tape`] string data
     Number(u32),
+    /// A true literal
     True,
+    /// A false literal
     False,
+    /// A null literal
     Null,
 }
 
@@ -53,9 +77,16 @@ impl Display for TapeElement {
     }
 }
 
-/// A decoded JSON tape based on <https://github.com/simdjson/simdjson/blob/master/doc/tape.md>
+/// A decoded JSON tape
+///
+/// String and numeric data is stored alongside an array of [`TapeElement`]
 ///
 /// The first element is always [`TapeElement::Null`]
+///
+/// This approach to decoding JSON is inspired by [simdjson]
+///
+/// [simdjson]: https://github.com/simdjson/simdjson/blob/master/doc/tape.md
+#[derive(Debug)]
 pub struct Tape<'a> {
     elements: &'a [TapeElement],
     strings: &'a str,
@@ -94,7 +125,7 @@ enum DecoderState {
     /// Contains index of start [`TapeElement::StartList`]
     List(u32),
     String,
-    AnyValue,
+    Value,
     Number,
     Colon,
     Escape,
@@ -106,6 +137,22 @@ enum DecoderState {
     ///
     /// Consists of `(literal, decoded length)`
     Literal(Literal, u8),
+}
+
+impl DecoderState {
+    fn as_str(&self) -> &'static str {
+        match self {
+            DecoderState::Object(_) => "object",
+            DecoderState::List(_) => "list",
+            DecoderState::String => "string",
+            DecoderState::Value => "value",
+            DecoderState::Number => "number",
+            DecoderState::Colon => "colon",
+            DecoderState::Escape => "escape",
+            DecoderState::Unicode(_, _, _) => "unicode literal",
+            DecoderState::Literal(d, _) => d.as_str(),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -124,13 +171,16 @@ impl Literal {
         }
     }
 
-    fn bytes(&self) -> &'static [u8] {
+    fn as_str(&self) -> &'static str {
         match self {
             Literal::Null => "null",
             Literal::True => "true",
             Literal::False => "false",
         }
-        .as_bytes()
+    }
+
+    fn bytes(&self) -> &'static [u8] {
+        self.as_str().as_bytes()
     }
 }
 
@@ -187,6 +237,10 @@ impl TapeDecoder {
     }
 
     pub fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
+        if self.num_rows >= self.batch_size {
+            return Ok(0);
+        }
+
         let mut iter = BufIter::new(buf);
 
         while !iter.is_empty() {
@@ -209,7 +263,7 @@ impl TapeDecoder {
                     iter.advance_until(|b| !json_whitespace(b) && b != b',');
                     match next!(iter) {
                         b'"' => {
-                            self.stack.push(DecoderState::AnyValue);
+                            self.stack.push(DecoderState::Value);
                             self.stack.push(DecoderState::Colon);
                             self.stack.push(DecoderState::String);
                         }
@@ -241,7 +295,7 @@ impl TapeDecoder {
                             self.elements.push(TapeElement::EndList(start_idx));
                             self.stack.pop();
                         }
-                        Some(_) => self.stack.push(DecoderState::AnyValue),
+                        Some(_) => self.stack.push(DecoderState::Value),
                         None => break,
                     }
                 }
@@ -261,7 +315,7 @@ impl TapeDecoder {
                         b => unreachable!("{}", b),
                     }
                 }
-                Some(state @ DecoderState::AnyValue) => {
+                Some(state @ DecoderState::Value) => {
                     iter.skip_whitespace();
                     *state = match next!(iter) {
                         b'"' => DecoderState::String,
@@ -354,12 +408,12 @@ impl TapeDecoder {
 
                             match next!(iter) {
                                 b'\\' => {}
-                                b => return Err(err(b, "reading surrogate pair escape")),
+                                b => return Err(err(b, "parsing surrogate pair escape")),
                             }
                         }
                         5 => match next!(iter) {
                             b'u' => {}
-                            b => return Err(err(b, "reading surrogate pair unicode")),
+                            b => return Err(err(b, "parsing surrogate pair unicode")),
                         },
                         6..=9 => *low = *low << 4 | parse_hex(next!(iter))? as u16,
                         _ => {
@@ -380,7 +434,10 @@ impl TapeDecoder {
     /// Finishes the current [`Tape`]
     pub fn finish(&self) -> Result<Tape<'_>, ArrowError> {
         if let Some(b) = self.stack.last() {
-            return Err(ArrowError::JsonError(format!("Record truncated: {:?}", b)));
+            return Err(ArrowError::JsonError(format!(
+                "Truncated record whilst reading {}",
+                b.as_str()
+            )));
         }
 
         if self.offsets.len() >= u32::MAX as usize {
@@ -483,7 +540,10 @@ impl<'a> ExactSizeIterator for BufIter<'a> {}
 
 /// Returns an error for a given byte `b` and context `ctx`
 fn err(b: u8, ctx: &str) -> ArrowError {
-    ArrowError::JsonError(format!("Encountered unexpected {} whilst {ctx}", b as char))
+    ArrowError::JsonError(format!(
+        "Encountered unexpected '{}' whilst {ctx}",
+        b as char
+    ))
 }
 
 /// Creates a character from an UTF-16 surrogate pair
@@ -639,5 +699,86 @@ mod tests {
                 76, 77
             ]
         )
+    }
+
+    #[test]
+    fn test_invalid() {
+        // Test invalid
+        let mut decoder = TapeDecoder::new(16, 2);
+        let err = decoder.decode(b"hello").unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Json error: Encountered unexpected 'h' whilst trimming leading whitespace"
+        );
+
+        let mut decoder = TapeDecoder::new(16, 2);
+        let err = decoder.decode(b"{\"hello\": }").unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Json error: Encountered unexpected '}' whilst parsing value"
+        );
+
+        let mut decoder = TapeDecoder::new(16, 2);
+        let err = decoder
+            .decode(b"{\"hello\": [ false, tru ]}")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "Json error: Encountered unexpected ' ' whilst parsing literal"
+        );
+
+        let mut decoder = TapeDecoder::new(16, 2);
+        let err = decoder
+            .decode(b"{\"hello\": \"\\ud8\"}")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "Json error: Encountered unexpected '\"' whilst unicode escape"
+        );
+
+        // Missing surrogate pair
+        let mut decoder = TapeDecoder::new(16, 2);
+        let err = decoder
+            .decode(b"{\"hello\": \"\\ud83d\"}")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "Json error: Encountered unexpected '\"' whilst parsing surrogate pair escape"
+        );
+
+        // Test truncation
+        let mut decoder = TapeDecoder::new(16, 2);
+        decoder.decode(b"{\"he").unwrap();
+        let err = decoder.finish().unwrap_err().to_string();
+        assert_eq!(err, "Json error: Truncated record whilst reading string");
+
+        let mut decoder = TapeDecoder::new(16, 2);
+        decoder.decode(b"{\"hello\" : ").unwrap();
+        let err = decoder.finish().unwrap_err().to_string();
+        assert_eq!(err, "Json error: Truncated record whilst reading value");
+
+        let mut decoder = TapeDecoder::new(16, 2);
+        decoder.decode(b"{\"hello\" : [").unwrap();
+        let err = decoder.finish().unwrap_err().to_string();
+        assert_eq!(err, "Json error: Truncated record whilst reading list");
+
+        let mut decoder = TapeDecoder::new(16, 2);
+        decoder.decode(b"{\"hello\" : tru").unwrap();
+        let err = decoder.finish().unwrap_err().to_string();
+        assert_eq!(err, "Json error: Truncated record whilst reading true");
+
+        let mut decoder = TapeDecoder::new(16, 2);
+        decoder.decode(b"{\"hello\" : nu").unwrap();
+        let err = decoder.finish().unwrap_err().to_string();
+        assert_eq!(err, "Json error: Truncated record whilst reading null");
+
+        // Test invalid UTF-8
+        let mut decoder = TapeDecoder::new(16, 2);
+        decoder.decode(b"{\"hello\" : \"world\xFF\"}").unwrap();
+        let err = decoder.finish().unwrap_err().to_string();
+        assert_eq!(err, "Json error: Encountered non-UTF-8 data");
     }
 }
