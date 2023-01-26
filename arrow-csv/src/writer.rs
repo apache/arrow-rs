@@ -66,7 +66,7 @@
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_cast::display::{
-    array_value_to_string, datetime_array_value_to_string, lexical_to_string,
+    array_value_to_string, lexical_to_string, temporal_array_value_to_string,
 };
 use arrow_schema::*;
 use std::io::Write;
@@ -86,6 +86,13 @@ where
 {
     let c = array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
     lexical_to_string(c.value(i))
+}
+
+fn invalid_cast_error(dt: &str, col_idx: usize, row_idx: usize) -> ArrowError {
+    ArrowError::CastError(format!(
+        "Cannot cast to {} at col index: {} row index: {}",
+        dt, col_idx, row_idx
+    ))
 }
 
 /// A CSV writer
@@ -161,55 +168,63 @@ impl<W: Write> Writer<W> {
                 DataType::Boolean => array_value_to_string(col, row_index)?.to_string(),
                 DataType::Utf8 => array_value_to_string(col, row_index)?.to_string(),
                 DataType::LargeUtf8 => array_value_to_string(col, row_index)?.to_string(),
-                DataType::Date32 => datetime_array_value_to_string(
+                DataType::Date32 => temporal_array_value_to_string(
                     col,
+                    col_index,
                     row_index,
                     self.date_format.as_deref(),
                 )?
                 .to_string(),
-                DataType::Date64 => datetime_array_value_to_string(
+                DataType::Date64 => temporal_array_value_to_string(
                     col,
+                    col_index,
                     row_index,
                     self.datetime_format.as_deref(),
                 )?
                 .to_string(),
-                DataType::Time32(TimeUnit::Second) => datetime_array_value_to_string(
+                DataType::Time32(TimeUnit::Second) => temporal_array_value_to_string(
                     col,
+                    col_index,
                     row_index,
                     self.time_format.as_deref(),
                 )?
                 .to_string(),
                 DataType::Time32(TimeUnit::Millisecond) => {
-                    datetime_array_value_to_string(
+                    temporal_array_value_to_string(
                         col,
+                        col_index,
                         row_index,
                         self.time_format.as_deref(),
                     )?
                     .to_string()
                 }
                 DataType::Time64(TimeUnit::Microsecond) => {
-                    datetime_array_value_to_string(
+                    temporal_array_value_to_string(
                         col,
+                        col_index,
                         row_index,
                         self.time_format.as_deref(),
                     )?
                     .to_string()
                 }
-                DataType::Time64(TimeUnit::Nanosecond) => datetime_array_value_to_string(
+                DataType::Time64(TimeUnit::Nanosecond) => temporal_array_value_to_string(
                     col,
+                    col_index,
                     row_index,
                     self.time_format.as_deref(),
                 )?
                 .to_string(),
                 DataType::Timestamp(_, time_zone) => match time_zone {
-                    Some(_tz) => datetime_array_value_to_string(
+                    Some(_tz) => temporal_array_value_to_string(
                         col,
+                        col_index,
                         row_index,
                         self.timestamp_tz_format.as_deref(),
                     )?
                     .to_string(),
-                    None => datetime_array_value_to_string(
+                    None => temporal_array_value_to_string(
                         col,
+                        col_index,
                         row_index,
                         self.timestamp_format.as_deref(),
                     )?
@@ -620,6 +635,37 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         let actual = c3.into_iter().collect::<Vec<_>>();
         let expected = nanoseconds.into_iter().map(Some).collect::<Vec<_>>();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_write_csv_invalid_cast() {
+        let schema = Schema::new(vec![
+            Field::new("c0", DataType::UInt32, false),
+            Field::new("c1", DataType::Date64, false),
+        ]);
+
+        let c0 = UInt32Array::from(vec![Some(123), Some(234)]);
+        let c1 = Date64Array::from(vec![Some(1926632005177), Some(1926632005177685347)]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c0), Arc::new(c1)])
+                .unwrap();
+
+        let mut file = tempfile::tempfile().unwrap();
+        let mut writer = Writer::new(&mut file);
+        let batches = vec![&batch, &batch];
+
+        for batch in batches {
+            writer
+                .write(batch)
+                .map_err(|e| {
+                    dbg!(e.to_string());
+                    assert!(e.to_string().ends_with(
+                        invalid_cast_error("Date64", 1, 1).to_string().as_str()
+                    ))
+                })
+                .unwrap_err();
+        }
+        drop(writer);
     }
 
     #[test]
