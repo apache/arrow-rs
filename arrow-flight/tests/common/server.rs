@@ -353,9 +353,15 @@ impl FlightService for TestFlightServer {
             .take()
             .ok_or_else(|| Status::internal("No do_get response configured"))?;
 
+        let schema = if let Some(Ok(batch)) = batches.get(0) {
+            batch.schema()
+        } else {
+            Arc::new(Schema::new(vec![]))
+        };
+
         let batch_stream = futures::stream::iter(batches).map_err(Into::into);
 
-        let stream = FlightDataEncoderBuilder::new()
+        let stream = FlightDataEncoderBuilder::new(schema)
             .build(batch_stream)
             .map_err(Into::into);
 

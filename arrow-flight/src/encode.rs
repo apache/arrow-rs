@@ -70,8 +70,8 @@ pub struct FlightDataEncoderBuilder {
     options: IpcWriteOptions,
     /// Metadata to add to the schema message
     app_metadata: Bytes,
-    /// Optional schema, if known before data.
-    schema: Option<SchemaRef>,
+    /// Schema to send
+    schema: SchemaRef,
 }
 
 /// Default target size for encoded [`FlightData`].
@@ -80,20 +80,14 @@ pub struct FlightDataEncoderBuilder {
 /// somewhat inexact, so we set it to 2MB.
 pub const GRPC_TARGET_MAX_FLIGHT_SIZE_BYTES: usize = 2097152;
 
-impl Default for FlightDataEncoderBuilder {
-    fn default() -> Self {
+impl FlightDataEncoderBuilder {
+    pub fn new(schema: SchemaRef) -> Self {
         Self {
             max_flight_data_size: GRPC_TARGET_MAX_FLIGHT_SIZE_BYTES,
             options: IpcWriteOptions::default(),
             app_metadata: Bytes::new(),
-            schema: None,
+            schema,
         }
-    }
-}
-
-impl FlightDataEncoderBuilder {
-    pub fn new() -> Self {
-        Self::default()
     }
 
     /// Set the (approximate) maximum size, in bytes, of the
@@ -122,15 +116,6 @@ impl FlightDataEncoderBuilder {
     /// Set the [`IpcWriteOptions`] used to encode the [`RecordBatch`]es for transport.
     pub fn with_options(mut self, options: IpcWriteOptions) -> Self {
         self.options = options;
-        self
-    }
-
-    /// Specify a schema for the RecordBatches being sent. If a schema
-    /// is not specified, an encoded Schema message will be sent when
-    /// the first [`RecordBatch`], if any, is encoded. Some clients
-    /// expect a Schema message even if there is no data sent.
-    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
-        self.schema = Some(schema);
         self
     }
 
@@ -181,7 +166,7 @@ pub struct FlightDataEncoder {
 impl FlightDataEncoder {
     fn new(
         inner: BoxStream<'static, Result<RecordBatch>>,
-        schema: Option<SchemaRef>,
+        schema: SchemaRef,
         max_flight_data_size: usize,
         options: IpcWriteOptions,
         app_metadata: Bytes,
@@ -196,10 +181,8 @@ impl FlightDataEncoder {
             done: false,
         };
 
-        // If schema is known up front, enqueue it immediately
-        if let Some(schema) = schema {
-            encoder.encode_schema(&schema);
-        }
+        // Since the schema is known, enqueue it immediately
+        encoder.encode_schema(&schema);
         encoder
     }
 
@@ -776,7 +759,7 @@ mod tests {
         for max_flight_data_size in [1024, 2021, 5000] {
             println!("Encoding {num_rows} with a maximum size of {max_flight_data_size}");
 
-            let mut stream = FlightDataEncoderBuilder::new()
+            let mut stream = FlightDataEncoderBuilder::new(batch.schema())
                 .with_max_flight_data_size(max_flight_data_size)
                 .build(futures::stream::iter([Ok(batch.clone())]));
 

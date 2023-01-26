@@ -754,7 +754,7 @@ async fn test_flight_data() -> Vec<FlightData> {
     .unwrap();
 
     // encode the batch as a stream of FlightData
-    FlightDataEncoderBuilder::new()
+    FlightDataEncoderBuilder::new(batch.schema())
         .build(futures::stream::iter(vec![Ok(batch)]))
         .try_collect()
         .await
@@ -769,7 +769,7 @@ async fn test_flight_data2() -> Vec<FlightData> {
     .unwrap();
 
     // encode the batch as a stream of FlightData
-    FlightDataEncoderBuilder::new()
+    FlightDataEncoderBuilder::new(batch.schema())
         .build(futures::stream::iter(vec![Ok(batch)]))
         .try_collect()
         .await
