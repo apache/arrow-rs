@@ -450,128 +450,36 @@ fn append_map_field_string(
 ///
 /// Note this function is quite inefficient and is unlikely to be
 /// suitable for converting large arrays or record batches.
-pub fn array_value_to_string(
-    column: &ArrayRef,
-    row: usize,
-) -> Result<String, ArrowError> {
-    if column.is_null(row) {
-        return Ok("".to_string());
-    }
-    match column.data_type() {
-        DataType::Utf8 => make_string!(array::StringArray, column, row),
-        DataType::LargeUtf8 => make_string!(array::LargeStringArray, column, row),
-        DataType::Binary => make_string_hex!(array::BinaryArray, column, row),
-        DataType::LargeBinary => make_string_hex!(array::LargeBinaryArray, column, row),
-        DataType::FixedSizeBinary(_) => {
-            make_string_hex!(array::FixedSizeBinaryArray, column, row)
-        }
-        DataType::Boolean => make_string!(array::BooleanArray, column, row),
-        DataType::Int8 => make_string!(array::Int8Array, column, row),
-        DataType::Int16 => make_string!(array::Int16Array, column, row),
-        DataType::Int32 => make_string!(array::Int32Array, column, row),
-        DataType::Int64 => make_string!(array::Int64Array, column, row),
-        DataType::UInt8 => make_string!(array::UInt8Array, column, row),
-        DataType::UInt16 => make_string!(array::UInt16Array, column, row),
-        DataType::UInt32 => make_string!(array::UInt32Array, column, row),
-        DataType::UInt64 => make_string!(array::UInt64Array, column, row),
-        DataType::Float16 => make_string!(array::Float16Array, column, row),
-        DataType::Float32 => make_string!(array::Float32Array, column, row),
-        DataType::Float64 => make_string!(array::Float64Array, column, row),
-        DataType::Decimal128(..) => make_string_from_decimal(column, row),
-        DataType::List(_) => make_string_from_list!(column, row),
-        DataType::LargeList(_) => make_string_from_large_list!(column, row),
-        DataType::Dictionary(index_type, _value_type) => match **index_type {
-            DataType::Int8 => dict_array_value_to_string::<Int8Type>(column, row),
-            DataType::Int16 => dict_array_value_to_string::<Int16Type>(column, row),
-            DataType::Int32 => dict_array_value_to_string::<Int32Type>(column, row),
-            DataType::Int64 => dict_array_value_to_string::<Int64Type>(column, row),
-            DataType::UInt8 => dict_array_value_to_string::<UInt8Type>(column, row),
-            DataType::UInt16 => dict_array_value_to_string::<UInt16Type>(column, row),
-            DataType::UInt32 => dict_array_value_to_string::<UInt32Type>(column, row),
-            DataType::UInt64 => dict_array_value_to_string::<UInt64Type>(column, row),
-            _ => Err(ArrowError::InvalidArgumentError(format!(
-                "Pretty printing not supported for {:?} due to index type",
-                column.data_type()
-            ))),
-        },
-        DataType::FixedSizeList(_, _) => make_string_from_fixed_size_list!(column, row),
-        DataType::Struct(_) => {
-            let st = column
-                .as_any()
-                .downcast_ref::<array::StructArray>()
-                .ok_or_else(|| {
-                    ArrowError::InvalidArgumentError(
-                        "Repl error: could not convert struct column to struct array."
-                            .to_string(),
-                    )
-                })?;
-
-            let mut s = String::new();
-            s.push('{');
-            let mut kv_iter = st.columns().iter().zip(st.column_names());
-            if let Some((col, name)) = kv_iter.next() {
-                append_struct_field_string(&mut s, name, col, row)?;
-            }
-            for (col, name) in kv_iter {
-                s.push_str(", ");
-                append_struct_field_string(&mut s, name, col, row)?;
-            }
-            s.push('}');
-
-            Ok(s)
-        }
-        DataType::Map(_, _) => {
-            let map_array =
-                column.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
-                    ArrowError::InvalidArgumentError(
-                        "Repl error: could not convert column to map array.".to_string(),
-                    )
-                })?;
-            let map_entry = map_array.value(row);
-            let st = map_entry
-                .as_any()
-                .downcast_ref::<StructArray>()
-                .ok_or_else(|| {
-                    ArrowError::InvalidArgumentError(
-                        "Repl error: could not convert map entry to struct array."
-                            .to_string(),
-                    )
-                })?;
-            let mut s = String::new();
-            s.push('{');
-            let entries_count = st.column(0).len();
-            for i in 0..entries_count {
-                if i > 0 {
-                    s.push_str(", ");
-                }
-                append_map_field_string(&mut s, st.column(0), i)?;
-                s.push_str(": ");
-                append_map_field_string(&mut s, st.column(1), i)?;
-            }
-            s.push('}');
-
-            Ok(s)
-        }
-        DataType::Union(field_vec, type_ids, mode) => {
-            union_to_string(column, row, field_vec, type_ids, mode)
-        }
-        _ => Err(ArrowError::InvalidArgumentError(format!(
-            "Pretty printing not implemented for {:?} type",
-            column.data_type()
-        ))),
-    }
-}
-
-pub fn temporal_array_value_to_string(
+fn array_value_to_string_internal(
     column: &ArrayRef,
     col_idx: usize,
     row_idx: usize,
-    format: Option<&str>,
+    format: Option<&str>
 ) -> Result<String, ArrowError> {
     if column.is_null(row_idx) {
         return Ok("".to_string());
     }
     match column.data_type() {
+        DataType::Utf8 => make_string!(array::StringArray, column, row_idx),
+        DataType::LargeUtf8 => make_string!(array::LargeStringArray, column, row_idx),
+        DataType::Binary => make_string_hex!(array::BinaryArray, column, row_idx),
+        DataType::LargeBinary => make_string_hex!(array::LargeBinaryArray, column, row_idx),
+        DataType::FixedSizeBinary(_) => {
+            make_string_hex!(array::FixedSizeBinaryArray, column, row_idx)
+        }
+        DataType::Boolean => make_string!(array::BooleanArray, column, row_idx),
+        DataType::Int8 => make_string!(array::Int8Array, column, row_idx),
+        DataType::Int16 => make_string!(array::Int16Array, column, row_idx),
+        DataType::Int32 => make_string!(array::Int32Array, column, row_idx),
+        DataType::Int64 => make_string!(array::Int64Array, column, row_idx),
+        DataType::UInt8 => make_string!(array::UInt8Array, column, row_idx),
+        DataType::UInt16 => make_string!(array::UInt16Array, column, row_idx),
+        DataType::UInt32 => make_string!(array::UInt32Array, column, row_idx),
+        DataType::UInt64 => make_string!(array::UInt64Array, column, row_idx),
+        DataType::Float16 => make_string!(array::Float16Array, column, row_idx),
+        DataType::Float32 => make_string!(array::Float32Array, column, row_idx),
+        DataType::Float64 => make_string!(array::Float64Array, column, row_idx),
+        DataType::Decimal128(..) => make_string_from_decimal(column, row_idx),
         DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Second => {
             handle_string_datetime!(
                 array::TimestampSecondArray,
@@ -687,6 +595,83 @@ pub fn temporal_array_value_to_string(
                 make_string_interval_month_day_nano!(column, row_idx)
             }
         },
+        DataType::List(_) => make_string_from_list!(column, row_idx),
+        DataType::LargeList(_) => make_string_from_large_list!(column, row_idx),
+        DataType::Dictionary(index_type, _value_type) => match **index_type {
+            DataType::Int8 => dict_array_value_to_string::<Int8Type>(column, row_idx),
+            DataType::Int16 => dict_array_value_to_string::<Int16Type>(column, row_idx),
+            DataType::Int32 => dict_array_value_to_string::<Int32Type>(column, row_idx),
+            DataType::Int64 => dict_array_value_to_string::<Int64Type>(column, row_idx),
+            DataType::UInt8 => dict_array_value_to_string::<UInt8Type>(column, row_idx),
+            DataType::UInt16 => dict_array_value_to_string::<UInt16Type>(column, row_idx),
+            DataType::UInt32 => dict_array_value_to_string::<UInt32Type>(column, row_idx),
+            DataType::UInt64 => dict_array_value_to_string::<UInt64Type>(column, row_idx),
+            _ => Err(ArrowError::InvalidArgumentError(format!(
+                "Pretty printing not supported for {:?} due to index type",
+                column.data_type()
+            ))),
+        },
+        DataType::FixedSizeList(_, _) => make_string_from_fixed_size_list!(column, row_idx),
+        DataType::Struct(_) => {
+            let st = column
+                .as_any()
+                .downcast_ref::<array::StructArray>()
+                .ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(
+                        "Repl error: could not convert struct column to struct array."
+                            .to_string(),
+                    )
+                })?;
+
+            let mut s = String::new();
+            s.push('{');
+            let mut kv_iter = st.columns().iter().zip(st.column_names());
+            if let Some((col, name)) = kv_iter.next() {
+                append_struct_field_string(&mut s, name, col, row_idx)?;
+            }
+            for (col, name) in kv_iter {
+                s.push_str(", ");
+                append_struct_field_string(&mut s, name, col, row_idx)?;
+            }
+            s.push('}');
+
+            Ok(s)
+        }
+        DataType::Map(_, _) => {
+            let map_array =
+                column.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(
+                        "Repl error: could not convert column to map array.".to_string(),
+                    )
+                })?;
+            let map_entry = map_array.value(row_idx);
+            let st = map_entry
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(
+                        "Repl error: could not convert map entry to struct array."
+                            .to_string(),
+                    )
+                })?;
+            let mut s = String::new();
+            s.push('{');
+            let entries_count = st.column(0).len();
+            for i in 0..entries_count {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                append_map_field_string(&mut s, st.column(0), i)?;
+                s.push_str(": ");
+                append_map_field_string(&mut s, st.column(1), i)?;
+            }
+            s.push('}');
+
+            Ok(s)
+        }
+        DataType::Union(field_vec, type_ids, mode) => {
+            union_to_string(column, row_idx, field_vec, type_ids, mode)
+        }
         DataType::Duration(unit) => match *unit {
             TimeUnit::Second => {
                 make_string_from_duration!(array::DurationSecondArray, column, row_idx)
@@ -718,6 +703,19 @@ pub fn temporal_array_value_to_string(
             column.data_type()
         ))),
     }
+}
+
+pub fn temporal_array_value_to_string(
+    column: &ArrayRef,
+    col_idx: usize,
+    row_idx: usize,
+    format: Option<&str>,
+) -> Result<String, ArrowError> {
+    array_value_to_string_internal(column, col_idx, row_idx, format)
+}
+
+pub fn array_value_to_string(column: &ArrayRef, row_idx: usize) -> Result<String, ArrowError> {
+    array_value_to_string_internal(column, 0, row_idx, None)
 }
 
 /// Converts the value of the union array at `row` to a String
@@ -815,48 +813,48 @@ mod tests {
     }
 
     #[test]
-    fn test_temporal_array_value_to_string_duration() {
+    fn test_array_value_to_string_duration() {
         let ns_array =
             Arc::new(DurationNanosecondArray::from(vec![Some(1), None])) as ArrayRef;
         assert_eq!(
-            temporal_array_value_to_string(&ns_array, 0, 0, None).unwrap(),
+            array_value_to_string(&ns_array, 0).unwrap(),
             "PT0.000000001S"
         );
         assert_eq!(
-            temporal_array_value_to_string(&ns_array, 0, 1, None).unwrap(),
+            array_value_to_string(&ns_array, 1).unwrap(),
             ""
         );
 
         let us_array =
             Arc::new(DurationMicrosecondArray::from(vec![Some(1), None])) as ArrayRef;
         assert_eq!(
-            temporal_array_value_to_string(&us_array, 0, 0, None).unwrap(),
+            array_value_to_string(&us_array, 0).unwrap(),
             "PT0.000001S"
         );
         assert_eq!(
-            temporal_array_value_to_string(&us_array, 0, 1, None).unwrap(),
+            array_value_to_string(&us_array, 1).unwrap(),
             ""
         );
 
         let ms_array =
             Arc::new(DurationMillisecondArray::from(vec![Some(1), None])) as ArrayRef;
         assert_eq!(
-            temporal_array_value_to_string(&ms_array, 0, 0, None).unwrap(),
+            array_value_to_string(&ms_array, 0).unwrap(),
             "PT0.001S"
         );
         assert_eq!(
-            temporal_array_value_to_string(&ms_array, 0, 1, None).unwrap(),
+            array_value_to_string(&ms_array, 1).unwrap(),
             ""
         );
 
         let s_array =
             Arc::new(DurationSecondArray::from(vec![Some(1), None])) as ArrayRef;
         assert_eq!(
-            temporal_array_value_to_string(&s_array, 0, 0, None).unwrap(),
+            array_value_to_string(&s_array, 0).unwrap(),
             "PT1S"
         );
         assert_eq!(
-            temporal_array_value_to_string(&s_array, 0, 1, None).unwrap(),
+            array_value_to_string(&s_array, 1).unwrap(),
             ""
         );
     }
