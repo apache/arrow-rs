@@ -54,7 +54,7 @@ rustls-pemfile = { version = "1.0", default-features = false, optional = true }
 
 # AWS Profile support
 aws-types = { version = "0.53", optional = true }
-aws-credential-types = { version = "0.53", optional = true }
+aws-credential-types = { version = "0.54", optional = true }
 aws-config = { version = "0.53", optional = true }
 
 [features]
