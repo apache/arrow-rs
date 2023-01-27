@@ -100,7 +100,7 @@ where
                 })?;
                 if ix >= len {
                     return Err(ArrowError::ComputeError(
-                        format!("Array index out of bounds, cannot get item at index {} from {} entries", ix, len))
+                        format!("Array index out of bounds, cannot get item at index {ix} from {len} entries"))
                     );
                 }
                 Ok(())
@@ -112,7 +112,7 @@ where
                 })?;
                 if ix >= len {
                     return Err(ArrowError::ComputeError(
-                        format!("Array index out of bounds, cannot get item at index {} from {} entries", ix, len))
+                        format!("Array index out of bounds, cannot get item at index {ix} from {len} entries"))
                     );
                 }
                 Ok(())
@@ -340,7 +340,7 @@ where
                 if indices_data.is_null(index) {
                     T::default()
                 } else {
-                    panic!("Out-of-bounds index {}", index)
+                    panic!("Out-of-bounds index {index}")
                 }
             }
         })

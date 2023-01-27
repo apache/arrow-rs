@@ -41,7 +41,7 @@ impl std::fmt::Display for Error {
             self.message, self.retries
         )?;
         if let Some(source) = &self.source {
-            write!(f, ": {}", source)?;
+            write!(f, ": {source}")?;
         }
         Ok(())
     }
@@ -171,7 +171,7 @@ impl RetryExt for reqwest::RequestBuilder {
                                     true => match r.text().await {
                                         Ok(message) if !message.is_empty() => message,
                                         Ok(_) => "No Body".to_string(),
-                                        Err(e) => format!("error getting response body: {}", e)
+                                        Err(e) => format!("error getting response body: {e}")
                                     }
                                     false => status.to_string(),
                                 };

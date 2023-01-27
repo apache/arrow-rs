@@ -578,8 +578,7 @@ impl RowConverter {
     pub fn new(fields: Vec<SortField>) -> Result<Self, ArrowError> {
         if !Self::supports_fields(&fields) {
             return Err(ArrowError::NotYetImplemented(format!(
-                "Row format support not yet implemented for: {:?}",
-                fields
+                "Row format support not yet implemented for: {fields:?}"
             )));
         }
 

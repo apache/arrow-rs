@@ -126,8 +126,7 @@ pub fn from_thrift(
             let null_count = stats.null_count.unwrap_or(0);
             assert!(
                 null_count >= 0,
-                "Statistics null count is negative ({})",
-                null_count
+                "Statistics null count is negative ({null_count})"
             );
 
             // Generic null count.
@@ -399,14 +398,14 @@ impl Statistics {
 impl fmt::Display for Statistics {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Statistics::Boolean(typed) => write!(f, "{}", typed),
-            Statistics::Int32(typed) => write!(f, "{}", typed),
-            Statistics::Int64(typed) => write!(f, "{}", typed),
-            Statistics::Int96(typed) => write!(f, "{}", typed),
-            Statistics::Float(typed) => write!(f, "{}", typed),
-            Statistics::Double(typed) => write!(f, "{}", typed),
-            Statistics::ByteArray(typed) => write!(f, "{}", typed),
-            Statistics::FixedLenByteArray(typed) => write!(f, "{}", typed),
+            Statistics::Boolean(typed) => write!(f, "{typed}"),
+            Statistics::Int32(typed) => write!(f, "{typed}"),
+            Statistics::Int64(typed) => write!(f, "{typed}"),
+            Statistics::Int96(typed) => write!(f, "{typed}"),
+            Statistics::Float(typed) => write!(f, "{typed}"),
+            Statistics::Double(typed) => write!(f, "{typed}"),
+            Statistics::ByteArray(typed) => write!(f, "{typed}"),
+            Statistics::FixedLenByteArray(typed) => write!(f, "{typed}"),
         }
     }
 }
@@ -536,17 +535,17 @@ impl<T: ParquetValueType> fmt::Display for ValueStatistics<T> {
         write!(f, "{{")?;
         write!(f, "min: ")?;
         match self.min {
-            Some(ref value) => write!(f, "{}", value)?,
+            Some(ref value) => write!(f, "{value}")?,
             None => write!(f, "N/A")?,
         }
         write!(f, ", max: ")?;
         match self.max {
-            Some(ref value) => write!(f, "{}", value)?,
+            Some(ref value) => write!(f, "{value}")?,
             None => write!(f, "N/A")?,
         }
         write!(f, ", distinct_count: ")?;
         match self.distinct_count {
-            Some(value) => write!(f, "{}", value)?,
+            Some(value) => write!(f, "{value}")?,
             None => write!(f, "N/A")?,
         }
         write!(f, ", null_count: {}", self.null_count)?;
@@ -619,14 +618,14 @@ mod tests {
     fn test_statistics_debug() {
         let stats = Statistics::int32(Some(1), Some(12), None, 12, true);
         assert_eq!(
-            format!("{:?}", stats),
+            format!("{stats:?}"),
             "Int32({min: Some(1), max: Some(12), distinct_count: None, null_count: 12, \
              min_max_deprecated: true, min_max_backwards_compatible: true})"
         );
 
         let stats = Statistics::int32(None, None, None, 7, false);
         assert_eq!(
-            format!("{:?}", stats),
+            format!("{stats:?}"),
             "Int32({min: None, max: None, distinct_count: None, null_count: 7, \
              min_max_deprecated: false, min_max_backwards_compatible: false})"
         )
@@ -636,13 +635,13 @@ mod tests {
     fn test_statistics_display() {
         let stats = Statistics::int32(Some(1), Some(12), None, 12, true);
         assert_eq!(
-            format!("{}", stats),
+            format!("{stats}"),
             "{min: 1, max: 12, distinct_count: N/A, null_count: 12, min_max_deprecated: true}"
         );
 
         let stats = Statistics::int64(None, None, None, 7, false);
         assert_eq!(
-            format!("{}", stats),
+            format!("{stats}"),
             "{min: N/A, max: N/A, distinct_count: N/A, null_count: 7, min_max_deprecated: \
              false}"
         );
@@ -655,7 +654,7 @@ mod tests {
             true,
         );
         assert_eq!(
-            format!("{}", stats),
+            format!("{stats}"),
             "{min: [1, 0, 0], max: [2, 3, 4], distinct_count: N/A, null_count: 3, \
              min_max_deprecated: true}"
         );
@@ -668,7 +667,7 @@ mod tests {
             false,
         );
         assert_eq!(
-            format!("{}", stats),
+            format!("{stats}"),
             "{min: [1], max: [2], distinct_count: 5, null_count: 7, min_max_deprecated: false}"
         );
     }

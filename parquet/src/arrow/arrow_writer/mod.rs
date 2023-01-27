@@ -363,8 +363,7 @@ fn write_leaves<W: Write>(
         ArrowDataType::FixedSizeList(_, _) | ArrowDataType::Union(_, _, _) | ArrowDataType::RunEndEncoded(_, _) => {
             Err(ParquetError::NYI(
                 format!(
-                    "Attempting to write an Arrow type {:?} to parquet that is not yet implemented",
-                    data_type
+                    "Attempting to write an Arrow type {data_type:?} to parquet that is not yet implemented"
                 )
             ))
         }
@@ -499,8 +498,7 @@ fn write_leaf(
                     _ => {
                         return Err(ParquetError::NYI(
                             format!(
-                                "Attempting to write an Arrow interval type {:?} to parquet that is not yet implemented",
-                                interval_unit
+                                "Attempting to write an Arrow interval type {interval_unit:?} to parquet that is not yet implemented"
                             )
                         ));
                     }
@@ -536,8 +534,8 @@ fn write_leaf(
     Ok(written as i64)
 }
 
-fn write_primitive<'a, T: DataType>(
-    writer: &mut ColumnWriterImpl<'a, T>,
+fn write_primitive<T: DataType>(
+    writer: &mut ColumnWriterImpl<'_, T>,
     values: &[T::T],
     levels: LevelInfo,
 ) -> Result<usize> {
@@ -1197,8 +1195,7 @@ mod tests {
         assert_eq!(
             offset_index.len(),
             10,
-            "Expected 9 pages but got {:#?}",
-            offset_index
+            "Expected 9 pages but got {offset_index:#?}"
         );
     }
 
@@ -1422,10 +1419,10 @@ mod tests {
                     {
                         bloom_filters.push(sbbf.clone());
                     } else {
-                        panic!("No bloom filter for column named {} found", file_column);
+                        panic!("No bloom filter for column named {file_column} found");
                     }
                 } else {
-                    panic!("No column named {} found", file_column);
+                    panic!("No column named {file_column} found");
                 }
             }
 

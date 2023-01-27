@@ -133,13 +133,13 @@ impl ParquetFromCsvError {
 impl Display for ParquetFromCsvError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParquetFromCsvError::CommandLineParseError(e) => write!(f, "{}", e),
-            ParquetFromCsvError::IoError(e) => write!(f, "{}", e),
-            ParquetFromCsvError::ArrowError(e) => write!(f, "{}", e),
-            ParquetFromCsvError::ParquetError(e) => write!(f, "{}", e),
+            ParquetFromCsvError::CommandLineParseError(e) => write!(f, "{e}"),
+            ParquetFromCsvError::IoError(e) => write!(f, "{e}"),
+            ParquetFromCsvError::ArrowError(e) => write!(f, "{e}"),
+            ParquetFromCsvError::ParquetError(e) => write!(f, "{e}"),
             ParquetFromCsvError::WithContext(c, e) => {
-                writeln!(f, "{}", e)?;
-                write!(f, "context: {}", c)
+                writeln!(f, "{e}")?;
+                write!(f, "context: {c}")
             }
         }
     }
@@ -219,7 +219,7 @@ fn compression_from_str(cmp: &str) -> Result<Compression, String> {
         "LZ4" => Ok(Compression::LZ4),
         "ZSTD" => Ok(Compression::ZSTD),
         v => Err(
-            format!("Unknown compression {0} : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help",v)
+            format!("Unknown compression {v} : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help")
         )
     }
 }
@@ -228,10 +228,7 @@ fn writer_version_from_str(cmp: &str) -> Result<WriterVersion, String> {
     match cmp.to_uppercase().as_str() {
         "1" => Ok(WriterVersion::PARQUET_1_0),
         "2" => Ok(WriterVersion::PARQUET_2_0),
-        v => Err(format!(
-            "Unknown writer version {0} : possible values 1, 2",
-            v
-        )),
+        v => Err(format!("Unknown writer version {v} : possible values 1, 2")),
     }
 }
 
@@ -397,7 +394,7 @@ fn main() -> Result<(), ParquetFromCsvError> {
 #[cfg(test)]
 mod tests {
     use std::{
-        io::{Seek, SeekFrom, Write},
+        io::{Seek, Write},
         path::{Path, PathBuf},
     };
 
@@ -424,8 +421,7 @@ mod tests {
         actual = actual[pos..].to_string();
         assert_eq!(
             expected, actual,
-            "help text not match. please update to \n---\n{}\n---\n",
-            actual
+            "help text not match. please update to \n---\n{actual}\n---\n"
         )
     }
 
@@ -527,18 +523,16 @@ mod tests {
         match parse_args(vec!["--parquet-compression", "zip"]) {
             Ok(_) => panic!("unexpected success"),
             Err(e) => assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "error: invalid value 'zip' for '--parquet-compression <PARQUET_COMPRESSION>': Unknown compression ZIP : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help\n"),
         }
     }
 
     fn assert_debug_text(debug_text: &str, name: &str, value: &str) {
-        let pattern = format!(" {}: {}", name, value);
+        let pattern = format!(" {name}: {value}");
         assert!(
             debug_text.contains(&pattern),
-            "\"{}\" not contains \"{}\"",
-            debug_text,
-            pattern
+            "\"{debug_text}\" not contains \"{pattern}\""
         )
     }
 
@@ -571,7 +565,7 @@ mod tests {
         ]));
 
         let reader_builder = configure_reader_builder(&args, arrow_schema);
-        let builder_debug = format!("{:?}", reader_builder);
+        let builder_debug = format!("{reader_builder:?}");
         assert_debug_text(&builder_debug, "has_header", "false");
         assert_debug_text(&builder_debug, "delimiter", "Some(44)");
         assert_debug_text(&builder_debug, "quote", "Some(34)");
@@ -605,7 +599,7 @@ mod tests {
             Field::new("field5", DataType::Utf8, false),
         ]));
         let reader_builder = configure_reader_builder(&args, arrow_schema);
-        let builder_debug = format!("{:?}", reader_builder);
+        let builder_debug = format!("{reader_builder:?}");
         assert_debug_text(&builder_debug, "has_header", "true");
         assert_debug_text(&builder_debug, "delimiter", "Some(9)");
         assert_debug_text(&builder_debug, "quote", "None");
@@ -627,10 +621,10 @@ mod tests {
         {
             let csv = input_file.as_file_mut();
             for index in 1..2000 {
-                write!(csv, "{},\"name_{}\"\r\n", index, index).unwrap();
+                write!(csv, "{index},\"name_{index}\"\r\n").unwrap();
             }
             csv.flush().unwrap();
-            csv.seek(SeekFrom::Start(0)).unwrap();
+            csv.rewind().unwrap();
         }
         let output_parquet = NamedTempFile::new().unwrap();
 

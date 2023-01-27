@@ -173,8 +173,7 @@ impl From<ArrayData> for FixedSizeListArray {
                     assert_eq!(
                         values.len() % *len as usize,
                         0,
-                        "FixedSizeListArray child array length should be a multiple of {}",
-                        len
+                        "FixedSizeListArray child array length should be a multiple of {len}"
                     );
                 }
 

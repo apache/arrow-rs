@@ -852,7 +852,7 @@ mod tests {
 
         assert_eq!(arrow_fields.len(), converted_fields.len());
         for i in 0..arrow_fields.len() {
-            assert_eq!(arrow_fields[i], converted_fields[i], "{}", i);
+            assert_eq!(arrow_fields[i], converted_fields[i], "{i}");
         }
     }
 

@@ -152,7 +152,7 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
             },
             Some(s) if s == "int" => match map.get("isSigned") {
                 Some(&Value::Bool(true)) => match map.get("bitWidth") {
-                    Some(&Value::Number(ref n)) => match n.as_u64() {
+                    Some(Value::Number(n)) => match n.as_u64() {
                         Some(8) => Ok(DataType::Int8),
                         Some(16) => Ok(DataType::Int16),
                         Some(32) => Ok(DataType::Int32),
@@ -166,7 +166,7 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                     )),
                 },
                 Some(&Value::Bool(false)) => match map.get("bitWidth") {
-                    Some(&Value::Number(ref n)) => match n.as_u64() {
+                    Some(Value::Number(n)) => match n.as_u64() {
                         Some(8) => Ok(DataType::UInt8),
                         Some(16) => Ok(DataType::UInt16),
                         Some(32) => Ok(DataType::UInt32),
@@ -226,8 +226,7 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                         UnionMode::Dense
                     } else {
                         return Err(ArrowError::ParseError(format!(
-                            "Unknown union mode {:?} for union",
-                            mode
+                            "Unknown union mode {mode:?} for union"
                         )));
                     };
                     if let Some(type_ids) = map.get("typeIds") {
@@ -256,8 +255,7 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                 }
             }
             Some(other) => Err(ArrowError::ParseError(format!(
-                "invalid or unsupported type name: {} in {:?}",
-                other, json
+                "invalid or unsupported type name: {other} in {json:?}"
             ))),
             None => Err(ArrowError::ParseError("type name missing".to_string())),
         },

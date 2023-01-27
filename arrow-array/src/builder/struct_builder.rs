@@ -174,7 +174,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Struct(fields) => {
             Box::new(StructBuilder::from_fields(fields.clone(), capacity))
         }
-        t => panic!("Data type {:?} is not currently supported", t),
+        t => panic!("Data type {t:?} is not currently supported"),
     }
 }
 

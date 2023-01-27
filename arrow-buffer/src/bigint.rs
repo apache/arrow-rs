@@ -29,7 +29,7 @@ pub struct i256 {
 
 impl std::fmt::Debug for i256 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{self}")
     }
 }
 
@@ -580,7 +580,7 @@ mod tests {
         for v in vals {
             let (t, overflow) = i256::from_bigint_with_overflow(v.clone());
             assert!(!overflow);
-            assert_eq!(t.to_i128(), v.to_i128(), "{} vs {}", v, t);
+            assert_eq!(t.to_i128(), v.to_i128(), "{v} vs {t}");
         }
     }
 
@@ -590,7 +590,7 @@ mod tests {
         let br = BigInt::from_signed_bytes_le(&ir.to_le_bytes());
 
         // Comparison
-        assert_eq!(il.cmp(&ir), bl.cmp(&br), "{} cmp {}", bl, br);
+        assert_eq!(il.cmp(&ir), bl.cmp(&br), "{bl} cmp {br}");
 
         // Conversions
         assert_eq!(i256::from_le_bytes(il.to_le_bytes()), il);
@@ -599,8 +599,8 @@ mod tests {
         assert_eq!(i256::from_be_bytes(ir.to_be_bytes()), ir);
 
         // To i128
-        assert_eq!(il.to_i128(), bl.to_i128(), "{}", bl);
-        assert_eq!(ir.to_i128(), br.to_i128(), "{}", br);
+        assert_eq!(il.to_i128(), bl.to_i128(), "{bl}");
+        assert_eq!(ir.to_i128(), br.to_i128(), "{br}");
 
         // Absolute value
         let (abs, overflow) = i256::from_bigint_with_overflow(bl.abs());
@@ -655,24 +655,12 @@ mod tests {
         match overflow {
             true => assert!(
                 checked.is_none(),
-                "{} * {} = {} vs {} * {} = {}",
-                il,
-                ir,
-                actual,
-                bl,
-                br,
-                expected
+                "{il} * {ir} = {actual} vs {bl} * {br} = {expected}"
             ),
             false => assert_eq!(
                 checked.unwrap(),
                 actual,
-                "{} * {} = {} vs {} * {} = {}",
-                il,
-                ir,
-                actual,
-                bl,
-                br,
-                expected
+                "{il} * {ir} = {actual} vs {bl} * {br} = {expected}"
             ),
         }
 
@@ -687,24 +675,12 @@ mod tests {
             match overflow {
                 true => assert!(
                     checked.is_none(),
-                    "{} ^ {} = {} vs {} * {} = {}",
-                    il,
-                    exp,
-                    actual,
-                    bl,
-                    exp,
-                    expected
+                    "{il} ^ {exp} = {actual} vs {bl} * {exp} = {expected}"
                 ),
                 false => assert_eq!(
                     checked.unwrap(),
                     actual,
-                    "{} ^ {} = {} vs {} * {} = {}",
-                    il,
-                    exp,
-                    actual,
-                    bl,
-                    exp,
-                    expected
+                    "{il} ^ {exp} = {actual} vs {bl} * {exp} = {expected}"
                 ),
             }
         }

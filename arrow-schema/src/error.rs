@@ -76,23 +76,23 @@ impl Display for ArrowError {
                 write!(f, "Not yet implemented: {}", &source)
             }
             ArrowError::ExternalError(source) => write!(f, "External error: {}", &source),
-            ArrowError::CastError(desc) => write!(f, "Cast error: {}", desc),
-            ArrowError::MemoryError(desc) => write!(f, "Memory error: {}", desc),
-            ArrowError::ParseError(desc) => write!(f, "Parser error: {}", desc),
-            ArrowError::SchemaError(desc) => write!(f, "Schema error: {}", desc),
-            ArrowError::ComputeError(desc) => write!(f, "Compute error: {}", desc),
+            ArrowError::CastError(desc) => write!(f, "Cast error: {desc}"),
+            ArrowError::MemoryError(desc) => write!(f, "Memory error: {desc}"),
+            ArrowError::ParseError(desc) => write!(f, "Parser error: {desc}"),
+            ArrowError::SchemaError(desc) => write!(f, "Schema error: {desc}"),
+            ArrowError::ComputeError(desc) => write!(f, "Compute error: {desc}"),
             ArrowError::DivideByZero => write!(f, "Divide by zero error"),
-            ArrowError::CsvError(desc) => write!(f, "Csv error: {}", desc),
-            ArrowError::JsonError(desc) => write!(f, "Json error: {}", desc),
-            ArrowError::IoError(desc) => write!(f, "Io error: {}", desc),
+            ArrowError::CsvError(desc) => write!(f, "Csv error: {desc}"),
+            ArrowError::JsonError(desc) => write!(f, "Json error: {desc}"),
+            ArrowError::IoError(desc) => write!(f, "Io error: {desc}"),
             ArrowError::InvalidArgumentError(desc) => {
-                write!(f, "Invalid argument error: {}", desc)
+                write!(f, "Invalid argument error: {desc}")
             }
             ArrowError::ParquetError(desc) => {
-                write!(f, "Parquet argument error: {}", desc)
+                write!(f, "Parquet argument error: {desc}")
             }
             ArrowError::CDataInterface(desc) => {
-                write!(f, "C Data interface error: {}", desc)
+                write!(f, "C Data interface error: {desc}")
             }
             ArrowError::DictionaryKeyOverflowError => {
                 write!(f, "Dictionary key bigger than the key type")

@@ -143,8 +143,8 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
             if let Some(len) = len {
                 if len != child_datum_len {
                     return Err(ArrowError::InvalidArgumentError(
-                        format!("Array of field \"{}\" has length {}, but previous elements have length {}.
-                        All arrays in every entry in a struct array must have the same length.", field_name, child_datum_len, len)
+                        format!("Array of field \"{field_name}\" has length {child_datum_len}, but previous elements have length {len}.
+                        All arrays in every entry in a struct array must have the same length.")
                     ));
                 }
             } else {

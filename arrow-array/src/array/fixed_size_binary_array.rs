@@ -629,7 +629,7 @@ mod tests {
         let arr = FixedSizeBinaryArray::from(array_data);
         assert_eq!(
             "FixedSizeBinaryArray<5>\n[\n  [104, 101, 108, 108, 111],\n  [116, 104, 101, 114, 101],\n  [97, 114, 114, 111, 119],\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 

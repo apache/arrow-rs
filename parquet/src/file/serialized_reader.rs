@@ -921,7 +921,7 @@ mod tests {
 
                 r.into_iter().project(proj).unwrap()
             })
-            .map(|r| format!("{}", r))
+            .map(|r| format!("{r}"))
             .collect::<Vec<_>>()
             .join(",");
 

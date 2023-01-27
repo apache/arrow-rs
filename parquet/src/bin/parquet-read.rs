@@ -102,6 +102,6 @@ fn print_row(row: &Row, json: bool) {
     if json {
         println!("{}", row.to_json_value())
     } else {
-        println!("{}", row);
+        println!("{row}");
     }
 }

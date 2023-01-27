@@ -55,7 +55,7 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
         Some(flags) => Box::new(regex_array.iter().zip(flags.iter()).map(
             |(pattern, flags)| {
                 pattern.map(|pattern| match flags {
-                    Some(flag) => format!("(?{}){}", flag, pattern),
+                    Some(flag) => format!("(?{flag}){pattern}"),
                     None => pattern.to_string(),
                 })
             },
@@ -84,8 +84,7 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
                         None => {
                             let re = Regex::new(pattern.as_str()).map_err(|e| {
                                 ArrowError::ComputeError(format!(
-                                    "Regular expression did not compile: {:?}",
-                                    e
+                                    "Regular expression did not compile: {e:?}"
                                 ))
                             })?;
                             patterns.insert(pattern, re.clone());
@@ -127,17 +126,14 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     let mut result = BooleanBufferBuilder::new(array.len());
 
     let pattern = match flag {
-        Some(flag) => format!("(?{}){}", flag, regex),
+        Some(flag) => format!("(?{flag}){regex}"),
         None => regex.to_string(),
     };
     if pattern.is_empty() {
         result.append_n(array.len(), true);
     } else {
         let re = Regex::new(pattern.as_str()).map_err(|e| {
-            ArrowError::ComputeError(format!(
-                "Regular expression did not compile: {:?}",
-                e
-            ))
+            ArrowError::ComputeError(format!("Regular expression did not compile: {e:?}"))
         })?;
         for i in 0..array.len() {
             let value = array.value(i);
@@ -175,7 +171,7 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
         Some(flags) => Box::new(regex_array.iter().zip(flags.iter()).map(
             |(pattern, flags)| {
                 pattern.map(|pattern| match flags {
-                    Some(value) => format!("(?{}){}", value, pattern),
+                    Some(value) => format!("(?{value}){pattern}"),
                     None => pattern.to_string(),
                 })
             },
@@ -204,8 +200,7 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
                         None => {
                             let re = Regex::new(pattern.as_str()).map_err(|e| {
                                 ArrowError::ComputeError(format!(
-                                    "Regular expression did not compile: {:?}",
-                                    e
+                                    "Regular expression did not compile: {e:?}"
                                 ))
                             })?;
                             patterns.insert(pattern, re.clone());

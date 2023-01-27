@@ -1137,7 +1137,7 @@ mod tests {
         assert!(res.is_err());
         if let Err(err) = res {
             assert_eq!(
-                format!("{}", err),
+                format!("{err}"),
                 "Parquet error: Inconsistent length of definition and repetition levels: 3 != 2"
             );
         }
@@ -1152,7 +1152,7 @@ mod tests {
         assert!(res.is_err());
         if let Err(err) = res {
             assert_eq!(
-                format!("{}", err),
+                format!("{err}"),
                 "Parquet error: Definition levels are required, because max definition level = 1"
             );
         }
@@ -1167,7 +1167,7 @@ mod tests {
         assert!(res.is_err());
         if let Err(err) = res {
             assert_eq!(
-                format!("{}", err),
+                format!("{err}"),
                 "Parquet error: Repetition levels are required, because max repetition level = 1"
             );
         }
@@ -1182,7 +1182,7 @@ mod tests {
         assert!(res.is_err());
         if let Err(err) = res {
             assert_eq!(
-                format!("{}", err),
+                format!("{err}"),
                 "Parquet error: Expected to write 4 values, but have only 2"
             );
         }
@@ -1907,7 +1907,7 @@ mod tests {
             assert_eq!(stats.min(), &false);
             assert_eq!(stats.max(), &true);
         } else {
-            panic!("expecting Statistics::Boolean, got {:?}", stats);
+            panic!("expecting Statistics::Boolean, got {stats:?}");
         }
     }
 
@@ -1920,7 +1920,7 @@ mod tests {
             assert_eq!(stats.min(), &-2);
             assert_eq!(stats.max(), &3);
         } else {
-            panic!("expecting Statistics::Int32, got {:?}", stats);
+            panic!("expecting Statistics::Int32, got {stats:?}");
         }
     }
 
@@ -1933,7 +1933,7 @@ mod tests {
             assert_eq!(stats.min(), &-2);
             assert_eq!(stats.max(), &3);
         } else {
-            panic!("expecting Statistics::Int64, got {:?}", stats);
+            panic!("expecting Statistics::Int64, got {stats:?}");
         }
     }
 
@@ -1955,7 +1955,7 @@ mod tests {
             assert_eq!(stats.min(), &Int96::from(vec![0, 20, 30]));
             assert_eq!(stats.max(), &Int96::from(vec![3, 20, 10]));
         } else {
-            panic!("expecting Statistics::Int96, got {:?}", stats);
+            panic!("expecting Statistics::Int96, got {stats:?}");
         }
     }
 
@@ -1968,7 +1968,7 @@ mod tests {
             assert_eq!(stats.min(), &-2.0);
             assert_eq!(stats.max(), &3.0);
         } else {
-            panic!("expecting Statistics::Float, got {:?}", stats);
+            panic!("expecting Statistics::Float, got {stats:?}");
         }
     }
 
@@ -1981,7 +1981,7 @@ mod tests {
             assert_eq!(stats.min(), &-2.0);
             assert_eq!(stats.max(), &3.0);
         } else {
-            panic!("expecting Statistics::Double, got {:?}", stats);
+            panic!("expecting Statistics::Double, got {stats:?}");
         }
     }
 
@@ -1999,7 +1999,7 @@ mod tests {
             assert_eq!(stats.min(), &ByteArray::from("aaw"));
             assert_eq!(stats.max(), &ByteArray::from("zz"));
         } else {
-            panic!("expecting Statistics::ByteArray, got {:?}", stats);
+            panic!("expecting Statistics::ByteArray, got {stats:?}");
         }
     }
 
@@ -2022,7 +2022,7 @@ mod tests {
             let expected_max: FixedLenByteArray = ByteArray::from("zz   ").into();
             assert_eq!(stats.max(), &expected_max);
         } else {
-            panic!("expecting Statistics::FixedLenByteArray, got {:?}", stats);
+            panic!("expecting Statistics::FixedLenByteArray, got {stats:?}");
         }
     }
 

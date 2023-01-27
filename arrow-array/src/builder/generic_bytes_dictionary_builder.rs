@@ -641,8 +641,9 @@ mod tests {
 
     #[test]
     fn test_string_dictionary_builder_with_reserved_null_value() {
+        let v: Vec<Option<&str>> = vec![None];
         test_bytes_dictionary_builder_with_reserved_null_value::<GenericStringType<i32>>(
-            StringArray::from(vec![None]),
+            StringArray::from(v),
             vec!["abc", "def"],
         );
     }

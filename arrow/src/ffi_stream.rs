@@ -287,8 +287,7 @@ fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef>
         Ok(Arc::new(schema))
     } else {
         Err(ArrowError::CDataInterface(format!(
-            "Cannot get schema from input stream. Error code: {:?}",
-            ret_code
+            "Cannot get schema from input stream. Error code: {ret_code:?}"
         )))
     }
 }

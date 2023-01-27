@@ -179,12 +179,12 @@ impl AzureClient {
                 Ok(AzureCredential::AuthorizationToken(
                     // we do the conversion to a HeaderValue here, since it is fallible
                     // and we wna to use it in an infallible function
-                    HeaderValue::from_str(&format!("Bearer {}", token)).map_err(
-                        |err| crate::Error::Generic {
+                    HeaderValue::from_str(&format!("Bearer {token}")).map_err(|err| {
+                        crate::Error::Generic {
                             store: "MicrosoftAzure",
                             source: Box::new(err),
-                        },
-                    )?,
+                        }
+                    })?,
                 ))
             }
             CredentialProvider::SASToken(sas) => {

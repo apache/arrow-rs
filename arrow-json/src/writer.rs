@@ -198,8 +198,7 @@ pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>, ArrowError> {
             Ok(jsonmaps.into_iter().map(Value::Object).collect())
         }
         t => Err(ArrowError::JsonError(format!(
-            "data type {:?} not supported",
-            t
+            "data type {t:?} not supported"
         ))),
     }
 }

@@ -90,8 +90,7 @@ pub fn read_gzip_json(version: &str, path: &str) -> ArrowJson {
 
     let testdata = arrow_test_data();
     let file = File::open(format!(
-        "{}/arrow-ipc-stream/integration/{}/{}.json.gz",
-        testdata, version, path
+        "{testdata}/arrow-ipc-stream/integration/{version}/{path}.json.gz"
     ))
     .unwrap();
     let mut gz = GzDecoder::new(&file);
