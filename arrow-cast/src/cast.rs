@@ -3440,10 +3440,10 @@ where
         let offset_buffer = offset_builder.finish();
 
         let builder = ArrayData::builder(GenericStringArray::<O>::DATA_TYPE)
-            .offset(array.offset())
             .len(array.len())
             .add_buffer(offset_buffer)
             .add_buffer(array.data().buffers()[1].clone())
+            .null_count(array.null_count())
             .null_bit_buffer(array.data().null_buffer().cloned());
 
         // SAFETY:
