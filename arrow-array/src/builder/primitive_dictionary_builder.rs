@@ -86,7 +86,7 @@ where
 {
     keys_builder: PrimitiveBuilder<K>,
     values_builder: PrimitiveBuilder<V>,
-    map: HashMap<Value<V::Native>, K::Native>,
+    map: HashMap<Value<V::Native>, usize>,
 }
 
 impl<K, V> Default for PrimitiveDictionaryBuilder<K, V>
@@ -180,13 +180,13 @@ where
         let key = match self.map.entry(Value(value)) {
             Entry::Vacant(vacant) => {
                 // Append new value.
-                let key = K::Native::from_usize(self.values_builder.len())
-                    .ok_or(ArrowError::DictionaryKeyOverflowError)?;
+                let key = self.values_builder.len();
                 self.values_builder.append_value(value);
                 vacant.insert(key);
-                key
+                K::Native::from_usize(key)
+                    .ok_or(ArrowError::DictionaryKeyOverflowError)?
             }
-            Entry::Occupied(o) => *o.get(),
+            Entry::Occupied(o) => K::Native::usize_as(*o.get()),
         };
 
         self.keys_builder.append_value(key);
@@ -198,6 +198,7 @@ where
     /// # Panics
     ///
     /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    #[inline]
     pub fn append_value(&mut self, value: V::Native) {
         self.append(value).expect("dictionary key overflow");
     }

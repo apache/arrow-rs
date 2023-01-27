@@ -40,10 +40,10 @@ where
     state: ahash::RandomState,
     /// Used to provide a lookup from string value to key type
     ///
-    /// Note: K's hash implementation is not used, instead the raw entry
+    /// Note: usize's hash implementation is not used, instead the raw entry
     /// API is used to store keys w.r.t the hash of the strings themselves
     ///
-    dedup: HashMap<K::Native, (), ()>,
+    dedup: HashMap<usize, (), ()>,
 
     keys_builder: PrimitiveBuilder<K>,
     values_builder: GenericByteBuilder<T>,
@@ -133,23 +133,22 @@ where
         let mut values_builder =
             GenericByteBuilder::<T>::with_capacity(dict_len, values_len);
 
+        K::Native::from_usize(dictionary_values.len())
+            .ok_or(ArrowError::DictionaryKeyOverflowError)?;
+
         for (idx, maybe_value) in dictionary_values.iter().enumerate() {
             match maybe_value {
                 Some(value) => {
                     let value_bytes: &[u8] = value.as_ref();
                     let hash = state.hash_one(value_bytes);
 
-                    let key = K::Native::from_usize(idx)
-                        .ok_or(ArrowError::DictionaryKeyOverflowError)?;
-
-                    let entry =
-                        dedup.raw_entry_mut().from_hash(hash, |key: &K::Native| {
-                            value_bytes == get_bytes(&values_builder, key)
-                        });
+                    let entry = dedup.raw_entry_mut().from_hash(hash, |idx: &usize| {
+                        value_bytes == get_bytes(&values_builder, *idx)
+                    });
 
                     if let RawEntryMut::Vacant(v) = entry {
-                        v.insert_with_hasher(hash, key, (), |key| {
-                            state.hash_one(get_bytes(&values_builder, key))
+                        v.insert_with_hasher(hash, idx, (), |idx| {
+                            state.hash_one(get_bytes(&values_builder, *idx))
                         });
                     }
 
@@ -233,21 +232,22 @@ where
         let entry = self
             .dedup
             .raw_entry_mut()
-            .from_hash(hash, |key| value_bytes == get_bytes(storage, key));
+            .from_hash(hash, |idx| value_bytes == get_bytes(storage, *idx));
 
         let key = match entry {
-            RawEntryMut::Occupied(entry) => *entry.into_key(),
+            RawEntryMut::Occupied(entry) => K::Native::usize_as(*entry.into_key()),
             RawEntryMut::Vacant(entry) => {
-                let index = storage.len();
+                let idx = storage.len();
                 storage.append_value(value);
-                let key = K::Native::from_usize(index)
-                    .ok_or(ArrowError::DictionaryKeyOverflowError)?;
 
-                *entry
-                    .insert_with_hasher(hash, key, (), |key| {
-                        state.hash_one(get_bytes(storage, key))
+                entry
+                    .insert_with_hasher(hash, idx, (), |idx| {
+                        state.hash_one(get_bytes(storage, *idx))
                     })
-                    .0
+                    .0;
+
+                K::Native::from_usize(idx)
+                    .ok_or(ArrowError::DictionaryKeyOverflowError)?
             }
         };
         self.keys_builder.append_value(key);
@@ -330,14 +330,10 @@ impl<K: ArrowDictionaryKeyType, T: ByteArrayType, V: AsRef<T::Native>> Extend<Op
     }
 }
 
-fn get_bytes<'a, K: ArrowNativeType, T: ByteArrayType>(
-    values: &'a GenericByteBuilder<T>,
-    key: &K,
-) -> &'a [u8] {
+fn get_bytes<T: ByteArrayType>(values: &GenericByteBuilder<T>, idx: usize) -> &[u8] {
     let offsets = values.offsets_slice();
     let values = values.values_slice();
 
-    let idx = key.as_usize();
     let end_offset = offsets[idx + 1].as_usize();
     let start_offset = offsets[idx].as_usize();
 
