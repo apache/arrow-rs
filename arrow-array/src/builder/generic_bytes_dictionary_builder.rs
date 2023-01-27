@@ -240,11 +240,9 @@ where
                 let idx = storage.len();
                 storage.append_value(value);
 
-                entry
-                    .insert_with_hasher(hash, idx, (), |idx| {
-                        state.hash_one(get_bytes(storage, *idx))
-                    })
-                    .0;
+                entry.insert_with_hasher(hash, idx, (), |idx| {
+                    state.hash_one(get_bytes(storage, *idx))
+                });
 
                 K::Native::from_usize(idx)
                     .ok_or(ArrowError::DictionaryKeyOverflowError)?
