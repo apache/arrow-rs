@@ -428,8 +428,7 @@ mod tests {
 
     fn invalid_cast_error(dt: &str, col_idx: usize, row_idx: usize) -> ArrowError {
         ArrowError::CastError(format!(
-            "Cannot cast to {} at col index: {} row index: {}",
-            dt, col_idx, row_idx
+            "Cannot cast to {dt} at col index: {col_idx} row index: {row_idx}"
         ))
     }
 
