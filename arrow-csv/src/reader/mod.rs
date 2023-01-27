@@ -1228,49 +1228,46 @@ mod tests {
 
     #[test]
     fn test_csv() {
-        let _: Vec<()> = vec![None, Some("%Y-%m-%dT%H:%M:%S%.f%:z".to_string())]
-            .into_iter()
-            .map(|format| {
-                let schema = Schema::new(vec![
-                    Field::new("city", DataType::Utf8, false),
-                    Field::new("lat", DataType::Float64, false),
-                    Field::new("lng", DataType::Float64, false),
-                ]);
+        for format in [None, Some("%Y-%m-%dT%H:%M:%S%.f%:z".to_string())] {
+            let schema = Schema::new(vec![
+                Field::new("city", DataType::Utf8, false),
+                Field::new("lat", DataType::Float64, false),
+                Field::new("lng", DataType::Float64, false),
+            ]);
 
-                let file = File::open("test/data/uk_cities.csv").unwrap();
-                let mut csv = Reader::new(
-                    file,
-                    Arc::new(schema.clone()),
-                    false,
-                    None,
-                    1024,
-                    None,
-                    None,
-                    format,
-                );
-                assert_eq!(Arc::new(schema), csv.schema());
-                let batch = csv.next().unwrap().unwrap();
-                assert_eq!(37, batch.num_rows());
-                assert_eq!(3, batch.num_columns());
+            let file = File::open("test/data/uk_cities.csv").unwrap();
+            let mut csv = Reader::new(
+                file,
+                Arc::new(schema.clone()),
+                false,
+                None,
+                1024,
+                None,
+                None,
+                format,
+            );
+            assert_eq!(Arc::new(schema), csv.schema());
+            let batch = csv.next().unwrap().unwrap();
+            assert_eq!(37, batch.num_rows());
+            assert_eq!(3, batch.num_columns());
 
-                // access data from a primitive array
-                let lat = batch
-                    .column(1)
-                    .as_any()
-                    .downcast_ref::<Float64Array>()
-                    .unwrap();
-                assert_eq!(57.653484, lat.value(0));
+            // access data from a primitive array
+            let lat = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap();
+            assert_eq!(57.653484, lat.value(0));
 
-                // access data from a string array (ListArray<u8>)
-                let city = batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .unwrap();
+            // access data from a string array (ListArray<u8>)
+            let city = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
 
-                assert_eq!("Aberdeen, Aberdeen City, UK", city.value(13));
-            })
-            .collect();
+            assert_eq!("Aberdeen, Aberdeen City, UK", city.value(13));
+        }
     }
 
     #[test]
@@ -2191,5 +2188,47 @@ mod tests {
         assert!(c.value(1));
         assert!(c.value(2));
         assert!(c.is_null(3));
+    }
+
+    #[test]
+    fn test_buffered() {
+        let tests = [
+            ("test/data/uk_cities.csv", false, 37),
+            ("test/data/various_types.csv", true, 7),
+            ("test/data/decimal_test.csv", false, 10),
+        ];
+
+        for (path, has_header, expected_rows) in tests {
+            for batch_size in [1, 4] {
+                for capacity in [1, 3, 7, 100] {
+                    let reader = ReaderBuilder::new()
+                        .with_batch_size(batch_size)
+                        .has_header(has_header)
+                        .build(File::open(path).unwrap())
+                        .unwrap();
+
+                    let expected = reader.collect::<Result<Vec<_>, _>>().unwrap();
+
+                    assert_eq!(
+                        expected.iter().map(|x| x.num_rows()).sum::<usize>(),
+                        expected_rows
+                    );
+
+                    let buffered = std::io::BufReader::with_capacity(
+                        capacity,
+                        File::open(path).unwrap(),
+                    );
+
+                    let reader = ReaderBuilder::new()
+                        .with_batch_size(batch_size)
+                        .has_header(has_header)
+                        .build_buffered(buffered)
+                        .unwrap();
+
+                    let actual = reader.collect::<Result<Vec<_>, _>>().unwrap();
+                    assert_eq!(expected, actual)
+                }
+            }
+        }
     }
 }
