@@ -222,7 +222,7 @@ where
                 part.ok_or_else(|| {
                     io::Error::new(
                         io::ErrorKind::Other,
-                        format!("Missing information for upload part {}", idx),
+                        format!("Missing information for upload part {idx}"),
                     )
                 })
             })

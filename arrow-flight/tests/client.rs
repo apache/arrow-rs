@@ -92,10 +92,7 @@ fn ensure_metadata(client: &FlightClient, test_server: &TestFlightServer) {
         assert_eq!(
             metadata.get(k).as_ref(),
             Some(&v),
-            "Missing / Mismatched metadata {:?} sent {:?} got {:?}",
-            k,
-            client_metadata,
-            metadata
+            "Missing / Mismatched metadata {k:?} sent {client_metadata:?} got {metadata:?}"
         );
     }
 }
@@ -797,29 +794,23 @@ fn expect_status(error: FlightError, expected: Status) {
     let status = if let FlightError::Tonic(status) = error {
         status
     } else {
-        panic!("Expected FlightError::Tonic, got: {:?}", error);
+        panic!("Expected FlightError::Tonic, got: {error:?}");
     };
 
     assert_eq!(
         status.code(),
         expected.code(),
-        "Got {:?} want {:?}",
-        status,
-        expected
+        "Got {status:?} want {expected:?}"
     );
     assert_eq!(
         status.message(),
         expected.message(),
-        "Got {:?} want {:?}",
-        status,
-        expected
+        "Got {status:?} want {expected:?}"
     );
     assert_eq!(
         status.details(),
         expected.details(),
-        "Got {:?} want {:?}",
-        status,
-        expected
+        "Got {status:?} want {expected:?}"
     );
 }
 

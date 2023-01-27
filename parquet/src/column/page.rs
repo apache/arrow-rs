@@ -222,8 +222,7 @@ impl TryFrom<&PageHeader> for PageMetadata {
                 is_dict: false,
             }),
             other => Err(ParquetError::General(format!(
-                "page type {:?} cannot be converted to PageMetadata",
-                other
+                "page type {other:?} cannot be converted to PageMetadata"
             ))),
         }
     }

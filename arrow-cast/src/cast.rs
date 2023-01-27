@@ -654,8 +654,7 @@ pub fn cast_with_options(
             UInt32 => dictionary_cast::<UInt32Type>(array, to_type, cast_options),
             UInt64 => dictionary_cast::<UInt64Type>(array, to_type, cast_options),
             _ => Err(ArrowError::CastError(format!(
-                "Casting from dictionary type {:?} to {:?} not supported",
-                from_type, to_type,
+                "Casting from dictionary type {from_type:?} to {to_type:?} not supported",
             ))),
         },
         (_, Dictionary(index_type, value_type)) => match **index_type {
@@ -668,8 +667,7 @@ pub fn cast_with_options(
             UInt32 => cast_to_dictionary::<UInt32Type>(array, value_type, cast_options),
             UInt64 => cast_to_dictionary::<UInt64Type>(array, value_type, cast_options),
             _ => Err(ArrowError::CastError(format!(
-                "Casting from type {:?} to dictionary type {:?} not supported",
-                from_type, to_type,
+                "Casting from type {from_type:?} to dictionary type {to_type:?} not supported",
             ))),
         },
         (List(_), List(ref to)) => {
@@ -808,8 +806,7 @@ pub fn cast_with_options(
                 }
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
-                    "Casting from {:?} to {:?} not supported",
-                    from_type, to_type
+                    "Casting from {from_type:?} to {to_type:?} not supported"
                 ))),
             }
         }
@@ -876,8 +873,7 @@ pub fn cast_with_options(
                 }
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
-                    "Casting from {:?} to {:?} not supported",
-                    from_type, to_type
+                    "Casting from {from_type:?} to {to_type:?} not supported"
                 ))),
             }
         }
@@ -966,8 +962,7 @@ pub fn cast_with_options(
                 ),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
-                    "Casting from {:?} to {:?} not supported",
-                    from_type, to_type
+                    "Casting from {from_type:?} to {to_type:?} not supported"
                 ))),
             }
         }
@@ -1056,8 +1051,7 @@ pub fn cast_with_options(
                 ),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
-                    "Casting from {:?} to {:?} not supported",
-                    from_type, to_type
+                    "Casting from {from_type:?} to {to_type:?} not supported"
                 ))),
             }
         }
@@ -1082,8 +1076,7 @@ pub fn cast_with_options(
             Utf8 => cast_utf8_to_boolean::<i32>(array, cast_options),
             LargeUtf8 => cast_utf8_to_boolean::<i64>(array, cast_options),
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
+                "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
         (Boolean, _) => match to_type {
@@ -1117,8 +1110,7 @@ pub fn cast_with_options(
                 ))
             }
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
+                "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
         (Utf8, _) => match to_type {
@@ -1156,8 +1148,7 @@ pub fn cast_with_options(
                 cast_string_to_timestamp_ns::<i32>(&**array, cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
+                "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
         (_, Utf8) => match from_type {
@@ -1214,8 +1205,7 @@ pub fn cast_with_options(
                 ))
             }
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
+                "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
         (_, LargeUtf8) => match from_type {
@@ -1271,8 +1261,7 @@ pub fn cast_with_options(
                 ))
             }
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
+                "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
         (LargeUtf8, _) => match to_type {
@@ -1312,8 +1301,7 @@ pub fn cast_with_options(
                 cast_string_to_timestamp_ns::<i64>(&**array, cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
+                "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
         (Binary, _) => match to_type {
@@ -1321,15 +1309,13 @@ pub fn cast_with_options(
                 cast_byte_container::<BinaryType, LargeBinaryType, [u8]>(&**array)
             }
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
+                "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
         (LargeBinary, _) => match to_type {
             Binary => cast_byte_container::<LargeBinaryType, BinaryType, [u8]>(&**array),
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
+                "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
         // start numeric casts
@@ -2041,8 +2027,7 @@ pub fn cast_with_options(
             cast_reinterpret_arrays::<Int64Type, IntervalDayTimeType>(array)
         }
         (_, _) => Err(ArrowError::CastError(format!(
-            "Casting from {:?} to {:?} not supported",
-            from_type, to_type,
+            "Casting from {from_type:?} to {to_type:?} not supported",
         ))),
     }
 }
@@ -2872,8 +2857,7 @@ where
                 invalid_value => match cast_options.safe {
                     true => Ok(None),
                     false => Err(ArrowError::CastError(format!(
-                        "Cannot cast value '{}' to value of Boolean type",
-                        invalid_value,
+                        "Cannot cast value '{invalid_value}' to value of Boolean type",
                     ))),
                 },
             },
@@ -2897,8 +2881,7 @@ where
     let parts: Vec<&str> = value_str.split('.').collect();
     if parts.len() > 2 {
         return Err(ArrowError::InvalidArgumentError(format!(
-            "Invalid decimal format: {:?}",
-            value_str
+            "Invalid decimal format: {value_str:?}"
         )));
     }
 
@@ -2909,8 +2892,7 @@ where
     let number_decimals = if decimals.len() > scale {
         let decimal_number = i256::from_string(decimals).ok_or_else(|| {
             ArrowError::InvalidArgumentError(format!(
-                "Cannot parse decimal format: {}",
-                value_str
+                "Cannot parse decimal format: {value_str}"
             ))
         })?;
 
@@ -2934,8 +2916,7 @@ where
             i256::from_string(integers)
                 .ok_or_else(|| {
                     ArrowError::InvalidArgumentError(format!(
-                        "Cannot parse decimal format: {}",
-                        value_str
+                        "Cannot parse decimal format: {value_str}"
                     ))
                 })
                 .map(|v| {
@@ -2949,8 +2930,8 @@ where
     } else {
         let padding = if scale > decimals.len() { scale } else { 0 };
 
-        let decimals = format!("{:0<width$}", decimals, width = padding);
-        format!("{}{}", integers, decimals)
+        let decimals = format!("{decimals:0<padding$}");
+        format!("{integers}{decimals}")
     };
 
     let value = i256::from_string(number_decimals.as_str()).ok_or_else(|| {
@@ -3032,8 +3013,7 @@ where
 {
     if scale < 0 {
         return Err(ArrowError::InvalidArgumentError(format!(
-            "Cannot cast string to decimal with negative scale {}",
-            scale
+            "Cannot cast string to decimal with negative scale {scale}"
         )));
     }
 
@@ -3199,8 +3179,7 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
                 UInt64 => Arc::new(DictionaryArray::<UInt64Type>::from(data)),
                 _ => {
                     return Err(ArrowError::CastError(format!(
-                        "Unsupported type {:?} for dictionary index",
-                        to_index_type
+                        "Unsupported type {to_index_type:?} for dictionary index"
                     )));
                 }
             };
@@ -3323,8 +3302,7 @@ fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
             pack_byte_to_dictionary::<K, GenericBinaryType<i64>>(array, cast_options)
         }
         _ => Err(ArrowError::CastError(format!(
-            "Unsupported output type for dictionary packing: {:?}",
-            dict_value_type
+            "Unsupported output type for dictionary packing: {dict_value_type:?}"
         ))),
     }
 }
@@ -4797,8 +4775,7 @@ mod tests {
                     e.to_string().contains(
                         "Cast error: Cannot cast string 'seven' to value of Int32 type",
                     ),
-                    "Error: {}",
-                    e
+                    "Error: {e}"
                 )
             }
         }
@@ -6689,13 +6666,11 @@ mod tests {
         let cast_type = Dictionary(Box::new(Int8), Box::new(Utf8));
         let res = cast(&array, &cast_type);
         assert!(res.is_err());
-        let actual_error = format!("{:?}", res);
+        let actual_error = format!("{res:?}");
         let expected_error = "Could not convert 72 dictionary indexes from Int32 to Int8";
         assert!(
             actual_error.contains(expected_error),
-            "did not find expected error '{}' in actual error '{}'",
-            actual_error,
-            expected_error
+            "did not find expected error '{actual_error}' in actual error '{expected_error}'"
         );
     }
 
@@ -6711,7 +6686,7 @@ mod tests {
         // dictionary indexed by int32, but not a dictionary indexed
         // with int8)
         for i in 0..200 {
-            let val = format!("val{}", i);
+            let val = format!("val{i}");
             builder.append(&val).unwrap();
         }
         let array: ArrayRef = Arc::new(builder.finish());
@@ -6719,13 +6694,11 @@ mod tests {
         let cast_type = Dictionary(Box::new(Int8), Box::new(Utf8));
         let res = cast(&array, &cast_type);
         assert!(res.is_err());
-        let actual_error = format!("{:?}", res);
+        let actual_error = format!("{res:?}");
         let expected_error = "Could not convert 72 dictionary indexes from Int32 to Int8";
         assert!(
             actual_error.contains(expected_error),
-            "did not find expected error '{}' in actual error '{}'",
-            actual_error,
-            expected_error
+            "did not find expected error '{actual_error}' in actual error '{expected_error}'"
         );
     }
 
@@ -7265,9 +7238,7 @@ mod tests {
         let expected_error = "Cast error: Cannot cast to Decimal128(38, 30)";
         assert!(
             err.contains(expected_error),
-            "did not find expected error '{}' in actual error '{}'",
-            expected_error,
-            err
+            "did not find expected error '{expected_error}' in actual error '{err}'"
         );
     }
 
@@ -7292,9 +7263,7 @@ mod tests {
         let expected_error = "Cast error: Cannot cast to Decimal256(76, 50)";
         assert!(
             err.contains(expected_error),
-            "did not find expected error '{}' in actual error '{}'",
-            expected_error,
-            err
+            "did not find expected error '{expected_error}' in actual error '{err}'"
         );
     }
 

@@ -67,6 +67,6 @@ fn main() {
             total_num_rows += group_metadata.num_rows();
         }
 
-        eprintln!("File {}: rowcount={}", filename, total_num_rows);
+        eprintln!("File {filename}: rowcount={total_num_rows}");
     }
 }

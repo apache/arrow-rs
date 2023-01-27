@@ -93,8 +93,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| status!("authorization not parsable", e))?;
         if !authorization.starts_with(basic) {
             Err(Status::invalid_argument(format!(
-                "Auth type not implemented: {}",
-                authorization
+                "Auth type not implemented: {authorization}"
             )))?;
         }
         let base64 = &authorization[basic.len()..];
@@ -473,7 +472,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
 
-    println!("Listening on {:?}", addr);
+    println!("Listening on {addr:?}");
 
     let cert = std::fs::read_to_string("arrow-flight/examples/data/server.pem")?;
     let key = std::fs::read_to_string("arrow-flight/examples/data/server.key")?;

@@ -37,8 +37,7 @@ impl TryFrom<CompressionType> for CompressionCodec {
             CompressionType::ZSTD => Ok(CompressionCodec::Zstd),
             CompressionType::LZ4_FRAME => Ok(CompressionCodec::Lz4Frame),
             other_type => Err(ArrowError::NotYetImplemented(format!(
-                "compression type {:?} not supported ",
-                other_type
+                "compression type {other_type:?} not supported "
             ))),
         }
     }

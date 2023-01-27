@@ -37,10 +37,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let mut do_bench = |dict_size: usize, total_size: usize, key_len: usize| {
         group.bench_function(
-            format!(
-                "(dict_size:{}, len:{}, key_len: {})",
-                dict_size, total_size, key_len
-            ),
+            format!("(dict_size:{dict_size}, len:{total_size}, key_len: {key_len})"),
             |b| {
                 let strings = build_strings(dict_size, total_size, key_len);
                 b.iter(|| {

@@ -144,6 +144,6 @@ mod tests {
     #[test]
     fn test_debug_null_array() {
         let array = NullArray::new(1024 * 1024);
-        assert_eq!(format!("{:?}", array), "NullArray(1048576)");
+        assert_eq!(format!("{array:?}"), "NullArray(1048576)");
     }
 }

@@ -543,8 +543,7 @@ fn union_to_string(
     let type_id = list.type_id(row);
     let field_idx = type_ids.iter().position(|t| t == &type_id).ok_or_else(|| {
         ArrowError::InvalidArgumentError(format!(
-            "Repl error: could not get field name for type id: {} in union array.",
-            type_id,
+            "Repl error: could not get field name for type id: {type_id} in union array.",
         ))
     })?;
     let name = fields.get(field_idx).unwrap().name();
@@ -557,7 +556,7 @@ fn union_to_string(
         },
     )?;
 
-    Ok(format!("{{{}={}}}", name, value))
+    Ok(format!("{{{name}={value}}}"))
 }
 /// Converts the value of the dictionary array at `row` to a String
 fn dict_array_value_to_string<K: ArrowPrimitiveType>(

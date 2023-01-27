@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-arith"
-version = "31.0.0"
+version = "32.0.0"
 description = "Arrow arithmetic kernels"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -38,10 +38,10 @@ path = "src/lib.rs"
 bench = false
 
 [dependencies]
-arrow-array = { version = "31.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "31.0.0", path = "../arrow-buffer" }
-arrow-data = { version = "31.0.0", path = "../arrow-data" }
-arrow-schema = { version = "31.0.0", path = "../arrow-schema" }
+arrow-array = { version = "32.0.0", path = "../arrow-array" }
+arrow-buffer = { version = "32.0.0", path = "../arrow-buffer" }
+arrow-data = { version = "32.0.0", path = "../arrow-data" }
+arrow-schema = { version = "32.0.0", path = "../arrow-schema" }
 chrono = { version = "0.4.23", default-features = false }
 half = { version = "2.1", default-features = false }
 num = { version = "0.4", default-features = false, features = ["std"] }

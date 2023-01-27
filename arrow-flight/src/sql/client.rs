@@ -90,7 +90,7 @@ impl FlightSqlServiceClient {
         host: &str,
         port: u16,
     ) -> Result<Self, ArrowError> {
-        let addr = format!("https://{}:{}", host, port);
+        let addr = format!("https://{host}:{port}");
 
         let endpoint = Endpoint::new(addr)
             .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
@@ -112,7 +112,7 @@ impl FlightSqlServiceClient {
             .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?;
 
         let channel = endpoint.connect().await.map_err(|e| {
-            ArrowError::IoError(format!("Cannot connect to endpoint: {}", e))
+            ArrowError::IoError(format!("Cannot connect to endpoint: {e}"))
         })?;
         Ok(Self::new(channel))
     }
@@ -173,8 +173,8 @@ impl FlightSqlServiceClient {
             payload: Default::default(),
         };
         let mut req = tonic::Request::new(stream::iter(vec![cmd]));
-        let val = BASE64_STANDARD.encode(format!("{}:{}", username, password));
-        let val = format!("Basic {}", val)
+        let val = BASE64_STANDARD.encode(format!("{username}:{password}"));
+        let val = format!("Basic {val}")
             .parse()
             .map_err(|_| ArrowError::ParseError("Cannot parse header".to_string()))?;
         req.metadata_mut().insert("authorization", val);
@@ -182,7 +182,7 @@ impl FlightSqlServiceClient {
             .flight_client
             .handshake(req)
             .await
-            .map_err(|e| ArrowError::IoError(format!("Can't handshake {}", e)))?;
+            .map_err(|e| ArrowError::IoError(format!("Can't handshake {e}")))?;
         if let Some(auth) = resp.metadata().get("authorization") {
             let auth = auth.to_str().map_err(|_| {
                 ArrowError::ParseError("Can't read auth header".to_string())
@@ -331,7 +331,7 @@ impl FlightSqlServiceClient {
         };
         let mut req = tonic::Request::new(action);
         if let Some(token) = &self.token {
-            let val = format!("Bearer {}", token).parse().map_err(|_| {
+            let val = format!("Bearer {token}").parse().map_err(|_| {
                 ArrowError::IoError("Statement already closed.".to_string())
             })?;
             req.metadata_mut().insert("authorization", val);
@@ -481,7 +481,7 @@ fn decode_error_to_arrow_error(err: prost::DecodeError) -> ArrowError {
 }
 
 fn status_to_arrow_error(status: tonic::Status) -> ArrowError {
-    ArrowError::IoError(format!("{:?}", status))
+    ArrowError::IoError(format!("{status:?}"))
 }
 
 // A polymorphic structure to natively represent different types of data contained in `FlightData`
@@ -496,7 +496,7 @@ pub fn arrow_data_from_flight_data(
     arrow_schema_ref: &SchemaRef,
 ) -> Result<ArrowFlightData, ArrowError> {
     let ipc_message = root_as_message(&flight_data.data_header[..]).map_err(|err| {
-        ArrowError::ParseError(format!("Unable to get root as message: {:?}", err))
+        ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
     })?;
 
     match ipc_message.header_type() {

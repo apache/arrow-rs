@@ -692,8 +692,7 @@ impl<'a> RowGroupCollection for InMemoryRowGroup<'a> {
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
         match &self.column_chunks[i] {
             None => Err(ParquetError::General(format!(
-                "Invalid column index {}, column was not fetched",
-                i
+                "Invalid column index {i}, column was not fetched"
             ))),
             Some(data) => {
                 let page_locations = self
@@ -757,8 +756,7 @@ impl ChunkReader for ColumnChunkData {
                 .map(|idx| data[idx].1.slice(0..length))
                 .map_err(|_| {
                     ParquetError::General(format!(
-                        "Invalid offset in sparse column chunk data: {}",
-                        start
+                        "Invalid offset in sparse column chunk data: {start}"
                     ))
                 }),
             ColumnChunkData::Dense { offset, data } => {
@@ -831,7 +829,7 @@ mod tests {
     #[tokio::test]
     async fn test_async_reader() {
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/alltypes_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
         let metadata = parse_metadata(&data).unwrap();
@@ -886,7 +884,7 @@ mod tests {
     #[tokio::test]
     async fn test_async_reader_with_index() {
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
         let metadata = parse_metadata(&data).unwrap();
@@ -948,7 +946,7 @@ mod tests {
     #[tokio::test]
     async fn test_async_reader_skip_pages() {
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
         let metadata = parse_metadata(&data).unwrap();
@@ -1005,7 +1003,7 @@ mod tests {
     #[tokio::test]
     async fn test_fuzz_async_reader_selection() {
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
         let metadata = parse_metadata(&data).unwrap();
@@ -1072,7 +1070,7 @@ mod tests {
     async fn test_async_reader_zero_row_selector() {
         //See https://github.com/apache/arrow-rs/issues/2669
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
         let metadata = parse_metadata(&data).unwrap();
@@ -1209,7 +1207,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_filter_with_index() {
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
         let metadata = parse_metadata(&data).unwrap();
@@ -1259,7 +1257,7 @@ mod tests {
     #[tokio::test]
     async fn test_in_memory_row_group_sparse() {
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/alltypes_tiny_pages.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
         let metadata = parse_metadata(&data).unwrap();
@@ -1345,7 +1343,7 @@ mod tests {
     async fn test_batch_size_overallocate() {
         let testdata = arrow::util::test_util::parquet_test_data();
         // `alltypes_plain.parquet` only have 8 rows
-        let path = format!("{}/alltypes_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
         let metadata = parse_metadata(&data).unwrap();

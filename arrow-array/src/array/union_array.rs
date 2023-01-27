@@ -192,8 +192,7 @@ impl UnionArray {
         if !invalid_type_ids.is_empty() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Type Ids must be positive and cannot be greater than the number of \
-                child arrays, found:\n{:?}",
-                invalid_type_ids
+                child arrays, found:\n{invalid_type_ids:?}"
             )));
         }
 
@@ -208,8 +207,7 @@ impl UnionArray {
             if !invalid_offsets.is_empty() {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Offsets must be positive and within the length of the Array, \
-                    found:\n{:?}",
-                    invalid_offsets
+                    found:\n{invalid_offsets:?}"
                 )));
             }
         }
@@ -345,7 +343,7 @@ impl std::fmt::Debug for UnionArray {
         } else {
             "UnionArray(Sparse)\n["
         };
-        writeln!(f, "{}", header)?;
+        writeln!(f, "{header}")?;
 
         writeln!(f, "-- type id buffer:")?;
         writeln!(f, "{:?}", self.data().buffers()[0])?;

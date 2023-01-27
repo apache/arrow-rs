@@ -854,8 +854,7 @@ impl ArrayData {
                 // At the moment, constructing a DictionaryArray will also check this
                 if !DataType::is_dictionary_key_type(key_type) {
                     return Err(ArrowError::InvalidArgumentError(format!(
-                        "Dictionary key type must be integer, but was {}",
-                        key_type
+                        "Dictionary key type must be integer, but was {key_type}"
                     )));
                 }
             }
@@ -1366,15 +1365,13 @@ impl ArrayData {
                 // check if the offset can be converted to usize
                 let r = x.to_usize().ok_or_else(|| {
                     ArrowError::InvalidArgumentError(format!(
-                        "Offset invariant failure: Could not convert offset {} to usize at position {}",
-                        x, i))}
+                        "Offset invariant failure: Could not convert offset {x} to usize at position {i}"))}
                     );
                 // check if the offset exceeds the limit
                 match r {
                     Ok(n) if n <= offset_limit => Ok((i, n)),
                     Ok(_) => Err(ArrowError::InvalidArgumentError(format!(
-                        "Offset invariant failure: offset at position {} out of bounds: {} > {}",
-                        i, x, offset_limit))
+                        "Offset invariant failure: offset at position {i} out of bounds: {x} > {offset_limit}"))
                     ),
                     Err(e) => Err(e),
                 }
@@ -1417,8 +1414,7 @@ impl ArrayData {
                         || !values_str.is_char_boundary(range.end)
                     {
                         return Err(ArrowError::InvalidArgumentError(format!(
-                            "incomplete utf-8 byte sequence from index {}",
-                            string_index
+                            "incomplete utf-8 byte sequence from index {string_index}"
                         )));
                     }
                     Ok(())
@@ -1431,8 +1427,7 @@ impl ArrayData {
                 |string_index, range| {
                     std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
                         ArrowError::InvalidArgumentError(format!(
-                            "Invalid UTF8 sequence at string index {} ({:?}): {}",
-                            string_index, range, e
+                            "Invalid UTF8 sequence at string index {string_index} ({range:?}): {e}"
                         ))
                     })?;
                     Ok(())
@@ -1478,15 +1473,13 @@ impl ArrayData {
             }
             let dict_index: i64 = dict_index.try_into().map_err(|_| {
                 ArrowError::InvalidArgumentError(format!(
-                    "Value at position {} out of bounds: {} (can not convert to i64)",
-                    i, dict_index
+                    "Value at position {i} out of bounds: {dict_index} (can not convert to i64)"
                 ))
             })?;
 
             if dict_index < 0 || dict_index > max_value {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "Value at position {} out of bounds: {} (should be in [0, {}])",
-                    i, dict_index, max_value
+                    "Value at position {i} out of bounds: {dict_index} (should be in [0, {max_value}])"
                 )));
             }
             Ok(())
@@ -1503,23 +1496,17 @@ impl ArrayData {
         values.iter().enumerate().try_for_each(|(ix, &inp_value)| {
             let value: i64 = inp_value.try_into().map_err(|_| {
                 ArrowError::InvalidArgumentError(format!(
-                    "Value at position {} out of bounds: {} (can not convert to i64)",
-                    ix, inp_value
+                    "Value at position {ix} out of bounds: {inp_value} (can not convert to i64)"
                 ))
             })?;
             if value <= 0_i64 {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "The values in run_ends array should be strictly positive. Found value {} at index {} that does not match the criteria.",
-                    value,
-                    ix
+                    "The values in run_ends array should be strictly positive. Found value {value} at index {ix} that does not match the criteria."
                 )));
             }
             if ix > 0 && value <= prev_value {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "The values in run_ends array should be strictly increasing. Found value {} at index {} with previous value {} that does not match the criteria.",
-                    value,
-                    ix,
-                    prev_value
+                    "The values in run_ends array should be strictly increasing. Found value {value} at index {ix} with previous value {prev_value} that does not match the criteria."
                 )));
             }
 
@@ -1529,9 +1516,7 @@ impl ArrayData {
 
         if prev_value.as_usize() != array_len {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "The length of array does not match the last value in the run_ends array. The last value of run_ends array is {} and length of array is {}.",
-                prev_value,
-                array_len
+                "The length of array does not match the last value in the run_ends array. The last value of run_ends array is {prev_value} and length of array is {array_len}."
             )));
         }
         Ok(())

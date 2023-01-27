@@ -176,8 +176,7 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         DataType::Binary => Ok(length_binary::<i32, Int32Type>(array)),
         DataType::LargeBinary => Ok(length_binary::<i64, Int64Type>(array)),
         other => Err(ArrowError::ComputeError(format!(
-            "length not supported for {:?}",
-            other
+            "length not supported for {other:?}"
         ))),
     }
 }
@@ -210,8 +209,7 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         DataType::Binary => Ok(bit_length_binary::<i32, Int32Type>(array)),
         DataType::LargeBinary => Ok(bit_length_binary::<i64, Int64Type>(array)),
         other => Err(ArrowError::ComputeError(format!(
-            "bit_length not supported for {:?}",
-            other
+            "bit_length not supported for {other:?}"
         ))),
     }
 }

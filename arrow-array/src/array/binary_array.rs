@@ -607,7 +607,7 @@ mod tests {
             .scan(0usize, |pos, i| {
                 if *pos < 10 {
                     *pos += 1;
-                    Some(Some(format!("value {}", i)))
+                    Some(Some(format!("value {i}")))
                 } else {
                     // actually returns up to 10 values
                     None

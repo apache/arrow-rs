@@ -89,8 +89,7 @@ fn read_1_0_0_bigendian() {
     ];
     paths.iter().for_each(|path| {
         let file = File::open(format!(
-            "{}/arrow-ipc-stream/integration/1.0.0-bigendian/{}.arrow_file",
-            testdata, path
+            "{testdata}/arrow-ipc-stream/integration/1.0.0-bigendian/{path}.arrow_file"
         ))
         .unwrap();
 
@@ -161,10 +160,8 @@ fn read_2_0_0_compression() {
 /// Verification json file
 /// `arrow-ipc-stream/integration/<version>/<path>.json.gz
 fn verify_arrow_file(testdata: &str, version: &str, path: &str) {
-    let filename = format!(
-        "{}/arrow-ipc-stream/integration/{}/{}.arrow_file",
-        testdata, version, path
-    );
+    let filename =
+        format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.arrow_file");
     println!("Verifying {filename}");
 
     // Compare contents to the expected output format in JSON
@@ -200,10 +197,8 @@ fn verify_arrow_file(testdata: &str, version: &str, path: &str) {
 /// Verification json file
 /// `arrow-ipc-stream/integration/<version>/<path>.json.gz
 fn verify_arrow_stream(testdata: &str, version: &str, path: &str) {
-    let filename = format!(
-        "{}/arrow-ipc-stream/integration/{}/{}.stream",
-        testdata, version, path
-    );
+    let filename =
+        format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.stream");
     println!("Verifying {filename}");
 
     // Compare contents to the expected output format in JSON

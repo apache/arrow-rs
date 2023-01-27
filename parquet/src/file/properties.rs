@@ -690,8 +690,7 @@ impl ColumnProperties {
     fn set_bloom_filter_fpp(&mut self, value: f64) {
         assert!(
             value > 0. && value < 1.0,
-            "fpp must be between 0 and 1 exclusive, got {}",
-            value
+            "fpp must be between 0 and 1 exclusive, got {value}"
         );
 
         self.bloom_filter_properties

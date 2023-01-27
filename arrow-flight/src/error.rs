@@ -50,7 +50,7 @@ impl FlightError {
 impl std::fmt::Display for FlightError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // TODO better format / error
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 

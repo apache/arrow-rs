@@ -58,8 +58,7 @@ impl FixedSizeBinaryBuilder {
     pub fn with_capacity(capacity: usize, byte_width: i32) -> Self {
         assert!(
             byte_width >= 0,
-            "value length ({}) of the array must >= 0",
-            byte_width
+            "value length ({byte_width}) of the array must >= 0"
         );
         Self {
             values_builder: UInt8BufferBuilder::new(capacity * byte_width as usize),
