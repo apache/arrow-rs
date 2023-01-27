@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-row"
-version = "31.0.0"
+version = "32.0.0"
 description = "Arrow row format"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -44,17 +44,17 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
-arrow-array = { version = "31.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "31.0.0", path = "../arrow-buffer" }
-arrow-data = { version = "31.0.0", path = "../arrow-data" }
-arrow-schema = { version = "31.0.0", path = "../arrow-schema" }
+arrow-array = { version = "32.0.0", path = "../arrow-array" }
+arrow-buffer = { version = "32.0.0", path = "../arrow-buffer" }
+arrow-data = { version = "32.0.0", path = "../arrow-data" }
+arrow-schema = { version = "32.0.0", path = "../arrow-schema" }
 
 half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.13", default-features = false }
 
 [dev-dependencies]
-arrow-cast = { version = "31.0.0", path = "../arrow-cast" }
-arrow-ord = { version = "31.0.0", path = "../arrow-ord" }
+arrow-cast = { version = "32.0.0", path = "../arrow-cast" }
+arrow-ord = { version = "32.0.0", path = "../arrow-ord" }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 
 [features]
