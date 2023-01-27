@@ -136,8 +136,7 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     // match. Ths any of the specific error messages is likely to be
     // be more confusing than helpful
     Err(ArrowError::CastError(format!(
-        "Error parsing '{}' as timestamp",
-        s
+        "Error parsing '{s}' as timestamp"
     )))
 }
 
@@ -241,7 +240,7 @@ pub fn string_to_time_nanoseconds(s: &str) -> Result<i64, ArrowError> {
             nt.num_seconds_from_midnight() as i64 * 1_000_000_000 + nt.nanosecond() as i64
         })
         // Return generic error if failed to parse as unknown which format user intended for the string
-        .ok_or_else(|| ArrowError::CastError(format!("Error parsing '{}' as time", s)))
+        .ok_or_else(|| ArrowError::CastError(format!("Error parsing '{s}' as time")))
 }
 
 /// Specialized parsing implementations
@@ -550,7 +549,7 @@ mod tests {
     fn parse_timestamp(s: &str) -> Result<i64, ArrowError> {
         let result = string_to_timestamp_nanos(s);
         if let Err(e) = &result {
-            eprintln!("Error parsing timestamp '{}': {:?}", s, e);
+            eprintln!("Error parsing timestamp '{s}': {e:?}");
         }
         result
     }
@@ -558,13 +557,11 @@ mod tests {
     fn expect_timestamp_parse_error(s: &str, expected_err: &str) {
         match string_to_timestamp_nanos(s) {
             Ok(v) => panic!(
-                "Expected error '{}' while parsing '{}', but parsed {} instead",
-                expected_err, s, v
+                "Expected error '{expected_err}' while parsing '{s}', but parsed {v} instead"
             ),
             Err(e) => {
                 assert!(e.to_string().contains(expected_err),
-                        "Can not find expected error '{}' while parsing '{}'. Actual error '{}'",
-                        expected_err, s, e);
+                        "Can not find expected error '{expected_err}' while parsing '{s}'. Actual error '{e}'");
             }
         }
     }

@@ -247,7 +247,7 @@ mod tests {
         for i in 0..10 {
             assert!(!arr.is_null(i));
             assert!(arr.is_valid(i));
-            assert_eq!(i == 3 || i == 6 || i == 9, arr.value(i), "failed at {}", i)
+            assert_eq!(i == 3 || i == 6 || i == 9, arr.value(i), "failed at {i}")
         }
     }
 

@@ -167,7 +167,7 @@ mod tests {
 
         let actual: Vec<&str> = table.lines().collect();
 
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -193,7 +193,7 @@ mod tests {
 
         let actual: Vec<&str> = table.lines().collect();
 
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -231,7 +231,7 @@ mod tests {
 
         let actual: Vec<&str> = table.lines().collect();
 
-        assert_eq!(expected, actual, "Actual result:\n{:#?}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table:#?}");
     }
 
     #[test]
@@ -264,7 +264,7 @@ mod tests {
 
         let actual: Vec<&str> = table.lines().collect();
 
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -304,7 +304,7 @@ mod tests {
 
         let actual: Vec<&str> = table.lines().collect();
 
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -337,7 +337,7 @@ mod tests {
 
         let actual: Vec<&str> = table.lines().collect();
 
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -669,7 +669,7 @@ mod tests {
         ];
 
         let actual: Vec<&str> = table.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -702,7 +702,7 @@ mod tests {
         ];
 
         let actual: Vec<&str> = table.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -761,7 +761,7 @@ mod tests {
         ];
 
         let actual: Vec<&str> = table.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -983,7 +983,7 @@ mod tests {
         ];
 
         let actual: Vec<&str> = table.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -1024,7 +1024,7 @@ mod tests {
 
         let actual: Vec<&str> = table.lines().collect();
 
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -1079,7 +1079,7 @@ mod tests {
 
         let actual: Vec<&str> = table.lines().collect();
 
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }

@@ -725,7 +725,7 @@ mod tests {
         let array = builder.finish();
         assert_eq!(
             "DictionaryArray {keys: PrimitiveArray<UInt8>\n[\n  0,\n  null,\n  1,\n] values: PrimitiveArray<UInt32>\n[\n  12345678,\n  22345678,\n]}\n",
-            format!("{:?}", array)
+            format!("{array:?}")
         );
 
         let mut builder =
@@ -736,7 +736,7 @@ mod tests {
         let array = builder.finish();
         assert_eq!(
             "DictionaryArray {keys: PrimitiveArray<UInt8>\n[\n  0,\n  0,\n  0,\n  0,\n  0,\n  0,\n  0,\n  0,\n  0,\n  0,\n  0,\n  0,\n  0,\n  0,\n  0,\n  0,\n  0,\n  0,\n  0,\n  0,\n] values: PrimitiveArray<UInt32>\n[\n  1,\n]}\n",
-            format!("{:?}", array)
+            format!("{array:?}")
         );
     }
 
@@ -749,13 +749,13 @@ mod tests {
             .collect();
         assert_eq!(
             "DictionaryArray {keys: PrimitiveArray<Int8>\n[\n  0,\n  0,\n  null,\n  1,\n] values: StringArray\n[\n  \"a\",\n  \"c\",\n]}\n",
-            format!("{:?}", array)
+            format!("{array:?}")
         );
 
         let array: DictionaryArray<Int8Type> = test.into_iter().collect();
         assert_eq!(
             "DictionaryArray {keys: PrimitiveArray<Int8>\n[\n  0,\n  0,\n  1,\n  2,\n] values: StringArray\n[\n  \"a\",\n  \"b\",\n  \"c\",\n]}\n",
-            format!("{:?}", array)
+            format!("{array:?}")
         );
     }
 
@@ -900,7 +900,7 @@ mod tests {
 
         assert_eq!(
             "DictionaryArray {keys: PrimitiveArray<Int32>\n[\n  0,\n  2,\n  null,\n  1,\n] values: StringArray\n[\n  \"foo\",\n  \"bar\",\n  \"baz\",\n]}\n",
-            format!("{:?}", array)
+            format!("{array:?}")
         );
     }
 

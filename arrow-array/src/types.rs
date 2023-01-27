@@ -688,11 +688,11 @@ fn format_decimal_str(value_str: &str, precision: usize, scale: i8) -> String {
         value_str.to_string()
     } else if scale < 0 {
         let padding = value_str.len() + scale.unsigned_abs() as usize;
-        format!("{:0<width$}", value_str, width = padding)
+        format!("{value_str:0<padding$}")
     } else if rest.len() > scale as usize {
         // Decimal separator is in the middle of the string
         let (whole, decimal) = value_str.split_at(value_str.len() - scale as usize);
-        format!("{}.{}", whole, decimal)
+        format!("{whole}.{decimal}")
     } else {
         // String has to be padded
         format!("{}0.{:0>width$}", sign, rest, width = scale as usize)

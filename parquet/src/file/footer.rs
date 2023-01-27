@@ -72,7 +72,7 @@ pub fn decode_metadata(metadata_read: &[u8]) -> Result<ParquetMetaData> {
     // TODO: row group filtering
     let mut prot = TCompactInputProtocol::new(metadata_read);
     let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
-        .map_err(|e| ParquetError::General(format!("Could not parse metadata: {}", e)))?;
+        .map_err(|e| ParquetError::General(format!("Could not parse metadata: {e}")))?;
     let schema = types::from_thrift(&t_file_metadata.schema)?;
     let schema_descr = Arc::new(SchemaDescriptor::new(schema));
     let mut row_groups = Vec::new();

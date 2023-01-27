@@ -148,7 +148,7 @@ fn infer_file_schema_with_csv_options<R: Read + Seek>(
     mut reader: R,
     roptions: ReaderOptions,
 ) -> Result<(Schema, usize), ArrowError> {
-    let saved_offset = reader.seek(SeekFrom::Current(0))?;
+    let saved_offset = reader.stream_position()?;
 
     let (schema, records_count) =
         infer_reader_schema_with_csv_options(&mut reader, roptions)?;
@@ -626,14 +626,12 @@ fn parse(
                                 .collect::<DictionaryArray<UInt64Type>>(),
                         ) as ArrayRef),
                         _ => Err(ArrowError::ParseError(format!(
-                            "Unsupported dictionary key type {:?}",
-                            key_type
+                            "Unsupported dictionary key type {key_type:?}"
                         ))),
                     }
                 }
                 other => Err(ArrowError::ParseError(format!(
-                    "Unsupported data type {:?}",
-                    other
+                    "Unsupported data type {other:?}"
                 ))),
             }
         })
@@ -765,14 +763,12 @@ fn parse_decimal_with_parameter(
         match validate_decimal_precision(result, precision) {
             Ok(_) => Ok(result),
             Err(e) => Err(ArrowError::ParseError(format!(
-                "parse decimal overflow: {}",
-                e
+                "parse decimal overflow: {e}"
             ))),
         }
     } else {
         Err(ArrowError::ParseError(format!(
-            "can't parse the string value {} to decimal",
-            s
+            "can't parse the string value {s} to decimal"
         )))
     }
 }
@@ -816,8 +812,7 @@ fn parse_decimal(s: &str) -> Result<i128, ArrowError> {
         }
     } else {
         Err(ArrowError::ParseError(format!(
-            "can't parse the string value {} to decimal",
-            s
+            "can't parse the string value {s} to decimal"
         )))
     }
 }
@@ -1542,7 +1537,7 @@ mod tests {
             Some(e) => match e {
                 Err(e) => assert_eq!(
                     "ParseError(\"Error while parsing value 4.x4 for column 1 at line 4\")",
-                    format!("{:?}", e)
+                    format!("{e:?}")
                 ),
                 Ok(_) => panic!("should have failed"),
             },
@@ -1690,10 +1685,7 @@ mod tests {
         for s in can_not_parse_tests {
             let result = parse_decimal_with_parameter(s, 20, 3);
             assert_eq!(
-                format!(
-                    "Parser error: can't parse the string value {} to decimal",
-                    s
-                ),
+                format!("Parser error: can't parse the string value {s} to decimal"),
                 result.unwrap_err().to_string()
             );
         }
@@ -1705,9 +1697,7 @@ mod tests {
 
             assert!(
                 actual.contains(expected),
-                "actual: '{}', expected: '{}'",
-                actual,
-                expected
+                "actual: '{actual}', expected: '{expected}'"
             );
         }
     }
@@ -1960,10 +1950,10 @@ mod tests {
         let mut csv_text = Vec::new();
         let mut csv_writer = std::io::Cursor::new(&mut csv_text);
         for index in 0..10 {
-            let text1 = format!("id{:}", index);
-            let text2 = format!("value{:}", index);
+            let text1 = format!("id{index:}");
+            let text2 = format!("value{index:}");
             csv_writer
-                .write_fmt(format_args!("~{}~,~{}~\r\n", text1, text2))
+                .write_fmt(format_args!("~{text1}~,~{text2}~\r\n"))
                 .unwrap();
         }
         let mut csv_reader = std::io::Cursor::new(&csv_text);
@@ -1993,10 +1983,10 @@ mod tests {
         let mut csv_text = Vec::new();
         let mut csv_writer = std::io::Cursor::new(&mut csv_text);
         for index in 0..10 {
-            let text1 = format!("id{:}", index);
-            let text2 = format!("value\\\"{:}", index);
+            let text1 = format!("id{index:}");
+            let text2 = format!("value\\\"{index:}");
             csv_writer
-                .write_fmt(format_args!("\"{}\",\"{}\"\r\n", text1, text2))
+                .write_fmt(format_args!("\"{text1}\",\"{text2}\"\r\n"))
                 .unwrap();
         }
         let mut csv_reader = std::io::Cursor::new(&csv_text);
@@ -2026,10 +2016,10 @@ mod tests {
         let mut csv_text = Vec::new();
         let mut csv_writer = std::io::Cursor::new(&mut csv_text);
         for index in 0..10 {
-            let text1 = format!("id{:}", index);
-            let text2 = format!("value{:}", index);
+            let text1 = format!("id{index:}");
+            let text2 = format!("value{index:}");
             csv_writer
-                .write_fmt(format_args!("\"{}\",\"{}\"\n", text1, text2))
+                .write_fmt(format_args!("\"{text1}\",\"{text2}\"\n"))
                 .unwrap();
         }
         let mut csv_reader = std::io::Cursor::new(&csv_text);
@@ -2068,7 +2058,7 @@ mod tests {
                 .next()
                 .unwrap()
                 .unwrap();
-            assert_eq!(b.num_rows(), expected, "{}", idx);
+            assert_eq!(b.num_rows(), expected, "{idx}");
         }
     }
 

@@ -172,8 +172,8 @@ impl ArrowJson {
             match batch {
                 Some(Ok(batch)) => {
                     if json_batch != batch {
-                        println!("json: {:?}", json_batch);
-                        println!("batch: {:?}", batch);
+                        println!("json: {json_batch:?}");
+                        println!("batch: {batch:?}");
                         return Ok(false);
                     }
                 }
@@ -255,8 +255,7 @@ impl ArrowJsonField {
             }
             Err(e) => {
                 eprintln!(
-                    "Encountered error while converting JSON field to Arrow field: {:?}",
-                    e
+                    "Encountered error while converting JSON field to Arrow field: {e:?}"
                 );
                 false
             }
@@ -323,10 +322,7 @@ pub fn array_from_json(
             {
                 match is_valid {
                     1 => b.append_value(value.as_i64().ok_or_else(|| {
-                        ArrowError::JsonError(format!(
-                            "Unable to get {:?} as int64",
-                            value
-                        ))
+                        ArrowError::JsonError(format!("Unable to get {value:?} as int64"))
                     })? as i8),
                     _ => b.append_null(),
                 };
@@ -411,18 +407,16 @@ pub fn array_from_json(
                                             i64::from_le_bytes(bytes)
                                         }
                                         _ => panic!(
-                                            "Unable to parse {:?} as interval daytime",
-                                            value
+                                            "Unable to parse {value:?} as interval daytime"
                                         ),
                                     }
                                 }
                                 _ => panic!(
-                                    "Unable to parse {:?} as interval daytime",
-                                    value
+                                    "Unable to parse {value:?} as interval daytime"
                                 ),
                             }
                         }
-                        _ => panic!("Unable to parse {:?} as number", value),
+                        _ => panic!("Unable to parse {value:?} as number"),
                     }),
                     _ => b.append_null(),
                 };
@@ -502,7 +496,7 @@ pub fn array_from_json(
                                 value.as_u64().expect("Unable to read number as u64"),
                             )
                         } else {
-                            panic!("Unable to parse value {:?} as u64", value)
+                            panic!("Unable to parse value {value:?} as u64")
                         }
                     }
                     _ => b.append_null(),
@@ -542,11 +536,11 @@ pub fn array_from_json(
                                     months_days_ns
                                 }
                                 (_, _, _) => {
-                                    panic!("Unable to parse {:?} as MonthDayNano", v)
+                                    panic!("Unable to parse {v:?} as MonthDayNano")
                                 }
                             }
                         }
-                        _ => panic!("Unable to parse {:?} as MonthDayNano", value),
+                        _ => panic!("Unable to parse {value:?} as MonthDayNano"),
                     }),
                     _ => b.append_null(),
                 };
@@ -760,16 +754,14 @@ pub fn array_from_json(
         DataType::Dictionary(key_type, value_type) => {
             let dict_id = field.dict_id().ok_or_else(|| {
                 ArrowError::JsonError(format!(
-                    "Unable to find dict_id for field {:?}",
-                    field
+                    "Unable to find dict_id for field {field:?}"
                 ))
             })?;
             // find dictionary
             let dictionary = dictionaries
                 .ok_or_else(|| {
                     ArrowError::JsonError(format!(
-                        "Unable to find any dictionaries for field {:?}",
-                        field
+                        "Unable to find any dictionaries for field {field:?}"
                     ))
                 })?
                 .get(&dict_id);
@@ -783,8 +775,7 @@ pub fn array_from_json(
                     dictionaries,
                 ),
                 None => Err(ArrowError::JsonError(format!(
-                    "Unable to find dictionary for field {:?}",
-                    field
+                    "Unable to find dictionary for field {field:?}"
                 ))),
             }
         }
@@ -892,8 +883,7 @@ pub fn array_from_json(
             Ok(Arc::new(array))
         }
         t => Err(ArrowError::JsonError(format!(
-            "data type {:?} not supported",
-            t
+            "data type {t:?} not supported"
         ))),
     }
 }
@@ -963,8 +953,7 @@ pub fn dictionary_array_from_json(
             Ok(array)
         }
         _ => Err(ArrowError::JsonError(format!(
-            "Dictionary key type {:?} not supported",
-            dict_key
+            "Dictionary key type {dict_key:?} not supported"
         ))),
     }
 }

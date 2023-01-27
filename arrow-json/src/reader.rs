@@ -46,7 +46,7 @@
 //! let batch = json.next().unwrap().unwrap();
 //! ```
 
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek};
 use std::sync::Arc;
 
 use indexmap::map::IndexMap as HashMap;
@@ -104,8 +104,7 @@ impl InferredType {
             // incompatible types
             (s, o) => {
                 return Err(ArrowError::JsonError(format!(
-                    "Incompatible type found during schema inference: {:?} v.s. {:?}",
-                    s, o,
+                    "Incompatible type found during schema inference: {s:?} v.s. {o:?}",
                 )));
             }
         }
@@ -228,8 +227,7 @@ impl<'a, R: Read> Iterator for ValueIter<'a, R> {
                 }
                 Err(e) => {
                     return Some(Err(ArrowError::JsonError(format!(
-                        "Failed to read JSON record: {}",
-                        e
+                        "Failed to read JSON record: {e}"
                     ))));
                 }
                 _ => {
@@ -241,7 +239,7 @@ impl<'a, R: Read> Iterator for ValueIter<'a, R> {
 
                     self.record_count += 1;
                     return Some(serde_json::from_str(trimmed_s).map_err(|e| {
-                        ArrowError::JsonError(format!("Not valid JSON: {}", e))
+                        ArrowError::JsonError(format!("Not valid JSON: {e}"))
                     }));
                 }
             }
@@ -275,7 +273,7 @@ pub fn infer_json_schema_from_seekable<R: Read + Seek>(
 ) -> Result<Schema, ArrowError> {
     let schema = infer_json_schema(reader, max_read_records);
     // return the reader seek back to the start
-    reader.seek(SeekFrom::Start(0))?;
+    reader.rewind()?;
 
     schema
 }
@@ -336,8 +334,7 @@ fn set_object_scalar_field_type(
             Ok(())
         }
         t => Err(ArrowError::JsonError(format!(
-            "Expected scalar or scalar array JSON type, found: {:?}",
-            t,
+            "Expected scalar or scalar array JSON type, found: {t:?}",
         ))),
     }
 }
@@ -363,8 +360,7 @@ fn infer_scalar_array_type(array: &[Value]) -> Result<InferredType, ArrowError> 
             }
             Value::Array(_) | Value::Object(_) => {
                 return Err(ArrowError::JsonError(format!(
-                    "Expected scalar value for scalar array, got: {:?}",
-                    v
+                    "Expected scalar value for scalar array, got: {v:?}"
                 )));
             }
         }
@@ -383,8 +379,7 @@ fn infer_nested_array_type(array: &[Value]) -> Result<InferredType, ArrowError> 
             }
             x => {
                 return Err(ArrowError::JsonError(format!(
-                    "Got non array element in nested array: {:?}",
-                    x
+                    "Got non array element in nested array: {x:?}"
                 )));
             }
         }
@@ -403,8 +398,7 @@ fn infer_struct_array_type(array: &[Value]) -> Result<InferredType, ArrowError> 
             }
             _ => {
                 return Err(ArrowError::JsonError(format!(
-                    "Expected struct value for struct array, got: {:?}",
-                    v
+                    "Expected struct value for struct array, got: {v:?}"
                 )));
             }
         }
@@ -474,8 +468,7 @@ fn collect_field_types_from_object(
                     }
                     t => {
                         return Err(ArrowError::JsonError(format!(
-                            "Expected array json type, found: {:?}",
-                            t,
+                            "Expected array json type, found: {t:?}",
                         )));
                     }
                 }
@@ -509,8 +502,7 @@ fn collect_field_types_from_object(
                     }
                     t => {
                         return Err(ArrowError::JsonError(format!(
-                            "Expected object json type, found: {:?}",
-                            t,
+                            "Expected object json type, found: {t:?}",
                         )));
                     }
                 }
@@ -547,8 +539,7 @@ where
             }
             value => {
                 return Err(ArrowError::JsonError(format!(
-                    "Expected JSON record to be an object, found {:?}",
-                    value
+                    "Expected JSON record to be an object, found {value:?}"
                 )));
             }
         };
@@ -698,8 +689,7 @@ impl Decoder {
                 Value::Object(_) => rows.push(v),
                 _ => {
                     return Err(ArrowError::JsonError(format!(
-                        "Row needs to be of type object, got: {:?}",
-                        v
+                        "Row needs to be of type object, got: {v:?}"
                     )));
                 }
             }
@@ -803,8 +793,7 @@ impl Decoder {
                 self.list_array_string_array_builder::<UInt64Type>(&dtype, col_name, rows)
             }
             ref e => Err(ArrowError::JsonError(format!(
-                "Data type is currently not supported for dictionaries in list : {:?}",
-                e
+                "Data type is currently not supported for dictionaries in list : {e:?}"
             ))),
         }
     }
@@ -832,8 +821,7 @@ impl Decoder {
             }
             e => {
                 return Err(ArrowError::JsonError(format!(
-                    "Nested list data builder type is not supported: {:?}",
-                    e
+                    "Nested list data builder type is not supported: {e:?}"
                 )))
             }
         };
@@ -905,8 +893,7 @@ impl Decoder {
                     }
                     e => {
                         return Err(ArrowError::JsonError(format!(
-                            "Nested list data builder type is not supported: {:?}",
-                            e
+                            "Nested list data builder type is not supported: {e:?}"
                         )))
                     }
                 }
@@ -1174,8 +1161,7 @@ impl Decoder {
             }
             datatype => {
                 return Err(ArrowError::JsonError(format!(
-                    "Nested list of {:?} not supported",
-                    datatype
+                    "Nested list of {datatype:?} not supported"
                 )));
             }
         };
@@ -1288,8 +1274,7 @@ impl Decoder {
                                 field.name(),
                             ),
                         t => Err(ArrowError::JsonError(format!(
-                            "TimeUnit {:?} not supported with Time64",
-                            t
+                            "TimeUnit {t:?} not supported with Time64"
                         ))),
                     },
                     DataType::Time32(unit) => match unit {
@@ -1304,8 +1289,7 @@ impl Decoder {
                                 field.name(),
                             ),
                         t => Err(ArrowError::JsonError(format!(
-                            "TimeUnit {:?} not supported with Time32",
-                            t
+                            "TimeUnit {t:?} not supported with Time32"
                         ))),
                     },
                     DataType::Utf8 => Ok(Arc::new(
@@ -2168,7 +2152,7 @@ mod tests {
         let mut file = File::open("test/data/mixed_arrays.json.gz").unwrap();
         let mut reader = BufReader::new(GzDecoder::new(&file));
         let schema = infer_json_schema(&mut reader, None).unwrap();
-        file.seek(SeekFrom::Start(0)).unwrap();
+        file.rewind().unwrap();
 
         let reader = BufReader::new(GzDecoder::new(&file));
         let options = DecoderOptions::new().with_batch_size(64);

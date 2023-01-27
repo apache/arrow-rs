@@ -320,7 +320,7 @@ mod tests {
         let array = builder.finish();
         assert_eq!(
             "RunArray {run_ends: PrimitiveArray<Int16>\n[\n  1,\n  2,\n  3,\n], values: PrimitiveArray<UInt32>\n[\n  12345678,\n  null,\n  22345678,\n]}\n",
-            format!("{:?}", array)
+            format!("{array:?}")
         );
 
         let mut builder = PrimitiveRunBuilder::<Int16Type, UInt32Type>::with_capacity(20);
@@ -334,7 +334,7 @@ mod tests {
 
         assert_eq!(
             "RunArray {run_ends: PrimitiveArray<Int16>\n[\n  20,\n], values: PrimitiveArray<UInt32>\n[\n  1,\n]}\n",
-            format!("{:?}", array)
+            format!("{array:?}")
         );
     }
 
@@ -347,7 +347,7 @@ mod tests {
             .collect();
         assert_eq!(
             "RunArray {run_ends: PrimitiveArray<Int16>\n[\n  2,\n  3,\n  4,\n], values: StringArray\n[\n  \"a\",\n  null,\n  \"c\",\n]}\n",
-            format!("{:?}", array)
+            format!("{array:?}")
         );
 
         assert_eq!(array.len(), 4);
@@ -356,7 +356,7 @@ mod tests {
         let array: RunArray<Int16Type> = test.into_iter().collect();
         assert_eq!(
             "RunArray {run_ends: PrimitiveArray<Int16>\n[\n  2,\n  3,\n  4,\n], values: StringArray\n[\n  \"a\",\n  \"b\",\n  \"c\",\n]}\n",
-            format!("{:?}", array)
+            format!("{array:?}")
         );
     }
 
@@ -428,7 +428,7 @@ mod tests {
 
         assert_eq!(
             "RunArray {run_ends: PrimitiveArray<Int32>\n[\n  1,\n  2,\n  3,\n  4,\n], values: StringArray\n[\n  \"foo\",\n  \"bar\",\n  null,\n  \"baz\",\n]}\n",
-            format!("{:?}", array)
+            format!("{array:?}")
         );
     }
 

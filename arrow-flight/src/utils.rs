@@ -85,7 +85,7 @@ pub fn flight_data_to_arrow_batch(
 ) -> Result<RecordBatch, ArrowError> {
     // check that the data_header is a record batch message
     let message = arrow_ipc::root_as_message(&data.data_header[..]).map_err(|err| {
-        ArrowError::ParseError(format!("Unable to get root as message: {:?}", err))
+        ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
     })?;
 
     message

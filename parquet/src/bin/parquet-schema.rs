@@ -60,7 +60,7 @@ fn main() {
     let verbose = args.verbose;
 
     match SerializedFileReader::new(file) {
-        Err(e) => panic!("Error when parsing Parquet file: {}", e),
+        Err(e) => panic!("Error when parsing Parquet file: {e}"),
         Ok(parquet_reader) => {
             let metadata = parquet_reader.metadata();
             println!("Metadata for file: {}", &filename);

@@ -143,10 +143,8 @@ fn roundtrip_arrow_file_with_options(
     path: &str,
     options: IpcWriteOptions,
 ) {
-    let filename = format!(
-        "{}/arrow-ipc-stream/integration/{}/{}.arrow_file",
-        testdata, version, path
-    );
+    let filename =
+        format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.arrow_file");
     println!("Verifying {filename}");
 
     let mut tempfile = tempfile::tempfile().unwrap();
@@ -222,10 +220,8 @@ fn roundtrip_arrow_stream_with_options(
     path: &str,
     options: IpcWriteOptions,
 ) {
-    let filename = format!(
-        "{}/arrow-ipc-stream/integration/{}/{}.stream",
-        testdata, version, path
-    );
+    let filename =
+        format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.stream");
     println!("Verifying {filename}");
 
     let mut tempfile = tempfile::tempfile().unwrap();

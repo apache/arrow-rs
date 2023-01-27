@@ -555,7 +555,7 @@ impl ObjectStore for LocalFileSystem {
 
 fn get_upload_stage_path(dest: &std::path::Path, multipart_id: &MultipartId) -> PathBuf {
     let mut staging_path = dest.as_os_str().to_owned();
-    staging_path.push(format!("#{}", multipart_id));
+    staging_path.push(format!("#{multipart_id}"));
     staging_path.into()
 }
 
@@ -607,7 +607,7 @@ impl AsyncWrite for LocalUpload {
             |condition: &str| -> std::task::Poll<Result<usize, io::Error>> {
                 Poll::Ready(Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    format!("Tried to write to file {}.", condition),
+                    format!("Tried to write to file {condition}."),
                 )))
             };
 
@@ -1040,12 +1040,11 @@ mod tests {
             let source_variant = source.downcast_ref::<std::io::Error>();
             assert!(
                 matches!(source_variant, Some(std::io::Error { .. }),),
-                "got: {:?}",
-                source_variant
+                "got: {source_variant:?}"
             );
             assert!(path.ends_with(NON_EXISTENT_NAME), "{}", path);
         } else {
-            panic!("unexpected error type: {:?}", err);
+            panic!("unexpected error type: {err:?}");
         }
     }
 

@@ -133,8 +133,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                             }
                             _ => {
                                 return Err(ArrowError::CDataInterface(format!(
-                                    "The decimal pattern \"d:{:?}\" is not supported in the Rust implementation",
-                                    extra
+                                    "The decimal pattern \"d:{extra:?}\" is not supported in the Rust implementation"
                                 )))
                             }
                         }
@@ -203,8 +202,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                     }
                     _ => {
                         return Err(ArrowError::CDataInterface(format!(
-                            "The datatype \"{:?}\" is still not supported in Rust implementation",
-                            other
+                            "The datatype \"{other:?}\" is still not supported in Rust implementation"
                         )))
                     }
                 }
@@ -304,13 +302,11 @@ fn get_format_string(dtype: &DataType) -> Result<String> {
         DataType::LargeBinary => Ok("Z".to_string()),
         DataType::Utf8 => Ok("u".to_string()),
         DataType::LargeUtf8 => Ok("U".to_string()),
-        DataType::FixedSizeBinary(num_bytes) => Ok(format!("w:{}", num_bytes)),
-        DataType::FixedSizeList(_, num_elems) => Ok(format!("+w:{}", num_elems)),
-        DataType::Decimal128(precision, scale) => {
-            Ok(format!("d:{},{}", precision, scale))
-        }
+        DataType::FixedSizeBinary(num_bytes) => Ok(format!("w:{num_bytes}")),
+        DataType::FixedSizeList(_, num_elems) => Ok(format!("+w:{num_elems}")),
+        DataType::Decimal128(precision, scale) => Ok(format!("d:{precision},{scale}")),
         DataType::Decimal256(precision, scale) => {
-            Ok(format!("d:{},{},256", precision, scale))
+            Ok(format!("d:{precision},{scale},256"))
         }
         DataType::Date32 => Ok("tdD".to_string()),
         DataType::Date64 => Ok("tdm".to_string()),
@@ -322,10 +318,10 @@ fn get_format_string(dtype: &DataType) -> Result<String> {
         DataType::Timestamp(TimeUnit::Millisecond, None) => Ok("tsm:".to_string()),
         DataType::Timestamp(TimeUnit::Microsecond, None) => Ok("tsu:".to_string()),
         DataType::Timestamp(TimeUnit::Nanosecond, None) => Ok("tsn:".to_string()),
-        DataType::Timestamp(TimeUnit::Second, Some(tz)) => Ok(format!("tss:{}", tz)),
-        DataType::Timestamp(TimeUnit::Millisecond, Some(tz)) => Ok(format!("tsm:{}", tz)),
-        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => Ok(format!("tsu:{}", tz)),
-        DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)) => Ok(format!("tsn:{}", tz)),
+        DataType::Timestamp(TimeUnit::Second, Some(tz)) => Ok(format!("tss:{tz}")),
+        DataType::Timestamp(TimeUnit::Millisecond, Some(tz)) => Ok(format!("tsm:{tz}")),
+        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => Ok(format!("tsu:{tz}")),
+        DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)) => Ok(format!("tsn:{tz}")),
         DataType::Duration(TimeUnit::Second) => Ok("tDs".to_string()),
         DataType::Duration(TimeUnit::Millisecond) => Ok("tDm".to_string()),
         DataType::Duration(TimeUnit::Microsecond) => Ok("tDu".to_string()),
@@ -343,8 +339,7 @@ fn get_format_string(dtype: &DataType) -> Result<String> {
             }
         }
         other => Err(ArrowError::CDataInterface(format!(
-            "The datatype \"{:?}\" is still not supported in Rust implementation",
-            other
+            "The datatype \"{other:?}\" is still not supported in Rust implementation"
         ))),
     }
 }

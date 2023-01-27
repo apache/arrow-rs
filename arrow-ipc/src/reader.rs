@@ -203,13 +203,12 @@ fn create_array(
             ];
 
             let dict_id = field.dict_id().ok_or_else(|| {
-                ArrowError::IoError(format!("Field {} does not have dict id", field))
+                ArrowError::IoError(format!("Field {field} does not have dict id"))
             })?;
 
             let value_array = dictionaries_by_id.get(&dict_id).ok_or_else(|| {
                 ArrowError::IoError(format!(
-                    "Cannot find a dictionary batch with dict id: {}",
-                    dict_id
+                    "Cannot find a dictionary batch with dict id: {dict_id}"
                 ))
             })?;
             node_index += 1;
@@ -283,8 +282,7 @@ fn create_array(
 
             if length != null_count {
                 return Err(ArrowError::IoError(format!(
-                    "Field {} of NullArray has unequal null_count {} and len {}",
-                    field, null_count, length
+                    "Field {field} of NullArray has unequal null_count {null_count} and len {length}"
                 )));
             }
 
@@ -797,7 +795,7 @@ impl<R: Read + Seek> FileReader<R> {
         reader.read_exact(&mut footer_data)?;
 
         let footer = crate::root_as_footer(&footer_data[..]).map_err(|err| {
-            ArrowError::IoError(format!("Unable to get root as footer: {:?}", err))
+            ArrowError::IoError(format!("Unable to get root as footer: {err:?}"))
         })?;
 
         let blocks = footer.recordBatches().ok_or_else(|| {
@@ -828,10 +826,7 @@ impl<R: Read + Seek> FileReader<R> {
                 reader.read_exact(&mut block_data)?;
 
                 let message = crate::root_as_message(&block_data[..]).map_err(|err| {
-                    ArrowError::IoError(format!(
-                        "Unable to get root as message: {:?}",
-                        err
-                    ))
+                    ArrowError::IoError(format!("Unable to get root as message: {err:?}"))
                 })?;
 
                 match message.header_type() {
@@ -856,8 +851,7 @@ impl<R: Read + Seek> FileReader<R> {
                     }
                     t => {
                         return Err(ArrowError::IoError(format!(
-                            "Expecting DictionaryBatch in dictionary blocks, found {:?}.",
-                            t
+                            "Expecting DictionaryBatch in dictionary blocks, found {t:?}."
                         )));
                     }
                 }
@@ -925,7 +919,7 @@ impl<R: Read + Seek> FileReader<R> {
         let mut block_data = vec![0; meta_len as usize];
         self.reader.read_exact(&mut block_data)?;
         let message = crate::root_as_message(&block_data[..]).map_err(|err| {
-            ArrowError::IoError(format!("Unable to get root as footer: {:?}", err))
+            ArrowError::IoError(format!("Unable to get root as footer: {err:?}"))
         })?;
 
         // some old test data's footer metadata is not set, so we account for that
@@ -968,7 +962,7 @@ impl<R: Read + Seek> FileReader<R> {
                 Ok(None)
             }
             t => Err(ArrowError::IoError(format!(
-                "Reading types other than record batches not yet supported, unable to read {:?}", t
+                "Reading types other than record batches not yet supported, unable to read {t:?}"
             ))),
         }
     }
@@ -1054,7 +1048,7 @@ impl<R: Read> StreamReader<R> {
         reader.read_exact(&mut meta_buffer)?;
 
         let message = crate::root_as_message(meta_buffer.as_slice()).map_err(|err| {
-            ArrowError::IoError(format!("Unable to get root as message: {:?}", err))
+            ArrowError::IoError(format!("Unable to get root as message: {err:?}"))
         })?;
         // message header is a Schema, so read it
         let ipc_schema: crate::Schema = message.header_as_schema().ok_or_else(|| {
@@ -1133,7 +1127,7 @@ impl<R: Read> StreamReader<R> {
 
         let vecs = &meta_buffer.to_vec();
         let message = crate::root_as_message(vecs).map_err(|err| {
-            ArrowError::IoError(format!("Unable to get root as message: {:?}", err))
+            ArrowError::IoError(format!("Unable to get root as message: {err:?}"))
         })?;
 
         match message.header_type() {
@@ -1173,7 +1167,7 @@ impl<R: Read> StreamReader<R> {
                 Ok(None)
             }
             t => Err(ArrowError::IoError(
-                format!("Reading types other than record batches not yet supported, unable to read {:?} ", t)
+                format!("Reading types other than record batches not yet supported, unable to read {t:?} ")
             )),
         }
     }

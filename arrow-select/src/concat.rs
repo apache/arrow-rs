@@ -106,8 +106,7 @@ pub fn concat_batches<'a>(
         .find(|&(_, batch)| batch.schema() != *schema)
     {
         return Err(ArrowError::InvalidArgumentError(format!(
-            "batches[{}] schema is different with argument schema.",
-            i
+            "batches[{i}] schema is different with argument schema."
         )));
     }
     let field_num = schema.fields().len();
@@ -555,8 +554,7 @@ mod tests {
         assert_eq!(
             combined.values(),
             &(Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef),
-            "Actual: {:#?}",
-            combined
+            "Actual: {combined:#?}"
         );
 
         assert_eq!(

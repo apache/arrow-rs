@@ -245,7 +245,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         let current_decoder = self
             .decoders
             .get_mut(&encoding)
-            .unwrap_or_else(|| panic!("decoder for encoding {} should be set", encoding));
+            .unwrap_or_else(|| panic!("decoder for encoding {encoding} should be set"));
 
         current_decoder.get(&mut out[range])
     }
@@ -258,7 +258,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         let current_decoder = self
             .decoders
             .get_mut(&encoding)
-            .unwrap_or_else(|| panic!("decoder for encoding {} should be set", encoding));
+            .unwrap_or_else(|| panic!("decoder for encoding {encoding} should be set"));
 
         current_decoder.skip(num_values)
     }

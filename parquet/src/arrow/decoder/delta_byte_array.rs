@@ -49,8 +49,7 @@ impl DeltaByteArrayDecoder {
 
         if num_prefix != num_suffix {
             return Err(general_err!(format!(
-                "inconsistent DELTA_BYTE_ARRAY lengths, prefixes: {}, suffixes: {}",
-                num_prefix, num_suffix
+                "inconsistent DELTA_BYTE_ARRAY lengths, prefixes: {num_prefix}, suffixes: {num_suffix}"
             )));
         }
 

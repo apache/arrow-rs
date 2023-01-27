@@ -289,7 +289,7 @@ impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListArray<OffsetSiz
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let prefix = OffsetSize::PREFIX;
 
-        write!(f, "{}ListArray\n[\n", prefix)?;
+        write!(f, "{prefix}ListArray\n[\n")?;
         print_long_array(self, f, |array, index, f| {
             std::fmt::Debug::fmt(&array.value(index), f)
         })?;

@@ -58,8 +58,7 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
         let (prefix, offsets, suffix) = unsafe { bytes.align_to::<T>() };
         assert!(
             prefix.is_empty() && suffix.is_empty(),
-            "buffer is not aligned to {} byte boundary",
-            size
+            "buffer is not aligned to {size} byte boundary"
         );
 
         let ptr = offsets.as_ptr();

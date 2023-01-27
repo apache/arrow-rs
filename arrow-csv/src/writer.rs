@@ -90,8 +90,7 @@ where
 
 fn invalid_cast_error(dt: &str, col_index: usize, row_index: usize) -> ArrowError {
     ArrowError::CastError(format!(
-        "Cannot cast to {} at col index: {} row index: {}",
-        dt, col_index, row_index
+        "Cannot cast to {dt} at col index: {col_index} row index: {row_index}"
     ))
 }
 
@@ -264,8 +263,7 @@ impl<W: Write> Writer<W> {
                     // List and Struct arrays not supported by the writer, any
                     // other type needs to be implemented
                     return Err(ArrowError::CsvError(format!(
-                        "CSV Writer does not support {:?} data type",
-                        t
+                        "CSV Writer does not support {t:?} data type"
                     )));
                 }
             };

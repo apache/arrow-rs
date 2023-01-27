@@ -441,11 +441,9 @@ impl GetResult {
                         }
                     })?;
 
-                    file.seek(SeekFrom::Start(0)).map_err(|source| {
-                        local::Error::Seek {
-                            source,
-                            path: path.clone(),
-                        }
+                    file.rewind().map_err(|source| local::Error::Seek {
+                        source,
+                        path: path.clone(),
                     })?;
 
                     let mut buffer = Vec::with_capacity(len as usize);
@@ -611,8 +609,7 @@ mod tests {
         let content_list = flatten_list_stream(storage, None).await.unwrap();
         assert!(
             content_list.is_empty(),
-            "Expected list to be empty; found: {:?}",
-            content_list
+            "Expected list to be empty; found: {content_list:?}"
         );
 
         let location = Path::from("test_dir/test_file.json");
@@ -815,7 +812,7 @@ mod tests {
         storage.delete(&path).await.unwrap();
 
         let files = flatten_list_stream(storage, None).await.unwrap();
-        assert!(files.is_empty(), "{:?}", files);
+        assert!(files.is_empty(), "{files:?}");
     }
 
     fn get_vec_of_bytes(chunk_length: usize, num_chunks: usize) -> Vec<Bytes> {
@@ -900,8 +897,7 @@ mod tests {
         let content_list = flatten_list_stream(storage, None).await.unwrap();
         assert!(
             content_list.is_empty(),
-            "Expected list to be empty; found: {:?}",
-            content_list
+            "Expected list to be empty; found: {content_list:?}"
         );
 
         let location1 = Path::from("foo/x.json");

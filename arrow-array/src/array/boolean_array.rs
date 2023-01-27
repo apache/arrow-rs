@@ -407,7 +407,7 @@ mod tests {
         let arr = BooleanArray::from(vec![true, false, false]);
         assert_eq!(
             "BooleanArray\n[\n  true,\n  false,\n  false,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -420,7 +420,7 @@ mod tests {
         let arr = builder.finish();
         assert_eq!(
             "BooleanArray\n[\n  true,\n  null,\n  false,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -435,7 +435,7 @@ mod tests {
         for i in 0..4 {
             assert!(!arr.is_null(i));
             assert!(arr.is_valid(i));
-            assert_eq!(i == 1 || i == 3, arr.value(i), "failed at {}", i)
+            assert_eq!(i == 1 || i == 3, arr.value(i), "failed at {i}")
         }
     }
 
@@ -454,7 +454,7 @@ mod tests {
             } else {
                 assert!(!arr.is_null(i));
                 assert!(arr.is_valid(i));
-                assert_eq!(i == 1 || i == 3, arr.value(i), "failed at {}", i)
+                assert_eq!(i == 1 || i == 3, arr.value(i), "failed at {i}")
             }
         }
     }
@@ -470,7 +470,7 @@ mod tests {
         for i in 0..3 {
             assert!(!arr.is_null(i));
             assert!(arr.is_valid(i));
-            assert_eq!(i == 1 || i == 3, arr.value(i), "failed at {}", i)
+            assert_eq!(i == 1 || i == 3, arr.value(i), "failed at {i}")
         }
     }
 
@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(2, arr.offset());
         assert_eq!(0, arr.null_count());
         for i in 0..3 {
-            assert_eq!(i != 0, arr.value(i), "failed at {}", i);
+            assert_eq!(i != 0, arr.value(i), "failed at {i}");
         }
     }
 

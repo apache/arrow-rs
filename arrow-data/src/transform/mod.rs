@@ -381,7 +381,7 @@ impl<'a> MutableArrayData<'a> {
                 array_capacity = *capacity;
                 new_buffers(data_type, *capacity)
             }
-            _ => panic!("Capacities: {:?} not yet supported", capacities),
+            _ => panic!("Capacities: {capacities:?} not yet supported"),
         };
 
         let child_data = match &data_type {

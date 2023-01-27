@@ -207,7 +207,7 @@ fn hex_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         // String writing is infallible
-        let _ = write!(out, "{:02x}", byte);
+        let _ = write!(out, "{byte:02x}");
     }
     out
 }
@@ -397,7 +397,7 @@ async fn instance_creds(
     const CREDENTIALS_PATH: &str = "latest/meta-data/iam/security-credentials";
     const AWS_EC2_METADATA_TOKEN_HEADER: &str = "X-aws-ec2-metadata-token";
 
-    let token_url = format!("{}/latest/api/token", endpoint);
+    let token_url = format!("{endpoint}/latest/api/token");
 
     let token_result = client
         .request(Method::PUT, token_url)
@@ -416,7 +416,7 @@ async fn instance_creds(
         Err(e) => return Err(e.into()),
     };
 
-    let role_url = format!("{}/{}/", endpoint, CREDENTIALS_PATH);
+    let role_url = format!("{endpoint}/{CREDENTIALS_PATH}/");
     let mut role_request = client.request(Method::GET, role_url);
 
     if let Some(token) = &token {
@@ -425,7 +425,7 @@ async fn instance_creds(
 
     let role = role_request.send_retry(retry_config).await?.text().await?;
 
-    let creds_url = format!("{}/{}/{}", endpoint, CREDENTIALS_PATH, role);
+    let creds_url = format!("{endpoint}/{CREDENTIALS_PATH}/{role}");
     let mut creds_request = client.request(Method::GET, creds_url);
     if let Some(token) = &token {
         creds_request = creds_request.header(AWS_EC2_METADATA_TOKEN_HEADER, token);
@@ -483,7 +483,7 @@ async fn web_identity(
     endpoint: &str,
 ) -> Result<TemporaryToken<Arc<AwsCredential>>, StdError> {
     let token = std::fs::read_to_string(token_path)
-        .map_err(|e| format!("Failed to read token file '{}': {}", token_path, e))?;
+        .map_err(|e| format!("Failed to read token file '{token_path}': {e}"))?;
 
     let bytes = client
         .request(Method::POST, endpoint)
@@ -501,7 +501,7 @@ async fn web_identity(
         .await?;
 
     let resp: AssumeRoleResponse = quick_xml::de::from_reader(bytes.reader())
-        .map_err(|e| format!("Invalid AssumeRoleWithWebIdentity response: {}", e))?;
+        .map_err(|e| format!("Invalid AssumeRoleWithWebIdentity response: {e}"))?;
 
     let creds = resp.assume_role_with_web_identity_result.credentials;
     let now = Utc::now();
@@ -677,7 +677,7 @@ mod tests {
 
         // Verify only allows IMDSv2
         let resp = client
-            .request(Method::GET, format!("{}/latest/meta-data/ami-id", endpoint))
+            .request(Method::GET, format!("{endpoint}/latest/meta-data/ami-id"))
             .send()
             .await
             .unwrap();

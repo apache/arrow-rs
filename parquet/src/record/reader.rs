@@ -150,16 +150,14 @@ impl TreeBuilder {
                     assert_eq!(
                         field.get_fields().len(),
                         1,
-                        "Invalid list type {:?}",
-                        field
+                        "Invalid list type {field:?}"
                     );
 
                     let repeated_field = field.get_fields()[0].clone();
                     assert_eq!(
                         repeated_field.get_basic_info().repetition(),
                         Repetition::REPEATED,
-                        "Invalid list type {:?}",
-                        field
+                        "Invalid list type {field:?}"
                     );
 
                     if Reader::is_element_type(&repeated_field) {
@@ -208,27 +206,23 @@ impl TreeBuilder {
                     assert_eq!(
                         field.get_fields().len(),
                         1,
-                        "Invalid map type: {:?}",
-                        field
+                        "Invalid map type: {field:?}"
                     );
                     assert!(
                         !field.get_fields()[0].is_primitive(),
-                        "Invalid map type: {:?}",
-                        field
+                        "Invalid map type: {field:?}"
                     );
 
                     let key_value_type = field.get_fields()[0].clone();
                     assert_eq!(
                         key_value_type.get_basic_info().repetition(),
                         Repetition::REPEATED,
-                        "Invalid map type: {:?}",
-                        field
+                        "Invalid map type: {field:?}"
                     );
                     assert_eq!(
                         key_value_type.get_fields().len(),
                         2,
-                        "Invalid map type: {:?}",
-                        field
+                        "Invalid map type: {field:?}"
                     );
 
                     path.push(String::from(key_value_type.name()));
@@ -236,8 +230,7 @@ impl TreeBuilder {
                     let key_type = &key_value_type.get_fields()[0];
                     assert!(
                         key_type.is_primitive(),
-                        "Map key type is expected to be a primitive type, but found {:?}",
-                        key_type
+                        "Map key type is expected to be a primitive type, but found {key_type:?}"
                     );
                     let key_reader = self.reader_tree(
                         key_type.clone(),
@@ -411,7 +404,7 @@ impl Reader {
                 }
                 make_row(fields)
             }
-            _ => panic!("Cannot call read() on {}", self),
+            _ => panic!("Cannot call read() on {self}"),
         }
     }
 
@@ -611,7 +604,7 @@ impl fmt::Display for Reader {
             Reader::RepeatedReader(..) => "RepeatedReader",
             Reader::KeyValueReader(..) => "KeyValueReader",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 

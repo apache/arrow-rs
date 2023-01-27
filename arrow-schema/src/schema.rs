@@ -151,8 +151,7 @@ impl Schema {
                         if old_val != &value {
                             return Err(ArrowError::SchemaError(format!(
                                 "Fail to merge schema due to conflicting metadata. \
-                                         Key '{}' has different values '{}' and '{}'",
-                                key, old_val, value
+                                         Key '{key}' has different values '{old_val}' and '{value}'"
                             )));
                         }
                     }
@@ -212,8 +211,7 @@ impl Schema {
                 let valid_fields: Vec<String> =
                     self.fields.iter().map(|f| f.name().clone()).collect();
                 ArrowError::SchemaError(format!(
-                    "Unable to get field named \"{}\". Valid fields: {:?}",
-                    name, valid_fields
+                    "Unable to get field named \"{name}\". Valid fields: {valid_fields:?}"
                 ))
             })
     }
@@ -764,9 +762,7 @@ mod tests {
         let expected = "Fail to merge schema due to conflicting metadata. Key 'foo' has different values 'bar' and 'baz'";
         assert!(
             res.to_string().contains(expected),
-            "Could not find expected string '{}' in '{}'",
-            expected,
-            res
+            "Could not find expected string '{expected}' in '{res}'"
         );
     }
 }

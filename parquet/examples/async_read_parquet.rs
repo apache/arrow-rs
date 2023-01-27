@@ -27,7 +27,7 @@ use tokio::fs::File;
 async fn main() -> Result<()> {
     // Create parquet file that will be read.
     let testdata = arrow::util::test_util::parquet_test_data();
-    let path = format!("{}/alltypes_plain.parquet", testdata);
+    let path = format!("{testdata}/alltypes_plain.parquet");
     let file = File::open(path).await.unwrap();
 
     // Create a async parquet reader builder with batch_size.
