@@ -193,7 +193,7 @@ impl RecordDecoder {
 
         // Need to truncate data t1o the actual amount of data read
         let data = std::str::from_utf8(&self.data[..self.data_len]).map_err(|e| {
-            ArrowError::CsvError(format!("Encountered invalid UTF-8 data: {}", e))
+            ArrowError::CsvError(format!("Encountered invalid UTF-8 data: {e}"))
         })?;
 
         let offsets = &self.offsets[..self.offsets_len];
