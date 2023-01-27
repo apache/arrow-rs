@@ -194,7 +194,6 @@ impl ArrowNativeType for i256 {
 
     fn as_usize(self) -> usize {
         self.to_parts().0 as usize
-
     }
 
     fn usize_as(i: usize) -> Self {
