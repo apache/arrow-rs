@@ -494,17 +494,6 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         let len = self.len();
         let null_count = self.null_count();
 
-        if null_count == 0 {
-            let values = self.values().iter().map(|v| op(*v));
-            // JUSTIFICATION
-            //  Benefit
-            //      ~60% speedup
-            //  Soundness
-            //      `values` is an iterator with a known size because arrays are sized.
-            let buffer = unsafe { Buffer::try_from_trusted_len_iter(values)? };
-            return Ok(unsafe { build_primitive_array(len, buffer, 0, None) });
-        }
-
         let null_buffer = data.null_buffer().map(|b| b.bit_slice(data.offset(), len));
         let mut buffer = BufferBuilder::<O::Native>::new(len);
         buffer.append_n_zeroed(len);
