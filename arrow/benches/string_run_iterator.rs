@@ -58,7 +58,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     build_strings_runs(physical_array_len, logical_array_len, string_len);
                 let typed = run_array.downcast_ref::<StringArray>().unwrap();
                 b.iter(|| {
-                    let mut iter = typed.into_iter();
+                    let iter = typed.into_iter();
                     for _ in iter {}
                 })
             },
