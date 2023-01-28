@@ -163,6 +163,8 @@ unsafe extern "C" fn drop_adbc_partitions(partitions: *mut FFI_AdbcPartitions) {
             .map(|(ptr, size)| Vec::from_raw_parts(ptr as *mut u8, size, size))
             .collect();
 
+        partitions.partitions = null_mut();
+        partitions.partition_lengths = null_mut();
         partitions.private_data = null_mut();
         partitions.release = None;
     }
@@ -402,4 +404,46 @@ pub enum AdbcObjectDepth {
     DBSchemas = 2,
     /// Metadata on catalogs, schemas, and tables.
     Tables = 3,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_adbc_partitions() {
+        let cases: Vec<Vec<Vec<u8>>> =
+            vec![vec![], vec![vec![]], vec![vec![0, 1, 2, 3], vec![4, 5, 6]]];
+
+        for case in cases {
+            let num_partitions = case.len();
+            let expected_partitions = case.clone();
+
+            let partitions: FFI_AdbcPartitions = case.into();
+
+            assert_eq!(partitions.num_partitions, num_partitions);
+            assert!(!partitions.private_data.is_null());
+
+            for (i, expected_part) in expected_partitions.into_iter().enumerate() {
+                let part_length = unsafe { *partitions.partition_lengths.add(i) };
+                let part = unsafe {
+                    std::slice::from_raw_parts(*partitions.partitions.add(i), part_length)
+                };
+                assert_eq!(part, &expected_part);
+            }
+
+            assert!(partitions.release.is_some());
+            let release_func = partitions.release.unwrap();
+            let partitions =
+                Box::into_raw(Box::new(partitions)) as *mut FFI_AdbcPartitions;
+            unsafe {
+                release_func(partitions);
+            }
+
+            let partitions = unsafe { Box::from_raw(partitions) };
+            assert!(partitions.partitions.is_null());
+            assert!(partitions.partition_lengths.is_null());
+            assert!(partitions.private_data.is_null());
+        }
+    }
 }

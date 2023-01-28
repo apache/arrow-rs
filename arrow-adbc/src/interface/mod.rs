@@ -259,9 +259,9 @@ pub trait AdbcConnection {
     fn rollback(&self) -> Result<(), Self::Error>;
 }
 
-/// A container for all state needed to execute a database query, such as the 
+/// A container for all state needed to execute a database query, such as the
 /// query itself, parameters for prepared statements, driver parameters, etc.
-/// 
+///
 /// Statements may represent queries or prepared statements.
 ///
 /// Statements may be used multiple times and can be reconfigured
@@ -277,12 +277,12 @@ pub trait AdbcStatement {
     type ConnectionType: AdbcConnection + Default;
 
     /// Create a new statement.
-    /// 
+    ///
     /// The conn should be saved within the struct.
     fn new_from_connection(conn: Rc<Self::ConnectionType>) -> Self;
 
     /// Turn this statement into a prepared statement to be executed multiple times.
-    /// 
+    ///
     /// This should return an error if called before [AdbcStatement::set_sql_query].
     fn prepare(&self) -> Result<(), Self::Error>;
 
@@ -320,22 +320,22 @@ pub trait AdbcStatement {
     ) -> Result<(), Self::Error>;
 
     /// Execute a statement and get the results.
-    /// 
+    ///
     /// See [StatementResult].
     fn execute(&self) -> Result<StatementResult, Self::Error>;
 
     /// Execute a statement with a partitioned result set.
-    /// 
+    ///
     /// This is not required to be implemented, as it only applies to backends
     /// that internally partition results. These backends can use this method
     /// to support threaded or distributed clients.
-    /// 
+    ///
     /// See [PartitionedStatementResult].
     fn execute_partitioned(&self) -> Result<PartitionedStatementResult, Self::Error>;
 }
 
 /// Result of calling [AdbcStatement::execute].
-/// 
+///
 /// `result` may be None if there is no meaningful result.
 /// `row_affected` may be None if not applicable or if it is not supported.
 pub struct StatementResult {
@@ -344,12 +344,12 @@ pub struct StatementResult {
 }
 
 /// Partitioned results
-/// 
+///
 /// [AdbcConnection::read_partition] will be called to get the output stream
 /// for each partition.
-/// 
+///
 /// These may be used by a multi-threaded or a distributed client. Each partition
-/// will be retrieved by a separate connection. For in-memory databases, these 
+/// will be retrieved by a separate connection. For in-memory databases, these
 /// may be connections on different threads that all reference the same database.
 /// For remote databases, these may be connections in different processes.
 #[derive(Debug, Clone)]

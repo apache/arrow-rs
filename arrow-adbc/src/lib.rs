@@ -19,19 +19,19 @@
 //!
 //! ADBC drivers provide an ABI-stable interface for interacting with databases,
 //! that:
-//! 
-//!  * Uses the Arrow [C Data interface](https://arrow.apache.org/docs/format/CDataInterface.html) 
-//!    and [C Stream Interface](https://arrow.apache.org/docs/format/CStreamInterface.html) 
+//!
+//!  * Uses the Arrow [C Data interface](https://arrow.apache.org/docs/format/CDataInterface.html)
+//!    and [C Stream Interface](https://arrow.apache.org/docs/format/CStreamInterface.html)
 //!    for efficient data interchange.
 //!  * Supports partitioned result sets for multi-threaded or distributed
 //!    applications.
 //!  * Support for [Substrait](https://substrait.io/) plans in addition to SQL queries.
-//! 
+//!
 //! When implemented for remote databases, [Flight SQL](https://arrow.apache.org/docs/format/FlightSql.html)
 //! can be used as the communication protocol. This means data can be in Arrow
 //! format through the whole connection, minimizing serialization and deserialization
 //! overhead.
-//! 
+//!
 //! Read more about ADBC at <https://arrow.apache.org/adbc/>
 pub mod error;
 pub mod ffi;
