@@ -52,10 +52,11 @@
 //!
 //! ```
 //! use std::ffi::CStr;
+//! use std::os::raw::c_char;
 //! use arrow_adbc::error::{FFI_AdbcError, AdbcStatusCode, check_err, AdbcError};
 //!
 //! unsafe fn adbc_str_utf8_len(
-//!     key: *const ::std::os::raw::c_char,
+//!     key: *const c_char,
 //!     out: *mut usize,
 //!     error: *mut FFI_AdbcError) -> AdbcStatusCode {
 //!     if key.is_null() {
@@ -69,11 +70,46 @@
 //!     }
 //!    AdbcStatusCode::Ok
 //! }
+//!
+//!
+//! let msg: &[u8] = &[0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x0]; // "hello"
+//! let mut out: usize = 0;
+//!
+//! let layout = std::alloc::Layout::new::<FFI_AdbcError>();
+//! let error_ptr = unsafe { std::alloc::alloc(layout) } as *mut FFI_AdbcError;
+//!
+//! let status_code = unsafe { adbc_str_utf8_len(
+//!   msg.as_ptr() as *const c_char,
+//!   &mut out as *mut usize,
+//!   error_ptr
+//! ) };
+//!
+//! assert_eq!(status_code, AdbcStatusCode::Ok);
+//! assert_eq!(out, 5);
+//!
+//! let msg: &[u8] = &[0xff, 0x0];
+//! let status_code = unsafe { adbc_str_utf8_len(
+//!   msg.as_ptr() as *const c_char,
+//!   &mut out as *mut usize,
+//!   error_ptr
+//! ) };
+//!
+//! assert_eq!(status_code, AdbcStatusCode::InvalidArguments);
+//! let error = unsafe { *error_ptr };
+//! let error_msg = unsafe { CStr::from_ptr(error.message).to_str().unwrap() };
+//! assert_eq!(error_msg, "Invalid UTF-8 character");
+//! assert_eq!(error.sqlstate, [2, 2, 0, 2, 1]);
+//!
+//! unsafe { std::alloc::dealloc(error_ptr as *mut u8, layout) };
 //! ```
 //!
 
-use std::ffi::{c_char, CString};
+use std::{
+    ffi::{c_char, CString},
+    ptr::null_mut,
+};
 
+#[derive(Debug, PartialEq)]
 #[repr(u8)]
 pub enum AdbcStatusCode {
     /// No error.
@@ -168,6 +204,9 @@ pub struct FFI_AdbcError {
 }
 
 impl FFI_AdbcError {
+    /// Create a new FFI_AdbcError.
+    ///
+    /// `vendor_code` defaults to -1 and `sql_state` defaults to zeros.
     pub fn new(
         message: &str,
         vendor_code: Option<i32>,
@@ -269,7 +308,7 @@ unsafe extern "C" fn drop_adbc_error(error: *mut FFI_AdbcError) {
     if let Some(error) = error.as_mut() {
         // Retake pointer so it will drop once out of scope.
         let _ = CString::from_raw(error.message);
-        error.release = None;
+        error.message = null_mut();
     }
 }
 
@@ -296,3 +335,67 @@ macro_rules! check_err {
 
 use arrow::error::ArrowError;
 pub use check_err;
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        alloc::{alloc, dealloc, Layout},
+        ffi::CStr,
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_adbcerror() {
+        let cases = vec![
+            ("hello", None, None),
+            ("", None, None),
+            ("unicode 😅", None, None),
+            ("msg", Some(20), None),
+            ("msg", None, Some([3, 4, 5, 6, 7])),
+        ];
+
+        for (msg, vendor_code, sqlstate) in cases {
+            let err = FFI_AdbcError::new(msg, vendor_code, sqlstate);
+            assert_eq!(
+                unsafe { CStr::from_ptr(err.message).to_str().unwrap() },
+                msg
+            );
+            assert_eq!(err.vendor_code, vendor_code.unwrap_or(-1));
+            assert_eq!(err.sqlstate, sqlstate.unwrap_or([0, 0, 0, 0, 0]));
+
+            assert!(err.release.is_some());
+            let release_func = err.release.unwrap();
+            let err = Box::into_raw(Box::new(err)) as *mut FFI_AdbcError;
+            unsafe { release_func(err) };
+
+            let err = unsafe { Box::from_raw(err) };
+            assert!(err.message.is_null());
+        }
+    }
+
+    #[test]
+    fn test_adbcerror_set_message() {
+        let layout = Layout::new::<FFI_AdbcError>();
+        let dest = unsafe { alloc(layout) } as *mut FFI_AdbcError;
+
+        let msg = "Hello world!";
+        unsafe { FFI_AdbcError::set_message(dest, msg) };
+
+        let err = unsafe { *dest };
+        assert_eq!(
+            unsafe { CStr::from_ptr(err.message).to_str().unwrap() },
+            msg
+        );
+        assert_eq!(err.vendor_code, -1);
+        assert_eq!(err.sqlstate, [0, 0, 0, 0, 0]);
+
+        assert!(err.release.is_some());
+        let release_func = err.release.unwrap();
+        unsafe { release_func(dest) };
+
+        assert!(unsafe { (*dest).message.is_null() });
+
+        unsafe { dealloc(dest as *mut u8, layout) };
+    }
+}
