@@ -17,6 +17,7 @@
 
 use arrow::datatypes::Int32Type;
 use arrow::{array::PrimitiveArray, util::bench_util::create_primitive_run_array};
+use arrow_array::ArrayAccessor;
 use criterion::{criterion_group, criterion_main, Criterion};
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -27,7 +28,6 @@ fn criterion_benchmark(c: &mut Criterion) {
             format!(
                 "(run_array_len:{logical_array_len}, physical_array_len:{physical_array_len})"),
             |b| {
-                use arrow_array::ArrayAccessor;
                 let run_array = create_primitive_run_array::<Int32Type, Int32Type>(
                     logical_array_len,
                     physical_array_len,

@@ -250,6 +250,7 @@ harness = false
 [[bench]]
 name = "primitive_run_accessor"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "substring_kernels"
