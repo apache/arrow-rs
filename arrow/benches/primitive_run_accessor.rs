@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayAccessor, PrimitiveArray};
 use arrow::datatypes::Int32Type;
-use arrow::util::bench_util::create_primitive_run_array;
+use arrow::{array::PrimitiveArray, util::bench_util::create_primitive_run_array};
 use criterion::{criterion_group, criterion_main, Criterion};
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -26,10 +25,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     let mut do_bench = |physical_array_len: usize, logical_array_len: usize| {
         group.bench_function(
             format!(
-                "(run_array_len:{}, physical_array_len:{})",
-                logical_array_len, physical_array_len
-            ),
+                "(run_array_len:{logical_array_len}, physical_array_len:{physical_array_len})"),
             |b| {
+                use arrow_array::ArrayAccessor;
                 let run_array = create_primitive_run_array::<Int32Type, Int32Type>(
                     logical_array_len,
                     physical_array_len,
