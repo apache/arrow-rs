@@ -92,7 +92,7 @@ unsafe extern "C" fn release_adbc_driver(
     driver: *mut FFI_AdbcDriver,
     _error: *mut FFI_AdbcError,
 ) -> AdbcStatusCode {
-    // TODO: if there is no private data is the more we should do?
+    // TODO: if there is no private data is there more we should do?
     if let Some(driver) = driver.as_mut() {
         driver.release = None;
     }

@@ -394,6 +394,7 @@ pub struct FFI_AdbcDriver {
 }
 
 /// Depth parameter for GetObjects method.
+#[derive(Debug)]
 #[repr(i32)]
 pub enum AdbcObjectDepth {
     /// Metadata on catalogs, schemas, tables, and columns.

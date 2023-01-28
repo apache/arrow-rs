@@ -359,44 +359,51 @@ pub struct PartitionedStatementResult {
     pub rows_affected: Option<i64>,
 }
 
-/// Expose an ADBC driver entrypoint for the given statement type.
+/// Expose an ADBC driver entrypoint for the given name and statement type.
+///
+/// The default name recommended is `AdbcDriverInit` or `<Prefix>DriverInit`.
 ///
 /// The type must implement [AdbcStatement].
 #[macro_export]
-macro_rules! adbc_api {
-    ($statement_type:ident) => {
-        mod _adbc_api {
-            use super::$statement_type;
-            use arrow_adbc::error::{AdbcStatusCode, FFI_AdbcError};
-            use arrow_adbc::ffi::FFI_AdbcDriver;
-
-            // TODO: Should this not be mangled? Is there a risk of symbol name collisions?
-            // No mangle, since this is the main entrypoint.
-            #[no_mangle]
-            pub extern "C" fn AdbcDriverInit(
-                version: ::std::os::raw::c_int,
-                driver: *mut ::std::os::raw::c_void,
-                mut error: *mut FFI_AdbcError,
-            ) -> AdbcStatusCode {
-                if version != 1000000 {
-                    unsafe {
-                        FFI_AdbcError::set_message(
-                            error,
-                            &format!("Unsupported ADBC version: {}", version),
-                        );
-                    }
-                    return AdbcStatusCode::NotImplemented;
-                }
-                let driver_raw = arrow_adbc::interface::internal::init_adbc_driver::<
-                    $statement_type,
-                >();
+macro_rules! adbc_init_func {
+    ($func_name:ident, $statement_type:ident) => {
+        #[no_mangle]
+        pub extern "C" fn $func_name(
+            version: ::std::os::raw::c_int,
+            driver: *mut ::std::os::raw::c_void,
+            mut error: *mut arrow_adbc::error::FFI_AdbcError,
+        ) -> arrow_adbc::error::AdbcStatusCode {
+            if version != 1000000 {
                 unsafe {
-                    std::ptr::write_unaligned(driver as *mut FFI_AdbcDriver, driver_raw);
+                    arrow_adbc::error::FFI_AdbcError::set_message(
+                        error,
+                        &format!("Unsupported ADBC version: {}", version),
+                    );
                 }
-                AdbcStatusCode::Ok
+                return arrow_adbc::error::AdbcStatusCode::NotImplemented;
             }
+
+            if driver.is_null() {
+                unsafe {
+                    arrow_adbc::error::FFI_AdbcError::set_message(
+                        error,
+                        "Passed a null pointer to ADBC driver init method.",
+                    );
+                }
+                return arrow_adbc::error::AdbcStatusCode::InvalidState;
+            }
+
+            let driver_raw =
+                arrow_adbc::interface::internal::init_adbc_driver::<$statement_type>();
+            unsafe {
+                std::ptr::write_unaligned(
+                    driver as *mut arrow_adbc::ffi::FFI_AdbcDriver,
+                    driver_raw,
+                );
+            }
+            arrow_adbc::error::AdbcStatusCode::Ok
         }
     };
 }
 
-pub use adbc_api;
+pub use adbc_init_func;

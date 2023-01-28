@@ -215,4 +215,4 @@ impl AdbcStatement for Statement {
     }
 }
 
-arrow_adbc::interface::adbc_api!(Statement);
+arrow_adbc::interface::adbc_init_func!(AdbcDriverInit, Statement);

@@ -303,11 +303,12 @@ impl AdbcError for ArrowError {
     }
 }
 
-#[no_mangle]
 unsafe extern "C" fn drop_adbc_error(error: *mut FFI_AdbcError) {
     if let Some(error) = error.as_mut() {
         // Retake pointer so it will drop once out of scope.
-        let _ = CString::from_raw(error.message);
+        if !error.message.is_null() {
+            let _ = CString::from_raw(error.message);
+        }
         error.message = null_mut();
     }
 }
