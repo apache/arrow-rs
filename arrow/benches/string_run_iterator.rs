@@ -52,16 +52,14 @@ fn criterion_benchmark(c: &mut Criterion) {
                         string_len: usize| {
         group.bench_function(
             format!(
-                "(run_array_len:{}, physical_array_len:{}, string_len: {})",
-                logical_array_len, physical_array_len, string_len
-            ),
+                "(run_array_len:{logical_array_len}, physical_array_len:{physical_array_len}, string_len: {string_len})"),
             |b| {
                 let run_array =
                     build_strings_runs(physical_array_len, logical_array_len, string_len);
                 let typed = run_array.downcast_ref::<StringArray>().unwrap();
                 b.iter(|| {
-                    let mut iter = typed.clone().into_iter();
-                    while let Some(_) = iter.next() {}
+                    let mut iter = typed.into_iter();
+                    for _ in iter {}
                 })
             },
         );
