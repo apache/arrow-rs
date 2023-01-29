@@ -1180,7 +1180,7 @@ pub fn cast_with_options(
             }
             Date32 => cast_date32_to_string::<i32>(array),
             Date64 => cast_date64_to_string::<i32>(array),
-            Binary => cast_binary_to_generic_string::<i32, i32>(array, cast_options),
+            Binary => cast_binary_to_string::<i32>(array, cast_options),
             LargeBinary => cast_binary_to_generic_string::<i64, i32>(array, cast_options),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
@@ -1215,7 +1215,7 @@ pub fn cast_with_options(
             Date32 => cast_date32_to_string::<i64>(array),
             Date64 => cast_date64_to_string::<i64>(array),
             Binary => cast_binary_to_generic_string::<i32, i64>(array, cast_options),
-            LargeBinary => cast_binary_to_generic_string::<i64, i64>(array, cast_options),
+            LargeBinary => cast_binary_to_string::<i64>(array, cast_options),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -3392,6 +3392,69 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
     Ok(Arc::new(list) as ArrayRef)
 }
 
+/// A specified helper to cast from `GenericBinaryArray` to `GenericStringArray` when they have same
+/// offset size so re-encoding offset is unnecessary.
+fn cast_binary_to_string<O>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError>
+where
+    O: OffsetSizeTrait + ToPrimitive,
+{
+    let array = array
+        .as_any()
+        .downcast_ref::<GenericByteArray<GenericBinaryType<O>>>()
+        .unwrap();
+
+    if !cast_options.safe {
+        let offsets = array.value_offsets();
+        let values = array.value_data();
+
+        // We only need to validate that all values are valid UTF-8
+        let validated = std::str::from_utf8(values)
+            .map_err(|_| ArrowError::CastError("Invalid UTF-8 sequence".to_string()))?;
+        // Checks if the offsets are valid but does not re-encode
+        for offset in offsets.iter() {
+            if !validated.is_char_boundary(offset.as_usize()) {
+                return Err(ArrowError::CastError("Invalid UTF-8 sequence".to_string()));
+            }
+        }
+
+        let builder = array
+            .into_data()
+            .into_builder()
+            .data_type(GenericStringArray::<O>::DATA_TYPE);
+        // SAFETY:
+        // Validated UTF-8 above
+        Ok(Arc::new(GenericStringArray::<O>::from(unsafe {
+            builder.build_unchecked()
+        })))
+    } else {
+        let mut null_builder = BooleanBufferBuilder::new(array.len());
+        array.iter().for_each(|maybe_value| {
+            if maybe_value
+                .and_then(|value| std::str::from_utf8(value).ok())
+                .is_some()
+            {
+                null_builder.append(true);
+            } else {
+                null_builder.append(false);
+            }
+        });
+
+        let builder = array
+            .into_data()
+            .into_builder()
+            .null_bit_buffer(Some(null_builder.finish()))
+            .data_type(GenericStringArray::<O>::DATA_TYPE);
+        // SAFETY:
+        // Validated UTF-8 above
+        Ok(Arc::new(GenericStringArray::<O>::from(unsafe {
+            builder.build_unchecked()
+        })))
+    }
+}
+
 /// Helper function to cast from `GenericBinaryArray` to `GenericStringArray`. This function performs
 /// UTF8 validation during casting. For invalid UTF8 value, it could be Null or returning `Err` depending
 /// `CastOptions`.
@@ -3417,6 +3480,7 @@ where
             .map_err(|_| ArrowError::CastError("Invalid UTF-8 sequence".to_string()))?;
 
         let mut offset_builder = BufferBuilder::<O>::new(offsets.len());
+        // Checks if the offset is a valid char boundary and re-encode the offset
         offsets
             .iter()
             .try_for_each::<_, Result<_, ArrowError>>(|offset| {
