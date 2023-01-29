@@ -131,38 +131,40 @@ where
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.current_end_logical == self.current_logical {
+            return None;
+        }
+
+        self.current_end_logical -= 1;
+
+        if self.current_end_physical > 0
+            && self.current_end_logical
+                < self
+                    .array
+                    .run_ends()
+                    .value(self.current_end_physical - 1)
+                    .as_usize()
+        {
+            // As the run_ends is expected to be strictly increasing, there
+            // should be at least one logical entry in one physical entry. Because of this
+            // reason the next value can be accessed by decrementing physical index once.
+            self.current_end_physical -= 1;
+        }
+        
+        Some(if self.array.values().is_null(self.current_end_physical) {
             None
         } else {
-            self.current_end_logical -= 1;
-            if self.current_end_physical > 0
-                && self.current_end_logical
-                    < self
-                        .array
-                        .run_ends()
-                        .value(self.current_end_physical - 1)
-                        .as_usize()
-            {
-                // As the run_ends is expected to be strictly increasing, there
-                // should be at least one logical entry in one physical entry. Because of this
-                // reason the next value can be accessed by decrementing physical index once.
-                self.current_end_physical -= 1;
+            // Safety:
+            // The check `self.current_end_physical > 0` ensures the value will not underflow.
+            // Also self.current_end_physical starts with array.len() and
+            // decrements based on the bounds of self.current_end_logical.
+            unsafe {
+                Some(
+                    self.array
+                        .values()
+                        .value_unchecked(self.current_end_physical),
+                )
             }
-            Some(if self.array.values().is_null(self.current_end_physical) {
-                None
-            } else {
-                // Safety:
-                // The check `self.current_end_physical > 0` ensures the value will not underflow.
-                // Also self.current_end_physical starts with array.len() and
-                // decrements based on the bounds of self.current_end_logical.
-                unsafe {
-                    Some(
-                        self.array
-                            .values()
-                            .value_unchecked(self.current_end_physical),
-                    )
-                }
-            })
-        }
+        })
     }
 }
 
@@ -199,7 +201,7 @@ mod tests {
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
         builder.extend(input_vec.clone().into_iter());
         let ree_array = builder.finish();
-        let ree_array = ree_array.downcast_ref::<Int32Array>().unwrap();
+        let ree_array = ree_array.downcast::<Int32Array>().unwrap();
 
         let output_vec: Vec<Option<i32>> = ree_array.into_iter().collect();
         assert_eq!(input_vec, output_vec);
@@ -223,7 +225,7 @@ mod tests {
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
         builder.extend(input_vec.into_iter());
         let ree_array = builder.finish();
-        let ree_array = ree_array.downcast_ref::<Int32Array>().unwrap();
+        let ree_array = ree_array.downcast::<Int32Array>().unwrap();
 
         let mut iter = ree_array.into_iter();
         assert_eq!(Some(Some(32)), iter.next());
@@ -241,7 +243,7 @@ mod tests {
     fn test_string_array_iter_round_trip() {
         let input_vec = vec!["ab", "ab", "ba", "cc", "cc"];
         let input_ree_array: Int64RunArray = input_vec.into_iter().collect();
-        let string_ree_array = input_ree_array.downcast_ref::<StringArray>().unwrap();
+        let string_ree_array = input_ree_array.downcast::<StringArray>().unwrap();
 
         // to and from iter, with a +1
         let result: Vec<Option<String>> = string_ree_array

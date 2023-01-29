@@ -123,20 +123,20 @@ impl<R: RunEndIndexType> RunArray<R> {
         &self.values
     }
 
-    /// Downcast this dictionary to a [`TypedRunArray`]
+    /// Downcast this [`RunArray`] to a [`TypedRunArray`]
     ///
     /// ```
     /// use arrow_array::{Array, ArrayAccessor, RunArray, StringArray, types::Int32Type};
     ///
     /// let orig = [Some("a"), Some("b"), None];
     /// let run_array = RunArray::<Int32Type>::from_iter(orig);
-    /// let typed = run_array.downcast_ref::<StringArray>().unwrap();
+    /// let typed = run_array.downcast::<StringArray>().unwrap();
     /// assert_eq!(typed.value(0), "a");
     /// assert_eq!(typed.value(1), "b");
     /// assert!(typed.values().is_null(2));
     /// ```
     ///
-    pub fn downcast_ref<V: 'static>(&self) -> Option<TypedRunArray<'_, R, V>> {
+    pub fn downcast<V: 'static>(&self) -> Option<TypedRunArray<'_, R, V>> {
         let values = self.values.as_any().downcast_ref()?;
         Some(TypedRunArray {
             run_array: self,
@@ -306,7 +306,7 @@ pub type Int64RunArray = RunArray<Int64Type>;
 /// let ree_array = RunArray::<Int32Type>::from_iter(orig);
 ///
 /// // `TypedRunArray` allows you to access the values directly
-/// let typed = ree_array.downcast_ref::<StringArray>().unwrap();
+/// let typed = ree_array.downcast::<StringArray>().unwrap();
 ///
 /// for (maybe_val, orig) in typed.into_iter().zip(orig) {
 ///     assert_eq!(maybe_val.unwrap(), orig)
@@ -451,6 +451,8 @@ mod tests {
     use crate::{Array, Int16Array, Int32Array, StringArray};
 
     fn build_input_array(approx_size: usize) -> Vec<Option<i32>> {
+        // The input array is created by shuffling and repeating
+        // the seed values random number of times.
         let mut seed: Vec<Option<i32>> = vec![
             None,
             None,
@@ -465,10 +467,12 @@ mod tests {
         let mut result: Vec<Option<i32>> = Vec::with_capacity(approx_size);
         let mut rng = thread_rng();
         while result.len() < approx_size {
+            // shuffle the seed array if all the values are iterated.
             if ix == 0 {
                 seed.shuffle(&mut rng);
             }
-            let num = rand::thread_rng().gen_range(0..8);
+            // repeat the items between 1 and 7 times.
+            let num = rand::thread_rng().gen_range(1..8);
             for _ in 0..num {
                 result.push(seed[ix]);
             }
@@ -710,21 +714,17 @@ mod tests {
         // Encode the input_array to ree_array
         let mut builder =
             PrimitiveRunBuilder::<Int16Type, Int32Type>::with_capacity(input_array.len());
-        builder.extend(input_array.clone().into_iter());
+        builder.extend(input_array.iter().copied());
         let run_array = builder.finish();
-        let typed = run_array
-            .downcast_ref::<PrimitiveArray<Int32Type>>()
-            .unwrap();
+        let typed = run_array.downcast::<PrimitiveArray<Int32Type>>().unwrap();
 
         for (i, inp_val) in input_array.iter().enumerate() {
             if let Some(val) = inp_val {
                 let actual = typed.value(i);
                 assert_eq!(*val, actual)
             } else {
-                // TODO: Check if the value in logical index is null.
-                // It seems, currently, there is no way to check nullability of logical index.
-                // Should `array.is_null` be overwritten to return nullability
-                // of logical index?
+                let physical_ix = typed.get_physical_index(i).unwrap();
+                assert!(typed.values().is_null(physical_ix));
             };
         }
     }
