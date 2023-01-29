@@ -1,5 +1,5 @@
-use std::ffi::CStr;
-use std::ptr::null_mut;
+use std::ffi::{CStr, CString};
+use std::ptr::{null, null_mut};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::{cell::RefCell, ffi::c_void};
@@ -11,7 +11,9 @@ use arrow::{error::ArrowError, record_batch::RecordBatch};
 use arrow_adbc::adbc_init_func;
 use arrow_adbc::error::AdbcError;
 
-use arrow_adbc::ffi::{AdbcObjectDepth, FFI_AdbcConnection};
+use arrow_adbc::ffi::{
+    AdbcObjectDepth, FFI_AdbcConnection, FFI_AdbcDatabase, FFI_AdbcStatement,
+};
 use arrow_adbc::interface::{
     AdbcConnection, AdbcDatabase, AdbcStatement, PartitionedStatementResult,
     StatementResult,
@@ -58,7 +60,7 @@ impl AdbcDatabase for TestDatabase {
 
     fn set_option(&self, key: &str, value: &str) -> Result<(), Self::Error> {
         Err(TestError::General(format!(
-            "Not implemented: setting option with key '{key}' and value '{value}'."
+            "Not implemented: setting option with key \"{key}\" and value \"{value}\"."
         )))
     }
 }
@@ -92,7 +94,7 @@ impl AdbcConnection for TestConnection {
 
     fn set_option(&self, key: &str, value: &str) -> Result<(), Self::Error> {
         Err(TestError::General(format!(
-            "Not implemented: setting option with key '{key}' and value '{value}'."
+            "Not implemented: setting option with key \"{key}\" and value \"{value}\"."
         )))
     }
 
@@ -264,7 +266,10 @@ fn init_driver(error: *mut FFI_AdbcError) -> *mut FFI_AdbcDriver {
     // Check null pointer rejected
     let status: AdbcStatusCode = TestDriverInit(1000000, null_mut(), error);
     assert_eq!(status, AdbcStatusCode::InvalidState);
-    assert_eq!(get_error_msg(error), Some("Passed a null pointer to ADBC driver init method."));
+    assert_eq!(
+        get_error_msg(error),
+        Some("Passed a null pointer to ADBC driver init method.")
+    );
     reset_error(error);
 
     let status: AdbcStatusCode =
@@ -283,27 +288,171 @@ fn release_driver(driver_ptr: *mut FFI_AdbcDriver, error: *mut FFI_AdbcError) {
     }
 }
 
+fn new_database(
+    driver: &mut FFI_AdbcDriver,
+    error: *mut FFI_AdbcError,
+) -> *mut FFI_AdbcDatabase {
+    let db_layout = std::alloc::Layout::new::<FFI_AdbcDatabase>();
+    let db_ptr = unsafe { std::alloc::alloc(db_layout) as *mut FFI_AdbcDatabase };
+    let database = FFI_AdbcDatabase {
+        private_data: null_mut(),
+        private_driver: driver,
+    };
+    unsafe { std::ptr::write_unaligned(db_ptr, database) };
+
+    assert!(driver.DatabaseNew.is_some());
+
+    // Verify null pointer disallowed
+    let status = unsafe { driver.DatabaseNew.unwrap()(null_mut(), error) };
+    assert_eq!(status, AdbcStatusCode::InvalidState);
+    assert_eq!(
+        get_error_msg(error),
+        Some("Passed a null pointer to DatabaseNew")
+    );
+    reset_error(error);
+
+    // Create new one
+    let status = unsafe { driver.DatabaseNew.unwrap()(db_ptr, error) };
+    assert_eq!(status, AdbcStatusCode::Ok);
+    reset_error(error);
+
+    // Test option setting
+    assert!(driver.DatabaseSetOption.is_some());
+    let key = CString::new("hello").unwrap();
+    let value = CString::new("world").unwrap();
+    let status = unsafe {
+        driver.DatabaseSetOption.unwrap()(db_ptr, key.as_ptr(), value.as_ptr(), error)
+    };
+    assert_eq!(status, AdbcStatusCode::Internal);
+    assert_eq!(
+        get_error_msg(error),
+        Some(
+            format!(
+                "Not implemented: setting option with key {key:?} and value {value:?}."
+            )
+            .as_ref()
+        )
+    );
+    reset_error(error);
+
+    // Test initialization
+    assert!(driver.DatabaseInit.is_some());
+
+    let status = unsafe { driver.DatabaseInit.unwrap()(null_mut(), error) };
+    assert_eq!(status, AdbcStatusCode::InvalidState);
+    assert_eq!(
+        get_error_msg(error),
+        Some("Passed a null pointer to DatabaseInit")
+    );
+    reset_error(error);
+
+    let status = unsafe { driver.DatabaseInit.unwrap()(db_ptr, error) };
+    assert_eq!(status, AdbcStatusCode::Ok);
+    reset_error(error);
+
+    db_ptr
+}
+
 fn new_connection(
-    driver: &FFI_AdbcDriver,
+    driver: &mut FFI_AdbcDriver,
+    database: &mut FFI_AdbcDatabase,
     error: *mut FFI_AdbcError,
 ) -> *mut FFI_AdbcConnection {
     let conn_layout = std::alloc::Layout::new::<FFI_AdbcConnection>();
-    let conn_ptr: *mut FFI_AdbcConnection =
-        unsafe { std::alloc::alloc(conn_layout) as *mut FFI_AdbcConnection };
+    let conn_ptr = unsafe { std::alloc::alloc(conn_layout) as *mut FFI_AdbcConnection };
+
+    // It's the caller's responsibility to initialize this memory
+    let conn = FFI_AdbcConnection {
+        private_data: null_mut(),
+        private_driver: driver,
+    };
+    unsafe { std::ptr::write_unaligned(conn_ptr, conn) };
 
     assert!(driver.ConnectionNew.is_some());
 
     // Verify null pointer disallowed
     let status = unsafe { driver.ConnectionNew.unwrap()(null_mut(), error) };
     assert_eq!(status, AdbcStatusCode::InvalidState);
-    assert_eq!(get_error_msg(error), Some("Passed a null pointer to ConnectionNew"));
+    assert_eq!(
+        get_error_msg(error),
+        Some("Passed a null pointer to ConnectionNew")
+    );
     reset_error(error);
 
     let status = unsafe { driver.ConnectionNew.unwrap()(conn_ptr, error) };
     assert_eq!(status, AdbcStatusCode::Ok);
     reset_error(error);
 
+    // Test option setting
+    assert!(driver.ConnectionSetOption.is_some());
+    let key = CString::new("hello").unwrap();
+    let value = CString::new("world").unwrap();
+    let status = unsafe {
+        driver.ConnectionSetOption.unwrap()(conn_ptr, key.as_ptr(), value.as_ptr(), error)
+    };
+    assert_eq!(status, AdbcStatusCode::Internal);
+    assert_eq!(
+        get_error_msg(error),
+        Some(
+            format!(
+                "Not implemented: setting option with key {key:?} and value {value:?}."
+            )
+            .as_ref()
+        )
+    );
+    reset_error(error);
+
+    // Test initialization
+    assert!(driver.ConnectionInit.is_some());
+
+    let status = unsafe { driver.ConnectionInit.unwrap()(null_mut(), null_mut(), error) };
+    assert_eq!(status, AdbcStatusCode::InvalidState);
+    assert_eq!(get_error_msg(error), Some("Passed a null pointer."));
+    reset_error(error);
+
+    let status = unsafe { driver.ConnectionInit.unwrap()(conn_ptr, null_mut(), error) };
+    assert_eq!(status, AdbcStatusCode::InvalidState);
+    assert_eq!(get_error_msg(error), Some("Passed a null pointer."));
+    reset_error(error);
+
+    let status = unsafe { driver.ConnectionInit.unwrap()(conn_ptr, database, error) };
+    assert_eq!(status, AdbcStatusCode::Ok);
+    reset_error(error);
+
     conn_ptr
+}
+
+fn new_statement(
+    driver: &mut FFI_AdbcDriver,
+    conn: &mut FFI_AdbcConnection,
+    error: *mut FFI_AdbcError,
+) -> *mut FFI_AdbcStatement {
+    let statement_layout = std::alloc::Layout::new::<FFI_AdbcStatement>();
+    let statement_ptr =
+        unsafe { std::alloc::alloc(statement_layout) as *mut FFI_AdbcStatement };
+
+    let statement = FFI_AdbcStatement {
+        private_data: null_mut(),
+        private_driver: driver,
+    };
+
+    // Verify null pointer disallowed
+    let status = unsafe { driver.StatementNew.unwrap()(null_mut(), null_mut(), error) };
+    assert_eq!(status, AdbcStatusCode::InvalidState);
+    assert_eq!(get_error_msg(error), Some("Passed a null pointer."));
+    reset_error(error);
+
+    let status = unsafe { driver.StatementNew.unwrap()(conn, null_mut(), error) };
+    assert_eq!(status, AdbcStatusCode::InvalidState);
+    assert_eq!(
+        get_error_msg(error),
+        Some("Passed a null pointer to StatementNew")
+    );
+    reset_error(error);
+
+    //
+
+    statement_ptr
 }
 
 #[test]
@@ -313,9 +462,15 @@ fn test_adbc_api() {
         unsafe { std::alloc::alloc(error_layout) as *mut FFI_AdbcError };
 
     let driver_ptr = init_driver(error_ptr);
-    let driver: FFI_AdbcDriver = unsafe { *driver_ptr };
+    let driver: &mut FFI_AdbcDriver = unsafe { driver_ptr.as_mut().unwrap() };
 
-    let conn_ptr = new_connection(&driver, error_ptr);
+    let db_ptr = new_database(driver, error_ptr);
+    let database: &mut FFI_AdbcDatabase = unsafe { db_ptr.as_mut().unwrap() };
+
+    let conn_ptr = new_connection(driver, database, error_ptr);
+    let conn: &mut FFI_AdbcConnection = unsafe { &mut conn_ptr.as_mut().unwrap() };
+
+    let statement_ptr = new_statement(driver, conn, error_ptr);
 
     // Cleanup
     let status = unsafe { driver.ConnectionRelease.unwrap()(conn_ptr, error_ptr) };

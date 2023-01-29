@@ -249,7 +249,7 @@ unsafe extern "C" fn database_init<DatabaseType: Default + AdbcDatabase>(
     let inner = database
         .as_ref()
         .ok_or(AdbcFFIError::InvalidState(
-            "Passed a null pointer to DatabaseSetOption",
+            "Passed a null pointer to DatabaseInit",
         ))
         .and_then(|wrapper| wrapper.get_inner_ref::<Arc<DatabaseType>>());
     let inner = check_err!(inner, error);
