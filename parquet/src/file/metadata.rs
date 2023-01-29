@@ -50,7 +50,7 @@ use crate::schema::types::{
     Type as SchemaType,
 };
 
-/// [`Index`] page level for each row group of each column.
+/// [`Index`] for each row group of each column.
 ///
 /// `column_index[row_group_number][column_number]` holds the
 /// [`Index`] corresponding to column `column_number` of row group
@@ -60,7 +60,7 @@ use crate::schema::types::{
 /// column in the third row group of the parquet file.
 pub type ParquetColumnIndex = Vec<Vec<Index>>;
 
-/// [`PageLocation`] page level for each row group of each column.
+/// [`PageLocation`] for each datapage of each row group of each column.
 ///
 /// `offset_index[row_group_number][column_number][page_number]` holds
 /// the [`PageLocation`] corresponding to page `page_number` of column
