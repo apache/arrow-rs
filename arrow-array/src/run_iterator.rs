@@ -149,7 +149,6 @@ where
             // reason the next value can be accessed by decrementing physical index once.
             self.current_end_physical -= 1;
         }
-
         Some(if self.array.values().is_null(self.current_end_physical) {
             None
         } else {
