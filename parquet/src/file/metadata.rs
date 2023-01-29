@@ -252,7 +252,7 @@ pub struct RowGroupMetaData {
     sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
-    /// `page_offset_index[column_number][row_number]`
+    /// `page_offset_index[column_number][row_group_number]`
     page_offset_index: Option<Vec<Vec<PageLocation>>>,
 }
 
@@ -299,7 +299,7 @@ impl RowGroupMetaData {
 
     /// Returns reference of page offset index of all column in this row group.
     ///
-    /// The returned vector contains `page_offset[column_number][row_number]`
+    /// The returned vector contains `page_offset[column_number][row_group_number]`
     pub fn page_offset_index(&self) -> Option<&Vec<Vec<PageLocation>>> {
         self.page_offset_index.as_ref()
     }
@@ -316,7 +316,7 @@ impl RowGroupMetaData {
 
     /// Sets page offset index for this row group.
     ///
-    /// The vector represents `page_offset[column_number][row_number]`
+    /// The vector represents `page_offset[column_number][row_group_number]`
     pub fn set_page_offset(&mut self, page_offset: Vec<Vec<PageLocation>>) {
         self.page_offset_index = Some(page_offset);
     }

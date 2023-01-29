@@ -30,7 +30,7 @@ use thrift::protocol::{TCompactInputProtocol, TSerializable};
 /// Reads per-column [`Index`] for all columns of a row group by
 /// decoding [`ColumnIndex`] .
 ///
-/// Returns a vecotr of `index[column_number]`.
+/// Returns a vector of `index[column_number]`.
 ///
 /// Returns an empty vector if this row group does not contain a
 /// [`ColumnIndex`].
