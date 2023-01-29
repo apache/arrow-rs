@@ -177,8 +177,13 @@ impl<R: RunEndIndexType> RunArray<R> {
 
     /// Returns the physical indices of input logical indices. Returns error
     /// if any of the logical index cannot be converted to physical index.
+    /// Finds physical indices for the given logical indices using
+    /// array accessor which in turn does binary search on run_ends.
     #[inline]
-    pub fn get_physical_indices<I>(&self, indices: &[I]) -> Result<Vec<usize>, ArrowError>
+    pub fn get_physical_indices_using_accessor<I>(
+        &self,
+        indices: &[I],
+    ) -> Result<Vec<usize>, ArrowError>
     where
         I: ArrowNativeType,
     {
@@ -192,6 +197,43 @@ impl<R: RunEndIndexType> RunArray<R> {
                     )
                 })?;
             result.push(physical_index);
+        }
+        Ok(result)
+    }
+
+    /// Returns the physical indices of input logical indices. Returns error
+    /// if any of the logical index cannot be converted to physical index.
+    /// TODO: Potential future optimization would be to skip sorting
+    /// if the indices are already in sorted order.
+    #[inline]
+    pub fn get_physical_indices_using_loop<I>(
+        &self,
+        indices: &[I],
+    ) -> Result<Vec<usize>, ArrowError>
+    where
+        I: ArrowNativeType,
+    {
+        let indices_len = indices.len();
+        let mut order: Vec<usize> = (0..indices_len).collect();
+        order.sort_unstable_by(|lhs, rhs| {
+            indices[*lhs].partial_cmp(&indices[*rhs]).unwrap()
+        });
+        let mut result = vec![0; indices_len];
+
+        let mut rix = 0_usize;
+        let mut tix = 0_usize;
+        while rix < self.run_ends.len() && tix < indices_len {
+            let run_end_index = unsafe { self.run_ends.value_unchecked(rix).as_usize() };
+            while tix < indices_len && indices[order[tix]].as_usize() < run_end_index {
+                result[order[tix]] = rix;
+                tix += 1;
+            }
+            rix += 1;
+        }
+        if tix < indices.len() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Cannot convert all logical indices to physical indices".to_string(),
+            ));
         }
         Ok(result)
     }
@@ -477,12 +519,16 @@ mod tests {
         let mut seed: Vec<Option<i32>> = vec![
             None,
             None,
+            None,
             Some(1),
             Some(2),
             Some(3),
             Some(4),
             Some(5),
             Some(6),
+            Some(7),
+            Some(8),
+            Some(9),
         ];
         let mut ix = 0;
         let mut result: Vec<Option<i32>> = Vec::with_capacity(approx_size);
@@ -747,6 +793,95 @@ mod tests {
                 let physical_ix = typed.get_physical_index(i).unwrap();
                 assert!(typed.values().is_null(physical_ix));
             };
+        }
+    }
+
+    #[test]
+    fn test_get_physical_indices_using_accessor() {
+        let mut logical_len = 10;
+        // Test for logical lengths starting from 10 to 250 increasing by 10
+        while logical_len < 260 {
+            let input_array = build_input_array(logical_len);
+            let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+            builder.extend(input_array.clone().into_iter());
+
+            let run_array = builder.finish();
+            let physical_values_array =
+                run_array.downcast_ref::<Int32Array>().unwrap().values();
+
+            let mut indices: Vec<u32> = (0_u32..(logical_len as u32)).collect();
+            let mut rng = thread_rng();
+            indices.shuffle(&mut rng);
+
+            let physical_indices = run_array
+                .get_physical_indices_using_accessor(&indices)
+                .unwrap();
+
+            assert_eq!(indices.len(), physical_indices.len());
+
+            // check value in logical index in the input_array matches physical index in typed_run_array
+            indices
+                .iter()
+                .map(|f| f.as_usize())
+                .zip(physical_indices.iter())
+                .for_each(|(logical_ix, physical_ix)| {
+                    let expected = input_array[logical_ix];
+                    match expected {
+                        Some(val) => {
+                            let actual = physical_values_array.value(*physical_ix);
+                            assert_eq!(val, actual);
+                        }
+                        None => {
+                            assert!(physical_values_array.is_null(*physical_ix))
+                        }
+                    };
+                });
+
+            logical_len += 10;
+        }
+    }
+
+    #[test]
+    fn test_get_physical_indices_using_loop() {
+        let mut logical_len = 10;
+        // Test for logical lengths starting from 10 to 250 increasing by 10
+        while logical_len < 260 {
+            let input_array = build_input_array(logical_len);
+            let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+            builder.extend(input_array.clone().into_iter());
+
+            let run_array = builder.finish();
+            let physical_values_array =
+                run_array.downcast_ref::<Int32Array>().unwrap().values();
+
+            let mut indices: Vec<u32> = (0_u32..(logical_len as u32)).collect();
+            let mut rng = thread_rng();
+            indices.shuffle(&mut rng);
+
+            let physical_indices =
+                run_array.get_physical_indices_using_loop(&indices).unwrap();
+
+            assert_eq!(indices.len(), physical_indices.len());
+
+            // check value in logical index in the input_array matches physical index in typed_run_array
+            indices
+                .iter()
+                .map(|f| f.as_usize())
+                .zip(physical_indices.iter())
+                .for_each(|(logical_ix, physical_ix)| {
+                    let expected = input_array[logical_ix];
+                    match expected {
+                        Some(val) => {
+                            let actual = physical_values_array.value(*physical_ix);
+                            assert_eq!(val, actual);
+                        }
+                        None => {
+                            assert!(physical_values_array.is_null(*physical_ix))
+                        }
+                    };
+                });
+
+            logical_len += 10;
         }
     }
 }

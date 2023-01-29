@@ -845,8 +845,8 @@ where
 {
     match run_array.data_type() {
         DataType::RunEndEncoded(_, fl) => {
-            let physical_indices =
-                run_array.get_physical_indices(logical_indices.values())?;
+            let physical_indices = take_run_physical_indices(run_array, logical_indices)?;
+
             downcast_primitive! {
                 fl.data_type() => (primitive_run_take, T, physical_indices, run_array),
                 dt => Err(ArrowError::NotYetImplemented(format!("take_run is not implemented for {dt:?}")))
@@ -857,6 +857,37 @@ where
         ))),
     }
 }
+
+#[cfg(not(feature = "take_run_loop"))]
+#[inline]
+fn take_run_physical_indices<T, I>(
+    run_array: &RunArray<T>,
+    logical_indices: &PrimitiveArray<I>,
+) -> Result<Vec<usize>, ArrowError>
+where
+    T: RunEndIndexType,
+    T::Native: num::Num,
+    I: ArrowPrimitiveType,
+    I::Native: ToPrimitive,
+{
+    run_array.get_physical_indices_using_accessor(logical_indices.values())
+}
+
+#[cfg(feature = "take_run_loop")]
+#[inline]
+fn take_run_physical_indices<T, I>(
+    run_array: &RunArray<T>,
+    logical_indices: &PrimitiveArray<I>,
+) -> Result<Vec<usize>, ArrowError>
+where
+    T: RunEndIndexType,
+    T::Native: num::Num,
+    I: ArrowPrimitiveType,
+    I::Native: ToPrimitive,
+{
+    run_array.get_physical_indices_using_loop(logical_indices.values())
+}
+
 // Builds a `RunArray` by taking values from given array for the given indices.
 fn take_primitive_run_values<R, V>(
     physical_indices: Vec<usize>,
