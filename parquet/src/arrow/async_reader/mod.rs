@@ -534,7 +534,12 @@ where
         loop {
             match &mut self.state {
                 StreamState::Decoding(batch_reader) => match batch_reader.next() {
-                    Some(Ok(batch)) => return Poll::Ready(Some(Ok(batch))),
+                    Some(Ok(batch)) => {
+                        if let Some(limit) = self.limit.as_mut() {
+                            *limit -= batch.num_rows();
+                        }
+                        return Poll::Ready(Some(Ok(batch)));
+                    }
                     Some(Err(e)) => {
                         self.state = StreamState::Error;
                         return Poll::Ready(Some(Err(ParquetError::ArrowError(
@@ -819,6 +824,7 @@ mod tests {
     use crate::arrow::ArrowWriter;
     use crate::file::footer::parse_metadata;
     use crate::file::page_index::index_reader;
+    use crate::file::properties::WriterProperties;
     use arrow::error::Result as ArrowResult;
     use arrow_array::{Array, ArrayRef, Int32Array, StringArray};
     use futures::TryStreamExt;
@@ -1282,6 +1288,61 @@ mod tests {
 
         // Should only have made 3 requests
         assert_eq!(requests.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_limit_multiple_row_groups() {
+        let a = StringArray::from_iter_values(["a", "b", "b", "b", "c", "c"]);
+        let b = StringArray::from_iter_values(["1", "2", "3", "4", "5", "6"]);
+        let c = Int32Array::from_iter(0..6);
+        let data = RecordBatch::try_from_iter([
+            ("a", Arc::new(a) as ArrayRef),
+            ("b", Arc::new(b) as ArrayRef),
+            ("c", Arc::new(c) as ArrayRef),
+        ])
+        .unwrap();
+
+        let mut buf = Vec::with_capacity(1024);
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(3)
+            .build();
+        let mut writer =
+            ArrowWriter::try_new(&mut buf, data.schema(), Some(props)).unwrap();
+        writer.write(&data).unwrap();
+        writer.close().unwrap();
+
+        let data: Bytes = buf.into();
+        let metadata = parse_metadata(&data).unwrap();
+
+        assert_eq!(metadata.num_row_groups(), 2);
+
+        let test = TestReader {
+            data,
+            metadata: Arc::new(metadata),
+            requests: Default::default(),
+        };
+
+        let stream = ParquetRecordBatchStreamBuilder::new(test)
+            .await
+            .unwrap()
+            .with_batch_size(1024)
+            .with_limit(4)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
+        // Expect one batch for each row group
+        assert_eq!(batches.len(), 2);
+
+        let batch = &batches[0];
+        // First batch should contain all rows
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(batch.num_columns(), 3);
+
+        let batch = &batches[1];
+        // Second batch should trigger the limit and only have one row
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(batch.num_columns(), 3);
     }
 
     #[tokio::test]
