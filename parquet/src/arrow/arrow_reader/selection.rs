@@ -19,6 +19,7 @@ use arrow_array::{Array, BooleanArray};
 use arrow_select::filter::SlicesIterator;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
+use std::mem;
 use std::ops::Range;
 
 /// [`RowSelection`] is a collection of [`RowSelector`] used to skip rows when
@@ -110,8 +111,18 @@ impl RowSelection {
         Self::from_consecutive_ranges(iter, total_rows)
     }
 
+    /// Creates a [`RowSelection`] that will select `limit` rows and skip all remaining rows.
+    pub(crate) fn from_limit(limit: usize, total_rows: usize) -> Self {
+        Self {
+            selectors: vec![
+                RowSelector::select(limit),
+                RowSelector::skip(total_rows.saturating_sub(limit)),
+            ],
+        }
+    }
+
     /// Creates a [`RowSelection`] from an iterator of consecutive ranges to keep
-    fn from_consecutive_ranges<I: Iterator<Item = Range<usize>>>(
+    pub(crate) fn from_consecutive_ranges<I: Iterator<Item = Range<usize>>>(
         ranges: I,
         total_rows: usize,
     ) -> Self {
@@ -368,6 +379,35 @@ impl RowSelection {
         while self.selectors.last().map(|x| x.skip).unwrap_or(false) {
             self.selectors.pop();
         }
+        self
+    }
+
+    /// Limit this [`RowSelection`] to only select `limit` rows
+    pub(crate) fn limit(mut self, mut limit: usize) -> Self {
+        let mut remaining = 0;
+        let mut new_selectors = Vec::with_capacity(self.selectors.len());
+        for selection in mem::take(&mut self.selectors) {
+            if limit == 0 {
+                remaining += selection.row_count;
+            } else if !selection.skip {
+                if selection.row_count > limit {
+                    remaining += selection.row_count - limit;
+                    new_selectors.push(RowSelector::select(limit));
+                    limit = 0;
+                } else {
+                    limit -= selection.row_count;
+                    new_selectors.push(selection);
+                }
+            } else {
+                new_selectors.push(selection);
+            }
+        }
+
+        if remaining > 0 {
+            new_selectors.push(RowSelector::skip(remaining));
+        }
+
+        self.selectors = new_selectors;
         self
     }
 
@@ -839,6 +879,59 @@ mod tests {
             .cloned()
             .collect::<Vec<_>>();
         assert_eq!(selectors, round_tripped);
+    }
+
+    #[test]
+    fn test_limit() {
+        // Limit to existing limit should no-op
+        let selection = RowSelection::from_limit(10, 100);
+        let limited = selection.clone().limit(10);
+        assert_eq!(selection, limited);
+
+        let selection = RowSelection::from(vec![
+            RowSelector::select(10),
+            RowSelector::skip(10),
+            RowSelector::select(10),
+            RowSelector::skip(10),
+            RowSelector::select(10),
+        ]);
+
+        let limited = selection.clone().limit(5);
+        let expected = vec![RowSelector::select(5), RowSelector::skip(45)];
+        assert_eq!(limited.selectors, expected);
+
+        let limited = selection.clone().limit(15);
+        let expected = vec![
+            RowSelector::select(10),
+            RowSelector::skip(10),
+            RowSelector::select(5),
+            RowSelector::skip(25),
+        ];
+        assert_eq!(limited.selectors, expected);
+
+        let limited = selection.clone().limit(0);
+        let expected = vec![RowSelector::skip(50)];
+        assert_eq!(limited.selectors, expected);
+
+        let limited = selection.clone().limit(30);
+        let expected = vec![
+            RowSelector::select(10),
+            RowSelector::skip(10),
+            RowSelector::select(10),
+            RowSelector::skip(10),
+            RowSelector::select(10),
+        ];
+        assert_eq!(limited.selectors, expected);
+
+        let limited = selection.limit(100);
+        let expected = vec![
+            RowSelector::select(10),
+            RowSelector::skip(10),
+            RowSelector::select(10),
+            RowSelector::skip(10),
+            RowSelector::select(10),
+        ];
+        assert_eq!(limited.selectors, expected);
     }
 
     #[test]
