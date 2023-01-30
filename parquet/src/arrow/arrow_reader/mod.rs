@@ -173,8 +173,8 @@ impl<T> ArrowReaderBuilder<T> {
 
     /// Provide a limit to the number of rows to be read
     ///
-    /// The limit will be used to generate an `RowSelection` so only `limit`
-    /// rows are decoded
+    /// The limit will be applied after any [`Self::with_row_selection`] and [`Self::with_row_filter`]
+    /// allowing it to limit the final set of rows decoded after any pushed down predicates
     pub fn with_limit(self, limit: usize) -> Self {
         Self {
             limit: Some(limit),
