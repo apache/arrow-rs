@@ -181,7 +181,7 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// finding physical index for each logical index using binary search using the function
     /// `get_physical_index`. Running benchmarks on both approaches showed that the approach used here
     /// scaled well for larger inputs.
-    /// See https://github.com/apache/arrow-rs/pull/3622#issuecomment-1407753727 for more details.
+    /// See <https://github.com/apache/arrow-rs/pull/3622#issuecomment-1407753727> for more details.
     #[inline]
     pub fn get_physical_indices<I>(
         &self,

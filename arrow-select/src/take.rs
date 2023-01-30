@@ -860,7 +860,6 @@ where
 }
 
 // Builds a `RunArray` by taking values from given array for the given indices.
-#[cfg(not(feature = "take_run_value_take"))]
 fn take_primitive_run_values<R, V>(
     physical_indices: Vec<usize>,
     values: &PrimitiveArray<V>,
