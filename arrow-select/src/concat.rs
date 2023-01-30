@@ -106,7 +106,12 @@ pub fn concat_batches<'a>(
         .find(|&(_, batch)| batch.schema() != *schema)
     {
         return Err(ArrowError::InvalidArgumentError(format!(
-            "batches[{i}] schema is different with argument schema."
+            "batches[{i}] schema is different with argument schema.
+            batches[{i}] schema: {:?},
+            argument schema: {:?}
+            ",
+            batches[i].schema(),
+            *schema
         )));
     }
     let field_num = schema.fields().len();
@@ -647,7 +652,7 @@ mod tests {
         let error = concat_batches(&schema1, [&batch1, &batch2]).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Invalid argument error: batches[1] schema is different with argument schema.",
+            "Invalid argument error: batches[1] schema is different with argument schema.\n            batches[1] schema: Schema { fields: [Field { name: \"c\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"d\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} },\n            argument schema: Schema { fields: [Field { name: \"a\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }\n            "
         );
     }
 
