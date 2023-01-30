@@ -99,7 +99,7 @@ use arrow_schema::SchemaRef;
 use crate::arrow::array_reader::{build_array_reader, RowGroupCollection};
 use crate::arrow::arrow_reader::{
     evaluate_predicate, selects_any, ArrowReaderBuilder, ArrowReaderOptions,
-    ParquetRecordBatchReader, RowFilter, RowSelection,
+    ParquetRecordBatchReader, RowFilter, RowSelection, RowSelector,
 };
 use crate::arrow::schema::ParquetField;
 use crate::arrow::ProjectionMask;
@@ -352,6 +352,7 @@ impl<T: AsyncFileReader + Send + 'static> ArrowReaderBuilder<AsyncReader<T>> {
         Ok(ParquetRecordBatchStream {
             metadata: self.metadata,
             batch_size,
+            limit: self.limit,
             row_groups,
             projection: self.projection,
             selection: self.selection,
@@ -389,6 +390,7 @@ where
         mut selection: Option<RowSelection>,
         projection: ProjectionMask,
         batch_size: usize,
+        limit: Option<usize>,
     ) -> ReadResult<T> {
         // TODO: calling build_array multiple times is wasteful
 
@@ -428,6 +430,17 @@ where
 
         if !selects_any(selection.as_ref()) {
             return Ok((self, None));
+        }
+
+        // If a limit is defined, apply it to the final `RowSelection`
+        if let Some(limit) = limit {
+            selection = Some(
+                selection
+                    .map(|selection| selection.limit(limit))
+                    .unwrap_or_else(|| {
+                        RowSelection::from(vec![RowSelector::select(limit)])
+                    }),
+            );
         }
 
         row_group
@@ -479,6 +492,8 @@ pub struct ParquetRecordBatchStream<T> {
 
     batch_size: usize,
 
+    limit: Option<usize>,
+
     selection: Option<RowSelection>,
 
     /// This is an option so it can be moved into a future
@@ -519,7 +534,12 @@ where
         loop {
             match &mut self.state {
                 StreamState::Decoding(batch_reader) => match batch_reader.next() {
-                    Some(Ok(batch)) => return Poll::Ready(Some(Ok(batch))),
+                    Some(Ok(batch)) => {
+                        if let Some(limit) = self.limit.as_mut() {
+                            *limit -= batch.num_rows();
+                        }
+                        return Poll::Ready(Some(Ok(batch)));
+                    }
                     Some(Err(e)) => {
                         self.state = StreamState::Error;
                         return Poll::Ready(Some(Err(ParquetError::ArrowError(
@@ -548,6 +568,7 @@ where
                             selection,
                             self.projection.clone(),
                             self.batch_size,
+                            self.limit,
                         )
                         .boxed();
 
@@ -803,6 +824,7 @@ mod tests {
     use crate::arrow::ArrowWriter;
     use crate::file::footer::parse_metadata;
     use crate::file::page_index::index_reader;
+    use crate::file::properties::WriterProperties;
     use arrow::error::Result as ArrowResult;
     use arrow_array::{Array, ArrayRef, Int32Array, StringArray};
     use futures::TryStreamExt;
@@ -935,6 +957,70 @@ mod tests {
             .unwrap()
             .with_projection(mask)
             .with_batch_size(1024)
+            .build()
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+
+        assert_eq!(async_batches, sync_batches);
+    }
+
+    #[tokio::test]
+    async fn test_async_reader_with_limit() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
+        let data = Bytes::from(std::fs::read(path).unwrap());
+
+        let metadata = parse_metadata(&data).unwrap();
+        let metadata = Arc::new(metadata);
+
+        assert_eq!(metadata.num_row_groups(), 1);
+
+        let async_reader = TestReader {
+            data: data.clone(),
+            metadata: metadata.clone(),
+            requests: Default::default(),
+        };
+
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let builder =
+            ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
+                .await
+                .unwrap();
+
+        // The builder should have page and offset indexes loaded now
+        let metadata_with_index = builder.metadata();
+
+        // Check offset indexes are present for all columns
+        for rg in metadata_with_index.row_groups() {
+            let page_locations =
+                rg.page_offset_index().expect("expected page offset index");
+            assert_eq!(page_locations.len(), rg.columns().len())
+        }
+
+        // Check page indexes are present for all columns
+        let page_indexes = metadata_with_index
+            .page_indexes()
+            .expect("expected page indexes");
+        for (idx, rg) in metadata_with_index.row_groups().iter().enumerate() {
+            assert_eq!(page_indexes[idx].len(), rg.columns().len())
+        }
+
+        let mask = ProjectionMask::leaves(builder.parquet_schema(), vec![1, 2]);
+        let stream = builder
+            .with_projection(mask.clone())
+            .with_batch_size(1024)
+            .with_limit(1)
+            .build()
+            .unwrap();
+
+        let async_batches: Vec<_> = stream.try_collect().await.unwrap();
+
+        let sync_batches = ParquetRecordBatchReaderBuilder::try_new(data)
+            .unwrap()
+            .with_projection(mask)
+            .with_batch_size(1024)
+            .with_limit(1)
             .build()
             .unwrap()
             .collect::<ArrowResult<Vec<_>>>()
@@ -1205,6 +1291,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_limit_multiple_row_groups() {
+        let a = StringArray::from_iter_values(["a", "b", "b", "b", "c", "c"]);
+        let b = StringArray::from_iter_values(["1", "2", "3", "4", "5", "6"]);
+        let c = Int32Array::from_iter(0..6);
+        let data = RecordBatch::try_from_iter([
+            ("a", Arc::new(a) as ArrayRef),
+            ("b", Arc::new(b) as ArrayRef),
+            ("c", Arc::new(c) as ArrayRef),
+        ])
+        .unwrap();
+
+        let mut buf = Vec::with_capacity(1024);
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(3)
+            .build();
+        let mut writer =
+            ArrowWriter::try_new(&mut buf, data.schema(), Some(props)).unwrap();
+        writer.write(&data).unwrap();
+        writer.close().unwrap();
+
+        let data: Bytes = buf.into();
+        let metadata = parse_metadata(&data).unwrap();
+
+        assert_eq!(metadata.num_row_groups(), 2);
+
+        let test = TestReader {
+            data,
+            metadata: Arc::new(metadata),
+            requests: Default::default(),
+        };
+
+        let stream = ParquetRecordBatchStreamBuilder::new(test)
+            .await
+            .unwrap()
+            .with_batch_size(1024)
+            .with_limit(4)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
+        // Expect one batch for each row group
+        assert_eq!(batches.len(), 2);
+
+        let batch = &batches[0];
+        // First batch should contain all rows
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(batch.num_columns(), 3);
+
+        let batch = &batches[1];
+        // Second batch should trigger the limit and only have one row
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(batch.num_columns(), 3);
+    }
+
+    #[tokio::test]
     async fn test_row_filter_with_index() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
@@ -1330,7 +1471,7 @@ mod tests {
         let selection = RowSelection::from(selectors);
 
         let (_factory, _reader) = reader_factory
-            .read_row_group(0, Some(selection), projection.clone(), 48)
+            .read_row_group(0, Some(selection), projection.clone(), 48, None)
             .await
             .expect("reading row group");
 
