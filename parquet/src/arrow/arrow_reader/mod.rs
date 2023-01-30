@@ -473,7 +473,9 @@ impl<T: ChunkReader + 'static> ArrowReaderBuilder<SyncReader<T>> {
                 selection
                     .map(|selection| selection.limit(limit))
                     .unwrap_or_else(|| {
-                        RowSelection::from_limit(limit, reader.num_rows())
+                        RowSelection::from(vec![RowSelector::select(
+                            limit.min(reader.num_rows()),
+                        )])
                     }),
             );
         }
