@@ -252,7 +252,7 @@ pub struct RowGroupMetaData {
     sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
-    /// `page_offset_index[column_number][row_group_number]`
+    /// `page_offset_index[column_number][page_number]`
     page_offset_index: Option<Vec<Vec<PageLocation>>>,
 }
 
