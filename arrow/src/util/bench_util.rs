@@ -150,8 +150,16 @@ pub fn create_primitive_run_array<R: RunEndIndexType, V: ArrowPrimitiveType>(
     physical_array_len: usize,
 ) -> RunArray<R> {
     let run_len = logical_array_len / physical_array_len;
+    let mut run_len_extra = logical_array_len % physical_array_len;
     let mut values: Vec<V::Native> = (0..physical_array_len)
-        .flat_map(|s| std::iter::repeat(V::Native::from_usize(s).unwrap()).take(run_len))
+        .flat_map(|s| {
+            let mut take_len = run_len;
+            if run_len_extra > 0 {
+                take_len += 1;
+                run_len_extra -= 1;
+            }
+            std::iter::repeat(V::Native::from_usize(s).unwrap()).take(take_len)
+        })
         .collect();
     while values.len() < logical_array_len {
         let last_val = values[values.len() - 1];

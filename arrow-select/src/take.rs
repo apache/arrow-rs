@@ -827,13 +827,13 @@ macro_rules! primitive_run_take {
 
 /// `take` implementation for run arrays
 ///
-/// performs binary search on `run_ends` to get physical indices for the given logical indices.
-/// builds output run array by taking values in the input run array at the physical indices.
+/// Finds physical indices for the given logical indices and builds output run array
+/// by taking values in the input run array at the physical indices.
 /// for e.g. an input `RunArray{ run_ends = [2,4,6,8], values=[1,2,1,2] }` and `indices=[2,7]`
 /// would be converted to `physical_indices=[1,3]` which will be used to build
 /// output `RunArray{ run_ends=[2], values=[2] }`
 
-pub fn take_run<T, I>(
+fn take_run<T, I>(
     run_array: &RunArray<T>,
     logical_indices: &PrimitiveArray<I>,
 ) -> Result<RunArray<T>, ArrowError>
@@ -845,7 +845,8 @@ where
 {
     match run_array.data_type() {
         DataType::RunEndEncoded(_, fl) => {
-            let physical_indices = take_run_physical_indices(run_array, logical_indices)?;
+            let physical_indices =
+                run_array.get_physical_indices(logical_indices.values())?;
 
             downcast_primitive! {
                 fl.data_type() => (primitive_run_take, T, physical_indices, run_array),
@@ -858,37 +859,8 @@ where
     }
 }
 
-#[cfg(not(feature = "take_run_loop"))]
-#[inline]
-fn take_run_physical_indices<T, I>(
-    run_array: &RunArray<T>,
-    logical_indices: &PrimitiveArray<I>,
-) -> Result<Vec<usize>, ArrowError>
-where
-    T: RunEndIndexType,
-    T::Native: num::Num,
-    I: ArrowPrimitiveType,
-    I::Native: ToPrimitive,
-{
-    run_array.get_physical_indices_using_accessor(logical_indices.values())
-}
-
-#[cfg(feature = "take_run_loop")]
-#[inline]
-fn take_run_physical_indices<T, I>(
-    run_array: &RunArray<T>,
-    logical_indices: &PrimitiveArray<I>,
-) -> Result<Vec<usize>, ArrowError>
-where
-    T: RunEndIndexType,
-    T::Native: num::Num,
-    I: ArrowPrimitiveType,
-    I::Native: ToPrimitive,
-{
-    run_array.get_physical_indices_using_loop(logical_indices.values())
-}
-
 // Builds a `RunArray` by taking values from given array for the given indices.
+#[cfg(not(feature = "take_run_value_take"))]
 fn take_primitive_run_values<R, V>(
     physical_indices: Vec<usize>,
     values: &PrimitiveArray<V>,

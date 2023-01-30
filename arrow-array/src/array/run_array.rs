@@ -175,67 +175,56 @@ impl<R: RunEndIndexType> RunArray<R> {
         Some(st)
     }
 
-    /// Returns the physical indices of input logical indices. Returns error
-    /// if any of the logical index cannot be converted to physical index.
-    /// Finds physical indices for the given logical indices using
-    /// array accessor which in turn does binary search on run_ends.
+    /// Returns the physical indices of the input logical indices. Returns error if any of the logical
+    /// index cannot be converted to physical index. The logical indices are sorted and iterated along
+    /// with run_ends array to find matching physical index. The approach used here was chosen over
+    /// finding physical index for each logical index using binary search using the function
+    /// `get_physical_index`. Running benchmarks on both approaches showed that the approach used here
+    /// scaled well for larger inputs.
+    /// See https://github.com/apache/arrow-rs/pull/3622#issuecomment-1407753727 for more details.
     #[inline]
-    pub fn get_physical_indices_using_accessor<I>(
+    pub fn get_physical_indices<I>(
         &self,
-        indices: &[I],
+        logical_indices: &[I],
     ) -> Result<Vec<usize>, ArrowError>
     where
         I: ArrowNativeType,
     {
-        let mut result: Vec<usize> = Vec::with_capacity(indices.len());
-        for ix in indices {
-            let logical_index = ix.as_usize();
-            let physical_index =
-                self.get_physical_index(logical_index).ok_or_else(|| {
-                    ArrowError::InvalidArgumentError(
-                        "Cannot convet {logical_index} to physical index".to_string(),
-                    )
-                })?;
-            result.push(physical_index);
-        }
-        Ok(result)
-    }
-
-    /// Returns the physical indices of input logical indices. Returns error
-    /// if any of the logical index cannot be converted to physical index.
-    /// TODO: Potential future optimization would be to skip sorting
-    /// if the indices are already in sorted order.
-    #[inline]
-    pub fn get_physical_indices_using_loop<I>(
-        &self,
-        indices: &[I],
-    ) -> Result<Vec<usize>, ArrowError>
-    where
-        I: ArrowNativeType,
-    {
-        let indices_len = indices.len();
-        let mut order: Vec<usize> = (0..indices_len).collect();
-        order.sort_unstable_by(|lhs, rhs| {
-            indices[*lhs].partial_cmp(&indices[*rhs]).unwrap()
+        let indices_len = logical_indices.len();
+        let mut ordered_indices: Vec<usize> = (0..indices_len).collect();
+        ordered_indices.sort_unstable_by(|lhs, rhs| {
+            logical_indices[*lhs]
+                .partial_cmp(&logical_indices[*rhs])
+                .unwrap()
         });
-        let mut result = vec![0; indices_len];
+        let mut physical_indices = vec![0; indices_len];
 
-        let mut rix = 0_usize;
-        let mut tix = 0_usize;
-        while rix < self.run_ends.len() && tix < indices_len {
-            let run_end_index = unsafe { self.run_ends.value_unchecked(rix).as_usize() };
-            while tix < indices_len && indices[order[tix]].as_usize() < run_end_index {
-                result[order[tix]] = rix;
-                tix += 1;
+        let mut run_ends_index = 0_usize;
+        let mut ordered_index = 0_usize;
+        while run_ends_index < self.run_ends.len() && ordered_index < indices_len {
+            let run_end_value =
+                // Safety:
+                //  The check `run_ends_index < self.run_ends.len()` ensures the index
+                //  is in bounds and can be accessed without validation.
+                unsafe { self.run_ends.value_unchecked(run_ends_index).as_usize() };
+
+            while ordered_index < indices_len
+                && logical_indices[ordered_indices[ordered_index]].as_usize()
+                    < run_end_value
+            {
+                physical_indices[ordered_indices[ordered_index]] = run_ends_index;
+                ordered_index += 1;
             }
-            rix += 1;
+            run_ends_index += 1;
         }
-        if tix < indices.len() {
-            return Err(ArrowError::InvalidArgumentError(
-                "Cannot convert all logical indices to physical indices".to_string(),
-            ));
+        if ordered_index < logical_indices.len() {
+            let logical_index =
+                logical_indices[ordered_indices[ordered_index]].as_usize();
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Cannot convert all logical indices to physical indices. The logical index cannot be converted is {logical_index}.",
+            )));
         }
-        Ok(result)
+        Ok(physical_indices)
     }
 }
 
@@ -797,7 +786,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_physical_indices_using_accessor() {
+    fn test_get_physical_indices() {
         let mut logical_len = 10;
         // Test for logical lengths starting from 10 to 250 increasing by 10
         while logical_len < 260 {
@@ -813,53 +802,7 @@ mod tests {
             let mut rng = thread_rng();
             indices.shuffle(&mut rng);
 
-            let physical_indices = run_array
-                .get_physical_indices_using_accessor(&indices)
-                .unwrap();
-
-            assert_eq!(indices.len(), physical_indices.len());
-
-            // check value in logical index in the input_array matches physical index in typed_run_array
-            indices
-                .iter()
-                .map(|f| f.as_usize())
-                .zip(physical_indices.iter())
-                .for_each(|(logical_ix, physical_ix)| {
-                    let expected = input_array[logical_ix];
-                    match expected {
-                        Some(val) => {
-                            let actual = physical_values_array.value(*physical_ix);
-                            assert_eq!(val, actual);
-                        }
-                        None => {
-                            assert!(physical_values_array.is_null(*physical_ix))
-                        }
-                    };
-                });
-
-            logical_len += 10;
-        }
-    }
-
-    #[test]
-    fn test_get_physical_indices_using_loop() {
-        let mut logical_len = 10;
-        // Test for logical lengths starting from 10 to 250 increasing by 10
-        while logical_len < 260 {
-            let input_array = build_input_array(logical_len);
-            let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-            builder.extend(input_array.clone().into_iter());
-
-            let run_array = builder.finish();
-            let physical_values_array =
-                run_array.downcast_ref::<Int32Array>().unwrap().values();
-
-            let mut indices: Vec<u32> = (0_u32..(logical_len as u32)).collect();
-            let mut rng = thread_rng();
-            indices.shuffle(&mut rng);
-
-            let physical_indices =
-                run_array.get_physical_indices_using_loop(&indices).unwrap();
+            let physical_indices = run_array.get_physical_indices(&indices).unwrap();
 
             assert_eq!(indices.len(), physical_indices.len());
 
