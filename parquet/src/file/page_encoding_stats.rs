@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Per-page encoding information.
+
 use crate::basic::{Encoding, PageType};
 use crate::errors::Result;
 use crate::format::{

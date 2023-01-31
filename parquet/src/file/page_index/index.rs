@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`Index`] structures holding decoded [`ColumnIndex`] information
+
 use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::{ByteArray, Int96};
@@ -23,7 +25,14 @@ use crate::format::{BoundaryOrder, ColumnIndex};
 use crate::util::bit_util::from_le_slice;
 use std::fmt::Debug;
 
-/// The statistics in one page
+/// PageIndex Statistics for one data page, as described in [Column Index].
+///
+/// One significant difference from the row group level
+/// [`Statistics`](crate::format::Statistics) is that page level
+/// statistics may not store actual column values as min and max
+/// (e.g. they may store truncated strings to save space)
+///
+/// [Column Index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PageIndex<T> {
     /// The minimum value, It is None when all values are null
@@ -48,6 +57,10 @@ impl<T> PageIndex<T> {
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_camel_case_types)]
+/// Typed statistics for a data page in a column chunk. This structure
+/// is obtained from decoding the [ColumnIndex] in the parquet file
+/// and can be used to skip decoding pages while reading the file
+/// data.
 pub enum Index {
     /// Sometimes reading page index from parquet file
     /// will only return pageLocations without min_max index,
@@ -90,14 +103,17 @@ impl Index {
     }
 }
 
-/// An index of a column of [`Type`] physical representation
+/// Stores the [`PageIndex`] for each page of a column with [`Type`]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NativeIndex<T: ParquetValueType> {
-    /// The physical type
+    /// The physical type of this column
     pub physical_type: Type,
     /// The indexes, one item per page
     pub indexes: Vec<PageIndex<T>>,
-    /// the order
+    /// If the min/max elements are ordered, and if so in which
+    /// direction. See [source] for details.
+    ///
+    /// [source]: https://github.com/apache/parquet-format/blob/bfc549b93e6927cb1fc425466e4084f76edc6d22/src/main/thrift/parquet.thrift#L959-L964
     pub boundary_order: BoundaryOrder,
 }
 

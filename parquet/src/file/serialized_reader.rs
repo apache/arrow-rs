@@ -189,13 +189,16 @@ impl ReadOptionsBuilder {
         self
     }
 
-    /// Enable page index in the reading option,
+    /// Enable reading the page index structures described in
+    /// "[Column Index] Layout to Support Page Skipping"
+    ///
+    /// [Column Index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_page_index(mut self) -> Self {
         self.enable_page_index = true;
         self
     }
 
-    /// Set the `ReaderProperties` configuration.
+    /// Set the [`ReaderProperties`] configuration.
     pub fn with_reader_properties(mut self, properties: ReaderProperties) -> Self {
         self.props = Some(properties);
         self
