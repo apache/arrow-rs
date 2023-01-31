@@ -3432,14 +3432,11 @@ where
     } else {
         let mut null_builder = BooleanBufferBuilder::new(array.len());
         array.iter().for_each(|maybe_value| {
-            if maybe_value
-                .and_then(|value| std::str::from_utf8(value).ok())
-                .is_some()
-            {
-                null_builder.append(true);
-            } else {
-                null_builder.append(false);
-            }
+            null_builder.append(
+                maybe_value
+                    .and_then(|value| std::str::from_utf8(value).ok())
+                    .is_some(),
+            );
         });
 
         let builder = array
