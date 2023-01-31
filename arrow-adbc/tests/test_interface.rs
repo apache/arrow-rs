@@ -14,10 +14,11 @@ use arrow_adbc::error::AdbcError;
 use arrow_adbc::ffi::{
     AdbcObjectDepth, FFI_AdbcConnection, FFI_AdbcDatabase, FFI_AdbcStatement,
 };
-use arrow_adbc::interface::{
-    AdbcConnection, AdbcDatabase, AdbcStatement, PartitionedStatementResult,
-    StatementResult,
+use arrow_adbc::implement::{
+    AdbcConnectionImpl, AdbcDatabaseImpl, AdbcStatementImpl,
 };
+use arrow_adbc::interface::{DatabaseApi, ConnectionApi, StatementApi};
+use arrow_adbc::interface::{PartitionedStatementResult, StatementResult};
 use arrow_adbc::{
     error::{self, AdbcStatusCode, FFI_AdbcError},
     ffi::FFI_AdbcDriver,
@@ -51,12 +52,14 @@ impl Default for TestDatabase {
     }
 }
 
-impl AdbcDatabase for TestDatabase {
-    type Error = TestError;
-
+impl AdbcDatabaseImpl for TestDatabase {
     fn init(&self) -> Result<(), Self::Error> {
         Ok(())
     }
+}
+
+impl DatabaseApi for TestDatabase {
+    type Error = TestError;
 
     fn set_option(&self, key: &str, value: &str) -> Result<(), Self::Error> {
         Err(TestError::General(format!(
@@ -77,8 +80,7 @@ impl Default for TestConnection {
     }
 }
 
-impl AdbcConnection for TestConnection {
-    type Error = TestError;
+impl AdbcConnectionImpl for TestConnection {
     type DatabaseType = TestDatabase;
 
     fn init(&self, database: Arc<Self::DatabaseType>) -> Result<(), Self::Error> {
@@ -91,6 +93,10 @@ impl AdbcConnection for TestConnection {
             ))
         }
     }
+}
+
+impl ConnectionApi for TestConnection {
+    type Error = TestError;
 
     fn set_option(&self, key: &str, value: &str) -> Result<(), Self::Error> {
         Err(TestError::General(format!(
@@ -158,13 +164,16 @@ struct TestStatement {
     connection: Rc<TestConnection>,
 }
 
-impl AdbcStatement for TestStatement {
-    type Error = TestError;
+impl AdbcStatementImpl for TestStatement {
     type ConnectionType = TestConnection;
 
     fn new_from_connection(connection: Rc<Self::ConnectionType>) -> Self {
         Self { connection }
     }
+}
+
+impl StatementApi for TestStatement {
+    type Error = TestError;
 
     fn set_option(&mut self, key: &str, value: &str) -> Result<(), Self::Error> {
         Err(TestError::General(format!(

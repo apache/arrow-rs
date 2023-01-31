@@ -17,6 +17,7 @@
 
 //! ADBC FFI structs, as defined in [adbc.h](https://github.com/apache/arrow-adbc/blob/main/adbc.h).
 #![allow(non_snake_case)]
+use std::ffi::CStr;
 use std::ptr::null_mut;
 
 use crate::error::{AdbcStatusCode, FFI_AdbcError};
@@ -27,14 +28,39 @@ use arrow::ffi_stream::FFI_ArrowArrayStream;
 ///
 /// Must be kept alive as long as any connections exist.
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct FFI_AdbcDatabase {
     /// Opaque implementation-defined state.
     /// This field is NULLPTR iff the connection is unintialized/freed.
     pub private_data: *mut ::std::os::raw::c_void,
     /// The associated driver (used by the driver manager to help
     ///   track state).
-    pub private_driver: *mut FFI_AdbcDriver,
+    pub private_driver: *const FFI_AdbcDriver,
+}
+
+impl Default for FFI_AdbcDatabase {
+    fn default() -> Self {
+        Self {
+            private_data: null_mut(),
+            private_driver: null_mut(),
+        }
+    }
+}
+
+impl Drop for FFI_AdbcDatabase {
+    fn drop(&mut self) {
+        if let Some(private_driver) = unsafe { self.private_driver.as_ref() } {
+            if let Some(release) = unsafe { private_driver.DatabaseRelease.as_ref() } {
+                let mut error = Box::new(FFI_AdbcError::empty());
+                let status = unsafe { release(self, error.as_mut()) };
+                if status != AdbcStatusCode::Ok {
+                    panic!("Failed to cleanup database: {}", unsafe {
+                        CStr::from_ptr(error.message).to_string_lossy()
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// An active database connection.
@@ -46,7 +72,7 @@ pub struct FFI_AdbcDatabase {
 /// used from multiple threads so long as clients take care to
 /// serialize accesses to a connection.
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct FFI_AdbcConnection {
     /// Opaque implementation-defined state.
     /// This field is NULLPTR iff the connection is unintialized/freed.
@@ -54,6 +80,22 @@ pub struct FFI_AdbcConnection {
     /// The associated driver (used by the driver manager to help
     ///   track state).
     pub private_driver: *mut FFI_AdbcDriver,
+}
+
+impl Drop for FFI_AdbcConnection {
+    fn drop(&mut self) {
+        if let Some(private_driver) = unsafe { self.private_driver.as_ref() } {
+            if let Some(release) = unsafe { private_driver.ConnectionRelease.as_ref() } {
+                let mut error = Box::new(FFI_AdbcError::empty());
+                let status = unsafe { release(self, error.as_mut()) };
+                if status != AdbcStatusCode::Ok {
+                    panic!("Failed to cleanup connection: {}", unsafe {
+                        CStr::from_ptr(error.message).to_string_lossy()
+                    });
+                }
+            }
+        }
+    }
 }
 
 ///  A container for all state needed to execute a database
@@ -75,7 +117,7 @@ pub struct FFI_AdbcConnection {
 /// used from multiple threads so long as clients take care to
 /// serialize accesses to a statement.
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct FFI_AdbcStatement {
     /// Opaque implementation-defined state.
     /// This field is NULLPTR iff the connection is unintialized/freed.
@@ -83,6 +125,22 @@ pub struct FFI_AdbcStatement {
     /// The associated driver (used by the driver manager to help
     /// track state).
     pub private_driver: *mut FFI_AdbcDriver,
+}
+
+impl Drop for FFI_AdbcStatement {
+    fn drop(&mut self) {
+        if let Some(private_driver) = unsafe { self.private_driver.as_ref() } {
+            if let Some(release) = unsafe { private_driver.StatementRelease.as_ref() } {
+                let mut error = Box::new(FFI_AdbcError::empty());
+                let status = unsafe { release(self, error.as_mut()) };
+                if status != AdbcStatusCode::Ok {
+                    panic!("Failed to cleanup statement: {}", unsafe {
+                        CStr::from_ptr(error.message).to_string_lossy()
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// The partitions of a distributed/partitioned result set.
@@ -177,7 +235,7 @@ unsafe extern "C" fn drop_adbc_partitions(partitions: *mut FFI_AdbcPartitions) {
 /// applications can call ADBC functions through this struct, without
 /// worrying about multiple definitions of the same symbol.
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct FFI_AdbcDriver {
     /// Opaque driver-defined state.
     /// This field is NULL if the driver is unintialized/freed (but
@@ -391,6 +449,32 @@ pub struct FFI_AdbcDriver {
             arg4: *mut FFI_AdbcError,
         ) -> AdbcStatusCode,
     >,
+}
+
+impl Default for FFI_AdbcDriver {
+    /// Initializes everything as null or None.
+    #[allow(unconditional_recursion)]
+    fn default() -> Self {
+        Self {
+            private_data: null_mut(),
+            private_manager: null_mut(),
+            ..Default::default()
+        }
+    }
+}
+
+impl Drop for FFI_AdbcDriver {
+    fn drop(&mut self) {
+        if let Some(release) = self.release {
+            let mut error = Box::new(FFI_AdbcError::empty());
+            let status = unsafe { release(self, error.as_mut()) };
+            if status != AdbcStatusCode::Ok {
+                panic!("Failed to cleanup driver: {}", unsafe {
+                    CStr::from_ptr(error.message).to_string_lossy()
+                });
+            }
+        }
+    }
 }
 
 /// Depth parameter for GetObjects method.

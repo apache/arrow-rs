@@ -109,7 +109,7 @@ use std::{
     ptr::null_mut,
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 #[repr(u8)]
 pub enum AdbcStatusCode {
     /// No error.
@@ -204,6 +204,16 @@ pub struct FFI_AdbcError {
 }
 
 impl FFI_AdbcError {
+    /// Create an empty error
+    pub fn empty() -> Self {
+        Self {
+            message: null_mut(),
+            vendor_code: -1,
+            sqlstate: ['\0' as c_char; 5],
+            release: None,
+        }
+    }
+
     /// Create a new FFI_AdbcError.
     ///
     /// `vendor_code` defaults to -1 and `sql_state` defaults to zeros.

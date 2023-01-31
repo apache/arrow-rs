@@ -39,14 +39,15 @@ use crate::{
     },
 };
 
-use super::{AdbcConnection, AdbcDatabase, AdbcError, AdbcStatement};
+use super::{AdbcConnectionImpl, AdbcDatabaseImpl, AdbcError, AdbcStatementImpl};
 
-type ConnType<StatementType> = <StatementType as AdbcStatement>::ConnectionType;
-type DBType<StatementType> = <ConnType<StatementType> as AdbcConnection>::DatabaseType;
+type ConnType<StatementType> = <StatementType as AdbcStatementImpl>::ConnectionType;
+type DBType<StatementType> =
+    <ConnType<StatementType> as AdbcConnectionImpl>::DatabaseType;
 
 /// Initialize an ADBC driver that dispatches to the types defined by the provided
 /// `StatementType`.
-pub fn init_adbc_driver<StatementType: AdbcStatement>() -> FFI_AdbcDriver {
+pub fn init_adbc_driver<StatementType: AdbcStatementImpl>() -> FFI_AdbcDriver {
     FFI_AdbcDriver {
         private_data: null_mut(),
         private_manager: null_mut(),
@@ -225,7 +226,7 @@ unsafe fn try_unwrap_mut<'a, Wrapper: PrivateDataWrapper + 'a, OutType>(
         .and_then(|wrapper| wrapper.get_inner_mut::<OutType>())
 }
 
-unsafe extern "C" fn database_new<DatabaseType: Default + AdbcDatabase>(
+unsafe extern "C" fn database_new<DatabaseType: Default + AdbcDatabaseImpl>(
     database: *mut FFI_AdbcDatabase,
     error: *mut FFI_AdbcError,
 ) -> AdbcStatusCode {
@@ -242,7 +243,7 @@ unsafe extern "C" fn database_new<DatabaseType: Default + AdbcDatabase>(
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn database_init<DatabaseType: Default + AdbcDatabase>(
+unsafe extern "C" fn database_init<DatabaseType: Default + AdbcDatabaseImpl>(
     database: *mut FFI_AdbcDatabase,
     error: *mut FFI_AdbcError,
 ) -> AdbcStatusCode {
@@ -259,7 +260,7 @@ unsafe extern "C" fn database_init<DatabaseType: Default + AdbcDatabase>(
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn database_set_option<DatabaseType: Default + AdbcDatabase>(
+unsafe extern "C" fn database_set_option<DatabaseType: Default + AdbcDatabaseImpl>(
     database: *mut FFI_AdbcDatabase,
     key: *const ::std::os::raw::c_char,
     value: *const ::std::os::raw::c_char,
@@ -276,7 +277,7 @@ unsafe extern "C" fn database_set_option<DatabaseType: Default + AdbcDatabase>(
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn database_release<DatabaseType: Default + AdbcDatabase>(
+unsafe extern "C" fn database_release<DatabaseType: Default + AdbcDatabaseImpl>(
     database: *mut FFI_AdbcDatabase,
     _error: *mut FFI_AdbcError,
 ) -> AdbcStatusCode {
@@ -289,7 +290,7 @@ unsafe extern "C" fn database_release<DatabaseType: Default + AdbcDatabase>(
 
 // Connection
 
-unsafe extern "C" fn connection_new<ConnectionType: Default + AdbcConnection>(
+unsafe extern "C" fn connection_new<ConnectionType: Default + AdbcConnectionImpl>(
     connection: *mut FFI_AdbcConnection,
     error: *mut FFI_AdbcError,
 ) -> AdbcStatusCode {
@@ -306,7 +307,9 @@ unsafe extern "C" fn connection_new<ConnectionType: Default + AdbcConnection>(
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn connection_set_option<ConnectionType: Default + AdbcConnection>(
+unsafe extern "C" fn connection_set_option<
+    ConnectionType: Default + AdbcConnectionImpl,
+>(
     connection: *mut FFI_AdbcConnection,
     key: *const ::std::os::raw::c_char,
     value: *const ::std::os::raw::c_char,
@@ -323,7 +326,7 @@ unsafe extern "C" fn connection_set_option<ConnectionType: Default + AdbcConnect
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn connection_init<ConnectionType: Default + AdbcConnection>(
+unsafe extern "C" fn connection_init<ConnectionType: Default + AdbcConnectionImpl>(
     connection: *mut FFI_AdbcConnection,
     database: *mut FFI_AdbcDatabase,
     error: *mut FFI_AdbcError,
@@ -336,7 +339,7 @@ unsafe extern "C" fn connection_init<ConnectionType: Default + AdbcConnection>(
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn connection_release<ConnectionType: Default + AdbcConnection>(
+unsafe extern "C" fn connection_release<ConnectionType: Default + AdbcConnectionImpl>(
     connection: *mut FFI_AdbcConnection,
     _error: *mut FFI_AdbcError,
 ) -> AdbcStatusCode {
@@ -347,7 +350,7 @@ unsafe extern "C" fn connection_release<ConnectionType: Default + AdbcConnection
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn connection_get_info<ConnectionType: Default + AdbcConnection>(
+unsafe extern "C" fn connection_get_info<ConnectionType: Default + AdbcConnectionImpl>(
     connection: *mut FFI_AdbcConnection,
     info_codes: *const u32,
     info_codes_length: usize,
@@ -373,7 +376,9 @@ unsafe fn get_maybe_str<'a>(
     }
 }
 
-unsafe extern "C" fn connection_get_objects<ConnectionType: Default + AdbcConnection>(
+unsafe extern "C" fn connection_get_objects<
+    ConnectionType: Default + AdbcConnectionImpl,
+>(
     connection: *mut FFI_AdbcConnection,
     depth: AdbcObjectDepth,
     catalog: *const ::std::os::raw::c_char,
@@ -418,7 +423,7 @@ unsafe extern "C" fn connection_get_objects<ConnectionType: Default + AdbcConnec
 }
 
 unsafe extern "C" fn connection_get_table_schema<
-    ConnectionType: Default + AdbcConnection,
+    ConnectionType: Default + AdbcConnectionImpl,
 >(
     connection: *mut FFI_AdbcConnection,
     catalog: *const ::std::os::raw::c_char,
@@ -461,7 +466,7 @@ unsafe extern "C" fn connection_get_table_schema<
 }
 
 unsafe extern "C" fn connection_get_table_types<
-    ConnectionType: Default + AdbcConnection,
+    ConnectionType: Default + AdbcConnectionImpl,
 >(
     connection: *mut FFI_AdbcConnection,
     out: *mut FFI_ArrowArrayStream,
@@ -476,7 +481,7 @@ unsafe extern "C" fn connection_get_table_types<
 }
 
 unsafe extern "C" fn connection_read_partition<
-    ConnectionType: Default + AdbcConnection,
+    ConnectionType: Default + AdbcConnectionImpl,
 >(
     connection: *mut FFI_AdbcConnection,
     serialized_partition: *const u8,
@@ -493,7 +498,7 @@ unsafe extern "C" fn connection_read_partition<
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn connection_commit<ConnectionType: Default + AdbcConnection>(
+unsafe extern "C" fn connection_commit<ConnectionType: Default + AdbcConnectionImpl>(
     connection: *mut FFI_AdbcConnection,
     error: *mut FFI_AdbcError,
 ) -> AdbcStatusCode {
@@ -504,7 +509,7 @@ unsafe extern "C" fn connection_commit<ConnectionType: Default + AdbcConnection>
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn connection_rollback<ConnectionType: Default + AdbcConnection>(
+unsafe extern "C" fn connection_rollback<ConnectionType: Default + AdbcConnectionImpl>(
     connection: *mut FFI_AdbcConnection,
     error: *mut FFI_AdbcError,
 ) -> AdbcStatusCode {
@@ -515,7 +520,7 @@ unsafe extern "C" fn connection_rollback<ConnectionType: Default + AdbcConnectio
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn statement_new<StatementType: AdbcStatement>(
+unsafe extern "C" fn statement_new<StatementType: AdbcStatementImpl>(
     connection_ptr: *mut FFI_AdbcConnection,
     statement_out: *mut FFI_AdbcStatement,
     error: *mut FFI_AdbcError,
@@ -535,7 +540,7 @@ unsafe extern "C" fn statement_new<StatementType: AdbcStatement>(
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn statement_release<StatementType: AdbcStatement>(
+unsafe extern "C" fn statement_release<StatementType: AdbcStatementImpl>(
     statement: *mut FFI_AdbcStatement,
     _error: *mut FFI_AdbcError,
 ) -> AdbcStatusCode {
@@ -546,7 +551,7 @@ unsafe extern "C" fn statement_release<StatementType: AdbcStatement>(
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn statement_execute_query<StatementType: AdbcStatement>(
+unsafe extern "C" fn statement_execute_query<StatementType: AdbcStatementImpl>(
     statement: *mut FFI_AdbcStatement,
     out: *mut FFI_ArrowArrayStream,
     rows_affected: *mut i64,
@@ -575,7 +580,7 @@ unsafe extern "C" fn statement_execute_query<StatementType: AdbcStatement>(
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn statement_prepare<StatementType: AdbcStatement>(
+unsafe extern "C" fn statement_prepare<StatementType: AdbcStatementImpl>(
     statement: *mut FFI_AdbcStatement,
     error: *mut FFI_AdbcError,
 ) -> AdbcStatusCode {
@@ -586,7 +591,7 @@ unsafe extern "C" fn statement_prepare<StatementType: AdbcStatement>(
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn statement_set_sql_query<StatementType: AdbcStatement>(
+unsafe extern "C" fn statement_set_sql_query<StatementType: AdbcStatementImpl>(
     statement: *mut FFI_AdbcStatement,
     query: *const ::std::os::raw::c_char,
     error: *mut FFI_AdbcError,
@@ -599,7 +604,7 @@ unsafe extern "C" fn statement_set_sql_query<StatementType: AdbcStatement>(
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn statement_set_substrait_plan<StatementType: AdbcStatement>(
+unsafe extern "C" fn statement_set_substrait_plan<StatementType: AdbcStatementImpl>(
     statement: *mut FFI_AdbcStatement,
     plan: *const u8,
     length: usize,
@@ -613,7 +618,7 @@ unsafe extern "C" fn statement_set_substrait_plan<StatementType: AdbcStatement>(
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn statement_bind<StatementType: AdbcStatement>(
+unsafe extern "C" fn statement_bind<StatementType: AdbcStatementImpl>(
     statement: *mut FFI_AdbcStatement,
     values: *mut FFI_ArrowArray,
     schema: *mut FFI_ArrowSchema,
@@ -627,7 +632,7 @@ unsafe extern "C" fn statement_bind<StatementType: AdbcStatement>(
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn statement_bind_stream<StatementType: AdbcStatement>(
+unsafe extern "C" fn statement_bind_stream<StatementType: AdbcStatementImpl>(
     statement: *mut FFI_AdbcStatement,
     stream_ptr: *mut FFI_ArrowArrayStream,
     error: *mut FFI_AdbcError,
@@ -646,7 +651,7 @@ unsafe extern "C" fn statement_bind_stream<StatementType: AdbcStatement>(
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn statement_get_parameter_schema<StatementType: AdbcStatement>(
+unsafe extern "C" fn statement_get_parameter_schema<StatementType: AdbcStatementImpl>(
     statement: *mut FFI_AdbcStatement,
     out_schema: *mut FFI_ArrowSchema,
     error: *mut FFI_AdbcError,
@@ -668,7 +673,7 @@ unsafe extern "C" fn statement_get_parameter_schema<StatementType: AdbcStatement
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn statement_set_option<StatementType: AdbcStatement>(
+unsafe extern "C" fn statement_set_option<StatementType: AdbcStatementImpl>(
     statement: *mut FFI_AdbcStatement,
     key: *const ::std::os::raw::c_char,
     value: *const ::std::os::raw::c_char,
@@ -685,7 +690,7 @@ unsafe extern "C" fn statement_set_option<StatementType: AdbcStatement>(
     AdbcStatusCode::Ok
 }
 
-unsafe extern "C" fn statement_execute_partitions<StatementType: AdbcStatement>(
+unsafe extern "C" fn statement_execute_partitions<StatementType: AdbcStatementImpl>(
     statement: *mut FFI_AdbcStatement,
     out_schema: *mut FFI_ArrowSchema,
     out_partitions: *mut FFI_AdbcPartitions,

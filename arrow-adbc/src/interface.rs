@@ -15,38 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Implement ADBC driver without unsafe code.
-//!
-//! Allows implementing ADBC driver in Rust without directly interacting with
-//! FFI types, which requires unsafe code. Implement [AdbcDatabase],
-//! [AdbcConnection], [AdbcStatement], and [AdbcError] first. Then pass the
-//! statement type to [adbc_api] to generate C FFI interface for ADBC.
-
-use std::{rc::Rc, sync::Arc};
-
 use arrow::{array::ArrayRef, datatypes::Schema, record_batch::RecordBatchReader};
 
 use crate::{error::AdbcError, ffi::AdbcObjectDepth};
 
-pub mod internal;
-
 /// Databases hold state shared by multiple connections. This typically means
 /// configuration and caches. For in-memory databases, it provides a place to
 /// hold ownership of the in-memory database.
-///
-/// Because it is shared by multiple connections, the implementation must be
-/// thread safe. Internally, it is held with an [std::sync::Arc] by each connection.
-pub trait AdbcDatabase {
+pub trait DatabaseApi {
     type Error: AdbcError;
 
     /// Set an option on the database.
-    fn set_option(&self, key: &str, value: &str) -> Result<(), Self::Error>;
-
-    /// Initialize the database.
     ///
-    /// Some drivers may choose not to support setting options after this has
-    /// been called.
-    fn init(&self) -> Result<(), Self::Error>;
+    /// Some databases may not allow setting options after it has been initialized.
+    fn set_option(&self, key: &str, value: &str) -> Result<(), Self::Error>;
 }
 
 /// A connection is a single connection to a database.
@@ -59,20 +41,13 @@ pub trait AdbcDatabase {
 /// setting `"adbc.connection.autocommit"` to `"false"` (using
 /// [AdbcConnection::set_option]). Turning off autocommit allows customizing
 /// the isolation level. Read more in [adbc.h](https://github.com/apache/arrow-adbc/blob/main/adbc.h).
-pub trait AdbcConnection {
+pub trait ConnectionApi {
     type Error: AdbcError;
-    type DatabaseType: AdbcDatabase + Default;
 
     /// Set an option on the connection.
+    ///
+    /// Some connections may not allow setting options after it has been initialized.
     fn set_option(&self, key: &str, value: &str) -> Result<(), Self::Error>;
-
-    /// Initialize the connection.
-    ///
-    /// The Arc to the database should be stored within your struct.
-    ///
-    /// Some drivers may choose not to support setting options after this has
-    /// been called.
-    fn init(&self, database: Arc<Self::DatabaseType>) -> Result<(), Self::Error>;
 
     /// Get metadata about the database/driver.
     ///
@@ -242,10 +217,6 @@ pub trait AdbcConnection {
     /// `table_type`     | `utf8 not null`
     fn get_table_types(&self) -> Result<Box<dyn RecordBatchReader>, Self::Error>;
 
-    // TODO: if Connection is only meant to be access from a single thread, does
-    // that mean these partitions should be accessible across connections? Or
-    // That read_partition should be called on the main thread and then the
-    // RBR are then passed to other threads?
     /// Read part of a partitioned result set.
     fn read_partition(
         &self,
@@ -272,14 +243,8 @@ pub trait AdbcConnection {
 /// Multiple statements may be created from a single connection.
 /// However, the driver may block or error if they are used
 /// concurrently (whether from a single thread or multiple threads).
-pub trait AdbcStatement {
+pub trait StatementApi {
     type Error: AdbcError;
-    type ConnectionType: AdbcConnection + Default;
-
-    /// Create a new statement.
-    ///
-    /// The conn should be saved within the struct.
-    fn new_from_connection(conn: Rc<Self::ConnectionType>) -> Self;
 
     /// Turn this statement into a prepared statement to be executed multiple times.
     ///
@@ -358,52 +323,3 @@ pub struct PartitionedStatementResult {
     pub partition_ids: Vec<Vec<u8>>,
     pub rows_affected: Option<i64>,
 }
-
-/// Expose an ADBC driver entrypoint for the given name and statement type.
-///
-/// The default name recommended is `AdbcDriverInit` or `<Prefix>DriverInit`.
-///
-/// The type must implement [AdbcStatement].
-#[macro_export]
-macro_rules! adbc_init_func {
-    ($func_name:ident, $statement_type:ident) => {
-        #[no_mangle]
-        pub extern "C" fn $func_name(
-            version: ::std::os::raw::c_int,
-            driver: *mut ::std::os::raw::c_void,
-            mut error: *mut arrow_adbc::error::FFI_AdbcError,
-        ) -> arrow_adbc::error::AdbcStatusCode {
-            if version != 1000000 {
-                unsafe {
-                    arrow_adbc::error::FFI_AdbcError::set_message(
-                        error,
-                        &format!("Unsupported ADBC version: {}", version),
-                    );
-                }
-                return arrow_adbc::error::AdbcStatusCode::NotImplemented;
-            }
-
-            if driver.is_null() {
-                unsafe {
-                    arrow_adbc::error::FFI_AdbcError::set_message(
-                        error,
-                        "Passed a null pointer to ADBC driver init method.",
-                    );
-                }
-                return arrow_adbc::error::AdbcStatusCode::InvalidState;
-            }
-
-            let driver_raw =
-                arrow_adbc::interface::internal::init_adbc_driver::<$statement_type>();
-            unsafe {
-                std::ptr::write_unaligned(
-                    driver as *mut arrow_adbc::ffi::FFI_AdbcDriver,
-                    driver_raw,
-                );
-            }
-            arrow_adbc::error::AdbcStatusCode::Ok
-        }
-    };
-}
-
-pub use adbc_init_func;

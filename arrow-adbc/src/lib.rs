@@ -33,6 +33,33 @@
 //! overhead.
 //!
 //! Read more about ADBC at <https://arrow.apache.org/adbc/>
+//!
+//! ## Using ADBC drivers
+//!
+//! The [driver_manager] mod allows loading drivers, either from an initialization
+//! function or by dynamically finding such a function in a dynamic library.
+//!
+//! ```
+//! use arrow_adbc::driver_manager::AdbcDriver;
+//! use arrow_adbc::version::adbc_version_1_0_0;
+//! use arrow::record_batch::RecordBatchReader;
+//!
+//! let sqlite_driver = AdbcDriver::load("adbc_driver_sqlite", None, adbc_version_1_0_0);
+//! let sqlite_database = sqlite_driver.new_database().init()?;
+//! let sqlite_conn = sqlite_database.new_connection().init()?;
+//! let sqlite_statement = sqlite_conn.new_statement();
+//! sqlite_statement.set_sql_query("SELECT 1");
+//! let results: RecordBatchReader = sqlite_statement.execute()?;
+//! assert_eq!(results.next().unwrap(), record_batch([1], ["1"]));
+//! ```
+//!
+//! ## Implementing ADBC drivers
+//!
+//! To implement an ADBC driver, use the [interface] module. The macro
+//! [adbc_init_func] will generate adapters from the safe Rust traits you implement
+//! to the FFI interface recognized by ADBC.
+pub mod driver_manager;
 pub mod error;
 pub mod ffi;
+pub mod implement;
 pub mod interface;
