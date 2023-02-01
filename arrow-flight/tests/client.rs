@@ -268,7 +268,7 @@ async fn test_do_put() {
 }
 
 #[tokio::test]
-async fn test_do_put_error() {
+async fn test_do_put_error_server() {
     do_test(|test_server, mut client| async move {
         client.add_header("foo-header", "bar-header-value").unwrap();
 
@@ -292,7 +292,7 @@ async fn test_do_put_error() {
 }
 
 #[tokio::test]
-async fn test_do_put_error_stream() {
+async fn test_do_put_error_stream_server() {
     do_test(|test_server, mut client| async move {
         client.add_header("foo-header", "bar-header-value").unwrap();
 
@@ -324,6 +324,48 @@ async fn test_do_put_error_stream() {
 
         expect_status(response, e);
         // server still got the request
+        assert_eq!(test_server.take_do_put_request(), Some(input_flight_data));
+        ensure_metadata(&client, &test_server);
+    })
+        .await;
+}
+
+
+#[tokio::test]
+async fn test_do_put_error_client() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        // client sends good messages followed by an error
+        let input_flight_data = test_flight_data().await;
+        let e = Status::invalid_argument("bad arg");
+        let input_stream = futures::stream::iter(input_flight_data.clone())
+            .map(Ok)
+            .chain(futures::stream::iter(vec![Err(FlightError::from(e.clone()))]));
+
+        // server responds with one good message
+        let response = vec![
+            Ok(PutResult {
+                app_metadata: Bytes::from("foo-metadata"),
+            }),
+        ];
+
+        test_server.set_do_put_response(response);
+
+        let response_stream = client
+            .do_put(input_stream)
+            .await
+            .expect("error making request");
+
+        let response: Result<Vec<_>, _> = response_stream.try_collect().await;
+        let response = match response {
+            Ok(_) => panic!("unexpected success"),
+            Err(e) => e,
+        };
+
+        // expect to the error made from the client
+        expect_status(response, e);
+        // server still got the request messages until the client sent the error
         assert_eq!(test_server.take_do_put_request(), Some(input_flight_data));
         ensure_metadata(&client, &test_server);
     })
