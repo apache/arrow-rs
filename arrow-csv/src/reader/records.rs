@@ -17,7 +17,6 @@
 
 use arrow_schema::ArrowError;
 use csv_core::{ReadRecordResult, Reader};
-use std::io::BufRead;
 
 /// The estimated length of a field in bytes
 const AVERAGE_FIELD_SIZE: usize = 8;
@@ -25,108 +24,165 @@ const AVERAGE_FIELD_SIZE: usize = 8;
 /// The minimum amount of data in a single read
 const MIN_CAPACITY: usize = 1024;
 
-pub struct RecordReader<R> {
-    reader: R,
+/// [`RecordDecoder`] provides a push-based interface to decoder [`StringRecords`]
+#[derive(Debug)]
+pub struct RecordDecoder {
     delimiter: Reader,
 
+    /// The expected number of fields per row
     num_columns: usize,
 
-    num_rows: usize,
+    /// The current line number
+    line_number: usize,
+
+    /// Offsets delimiting field start positions
     offsets: Vec<usize>,
+
+    /// The current offset into `self.offsets`
+    ///
+    /// We track this independently of Vec to avoid re-zeroing memory
+    offsets_len: usize,
+
+    /// The number of fields read for the current record
+    current_field: usize,
+
+    /// The number of rows buffered
+    num_rows: usize,
+
+    /// Decoded field data
     data: Vec<u8>,
+
+    /// Offsets into data
+    ///
+    /// We track this independently of Vec to avoid re-zeroing memory
+    data_len: usize,
 }
 
-impl<R: BufRead> RecordReader<R> {
-    pub fn new(reader: R, delimiter: Reader, num_columns: usize) -> Self {
+impl RecordDecoder {
+    pub fn new(delimiter: Reader, num_columns: usize) -> Self {
         Self {
-            reader,
             delimiter,
             num_columns,
-            num_rows: 0,
+            line_number: 1,
             offsets: vec![],
+            offsets_len: 1, // The first offset is always 0
+            current_field: 0,
+            data_len: 0,
             data: vec![],
+            num_rows: 0,
         }
     }
 
-    fn fill_buf(&mut self, to_read: usize) -> Result<(), ArrowError> {
-        // Reserve sufficient capacity in offsets
-        self.offsets.resize(to_read * self.num_columns + 1, 0);
-        self.num_rows = 0;
-
+    /// Decodes records from `input` returning the number of records and bytes read
+    ///
+    /// Note: this expects to be called with an empty `input` to signal EOF
+    pub fn decode(
+        &mut self,
+        input: &[u8],
+        to_read: usize,
+    ) -> Result<(usize, usize), ArrowError> {
         if to_read == 0 {
-            return Ok(());
+            return Ok((0, 0));
         }
 
-        // The current offset into `self.data`
-        let mut output_offset = 0;
+        // Reserve sufficient capacity in offsets
+        self.offsets
+            .resize(self.offsets_len + to_read * self.num_columns, 0);
+
         // The current offset into `input`
         let mut input_offset = 0;
-        // The current offset into `self.offsets`
-        let mut field_offset = 1;
-        // The number of fields read for the current row
-        let mut field_count = 0;
 
-        'outer: loop {
-            let input = self.reader.fill_buf()?;
+        // The number of rows decoded in this pass
+        let mut read = 0;
 
-            'input: loop {
-                // Reserve necessary space in output data based on best estimate
-                let remaining_rows = to_read - self.num_rows;
-                let capacity = remaining_rows * self.num_columns * AVERAGE_FIELD_SIZE;
-                let estimated_data = capacity.max(MIN_CAPACITY);
-                self.data.resize(output_offset + estimated_data, 0);
+        loop {
+            // Reserve necessary space in output data based on best estimate
+            let remaining_rows = to_read - read;
+            let capacity = remaining_rows * self.num_columns * AVERAGE_FIELD_SIZE;
+            let estimated_data = capacity.max(MIN_CAPACITY);
+            self.data.resize(self.data_len + estimated_data, 0);
 
-                loop {
-                    let (result, bytes_read, bytes_written, end_positions) =
-                        self.delimiter.read_record(
-                            &input[input_offset..],
-                            &mut self.data[output_offset..],
-                            &mut self.offsets[field_offset..],
-                        );
+            // Try to read a record
+            loop {
+                let (result, bytes_read, bytes_written, end_positions) =
+                    self.delimiter.read_record(
+                        &input[input_offset..],
+                        &mut self.data[self.data_len..],
+                        &mut self.offsets[self.offsets_len..],
+                    );
 
-                    field_count += end_positions;
-                    field_offset += end_positions;
-                    input_offset += bytes_read;
-                    output_offset += bytes_written;
+                self.current_field += end_positions;
+                self.offsets_len += end_positions;
+                input_offset += bytes_read;
+                self.data_len += bytes_written;
 
-                    match result {
-                        ReadRecordResult::End => break 'outer, // Reached end of file
-                        ReadRecordResult::InputEmpty => break 'input, // Input exhausted, need to read more
-                        ReadRecordResult::OutputFull => break, // Need to allocate more capacity
-                        ReadRecordResult::OutputEndsFull => {
-                            return Err(ArrowError::CsvError(format!("incorrect number of fields, expected {} got more than {}", self.num_columns, field_count)))
+                match result {
+                    ReadRecordResult::End | ReadRecordResult::InputEmpty => {
+                        // Reached end of input
+                        return Ok((read, input_offset));
+                    }
+                    // Need to allocate more capacity
+                    ReadRecordResult::OutputFull => break,
+                    ReadRecordResult::OutputEndsFull => {
+                        return Err(ArrowError::CsvError(format!("incorrect number of fields for line {}, expected {} got more than {}", self.line_number, self.num_columns, self.current_field)));
+                    }
+                    ReadRecordResult::Record => {
+                        if self.current_field != self.num_columns {
+                            return Err(ArrowError::CsvError(format!("incorrect number of fields for line {}, expected {} got {}", self.line_number, self.num_columns, self.current_field)));
                         }
-                        ReadRecordResult::Record => {
-                            if field_count != self.num_columns {
-                                return Err(ArrowError::CsvError(format!("incorrect number of fields, expected {} got {}", self.num_columns, field_count)))
-                            }
-                            self.num_rows += 1;
-                            field_count = 0;
+                        read += 1;
+                        self.current_field = 0;
+                        self.line_number += 1;
+                        self.num_rows += 1;
 
-                            if self.num_rows == to_read {
-                                break 'outer // Read sufficient rows
-                            }
+                        if read == to_read {
+                            // Read sufficient rows
+                            return Ok((read, input_offset));
+                        }
 
-                            if input.len() == input_offset {
-                                // Input exhausted, need to read more
-                                // Without this read_record will interpret the empty input
-                                // byte array as indicating the end of the file
-                                break 'input
-                            }
+                        if input.len() == input_offset {
+                            // Input exhausted, need to read more
+                            // Without this read_record will interpret the empty input
+                            // byte array as indicating the end of the file
+                            return Ok((read, input_offset));
                         }
                     }
                 }
             }
-            self.reader.consume(input_offset);
-            input_offset = 0;
         }
-        self.reader.consume(input_offset);
+    }
+
+    /// Returns the current number of buffered records
+    pub fn len(&self) -> usize {
+        self.num_rows
+    }
+
+    /// Returns true if the decoder is empty
+    pub fn is_empty(&self) -> bool {
+        self.num_rows == 0
+    }
+
+    /// Clears the current contents of the decoder
+    pub fn clear(&mut self) {
+        // This does not reset current_field to allow clearing part way through a record
+        self.offsets_len = 1;
+        self.data_len = 0;
+        self.num_rows = 0;
+    }
+
+    /// Flushes the current contents of the reader
+    pub fn flush(&mut self) -> Result<StringRecords<'_>, ArrowError> {
+        if self.current_field != 0 {
+            return Err(ArrowError::CsvError(
+                "Cannot flush part way through record".to_string(),
+            ));
+        }
 
         // csv_core::Reader writes end offsets relative to the start of the row
         // Therefore scan through and offset these based on the cumulative row offsets
         let mut row_offset = 0;
-        self.offsets[1..]
-            .chunks_mut(self.num_columns)
+        self.offsets[1..self.offsets_len]
+            .chunks_exact_mut(self.num_columns)
             .for_each(|row| {
                 let offset = row_offset;
                 row.iter_mut().for_each(|x| {
@@ -135,39 +191,23 @@ impl<R: BufRead> RecordReader<R> {
                 });
             });
 
-        Ok(())
-    }
-
-    /// Skips forward `to_skip` rows
-    pub fn skip(&mut self, mut to_skip: usize) -> Result<(), ArrowError> {
-        // TODO: This could be done by scanning for unquoted newline delimiters
-        while to_skip != 0 {
-            self.fill_buf(to_skip.min(1024))?;
-            to_skip -= self.num_rows;
-        }
-        Ok(())
-    }
-
-    /// Reads up to `to_read` rows from the reader
-    pub fn read(&mut self, to_read: usize) -> Result<StringRecords<'_>, ArrowError> {
-        self.fill_buf(to_read)?;
-
-        // Need to slice fields to the actual number of rows read
-        //
-        // We intentionally avoid using `Vec::truncate` to avoid having
-        // to re-initialize the data again
-        let num_fields = self.num_rows * self.num_columns;
-        let last_offset = self.offsets[num_fields];
-
-        // Need to truncate data to the actual amount of data read
-        let data = std::str::from_utf8(&self.data[..last_offset]).map_err(|e| {
-            ArrowError::CsvError(format!("Encountered invalid UTF-8 data: {}", e))
+        // Need to truncate data t1o the actual amount of data read
+        let data = std::str::from_utf8(&self.data[..self.data_len]).map_err(|e| {
+            ArrowError::CsvError(format!("Encountered invalid UTF-8 data: {e}"))
         })?;
 
+        let offsets = &self.offsets[..self.offsets_len];
+        let num_rows = self.num_rows;
+
+        // Reset state
+        self.offsets_len = 1;
+        self.data_len = 0;
+        self.num_rows = 0;
+
         Ok(StringRecords {
+            num_rows,
             num_columns: self.num_columns,
-            num_rows: self.num_rows,
-            offsets: &self.offsets[..num_fields + 1],
+            offsets,
             data,
         })
     }
@@ -195,10 +235,6 @@ impl<'a> StringRecords<'a> {
         self.num_rows
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.num_rows == 0
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = StringRecord<'a>> + '_ {
         (0..self.num_rows).map(|x| self.get(x))
     }
@@ -224,9 +260,9 @@ impl<'a> StringRecord<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::reader::records::RecordReader;
+    use crate::reader::records::RecordDecoder;
     use csv_core::Reader;
-    use std::io::Cursor;
+    use std::io::{BufRead, BufReader, Cursor};
 
     #[test]
     fn test_basic() {
@@ -246,21 +282,66 @@ mod tests {
         ]
         .into_iter();
 
-        let cursor = Cursor::new(csv.as_bytes());
-        let mut reader = RecordReader::new(cursor, Reader::new(), 3);
+        let mut reader = BufReader::with_capacity(3, Cursor::new(csv.as_bytes()));
+        let mut decoder = RecordDecoder::new(Reader::new(), 3);
 
         loop {
-            let b = reader.read(3).unwrap();
-            if b.is_empty() {
+            let to_read = 3;
+            let mut read = 0;
+            loop {
+                let buf = reader.fill_buf().unwrap();
+                let (records, bytes) = decoder.decode(buf, to_read - read).unwrap();
+
+                reader.consume(bytes);
+                read += records;
+
+                if read == to_read || bytes == 0 {
+                    break;
+                }
+            }
+            if read == 0 {
                 break;
             }
 
+            let b = decoder.flush().unwrap();
             b.iter().zip(&mut expected).for_each(|(record, expected)| {
                 let actual = (0..3)
                     .map(|field_idx| record.get(field_idx))
                     .collect::<Vec<_>>();
                 assert_eq!(actual, expected)
-            })
+            });
         }
+        assert!(expected.next().is_none());
+    }
+
+    #[test]
+    fn test_invalid_fields() {
+        let csv = "a,b\nb,c\na\n";
+        let mut decoder = RecordDecoder::new(Reader::new(), 2);
+        let err = decoder.decode(csv.as_bytes(), 4).unwrap_err().to_string();
+
+        let expected =
+            "Csv error: incorrect number of fields for line 3, expected 2 got 1";
+
+        assert_eq!(err, expected);
+
+        // Test with initial skip
+        let mut decoder = RecordDecoder::new(Reader::new(), 2);
+        let (skipped, bytes) = decoder.decode(csv.as_bytes(), 1).unwrap();
+        assert_eq!(skipped, 1);
+        decoder.clear();
+
+        let remaining = &csv.as_bytes()[bytes..];
+        let err = decoder.decode(remaining, 3).unwrap_err().to_string();
+        assert_eq!(err, expected);
+    }
+
+    #[test]
+    fn test_skip_insufficient_rows() {
+        let csv = "a\nv\n";
+        let mut decoder = RecordDecoder::new(Reader::new(), 1);
+        let (read, bytes) = decoder.decode(csv.as_bytes(), 3).unwrap();
+        assert_eq!(read, 2);
+        assert_eq!(bytes, csv.len());
     }
 }

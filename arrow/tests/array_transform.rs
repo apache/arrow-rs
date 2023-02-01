@@ -433,7 +433,8 @@ fn test_struct_nulls() {
     let data = mutable.freeze();
     let array = StructArray::from(data);
 
-    let expected_string = Arc::new(StringArray::from(vec![None, None])) as ArrayRef;
+    let v: Vec<Option<&str>> = vec![None, None];
+    let expected_string = Arc::new(StringArray::from(v)) as ArrayRef;
     let expected_int = Arc::new(Int32Array::from(vec![Some(2), None])) as ArrayRef;
 
     let expected =

@@ -15,18 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Support for reading [`Index`] and [`PageLocation`] from parquet metadata.
+
 use crate::basic::Type;
 use crate::data_type::Int96;
 use crate::errors::ParquetError;
 use crate::file::metadata::ColumnChunkMetaData;
-use crate::file::page_index::index::{BooleanIndex, ByteArrayIndex, Index, NativeIndex};
+use crate::file::page_index::index::{Index, NativeIndex};
 use crate::file::reader::ChunkReader;
 use crate::format::{ColumnIndex, OffsetIndex, PageLocation};
 use std::io::{Cursor, Read};
 use thrift::protocol::{TCompactInputProtocol, TSerializable};
 
-/// Read on row group's all columns indexes and change into  [`Index`]
-/// If not the format not available return an empty vector.
+/// Reads per-column [`Index`] for all columns of a row group by
+/// decoding [`ColumnIndex`] .
+///
+/// Returns a vector of `index[column_number]`.
+///
+/// Returns an empty vector if this row group does not contain a
+/// [`ColumnIndex`].
+///
+/// See [Column Index Documentation] for more details.
+///
+/// [Column Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub fn read_columns_indexes<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
@@ -60,8 +71,17 @@ pub fn read_columns_indexes<R: ChunkReader>(
         .collect()
 }
 
-/// Read on row group's all indexes and change into  [`Index`]
-/// If not the format not available return an empty vector.
+/// Reads per-page [`PageLocation`] for all columns of a row group by
+/// decoding the [`OffsetIndex`].
+///
+/// Returns a vector of `location[column_number][page_number]`
+///
+/// Return an empty vector if this row group does not contain an
+/// [`OffsetIndex]`.
+///
+/// See [Column Index Documentation] for more details.
+///
+/// [Column Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub fn read_pages_locations<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
@@ -154,17 +174,17 @@ pub(crate) fn deserialize_column_index(
     let index = ColumnIndex::read_from_in_protocol(&mut prot)?;
 
     let index = match column_type {
-        Type::BOOLEAN => Index::BOOLEAN(BooleanIndex::try_new(index)?),
+        Type::BOOLEAN => {
+            Index::BOOLEAN(NativeIndex::<bool>::try_new(index, column_type)?)
+        }
         Type::INT32 => Index::INT32(NativeIndex::<i32>::try_new(index, column_type)?),
         Type::INT64 => Index::INT64(NativeIndex::<i64>::try_new(index, column_type)?),
         Type::INT96 => Index::INT96(NativeIndex::<Int96>::try_new(index, column_type)?),
         Type::FLOAT => Index::FLOAT(NativeIndex::<f32>::try_new(index, column_type)?),
         Type::DOUBLE => Index::DOUBLE(NativeIndex::<f64>::try_new(index, column_type)?),
-        Type::BYTE_ARRAY => {
-            Index::BYTE_ARRAY(ByteArrayIndex::try_new(index, column_type)?)
-        }
+        Type::BYTE_ARRAY => Index::BYTE_ARRAY(NativeIndex::try_new(index, column_type)?),
         Type::FIXED_LEN_BYTE_ARRAY => {
-            Index::FIXED_LEN_BYTE_ARRAY(ByteArrayIndex::try_new(index, column_type)?)
+            Index::FIXED_LEN_BYTE_ARRAY(NativeIndex::try_new(index, column_type)?)
         }
     };
 

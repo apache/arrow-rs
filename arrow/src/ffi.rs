@@ -345,8 +345,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         (DataType::Timestamp(..), _) |
         (DataType::Duration(..), _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{:?}\" expects 2 buffers, but requested {}. Please verify that the C data interface is correctly implemented.",
-                data_type, i
+                "The datatype \"{data_type:?}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
         (DataType::FixedSizeBinary(num_bytes), 1) => size_of::<u8>() * (*num_bytes as usize) * 8,
@@ -356,8 +355,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         },
         (DataType::FixedSizeBinary(_), _) | (DataType::FixedSizeList(_, _), _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{:?}\" expects 2 buffers, but requested {}. Please verify that the C data interface is correctly implemented.",
-                data_type, i
+                "The datatype \"{data_type:?}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         },
         // Variable-size list and map have one i32 buffer.
@@ -367,14 +365,12 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         (DataType::Utf8, 2) | (DataType::Binary, 2) => size_of::<u8>() * 8,
         (DataType::List(_), _) | (DataType::Map(_, _), _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{:?}\" expects 2 buffers, but requested {}. Please verify that the C data interface is correctly implemented.",
-                data_type, i
+                "The datatype \"{data_type:?}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
         (DataType::Utf8, _) | (DataType::Binary, _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{:?}\" expects 3 buffers, but requested {}. Please verify that the C data interface is correctly implemented.",
-                data_type, i
+                "The datatype \"{data_type:?}\" expects 3 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
         // Variable-sized binaries: have two buffers.
@@ -383,8 +379,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) | (DataType::LargeList(_), 2)=> size_of::<u8>() * 8,
         (DataType::LargeUtf8, _) | (DataType::LargeBinary, _) | (DataType::LargeList(_), _)=> {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{:?}\" expects 3 buffers, but requested {}. Please verify that the C data interface is correctly implemented.",
-                data_type, i
+                "The datatype \"{data_type:?}\" expects 3 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
         // type ids. UnionArray doesn't have null bitmap so buffer index begins with 0.
@@ -393,28 +388,24 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         (DataType::Union(_, _, UnionMode::Dense), 1) => size_of::<i32>() * 8,
         (DataType::Union(_, _, UnionMode::Sparse), _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{:?}\" expects 1 buffer, but requested {}. Please verify that the C data interface is correctly implemented.",
-                data_type, i
+                "The datatype \"{data_type:?}\" expects 1 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
         (DataType::Union(_, _, UnionMode::Dense), _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{:?}\" expects 2 buffer, but requested {}. Please verify that the C data interface is correctly implemented.",
-                data_type, i
+                "The datatype \"{data_type:?}\" expects 2 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
         (_, 0) => {
             // We don't call this `bit_width` to compute buffer length for null buffer. If any types that don't have null buffer like
             // UnionArray, they should be handled above.
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{:?}\" doesn't expect buffer at index 0. Please verify that the C data interface is correctly implemented.",
-                data_type
+                "The datatype \"{data_type:?}\" doesn't expect buffer at index 0. Please verify that the C data interface is correctly implemented."
             )))
         }
         _ => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{:?}\" is still not supported in Rust implementation",
-                data_type
+                "The datatype \"{data_type:?}\" is still not supported in Rust implementation"
             )))
         }
     })
@@ -708,8 +699,7 @@ pub trait ArrowArrayRef {
                         Ok(MutableBuffer::new(0).into())
                     }
                     None => Err(ArrowError::CDataInterface(format!(
-                        "The external buffer at position {} is null.",
-                        index
+                        "The external buffer at position {index} is null."
                     ))),
                 }
             })

@@ -365,12 +365,11 @@ mod tests {
             let source_variant = source.downcast_ref::<Error>();
             assert!(
                 matches!(source_variant, Some(Error::NoDataInMemory { .. }),),
-                "got: {:?}",
-                source_variant
+                "got: {source_variant:?}"
             );
             assert_eq!(path, NON_EXISTENT_NAME);
         } else {
-            panic!("unexpected error type: {:?}", err);
+            panic!("unexpected error type: {err:?}");
         }
     }
 }

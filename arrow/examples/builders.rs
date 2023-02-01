@@ -52,17 +52,17 @@ fn main() {
     // Build the `PrimitiveArray`
     let primitive_array = primitive_array_builder.finish();
     // Long arrays will have an ellipsis printed in the middle
-    println!("{:?}", primitive_array);
+    println!("{primitive_array:?}");
 
     // Arrays can also be built from `Vec<Option<T>>`. `None`
     // represents a null value in the array.
     let date_array: PrimitiveArray<Date64Type> =
         vec![Some(1550902545147), None, Some(1550902545147)].into();
-    println!("{:?}", date_array);
+    println!("{date_array:?}");
 
     let time_array: PrimitiveArray<Time64NanosecondType> =
         (0..100).collect::<Vec<i64>>().into();
-    println!("{:?}", time_array);
+    println!("{time_array:?}");
 
     // We can build arrays directly from the underlying buffers.
 
@@ -83,7 +83,7 @@ fn main() {
         .build()
         .unwrap();
     let binary_array = StringArray::from(array_data);
-    println!("{:?}", binary_array);
+    println!("{binary_array:?}");
 
     // ListArrays are similar to ByteArrays: they are arrays of other
     // arrays, where each child array is a slice of the underlying
@@ -109,7 +109,7 @@ fn main() {
         .unwrap();
     let list_array = ListArray::from(list_data);
 
-    println!("{:?}", list_array);
+    println!("{list_array:?}");
 
     // StructArrays are arrays of tuples, where each tuple element is
     // from a child array. (In other words, they're like zipping
@@ -128,5 +128,5 @@ fn main() {
             Arc::new(Int32Array::from(vec![42, 28, 19, 31])),
         ),
     ]);
-    println!("{:?}", struct_array);
+    println!("{struct_array:?}");
 }

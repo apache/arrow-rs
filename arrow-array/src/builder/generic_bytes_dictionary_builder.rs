@@ -40,10 +40,10 @@ where
     state: ahash::RandomState,
     /// Used to provide a lookup from string value to key type
     ///
-    /// Note: K's hash implementation is not used, instead the raw entry
+    /// Note: usize's hash implementation is not used, instead the raw entry
     /// API is used to store keys w.r.t the hash of the strings themselves
     ///
-    dedup: HashMap<K::Native, (), ()>,
+    dedup: HashMap<usize, (), ()>,
 
     keys_builder: PrimitiveBuilder<K>,
     values_builder: GenericByteBuilder<T>,
@@ -133,23 +133,22 @@ where
         let mut values_builder =
             GenericByteBuilder::<T>::with_capacity(dict_len, values_len);
 
+        K::Native::from_usize(dictionary_values.len())
+            .ok_or(ArrowError::DictionaryKeyOverflowError)?;
+
         for (idx, maybe_value) in dictionary_values.iter().enumerate() {
             match maybe_value {
                 Some(value) => {
                     let value_bytes: &[u8] = value.as_ref();
                     let hash = state.hash_one(value_bytes);
 
-                    let key = K::Native::from_usize(idx)
-                        .ok_or(ArrowError::DictionaryKeyOverflowError)?;
-
-                    let entry =
-                        dedup.raw_entry_mut().from_hash(hash, |key: &K::Native| {
-                            value_bytes == get_bytes(&values_builder, key)
-                        });
+                    let entry = dedup.raw_entry_mut().from_hash(hash, |idx: &usize| {
+                        value_bytes == get_bytes(&values_builder, *idx)
+                    });
 
                     if let RawEntryMut::Vacant(v) = entry {
-                        v.insert_with_hasher(hash, key, (), |key| {
-                            state.hash_one(get_bytes(&values_builder, key))
+                        v.insert_with_hasher(hash, idx, (), |idx| {
+                            state.hash_one(get_bytes(&values_builder, *idx))
                         });
                     }
 
@@ -214,7 +213,7 @@ where
     K: ArrowDictionaryKeyType,
     T: ByteArrayType,
 {
-    /// Append a primitive value to the array. Return an existing index
+    /// Append a value to the array. Return an existing index
     /// if already present in the values array or a new index if the
     /// value is appended to the values array.
     ///
@@ -233,21 +232,20 @@ where
         let entry = self
             .dedup
             .raw_entry_mut()
-            .from_hash(hash, |key| value_bytes == get_bytes(storage, key));
+            .from_hash(hash, |idx| value_bytes == get_bytes(storage, *idx));
 
         let key = match entry {
-            RawEntryMut::Occupied(entry) => *entry.into_key(),
+            RawEntryMut::Occupied(entry) => K::Native::usize_as(*entry.into_key()),
             RawEntryMut::Vacant(entry) => {
-                let index = storage.len();
+                let idx = storage.len();
                 storage.append_value(value);
-                let key = K::Native::from_usize(index)
-                    .ok_or(ArrowError::DictionaryKeyOverflowError)?;
 
-                *entry
-                    .insert_with_hasher(hash, key, (), |key| {
-                        state.hash_one(get_bytes(storage, key))
-                    })
-                    .0
+                entry.insert_with_hasher(hash, idx, (), |idx| {
+                    state.hash_one(get_bytes(storage, *idx))
+                });
+
+                K::Native::from_usize(idx)
+                    .ok_or(ArrowError::DictionaryKeyOverflowError)?
             }
         };
         self.keys_builder.append_value(key);
@@ -255,10 +253,32 @@ where
         Ok(key)
     }
 
+    /// Infallibly append a value to this builder
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
+        self.append(value).expect("dictionary key overflow");
+    }
+
     /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
         self.keys_builder.append_null()
+    }
+
+    /// Append an `Option` value into the builder
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    #[inline]
+    pub fn append_option(&mut self, value: Option<impl AsRef<T::Native>>) {
+        match value {
+            None => self.append_null(),
+            Some(v) => self.append_value(v),
+        };
     }
 
     /// Builds the `DictionaryArray` and reset this builder.
@@ -268,7 +288,7 @@ where
         let keys = self.keys_builder.finish();
 
         let data_type =
-            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(DataType::Utf8));
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
 
         let builder = keys
             .into_data()
@@ -285,7 +305,7 @@ where
         let keys = self.keys_builder.finish_cloned();
 
         let data_type =
-            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(DataType::Utf8));
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
 
         let builder = keys
             .into_data()
@@ -297,14 +317,21 @@ where
     }
 }
 
-fn get_bytes<'a, K: ArrowNativeType, T: ByteArrayType>(
-    values: &'a GenericByteBuilder<T>,
-    key: &K,
-) -> &'a [u8] {
+impl<K: ArrowDictionaryKeyType, T: ByteArrayType, V: AsRef<T::Native>> Extend<Option<V>>
+    for GenericByteDictionaryBuilder<K, T>
+{
+    #[inline]
+    fn extend<I: IntoIterator<Item = Option<V>>>(&mut self, iter: I) {
+        for v in iter {
+            self.append_option(v)
+        }
+    }
+}
+
+fn get_bytes<T: ByteArrayType>(values: &GenericByteBuilder<T>, idx: usize) -> &[u8] {
     let offsets = values.offsets_slice();
     let values = values.values_slice();
 
-    let idx = key.as_usize();
     let end_offset = offsets[idx + 1].as_usize();
     let start_offset = offsets[idx].as_usize();
 
@@ -405,7 +432,7 @@ mod tests {
 
     use crate::array::Array;
     use crate::array::Int8Array;
-    use crate::types::{Int16Type, Int8Type};
+    use crate::types::{Int16Type, Int32Type, Int8Type, Utf8Type};
     use crate::{BinaryArray, StringArray};
 
     fn test_bytes_dictionary_builder<T>(values: Vec<&T::Native>)
@@ -608,8 +635,9 @@ mod tests {
 
     #[test]
     fn test_string_dictionary_builder_with_reserved_null_value() {
+        let v: Vec<Option<&str>> = vec![None];
         test_bytes_dictionary_builder_with_reserved_null_value::<GenericStringType<i32>>(
-            StringArray::from(vec![None]),
+            StringArray::from(v),
             vec!["abc", "def"],
         );
     }
@@ -621,5 +649,15 @@ mod tests {
             BinaryArray::from(values),
             vec![b"abc", b"def"],
         );
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
+        builder.extend(["a", "b", "c", "a", "b", "c"].into_iter().map(Some));
+        builder.extend(["c", "d", "a"].into_iter().map(Some));
+        let dict = builder.finish();
+        assert_eq!(dict.keys().values(), &[0, 1, 2, 0, 1, 2, 2, 3, 0]);
+        assert_eq!(dict.values().len(), 4);
     }
 }

@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use bytes::Bytes;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::flight_service_client::FlightServiceClient;
@@ -43,7 +44,6 @@ use arrow_ipc::{root_as_message, MessageHeader};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
 use futures::{stream, TryStreamExt};
 use prost::Message;
-use tokio::sync::{Mutex, MutexGuard};
 #[cfg(feature = "tls")]
 use tonic::transport::{Certificate, ClientTlsConfig, Identity};
 use tonic::transport::{Channel, Endpoint};
@@ -54,7 +54,7 @@ use tonic::Streaming;
 #[derive(Debug, Clone)]
 pub struct FlightSqlServiceClient {
     token: Option<String>,
-    flight_client: Arc<Mutex<FlightServiceClient<Channel>>>,
+    flight_client: FlightServiceClient<Channel>,
 }
 
 /// A FlightSql protocol client that can run queries against FlightSql servers
@@ -90,7 +90,7 @@ impl FlightSqlServiceClient {
         host: &str,
         port: u16,
     ) -> Result<Self, ArrowError> {
-        let addr = format!("https://{}:{}", host, port);
+        let addr = format!("https://{host}:{port}");
 
         let endpoint = Endpoint::new(addr)
             .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
@@ -112,7 +112,7 @@ impl FlightSqlServiceClient {
             .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?;
 
         let channel = endpoint.connect().await.map_err(|e| {
-            ArrowError::IoError(format!("Cannot connect to endpoint: {}", e))
+            ArrowError::IoError(format!("Cannot connect to endpoint: {e}"))
         })?;
         Ok(Self::new(channel))
     }
@@ -122,16 +122,23 @@ impl FlightSqlServiceClient {
         let flight_client = FlightServiceClient::new(channel);
         FlightSqlServiceClient {
             token: None,
-            flight_client: Arc::new(Mutex::new(flight_client)),
+            flight_client,
         }
     }
 
-    fn mut_client(
-        &mut self,
-    ) -> Result<MutexGuard<FlightServiceClient<Channel>>, ArrowError> {
+    /// Return a reference to the underlying [`FlightServiceClient`]
+    pub fn inner(&self) -> &FlightServiceClient<Channel> {
+        &self.flight_client
+    }
+
+    /// Return a mutable reference to the underlying [`FlightServiceClient`]
+    pub fn inner_mut(&mut self) -> &mut FlightServiceClient<Channel> {
+        &mut self.flight_client
+    }
+
+    /// Consume this client and return the underlying [`FlightServiceClient`]
+    pub fn into_inner(self) -> FlightServiceClient<Channel> {
         self.flight_client
-            .try_lock()
-            .map_err(|_| ArrowError::IoError("Unable to lock client".to_string()))
     }
 
     async fn get_flight_info_for_command<M: ProstMessageExt>(
@@ -140,7 +147,7 @@ impl FlightSqlServiceClient {
     ) -> Result<FlightInfo, ArrowError> {
         let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
         let fi = self
-            .mut_client()?
+            .flight_client
             .get_flight_info(descriptor)
             .await
             .map_err(status_to_arrow_error)?
@@ -166,16 +173,16 @@ impl FlightSqlServiceClient {
             payload: Default::default(),
         };
         let mut req = tonic::Request::new(stream::iter(vec![cmd]));
-        let val = base64::encode(format!("{}:{}", username, password));
-        let val = format!("Basic {}", val)
+        let val = BASE64_STANDARD.encode(format!("{username}:{password}"));
+        let val = format!("Basic {val}")
             .parse()
             .map_err(|_| ArrowError::ParseError("Cannot parse header".to_string()))?;
         req.metadata_mut().insert("authorization", val);
         let resp = self
-            .mut_client()?
+            .flight_client
             .handshake(req)
             .await
-            .map_err(|e| ArrowError::IoError(format!("Can't handshake {}", e)))?;
+            .map_err(|e| ArrowError::IoError(format!("Can't handshake {e}")))?;
         if let Some(auth) = resp.metadata().get("authorization") {
             let auth = auth.to_str().map_err(|_| {
                 ArrowError::ParseError("Can't read auth header".to_string())
@@ -206,7 +213,7 @@ impl FlightSqlServiceClient {
         let cmd = CommandStatementUpdate { query };
         let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
         let mut result = self
-            .mut_client()?
+            .flight_client
             .do_put(stream::iter(vec![FlightData {
                 flight_descriptor: Some(descriptor),
                 ..Default::default()
@@ -245,7 +252,7 @@ impl FlightSqlServiceClient {
         ticket: Ticket,
     ) -> Result<Streaming<FlightData>, ArrowError> {
         Ok(self
-            .mut_client()?
+            .flight_client
             .do_get(ticket)
             .await
             .map_err(status_to_arrow_error)?
@@ -324,13 +331,13 @@ impl FlightSqlServiceClient {
         };
         let mut req = tonic::Request::new(action);
         if let Some(token) = &self.token {
-            let val = format!("Bearer {}", token).parse().map_err(|_| {
+            let val = format!("Bearer {token}").parse().map_err(|_| {
                 ArrowError::IoError("Statement already closed.".to_string())
             })?;
             req.metadata_mut().insert("authorization", val);
         }
         let mut result = self
-            .mut_client()?
+            .flight_client
             .do_action(req)
             .await
             .map_err(status_to_arrow_error)?
@@ -367,7 +374,7 @@ impl FlightSqlServiceClient {
 /// A PreparedStatement
 #[derive(Debug, Clone)]
 pub struct PreparedStatement<T> {
-    flight_client: Arc<Mutex<FlightServiceClient<T>>>,
+    flight_client: FlightServiceClient<T>,
     parameter_binding: Option<RecordBatch>,
     handle: Bytes,
     dataset_schema: Schema,
@@ -376,13 +383,13 @@ pub struct PreparedStatement<T> {
 
 impl PreparedStatement<Channel> {
     pub(crate) fn new(
-        client: Arc<Mutex<FlightServiceClient<Channel>>>,
+        flight_client: FlightServiceClient<Channel>,
         handle: impl Into<Bytes>,
         dataset_schema: Schema,
         parameter_schema: Schema,
     ) -> Self {
         PreparedStatement {
-            flight_client: client,
+            flight_client,
             parameter_binding: None,
             handle: handle.into(),
             dataset_schema,
@@ -397,7 +404,7 @@ impl PreparedStatement<Channel> {
         };
         let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
         let result = self
-            .mut_client()?
+            .flight_client
             .get_flight_info(descriptor)
             .await
             .map_err(status_to_arrow_error)?
@@ -412,7 +419,7 @@ impl PreparedStatement<Channel> {
         };
         let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
         let mut result = self
-            .mut_client()?
+            .flight_client
             .do_put(stream::iter(vec![FlightData {
                 flight_descriptor: Some(descriptor),
                 ..Default::default()
@@ -461,19 +468,11 @@ impl PreparedStatement<Channel> {
             body: cmd.as_any().encode_to_vec().into(),
         };
         let _ = self
-            .mut_client()?
+            .flight_client
             .do_action(action)
             .await
             .map_err(status_to_arrow_error)?;
         Ok(())
-    }
-
-    fn mut_client(
-        &mut self,
-    ) -> Result<MutexGuard<FlightServiceClient<Channel>>, ArrowError> {
-        self.flight_client
-            .try_lock()
-            .map_err(|_| ArrowError::IoError("Unable to lock client".to_string()))
     }
 }
 
@@ -482,7 +481,7 @@ fn decode_error_to_arrow_error(err: prost::DecodeError) -> ArrowError {
 }
 
 fn status_to_arrow_error(status: tonic::Status) -> ArrowError {
-    ArrowError::IoError(format!("{:?}", status))
+    ArrowError::IoError(format!("{status:?}"))
 }
 
 // A polymorphic structure to natively represent different types of data contained in `FlightData`
@@ -497,7 +496,7 @@ pub fn arrow_data_from_flight_data(
     arrow_schema_ref: &SchemaRef,
 ) -> Result<ArrowFlightData, ArrowError> {
     let ipc_message = root_as_message(&flight_data.data_header[..]).map_err(|err| {
-        ArrowError::ParseError(format!("Unable to get root as message: {:?}", err))
+        ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
     })?;
 
     match ipc_message.header_type() {

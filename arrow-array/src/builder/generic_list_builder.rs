@@ -111,6 +111,10 @@ where
     }
 
     /// Finish the current variable-length list array slot
+    ///
+    /// # Panics
+    ///
+    /// Panics if the length of [`Self::values`] exceeds `OffsetSize::MAX`
     #[inline]
     pub fn append(&mut self, is_valid: bool) {
         self.offsets_builder
@@ -178,10 +182,32 @@ where
     }
 }
 
+impl<O, B, V, E> Extend<Option<V>> for GenericListBuilder<O, B>
+where
+    O: OffsetSizeTrait,
+    B: ArrayBuilder + Extend<E>,
+    V: IntoIterator<Item = E>,
+{
+    #[inline]
+    fn extend<T: IntoIterator<Item = Option<V>>>(&mut self, iter: T) {
+        for v in iter {
+            match v {
+                Some(elements) => {
+                    self.values_builder.extend(elements);
+                    self.append(true);
+                }
+                None => self.append(false),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::builder::{Int32Builder, ListBuilder};
+    use crate::cast::as_primitive_array;
+    use crate::types::Int32Type;
     use crate::{Array, Int32Array};
     use arrow_buffer::Buffer;
     use arrow_schema::DataType;
@@ -363,5 +389,26 @@ mod tests {
             Buffer::from_slice_ref([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
             list_array.values().data().child_data()[0].buffers()[0].clone()
         );
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = ListBuilder::new(Int32Builder::new());
+        builder.extend([
+            Some(vec![Some(1), Some(2), Some(7), None]),
+            Some(vec![]),
+            Some(vec![Some(4), Some(5)]),
+            None,
+        ]);
+
+        let array = builder.finish();
+        assert_eq!(array.value_offsets(), [0, 4, 4, 6, 6]);
+        assert_eq!(array.null_count(), 1);
+        assert!(array.is_null(3));
+        let a_values = array.values();
+        let elements = as_primitive_array::<Int32Type>(a_values.as_ref());
+        assert_eq!(elements.values(), &[1, 2, 7, 0, 4, 5]);
+        assert_eq!(elements.null_count(), 1);
+        assert!(elements.is_null(3));
     }
 }

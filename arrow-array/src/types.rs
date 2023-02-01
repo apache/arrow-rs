@@ -240,6 +240,31 @@ impl ArrowDictionaryKeyType for UInt32Type {}
 
 impl ArrowDictionaryKeyType for UInt64Type {}
 
+mod run {
+    use super::*;
+
+    pub trait RunEndTypeSealed {}
+
+    impl RunEndTypeSealed for Int16Type {}
+
+    impl RunEndTypeSealed for Int32Type {}
+
+    impl RunEndTypeSealed for Int64Type {}
+}
+
+/// A subtype of primitive type that is used as run-ends index
+/// in `RunArray`.
+/// See <https://arrow.apache.org/docs/format/Columnar.html>
+///
+/// Note: The implementation of this trait is sealed to avoid accidental misuse.
+pub trait RunEndIndexType: ArrowPrimitiveType + run::RunEndTypeSealed {}
+
+impl RunEndIndexType for Int16Type {}
+
+impl RunEndIndexType for Int32Type {}
+
+impl RunEndIndexType for Int64Type {}
+
 /// A subtype of primitive type that represents temporal values.
 pub trait ArrowTemporalType: ArrowPrimitiveType {}
 
@@ -559,15 +584,15 @@ mod decimal {
     impl DecimalTypeSealed for Decimal256Type {}
 }
 
-/// A trait over the decimal types, used by [`DecimalArray`] to provide a generic
+/// A trait over the decimal types, used by [`PrimitiveArray`] to provide a generic
 /// implementation across the various decimal types
 ///
 /// Implemented by [`Decimal128Type`] and [`Decimal256Type`] for [`Decimal128Array`]
 /// and [`Decimal256Array`] respectively
 ///
-/// [`DecimalArray`]: [crate::array::DecimalArray]
-/// [`Decimal128Array`]: [crate::array::Decimal128Array]
-/// [`Decimal256Array`]: [crate::array::Decimal256Array]
+/// [`PrimitiveArray`]: crate::array::PrimitiveArray
+/// [`Decimal128Array`]: crate::array::Decimal128Array
+/// [`Decimal256Array`]: crate::array::Decimal256Array
 pub trait DecimalType:
     'static + Send + Sync + ArrowPrimitiveType + decimal::DecimalTypeSealed
 {
@@ -663,11 +688,11 @@ fn format_decimal_str(value_str: &str, precision: usize, scale: i8) -> String {
         value_str.to_string()
     } else if scale < 0 {
         let padding = value_str.len() + scale.unsigned_abs() as usize;
-        format!("{:0<width$}", value_str, width = padding)
+        format!("{value_str:0<padding$}")
     } else if rest.len() > scale as usize {
         // Decimal separator is in the middle of the string
         let (whole, decimal) = value_str.split_at(value_str.len() - scale as usize);
-        format!("{}.{}", whole, decimal)
+        format!("{whole}.{decimal}")
     } else {
         // String has to be padded
         format!("{}0.{:0>width$}", sign, rest, width = scale as usize)
@@ -767,6 +792,8 @@ pub type LargeBinaryType = GenericBinaryType<i64>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_data::{layout, BufferSpec};
+    use std::mem::size_of;
 
     #[test]
     fn month_day_nano_should_roundtrip() {
@@ -802,5 +829,47 @@ mod tests {
     fn year_month_should_roundtrip_neg() {
         let value = IntervalYearMonthType::make_value(-1, -2);
         assert_eq!(IntervalYearMonthType::to_months(value), -14);
+    }
+
+    fn test_layout<T: ArrowPrimitiveType>() {
+        let layout = layout(&T::DATA_TYPE);
+
+        assert_eq!(layout.buffers.len(), 1);
+
+        let spec = &layout.buffers[0];
+        assert_eq!(
+            spec,
+            &BufferSpec::FixedWidth {
+                byte_width: size_of::<T::Native>()
+            }
+        );
+    }
+
+    #[test]
+    fn test_layouts() {
+        test_layout::<Int8Type>();
+        test_layout::<Int16Type>();
+        test_layout::<Int32Type>();
+        test_layout::<Int64Type>();
+        test_layout::<UInt8Type>();
+        test_layout::<UInt16Type>();
+        test_layout::<UInt32Type>();
+        test_layout::<UInt64Type>();
+        test_layout::<Float16Type>();
+        test_layout::<Float32Type>();
+        test_layout::<Float64Type>();
+        test_layout::<TimestampSecondType>();
+        test_layout::<Date32Type>();
+        test_layout::<Date64Type>();
+        test_layout::<Time32SecondType>();
+        test_layout::<Time32MillisecondType>();
+        test_layout::<Time64MicrosecondType>();
+        test_layout::<Time64NanosecondType>();
+        test_layout::<IntervalMonthDayNanoType>();
+        test_layout::<IntervalDayTimeType>();
+        test_layout::<IntervalYearMonthType>();
+        test_layout::<DurationNanosecondType>();
+        test_layout::<DurationMicrosecondType>();
+        test_layout::<DurationMillisecondType>();
     }
 }

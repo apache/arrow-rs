@@ -351,7 +351,7 @@ fn get_all_types() -> Vec<DataType> {
     use DataType::*;
     let tz_name = String::from("America/New_York");
 
-    vec![
+    let mut types = vec![
         Null,
         Boolean,
         Int8,
@@ -409,17 +409,30 @@ fn get_all_types() -> Vec<DataType> {
             vec![0, 1],
             UnionMode::Dense,
         ),
-        Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
-        Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
-        Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
         Decimal128(38, 0),
-        Dictionary(Box::new(DataType::Int8), Box::new(Decimal128(38, 0))),
-        Dictionary(Box::new(DataType::Int16), Box::new(Decimal128(38, 0))),
-        Dictionary(Box::new(DataType::UInt32), Box::new(Decimal128(38, 0))),
-        Dictionary(Box::new(DataType::Int8), Box::new(Decimal256(76, 0))),
-        Dictionary(Box::new(DataType::Int16), Box::new(Decimal256(76, 0))),
-        Dictionary(Box::new(DataType::UInt32), Box::new(Decimal256(76, 0))),
-    ]
+    ];
+
+    let dictionary_key_types =
+        vec![Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64];
+
+    let mut dictionary_types = dictionary_key_types
+        .into_iter()
+        .flat_map(|key_type| {
+            vec![
+                Dictionary(Box::new(key_type.clone()), Box::new(Int32)),
+                Dictionary(Box::new(key_type.clone()), Box::new(Utf8)),
+                Dictionary(Box::new(key_type.clone()), Box::new(LargeUtf8)),
+                Dictionary(Box::new(key_type.clone()), Box::new(Binary)),
+                Dictionary(Box::new(key_type.clone()), Box::new(LargeBinary)),
+                Dictionary(Box::new(key_type.clone()), Box::new(Decimal128(38, 0))),
+                Dictionary(Box::new(key_type), Box::new(Decimal256(76, 0))),
+            ]
+        })
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    types.append(&mut dictionary_types);
+    types
 }
 
 #[test]

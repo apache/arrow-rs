@@ -115,9 +115,10 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::FixedSizeBinary(len) => {
             Box::new(FixedSizeBinaryBuilder::with_capacity(capacity, *len))
         }
-        DataType::Decimal128(_precision, _scale) => {
-            Box::new(Decimal128Builder::with_capacity(capacity))
-        }
+        DataType::Decimal128(p, s) => Box::new(
+            Decimal128Builder::with_capacity(capacity)
+                .with_data_type(DataType::Decimal128(*p, *s)),
+        ),
         DataType::Utf8 => Box::new(StringBuilder::with_capacity(capacity, 1024)),
         DataType::Date32 => Box::new(Date32Builder::with_capacity(capacity)),
         DataType::Date64 => Box::new(Date64Builder::with_capacity(capacity)),
@@ -133,18 +134,22 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Time64(TimeUnit::Nanosecond) => {
             Box::new(Time64NanosecondBuilder::with_capacity(capacity))
         }
-        DataType::Timestamp(TimeUnit::Second, _) => {
-            Box::new(TimestampSecondBuilder::with_capacity(capacity))
-        }
-        DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            Box::new(TimestampMillisecondBuilder::with_capacity(capacity))
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            Box::new(TimestampMicrosecondBuilder::with_capacity(capacity))
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            Box::new(TimestampNanosecondBuilder::with_capacity(capacity))
-        }
+        DataType::Timestamp(TimeUnit::Second, tz) => Box::new(
+            TimestampSecondBuilder::with_capacity(capacity)
+                .with_data_type(DataType::Timestamp(TimeUnit::Second, tz.clone())),
+        ),
+        DataType::Timestamp(TimeUnit::Millisecond, tz) => Box::new(
+            TimestampMillisecondBuilder::with_capacity(capacity)
+                .with_data_type(DataType::Timestamp(TimeUnit::Millisecond, tz.clone())),
+        ),
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => Box::new(
+            TimestampMicrosecondBuilder::with_capacity(capacity)
+                .with_data_type(DataType::Timestamp(TimeUnit::Microsecond, tz.clone())),
+        ),
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => Box::new(
+            TimestampNanosecondBuilder::with_capacity(capacity)
+                .with_data_type(DataType::Timestamp(TimeUnit::Nanosecond, tz.clone())),
+        ),
         DataType::Interval(IntervalUnit::YearMonth) => {
             Box::new(IntervalYearMonthBuilder::with_capacity(capacity))
         }
@@ -169,7 +174,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Struct(fields) => {
             Box::new(StructBuilder::from_fields(fields.clone(), capacity))
         }
-        t => panic!("Data type {:?} is not currently supported", t),
+        t => panic!("Data type {t:?} is not currently supported"),
     }
 }
 
@@ -482,6 +487,33 @@ mod tests {
         assert!(builder.field_builder::<Float32Builder>(0).is_some());
         assert!(builder.field_builder::<StringBuilder>(1).is_some());
         assert!(builder.field_builder::<StructBuilder>(2).is_some());
+    }
+
+    #[test]
+    fn test_datatype_properties() {
+        let fields = vec![
+            Field::new("f1", DataType::Decimal128(1, 2), false),
+            Field::new(
+                "f2",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".to_string())),
+                false,
+            ),
+        ];
+        let mut builder = StructBuilder::from_fields(fields.clone(), 1);
+        builder
+            .field_builder::<Decimal128Builder>(0)
+            .unwrap()
+            .append_value(1);
+        builder
+            .field_builder::<TimestampMillisecondBuilder>(1)
+            .unwrap()
+            .append_value(1);
+        builder.append(true);
+        let array = builder.finish();
+
+        assert_eq!(array.data_type(), &DataType::Struct(fields.clone()));
+        assert_eq!(array.column(0).data_type(), fields[0].data_type());
+        assert_eq!(array.column(1).data_type(), fields[1].data_type());
     }
 
     #[test]

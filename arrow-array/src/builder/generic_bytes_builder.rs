@@ -81,13 +81,22 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         }
     }
 
+    #[inline]
+    fn next_offset(&self) -> T::Offset {
+        T::Offset::from_usize(self.value_builder.len())
+            .expect("byte array offset overflow")
+    }
+
     /// Appends a value into the builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of [`Self::values_slice`] would exceed `T::Offset::MAX`
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
         self.value_builder.append_slice(value.as_ref().as_ref());
         self.null_buffer_builder.append(true);
-        self.offsets_builder
-            .append(T::Offset::from_usize(self.value_builder.len()).unwrap());
+        self.offsets_builder.append(self.next_offset());
     }
 
     /// Append an `Option` value into the builder.
@@ -103,8 +112,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     #[inline]
     pub fn append_null(&mut self) {
         self.null_buffer_builder.append(false);
-        self.offsets_builder
-            .append(T::Offset::from_usize(self.value_builder.len()).unwrap());
+        self.offsets_builder.append(self.next_offset());
     }
 
     /// Builds the [`GenericByteArray`] and reset this builder.
@@ -116,8 +124,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .add_buffer(self.value_builder.finish())
             .null_bit_buffer(self.null_buffer_builder.finish());
 
-        self.offsets_builder
-            .append(T::Offset::from_usize(0).unwrap());
+        self.offsets_builder.append(self.next_offset());
         let array_data = unsafe { array_builder.build_unchecked() };
         GenericByteArray::from(array_data)
     }
@@ -213,6 +220,15 @@ impl<T: ByteArrayType> ArrayBuilder for GenericByteBuilder<T> {
     /// Returns the boxed builder as a box of `Any`.
     fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
         self
+    }
+}
+
+impl<T: ByteArrayType, V: AsRef<T::Native>> Extend<Option<V>> for GenericByteBuilder<T> {
+    #[inline]
+    fn extend<I: IntoIterator<Item = Option<V>>>(&mut self, iter: I) {
+        for v in iter {
+            self.append_option(v)
+        }
     }
 }
 
@@ -416,5 +432,15 @@ mod tests {
     #[test]
     fn test_large_string_array_builder_finish_cloned() {
         _test_generic_string_array_builder_finish_cloned::<i64>()
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = GenericStringBuilder::<i32>::new();
+        builder.extend(["a", "b", "c", "", "a", "b", "c"].into_iter().map(Some));
+        builder.extend(["d", "cupcakes", "hello"].into_iter().map(Some));
+        let array = builder.finish();
+        assert_eq!(array.value_offsets(), &[0, 1, 2, 3, 3, 4, 5, 6, 7, 15, 20]);
+        assert_eq!(array.value_data(), b"abcabcdcupcakeshello");
     }
 }

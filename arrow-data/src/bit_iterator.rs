@@ -186,14 +186,7 @@ pub fn try_for_each_valid_idx<E, F: FnMut(usize) -> Result<(), E>>(
     if valid_count == len {
         (0..len).try_for_each(f)
     } else if null_count != len {
-        let selectivity = valid_count as f64 / len as f64;
-        if selectivity > 0.8 {
-            BitSliceIterator::new(nulls.unwrap(), offset, len)
-                .flat_map(|(start, end)| start..end)
-                .try_for_each(f)
-        } else {
-            BitIndexIterator::new(nulls.unwrap(), offset, len).try_for_each(f)
-        }
+        BitIndexIterator::new(nulls.unwrap(), offset, len).try_for_each(f)
     } else {
         Ok(())
     }

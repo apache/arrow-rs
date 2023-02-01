@@ -189,13 +189,16 @@ impl ReadOptionsBuilder {
         self
     }
 
-    /// Enable page index in the reading option,
+    /// Enable reading the page index structures described in
+    /// "[Column Index] Layout to Support Page Skipping"
+    ///
+    /// [Column Index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_page_index(mut self) -> Self {
         self.enable_page_index = true;
         self
     }
 
-    /// Set the `ReaderProperties` configuration.
+    /// Set the [`ReaderProperties`] configuration.
     pub fn with_reader_properties(mut self, properties: ReaderProperties) -> Self {
         self.props = Some(properties);
         self
@@ -831,7 +834,10 @@ mod tests {
 
     use crate::basic::{self, ColumnOrder};
     use crate::data_type::private::ParquetValueType;
-    use crate::file::page_index::index::{ByteArrayIndex, Index, NativeIndex};
+    use crate::data_type::{AsBytes, FixedLenByteArrayType};
+    use crate::file::page_index::index::{Index, NativeIndex};
+    use crate::file::properties::WriterProperties;
+    use crate::file::writer::SerializedFileWriter;
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
     use crate::util::bit_util::from_le_slice;
@@ -918,7 +924,7 @@ mod tests {
 
                 r.into_iter().project(proj).unwrap()
             })
-            .map(|r| format!("{}", r))
+            .map(|r| format!("{r}"))
             .collect::<Vec<_>>()
             .join(",");
 
@@ -1363,8 +1369,8 @@ mod tests {
         let page0 = &index_in_pages[0];
         let min = page0.min.as_ref().unwrap();
         let max = page0.max.as_ref().unwrap();
-        assert_eq!("Hello", std::str::from_utf8(min.as_slice()).unwrap());
-        assert_eq!("today", std::str::from_utf8(max.as_slice()).unwrap());
+        assert_eq!(b"Hello", min.as_bytes());
+        assert_eq!(b"today", max.as_bytes());
 
         let offset_indexes = metadata.offset_indexes().unwrap();
         // only one row group
@@ -1502,7 +1508,7 @@ mod tests {
         //col9->date_string_col: BINARY UNCOMPRESSED DO:0 FPO:332847 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 01/01/09, max: 12/31/10, num_nulls: 0]
         assert!(!&page_indexes[0][8].is_sorted());
         if let Index::BYTE_ARRAY(index) = &page_indexes[0][8] {
-            check_bytes_page_index(
+            check_native_page_index(
                 index,
                 974,
                 get_row_group_min_max_bytes(row_group_metadata, 8),
@@ -1515,7 +1521,7 @@ mod tests {
         //col10->string_col: BINARY UNCOMPRESSED DO:0 FPO:444795 SZ:45298/45298/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
         assert!(&page_indexes[0][9].is_sorted());
         if let Index::BYTE_ARRAY(index) = &page_indexes[0][9] {
-            check_bytes_page_index(
+            check_native_page_index(
                 index,
                 352,
                 get_row_group_min_max_bytes(row_group_metadata, 9),
@@ -1572,20 +1578,6 @@ mod tests {
         row_group_index.indexes.iter().all(|x| {
             x.min.as_ref().unwrap() >= &from_le_slice::<T>(min_max.0)
                 && x.max.as_ref().unwrap() <= &from_le_slice::<T>(min_max.1)
-        });
-    }
-
-    fn check_bytes_page_index(
-        row_group_index: &ByteArrayIndex,
-        page_size: usize,
-        min_max: (&[u8], &[u8]),
-        boundary_order: BoundaryOrder,
-    ) {
-        assert_eq!(row_group_index.indexes.len(), page_size);
-        assert_eq!(row_group_index.boundary_order, boundary_order);
-        row_group_index.indexes.iter().all(|x| {
-            x.min.as_ref().unwrap().as_slice() >= min_max.0
-                && x.max.as_ref().unwrap().as_slice() <= min_max.1
         });
     }
 
@@ -1741,5 +1733,58 @@ mod tests {
         assert!(column_page_reader.get_next_page().unwrap().is_none());
 
         assert_eq!(vec.len(), 352);
+    }
+
+    #[test]
+    fn test_fixed_length_index() {
+        let message_type = "
+        message test_schema {
+          OPTIONAL FIXED_LEN_BYTE_ARRAY (11) value (DECIMAL(25,2));
+        }
+        ";
+
+        let schema = parse_message_type(message_type).unwrap();
+        let mut out = Vec::with_capacity(1024);
+        let mut writer = SerializedFileWriter::new(
+            &mut out,
+            Arc::new(schema),
+            Arc::new(WriterProperties::builder().build()),
+        )
+        .unwrap();
+
+        let mut r = writer.next_row_group().unwrap();
+        let mut c = r.next_column().unwrap().unwrap();
+        c.typed::<FixedLenByteArrayType>()
+            .write_batch(
+                &[vec![0; 11].into(), vec![5; 11].into(), vec![3; 11].into()],
+                Some(&[1, 1, 0, 1]),
+                None,
+            )
+            .unwrap();
+        c.close().unwrap();
+        r.close().unwrap();
+        writer.close().unwrap();
+
+        let b = Bytes::from(out);
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(b, options).unwrap();
+        let index = reader.metadata().page_indexes().unwrap();
+
+        // 1 row group
+        assert_eq!(index.len(), 1);
+        let c = &index[0];
+        // 1 column
+        assert_eq!(c.len(), 1);
+
+        match &c[0] {
+            Index::FIXED_LEN_BYTE_ARRAY(v) => {
+                assert_eq!(v.indexes.len(), 1);
+                let page_idx = &v.indexes[0];
+                assert_eq!(page_idx.null_count.unwrap(), 1);
+                assert_eq!(page_idx.min.as_ref().unwrap().as_ref(), &[0; 11]);
+                assert_eq!(page_idx.max.as_ref().unwrap().as_ref(), &[5; 11]);
+            }
+            _ => unreachable!(),
+        }
     }
 }

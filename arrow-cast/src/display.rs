@@ -27,6 +27,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
+use chrono::prelude::SecondsFormat;
 
 macro_rules! make_string {
     ($array_type:ty, $column: ident, $row: ident) => {{
@@ -66,20 +67,29 @@ macro_rules! make_string_interval_day_time {
         let days_parts: i32 = ((value & 0xFFFFFFFF00000000) >> 32) as i32;
         let milliseconds_part: i32 = (value & 0xFFFFFFFF) as i32;
 
-        let secs = milliseconds_part / 1000;
+        let secs = milliseconds_part / 1_000;
         let mins = secs / 60;
         let hours = mins / 60;
 
         let secs = secs - (mins * 60);
         let mins = mins - (hours * 60);
 
+        let milliseconds = milliseconds_part % 1_000;
+
+        let secs_sign = if secs < 0 || milliseconds < 0 {
+            "-"
+        } else {
+            ""
+        };
+
         Ok(format!(
-            "0 years 0 mons {} days {} hours {} mins {}.{:03} secs",
+            "0 years 0 mons {} days {} hours {} mins {}{}.{:03} secs",
             days_parts,
             hours,
             mins,
-            secs,
-            (milliseconds_part % 1000),
+            secs_sign,
+            secs.abs(),
+            milliseconds.abs(),
         ))
     }};
 }
@@ -98,21 +108,26 @@ macro_rules! make_string_interval_month_day_nano {
         let days_part: i32 = ((value & 0xFFFFFFFF0000000000000000) >> 64) as i32;
         let nanoseconds_part: i64 = (value & 0xFFFFFFFFFFFFFFFF) as i64;
 
-        let secs = nanoseconds_part / 1000000000;
+        let secs = nanoseconds_part / 1_000_000_000;
         let mins = secs / 60;
         let hours = mins / 60;
 
         let secs = secs - (mins * 60);
         let mins = mins - (hours * 60);
 
+        let nanoseconds = nanoseconds_part % 1_000_000_000;
+
+        let secs_sign = if secs < 0 || nanoseconds < 0 { "-" } else { "" };
+
         Ok(format!(
-            "0 years {} mons {} days {} hours {} mins {}.{:09} secs",
+            "0 years {} mons {} days {} hours {} mins {}{}.{:09} secs",
             months_part,
             days_part,
             hours,
             mins,
-            secs,
-            (nanoseconds_part % 1000000000),
+            secs_sign,
+            secs.abs(),
+            nanoseconds.abs(),
         ))
     }};
 }
@@ -157,7 +172,7 @@ macro_rules! make_string_datetime_with_tz {
         let s = match $tz_string.parse::<Tz>() {
             Ok(tz) => array
                 .value_as_datetime_with_tz($row, tz)
-                .map(|d| format!("{}", d.to_rfc3339()))
+                .map(|d| format!("{}", d.to_rfc3339_opts(SecondsFormat::AutoSi, true)))
                 .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()),
             Err(_) => array
                 .value_as_datetime($row)
@@ -528,8 +543,7 @@ fn union_to_string(
     let type_id = list.type_id(row);
     let field_idx = type_ids.iter().position(|t| t == &type_id).ok_or_else(|| {
         ArrowError::InvalidArgumentError(format!(
-            "Repl error: could not get field name for type id: {} in union array.",
-            type_id,
+            "Repl error: could not get field name for type id: {type_id} in union array.",
         ))
     })?;
     let name = fields.get(field_idx).unwrap().name();
@@ -542,7 +556,7 @@ fn union_to_string(
         },
     )?;
 
-    Ok(format!("{{{}={}}}", name, value))
+    Ok(format!("{{{name}={value}}}"))
 }
 /// Converts the value of the dictionary array at `row` to a String
 fn dict_array_value_to_string<K: ArrowPrimitiveType>(

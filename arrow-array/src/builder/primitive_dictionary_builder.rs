@@ -86,7 +86,7 @@ where
 {
     keys_builder: PrimitiveBuilder<K>,
     values_builder: PrimitiveBuilder<V>,
-    map: HashMap<Value<V::Native>, K::Native>,
+    map: HashMap<Value<V::Native>, usize>,
 }
 
 impl<K, V> Default for PrimitiveDictionaryBuilder<K, V>
@@ -180,23 +180,46 @@ where
         let key = match self.map.entry(Value(value)) {
             Entry::Vacant(vacant) => {
                 // Append new value.
-                let key = K::Native::from_usize(self.values_builder.len())
-                    .ok_or(ArrowError::DictionaryKeyOverflowError)?;
+                let key = self.values_builder.len();
                 self.values_builder.append_value(value);
                 vacant.insert(key);
-                key
+                K::Native::from_usize(key)
+                    .ok_or(ArrowError::DictionaryKeyOverflowError)?
             }
-            Entry::Occupied(o) => *o.get(),
+            Entry::Occupied(o) => K::Native::usize_as(*o.get()),
         };
 
         self.keys_builder.append_value(key);
         Ok(key)
     }
 
+    /// Infallibly append a value to this builder
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    #[inline]
+    pub fn append_value(&mut self, value: V::Native) {
+        self.append(value).expect("dictionary key overflow");
+    }
+
     /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
         self.keys_builder.append_null()
+    }
+
+    /// Append an `Option` value into the builder
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    #[inline]
+    pub fn append_option(&mut self, value: Option<V::Native>) {
+        match value {
+            None => self.append_null(),
+            Some(v) => self.append_value(v),
+        };
     }
 
     /// Builds the `DictionaryArray` and reset this builder.
@@ -235,6 +258,17 @@ where
     }
 }
 
+impl<K: ArrowPrimitiveType, P: ArrowPrimitiveType> Extend<Option<P::Native>>
+    for PrimitiveDictionaryBuilder<K, P>
+{
+    #[inline]
+    fn extend<T: IntoIterator<Item = Option<P::Native>>>(&mut self, iter: T) {
+        for v in iter {
+            self.append_option(v)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,7 +276,7 @@ mod tests {
     use crate::array::Array;
     use crate::array::UInt32Array;
     use crate::array::UInt8Array;
-    use crate::types::{UInt32Type, UInt8Type};
+    use crate::types::{Int32Type, UInt32Type, UInt8Type};
 
     #[test]
     fn test_primitive_dictionary_builder() {
@@ -268,6 +302,19 @@ mod tests {
         assert!(!array.is_null(2));
 
         assert_eq!(avs, &[12345678, 22345678]);
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([1, 2, 3, 1, 2, 3, 1, 2, 3].into_iter().map(Some));
+        builder.extend([4, 5, 1, 3, 1].into_iter().map(Some));
+        let dict = builder.finish();
+        assert_eq!(
+            dict.keys().values(),
+            &[0, 1, 2, 0, 1, 2, 0, 1, 2, 3, 4, 0, 2, 0]
+        );
+        assert_eq!(dict.values().len(), 5);
     }
 
     #[test]

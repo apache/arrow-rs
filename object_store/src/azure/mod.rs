@@ -27,6 +27,7 @@
 //! a way to drop old blocks. Instead unused blocks are automatically cleaned up
 //! after 7 days.
 use self::client::{BlockId, BlockList};
+use crate::client::token::TokenCache;
 use crate::{
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::Path,
@@ -34,6 +35,8 @@ use crate::{
     RetryConfig,
 };
 use async_trait::async_trait;
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
@@ -62,6 +65,8 @@ const EMULATOR_ACCOUNT: &str = "devstoreaccount1";
 /// <https://docs.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key>
 const EMULATOR_ACCOUNT_KEY: &str =
     "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
+
+const MSI_ENDPOINT_ENV_KEY: &str = "IDENTITY_ENDPOINT";
 
 /// A specialized `Error` for Azure object store-related errors
 #[derive(Debug, Snafu)]
@@ -322,7 +327,7 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
         buf: Vec<u8>,
         part_idx: usize,
     ) -> Result<UploadPart, io::Error> {
-        let content_id = format!("{:20}", part_idx);
+        let content_id = format!("{part_idx:20}");
         let block_id: BlockId = content_id.clone().into();
 
         self.client
@@ -330,7 +335,10 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
                 &self.location,
                 Some(buf.into()),
                 true,
-                &[("comp", "block"), ("blockid", &base64::encode(block_id))],
+                &[
+                    ("comp", "block"),
+                    ("blockid", &BASE64_STANDARD.encode(block_id)),
+                ],
             )
             .await?;
 
@@ -388,6 +396,10 @@ pub struct MicrosoftAzureBuilder {
     authority_host: Option<String>,
     url: Option<String>,
     use_emulator: bool,
+    msi_endpoint: Option<String>,
+    object_id: Option<String>,
+    msi_resource_id: Option<String>,
+    federated_token_file: Option<String>,
     retry_config: RetryConfig,
     client_options: ClientOptions,
 }
@@ -491,6 +503,36 @@ pub enum AzureConfigKey {
     /// - `object_store_use_emulator`
     /// - `use_emulator`
     UseEmulator,
+
+    /// Endpoint to request a imds managed identity token
+    ///
+    /// Supported keys:
+    /// - `azure_msi_endpoint`
+    /// - `azure_identity_endpoint`
+    /// - `identity_endpoint`
+    /// - `msi_endpoint`
+    MsiEndpoint,
+
+    /// Object id for use with managed identity authentication
+    ///
+    /// Supported keys:
+    /// - `azure_object_id`
+    /// - `object_id`
+    ObjectId,
+
+    /// Msi resource id for use with managed identity authentication
+    ///
+    /// Supported keys:
+    /// - `azure_msi_resource_id`
+    /// - `msi_resource_id`
+    MsiResourceId,
+
+    /// File containing token for Azure AD workload identity federation
+    ///
+    /// Supported keys:
+    /// - `azure_federated_token_file`
+    /// - `federated_token_file`
+    FederatedTokenFile,
 }
 
 impl AsRef<str> for AzureConfigKey {
@@ -504,6 +546,10 @@ impl AsRef<str> for AzureConfigKey {
             Self::SasKey => "azure_storage_sas_key",
             Self::Token => "azure_storage_token",
             Self::UseEmulator => "azure_storage_use_emulator",
+            Self::MsiEndpoint => "azure_msi_endpoint",
+            Self::ObjectId => "azure_object_id",
+            Self::MsiResourceId => "azure_msi_resource_id",
+            Self::FederatedTokenFile => "azure_federated_token_file",
         }
     }
 }
@@ -538,6 +584,15 @@ impl FromStr for AzureConfigKey {
             | "sas_token" => Ok(Self::SasKey),
             "azure_storage_token" | "bearer_token" | "token" => Ok(Self::Token),
             "azure_storage_use_emulator" | "use_emulator" => Ok(Self::UseEmulator),
+            "azure_msi_endpoint"
+            | "azure_identity_endpoint"
+            | "identity_endpoint"
+            | "msi_endpoint" => Ok(Self::MsiEndpoint),
+            "azure_object_id" | "object_id" => Ok(Self::ObjectId),
+            "azure_msi_resource_id" | "msi_resource_id" => Ok(Self::MsiResourceId),
+            "azure_federated_token_file" | "federated_token_file" => {
+                Ok(Self::FederatedTokenFile)
+            }
             _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
         }
     }
@@ -595,6 +650,10 @@ impl MicrosoftAzureBuilder {
                 builder.client_options.with_allow_http(str_is_truthy(&text));
         }
 
+        if let Ok(text) = std::env::var(MSI_ENDPOINT_ENV_KEY) {
+            builder = builder.with_msi_endpoint(text);
+        }
+
         builder
     }
 
@@ -639,6 +698,12 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::AuthorityId => self.tenant_id = Some(value.into()),
             AzureConfigKey::SasKey => self.sas_key = Some(value.into()),
             AzureConfigKey::Token => self.bearer_token = Some(value.into()),
+            AzureConfigKey::MsiEndpoint => self.msi_endpoint = Some(value.into()),
+            AzureConfigKey::ObjectId => self.object_id = Some(value.into()),
+            AzureConfigKey::MsiResourceId => self.msi_resource_id = Some(value.into()),
+            AzureConfigKey::FederatedTokenFile => {
+                self.federated_token_file = Some(value.into())
+            }
             AzureConfigKey::UseEmulator => {
                 self.use_emulator = str_is_truthy(&value.into())
             }
@@ -738,6 +803,24 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// Sets the client id for use in client secret or k8s federated credential flow
+    pub fn with_client_id(mut self, client_id: impl Into<String>) -> Self {
+        self.client_id = Some(client_id.into());
+        self
+    }
+
+    /// Sets the client secret for use in client secret flow
+    pub fn with_client_secret(mut self, client_secret: impl Into<String>) -> Self {
+        self.client_secret = Some(client_secret.into());
+        self
+    }
+
+    /// Sets the tenant id for use in client secret or k8s federated credential flow
+    pub fn with_tenant_id(mut self, tenant_id: impl Into<String>) -> Self {
+        self.tenant_id = Some(tenant_id.into());
+        self
+    }
+
     /// Set query pairs appended to the url for shared access signature authorization
     pub fn with_sas_authorization(
         mut self,
@@ -764,8 +847,8 @@ impl MicrosoftAzureBuilder {
     /// Sets an alternative authority host for OAuth based authorization
     /// common hosts for azure clouds are defined in [authority_hosts].
     /// Defaults to <https://login.microsoftonline.com>
-    pub fn with_authority_host(mut self, authority_host: String) -> Self {
-        self.authority_host = Some(authority_host);
+    pub fn with_authority_host(mut self, authority_host: impl Into<String>) -> Self {
+        self.authority_host = Some(authority_host.into());
         self
     }
 
@@ -784,6 +867,23 @@ impl MicrosoftAzureBuilder {
     /// Sets the client options, overriding any already set
     pub fn with_client_options(mut self, options: ClientOptions) -> Self {
         self.client_options = options;
+        self
+    }
+
+    /// Sets the endpoint for acquiring managed identity token
+    pub fn with_msi_endpoint(mut self, msi_endpoint: impl Into<String>) -> Self {
+        self.msi_endpoint = Some(msi_endpoint.into());
+        self
+    }
+
+    /// Sets a file path for acquiring azure federated identity token in k8s
+    ///
+    /// requires `client_id` and `tenant_id` to be set
+    pub fn with_federated_token_file(
+        mut self,
+        federated_token_file: impl Into<String>,
+    ) -> Self {
+        self.federated_token_file = Some(federated_token_file.into());
         self
     }
 
@@ -816,28 +916,54 @@ impl MicrosoftAzureBuilder {
             let url = Url::parse(&account_url)
                 .context(UnableToParseUrlSnafu { url: account_url })?;
             let credential = if let Some(bearer_token) = self.bearer_token {
-                Ok(credential::CredentialProvider::AccessKey(bearer_token))
+                credential::CredentialProvider::AccessKey(bearer_token)
             } else if let Some(access_key) = self.access_key {
-                Ok(credential::CredentialProvider::AccessKey(access_key))
+                credential::CredentialProvider::AccessKey(access_key)
+            } else if let (Some(client_id), Some(tenant_id), Some(federated_token_file)) =
+                (&self.client_id, &self.tenant_id, self.federated_token_file)
+            {
+                let client_credential = credential::WorkloadIdentityOAuthProvider::new(
+                    client_id,
+                    federated_token_file,
+                    tenant_id,
+                    self.authority_host,
+                );
+                credential::CredentialProvider::TokenCredential(
+                    TokenCache::default(),
+                    Box::new(client_credential),
+                )
             } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
-                (self.client_id, self.client_secret, self.tenant_id)
+                (&self.client_id, self.client_secret, &self.tenant_id)
             {
                 let client_credential = credential::ClientSecretOAuthProvider::new(
-                    client_id,
+                    client_id.clone(),
                     client_secret,
                     tenant_id,
                     self.authority_host,
                 );
-                Ok(credential::CredentialProvider::ClientSecret(
-                    client_credential,
-                ))
+                credential::CredentialProvider::TokenCredential(
+                    TokenCache::default(),
+                    Box::new(client_credential),
+                )
             } else if let Some(query_pairs) = self.sas_query_pairs {
-                Ok(credential::CredentialProvider::SASToken(query_pairs))
+                credential::CredentialProvider::SASToken(query_pairs)
             } else if let Some(sas) = self.sas_key {
-                Ok(credential::CredentialProvider::SASToken(split_sas(&sas)?))
+                credential::CredentialProvider::SASToken(split_sas(&sas)?)
             } else {
-                Err(Error::MissingCredentials {})
-            }?;
+                let client =
+                    self.client_options.clone().with_allow_http(true).client()?;
+                let msi_credential = credential::ImdsManagedIdentityOAuthProvider::new(
+                    self.client_id,
+                    self.object_id,
+                    self.msi_resource_id,
+                    self.msi_endpoint,
+                    client,
+                );
+                credential::CredentialProvider::TokenCredential(
+                    TokenCache::default(),
+                    Box::new(msi_credential),
+                )
+            };
             (false, url, credential, account_name)
         };
 
@@ -965,10 +1091,8 @@ mod tests {
 
     #[tokio::test]
     async fn azure_blob_test() {
-        let use_emulator = env::var("AZURE_USE_EMULATOR").is_ok();
         let integration = maybe_skip_integration!().build().unwrap();
-        // Azurite doesn't support listing with spaces - https://github.com/localstack/localstack/issues/6328
-        put_get_delete_list_opts(&integration, use_emulator).await;
+        put_get_delete_list_opts(&integration, false).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;

@@ -49,8 +49,7 @@ where
 {
     if file_size < 8 {
         return Err(ParquetError::EOF(format!(
-            "file size of {} is less than footer",
-            file_size
+            "file size of {file_size} is less than footer"
         )));
     }
 

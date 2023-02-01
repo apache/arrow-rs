@@ -37,7 +37,7 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     drop(csv);
 
     for batch_size in [128, 1024, 4096] {
-        c.bench_function(&format!("{} - {}", name, batch_size), |b| {
+        c.bench_function(&format!("{name} - {batch_size}"), |b| {
             b.iter(|| {
                 let cursor = Cursor::new(buf.as_slice());
                 let reader = csv::ReaderBuilder::new()

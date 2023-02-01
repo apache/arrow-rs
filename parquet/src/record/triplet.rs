@@ -200,8 +200,7 @@ impl<T: DataType> TypedTripletIter<T> {
     fn new(descr: ColumnDescPtr, batch_size: usize, column_reader: ColumnReader) -> Self {
         assert!(
             batch_size > 0,
-            "Expected positive batch size, found: {}",
-            batch_size
+            "Expected positive batch size, found: {batch_size}"
         );
 
         let max_def_level = descr.max_def_level();

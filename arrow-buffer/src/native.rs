@@ -58,6 +58,11 @@ pub trait ArrowNativeType:
     /// [`as`]: https://doc.rust-lang.org/reference/expressions/operator-expr.html#numeric-cast
     fn as_usize(self) -> usize;
 
+    /// Convert from usize according to the [`as`] operator
+    ///
+    /// [`as`]: https://doc.rust-lang.org/reference/expressions/operator-expr.html#numeric-cast
+    fn usize_as(i: usize) -> Self;
+
     /// Convert native type to usize.
     ///
     /// Returns `None` if [`Self`] is not an integer or conversion would result
@@ -119,6 +124,12 @@ macro_rules! native_integer {
                 self as _
             }
 
+            #[inline]
+            fn usize_as(i: usize) -> Self {
+                i as _
+            }
+
+
             $(
                 #[inline]
                 fn $from(v: $t) -> Option<Self> {
@@ -140,7 +151,7 @@ native_integer!(u32);
 native_integer!(u64);
 
 macro_rules! native_float {
-    ($t:ty, $s:ident, $as_usize: expr) => {
+    ($t:ty, $s:ident, $as_usize: expr, $i:ident, $usize_as: expr) => {
         impl private::Sealed for $t {}
         impl ArrowNativeType for $t {
             #[inline]
@@ -162,13 +173,18 @@ macro_rules! native_float {
             fn as_usize($s) -> usize {
                 $as_usize
             }
+
+            #[inline]
+            fn usize_as($i: usize) -> Self {
+                $usize_as
+            }
         }
     };
 }
 
-native_float!(f16, self, self.to_f32() as _);
-native_float!(f32, self, self as _);
-native_float!(f64, self, self as _);
+native_float!(f16, self, self.to_f32() as _, i, f16::from_f32(i as _));
+native_float!(f32, self, self as _, i, i as _);
+native_float!(f64, self, self as _, i, i as _);
 
 impl private::Sealed for i256 {}
 impl ArrowNativeType for i256 {
@@ -178,6 +194,10 @@ impl ArrowNativeType for i256 {
 
     fn as_usize(self) -> usize {
         self.to_parts().0 as usize
+    }
+
+    fn usize_as(i: usize) -> Self {
+        Self::from_parts(i as u128, 0)
     }
 
     fn to_usize(self) -> Option<usize> {

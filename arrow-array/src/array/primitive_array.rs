@@ -494,17 +494,6 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         let len = self.len();
         let null_count = self.null_count();
 
-        if null_count == 0 {
-            let values = self.values().iter().map(|v| op(*v));
-            // JUSTIFICATION
-            //  Benefit
-            //      ~60% speedup
-            //  Soundness
-            //      `values` is an iterator with a known size because arrays are sized.
-            let buffer = unsafe { Buffer::try_from_trusted_len_iter(values)? };
-            return Ok(unsafe { build_primitive_array(len, buffer, 0, None) });
-        }
-
         let null_buffer = data.null_buffer().map(|b| b.bit_slice(data.offset(), len));
         let mut buffer = BufferBuilder::<O::Native>::new(len);
         buffer.append_n_zeroed(len);
@@ -765,19 +754,19 @@ where
 impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let data_type = self.data_type();
-        write!(f, "PrimitiveArray<{:?}>\n[\n", data_type)?;
+        write!(f, "PrimitiveArray<{data_type:?}>\n[\n")?;
         print_long_array(self, f, |array, index, f| match data_type {
             DataType::Date32 | DataType::Date64 => {
                 let v = self.value(index).to_isize().unwrap() as i64;
                 match as_date::<T>(v) {
-                    Some(date) => write!(f, "{:?}", date),
+                    Some(date) => write!(f, "{date:?}"),
                     None => write!(f, "null"),
                 }
             }
             DataType::Time32(_) | DataType::Time64(_) => {
                 let v = self.value(index).to_isize().unwrap() as i64;
                 match as_time::<T>(v) {
-                    Some(time) => write!(f, "{:?}", time),
+                    Some(time) => write!(f, "{time:?}"),
                     None => write!(f, "null"),
                 }
             }
@@ -796,8 +785,7 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
                             Err(_) => match as_datetime::<T>(v) {
                                 Some(datetime) => write!(
                                     f,
-                                    "{:?} (Unknown Time Zone '{}')",
-                                    datetime, tz_string
+                                    "{datetime:?} (Unknown Time Zone '{tz_string}')"
                                 ),
                                 None => write!(f, "null"),
                             },
@@ -805,7 +793,7 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
                     }
                     // for Timestamp without TimeZone
                     None => match as_datetime::<T>(v) {
-                        Some(datetime) => write!(f, "{:?}", datetime),
+                        Some(datetime) => write!(f, "{datetime:?}"),
                         None => write!(f, "null"),
                     },
                 }
@@ -1136,8 +1124,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
         }
         if scale > 0 && scale as u8 > precision {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "scale {} is greater than precision {}",
-                scale, precision
+                "scale {scale} is greater than precision {precision}"
             )));
         }
 
@@ -1546,7 +1533,7 @@ mod tests {
         let arr = Int32Array::from(vec![0, 1, 2, 3, 4]);
         assert_eq!(
             "PrimitiveArray<Int32>\n[\n  0,\n  1,\n  2,\n  3,\n  4,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1558,13 +1545,13 @@ mod tests {
                 "PrimitiveArray<Int16>\n[\n{}\n]",
                 values
                     .iter()
-                    .map(|v| { format!("  {},", v) })
+                    .map(|v| { format!("  {v},") })
                     .collect::<Vec<String>>()
                     .join("\n")
             );
             let array = Int16Array::from(values);
 
-            assert_eq!(array_expected, format!("{:?}", array));
+            assert_eq!(array_expected, format!("{array:?}"));
         })
     }
 
@@ -1577,7 +1564,7 @@ mod tests {
         let arr = builder.finish();
         assert_eq!(
             "PrimitiveArray<Int32>\n[\n  0,\n  1,\n  null,\n  3,\n  4,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1591,7 +1578,7 @@ mod tests {
             ]);
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, None)>\n[\n  2018-12-31T00:00:00,\n  2018-12-31T00:00:00,\n  1921-01-02T00:00:00,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1606,7 +1593,7 @@ mod tests {
             .with_timezone_utc();
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, Some(\"+00:00\"))>\n[\n  2018-12-31T00:00:00+00:00,\n  2018-12-31T00:00:00+00:00,\n  1921-01-02T00:00:00+00:00,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1637,11 +1624,11 @@ mod tests {
             ])
             .with_timezone("Asia/Taipei".to_string());
 
-        println!("{:?}", arr);
+        println!("{arr:?}");
 
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, Some(\"Asia/Taipei\"))>\n[\n  2018-12-31T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n  2018-12-31T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n  1921-01-02T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1656,7 +1643,7 @@ mod tests {
             .with_timezone("+08:00".to_string());
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, Some(\"+08:00\"))>\n[\n  2018-12-31T08:00:00+08:00,\n  2018-12-31T08:00:00+08:00,\n  1921-01-02T08:00:00+08:00,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1671,7 +1658,7 @@ mod tests {
             .with_timezone("xxx".to_string());
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, Some(\"xxx\"))>\n[\n  2018-12-31T00:00:00 (Unknown Time Zone 'xxx'),\n  2018-12-31T00:00:00 (Unknown Time Zone 'xxx'),\n  1921-01-02T00:00:00 (Unknown Time Zone 'xxx'),\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1697,7 +1684,7 @@ mod tests {
         let arr: PrimitiveArray<Date32Type> = vec![12356, 13548, -365].into();
         assert_eq!(
             "PrimitiveArray<Date32>\n[\n  2003-10-31,\n  2007-02-04,\n  1969-01-01,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1706,7 +1693,7 @@ mod tests {
         let arr: PrimitiveArray<Time32SecondType> = vec![7201, 60054].into();
         assert_eq!(
             "PrimitiveArray<Time32(Second)>\n[\n  02:00:01,\n  16:40:54,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1716,7 +1703,7 @@ mod tests {
         let arr: PrimitiveArray<Time32SecondType> = vec![-7201, -60054].into();
         assert_eq!(
             "PrimitiveArray<Time32(Second)>\n[\n  null,\n  null,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         )
     }
 
@@ -1727,7 +1714,7 @@ mod tests {
             vec![9065525203050843594].into();
         assert_eq!(
             "PrimitiveArray<Timestamp(Microsecond, None)>\n[\n  null,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         )
     }
 

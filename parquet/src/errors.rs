@@ -17,12 +17,13 @@
 
 //! Common Parquet errors and macros.
 
+use std::error::Error;
 use std::{cell, io, result, str};
 
 #[cfg(feature = "arrow")]
 use arrow_schema::ArrowError;
 
-#[derive(Debug, PartialEq, Clone, Eq)]
+#[derive(Debug)]
 pub enum ParquetError {
     /// General Parquet error.
     /// Returned when code violates normal workflow of working with Parquet files.
@@ -39,66 +40,72 @@ pub enum ParquetError {
     /// Returned when reading into arrow or writing from arrow.
     ArrowError(String),
     IndexOutOfBound(usize, usize),
+    /// An external error variant
+    External(Box<dyn Error + Send + Sync>),
 }
 
 impl std::fmt::Display for ParquetError {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match *self {
-            ParquetError::General(ref message) => {
-                write!(fmt, "Parquet error: {}", message)
+        match &self {
+            ParquetError::General(message) => {
+                write!(fmt, "Parquet error: {message}")
             }
-            ParquetError::NYI(ref message) => write!(fmt, "NYI: {}", message),
-            ParquetError::EOF(ref message) => write!(fmt, "EOF: {}", message),
+            ParquetError::NYI(message) => write!(fmt, "NYI: {message}"),
+            ParquetError::EOF(message) => write!(fmt, "EOF: {message}"),
             #[cfg(feature = "arrow")]
-            ParquetError::ArrowError(ref message) => write!(fmt, "Arrow: {}", message),
-            ParquetError::IndexOutOfBound(ref index, ref bound) => {
-                write!(fmt, "Index {} out of bound: {}", index, bound)
+            ParquetError::ArrowError(message) => write!(fmt, "Arrow: {message}"),
+            ParquetError::IndexOutOfBound(index, ref bound) => {
+                write!(fmt, "Index {index} out of bound: {bound}")
             }
+            ParquetError::External(e) => write!(fmt, "External: {e}"),
         }
     }
 }
 
-impl std::error::Error for ParquetError {
-    fn cause(&self) -> Option<&dyn ::std::error::Error> {
-        None
+impl Error for ParquetError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            ParquetError::External(e) => Some(e.as_ref()),
+            _ => None,
+        }
     }
 }
 
 impl From<io::Error> for ParquetError {
     fn from(e: io::Error) -> ParquetError {
-        ParquetError::General(format!("underlying IO error: {}", e))
+        ParquetError::External(Box::new(e))
     }
 }
 
 #[cfg(any(feature = "snap", test))]
 impl From<snap::Error> for ParquetError {
     fn from(e: snap::Error) -> ParquetError {
-        ParquetError::General(format!("underlying snap error: {}", e))
+        ParquetError::External(Box::new(e))
     }
 }
 
 impl From<thrift::Error> for ParquetError {
     fn from(e: thrift::Error) -> ParquetError {
-        ParquetError::General(format!("underlying Thrift error: {}", e))
+        ParquetError::External(Box::new(e))
     }
 }
 
 impl From<cell::BorrowMutError> for ParquetError {
     fn from(e: cell::BorrowMutError) -> ParquetError {
-        ParquetError::General(format!("underlying borrow error: {}", e))
+        ParquetError::External(Box::new(e))
     }
 }
 
 impl From<str::Utf8Error> for ParquetError {
     fn from(e: str::Utf8Error) -> ParquetError {
-        ParquetError::General(format!("underlying utf8 error: {}", e))
+        ParquetError::External(Box::new(e))
     }
 }
 
 #[cfg(feature = "arrow")]
 impl From<ArrowError> for ParquetError {
     fn from(e: ArrowError) -> ParquetError {
-        ParquetError::ArrowError(format!("underlying Arrow error: {}", e))
+        ParquetError::External(Box::new(e))
     }
 }
 
@@ -150,6 +157,6 @@ macro_rules! arrow_err {
 #[cfg(feature = "arrow")]
 impl From<ParquetError> for ArrowError {
     fn from(p: ParquetError) -> Self {
-        Self::ParquetError(format!("{}", p))
+        Self::ParquetError(format!("{p}"))
     }
 }

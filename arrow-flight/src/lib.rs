@@ -36,6 +36,8 @@ use arrow_ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema};
 
 use arrow_ipc::convert::try_schema_from_ipc_buffer;
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use bytes::Bytes;
 use std::{
     convert::{TryFrom, TryInto},
@@ -172,7 +174,7 @@ impl fmt::Display for FlightData {
         write!(f, "FlightData {{")?;
         write!(f, " descriptor: ")?;
         match &self.flight_descriptor {
-            Some(d) => write!(f, "{}", d)?,
+            Some(d) => write!(f, "{d}")?,
             None => write!(f, "None")?,
         };
         write!(f, ", header: ")?;
@@ -198,7 +200,7 @@ impl fmt::Display for FlightDescriptor {
                 write!(f, "path: [")?;
                 let mut sep = "";
                 for element in &self.path {
-                    write!(f, "{}{}", sep, element)?;
+                    write!(f, "{sep}{element}")?;
                     sep = ", ";
                 }
                 write!(f, "]")?;
@@ -216,13 +218,13 @@ impl fmt::Display for FlightEndpoint {
         write!(f, "FlightEndpoint {{")?;
         write!(f, " ticket: ")?;
         match &self.ticket {
-            Some(value) => write!(f, "{}", value),
+            Some(value) => write!(f, "{value}"),
             None => write!(f, " none"),
         }?;
         write!(f, ", location: [")?;
         let mut sep = "";
         for location in &self.location {
-            write!(f, "{}{}", sep, location)?;
+            write!(f, "{sep}{location}")?;
             sep = ", ";
         }
         write!(f, "]")?;
@@ -235,16 +237,16 @@ impl fmt::Display for FlightInfo {
         let ipc_message = IpcMessage(self.schema.clone());
         let schema: Schema = ipc_message.try_into().map_err(|_err| fmt::Error)?;
         write!(f, "FlightInfo {{")?;
-        write!(f, " schema: {}", schema)?;
+        write!(f, " schema: {schema}")?;
         write!(f, ", descriptor:")?;
         match &self.flight_descriptor {
-            Some(d) => write!(f, " {}", d),
+            Some(d) => write!(f, " {d}"),
             None => write!(f, " None"),
         }?;
         write!(f, ", endpoint: [")?;
         let mut sep = "";
         for endpoint in &self.endpoint {
-            write!(f, "{}{}", sep, endpoint)?;
+            write!(f, "{sep}{endpoint}")?;
             sep = ", ";
         }
         write!(f, "], total_records: {}", self.total_records)?;
@@ -265,7 +267,7 @@ impl fmt::Display for Ticket {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Ticket {{")?;
         write!(f, " ticket: ")?;
-        write!(f, "{}", base64::encode(&self.ticket))
+        write!(f, "{}", BASE64_STANDARD.encode(&self.ticket))
     }
 }
 
@@ -337,8 +339,7 @@ impl TryFrom<&FlightData> for Schema {
     fn try_from(data: &FlightData) -> ArrowResult<Self> {
         convert::try_schema_from_flatbuffer_bytes(&data.data_header[..]).map_err(|err| {
             ArrowError::ParseError(format!(
-                "Unable to convert flight data to Arrow schema: {}",
-                err
+                "Unable to convert flight data to Arrow schema: {err}"
             ))
         })
     }
@@ -454,6 +455,13 @@ impl Action {
     }
 }
 
+impl Result {
+    /// Create a new Result with the specified body
+    pub fn new(body: impl Into<Bytes>) -> Self {
+        Self { body: body.into() }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,7 +488,7 @@ mod tests {
     fn it_accepts_equal_output() {
         let input = TestVector(vec![91; 10], 10);
 
-        let actual = format!("{}", input);
+        let actual = format!("{input}");
         let expected = format!("{:?}", vec![91; 10]);
         assert_eq!(actual, expected);
     }
@@ -489,7 +497,7 @@ mod tests {
     fn it_accepts_short_output() {
         let input = TestVector(vec![91; 6], 10);
 
-        let actual = format!("{}", input);
+        let actual = format!("{input}");
         let expected = format!("{:?}", vec![91; 6]);
         assert_eq!(actual, expected);
     }
@@ -498,7 +506,7 @@ mod tests {
     fn it_accepts_long_output() {
         let input = TestVector(vec![91; 10], 9);
 
-        let actual = format!("{}", input);
+        let actual = format!("{input}");
         let expected = format!("{:?}", vec![91; 9]);
         assert_eq!(actual, expected);
     }

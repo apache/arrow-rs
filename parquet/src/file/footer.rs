@@ -72,7 +72,7 @@ pub fn decode_metadata(metadata_read: &[u8]) -> Result<ParquetMetaData> {
     // TODO: row group filtering
     let mut prot = TCompactInputProtocol::new(metadata_read);
     let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
-        .map_err(|e| ParquetError::General(format!("Could not parse metadata: {}", e)))?;
+        .map_err(|e| ParquetError::General(format!("Could not parse metadata: {e}")))?;
     let schema = types::from_thrift(&t_file_metadata.schema)?;
     let schema_descr = Arc::new(SchemaDescriptor::new(schema));
     let mut row_groups = Vec::new();
@@ -156,10 +156,9 @@ mod tests {
     fn test_parse_metadata_size_smaller_than_footer() {
         let test_file = tempfile::tempfile().unwrap();
         let reader_result = parse_metadata(&test_file);
-        assert!(reader_result.is_err());
         assert_eq!(
-            reader_result.err().unwrap(),
-            general_err!("Invalid Parquet file. Size is smaller than footer")
+            reader_result.unwrap_err().to_string(),
+            "Parquet error: Invalid Parquet file. Size is smaller than footer"
         );
     }
 
@@ -167,10 +166,9 @@ mod tests {
     fn test_parse_metadata_corrupt_footer() {
         let data = Bytes::from(vec![1, 2, 3, 4, 5, 6, 7, 8]);
         let reader_result = parse_metadata(&data);
-        assert!(reader_result.is_err());
         assert_eq!(
-            reader_result.err().unwrap(),
-            general_err!("Invalid Parquet file. Corrupt footer")
+            reader_result.unwrap_err().to_string(),
+            "Parquet error: Invalid Parquet file. Corrupt footer"
         );
     }
 
@@ -178,12 +176,9 @@ mod tests {
     fn test_parse_metadata_invalid_length() {
         let test_file = Bytes::from(vec![0, 0, 0, 255, b'P', b'A', b'R', b'1']);
         let reader_result = parse_metadata(&test_file);
-        assert!(reader_result.is_err());
         assert_eq!(
-            reader_result.err().unwrap(),
-            general_err!(
-                "Invalid Parquet file. Metadata length is less than zero (-16777216)"
-            )
+            reader_result.unwrap_err().to_string(),
+            "Parquet error: Invalid Parquet file. Metadata length is less than zero (-16777216)"
         );
     }
 
@@ -191,12 +186,9 @@ mod tests {
     fn test_parse_metadata_invalid_start() {
         let test_file = Bytes::from(vec![255, 0, 0, 0, b'P', b'A', b'R', b'1']);
         let reader_result = parse_metadata(&test_file);
-        assert!(reader_result.is_err());
         assert_eq!(
-            reader_result.err().unwrap(),
-            general_err!(
-                "Invalid Parquet file. Reported metadata length of 255 + 8 byte footer, but file is only 8 bytes"
-            )
+            reader_result.unwrap_err().to_string(),
+            "Parquet error: Invalid Parquet file. Reported metadata length of 255 + 8 byte footer, but file is only 8 bytes"
         );
     }
 

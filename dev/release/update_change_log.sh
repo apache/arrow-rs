@@ -25,12 +25,12 @@
 # arrow-rs/.github_changelog_generator
 #
 # Usage:
-# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log.sh
+# ARROW_GITHUB_API_TOKEN=<TOKEN> ./update_change_log.sh
 
 set -e
 
-SINCE_TAG="29.0.0"
-FUTURE_RELEASE="30.0.0"
+SINCE_TAG="31.0.0"
+FUTURE_RELEASE="32.0.0"
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"

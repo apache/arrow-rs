@@ -2063,7 +2063,7 @@ mod tests {
         let e = add(&a, &b).expect_err("should have failed due to different lengths");
         assert_eq!(
             "ComputeError(\"Cannot perform binary operation on arrays of different length\")",
-            format!("{:?}", e)
+            format!("{e:?}")
         );
     }
 
@@ -2238,7 +2238,7 @@ mod tests {
 
         let e = divide_scalar_dyn::<Int32Type>(&a, 0_i32)
             .expect_err("should have failed due to divide by zero");
-        assert_eq!("DivideByZero", format!("{:?}", e));
+        assert_eq!("DivideByZero", format!("{e:?}"));
     }
 
     #[test]

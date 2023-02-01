@@ -614,7 +614,7 @@ impl AmazonS3Builder {
             std::env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
         {
             builder.metadata_endpoint =
-                Some(format!("{}{}", METADATA_ENDPOINT, metadata_relative_uri));
+                Some(format!("{METADATA_ENDPOINT}{metadata_relative_uri}"));
         }
 
         if let Ok(text) = std::env::var("AWS_ALLOW_HTTP") {
@@ -814,8 +814,8 @@ impl AmazonS3Builder {
     ///
     /// This option has no effect if not using instance credentials
     ///
-    /// [IMDSv2]: [https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html]
-    /// [SSRF attack]: [https://aws.amazon.com/blogs/security/defense-in-depth-open-firewalls-reverse-proxies-ssrf-vulnerabilities-ec2-instance-metadata-service/]
+    /// [IMDSv2]: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html
+    /// [SSRF attack]: https://aws.amazon.com/blogs/security/defense-in-depth-open-firewalls-reverse-proxies-ssrf-vulnerabilities-ec2-instance-metadata-service/
     ///
     pub fn with_imdsv1_fallback(mut self) -> Self {
         self.imdsv1_fallback = true;
@@ -896,7 +896,7 @@ impl AmazonS3Builder {
                     let session_name = std::env::var("AWS_ROLE_SESSION_NAME")
                         .unwrap_or_else(|_| "WebIdentitySession".to_string());
 
-                    let endpoint = format!("https://sts.{}.amazonaws.com", region);
+                    let endpoint = format!("https://sts.{region}.amazonaws.com");
 
                     // Disallow non-HTTPs requests
                     let client = self
@@ -948,15 +948,15 @@ impl AmazonS3Builder {
         // `virtual_hosted_style_request`. i.e. if `virtual_hosted_style_request` is true then
         // `endpoint` should have bucket name included.
         if self.virtual_hosted_style_request {
-            endpoint = self.endpoint.unwrap_or_else(|| {
-                format!("https://{}.s3.{}.amazonaws.com", bucket, region)
-            });
+            endpoint = self
+                .endpoint
+                .unwrap_or_else(|| format!("https://{bucket}.s3.{region}.amazonaws.com"));
             bucket_endpoint = endpoint.clone();
         } else {
             endpoint = self
                 .endpoint
-                .unwrap_or_else(|| format!("https://s3.{}.amazonaws.com", region));
-            bucket_endpoint = format!("{}/{}", endpoint, bucket);
+                .unwrap_or_else(|| format!("https://s3.{region}.amazonaws.com"));
+            bucket_endpoint = format!("{endpoint}/{bucket}");
         }
 
         let config = S3Config {
@@ -1137,8 +1137,7 @@ mod tests {
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
 
-        let metadata_uri =
-            format!("{}{}", METADATA_ENDPOINT, container_creds_relative_uri);
+        let metadata_uri = format!("{METADATA_ENDPOINT}{container_creds_relative_uri}");
         assert_eq!(builder.metadata_endpoint.unwrap(), metadata_uri);
     }
 

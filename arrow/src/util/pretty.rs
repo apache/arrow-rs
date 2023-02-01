@@ -167,7 +167,7 @@ mod tests {
 
         let actual: Vec<&str> = table.lines().collect();
 
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -193,7 +193,7 @@ mod tests {
 
         let actual: Vec<&str> = table.lines().collect();
 
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -231,7 +231,7 @@ mod tests {
 
         let actual: Vec<&str> = table.lines().collect();
 
-        assert_eq!(expected, actual, "Actual result:\n{:#?}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table:#?}");
     }
 
     #[test]
@@ -264,7 +264,7 @@ mod tests {
 
         let actual: Vec<&str> = table.lines().collect();
 
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -304,7 +304,7 @@ mod tests {
 
         let actual: Vec<&str> = table.lines().collect();
 
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -337,7 +337,7 @@ mod tests {
 
         let actual: Vec<&str> = table.lines().collect();
 
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -669,7 +669,7 @@ mod tests {
         ];
 
         let actual: Vec<&str> = table.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -702,7 +702,7 @@ mod tests {
         ];
 
         let actual: Vec<&str> = table.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -761,7 +761,7 @@ mod tests {
         ];
 
         let actual: Vec<&str> = table.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -983,7 +983,7 @@ mod tests {
         ];
 
         let actual: Vec<&str> = table.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -991,6 +991,9 @@ mod tests {
     #[test]
     fn test_pretty_format_interval_day_time() -> Result<()> {
         let arr = Arc::new(arrow_array::IntervalDayTimeArray::from(vec![
+            Some(-600000),
+            Some(4294966295),
+            Some(4294967295),
             Some(1),
             Some(10),
             Some(100),
@@ -1007,18 +1010,21 @@ mod tests {
         let table = pretty_format_batches(&[batch])?.to_string();
 
         let expected = vec![
-            "+-------------------------------------------------+",
-            "| IntervalDayTime                                 |",
-            "+-------------------------------------------------+",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.001 secs |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.010 secs |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.100 secs |",
-            "+-------------------------------------------------+",
+            "+----------------------------------------------------+",
+            "| IntervalDayTime                                    |",
+            "+----------------------------------------------------+",
+            "| 0 years 0 mons -1 days 0 hours -10 mins 0.000 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins -1.001 secs   |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins -0.001 secs   |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.001 secs    |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.010 secs    |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.100 secs    |",
+            "+----------------------------------------------------+",
         ];
 
         let actual: Vec<&str> = table.lines().collect();
 
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }
@@ -1026,6 +1032,9 @@ mod tests {
     #[test]
     fn test_pretty_format_interval_month_day_nano_array() -> Result<()> {
         let arr = Arc::new(arrow_array::IntervalMonthDayNanoArray::from(vec![
+            Some(-600000000000),
+            Some(18446744072709551615),
+            Some(18446744073709551615),
             Some(1),
             Some(10),
             Some(100),
@@ -1049,25 +1058,28 @@ mod tests {
         let table = pretty_format_batches(&[batch])?.to_string();
 
         let expected = vec![
-            "+-------------------------------------------------------+",
-            "| IntervalMonthDayNano                                  |",
-            "+-------------------------------------------------------+",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000000001 secs |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000000010 secs |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000000100 secs |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000001000 secs |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000010000 secs |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000100000 secs |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.001000000 secs |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.010000000 secs |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.100000000 secs |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs |",
-            "+-------------------------------------------------------+",
+            "+-----------------------------------------------------------+",
+            "| IntervalMonthDayNano                                      |",
+            "+-----------------------------------------------------------+",
+            "| 0 years -1 mons -1 days 0 hours -10 mins 0.000000000 secs |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins -1.000000001 secs    |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins -0.000000001 secs    |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000000001 secs     |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000000010 secs     |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000000100 secs     |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000001000 secs     |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000010000 secs     |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000100000 secs     |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.001000000 secs     |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.010000000 secs     |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 0.100000000 secs     |",
+            "| 0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs     |",
+            "+-----------------------------------------------------------+",
         ];
 
         let actual: Vec<&str> = table.lines().collect();
 
-        assert_eq!(expected, actual, "Actual result:\n{}", table);
+        assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
     }

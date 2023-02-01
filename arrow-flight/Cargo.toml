@@ -18,7 +18,7 @@
 [package]
 name = "arrow-flight"
 description = "Apache Arrow Flight"
-version = "30.0.0"
+version = "32.0.0"
 edition = "2021"
 rust-version = "1.62"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -27,13 +27,13 @@ repository = "https://github.com/apache/arrow-rs"
 license = "Apache-2.0"
 
 [dependencies]
-arrow-array = { version = "30.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "30.0.0", path = "../arrow-buffer" }
+arrow-array = { version = "32.0.0", path = "../arrow-array" }
+arrow-buffer = { version = "32.0.0", path = "../arrow-buffer" }
 # Cast is needed to work around https://github.com/apache/arrow-rs/issues/3389
-arrow-cast = { version = "30.0.0", path = "../arrow-cast" }
-arrow-ipc = { version = "30.0.0", path = "../arrow-ipc" }
-arrow-schema = { version = "30.0.0", path = "../arrow-schema" }
-base64 = { version = "0.20", default-features = false, features = ["std"] }
+arrow-cast = { version = "32.0.0", path = "../arrow-cast" }
+arrow-ipc = { version = "32.0.0", path = "../arrow-ipc" }
+arrow-schema = { version = "32.0.0", path = "../arrow-schema" }
+base64 = { version = "0.21", default-features = false, features = ["std"] }
 tonic = { version = "0.8", default-features = false, features = ["transport", "codegen", "prost"] }
 bytes = { version = "1", default-features = false }
 prost = { version = "0.11", default-features = false }
@@ -50,7 +50,7 @@ flight-sql-experimental = []
 tls = ["tonic/tls"]
 
 [dev-dependencies]
-arrow = { version = "30.0.0", path = "../arrow", features = ["prettyprint"] }
+arrow = { version = "32.0.0", path = "../arrow", features = ["prettyprint"] }
 tempfile = "3.3"
 tokio-stream = { version = "0.1", features = ["net"] }
 tower = "0.4.13"
@@ -58,8 +58,8 @@ tower = "0.4.13"
 [build-dependencies]
 # Pin specific version of the tonic-build dependencies to avoid auto-generated
 # (and checked in) arrow.flight.protocol.rs from changing
-proc-macro2 = { version = "=1.0.49", default-features = false }
-prost-build = { version = "=0.11.5", default-features = false }
+proc-macro2 = { version = "=1.0.50", default-features = false }
+prost-build = { version = "=0.11.6", default-features = false }
 tonic-build = { version = "=0.8.4", default-features = false, features = ["transport", "prost"] }
 
 [[example]]

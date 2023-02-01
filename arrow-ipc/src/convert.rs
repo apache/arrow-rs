@@ -185,8 +185,7 @@ pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema, ArrowError> {
         let msg =
             size_prefixed_root_as_message(&buffer[begin_offset..]).map_err(|err| {
                 ArrowError::ParseError(format!(
-                    "Unable to convert flight info to a message: {}",
-                    err
+                    "Unable to convert flight info to a message: {err}"
                 ))
             })?;
         let ipc_schema = msg.header_as_schema().ok_or_else(|| {
@@ -259,7 +258,7 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
                 crate::Precision::HALF => DataType::Float16,
                 crate::Precision::SINGLE => DataType::Float32,
                 crate::Precision::DOUBLE => DataType::Float64,
-                z => panic!("FloatingPoint type with precision of {:?} not supported", z),
+                z => panic!("FloatingPoint type with precision of {z:?} not supported"),
             }
         }
         crate::Type::Date => {
@@ -267,7 +266,7 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             match date.unit() {
                 crate::DateUnit::DAY => DataType::Date32,
                 crate::DateUnit::MILLISECOND => DataType::Date64,
-                z => panic!("Date type with unit of {:?} not supported", z),
+                z => panic!("Date type with unit of {z:?} not supported"),
             }
         }
         crate::Type::Time => {
@@ -305,7 +304,7 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
                 crate::TimeUnit::NANOSECOND => {
                     DataType::Timestamp(TimeUnit::Nanosecond, timezone)
                 }
-                z => panic!("Timestamp type with unit of {:?} not supported", z),
+                z => panic!("Timestamp type with unit of {z:?} not supported"),
             }
         }
         crate::Type::Interval => {
@@ -320,7 +319,7 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
                 crate::IntervalUnit::MONTH_DAY_NANO => {
                     DataType::Interval(IntervalUnit::MonthDayNano)
                 }
-                z => panic!("Interval type with unit of {:?} unsupported", z),
+                z => panic!("Interval type with unit of {z:?} unsupported"),
             }
         }
         crate::Type::Duration => {
@@ -330,7 +329,7 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
                 crate::TimeUnit::MILLISECOND => DataType::Duration(TimeUnit::Millisecond),
                 crate::TimeUnit::MICROSECOND => DataType::Duration(TimeUnit::Microsecond),
                 crate::TimeUnit::NANOSECOND => DataType::Duration(TimeUnit::Nanosecond),
-                z => panic!("Duration type with unit of {:?} unsupported", z),
+                z => panic!("Duration type with unit of {z:?} unsupported"),
             }
         }
         crate::Type::List => {
@@ -387,7 +386,7 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
                     fsb.scale().try_into().unwrap(),
                 )
             } else {
-                panic!("Unexpected decimal bit width {}", bit_width)
+                panic!("Unexpected decimal bit width {bit_width}")
             }
         }
         crate::Type::Union => {
@@ -396,7 +395,7 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             let union_mode = match union.mode() {
                 crate::UnionMode::Dense => UnionMode::Dense,
                 crate::UnionMode::Sparse => UnionMode::Sparse,
-                mode => panic!("Unexpected union mode: {:?}", mode),
+                mode => panic!("Unexpected union mode: {mode:?}"),
             };
 
             let mut fields = vec![];
@@ -711,6 +710,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&children[..])),
             }
         }
+        RunEndEncoded(_, _) => todo!(),
         Map(map_field, keys_sorted) => {
             let child = build_field(fbb, map_field);
             let mut field_type = crate::MapBuilder::new(fbb);

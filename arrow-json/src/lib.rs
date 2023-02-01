@@ -25,8 +25,10 @@
 pub mod reader;
 pub mod writer;
 
-pub use self::reader::Reader;
-pub use self::reader::ReaderBuilder;
+mod raw;
+
+pub use self::raw::{RawDecoder, RawReader, RawReaderBuilder};
+pub use self::reader::{Reader, ReaderBuilder};
 pub use self::writer::{ArrayWriter, LineDelimitedWriter, Writer};
 use half::f16;
 use serde_json::{Number, Value};

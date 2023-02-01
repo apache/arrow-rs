@@ -19,78 +19,81 @@
 
 # Changelog
 
-## [30.0.0](https://github.com/apache/arrow-rs/tree/30.0.0) (2022-12-29)
+## [32.0.0](https://github.com/apache/arrow-rs/tree/32.0.0) (2023-01-27)
 
-[Full Changelog](https://github.com/apache/arrow-rs/compare/29.0.0...30.0.0)
+[Full Changelog](https://github.com/apache/arrow-rs/compare/31.0.0...32.0.0)
 
 **Breaking changes:**
 
-- Infer Parquet JSON Logical and Converted Type as UTF-8 [\#3376](https://github.com/apache/arrow-rs/pull/3376) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
-- Use custom Any instead of prost\_types [\#3360](https://github.com/apache/arrow-rs/pull/3360) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([tustvold](https://github.com/tustvold))
-- Use bytes in arrow-flight [\#3359](https://github.com/apache/arrow-rs/pull/3359) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([tustvold](https://github.com/tustvold))
+- Allow `StringArray` construction with `Vec<Option<String>>` [\#3602](https://github.com/apache/arrow-rs/pull/3602) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([sinistersnare](https://github.com/sinistersnare))
+- Use native types in PageIndex \(\#3575\) [\#3578](https://github.com/apache/arrow-rs/pull/3578) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
+- Add external variant to ParquetError \(\#3285\) [\#3574](https://github.com/apache/arrow-rs/pull/3574) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
+- Return reference from ListArray::values [\#3561](https://github.com/apache/arrow-rs/pull/3561) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- feat: Add `RunEndEncodedArray` [\#3553](https://github.com/apache/arrow-rs/pull/3553) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([askoa](https://github.com/askoa))
 
 **Implemented enhancements:**
 
-- Add derived implementations of Clone and Debug for `ParquetObjectReader` [\#3381](https://github.com/apache/arrow-rs/issues/3381) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Speed up TrackedWrite [\#3366](https://github.com/apache/arrow-rs/issues/3366) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Is it possible for ArrowWriter to write key\_value\_metadata after write all records [\#3356](https://github.com/apache/arrow-rs/issues/3356) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Add UnionArray test to arrow-pyarrow integration test [\#3346](https://github.com/apache/arrow-rs/issues/3346)
-- Document / Deprecate arrow\_flight::utils::flight\_data\_from\_arrow\_batch [\#3312](https://github.com/apache/arrow-rs/issues/3312) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
-- \[FlightSQL\] Support HTTPs [\#3309](https://github.com/apache/arrow-rs/issues/3309) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
-- Support UnionArray in ffi [\#3304](https://github.com/apache/arrow-rs/issues/3304) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Add support for Azure Data Lake Storage Gen2 \(aka: ADLS Gen2\) in Object Store library [\#3283](https://github.com/apache/arrow-rs/issues/3283)
-- Support casting from String to Decimal [\#3280](https://github.com/apache/arrow-rs/issues/3280) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Allow ArrowCSV writer to control the display of NULL values [\#3268](https://github.com/apache/arrow-rs/issues/3268) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- There should be a `From<Vec<Option<String>>>` impl for `GenericStringArray<OffsetSize>` [\#3599](https://github.com/apache/arrow-rs/issues/3599) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- FlightDataEncoder Optionally send Schema even when no record batches [\#3591](https://github.com/apache/arrow-rs/issues/3591) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+- Use Native Types in PageIndex [\#3575](https://github.com/apache/arrow-rs/issues/3575) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Packing array into dictionary of generic byte array [\#3571](https://github.com/apache/arrow-rs/issues/3571) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Implement `Error::Source` for ArrowError and FlightError [\#3566](https://github.com/apache/arrow-rs/issues/3566) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+- \[FlightSQL\] Allow access to underlying FlightClient [\#3551](https://github.com/apache/arrow-rs/issues/3551) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+- Arrow CSV writer should not fail when cannot cast the value [\#3547](https://github.com/apache/arrow-rs/issues/3547) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Write Deprecated Min Max Statistics When ColumnOrder Signed [\#3526](https://github.com/apache/arrow-rs/issues/3526) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Improve Performance of JSON Reader [\#3441](https://github.com/apache/arrow-rs/issues/3441)
+- Support footer kv metadata for IPC file [\#3432](https://github.com/apache/arrow-rs/issues/3432)
+- Add `External` variant to ParquetError [\#3285](https://github.com/apache/arrow-rs/issues/3285) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Fixed bugs:**
 
-- FlightSQL example is broken [\#3386](https://github.com/apache/arrow-rs/issues/3386) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
-- CSV Reader Bounds Incorrectly Handles Header [\#3364](https://github.com/apache/arrow-rs/issues/3364) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Incorrect output string from `try_to_type`  [\#3350](https://github.com/apache/arrow-rs/issues/3350)
-- Decimal arithmetic computation fails to run because decimal type equality [\#3344](https://github.com/apache/arrow-rs/issues/3344) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Pretty print not implemented for Map [\#3322](https://github.com/apache/arrow-rs/issues/3322) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- ILIKE Kernels Inconsistent Case Folding [\#3311](https://github.com/apache/arrow-rs/issues/3311) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Nullif of NULL Predicate is not NULL [\#3589](https://github.com/apache/arrow-rs/issues/3589)
+- BooleanBufferBuilder Fails to Clear Set Bits On Truncate [\#3587](https://github.com/apache/arrow-rs/issues/3587) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- `nullif` incorrectly calculates `null_count`, sometimes panics with substraction overflow error [\#3579](https://github.com/apache/arrow-rs/issues/3579) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Meet warning when use pyarrow [\#3543](https://github.com/apache/arrow-rs/issues/3543) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Incorrect row group total\_byte\_size written to parquet file [\#3530](https://github.com/apache/arrow-rs/issues/3530) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Overflow when casting timestamps prior to the epoch [\#3512](https://github.com/apache/arrow-rs/issues/3512) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
-**Documentation updates:**
+**Closed issues:**
 
-- minor: Improve arrow-flight docs [\#3372](https://github.com/apache/arrow-rs/pull/3372) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([alamb](https://github.com/alamb))
+- Panic on Key Overflow in Dictionary Builders [\#3562](https://github.com/apache/arrow-rs/issues/3562) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Bumping version gives compilation error \(arrow-array\) [\#3525](https://github.com/apache/arrow-rs/issues/3525)
 
 **Merged pull requests:**
 
-- Version 30.0.0 release notes and changelog [\#3406](https://github.com/apache/arrow-rs/pull/3406) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([alamb](https://github.com/alamb))
-- Ends ParquetRecordBatchStream when polling on StreamState::Error [\#3404](https://github.com/apache/arrow-rs/pull/3404) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([viirya](https://github.com/viirya))
-- fix clippy issues [\#3398](https://github.com/apache/arrow-rs/pull/3398) ([Jimexist](https://github.com/Jimexist))
-- Upgrade multiversion to 0.7.1 [\#3396](https://github.com/apache/arrow-rs/pull/3396) ([viirya](https://github.com/viirya))
-- Make FlightSQL Support HTTPs [\#3388](https://github.com/apache/arrow-rs/pull/3388) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([viirya](https://github.com/viirya))
-- Fix broken FlightSQL example [\#3387](https://github.com/apache/arrow-rs/pull/3387) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([viirya](https://github.com/viirya))
-- Update prost-build [\#3385](https://github.com/apache/arrow-rs/pull/3385) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([tustvold](https://github.com/tustvold))
-- Split out arrow-arith \(\#2594\) [\#3384](https://github.com/apache/arrow-rs/pull/3384) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
-- Add derive for Clone and Debug for `ParquetObjectReader` [\#3382](https://github.com/apache/arrow-rs/pull/3382) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([kszlim](https://github.com/kszlim))
-- Initial Mid-level `FlightClient` [\#3378](https://github.com/apache/arrow-rs/pull/3378) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([alamb](https://github.com/alamb))
-- Document all features on docs.rs [\#3377](https://github.com/apache/arrow-rs/pull/3377) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([tustvold](https://github.com/tustvold))
-- Split out arrow-row \(\#2594\) [\#3375](https://github.com/apache/arrow-rs/pull/3375) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
-- Remove unnecessary flush calls on TrackedWrite [\#3374](https://github.com/apache/arrow-rs/pull/3374) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([viirya](https://github.com/viirya))
-- Update proc-macro2 requirement from =1.0.47 to =1.0.49 [\#3369](https://github.com/apache/arrow-rs/pull/3369) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([dependabot[bot]](https://github.com/apps/dependabot))
-- Add CSV build\_buffered \(\#3338\) [\#3368](https://github.com/apache/arrow-rs/pull/3368) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
-- feat: add append\_key\_value\_metadata [\#3367](https://github.com/apache/arrow-rs/pull/3367) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([jiacai2050](https://github.com/jiacai2050))
-- Add csv-core based reader \(\#3338\) [\#3365](https://github.com/apache/arrow-rs/pull/3365) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
-- Put BufWriter into TrackedWrite [\#3361](https://github.com/apache/arrow-rs/pull/3361) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([viirya](https://github.com/viirya))
-- Add CSV reader benchmark \(\#3338\) [\#3357](https://github.com/apache/arrow-rs/pull/3357) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
-- Use ArrayData::ptr\_eq in DictionaryTracker [\#3354](https://github.com/apache/arrow-rs/pull/3354) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
-- Deprecate flight\_data\_from\_arrow\_batch [\#3353](https://github.com/apache/arrow-rs/pull/3353) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([Dandandan](https://github.com/Dandandan))
-- Fix incorrect output string from try\_to\_type [\#3351](https://github.com/apache/arrow-rs/pull/3351) ([viirya](https://github.com/viirya))
-- Fix unary\_dyn for decimal scalar arithmetic computation [\#3345](https://github.com/apache/arrow-rs/pull/3345) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
-- Add UnionArray test to arrow-pyarrow integration test [\#3343](https://github.com/apache/arrow-rs/pull/3343) ([viirya](https://github.com/viirya))
-- feat: configure null value in arrow csv writer [\#3342](https://github.com/apache/arrow-rs/pull/3342) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([askoa](https://github.com/askoa))
-- Optimize bulk writing of all blocks of bloom filter [\#3340](https://github.com/apache/arrow-rs/pull/3340) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([viirya](https://github.com/viirya))
-- Add MapArray to pretty print [\#3339](https://github.com/apache/arrow-rs/pull/3339) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([askoa](https://github.com/askoa))
-- Update prost-build 0.11.4 [\#3334](https://github.com/apache/arrow-rs/pull/3334) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([tustvold](https://github.com/tustvold))
-- Faster Parquet Bloom Writer [\#3333](https://github.com/apache/arrow-rs/pull/3333) ([tustvold](https://github.com/tustvold))
-- Add bloom filter benchmark for parquet writer [\#3323](https://github.com/apache/arrow-rs/pull/3323) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([viirya](https://github.com/viirya))
-- Add ASCII fast path for ILIKE scalar \(90% faster\) [\#3306](https://github.com/apache/arrow-rs/pull/3306) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
-- Support UnionArray in ffi [\#3305](https://github.com/apache/arrow-rs/pull/3305) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
-- Support casting from String to Decimal [\#3281](https://github.com/apache/arrow-rs/pull/3281) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
-- add more integration test for parquet bloom filter round trip tests [\#3210](https://github.com/apache/arrow-rs/pull/3210) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([Jimexist](https://github.com/Jimexist))
+- Add Push-Based CSV Decoder [\#3604](https://github.com/apache/arrow-rs/pull/3604) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Update to flatbuffers 23.1.21 [\#3597](https://github.com/apache/arrow-rs/pull/3597) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Faster BooleanBufferBuilder::append\_n for true values [\#3596](https://github.com/apache/arrow-rs/pull/3596) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Support sending schemas for empty streams [\#3594](https://github.com/apache/arrow-rs/pull/3594) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([alamb](https://github.com/alamb))
+- Faster ListArray to StringArray conversion [\#3593](https://github.com/apache/arrow-rs/pull/3593) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Add conversion from StringArray to BinaryArray [\#3592](https://github.com/apache/arrow-rs/pull/3592) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Fix nullif null count \(\#3579\) [\#3590](https://github.com/apache/arrow-rs/pull/3590) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Clear bits in BooleanBufferBuilder \(\#3587\) [\#3588](https://github.com/apache/arrow-rs/pull/3588) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Iterate all dictionary key types in cast test [\#3585](https://github.com/apache/arrow-rs/pull/3585) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Propagate EOF Error from AsyncRead [\#3576](https://github.com/apache/arrow-rs/pull/3576) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([Sach1nAgarwal](https://github.com/Sach1nAgarwal))
+- Show row\_counts also for \(FixedLen\)ByteArray [\#3573](https://github.com/apache/arrow-rs/pull/3573) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([bmmeijers](https://github.com/bmmeijers))
+- Packing array into dictionary of generic byte array [\#3572](https://github.com/apache/arrow-rs/pull/3572) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Remove unwrap on datetime cast for CSV writer [\#3570](https://github.com/apache/arrow-rs/pull/3570) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([comphead](https://github.com/comphead))
+- Implement `std::error::Error::source` for `ArrowError` and `FlightError` [\#3567](https://github.com/apache/arrow-rs/pull/3567) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([alamb](https://github.com/alamb))
+- Improve GenericBytesBuilder offset overflow panic message \(\#139\) [\#3564](https://github.com/apache/arrow-rs/pull/3564) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Implement Extend for ArrayBuilder \(\#1841\) [\#3563](https://github.com/apache/arrow-rs/pull/3563) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Update pyarrow method call with kwargs [\#3560](https://github.com/apache/arrow-rs/pull/3560) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Frankonly](https://github.com/Frankonly))
+- Update pyo3 requirement from 0.17 to 0.18 [\#3557](https://github.com/apache/arrow-rs/pull/3557) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Expose Inner FlightServiceClient on FlightSqlServiceClient \(\#3551\) [\#3556](https://github.com/apache/arrow-rs/pull/3556) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([tustvold](https://github.com/tustvold))
+- Fix final page row count in parquet-index binary [\#3554](https://github.com/apache/arrow-rs/pull/3554) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
+- Parquet Avoid Reading 8 Byte Footer Twice from AsyncRead [\#3550](https://github.com/apache/arrow-rs/pull/3550) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([Sach1nAgarwal](https://github.com/Sach1nAgarwal))
+- Improve concat kernel capacity estimation [\#3546](https://github.com/apache/arrow-rs/pull/3546) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Update proc-macro2 requirement from =1.0.49 to =1.0.50 [\#3545](https://github.com/apache/arrow-rs/pull/3545) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([dependabot[bot]](https://github.com/apps/dependabot))
+- Update pyarrow method call to avoid warning [\#3544](https://github.com/apache/arrow-rs/pull/3544) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Frankonly](https://github.com/Frankonly))
+- Enable casting between Utf8/LargeUtf8 and Binary/LargeBinary [\#3542](https://github.com/apache/arrow-rs/pull/3542) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Use GHA concurrency groups \(\#3495\) [\#3538](https://github.com/apache/arrow-rs/pull/3538) ([tustvold](https://github.com/tustvold))
+- set sum of uncompressed column size as row group size for parquet files [\#3531](https://github.com/apache/arrow-rs/pull/3531) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([sidred](https://github.com/sidred))
+- Minor: Add documentation about memory use for ArrayData [\#3529](https://github.com/apache/arrow-rs/pull/3529) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- Upgrade to clap 4.1 + fix test [\#3528](https://github.com/apache/arrow-rs/pull/3528) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
+- Write backwards compatible row group statistics \(\#3526\) [\#3527](https://github.com/apache/arrow-rs/pull/3527) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
+- No panic on timestamp buffer overflow [\#3519](https://github.com/apache/arrow-rs/pull/3519) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([comphead](https://github.com/comphead))
+- Support casting from binary to dictionary of binary [\#3482](https://github.com/apache/arrow-rs/pull/3482) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Add Raw JSON Reader \(~2.5x faster\) [\#3479](https://github.com/apache/arrow-rs/pull/3479) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 
 
 

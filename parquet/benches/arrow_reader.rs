@@ -281,7 +281,7 @@ fn build_plain_encoded_string_page_iterator(
                 };
                 if def_level == max_def_level {
                     let string_value =
-                        format!("Test value {}, row group: {}, page: {}", k, i, j);
+                        format!("Test value {k}, row group: {i}, page: {j}");
                     values
                         .push(parquet::data_type::ByteArray::from(string_value.as_str()));
                 }
@@ -312,7 +312,7 @@ fn build_dictionary_encoded_string_page_iterator(
     // generate 1% unique values
     const NUM_UNIQUE_VALUES: usize = VALUES_PER_PAGE / 100;
     let unique_values = (0..NUM_UNIQUE_VALUES)
-        .map(|x| format!("Dictionary value {}", x))
+        .map(|x| format!("Dictionary value {x}"))
         .collect::<Vec<_>>();
     let mut rng = seedable_rng();
     let mut pages: Vec<Vec<parquet::column::page::Page>> = Vec::new();

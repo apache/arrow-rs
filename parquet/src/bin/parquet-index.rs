@@ -86,11 +86,10 @@ impl Args {
             .zip(reader.metadata().row_groups())
             .enumerate()
         {
-            println!("Row Group: {}", row_group_idx);
+            println!("Row Group: {row_group_idx}");
             let offset_index = offset_indices.get(column_idx).ok_or_else(|| {
                 ParquetError::General(format!(
-                    "No offset index for row group {} column chunk {}",
-                    row_group_idx, column_idx
+                    "No offset index for row group {row_group_idx} column chunk {column_idx}"
                 ))
             })?;
 
@@ -103,9 +102,11 @@ impl Args {
                 Index::INT96(v) => print_index(&v.indexes, offset_index, &row_counts)?,
                 Index::FLOAT(v) => print_index(&v.indexes, offset_index, &row_counts)?,
                 Index::DOUBLE(v) => print_index(&v.indexes, offset_index, &row_counts)?,
-                Index::BYTE_ARRAY(_) => println!("BYTE_ARRAY not supported"),
-                Index::FIXED_LEN_BYTE_ARRAY(_) => {
-                    println!("FIXED_LEN_BYTE_ARRAY not supported")
+                Index::BYTE_ARRAY(v) => {
+                    print_index(&v.indexes, offset_index, &row_counts)?
+                }
+                Index::FIXED_LEN_BYTE_ARRAY(v) => {
+                    print_index(&v.indexes, offset_index, &row_counts)?
                 }
             }
         }
@@ -125,7 +126,7 @@ fn compute_row_counts(offset_index: &[PageLocation], rows: i64) -> Vec<i64> {
         out.push(o.first_row_index - last);
         last = o.first_row_index;
     }
-    out.push(rows);
+    out.push(rows - last);
     out
 }
 
@@ -154,12 +155,12 @@ fn print_index<T: std::fmt::Display>(
             idx, o.offset, o.compressed_page_size, row_count
         );
         match &c.min {
-            Some(m) => print!(", min {:>10}", m),
+            Some(m) => print!(", min {m:>10}"),
             None => print!(", min {:>10}", "NONE"),
         }
 
         match &c.max {
-            Some(m) => print!(", max {:>10}", m),
+            Some(m) => print!(", max {m:>10}"),
             None => print!(", max {:>10}", "NONE"),
         }
         println!()

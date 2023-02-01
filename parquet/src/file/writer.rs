@@ -382,6 +382,7 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     buf: &'a mut TrackedWrite<W>,
     total_rows_written: Option<u64>,
     total_bytes_written: u64,
+    total_uncompressed_bytes: i64,
     column_index: usize,
     row_group_metadata: Option<RowGroupMetaDataPtr>,
     column_chunks: Vec<ColumnChunkMetaData>,
@@ -418,6 +419,7 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
             column_indexes: Vec::with_capacity(num_columns),
             offset_indexes: Vec::with_capacity(num_columns),
             total_bytes_written: 0,
+            total_uncompressed_bytes: 0,
         }
     }
 
@@ -443,6 +445,7 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
         let page_writer = Box::new(SerializedPageWriter::new(self.buf));
 
         let total_bytes_written = &mut self.total_bytes_written;
+        let total_uncompressed_bytes = &mut self.total_uncompressed_bytes;
         let total_rows_written = &mut self.total_rows_written;
         let column_chunks = &mut self.column_chunks;
         let column_indexes = &mut self.column_indexes;
@@ -452,6 +455,7 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
         let on_close = |r: ColumnCloseResult| {
             // Update row group writer metrics
             *total_bytes_written += r.bytes_written;
+            *total_uncompressed_bytes += r.metadata.uncompressed_size();
             column_chunks.push(r.metadata);
             bloom_filters.push(r.bloom_filter);
             column_indexes.push(r.column_index);
@@ -501,7 +505,7 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
             let column_chunks = std::mem::take(&mut self.column_chunks);
             let row_group_metadata = RowGroupMetaData::builder(self.descr.clone())
                 .set_column_metadata(column_chunks)
-                .set_total_byte_size(self.total_bytes_written as i64)
+                .set_total_byte_size(self.total_uncompressed_bytes)
                 .set_num_rows(self.total_rows_written.unwrap_or(0) as i64)
                 .set_sorting_columns(self.props.sorting_columns().cloned())
                 .build()?;
@@ -726,6 +730,7 @@ mod tests {
     };
     use crate::format::SortingColumn;
     use crate::record::{Row, RowAccessor};
+    use crate::schema::parser::parse_message_type;
     use crate::schema::types::{ColumnDescriptor, ColumnPath};
     use crate::util::memory::ByteBufferPtr;
 
@@ -749,7 +754,7 @@ mod tests {
         assert!(res.is_err());
         if let Err(err) = res {
             assert_eq!(
-                format!("{}", err),
+                format!("{err}"),
                 "Parquet error: Column length mismatch: 1 != 0"
             );
         }
@@ -1237,12 +1242,18 @@ mod tests {
     fn test_roundtrip_i32<W, R>(
         file: W,
         data: Vec<Vec<i32>>,
+        compression: Compression,
     ) -> crate::format::FileMetaData
     where
         W: Write,
         R: ChunkReader + From<W> + 'static,
     {
-        test_roundtrip::<W, R, Int32Type, _>(file, data, |r| r.get_int(0).unwrap())
+        test_roundtrip::<W, R, Int32Type, _>(
+            file,
+            data,
+            |r| r.get_int(0).unwrap(),
+            compression,
+        )
     }
 
     /// Tests roundtrip of data of type `D` written using `W` and read using `R`
@@ -1251,6 +1262,7 @@ mod tests {
         mut file: W,
         data: Vec<Vec<D::T>>,
         value: F,
+        compression: Compression,
     ) -> crate::format::FileMetaData
     where
         W: Write,
@@ -1269,7 +1281,11 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_compression(compression)
+                .build(),
+        );
         let mut file_writer =
             SerializedFileWriter::new(&mut file, schema, props).unwrap();
         let mut rows: i64 = 0;
@@ -1301,6 +1317,14 @@ mod tests {
             let row_group_reader = reader.get_row_group(i).unwrap();
             let iter = row_group_reader.get_row_iter(None).unwrap();
             let res: Vec<_> = iter.map(&value).collect();
+            let row_group_size = row_group_reader.metadata().total_byte_size();
+            let uncompressed_size: i64 = row_group_reader
+                .metadata()
+                .columns()
+                .iter()
+                .map(|v| v.uncompressed_size())
+                .sum();
+            assert_eq!(row_group_size, uncompressed_size);
             assert_eq!(res, *item);
         }
         file_metadata
@@ -1312,31 +1336,52 @@ mod tests {
         file: File,
         data: Vec<Vec<i32>>,
     ) -> crate::format::FileMetaData {
-        test_roundtrip_i32::<File, File>(file, data)
+        test_roundtrip_i32::<File, File>(file, data, Compression::UNCOMPRESSED)
     }
 
     #[test]
     fn test_bytes_writer_empty_row_groups() {
-        test_bytes_roundtrip(vec![]);
+        test_bytes_roundtrip(vec![], Compression::UNCOMPRESSED);
     }
 
     #[test]
     fn test_bytes_writer_single_row_group() {
-        test_bytes_roundtrip(vec![vec![1, 2, 3, 4, 5]]);
+        test_bytes_roundtrip(vec![vec![1, 2, 3, 4, 5]], Compression::UNCOMPRESSED);
     }
 
     #[test]
     fn test_bytes_writer_multiple_row_groups() {
-        test_bytes_roundtrip(vec![
-            vec![1, 2, 3, 4, 5],
-            vec![1, 2, 3],
-            vec![1],
-            vec![1, 2, 3, 4, 5, 6],
-        ]);
+        test_bytes_roundtrip(
+            vec![
+                vec![1, 2, 3, 4, 5],
+                vec![1, 2, 3],
+                vec![1],
+                vec![1, 2, 3, 4, 5, 6],
+            ],
+            Compression::UNCOMPRESSED,
+        );
     }
 
-    fn test_bytes_roundtrip(data: Vec<Vec<i32>>) {
-        test_roundtrip_i32::<Vec<u8>, Bytes>(Vec::with_capacity(1024), data);
+    #[test]
+    fn test_bytes_writer_single_row_group_compressed() {
+        test_bytes_roundtrip(vec![vec![1, 2, 3, 4, 5]], Compression::SNAPPY);
+    }
+
+    #[test]
+    fn test_bytes_writer_multiple_row_groups_compressed() {
+        test_bytes_roundtrip(
+            vec![
+                vec![1, 2, 3, 4, 5],
+                vec![1, 2, 3],
+                vec![1],
+                vec![1, 2, 3, 4, 5, 6],
+            ],
+            Compression::SNAPPY,
+        );
+    }
+
+    fn test_bytes_roundtrip(data: Vec<Vec<i32>>, compression: Compression) {
+        test_roundtrip_i32::<Vec<u8>, Bytes>(Vec::with_capacity(1024), data, compression);
     }
 
     #[test]
@@ -1346,6 +1391,18 @@ mod tests {
             Vec::with_capacity(1024),
             vec![my_bool_values],
             |r| r.get_bool(0).unwrap(),
+            Compression::UNCOMPRESSED,
+        );
+    }
+
+    #[test]
+    fn test_boolean_compressed_roundtrip() {
+        let my_bool_values: Vec<_> = (0..2049).map(|idx| idx % 2 == 0).collect();
+        test_roundtrip::<Vec<u8>, Bytes, BoolType, _>(
+            Vec::with_capacity(1024),
+            vec![my_bool_values],
+            |r| r.get_bool(0).unwrap(),
+            Compression::SNAPPY,
         );
     }
 
@@ -1427,5 +1484,60 @@ mod tests {
         test_kv_metadata(Some(vec![]), Some(vec![]));
         test_kv_metadata(Some(vec![kv1]), Some(vec![]));
         test_kv_metadata(None, Some(vec![]));
+    }
+
+    #[test]
+    fn test_backwards_compatible_statistics() {
+        let message_type = "
+            message test_schema {
+                REQUIRED INT32 decimal1 (DECIMAL(8,2));
+                REQUIRED INT32 i32 (INTEGER(32,true));
+                REQUIRED INT32 u32 (INTEGER(32,false));
+            }
+        ";
+
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let props = Arc::new(WriterProperties::builder().build());
+        let mut writer = SerializedFileWriter::new(vec![], schema, props).unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
+
+        for _ in 0..3 {
+            let mut writer = row_group_writer.next_column().unwrap().unwrap();
+            writer
+                .typed::<Int32Type>()
+                .write_batch(&[1, 2, 3], None, None)
+                .unwrap();
+            writer.close().unwrap();
+        }
+        let metadata = row_group_writer.close().unwrap();
+        writer.close().unwrap();
+
+        let thrift = metadata.to_thrift();
+        let encoded_stats: Vec<_> = thrift
+            .columns
+            .into_iter()
+            .map(|x| x.meta_data.unwrap().statistics.unwrap())
+            .collect();
+
+        // decimal
+        let s = &encoded_stats[0];
+        assert_eq!(s.min.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
+        assert_eq!(s.max.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
+        assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
+        assert_eq!(s.max_value.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
+
+        // i32
+        let s = &encoded_stats[1];
+        assert_eq!(s.min.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
+        assert_eq!(s.max.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
+        assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
+        assert_eq!(s.max_value.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
+
+        // u32
+        let s = &encoded_stats[2];
+        assert_eq!(s.min.as_deref(), None);
+        assert_eq!(s.max.as_deref(), None);
+        assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
+        assert_eq!(s.max_value.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
     }
 }

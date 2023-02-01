@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-buffer"
-version = "30.0.0"
+version = "32.0.0"
 description = "Buffer abstractions for Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"

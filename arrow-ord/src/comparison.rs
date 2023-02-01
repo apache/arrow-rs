@@ -452,7 +452,7 @@ fn try_to_type_result<T>(
     ty: &str,
 ) -> Result<T, ArrowError> {
     value.ok_or_else(|| {
-        ArrowError::ComputeError(format!("Could not convert {} with {}", right, ty,))
+        ArrowError::ComputeError(format!("Could not convert {right} with {ty}",))
     })
 }
 
@@ -628,6 +628,8 @@ macro_rules! dyn_compare_utf8_scalar {
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
@@ -647,6 +649,8 @@ where
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn lt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
@@ -666,6 +670,8 @@ where
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn lt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
@@ -685,6 +691,8 @@ where
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn gt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
@@ -704,6 +712,8 @@ where
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn gt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
@@ -723,6 +733,8 @@ where
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn neq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray, ArrowError>
 where
@@ -2098,6 +2110,8 @@ where
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 ///
 /// # Example
@@ -2141,6 +2155,8 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, Arrow
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 ///
 /// # Example
@@ -2186,6 +2202,8 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, Arro
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 ///
 /// # Example
@@ -2231,6 +2249,8 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, Arrow
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 ///
 /// # Example
@@ -2278,6 +2298,8 @@ pub fn lt_eq_dyn(
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 ///
 /// # Example
@@ -2322,6 +2344,8 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, Arrow
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 ///
 /// # Example
@@ -2366,6 +2390,8 @@ pub fn gt_eq_dyn(
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn eq<T>(
     left: &PrimitiveArray<T>,
@@ -2386,6 +2412,8 @@ where
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn eq_scalar<T>(
     left: &PrimitiveArray<T>,
@@ -2418,6 +2446,8 @@ where
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn neq<T>(
     left: &PrimitiveArray<T>,
@@ -2438,6 +2468,8 @@ where
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn neq_scalar<T>(
     left: &PrimitiveArray<T>,
@@ -2459,6 +2491,8 @@ where
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn lt<T>(
     left: &PrimitiveArray<T>,
@@ -2480,6 +2514,8 @@ where
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn lt_scalar<T>(
     left: &PrimitiveArray<T>,
@@ -2501,6 +2537,8 @@ where
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn lt_eq<T>(
     left: &PrimitiveArray<T>,
@@ -2522,6 +2560,8 @@ where
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn lt_eq_scalar<T>(
     left: &PrimitiveArray<T>,
@@ -2543,6 +2583,8 @@ where
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn gt<T>(
     left: &PrimitiveArray<T>,
@@ -2564,6 +2606,8 @@ where
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn gt_scalar<T>(
     left: &PrimitiveArray<T>,
@@ -2585,6 +2629,8 @@ where
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn gt_eq<T>(
     left: &PrimitiveArray<T>,
@@ -2606,6 +2652,8 @@ where
 /// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
+/// Note that totalOrder treats positive and negative zeros are different. If it is necessary
+/// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 pub fn gt_eq_scalar<T>(
     left: &PrimitiveArray<T>,
@@ -3664,7 +3712,8 @@ mod tests {
         // value_offsets = [0, 3, 6, 6]
         let list_array = builder.finish();
 
-        let nulls = StringArray::from(vec![None, None, None, None]);
+        let v: Vec<Option<&str>> = vec![None, None, None, None];
+        let nulls = StringArray::from(v);
         let nulls_result = contains_utf8(&nulls, &list_array).unwrap();
         assert_eq!(
             nulls_result
@@ -5826,6 +5875,25 @@ mod tests {
 
         let r = gt_eq_dyn(&a, &b).unwrap();
         assert_eq!(e, r);
+    }
+
+    #[test]
+    #[cfg(not(feature = "simd"))]
+    fn test_floating_zeros() {
+        let a = Float32Array::from(vec![0.0_f32, -0.0]);
+        let b = Float32Array::from(vec![-0.0_f32, 0.0]);
+
+        let result = eq_dyn(&a, &b).unwrap();
+        let excepted = BooleanArray::from(vec![false, false]);
+        assert_eq!(excepted, result);
+
+        let result = eq_dyn_scalar(&a, 0.0).unwrap();
+        let excepted = BooleanArray::from(vec![true, false]);
+        assert_eq!(excepted, result);
+
+        let result = eq_dyn_scalar(&a, -0.0).unwrap();
+        let excepted = BooleanArray::from(vec![false, true]);
+        assert_eq!(excepted, result);
     }
 
     #[derive(Debug)]

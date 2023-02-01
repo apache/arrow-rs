@@ -17,6 +17,10 @@
 
 name: dev
 
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
 # trigger for all PRs and changes to master
 on:
   push:

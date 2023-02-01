@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-json"
-version = "30.0.0"
+version = "32.0.0"
 description = "Support for parsing JSON format into the Arrow format"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -38,16 +38,17 @@ path = "src/lib.rs"
 bench = false
 
 [dependencies]
-arrow-array = { version = "30.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "30.0.0", path = "../arrow-buffer" }
-arrow-cast = { version = "30.0.0", path = "../arrow-cast" }
-arrow-data = { version = "30.0.0", path = "../arrow-data" }
-arrow-schema = { version = "30.0.0", path = "../arrow-schema" }
+arrow-array = { version = "32.0.0", path = "../arrow-array" }
+arrow-buffer = { version = "32.0.0", path = "../arrow-buffer" }
+arrow-cast = { version = "32.0.0", path = "../arrow-cast" }
+arrow-data = { version = "32.0.0", path = "../arrow-data" }
+arrow-schema = { version = "32.0.0", path = "../arrow-schema" }
 half = { version = "2.1", default-features = false }
 indexmap = { version = "1.9", default-features = false, features = ["std"] }
 num = { version = "0.4", default-features = false, features = ["std"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
+lexical-core = { version = "0.8", default-features = false }
 
 [dev-dependencies]
 tempfile = "3.3"

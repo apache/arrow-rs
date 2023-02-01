@@ -31,7 +31,7 @@
 //!
 //! The current list of sub-crates is:
 //!
-//! * [`arrow-arith][arrow_arith] - arithmetic kernels
+//! * [`arrow-arith`][arrow_arith] - arithmetic kernels
 //! * [`arrow-array`][arrow_array] - type-safe arrow array abstractions
 //! * [`arrow-buffer`][arrow_buffer] - buffer abstractions for arrow arrays
 //! * [`arrow-cast`][arrow_cast] - cast kernels for arrow arrays

@@ -142,13 +142,9 @@ impl Field {
     }
 
     /// Sets the `Field`'s optional custom metadata.
-    /// The metadata is set as `None` for empty map.
     #[inline]
     pub fn set_metadata(&mut self, metadata: HashMap<String, String>) {
-        self.metadata = HashMap::default();
-        if !metadata.is_empty() {
-            self.metadata = metadata;
-        }
+        self.metadata = metadata;
     }
 
     /// Sets the metadata of this `Field` to be `metadata` and returns self
@@ -410,6 +406,7 @@ impl Field {
             | DataType::List(_)
             | DataType::Map(_, _)
             | DataType::Dictionary(_, _)
+            | DataType::RunEndEncoded(_, _)
             | DataType::FixedSizeList(_, _)
             | DataType::FixedSizeBinary(_)
             | DataType::Utf8
@@ -475,7 +472,7 @@ impl Field {
 // TODO: improve display with crate https://crates.io/crates/derive_more ?
 impl std::fmt::Display for Field {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 

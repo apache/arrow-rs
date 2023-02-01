@@ -628,30 +628,26 @@ mod tests {
         assert!(assert_token(None, "b").is_err());
     }
 
-    #[test]
-    fn test_parse_message_type_invalid() {
-        let mut iter = Tokenizer::from_str("test");
-        let result = Parser {
+    fn parse(schema: &str) -> Result<Type, ParquetError> {
+        let mut iter = Tokenizer::from_str(schema);
+        Parser {
             tokenizer: &mut iter,
         }
-        .parse_message_type();
-        assert!(result.is_err());
+        .parse_message_type()
+    }
+
+    #[test]
+    fn test_parse_message_type_invalid() {
         assert_eq!(
-            result.unwrap_err().to_string(),
+            parse("test").unwrap_err().to_string(),
             "Parquet error: Message type does not start with 'message'"
         );
     }
 
     #[test]
     fn test_parse_message_type_no_name() {
-        let mut iter = Tokenizer::from_str("message");
-        let result = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type();
-        assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err().to_string(),
+            parse("message").unwrap_err().to_string(),
             "Parquet error: Expected name, found None"
         );
     }
@@ -659,46 +655,34 @@ mod tests {
     #[test]
     fn test_parse_message_type_fixed_byte_array() {
         let schema = "
-    message schema {
-      REQUIRED FIXED_LEN_BYTE_ARRAY col;
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let result = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type();
-        assert!(result.is_err());
+            message schema {
+              REQUIRED FIXED_LEN_BYTE_ARRAY col;
+            }
+        ";
+        assert_eq!(
+            parse(schema).unwrap_err().to_string(),
+            "Parquet error: Expected '(', found token 'col'"
+        );
 
         let schema = "
-    message schema {
-      REQUIRED FIXED_LEN_BYTE_ARRAY(16) col;
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let result = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type();
-        assert!(result.is_ok());
+            message schema {
+              REQUIRED FIXED_LEN_BYTE_ARRAY(16) col;
+            }
+        ";
+        parse(schema).unwrap();
     }
 
     #[test]
     fn test_parse_message_type_integer() {
         // Invalid integer syntax
         let schema = "
-    message root {
-      optional int64 f1 (INTEGER());
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let result = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type();
+            message root {
+              optional int64 f1 (INTEGER());
+            }
+        ";
         assert_eq!(
-            result,
-            Err(general_err!("Failed to parse bit_width for INTEGER type"))
+            parse(schema).unwrap_err().to_string(),
+            "Parquet error: Failed to parse bit_width for INTEGER type"
         );
 
         // Invalid integer syntax, needs both bit-width and UTC sign
@@ -707,123 +691,87 @@ mod tests {
       optional int64 f1 (INTEGER(32,));
     }
     ";
-        let mut iter = Tokenizer::from_str(schema);
-        let result = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type();
         assert_eq!(
-            result,
-            Err(general_err!("Incorrect bit width 32 for INT64"))
+            parse(schema).unwrap_err().to_string(),
+            "Parquet error: Incorrect bit width 32 for INT64"
         );
 
         // Invalid integer because of non-numeric bit width
         let schema = "
-    message root {
-      optional int32 f1 (INTEGER(eight,true));
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let result = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type();
+            message root {
+              optional int32 f1 (INTEGER(eight,true));
+            }
+        ";
         assert_eq!(
-            result,
-            Err(general_err!("Failed to parse bit_width for INTEGER type"))
+            parse(schema).unwrap_err().to_string(),
+            "Parquet error: Failed to parse bit_width for INTEGER type"
         );
 
         // Valid types
         let schema = "
-    message root {
-      optional int32 f1 (INTEGER(8,false));
-      optional int32 f2 (INTEGER(8,true));
-      optional int32 f3 (INTEGER(16,false));
-      optional int32 f4 (INTEGER(16,true));
-      optional int32 f5 (INTEGER(32,false));
-      optional int32 f6 (INTEGER(32,true));
-      optional int64 f7 (INTEGER(64,false));
-      optional int64 f7 (INTEGER(64,true));
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let result = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type();
-        assert!(result.is_ok());
+            message root {
+              optional int32 f1 (INTEGER(8,false));
+              optional int32 f2 (INTEGER(8,true));
+              optional int32 f3 (INTEGER(16,false));
+              optional int32 f4 (INTEGER(16,true));
+              optional int32 f5 (INTEGER(32,false));
+              optional int32 f6 (INTEGER(32,true));
+              optional int64 f7 (INTEGER(64,false));
+              optional int64 f7 (INTEGER(64,true));
+            }
+        ";
+        parse(schema).unwrap();
     }
 
     #[test]
     fn test_parse_message_type_temporal() {
         // Invalid timestamp syntax
         let schema = "
-    message root {
-      optional int64 f1 (TIMESTAMP();
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let result = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type();
+            message root {
+              optional int64 f1 (TIMESTAMP();
+            }
+        ";
         assert_eq!(
-            result,
-            Err(general_err!("Failed to parse timeunit for TIMESTAMP type"))
+            parse(schema).unwrap_err().to_string(),
+            "Parquet error: Failed to parse timeunit for TIMESTAMP type"
         );
 
         // Invalid timestamp syntax, needs both unit and UTC adjustment
         let schema = "
-    message root {
-      optional int64 f1 (TIMESTAMP(MILLIS,));
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let result = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type();
+            message root {
+              optional int64 f1 (TIMESTAMP(MILLIS,));
+            }
+        ";
         assert_eq!(
-            result,
-            Err(general_err!(
-                "Failed to parse timezone info for TIMESTAMP type"
-            ))
+            parse(schema).unwrap_err().to_string(),
+            "Parquet error: Failed to parse timezone info for TIMESTAMP type"
         );
 
         // Invalid timestamp because of unknown unit
         let schema = "
-    message root {
-      optional int64 f1 (TIMESTAMP(YOCTOS,));
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let result = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type();
+            message root {
+              optional int64 f1 (TIMESTAMP(YOCTOS,));
+            }
+        ";
+
         assert_eq!(
-            result,
-            Err(general_err!("Failed to parse timeunit for TIMESTAMP type"))
+            parse(schema).unwrap_err().to_string(),
+            "Parquet error: Failed to parse timeunit for TIMESTAMP type"
         );
 
         // Valid types
         let schema = "
-    message root {
-      optional int32 f1 (DATE);
-      optional int32 f2 (TIME(MILLIS,true));
-      optional int64 f3 (TIME(MICROS,false));
-      optional int64 f4 (TIME(NANOS,true));
-      optional int64 f5 (TIMESTAMP(MILLIS,true));
-      optional int64 f6 (TIMESTAMP(MICROS,true));
-      optional int64 f7 (TIMESTAMP(NANOS,false));
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let result = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type();
-        assert!(result.is_ok());
+            message root {
+              optional int32 f1 (DATE);
+              optional int32 f2 (TIME(MILLIS,true));
+              optional int64 f3 (TIME(MICROS,false));
+              optional int64 f4 (TIME(NANOS,true));
+              optional int64 f5 (TIMESTAMP(MILLIS,true));
+              optional int64 f6 (TIMESTAMP(MICROS,true));
+              optional int64 f7 (TIMESTAMP(NANOS,false));
+            }
+        ";
+        parse(schema).unwrap();
     }
 
     #[test]
@@ -833,86 +781,68 @@ mod tests {
 
         // Invalid decimal syntax
         let schema = "
-    message root {
-      optional int32 f1 (DECIMAL();
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let result = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type();
-        assert!(result.is_err());
+            message root {
+              optional int32 f1 (DECIMAL();
+            }
+        ";
+        assert_eq!(
+            parse(schema).unwrap_err().to_string(),
+            "Parquet error: Failed to parse precision for DECIMAL type"
+        );
 
         // Invalid decimal, need precision and scale
         let schema = "
-    message root {
-      optional int32 f1 (DECIMAL());
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let result = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type();
-        assert!(result.is_err());
+            message root {
+              optional int32 f1 (DECIMAL());
+            }
+        ";
+        assert_eq!(
+            parse(schema).unwrap_err().to_string(),
+            "Parquet error: Failed to parse precision for DECIMAL type"
+        );
 
         // Invalid decimal because of `,` - has precision, needs scale
         let schema = "
-    message root {
-      optional int32 f1 (DECIMAL(8,));
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let result = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type();
-        assert!(result.is_err());
+            message root {
+              optional int32 f1 (DECIMAL(8,));
+            }
+        ";
+        assert_eq!(
+            parse(schema).unwrap_err().to_string(),
+            "Parquet error: Failed to parse scale for DECIMAL type"
+        );
 
         // Invalid decimal because, we always require either precision or scale to be
         // specified as part of converted type
         let schema = "
-    message root {
-      optional int32 f3 (DECIMAL);
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let result = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type();
-        assert!(result.is_err());
+            message root {
+              optional int32 f3 (DECIMAL);
+            }
+        ";
+        assert_eq!(
+            parse(schema).unwrap_err().to_string(),
+            "Parquet error: Expected ')', found token ';'"
+        );
 
         // Valid decimal (precision, scale)
         let schema = "
-    message root {
-      optional int32 f1 (DECIMAL(8, 3));
-      optional int32 f2 (DECIMAL(8));
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let result = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type();
-        assert!(result.is_ok());
+            message root {
+              optional int32 f1 (DECIMAL(8, 3));
+              optional int32 f2 (DECIMAL(8));
+            }
+        ";
+        parse(schema).unwrap();
     }
 
     #[test]
     fn test_parse_message_type_compare_1() {
         let schema = "
-    message root {
-      optional fixed_len_byte_array(5) f1 (DECIMAL(9, 3));
-      optional fixed_len_byte_array (16) f2 (DECIMAL (38, 18));
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let message = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type()
-        .unwrap();
+            message root {
+              optional fixed_len_byte_array(5) f1 (DECIMAL(9, 3));
+              optional fixed_len_byte_array (16) f2 (DECIMAL (38, 18));
+            }
+        ";
+        let message = parse(schema).unwrap();
 
         let expected = Type::group_type_builder("root")
             .with_fields(&mut vec![
@@ -958,27 +888,22 @@ mod tests {
     #[test]
     fn test_parse_message_type_compare_2() {
         let schema = "
-    message root {
-      required group a0 {
-        optional group a1 (LIST) {
-          repeated binary a2 (UTF8);
-        }
+            message root {
+              required group a0 {
+                optional group a1 (LIST) {
+                  repeated binary a2 (UTF8);
+                }
 
-        optional group b1 (LIST) {
-          repeated group b2 {
-            optional int32 b3;
-            optional double b4;
-          }
-        }
-      }
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let message = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type()
-        .unwrap();
+                optional group b1 (LIST) {
+                  repeated group b2 {
+                    optional int32 b3;
+                    optional double b4;
+                  }
+                }
+              }
+            }
+        ";
+        let message = parse(schema).unwrap();
 
         let expected = Type::group_type_builder("root")
             .with_fields(&mut vec![Arc::new(
@@ -1048,21 +973,16 @@ mod tests {
     #[test]
     fn test_parse_message_type_compare_3() {
         let schema = "
-    message root {
-      required int32 _1 (INT_8);
-      required int32 _2 (INT_16);
-      required float _3;
-      required double _4;
-      optional int32 _5 (DATE);
-      optional binary _6 (UTF8);
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let message = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type()
-        .unwrap();
+            message root {
+              required int32 _1 (INT_8);
+              required int32 _2 (INT_16);
+              required float _3;
+              required double _4;
+              optional int32 _5 (DATE);
+              optional binary _6 (UTF8);
+            }
+        ";
+        let message = parse(schema).unwrap();
 
         let mut fields = vec![
             Arc::new(
@@ -1116,25 +1036,20 @@ mod tests {
     #[test]
     fn test_parse_message_type_compare_4() {
         let schema = "
-    message root {
-      required int32 _1 (INTEGER(8,true));
-      required int32 _2 (INTEGER(16,false));
-      required float _3;
-      required double _4;
-      optional int32 _5 (DATE);
-      optional int32 _6 (TIME(MILLIS,false));
-      optional int64 _7 (TIME(MICROS,true));
-      optional int64 _8 (TIMESTAMP(MILLIS,true));
-      optional int64 _9 (TIMESTAMP(NANOS,false));
-      optional binary _10 (STRING);
-    }
-    ";
-        let mut iter = Tokenizer::from_str(schema);
-        let message = Parser {
-            tokenizer: &mut iter,
-        }
-        .parse_message_type()
-        .unwrap();
+            message root {
+              required int32 _1 (INTEGER(8,true));
+              required int32 _2 (INTEGER(16,false));
+              required float _3;
+              required double _4;
+              optional int32 _5 (DATE);
+              optional int32 _6 (TIME(MILLIS,false));
+              optional int64 _7 (TIME(MICROS,true));
+              optional int64 _8 (TIMESTAMP(MILLIS,true));
+              optional int64 _9 (TIMESTAMP(NANOS,false));
+              optional binary _10 (STRING);
+            }
+        ";
+        let message = parse(schema).unwrap();
 
         let mut fields = vec![
             Arc::new(

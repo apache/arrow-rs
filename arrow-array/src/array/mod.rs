@@ -64,6 +64,9 @@ pub use struct_array::*;
 mod union_array;
 pub use union_array::*;
 
+mod run_array;
+pub use run_array::*;
+
 /// Trait for dealing with different types of array at runtime when the type of the
 /// array is not known in advance.
 pub trait Array: std::fmt::Debug + Send + Sync {
@@ -577,12 +580,26 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
             DataType::UInt64 => {
                 Arc::new(DictionaryArray::<UInt64Type>::from(data)) as ArrayRef
             }
-            dt => panic!("Unexpected dictionary key type {:?}", dt),
+            dt => panic!("Unexpected dictionary key type {dt:?}"),
         },
+        DataType::RunEndEncoded(ref run_ends_type, _) => {
+            match run_ends_type.data_type() {
+                DataType::Int16 => {
+                    Arc::new(RunArray::<Int16Type>::from(data)) as ArrayRef
+                }
+                DataType::Int32 => {
+                    Arc::new(RunArray::<Int32Type>::from(data)) as ArrayRef
+                }
+                DataType::Int64 => {
+                    Arc::new(RunArray::<Int64Type>::from(data)) as ArrayRef
+                }
+                dt => panic!("Unexpected data type for run_ends array {dt:?}"),
+            }
+        }
         DataType::Null => Arc::new(NullArray::from(data)) as ArrayRef,
         DataType::Decimal128(_, _) => Arc::new(Decimal128Array::from(data)) as ArrayRef,
         DataType::Decimal256(_, _) => Arc::new(Decimal256Array::from(data)) as ArrayRef,
-        dt => panic!("Unexpected data type {:?}", dt),
+        dt => panic!("Unexpected data type {dt:?}"),
     }
 }
 
@@ -737,6 +754,7 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
             new_null_sized_decimal(data_type, length, std::mem::size_of::<i128>())
         }
         DataType::Decimal256(_, _) => new_null_sized_decimal(data_type, length, 32),
+        DataType::RunEndEncoded(_, _) => todo!(),
     }
 }
 

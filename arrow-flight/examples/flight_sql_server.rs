@@ -24,6 +24,8 @@ use arrow_flight::{
     Action, FlightData, FlightEndpoint, HandshakeRequest, HandshakeResponse, IpcMessage,
     Location, SchemaAsIpc, Ticket,
 };
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use futures::{stream, Stream};
 use prost::Message;
 use std::pin::Pin;
@@ -91,12 +93,12 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| status!("authorization not parsable", e))?;
         if !authorization.starts_with(basic) {
             Err(Status::invalid_argument(format!(
-                "Auth type not implemented: {}",
-                authorization
+                "Auth type not implemented: {authorization}"
             )))?;
         }
         let base64 = &authorization[basic.len()..];
-        let bytes = base64::decode(base64)
+        let bytes = BASE64_STANDARD
+            .decode(base64)
             .map_err(|e| status!("authorization not decodable", e))?;
         let str = String::from_utf8(bytes)
             .map_err(|e| status!("authorization not parsable", e))?;
@@ -470,7 +472,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
 
-    println!("Listening on {:?}", addr);
+    println!("Listening on {addr:?}");
 
     let cert = std::fs::read_to_string("arrow-flight/examples/data/server.pem")?;
     let key = std::fs::read_to_string("arrow-flight/examples/data/server.key")?;

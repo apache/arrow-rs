@@ -17,7 +17,7 @@
 
 [package]
 name = "parquet"
-version = "30.0.0"
+version = "32.0.0"
 license = "Apache-2.0"
 description = "Apache Parquet implementation in Rust"
 homepage = "https://github.com/apache/arrow-rs"
@@ -35,14 +35,14 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
-arrow-array = { version = "30.0.0", path = "../arrow-array", default-features = false, optional = true }
-arrow-buffer = { version = "30.0.0", path = "../arrow-buffer", default-features = false, optional = true }
-arrow-cast = { version = "30.0.0", path = "../arrow-cast", default-features = false, optional = true }
-arrow-csv = { version = "30.0.0", path = "../arrow-csv", default-features = false, optional = true }
-arrow-data = { version = "30.0.0", path = "../arrow-data", default-features = false, optional = true }
-arrow-schema = { version = "30.0.0", path = "../arrow-schema", default-features = false, optional = true }
-arrow-select = { version = "30.0.0", path = "../arrow-select", default-features = false, optional = true }
-arrow-ipc = { version = "30.0.0", path = "../arrow-ipc", default-features = false, optional = true }
+arrow-array = { version = "32.0.0", path = "../arrow-array", default-features = false, optional = true }
+arrow-buffer = { version = "32.0.0", path = "../arrow-buffer", default-features = false, optional = true }
+arrow-cast = { version = "32.0.0", path = "../arrow-cast", default-features = false, optional = true }
+arrow-csv = { version = "32.0.0", path = "../arrow-csv", default-features = false, optional = true }
+arrow-data = { version = "32.0.0", path = "../arrow-data", default-features = false, optional = true }
+arrow-schema = { version = "32.0.0", path = "../arrow-schema", default-features = false, optional = true }
+arrow-select = { version = "32.0.0", path = "../arrow-select", default-features = false, optional = true }
+arrow-ipc = { version = "32.0.0", path = "../arrow-ipc", default-features = false, optional = true }
 object_store = { version = "0.5", path = "../object_store", default-features = false, optional = true }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
@@ -55,8 +55,8 @@ zstd = { version = "0.12.0", optional = true, default-features = false }
 chrono = { version = "0.4.23", default-features = false, features = ["alloc"] }
 num = { version = "0.4", default-features = false }
 num-bigint = { version = "0.4", default-features = false }
-base64 = { version = "0.20", default-features = false, features = ["std", ], optional = true }
-clap = { version = "4", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
+base64 = { version = "0.21", default-features = false, features = ["std", ], optional = true }
+clap = { version = "4.1", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 seq-macro = { version = "0.3", default-features = false }
@@ -67,7 +67,7 @@ twox-hash = { version = "1.6", default-features = false }
 paste = { version = "1.0" }
 
 [dev-dependencies]
-base64 = { version = "0.20", default-features = false, features = ["std"] }
+base64 = { version = "0.21", default-features = false, features = ["std"] }
 criterion = { version = "0.4", default-features = false }
 snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
@@ -76,7 +76,7 @@ flate2 = { version = "1.0", default-features = false, features = ["rust_backend"
 lz4 = { version = "1.23", default-features = false }
 zstd = { version = "0.12", default-features = false }
 serde_json = { version = "1.0", features = ["std"], default-features = false }
-arrow = { path = "../arrow", version = "30.0.0", default-features = false, features = ["ipc", "test_utils", "prettyprint", "json"] }
+arrow = { path = "../arrow", version = "32.0.0", default-features = false, features = ["ipc", "test_utils", "prettyprint", "json"] }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "io-util", "fs"] }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 
@@ -117,6 +117,10 @@ required-features = ["arrow"]
 [[bin]]
 name = "parquet-read"
 required-features = ["cli"]
+
+[[bin]]
+name = "parquet-rewrite"
+required-features = ["arrow", "cli"]
 
 [[bin]]
 name = "parquet-schema"

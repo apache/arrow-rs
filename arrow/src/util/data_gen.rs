@@ -101,8 +101,7 @@ pub fn create_random_array(
             >(size, null_density)),
             _ => {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "Unsupported unit {:?} for Time32",
-                    unit
+                    "Unsupported unit {unit:?} for Time32"
                 )))
             }
         },
@@ -115,8 +114,7 @@ pub fn create_random_array(
             >(size, null_density)),
             _ => {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "Unsupported unit {:?} for Time64",
-                    unit
+                    "Unsupported unit {unit:?} for Time64"
                 )))
             }
         },
@@ -153,8 +151,7 @@ pub fn create_random_array(
         }
         other => {
             return Err(ArrowError::NotYetImplemented(format!(
-                "Generating random arrays not yet implemented for {:?}",
-                other
+                "Generating random arrays not yet implemented for {other:?}"
             )))
         }
     })
@@ -186,8 +183,7 @@ fn create_random_list_array(
         }
         _ => {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot create list array for field {:?}",
-                field
+                "Cannot create list array for field {field:?}"
             )))
         }
     };
@@ -342,7 +338,7 @@ mod tests {
         let col_c_values = col_c.values();
         assert!(col_c_values.len() > size);
         // col_c_values should be a list
-        let col_c_list = col_c_values.as_any().downcast_ref::<ListArray>().unwrap();
+        let col_c_list = as_list_array(col_c_values);
         // Its values should be FixedSizeBinary(6)
         let fsb = col_c_list.values();
         assert_eq!(fsb.data_type(), &DataType::FixedSizeBinary(6));

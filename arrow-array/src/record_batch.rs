@@ -20,6 +20,7 @@
 
 use crate::{new_empty_array, Array, ArrayRef, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
+use std::ops::Index;
 use std::sync::Arc;
 
 /// Trait for types that can read `RecordBatch`'s.
@@ -191,10 +192,7 @@ impl RecordBatch {
 
         if let Some((i, (col_type, field_type))) = not_match {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "column types must match schema types, expected {:?} but found {:?} at column index {}",
-                field_type,
-                col_type,
-                i)));
+                "column types must match schema types, expected {field_type:?} but found {col_type:?} at column index {i}")));
         }
 
         Ok(RecordBatch {
@@ -286,6 +284,13 @@ impl RecordBatch {
     /// Panics if `index` is outside of `0..num_columns`.
     pub fn column(&self, index: usize) -> &ArrayRef {
         &self.columns[index]
+    }
+
+    /// Get a reference to a column's array by name.
+    pub fn column_by_name(&self, name: &str) -> Option<&ArrayRef> {
+        self.schema()
+            .column_with_name(name)
+            .map(|(index, _)| &self.columns[index])
     }
 
     /// Get a reference to all columns in the record batch.
@@ -470,6 +475,19 @@ impl From<RecordBatch> for StructArray {
             .map(|t| (t.0.clone(), t.1.clone()))
             .collect::<Vec<(Field, ArrayRef)>>()
             .into()
+    }
+}
+
+impl Index<&str> for RecordBatch {
+    type Output = ArrayRef;
+
+    /// Get a reference to a column's array by name.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the name is not in the schema.
+    fn index(&self, name: &str) -> &Self::Output {
+        self.column_by_name(name).unwrap()
     }
 }
 
@@ -744,6 +762,25 @@ mod tests {
         .unwrap();
 
         assert_eq!(batch1, batch2);
+    }
+
+    /// validates if the record batch can be accessed using `column_name` as index i.e. `record_batch["column_name"]`
+    #[test]
+    fn record_batch_index_access() {
+        let id_arr = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let val_arr = Arc::new(Int32Array::from(vec![5, 6, 7, 8]));
+        let schema1 = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("val", DataType::Int32, false),
+        ]);
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema1),
+            vec![id_arr.clone(), val_arr.clone()],
+        )
+        .unwrap();
+
+        assert_eq!(record_batch["id"].as_ref(), id_arr.as_ref());
+        assert_eq!(record_batch["val"].as_ref(), val_arr.as_ref());
     }
 
     #[test]

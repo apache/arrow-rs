@@ -379,8 +379,7 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
                 Ok(offset)
             } else {
                 Err(ArrowError::ComputeError(format!(
-                    "The offset {} is at an invalid utf-8 boundary.",
-                    offset_usize
+                    "The offset {offset_usize} is at an invalid utf-8 boundary."
                 )))
             }
         }

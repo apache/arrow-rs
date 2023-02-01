@@ -230,6 +230,7 @@ fn build_extend(array: &ArrayData) -> Extend {
             UnionMode::Sparse => union::build_extend_sparse(array),
             UnionMode::Dense => union::build_extend_dense(array),
         },
+        DataType::RunEndEncoded(_, _) => todo!(),
     }
 }
 
@@ -281,6 +282,7 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
             UnionMode::Sparse => union::extend_nulls_sparse,
             UnionMode::Dense => union::extend_nulls_dense,
         },
+        DataType::RunEndEncoded(_, _) => todo!(),
     })
 }
 
@@ -379,7 +381,7 @@ impl<'a> MutableArrayData<'a> {
                 array_capacity = *capacity;
                 new_buffers(data_type, *capacity)
             }
-            _ => panic!("Capacities: {:?} not yet supported", capacities),
+            _ => panic!("Capacities: {capacities:?} not yet supported"),
         };
 
         let child_data = match &data_type {
@@ -473,6 +475,20 @@ impl<'a> MutableArrayData<'a> {
                     })
                     .collect::<Vec<_>>(),
             },
+            DataType::RunEndEncoded(_, _) => {
+                let run_ends_child = arrays
+                    .iter()
+                    .map(|array| &array.child_data()[0])
+                    .collect::<Vec<_>>();
+                let value_child = arrays
+                    .iter()
+                    .map(|array| &array.child_data()[1])
+                    .collect::<Vec<_>>();
+                vec![
+                    MutableArrayData::new(run_ends_child, false, array_capacity),
+                    MutableArrayData::new(value_child, use_nulls, array_capacity),
+                ]
+            }
             DataType::FixedSizeList(_, _) => {
                 let childs = arrays
                     .iter()

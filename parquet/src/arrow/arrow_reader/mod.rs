@@ -50,7 +50,7 @@ pub use selection::{RowSelection, RowSelector};
 /// * For a synchronous API - [`ParquetRecordBatchReaderBuilder`]
 /// * For an asynchronous API - [`ParquetRecordBatchStreamBuilder`]
 ///
-/// [`ParquetRecordBatchStreamBuilder`]: [crate::arrow::async_reader::ParquetRecordBatchStreamBuilder]
+/// [`ParquetRecordBatchStreamBuilder`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder
 pub struct ArrowReaderBuilder<T> {
     pub(crate) input: T,
 
@@ -69,6 +69,8 @@ pub struct ArrowReaderBuilder<T> {
     pub(crate) filter: Option<RowFilter>,
 
     pub(crate) selection: Option<RowSelection>,
+
+    pub(crate) limit: Option<usize>,
 }
 
 impl<T> ArrowReaderBuilder<T> {
@@ -98,6 +100,7 @@ impl<T> ArrowReaderBuilder<T> {
             projection: ProjectionMask::all(),
             filter: None,
             selection: None,
+            limit: None,
         })
     }
 
@@ -150,7 +153,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// An example use case of this would be applying a selection determined by
     /// evaluating predicates against the [`Index`]
     ///
-    /// [`Index`]: [parquet::file::page_index::index::Index]
+    /// [`Index`]: crate::file::page_index::index::Index
     pub fn with_row_selection(self, selection: RowSelection) -> Self {
         Self {
             selection: Some(selection),
@@ -164,6 +167,17 @@ impl<T> ArrowReaderBuilder<T> {
     pub fn with_row_filter(self, filter: RowFilter) -> Self {
         Self {
             filter: Some(filter),
+            ..self
+        }
+    }
+
+    /// Provide a limit to the number of rows to be read
+    ///
+    /// The limit will be applied after any [`Self::with_row_selection`] and [`Self::with_row_filter`]
+    /// allowing it to limit the final set of rows decoded after any pushed down predicates
+    pub fn with_limit(self, limit: usize) -> Self {
+        Self {
+            limit: Some(limit),
             ..self
         }
     }
@@ -238,7 +252,7 @@ impl ArrowReaderOptions {
     /// Set this true to enable decoding of the [PageIndex] if present. This can be used
     /// to push down predicates to the parquet scan, potentially eliminating unnecessary IO
     ///
-    /// [PageIndex]: [https://github.com/apache/parquet-format/blob/master/PageIndex.md]
+    /// [PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_page_index(self, page_index: bool) -> Self {
         Self { page_index, ..self }
     }
@@ -451,6 +465,19 @@ impl<T: ChunkReader + 'static> ArrowReaderBuilder<SyncReader<T>> {
         // If selection is empty, truncate
         if !selects_any(selection.as_ref()) {
             selection = Some(RowSelection::from(vec![]));
+        }
+
+        // If a limit is defined, apply it to the final `RowSelection`
+        if let Some(limit) = self.limit {
+            selection = Some(
+                selection
+                    .map(|selection| selection.limit(limit))
+                    .unwrap_or_else(|| {
+                        RowSelection::from(vec![RowSelector::select(
+                            limit.min(reader.num_rows()),
+                        )])
+                    }),
+            );
         }
 
         Ok(ParquetRecordBatchReader::new(
@@ -1161,7 +1188,7 @@ mod tests {
             ("int64", 10),
         ];
         for (prefix, target_precision) in file_variants {
-            let path = format!("{}/{}_decimal.parquet", testdata, prefix);
+            let path = format!("{testdata}/{prefix}_decimal.parquet");
             let file = File::open(path).unwrap();
             let mut record_reader = ParquetRecordBatchReader::try_new(file, 32).unwrap();
 
@@ -1215,6 +1242,8 @@ mod tests {
         row_selections: Option<(RowSelection, usize)>,
         /// row filter
         row_filter: Option<Vec<bool>>,
+        /// limit
+        limit: Option<usize>,
     }
 
     /// Manually implement this to avoid printing entire contents of row_selections and row_filter
@@ -1233,6 +1262,7 @@ mod tests {
                 .field("encoding", &self.encoding)
                 .field("row_selections", &self.row_selections.is_some())
                 .field("row_filter", &self.row_filter.is_some())
+                .field("limit", &self.limit)
                 .finish()
         }
     }
@@ -1252,6 +1282,7 @@ mod tests {
                 encoding: Encoding::PLAIN,
                 row_selections: None,
                 row_filter: None,
+                limit: None,
             }
         }
     }
@@ -1323,6 +1354,13 @@ mod tests {
             }
         }
 
+        fn with_limit(self, limit: usize) -> Self {
+            Self {
+                limit: Some(limit),
+                ..self
+            }
+        }
+
         fn writer_props(&self) -> WriterProperties {
             let builder = WriterProperties::builder()
                 .set_data_pagesize_limit(self.max_data_page_size)
@@ -1381,6 +1419,14 @@ mod tests {
             TestOptions::new(2, 256, 127).with_null_percent(0),
             // Test optional with nulls
             TestOptions::new(2, 256, 93).with_null_percent(25),
+            // Test with limit of 0
+            TestOptions::new(4, 100, 25).with_limit(0),
+            // Test with limit of 50
+            TestOptions::new(4, 100, 25).with_limit(50),
+            // Test with limit equal to number of rows
+            TestOptions::new(4, 100, 25).with_limit(10),
+            // Test with limit larger than number of rows
+            TestOptions::new(4, 100, 25).with_limit(101),
             // Test with no page-level statistics
             TestOptions::new(2, 256, 91)
                 .with_null_percent(25)
@@ -1423,6 +1469,11 @@ mod tests {
             TestOptions::new(2, 256, 93)
                 .with_null_percent(25)
                 .with_row_selections(),
+            // Test optional with nulls
+            TestOptions::new(2, 256, 93)
+                .with_null_percent(25)
+                .with_row_selections()
+                .with_limit(10),
             // Test filter
 
             // Test with row filter
@@ -1592,7 +1643,7 @@ mod tests {
             }
         };
 
-        let expected_data = match opts.row_filter {
+        let mut expected_data = match opts.row_filter {
             Some(filter) => {
                 let expected_data = expected_data
                     .into_iter()
@@ -1621,6 +1672,11 @@ mod tests {
             }
             None => expected_data,
         };
+
+        if let Some(limit) = opts.limit {
+            builder = builder.with_limit(limit);
+            expected_data = expected_data.into_iter().take(limit).collect();
+        }
 
         let mut record_reader = builder
             .with_batch_size(opts.record_batch_size)
@@ -1726,7 +1782,7 @@ mod tests {
         // a column that has the same name as one of the struct fields
         // (see: ARROW-11452)
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/nested_structs.rust.parquet", testdata);
+        let path = format!("{testdata}/nested_structs.rust.parquet");
         let file = File::open(&path).unwrap();
         let record_batch_reader = ParquetRecordBatchReader::try_new(file, 60).unwrap();
 
@@ -1776,7 +1832,7 @@ mod tests {
     #[test]
     fn test_read_maps() {
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/nested_maps.snappy.parquet", testdata);
+        let path = format!("{testdata}/nested_maps.snappy.parquet");
         let file = File::open(path).unwrap();
         let record_batch_reader = ParquetRecordBatchReader::try_new(file, 60).unwrap();
 
@@ -1968,7 +2024,7 @@ mod tests {
     #[test]
     fn test_read_null_list() {
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/null_list.parquet", testdata);
+        let path = format!("{testdata}/null_list.parquet");
         let file = File::open(path).unwrap();
         let mut record_batch_reader =
             ParquetRecordBatchReader::try_new(file, 60).unwrap();
@@ -1993,7 +2049,7 @@ mod tests {
     #[test]
     fn test_null_schema_inference() {
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/null_list.parquet", testdata);
+        let path = format!("{testdata}/null_list.parquet");
         let file = File::open(path).unwrap();
 
         let arrow_field = Field::new(
@@ -2084,7 +2140,7 @@ mod tests {
     #[test]
     fn test_empty_projection() {
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/alltypes_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_plain.parquet");
         let file = File::open(path).unwrap();
 
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -2256,7 +2312,7 @@ mod tests {
     #[test]
     fn test_scan_row_with_selection() {
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let test_file = File::open(&path).unwrap();
 
         let mut serial_reader =
@@ -2273,10 +2329,7 @@ mod tests {
                 assert_eq!(
                     skip_reader.collect::<Result<Vec<_>, _>>().unwrap(),
                     expected,
-                    "batch_size: {}, selection_len: {}, skip_first: {}",
-                    batch_size,
-                    selection_len,
-                    skip_first
+                    "batch_size: {batch_size}, selection_len: {selection_len}, skip_first: {skip_first}"
                 );
             }
         };
@@ -2315,7 +2368,7 @@ mod tests {
     fn test_batch_size_overallocate() {
         let testdata = arrow::util::test_util::parquet_test_data();
         // `alltypes_plain.parquet` only have 8 rows
-        let path = format!("{}/alltypes_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_plain.parquet");
         let test_file = File::open(path).unwrap();
 
         let builder = ParquetRecordBatchReaderBuilder::try_new(test_file).unwrap();
@@ -2394,7 +2447,7 @@ mod tests {
     #[test]
     fn test_read_lz4_raw() {
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/lz4_raw_compressed.parquet", testdata);
+        let path = format!("{testdata}/lz4_raw_compressed.parquet");
         let file = File::open(path).unwrap();
 
         let batches = ParquetRecordBatchReader::try_new(file, 1024)
@@ -2438,7 +2491,7 @@ mod tests {
             "non_hadoop_lz4_compressed.parquet",
         ] {
             let testdata = arrow::util::test_util::parquet_test_data();
-            let path = format!("{}/{}", testdata, file);
+            let path = format!("{testdata}/{file}");
             let file = File::open(path).unwrap();
             let expected_rows = 4;
 
@@ -2470,7 +2523,7 @@ mod tests {
     #[test]
     fn test_read_lz4_hadoop_large() {
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/hadoop_lz4_compressed_larger.parquet", testdata);
+        let path = format!("{testdata}/hadoop_lz4_compressed_larger.parquet");
         let file = File::open(path).unwrap();
         let expected_rows = 10000;
 
@@ -2496,7 +2549,7 @@ mod tests {
     #[cfg(feature = "snap")]
     fn test_read_nested_lists() {
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/nested_lists.snappy.parquet", testdata);
+        let path = format!("{testdata}/nested_lists.snappy.parquet");
         let file = File::open(path).unwrap();
 
         let f = file.try_clone().unwrap();

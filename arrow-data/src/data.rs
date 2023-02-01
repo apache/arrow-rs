@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains `ArrayData`, a generic representation of Arrow array data which encapsulates
+//! Contains [`ArrayData`], a generic representation of Arrow array data which encapsulates
 //! common attributes and operations for Arrow array.
 
 use crate::{bit_iterator::BitSliceIterator, bitmap::Bitmap};
@@ -198,9 +198,9 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             ],
             _ => unreachable!(),
         },
-        DataType::FixedSizeList(_, _) | DataType::Struct(_) => {
-            [empty_buffer, MutableBuffer::new(0)]
-        }
+        DataType::FixedSizeList(_, _)
+        | DataType::Struct(_)
+        | DataType::RunEndEncoded(_, _) => [empty_buffer, MutableBuffer::new(0)],
         DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => [
             MutableBuffer::new(capacity * mem::size_of::<u8>()),
             empty_buffer,
@@ -245,6 +245,46 @@ pub(crate) fn into_buffers(
 /// An generic representation of Arrow array data which encapsulates common attributes and
 /// operations for Arrow array. Specific operations for different arrays types (e.g.,
 /// primitive, list, struct) are implemented in `Array`.
+///
+/// # Memory Layout
+///
+/// `ArrayData` has references to one or more underlying data buffers
+/// and optional child ArrayDatas, depending on type as illustrated
+/// below. Bitmaps are not shown for simplicity but they are stored
+/// similarly to the buffers.
+///
+/// ```text
+///                        offset
+///                       points to
+/// ┌───────────────────┐ start of  ┌───────┐       Different
+/// │                   │   data    │       │     ArrayData may
+/// │ArrayData {        │           │....   │     also refers to
+/// │  data_type: ...   │   ─ ─ ─ ─▶│1234   │  ┌ ─  the same
+/// │  offset: ... ─ ─ ─│─ ┘        │4372   │      underlying
+/// │  len: ...    ─ ─ ─│─ ┐        │4888   │  │     buffer with different offset/len
+/// │  buffers: [       │           │5882   │◀─
+/// │    ...            │  │        │4323   │
+/// │  ]                │   ─ ─ ─ ─▶│4859   │
+/// │  child_data: [    │           │....   │
+/// │    ...            │           │       │
+/// │  ]                │           └───────┘
+/// │}                  │
+/// │                   │            Shared Buffer uses
+/// │               │   │            bytes::Bytes to hold
+/// └───────────────────┘            actual data values
+///           ┌ ─ ─ ┘
+///
+///           ▼
+/// ┌───────────────────┐
+/// │ArrayData {        │
+/// │  ...              │
+/// │}                  │
+/// │                   │
+/// └───────────────────┘
+///
+/// Child ArrayData may also have its own buffers and children
+/// ```
+
 #[derive(Debug, Clone)]
 pub struct ArrayData {
     /// The data type for this array data
@@ -375,24 +415,25 @@ impl ArrayData {
         Ok(new_self)
     }
 
-    /// Returns a builder to construct a `ArrayData` instance.
+    /// Returns a builder to construct a [`ArrayData`] instance of the same [`DataType`]
     #[inline]
     pub const fn builder(data_type: DataType) -> ArrayDataBuilder {
         ArrayDataBuilder::new(data_type)
     }
 
-    /// Returns a reference to the data type of this array data
+    /// Returns a reference to the [`DataType`] of this [`ArrayData`]
     #[inline]
     pub const fn data_type(&self) -> &DataType {
         &self.data_type
     }
 
-    /// Returns a slice of buffers for this array data
+    /// Returns a slice of the [`Buffer`]s that hold the data.
     pub fn buffers(&self) -> &[Buffer] {
         &self.buffers[..]
     }
 
-    /// Returns a slice of children data arrays
+    /// Returns a slice of children [`ArrayData`]. This will be non
+    /// empty for type such as lists and structs.
     pub fn child_data(&self) -> &[ArrayData] {
         &self.child_data[..]
     }
@@ -405,13 +446,13 @@ impl ArrayData {
         false
     }
 
-    /// Returns a reference to the null bitmap of this array data
+    /// Returns a reference to the null bitmap of this [`ArrayData`]
     #[inline]
     pub const fn null_bitmap(&self) -> Option<&Bitmap> {
         self.null_bitmap.as_ref()
     }
 
-    /// Returns a reference to the null buffer of this array data.
+    /// Returns a reference to the null buffer of this [`ArrayData`].
     pub fn null_buffer(&self) -> Option<&Buffer> {
         self.null_bitmap().as_ref().map(|b| b.buffer_ref())
     }
@@ -424,19 +465,19 @@ impl ArrayData {
         true
     }
 
-    /// Returns the length (i.e., number of elements) of this array
+    /// Returns the length (i.e., number of elements) of this [`ArrayData`].
     #[inline]
     pub const fn len(&self) -> usize {
         self.len
     }
 
-    // Returns whether array data is empty
+    /// Returns whether this [`ArrayData`] is empty
     #[inline]
     pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    /// Returns the offset of this array
+    /// Returns the offset of this [`ArrayData`]
     #[inline]
     pub const fn offset(&self) -> usize {
         self.offset
@@ -448,7 +489,17 @@ impl ArrayData {
         self.null_count
     }
 
-    /// Returns the total number of bytes of memory occupied by the buffers owned by this [ArrayData].
+    /// Returns the total number of bytes of memory occupied by the
+    /// buffers owned by this [`ArrayData`] and all of its
+    /// children. (See also diagram on [`ArrayData`]).
+    ///
+    /// Note that this [`ArrayData`] may only refer to a subset of the
+    /// data in the underlying [`Buffer`]s (due to `offset` and
+    /// `length`), but the size returned includes the entire size of
+    /// the buffers.
+    ///
+    /// If multiple [`ArrayData`]s refer to the same underlying
+    /// [`Buffer`]s they will both report the same size.
     pub fn get_buffer_memory_size(&self) -> usize {
         let mut size = 0;
         for buffer in &self.buffers {
@@ -463,7 +514,81 @@ impl ArrayData {
         size
     }
 
-    /// Returns the total number of bytes of memory occupied physically by this [ArrayData].
+    /// Returns the total number of the bytes of memory occupied by
+    /// the buffers by this slice of [`ArrayData`] (See also diagram on [`ArrayData`]).
+    ///
+    /// This is approximately the number of bytes if a new
+    /// [`ArrayData`] was formed by creating new [`Buffer`]s with
+    /// exactly the data needed.
+    ///
+    /// For example, a [`DataType::Int64`] with `100` elements,
+    /// [`Self::get_slice_memory_size`] would return `100 * 8 = 800`. If
+    /// the [`ArrayData`] was then [`Self::slice`]ed to refer to its
+    /// first `20` elements, then [`Self::get_slice_memory_size`] on the
+    /// sliced [`ArrayData`] would return `20 * 8 = 160`.
+    pub fn get_slice_memory_size(&self) -> Result<usize, ArrowError> {
+        let mut result: usize = 0;
+        let layout = layout(&self.data_type);
+
+        for spec in layout.buffers.iter() {
+            match spec {
+                BufferSpec::FixedWidth { byte_width } => {
+                    let buffer_size =
+                        self.len.checked_mul(*byte_width).ok_or_else(|| {
+                            ArrowError::ComputeError(
+                                "Integer overflow computing buffer size".to_string(),
+                            )
+                        })?;
+                    result += buffer_size;
+                }
+                BufferSpec::VariableWidth => {
+                    let buffer_len: usize;
+                    match self.data_type {
+                        DataType::Utf8 | DataType::Binary => {
+                            let offsets = self.typed_offsets::<i32>()?;
+                            buffer_len = (offsets[self.len] - offsets[0] ) as usize;
+                        }
+                        DataType::LargeUtf8 | DataType::LargeBinary => {
+                            let offsets = self.typed_offsets::<i64>()?;
+                            buffer_len = (offsets[self.len] - offsets[0]) as usize;
+                        }
+                        _ => {
+                            return Err(ArrowError::NotYetImplemented(format!(
+                            "Invalid data type for VariableWidth buffer. Expected Utf8, LargeUtf8, Binary or LargeBinary. Got {}",
+                            self.data_type
+                            )))
+                        }
+                    };
+                    result += buffer_len;
+                }
+                BufferSpec::BitMap => {
+                    let buffer_size = bit_util::ceil(self.len, 8);
+                    result += buffer_size;
+                }
+                BufferSpec::AlwaysNull => {
+                    // Nothing to do
+                }
+            }
+        }
+
+        if self.null_bitmap().is_some() {
+            result += bit_util::ceil(self.len, 8);
+        }
+
+        for child in &self.child_data {
+            result += child.get_slice_memory_size()?;
+        }
+        Ok(result)
+    }
+
+    /// Returns the total number of bytes of memory occupied
+    /// physically by this [`ArrayData`] and all its [`Buffer`]s and
+    /// children. (See also diagram on [`ArrayData`]).
+    ///
+    /// Equivalent to:
+    ///  `size_of_val(self)` +
+    ///  [`Self::get_buffer_memory_size`] +
+    ///  `size_of_val(child)` for all children
     pub fn get_array_memory_size(&self) -> usize {
         let mut size = mem::size_of_val(self);
 
@@ -485,8 +610,9 @@ impl ArrayData {
         size
     }
 
-    /// Creates a zero-copy slice of itself. This creates a new [ArrayData]
-    /// with a different offset, len and a shifted null bitmap.
+    /// Creates a zero-copy slice of itself. This creates a new
+    /// [`ArrayData`] pointing at the same underlying [`Buffer`]s with a
+    /// different offset and len
     ///
     /// # Panics
     ///
@@ -597,6 +723,12 @@ impl ArrayData {
                 .collect(),
             DataType::Dictionary(_, data_type) => {
                 vec![Self::new_empty(data_type)]
+            }
+            DataType::RunEndEncoded(run_ends, values) => {
+                vec![
+                    Self::new_empty(run_ends.data_type()),
+                    Self::new_empty(values.data_type()),
+                ]
             }
         };
 
@@ -722,8 +854,20 @@ impl ArrayData {
                 // At the moment, constructing a DictionaryArray will also check this
                 if !DataType::is_dictionary_key_type(key_type) {
                     return Err(ArrowError::InvalidArgumentError(format!(
-                        "Dictionary key type must be integer, but was {}",
-                        key_type
+                        "Dictionary key type must be integer, but was {key_type}"
+                    )));
+                }
+            }
+            DataType::RunEndEncoded(run_ends_type, _) => {
+                if run_ends_type.is_nullable() {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "The nullable should be set to false for the field defining run_ends array.".to_string()
+                    ));
+                }
+                if !DataType::is_run_ends_type(run_ends_type.data_type()) {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "RunArray run_ends types must be Int16, Int32 or Int64, but was {}",
+                        run_ends_type.data_type()
                     )));
                 }
             }
@@ -869,6 +1013,25 @@ impl ArrayData {
                             self.data_type, i, field.name(), field_data.len, self.len
                         )));
                     }
+                }
+                Ok(())
+            }
+            DataType::RunEndEncoded(run_ends_field, values_field) => {
+                self.validate_num_child_data(2)?;
+                let run_ends_data =
+                    self.get_valid_child_data(0, run_ends_field.data_type())?;
+                let values_data =
+                    self.get_valid_child_data(1, values_field.data_type())?;
+                if run_ends_data.len != values_data.len {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "The run_ends array length should be the same as values array length. Run_ends array length is {}, values array length is {}",
+                        run_ends_data.len, values_data.len
+                    )));
+                }
+                if run_ends_data.null_count() > 0 {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Found null values in run_ends array. The run_ends array should not have null values.".to_string(),
+                    ));
                 }
                 Ok(())
             }
@@ -1160,6 +1323,15 @@ impl ArrayData {
                     _ => unreachable!(),
                 }
             }
+            DataType::RunEndEncoded(run_ends, _values) => {
+                let run_ends_data = self.child_data()[0].clone();
+                match run_ends.data_type() {
+                    DataType::Int16 => run_ends_data.check_run_ends::<i16>(self.len()),
+                    DataType::Int32 => run_ends_data.check_run_ends::<i32>(self.len()),
+                    DataType::Int64 => run_ends_data.check_run_ends::<i64>(self.len()),
+                    _ => unreachable!(),
+                }
+            }
             _ => {
                 // No extra validation check required for other types
                 Ok(())
@@ -1193,15 +1365,13 @@ impl ArrayData {
                 // check if the offset can be converted to usize
                 let r = x.to_usize().ok_or_else(|| {
                     ArrowError::InvalidArgumentError(format!(
-                        "Offset invariant failure: Could not convert offset {} to usize at position {}",
-                        x, i))}
+                        "Offset invariant failure: Could not convert offset {x} to usize at position {i}"))}
                     );
                 // check if the offset exceeds the limit
                 match r {
                     Ok(n) if n <= offset_limit => Ok((i, n)),
                     Ok(_) => Err(ArrowError::InvalidArgumentError(format!(
-                        "Offset invariant failure: offset at position {} out of bounds: {} > {}",
-                        i, x, offset_limit))
+                        "Offset invariant failure: offset at position {i} out of bounds: {x} > {offset_limit}"))
                     ),
                     Err(e) => Err(e),
                 }
@@ -1244,8 +1414,7 @@ impl ArrayData {
                         || !values_str.is_char_boundary(range.end)
                     {
                         return Err(ArrowError::InvalidArgumentError(format!(
-                            "incomplete utf-8 byte sequence from index {}",
-                            string_index
+                            "incomplete utf-8 byte sequence from index {string_index}"
                         )));
                     }
                     Ok(())
@@ -1258,8 +1427,7 @@ impl ArrayData {
                 |string_index, range| {
                     std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
                         ArrowError::InvalidArgumentError(format!(
-                            "Invalid UTF8 sequence at string index {} ({:?}): {}",
-                            string_index, range, e
+                            "Invalid UTF8 sequence at string index {string_index} ({range:?}): {e}"
                         ))
                     })?;
                     Ok(())
@@ -1305,19 +1473,53 @@ impl ArrayData {
             }
             let dict_index: i64 = dict_index.try_into().map_err(|_| {
                 ArrowError::InvalidArgumentError(format!(
-                    "Value at position {} out of bounds: {} (can not convert to i64)",
-                    i, dict_index
+                    "Value at position {i} out of bounds: {dict_index} (can not convert to i64)"
                 ))
             })?;
 
             if dict_index < 0 || dict_index > max_value {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "Value at position {} out of bounds: {} (should be in [0, {}])",
-                    i, dict_index, max_value
+                    "Value at position {i} out of bounds: {dict_index} (should be in [0, {max_value}])"
                 )));
             }
             Ok(())
         })
+    }
+
+    /// Validates that each value in run_ends array is positive and strictly increasing.
+    fn check_run_ends<T>(&self, array_len: usize) -> Result<(), ArrowError>
+    where
+        T: ArrowNativeType + TryInto<i64> + num::Num + std::fmt::Display,
+    {
+        let values = self.typed_buffer::<T>(0, self.len())?;
+        let mut prev_value: i64 = 0_i64;
+        values.iter().enumerate().try_for_each(|(ix, &inp_value)| {
+            let value: i64 = inp_value.try_into().map_err(|_| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Value at position {ix} out of bounds: {inp_value} (can not convert to i64)"
+                ))
+            })?;
+            if value <= 0_i64 {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "The values in run_ends array should be strictly positive. Found value {value} at index {ix} that does not match the criteria."
+                )));
+            }
+            if ix > 0 && value <= prev_value {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "The values in run_ends array should be strictly increasing. Found value {value} at index {ix} with previous value {prev_value} that does not match the criteria."
+                )));
+            }
+
+            prev_value = value;
+            Ok(())
+        })?;
+
+        if prev_value.as_usize() != array_len {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "The length of array does not match the last value in the run_ends array. The last value of run_ends array is {prev_value} and length of array is {array_len}."
+            )));
+        }
+        Ok(())
     }
 
     /// Returns true if this `ArrayData` is equal to `other`, using pointer comparisons
@@ -1414,8 +1616,9 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::LargeUtf8 => DataTypeLayout::new_binary(size_of::<i64>()),
         DataType::List(_) => DataTypeLayout::new_fixed_width(size_of::<i32>()),
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
-        DataType::LargeList(_) => DataTypeLayout::new_fixed_width(size_of::<i32>()),
+        DataType::LargeList(_) => DataTypeLayout::new_fixed_width(size_of::<i64>()),
         DataType::Struct(_) => DataTypeLayout::new_empty(), // all in child data,
+        DataType::RunEndEncoded(_, _) => DataTypeLayout::new_empty(), // all in child data,
         DataType::Union(_, _, mode) => {
             let type_ids = BufferSpec::FixedWidth {
                 byte_width: size_of::<i8>(),
@@ -1836,6 +2039,42 @@ mod tests {
         let string_data_slice = string_data.slice(1, 2);
         assert!(string_data_slice.ptr_eq(&string_data_slice));
         assert!(!string_data_slice.ptr_eq(&string_data))
+    }
+
+    #[test]
+    fn test_slice_memory_size() {
+        let mut bit_v: [u8; 2] = [0; 2];
+        bit_util::set_bit(&mut bit_v, 0);
+        bit_util::set_bit(&mut bit_v, 3);
+        bit_util::set_bit(&mut bit_v, 10);
+        let data = ArrayData::builder(DataType::Int32)
+            .len(16)
+            .add_buffer(make_i32_buffer(16))
+            .null_bit_buffer(Some(Buffer::from(bit_v)))
+            .build()
+            .unwrap();
+        let new_data = data.slice(1, 14);
+        assert_eq!(
+            data.get_slice_memory_size().unwrap() - 8,
+            new_data.get_slice_memory_size().unwrap()
+        );
+        let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+        let offsets_buffer = Buffer::from_slice_ref([0_i32, 2_i32, 2_i32, 5_i32]);
+        let string_data = ArrayData::try_new(
+            DataType::Utf8,
+            3,
+            Some(Buffer::from_iter(vec![true, false, true])),
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+        let string_data_slice = string_data.slice(1, 2);
+        //4 bytes of offset and 2 bytes of data reduced by slicing.
+        assert_eq!(
+            string_data.get_slice_memory_size().unwrap() - 6,
+            string_data_slice.get_slice_memory_size().unwrap()
+        );
     }
 
     #[test]
