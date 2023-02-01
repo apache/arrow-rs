@@ -191,32 +191,45 @@ impl<R: RunEndIndexType> RunArray<R> {
         I: ArrowNativeType,
     {
         let indices_len = logical_indices.len();
+
+        // `ordered_indices` store index into `logical_indices` and can be used
+        // to iterate `logical_indices` in sorted order.
         let mut ordered_indices: Vec<usize> = (0..indices_len).collect();
+
+        // Instead of sorting `logical_idices` directly, sort the `ordered_indices`
+        // whose values are index of `logical_indices`
         ordered_indices.sort_unstable_by(|lhs, rhs| {
             logical_indices[*lhs]
                 .partial_cmp(&logical_indices[*rhs])
                 .unwrap()
         });
+
         let mut physical_indices = vec![0; indices_len];
 
-        let mut run_ends_index = 0_usize;
+        let mut physical_index = 0_usize;
         let mut ordered_index = 0_usize;
-        while run_ends_index < self.run_ends.len() && ordered_index < indices_len {
+        while physical_index < self.run_ends.len() && ordered_index < indices_len {
+            // Get the run end index of current physical index
             let run_end_value =
                 // Safety:
                 //  The check `run_ends_index < self.run_ends.len()` ensures the index
                 //  is in bounds and can be accessed without validation.
-                unsafe { self.run_ends.value_unchecked(run_ends_index).as_usize() };
+                unsafe { self.run_ends.value_unchecked(physical_index).as_usize() };
 
+            // All the `logical_indices` that are less than current run end index
+            // belongs to current physical index.
             while ordered_index < indices_len
                 && logical_indices[ordered_indices[ordered_index]].as_usize()
                     < run_end_value
             {
-                physical_indices[ordered_indices[ordered_index]] = run_ends_index;
+                physical_indices[ordered_indices[ordered_index]] = physical_index;
                 ordered_index += 1;
             }
-            run_ends_index += 1;
+            physical_index += 1;
         }
+
+        // If there are input values >= run_ends.last_value then we'll not be able to convert
+        // all logical indices to physical indices.
         if ordered_index < logical_indices.len() {
             let logical_index =
                 logical_indices[ordered_indices[ordered_index]].as_usize();
