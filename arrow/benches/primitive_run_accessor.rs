@@ -44,11 +44,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         );
     };
 
-    do_bench(20, 1000);
-    do_bench(100, 1000);
-    do_bench(500, 5000);
-    do_bench(1000, 10000);
-    do_bench(5000, 50000);
+    do_bench(128, 512);
+    do_bench(256, 1024);
+    do_bench(512, 2048);
+    do_bench(1024, 4096);
+    do_bench(2048, 8192);
 
     group.finish();
 }

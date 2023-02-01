@@ -65,11 +65,17 @@ fn criterion_benchmark(c: &mut Criterion) {
         );
     };
 
-    do_bench(20, 1000, 5);
-    do_bench(100, 1000, 5);
-    do_bench(100, 1000, 10);
-    do_bench(1000, 10000, 10);
-    do_bench(1000, 10000, 100);
+    do_bench(256, 1024, 5);
+    do_bench(256, 1024, 25);
+    do_bench(256, 1024, 100);
+
+    do_bench(512, 2048, 5);
+    do_bench(512, 2048, 25);
+    do_bench(512, 2048, 100);
+
+    do_bench(1024, 4096, 5);
+    do_bench(1024, 4096, 25);
+    do_bench(1024, 4096, 100);
 
     group.finish();
 }
