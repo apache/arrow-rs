@@ -550,11 +550,21 @@ impl FlightClient {
     }
 }
 
-/// A stream that reads `Results`, and passes along the OK variants,
-/// and saves any Errors seen to be forward along with responses
+/// A stream that reads `Results`, passing along Ok variants,
+/// and saving any Errors seen to be forward along with responses
 ///
 /// If the input stream produces an an error, the error is saved in `err`
 /// and this stream is ended (the inner is not pollled any more)
+///
+/// The setup of copying errors to result stream looks like this:
+///
+/// ```text
+/// input: ---> (Stream of Result<FlightData>) ---- (Stream of FlightData) ---- network ----> Server
+///                                      |                                                      |
+///                                      | (errors copied to output)                            |
+///                                      v                                                      |
+/// output: <-- (Stream of Result<FlightData>) <--- network --(Stream of Result<PutResult>)------+
+/// ```
 struct FallibleStream {
     input_stream: BoxStream<'static, Result<FlightData>>,
     err: Arc<Mutex<Option<FlightError>>>,
@@ -570,7 +580,7 @@ impl FallibleStream {
         }
     }
 
-    /// Returns a builder for wrapping result streams
+    /// Returns a builder that wraps result streams and injects error
     fn builder(&self) -> StreamWrapperBuilder {
         StreamWrapperBuilder {
             maybe_err: Arc::clone(&self.err),
