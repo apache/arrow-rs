@@ -539,7 +539,7 @@ macro_rules! downcast_run_array_helper {
 ///     downcast_run_array!(
 ///         array => match array.values().data_type() {
 ///             DataType::Utf8 => {
-///                 for v in array.downcast_ref::<StringArray>().unwrap() {
+///                 for v in array.downcast::<StringArray>().unwrap() {
 ///                     println!("{:?}", v);
 ///                 }
 ///             }
