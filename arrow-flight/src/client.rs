@@ -271,7 +271,7 @@ impl FlightClient {
     /// # Note
     ///
     /// The input stream is [`Result`] so that this can be connected
-    /// to a streaming data source (such as [`FlightDataEncoder`])
+    /// to a streaming data source, such as [`FlightDataEncoder`](crate::encode::FlightDataEncoder),
     /// without having to buffer. If the input stream returns an error
     /// that error will not be sent to the server, instead it will be
     /// placed into the result stream and the server connection
