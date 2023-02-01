@@ -646,7 +646,7 @@ impl StreamAndError {
         // if the client made an error return that
         let next_item = self.maybe_err.lock().expect("non poisoned").take();
         if let Some(e) = next_item {
-            return Some(Err(e));
+            Some(Err(e))
         }
         // otherwise return the next item from the server, if any
         else {
