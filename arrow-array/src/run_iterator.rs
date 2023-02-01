@@ -179,12 +179,56 @@ where
 
 #[cfg(test)]
 mod tests {
+    use rand::{seq::SliceRandom, thread_rng, Rng};
+
     use crate::{
         array::{Int32Array, StringArray},
         builder::PrimitiveRunBuilder,
         types::Int32Type,
         Int64RunArray,
     };
+
+    fn build_input_array(size: usize) -> Vec<Option<i32>> {
+        // The input array is created by shuffling and repeating
+        // the seed values random number of times.
+        let mut seed: Vec<Option<i32>> = vec![
+            None,
+            None,
+            None,
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(5),
+            Some(6),
+            Some(7),
+            Some(8),
+            Some(9),
+        ];
+        let mut result: Vec<Option<i32>> = Vec::with_capacity(size);
+        let mut ix = 0;
+        let mut rng = thread_rng();
+        // run length can go up to 8. Cap the max run length for smaller arrays to size / 2.
+        let max_run_length = 8_usize.min(1_usize.max(size / 2));
+        while result.len() < size {
+            // shuffle the seed array if all the values are iterated.
+            if ix == 0 {
+                seed.shuffle(&mut rng);
+            }
+            // repeat the items between 1 and 8 times. Cap the length for smaller sized arrays
+            let num =
+                max_run_length.min(rand::thread_rng().gen_range(1..=max_run_length));
+            for _ in 0..num {
+                result.push(seed[ix]);
+            }
+            ix += 1;
+            if ix == seed.len() {
+                ix = 0
+            }
+        }
+        result.resize(size, None);
+        result
+    }
 
     #[test]
     fn test_primitive_array_iter_round_trip() {
@@ -236,6 +280,38 @@ mod tests {
         assert_eq!(Some(Some(64)), iter.next());
         assert_eq!(None, iter.next_back());
         assert_eq!(None, iter.next());
+    }
+
+    #[test]
+    fn test_run_iterator_comprehensive() {
+        // Test forward and backward iterator for different array lengths.
+        let logical_lengths = vec![1_usize, 2, 3, 4, 15, 16, 17, 63, 64, 65];
+
+        for logical_len in logical_lengths {
+            let input_array = build_input_array(logical_len);
+
+            let mut run_array_builder =
+                PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+            run_array_builder.extend(input_array.iter().copied());
+            let run_array = run_array_builder.finish();
+            let typed_array = run_array.downcast::<Int32Array>().unwrap();
+
+            // test forward iterator
+            let mut input_iter = input_array.iter().copied();
+            let mut run_array_iter = typed_array.into_iter();
+            for _ in 0..logical_len {
+                assert_eq!(input_iter.next(), run_array_iter.next());
+            }
+            assert_eq!(None, run_array_iter.next());
+
+            // test reverse iterator
+            let mut input_iter = input_array.iter().rev().copied();
+            let mut run_array_iter = typed_array.into_iter().rev();
+            for _ in 0..logical_len {
+                assert_eq!(input_iter.next(), run_array_iter.next());
+            }
+            assert_eq!(None, run_array_iter.next());
+        }
     }
 
     #[test]
