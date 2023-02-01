@@ -502,7 +502,7 @@ mod tests {
     use crate::types::{Int16Type, Int32Type, Int8Type, UInt32Type};
     use crate::{Array, Int16Array, Int32Array, StringArray};
 
-    fn build_input_array(approx_size: usize) -> Vec<Option<i32>> {
+    fn build_input_array(size: usize) -> Vec<Option<i32>> {
         // The input array is created by shuffling and repeating
         // the seed values random number of times.
         let mut seed: Vec<Option<i32>> = vec![
@@ -519,25 +519,27 @@ mod tests {
             Some(8),
             Some(9),
         ];
+        let mut result: Vec<Option<i32>> = Vec::with_capacity(size);
         let mut ix = 0;
-        let mut result: Vec<Option<i32>> = Vec::with_capacity(approx_size);
         let mut rng = thread_rng();
-        while result.len() < approx_size {
+        // Cap run length for smaller arrays
+        let max_run_length = (size + 2) / 2;
+        while result.len() < size {
             // shuffle the seed array if all the values are iterated.
             if ix == 0 {
                 seed.shuffle(&mut rng);
             }
-            // repeat the items between 1 and 7 times.
-            let num = rand::thread_rng().gen_range(1..8);
+            // repeat the items between 1 and 8 times. Cap the length for smaller sized arrays
+            let num = max_run_length.min(rand::thread_rng().gen_range(1..9));
             for _ in 0..num {
                 result.push(seed[ix]);
             }
             ix += 1;
-            if ix == 8 {
+            if ix == seed.len() {
                 ix = 0
             }
         }
-        println!("Size of input array: {}", result.len());
+        result.resize(size, None);
         result
     }
 
@@ -774,6 +776,7 @@ mod tests {
         let run_array = builder.finish();
         let typed = run_array.downcast::<PrimitiveArray<Int32Type>>().unwrap();
 
+        // Access every index and check if the value in the input array matches returned value.
         for (i, inp_val) in input_array.iter().enumerate() {
             if let Some(val) = inp_val {
                 let actual = typed.value(i);
@@ -791,6 +794,8 @@ mod tests {
         // Test for logical lengths starting from 10 to 250 increasing by 10
         while logical_len < 260 {
             let input_array = build_input_array(logical_len);
+
+            // create run array using input_array
             let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
             builder.extend(input_array.clone().into_iter());
 
@@ -798,16 +803,18 @@ mod tests {
             let physical_values_array =
                 run_array.downcast::<Int32Array>().unwrap().values();
 
-            let mut indices: Vec<u32> = (0_u32..(logical_len as u32)).collect();
+            // create an array consisiting of all the indices shuffled.
+            let mut logical_indices: Vec<u32> = (0_u32..(logical_len as u32)).collect();
             let mut rng = thread_rng();
-            indices.shuffle(&mut rng);
+            logical_indices.shuffle(&mut rng);
 
-            let physical_indices = run_array.get_physical_indices(&indices).unwrap();
+            let physical_indices =
+                run_array.get_physical_indices(&logical_indices).unwrap();
 
-            assert_eq!(indices.len(), physical_indices.len());
+            assert_eq!(logical_indices.len(), physical_indices.len());
 
             // check value in logical index in the input_array matches physical index in typed_run_array
-            indices
+            logical_indices
                 .iter()
                 .map(|f| f.as_usize())
                 .zip(physical_indices.iter())
