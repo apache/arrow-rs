@@ -33,7 +33,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     physical_array_len,
                 );
                 let typed = run_array
-                    .downcast_ref::<PrimitiveArray<Int32Type>>()
+                    .downcast::<PrimitiveArray<Int32Type>>()
                     .unwrap();
                 b.iter(|| {
                     for i in 0..logical_array_len {

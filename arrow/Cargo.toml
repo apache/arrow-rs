@@ -242,6 +242,7 @@ harness = false
 [[bench]]
 name = "string_run_builder"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "string_run_iterator"

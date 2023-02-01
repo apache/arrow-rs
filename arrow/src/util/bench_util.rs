@@ -22,6 +22,7 @@ use crate::datatypes::*;
 use crate::util::test_util::seedable_rng;
 use arrow_buffer::Buffer;
 use rand::distributions::uniform::SampleUniform;
+use rand::thread_rng;
 use rand::Rng;
 use rand::SeedableRng;
 use rand::{
@@ -145,12 +146,17 @@ pub fn create_string_dict_array<K: ArrowDictionaryKeyType>(
     data.iter().map(|x| x.as_deref()).collect()
 }
 
+/// Create primitive run array for given logical and physical array lengths
 pub fn create_primitive_run_array<R: RunEndIndexType, V: ArrowPrimitiveType>(
     logical_array_len: usize,
     physical_array_len: usize,
 ) -> RunArray<R> {
+    // typical length of each run
     let run_len = logical_array_len / physical_array_len;
+
+    // Some runs should have extra length
     let mut run_len_extra = logical_array_len % physical_array_len;
+
     let mut values: Vec<V::Native> = (0..physical_array_len)
         .flat_map(|s| {
             let mut take_len = run_len;
@@ -170,6 +176,41 @@ pub fn create_primitive_run_array<R: RunEndIndexType, V: ArrowPrimitiveType>(
 
     builder.finish()
 }
+
+/// Create string array to be used by run array builder. The string array
+/// will result in run array with physial length of `physical_array_len`
+/// and logical length of `logical_array_len`
+pub fn create_string_array_for_runs(
+    physical_array_len: usize,
+    logical_array_len: usize,
+    string_len: usize,
+) -> Vec<String> {
+    let mut rng = thread_rng();
+
+    // typical length of each run
+    let run_len = logical_array_len / physical_array_len;
+
+    // Some runs should have extra length
+    let mut run_len_extra = logical_array_len % physical_array_len;
+
+    let mut values: Vec<String> = (0..physical_array_len)
+        .map(|_| (0..string_len).map(|_| rng.gen::<char>()).collect())
+        .flat_map(|s| {
+            let mut take_len = run_len;
+            if run_len_extra > 0 {
+                take_len += 1;
+                run_len_extra -= 1;
+            }
+            std::iter::repeat(s).take(take_len)
+        })
+        .collect();
+    while values.len() < logical_array_len {
+        let last_val = values[values.len() - 1].clone();
+        values.push(last_val);
+    }
+    values
+}
+
 /// Creates an random (but fixed-seeded) binary array of a given size and null density
 pub fn create_binary_array<Offset: OffsetSizeTrait>(
     size: usize,

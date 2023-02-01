@@ -779,7 +779,7 @@ mod tests {
                 let actual = typed.value(i);
                 assert_eq!(*val, actual)
             } else {
-                let physical_ix = typed.get_physical_index(i).unwrap();
+                let physical_ix = run_array.get_physical_index(i).unwrap();
                 assert!(typed.values().is_null(physical_ix));
             };
         }
@@ -796,7 +796,7 @@ mod tests {
 
             let run_array = builder.finish();
             let physical_values_array =
-                run_array.downcast_ref::<Int32Array>().unwrap().values();
+                run_array.downcast::<Int32Array>().unwrap().values();
 
             let mut indices: Vec<u32> = (0_u32..(logical_len as u32)).collect();
             let mut rng = thread_rng();
