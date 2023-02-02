@@ -105,7 +105,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_schema::*;
 
-use arrow_cast::display::array_value_to_string;
+use arrow_cast::display::temporal_array_value_to_string;
 
 fn primitive_array_to_json<T>(array: &ArrayRef) -> Result<Vec<Value>, ArrowError>
 where
@@ -137,6 +137,7 @@ fn struct_array_to_jsonmap_array(
             row_count,
             struct_col,
             inner_col_names[j],
+            j,
         )?
     }
     Ok(inner_objs)
@@ -217,7 +218,7 @@ macro_rules! set_column_by_array_type {
 }
 
 macro_rules! set_temporal_column_by_array_type {
-    ($array_type:ident, $col_name:ident, $rows:ident, $array:ident, $row_count:ident, $cast_fn:ident) => {
+    ($col_name:ident, $col_idx:ident, $rows:ident, $array:ident, $row_count:ident) => {
         $rows
             .iter_mut()
             .enumerate()
@@ -226,7 +227,10 @@ macro_rules! set_temporal_column_by_array_type {
                 if !$array.is_null(i) {
                     row.insert(
                         $col_name.to_string(),
-                        array_value_to_string($array, i).unwrap().to_string().into(),
+                        temporal_array_value_to_string($array, $col_idx, i, None)
+                            .unwrap()
+                            .to_string()
+                            .into(),
                     );
                 }
             });
@@ -260,6 +264,7 @@ fn set_column_for_json_rows(
     row_count: usize,
     array: &ArrayRef,
     col_name: &str,
+    col_idx: usize,
 ) -> Result<(), ArrowError> {
     match array.data_type() {
         DataType::Int8 => {
@@ -311,144 +316,46 @@ fn set_column_for_json_rows(
             );
         }
         DataType::Date32 => {
-            set_temporal_column_by_array_type!(
-                Date32Array,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_date
-            );
+            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
         }
         DataType::Date64 => {
-            set_temporal_column_by_array_type!(
-                Date64Array,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_date
-            );
+            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
         }
         DataType::Timestamp(TimeUnit::Second, _) => {
-            set_temporal_column_by_array_type!(
-                TimestampSecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_datetime
-            );
+            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
         }
         DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            set_temporal_column_by_array_type!(
-                TimestampMillisecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_datetime
-            );
+            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
         }
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            set_temporal_column_by_array_type!(
-                TimestampMicrosecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_datetime
-            );
+            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
         }
         DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            set_temporal_column_by_array_type!(
-                TimestampNanosecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_datetime
-            );
+            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
         }
         DataType::Time32(TimeUnit::Second) => {
-            set_temporal_column_by_array_type!(
-                Time32SecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_time
-            );
+            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
         }
         DataType::Time32(TimeUnit::Millisecond) => {
-            set_temporal_column_by_array_type!(
-                Time32MillisecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_time
-            );
+            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
         }
         DataType::Time64(TimeUnit::Microsecond) => {
-            set_temporal_column_by_array_type!(
-                Time64MicrosecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_time
-            );
+            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
         }
         DataType::Time64(TimeUnit::Nanosecond) => {
-            set_temporal_column_by_array_type!(
-                Time64NanosecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_time
-            );
+            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
         }
         DataType::Duration(TimeUnit::Second) => {
-            set_temporal_column_by_array_type!(
-                DurationSecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_duration
-            );
+            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
         }
         DataType::Duration(TimeUnit::Millisecond) => {
-            set_temporal_column_by_array_type!(
-                DurationMillisecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_duration
-            );
+            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
         }
         DataType::Duration(TimeUnit::Microsecond) => {
-            set_temporal_column_by_array_type!(
-                DurationMicrosecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_duration
-            );
+            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
         }
         DataType::Duration(TimeUnit::Nanosecond) => {
-            set_temporal_column_by_array_type!(
-                DurationNanosecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_duration
-            );
+            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
         }
         DataType::Struct(_) => {
             let inner_objs =
@@ -492,7 +399,7 @@ fn set_column_for_json_rows(
             let slice = array.slice(0, row_count);
             let hydrated = arrow_cast::cast::cast(&slice, value_type)
                 .expect("cannot cast dictionary to underlying values");
-            set_column_for_json_rows(rows, row_count, &hydrated, col_name)?;
+            set_column_for_json_rows(rows, row_count, &hydrated, col_name, col_idx)?;
         }
         DataType::Map(_, _) => {
             let maparr = as_map_array(array);
@@ -558,7 +465,7 @@ pub fn record_batches_to_json_rows(
             let row_count = batch.num_rows();
             for (j, col) in batch.columns().iter().enumerate() {
                 let col_name = schema.field(j).name();
-                set_column_for_json_rows(&mut rows[base..], row_count, col, col_name)?
+                set_column_for_json_rows(&mut rows[base..], row_count, col, col_name, j)?
             }
             base += row_count;
         }

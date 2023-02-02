@@ -63,12 +63,12 @@
 //! }
 //! ```
 
-use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_cast::display::{lexical_to_string, make_string_from_decimal};
+use arrow_cast::display::{
+    array_value_to_string, lexical_to_string, temporal_array_value_to_string,
+};
 use arrow_schema::*;
-use chrono::{DateTime, Utc};
 use std::io::Write;
 
 use crate::map_csv_error;
@@ -88,25 +88,6 @@ where
     lexical_to_string(c.value(i))
 }
 
-fn invalid_cast_error(dt: &str, col_index: usize, row_index: usize) -> ArrowError {
-    ArrowError::CastError(format!(
-        "Cannot cast to {dt} at col index: {col_index} row index: {row_index}"
-    ))
-}
-
-macro_rules! write_temporal_value {
-    ($array:expr, $tpe: ident, $format: expr, $col_index: expr, $row_index: expr, $cast_func: ident, $tpe_name: expr) => {{
-        $array
-            .as_any()
-            .downcast_ref::<$tpe>()
-            .ok_or_else(|| invalid_cast_error($tpe_name, $col_index, $row_index))?
-            .$cast_func($row_index)
-            .ok_or_else(|| invalid_cast_error($tpe_name, $col_index, $row_index))?
-            .format($format)
-            .to_string()
-    }};
-}
-
 /// A CSV writer
 #[derive(Debug)]
 pub struct Writer<W: Write> {
@@ -115,17 +96,17 @@ pub struct Writer<W: Write> {
     /// Whether file should be written with headers. Defaults to `true`
     has_headers: bool,
     /// The date format for date arrays
-    date_format: String,
+    date_format: Option<String>,
     /// The datetime format for datetime arrays
-    datetime_format: String,
+    datetime_format: Option<String>,
     /// The timestamp format for timestamp arrays
     #[allow(dead_code)]
-    timestamp_format: String,
+    timestamp_format: Option<String>,
     /// The timestamp format for timestamp (with timezone) arrays
     #[allow(dead_code)]
-    timestamp_tz_format: String,
+    timestamp_tz_format: Option<String>,
     /// The time format for time arrays
-    time_format: String,
+    time_format: Option<String>,
     /// Is the beginning-of-writer
     beginning: bool,
     /// The value to represent null entries
@@ -141,11 +122,11 @@ impl<W: Write> Writer<W> {
         Writer {
             writer,
             has_headers: true,
-            date_format: DEFAULT_DATE_FORMAT.to_string(),
-            datetime_format: DEFAULT_TIMESTAMP_FORMAT.to_string(),
-            time_format: DEFAULT_TIME_FORMAT.to_string(),
-            timestamp_format: DEFAULT_TIMESTAMP_FORMAT.to_string(),
-            timestamp_tz_format: DEFAULT_TIMESTAMP_TZ_FORMAT.to_string(),
+            date_format: Some(DEFAULT_DATE_FORMAT.to_string()),
+            datetime_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
+            time_format: Some(DEFAULT_TIME_FORMAT.to_string()),
+            timestamp_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
+            timestamp_tz_format: Some(DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
             beginning: true,
             null_value: DEFAULT_NULL_VALUE.to_string(),
         }
@@ -177,88 +158,74 @@ impl<W: Write> Writer<W> {
                 DataType::UInt16 => write_primitive_value::<UInt16Type>(col, row_index),
                 DataType::UInt32 => write_primitive_value::<UInt32Type>(col, row_index),
                 DataType::UInt64 => write_primitive_value::<UInt64Type>(col, row_index),
-                DataType::Boolean => {
-                    let c = col.as_any().downcast_ref::<BooleanArray>().unwrap();
-                    c.value(row_index).to_string()
-                }
-                DataType::Utf8 => {
-                    let c = col.as_any().downcast_ref::<StringArray>().unwrap();
-                    c.value(row_index).to_owned()
-                }
-                DataType::LargeUtf8 => {
-                    let c = col.as_any().downcast_ref::<LargeStringArray>().unwrap();
-                    c.value(row_index).to_owned()
-                }
-                DataType::Date32 => {
-                    write_temporal_value!(
-                        col,
-                        Date32Array,
-                        &self.date_format,
-                        col_index,
-                        row_index,
-                        value_as_date,
-                        "Date32"
-                    )
-                }
-                DataType::Date64 => {
-                    write_temporal_value!(
-                        col,
-                        Date64Array,
-                        &self.datetime_format,
-                        col_index,
-                        row_index,
-                        value_as_datetime,
-                        "Date64"
-                    )
-                }
-                DataType::Time32(TimeUnit::Second) => {
-                    write_temporal_value!(
-                        col,
-                        Time32SecondArray,
-                        &self.time_format,
-                        col_index,
-                        row_index,
-                        value_as_time,
-                        "Time32"
-                    )
-                }
+                DataType::Boolean => array_value_to_string(col, row_index)?.to_string(),
+                DataType::Utf8 => array_value_to_string(col, row_index)?.to_string(),
+                DataType::LargeUtf8 => array_value_to_string(col, row_index)?.to_string(),
+                DataType::Date32 => temporal_array_value_to_string(
+                    col,
+                    col_index,
+                    row_index,
+                    self.date_format.as_deref(),
+                )?
+                .to_string(),
+                DataType::Date64 => temporal_array_value_to_string(
+                    col,
+                    col_index,
+                    row_index,
+                    self.datetime_format.as_deref(),
+                )?
+                .to_string(),
+                DataType::Time32(TimeUnit::Second) => temporal_array_value_to_string(
+                    col,
+                    col_index,
+                    row_index,
+                    self.time_format.as_deref(),
+                )?
+                .to_string(),
                 DataType::Time32(TimeUnit::Millisecond) => {
-                    write_temporal_value!(
+                    temporal_array_value_to_string(
                         col,
-                        Time32MillisecondArray,
-                        &self.time_format,
                         col_index,
                         row_index,
-                        value_as_time,
-                        "Time32"
-                    )
+                        self.time_format.as_deref(),
+                    )?
+                    .to_string()
                 }
                 DataType::Time64(TimeUnit::Microsecond) => {
-                    write_temporal_value!(
+                    temporal_array_value_to_string(
                         col,
-                        Time64MicrosecondArray,
-                        &self.time_format,
                         col_index,
                         row_index,
-                        value_as_time,
-                        "Time64"
-                    )
+                        self.time_format.as_deref(),
+                    )?
+                    .to_string()
                 }
-                DataType::Time64(TimeUnit::Nanosecond) => {
-                    write_temporal_value!(
+                DataType::Time64(TimeUnit::Nanosecond) => temporal_array_value_to_string(
+                    col,
+                    col_index,
+                    row_index,
+                    self.time_format.as_deref(),
+                )?
+                .to_string(),
+                DataType::Timestamp(_, time_zone) => match time_zone {
+                    Some(_tz) => temporal_array_value_to_string(
                         col,
-                        Time64NanosecondArray,
-                        &self.time_format,
                         col_index,
                         row_index,
-                        value_as_time,
-                        "Time64"
-                    )
+                        self.timestamp_tz_format.as_deref(),
+                    )?
+                    .to_string(),
+                    None => temporal_array_value_to_string(
+                        col,
+                        col_index,
+                        row_index,
+                        self.timestamp_format.as_deref(),
+                    )?
+                    .to_string(),
+                },
+                DataType::Decimal128(..) => {
+                    array_value_to_string(col, row_index)?.to_string()
                 }
-                DataType::Timestamp(time_unit, time_zone) => {
-                    self.handle_timestamp(time_unit, time_zone.as_ref(), row_index, col)?
-                }
-                DataType::Decimal128(..) => make_string_from_decimal(col, row_index)?,
                 t => {
                     // List and Struct arrays not supported by the writer, any
                     // other type needs to be implemented
@@ -270,52 +237,6 @@ impl<W: Write> Writer<W> {
             *item = string;
         }
         Ok(())
-    }
-
-    fn handle_timestamp(
-        &self,
-        time_unit: &TimeUnit,
-        time_zone: Option<&String>,
-        row_index: usize,
-        col: &ArrayRef,
-    ) -> Result<String, ArrowError> {
-        use TimeUnit::*;
-        let datetime = match time_unit {
-            Second => col
-                .as_any()
-                .downcast_ref::<TimestampSecondArray>()
-                .unwrap()
-                .value_as_datetime(row_index)
-                .unwrap(),
-            Millisecond => col
-                .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .unwrap()
-                .value_as_datetime(row_index)
-                .unwrap(),
-            Microsecond => col
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .unwrap()
-                .value_as_datetime(row_index)
-                .unwrap(),
-            Nanosecond => col
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap()
-                .value_as_datetime(row_index)
-                .unwrap(),
-        };
-
-        let tz: Option<Tz> = time_zone.map(|x| x.parse()).transpose()?;
-        match tz {
-            Some(tz) => {
-                let utc_time = DateTime::<Utc>::from_utc(datetime, Utc);
-                let local_time = utc_time.with_timezone(&tz);
-                Ok(local_time.format(&self.timestamp_tz_format).to_string())
-            }
-            None => Ok(datetime.format(&self.timestamp_format).to_string()),
-        }
     }
 
     /// Write a vector of record batches to a writable object
@@ -463,6 +384,19 @@ impl WriterBuilder {
         self
     }
 
+    /// Use RFC3339 format for date/time/timestamps by clearing all
+    /// date/time specific formats.
+    pub fn with_rfc3339(mut self, use_rfc3339: bool) -> Self {
+        if use_rfc3339 {
+            self.date_format = None;
+            self.datetime_format = None;
+            self.time_format = None;
+            self.timestamp_format = None;
+            self.timestamp_tz_format = None;
+        }
+        self
+    }
+
     /// Create a new `Writer`
     pub fn build<W: Write>(self, writer: W) -> Writer<W> {
         let delimiter = self.delimiter.unwrap_or(b',');
@@ -471,21 +405,11 @@ impl WriterBuilder {
         Writer {
             writer,
             has_headers: self.has_headers,
-            date_format: self
-                .date_format
-                .unwrap_or_else(|| DEFAULT_DATE_FORMAT.to_string()),
-            datetime_format: self
-                .datetime_format
-                .unwrap_or_else(|| DEFAULT_TIMESTAMP_FORMAT.to_string()),
-            time_format: self
-                .time_format
-                .unwrap_or_else(|| DEFAULT_TIME_FORMAT.to_string()),
-            timestamp_format: self
-                .timestamp_format
-                .unwrap_or_else(|| DEFAULT_TIMESTAMP_FORMAT.to_string()),
-            timestamp_tz_format: self
-                .timestamp_tz_format
-                .unwrap_or_else(|| DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
+            date_format: self.date_format,
+            datetime_format: self.datetime_format,
+            time_format: self.time_format,
+            timestamp_format: self.timestamp_format,
+            timestamp_tz_format: self.timestamp_tz_format,
             beginning: true,
             null_value: self
                 .null_value
@@ -501,6 +425,12 @@ mod tests {
     use crate::Reader;
     use std::io::{Cursor, Read, Seek};
     use std::sync::Arc;
+
+    fn invalid_cast_error(dt: &str, col_idx: usize, row_idx: usize) -> ArrowError {
+        ArrowError::CastError(format!(
+            "Cannot cast to {dt} at col index: {col_idx} row index: {row_idx}"
+        ))
+    }
 
     #[test]
     fn test_write_csv() {
@@ -722,6 +652,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         let mut file = tempfile::tempfile().unwrap();
         let mut writer = Writer::new(&mut file);
         let batches = vec![&batch, &batch];
+
         for batch in batches {
             writer
                 .write(batch)
@@ -734,5 +665,58 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
                 .unwrap_err();
         }
         drop(writer);
+    }
+
+    #[test]
+    fn test_write_csv_using_rfc3339() {
+        let schema = Schema::new(vec![
+            Field::new(
+                "c1",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".to_string())),
+                true,
+            ),
+            Field::new("c2", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+            Field::new("c3", DataType::Date32, false),
+            Field::new("c4", DataType::Time32(TimeUnit::Second), false),
+        ]);
+
+        let c1 = TimestampMillisecondArray::from(vec![
+            Some(1555584887378),
+            Some(1635577147000),
+        ])
+        .with_timezone("+00:00".to_string());
+        let c2 = TimestampMillisecondArray::from(vec![
+            Some(1555584887378),
+            Some(1635577147000),
+        ]);
+        let c3 = Date32Array::from(vec![3, 2]);
+        let c4 = Time32SecondArray::from(vec![1234, 24680]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(c1), Arc::new(c2), Arc::new(c3), Arc::new(c4)],
+        )
+        .unwrap();
+
+        let mut file = tempfile::tempfile().unwrap();
+
+        let builder = WriterBuilder::new().with_rfc3339(true);
+        let mut writer = builder.build(&mut file);
+        let batches = vec![&batch];
+        for batch in batches {
+            writer.write(batch).unwrap();
+        }
+        drop(writer);
+
+        file.rewind().unwrap();
+        let mut buffer: Vec<u8> = vec![];
+        file.read_to_end(&mut buffer).unwrap();
+
+        assert_eq!(
+            "c1,c2,c3,c4
+2019-04-18T10:54:47.378Z,2019-04-18T10:54:47.378,1970-01-04,00:20:34
+2021-10-30T06:59:07Z,2021-10-30T06:59:07,1970-01-03,06:51:20\n",
+            String::from_utf8(buffer).unwrap()
+        );
     }
 }

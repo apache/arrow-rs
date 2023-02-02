@@ -28,6 +28,13 @@ use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
 use chrono::prelude::SecondsFormat;
+use chrono::{DateTime, Utc};
+
+fn invalid_cast_error(dt: &str, col_idx: usize, row_idx: usize) -> ArrowError {
+    ArrowError::CastError(format!(
+        "Cannot cast to {dt} at col index: {col_idx} row index: {row_idx}"
+    ))
+}
 
 macro_rules! make_string {
     ($array_type:ty, $column: ident, $row: ident) => {{
@@ -133,55 +140,174 @@ macro_rules! make_string_interval_month_day_nano {
 }
 
 macro_rules! make_string_date {
-    ($array_type:ty, $column: ident, $row: ident) => {{
-        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
+    ($array_type:ty, $dt:expr, $column: ident, $col_idx:ident, $row_idx: ident) => {{
+        Ok($column
+            .as_any()
+            .downcast_ref::<$array_type>()
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
+            .value_as_date($row_idx)
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
+            .to_string())
+    }};
+}
 
-        Ok(array
-            .value_as_date($row)
-            .map(|d| d.to_string())
-            .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
+macro_rules! make_string_date_with_format {
+    ($array_type:ty, $dt:expr, $format: ident, $column: ident, $col_idx:ident, $row_idx: ident) => {{
+        Ok($column
+            .as_any()
+            .downcast_ref::<$array_type>()
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
+            .value_as_datetime($row_idx)
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
+            .format($format)
+            .to_string())
+    }};
+}
+
+macro_rules! handle_string_date {
+    ($array_type:ty, $dt:expr, $format: ident, $column: ident, $col_idx:ident, $row_idx: ident) => {{
+        match $format {
+            Some(format) => {
+                make_string_date_with_format!(
+                    $array_type,
+                    $dt,
+                    format,
+                    $column,
+                    $col_idx,
+                    $row_idx
+                )
+            }
+            None => make_string_date!($array_type, $dt, $column, $col_idx, $row_idx),
+        }
     }};
 }
 
 macro_rules! make_string_time {
-    ($array_type:ty, $column: ident, $row: ident) => {{
-        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
-
-        Ok(array
-            .value_as_time($row)
-            .map(|d| d.to_string())
-            .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
+    ($array_type:ty, $dt:expr, $column: ident, $col_idx:ident, $row_idx: ident) => {{
+        Ok($column
+            .as_any()
+            .downcast_ref::<$array_type>()
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
+            .value_as_time($row_idx)
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
+            .to_string())
     }};
+}
+
+macro_rules! make_string_time_with_format {
+    ($array_type:ty, $dt:expr, $format: ident, $column: ident, $col_idx:ident, $row_idx: ident) => {{
+        Ok($column
+            .as_any()
+            .downcast_ref::<$array_type>()
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
+            .value_as_time($row_idx)
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
+            .format($format)
+            .to_string())
+    }};
+}
+
+macro_rules! handle_string_time {
+    ($array_type:ty, $dt:expr, $format: ident, $column: ident, $col_idx:ident, $row_idx: ident) => {
+        match $format {
+            Some(format) => {
+                make_string_time_with_format!(
+                    $array_type,
+                    $dt,
+                    format,
+                    $column,
+                    $col_idx,
+                    $row_idx
+                )
+            }
+            None => make_string_time!($array_type, $dt, $column, $col_idx, $row_idx),
+        }
+    };
 }
 
 macro_rules! make_string_datetime {
-    ($array_type:ty, $column: ident, $row: ident) => {{
-        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
+    ($array_type:ty, $dt:expr, $tz_string: ident, $column: ident, $col_idx:ident, $row_idx: ident) => {{
+        let array = $column
+            .as_any()
+            .downcast_ref::<$array_type>()
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
 
-        Ok(array
-            .value_as_datetime($row)
-            .map(|d| format!("{:?}", d))
-            .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
-    }};
-}
-
-macro_rules! make_string_datetime_with_tz {
-    ($array_type:ty, $tz_string: ident, $column: ident, $row: ident) => {{
-        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
-
-        let s = match $tz_string.parse::<Tz>() {
-            Ok(tz) => array
-                .value_as_datetime_with_tz($row, tz)
-                .map(|d| format!("{}", d.to_rfc3339_opts(SecondsFormat::AutoSi, true)))
-                .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()),
-            Err(_) => array
-                .value_as_datetime($row)
-                .map(|d| format!("{:?} (Unknown Time Zone '{}')", d, $tz_string))
-                .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()),
+        let s = match $tz_string {
+            Some(tz_string) => match tz_string.parse::<Tz>() {
+                Ok(tz) => array
+                    .value_as_datetime_with_tz($row_idx, tz)
+                    .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
+                    .to_rfc3339_opts(SecondsFormat::AutoSi, true)
+                    .to_string(),
+                Err(_) => {
+                    let datetime = array
+                        .value_as_datetime($row_idx)
+                        .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
+                    format!("{:?} (Unknown Time Zone '{}')", datetime, tz_string)
+                }
+            },
+            None => {
+                let datetime = array
+                    .value_as_datetime($row_idx)
+                    .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
+                format!("{:?}", datetime)
+            }
         };
 
         Ok(s)
     }};
+}
+
+macro_rules! make_string_datetime_with_format {
+    ($array_type:ty, $dt:expr, $format: ident, $tz_string: ident, $column: ident, $col_idx:ident, $row_idx: ident) => {{
+        let array = $column
+            .as_any()
+            .downcast_ref::<$array_type>()
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
+        let datetime = array
+            .value_as_datetime($row_idx)
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
+
+        let s = match $tz_string {
+            Some(tz_string) => match tz_string.parse::<Tz>() {
+                Ok(tz) => {
+                    let utc_time = DateTime::<Utc>::from_utc(datetime, Utc);
+                    let local_time = utc_time.with_timezone(&tz);
+                    local_time.format($format).to_string()
+                }
+                Err(_) => {
+                    format!("{:?} (Unknown Time Zone '{}')", datetime, tz_string)
+                }
+            },
+            None => datetime.format($format).to_string(),
+        };
+
+        Ok(s)
+    }};
+}
+
+macro_rules! handle_string_datetime {
+    ($array_type:ty, $dt:expr, $format: ident, $tz_string: ident, $column: ident, $col_idx:ident, $row_idx: ident) => {
+        match $format {
+            Some(format) => make_string_datetime_with_format!(
+                $array_type,
+                $dt,
+                format,
+                $tz_string,
+                $column,
+                $col_idx,
+                $row_idx
+            ),
+            None => make_string_datetime!(
+                $array_type,
+                $dt,
+                $tz_string,
+                $column,
+                $col_idx,
+                $row_idx
+            ),
+        }
+    };
 }
 
 // It's not possible to do array.value($row).to_string() for &[u8], let's format it as hex
@@ -248,13 +374,14 @@ macro_rules! make_string_from_fixed_size_list {
 }
 
 macro_rules! make_string_from_duration {
-    ($array_type:ty, $column: ident, $row: ident) => {{
-        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
-
-        Ok(array
-            .value_as_duration($row)
-            .map(|d| d.to_string())
-            .unwrap_or_else(|| "ERROR CONVERTING DATE".to_string()))
+    ($array_type:ty, $dt:expr, $column:ident, $col_idx:ident, $row_idx: ident) => {{
+        Ok($column
+            .as_any()
+            .downcast_ref::<$array_type>()
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
+            .value_as_duration($row_idx)
+            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
+            .to_string())
     }};
 }
 
@@ -323,126 +450,172 @@ fn append_map_field_string(
 ///
 /// Note this function is quite inefficient and is unlikely to be
 /// suitable for converting large arrays or record batches.
-pub fn array_value_to_string(
+fn array_value_to_string_internal(
     column: &ArrayRef,
-    row: usize,
+    col_idx: usize,
+    row_idx: usize,
+    format: Option<&str>,
 ) -> Result<String, ArrowError> {
-    if column.is_null(row) {
+    if column.is_null(row_idx) {
         return Ok("".to_string());
     }
     match column.data_type() {
-        DataType::Utf8 => make_string!(array::StringArray, column, row),
-        DataType::LargeUtf8 => make_string!(array::LargeStringArray, column, row),
-        DataType::Binary => make_string_hex!(array::BinaryArray, column, row),
-        DataType::LargeBinary => make_string_hex!(array::LargeBinaryArray, column, row),
-        DataType::FixedSizeBinary(_) => {
-            make_string_hex!(array::FixedSizeBinaryArray, column, row)
+        DataType::Utf8 => make_string!(array::StringArray, column, row_idx),
+        DataType::LargeUtf8 => make_string!(array::LargeStringArray, column, row_idx),
+        DataType::Binary => make_string_hex!(array::BinaryArray, column, row_idx),
+        DataType::LargeBinary => {
+            make_string_hex!(array::LargeBinaryArray, column, row_idx)
         }
-        DataType::Boolean => make_string!(array::BooleanArray, column, row),
-        DataType::Int8 => make_string!(array::Int8Array, column, row),
-        DataType::Int16 => make_string!(array::Int16Array, column, row),
-        DataType::Int32 => make_string!(array::Int32Array, column, row),
-        DataType::Int64 => make_string!(array::Int64Array, column, row),
-        DataType::UInt8 => make_string!(array::UInt8Array, column, row),
-        DataType::UInt16 => make_string!(array::UInt16Array, column, row),
-        DataType::UInt32 => make_string!(array::UInt32Array, column, row),
-        DataType::UInt64 => make_string!(array::UInt64Array, column, row),
-        DataType::Float16 => make_string!(array::Float16Array, column, row),
-        DataType::Float32 => make_string!(array::Float32Array, column, row),
-        DataType::Float64 => make_string!(array::Float64Array, column, row),
-        DataType::Decimal128(..) => make_string_from_decimal(column, row),
+        DataType::FixedSizeBinary(_) => {
+            make_string_hex!(array::FixedSizeBinaryArray, column, row_idx)
+        }
+        DataType::Boolean => make_string!(array::BooleanArray, column, row_idx),
+        DataType::Int8 => make_string!(array::Int8Array, column, row_idx),
+        DataType::Int16 => make_string!(array::Int16Array, column, row_idx),
+        DataType::Int32 => make_string!(array::Int32Array, column, row_idx),
+        DataType::Int64 => make_string!(array::Int64Array, column, row_idx),
+        DataType::UInt8 => make_string!(array::UInt8Array, column, row_idx),
+        DataType::UInt16 => make_string!(array::UInt16Array, column, row_idx),
+        DataType::UInt32 => make_string!(array::UInt32Array, column, row_idx),
+        DataType::UInt64 => make_string!(array::UInt64Array, column, row_idx),
+        DataType::Float16 => make_string!(array::Float16Array, column, row_idx),
+        DataType::Float32 => make_string!(array::Float32Array, column, row_idx),
+        DataType::Float64 => make_string!(array::Float64Array, column, row_idx),
+        DataType::Decimal128(..) => make_string_from_decimal(column, row_idx),
         DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Second => {
-            match tz_string_opt {
-                Some(tz_string) => make_string_datetime_with_tz!(
-                    array::TimestampSecondArray,
-                    tz_string,
-                    column,
-                    row
-                ),
-                None => make_string_datetime!(array::TimestampSecondArray, column, row),
-            }
+            handle_string_datetime!(
+                array::TimestampSecondArray,
+                "Timestamp",
+                format,
+                tz_string_opt,
+                column,
+                col_idx,
+                row_idx
+            )
         }
         DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Millisecond => {
-            match tz_string_opt {
-                Some(tz_string) => make_string_datetime_with_tz!(
-                    array::TimestampMillisecondArray,
-                    tz_string,
-                    column,
-                    row
-                ),
-                None => {
-                    make_string_datetime!(array::TimestampMillisecondArray, column, row)
-                }
-            }
+            handle_string_datetime!(
+                array::TimestampMillisecondArray,
+                "Timestamp",
+                format,
+                tz_string_opt,
+                column,
+                col_idx,
+                row_idx
+            )
         }
         DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Microsecond => {
-            match tz_string_opt {
-                Some(tz_string) => make_string_datetime_with_tz!(
-                    array::TimestampMicrosecondArray,
-                    tz_string,
-                    column,
-                    row
-                ),
-                None => {
-                    make_string_datetime!(array::TimestampMicrosecondArray, column, row)
-                }
-            }
+            handle_string_datetime!(
+                array::TimestampMicrosecondArray,
+                "Timestamp",
+                format,
+                tz_string_opt,
+                column,
+                col_idx,
+                row_idx
+            )
         }
         DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Nanosecond => {
-            match tz_string_opt {
-                Some(tz_string) => make_string_datetime_with_tz!(
-                    array::TimestampNanosecondArray,
-                    tz_string,
-                    column,
-                    row
-                ),
-                None => {
-                    make_string_datetime!(array::TimestampNanosecondArray, column, row)
-                }
-            }
+            handle_string_datetime!(
+                array::TimestampNanosecondArray,
+                "Timestamp",
+                format,
+                tz_string_opt,
+                column,
+                col_idx,
+                row_idx
+            )
         }
-        DataType::Date32 => make_string_date!(array::Date32Array, column, row),
-        DataType::Date64 => make_string_date!(array::Date64Array, column, row),
+        DataType::Date32 => {
+            handle_string_date!(
+                array::Date32Array,
+                "Date32",
+                format,
+                column,
+                col_idx,
+                row_idx
+            )
+        }
+        DataType::Date64 => {
+            handle_string_date!(
+                array::Date64Array,
+                "Date64",
+                format,
+                column,
+                col_idx,
+                row_idx
+            )
+        }
         DataType::Time32(unit) if *unit == TimeUnit::Second => {
-            make_string_time!(array::Time32SecondArray, column, row)
+            handle_string_time!(
+                array::Time32SecondArray,
+                "Time32",
+                format,
+                column,
+                col_idx,
+                row_idx
+            )
         }
         DataType::Time32(unit) if *unit == TimeUnit::Millisecond => {
-            make_string_time!(array::Time32MillisecondArray, column, row)
+            handle_string_time!(
+                array::Time32MillisecondArray,
+                "Time32",
+                format,
+                column,
+                col_idx,
+                row_idx
+            )
         }
         DataType::Time64(unit) if *unit == TimeUnit::Microsecond => {
-            make_string_time!(array::Time64MicrosecondArray, column, row)
+            handle_string_time!(
+                array::Time64MicrosecondArray,
+                "Time64",
+                format,
+                column,
+                col_idx,
+                row_idx
+            )
         }
         DataType::Time64(unit) if *unit == TimeUnit::Nanosecond => {
-            make_string_time!(array::Time64NanosecondArray, column, row)
+            handle_string_time!(
+                array::Time64NanosecondArray,
+                "Time64",
+                format,
+                column,
+                col_idx,
+                row_idx
+            )
         }
         DataType::Interval(unit) => match unit {
             IntervalUnit::DayTime => {
-                make_string_interval_day_time!(column, row)
+                make_string_interval_day_time!(column, row_idx)
             }
             IntervalUnit::YearMonth => {
-                make_string_interval_year_month!(column, row)
+                make_string_interval_year_month!(column, row_idx)
             }
             IntervalUnit::MonthDayNano => {
-                make_string_interval_month_day_nano!(column, row)
+                make_string_interval_month_day_nano!(column, row_idx)
             }
         },
-        DataType::List(_) => make_string_from_list!(column, row),
-        DataType::LargeList(_) => make_string_from_large_list!(column, row),
+        DataType::List(_) => make_string_from_list!(column, row_idx),
+        DataType::LargeList(_) => make_string_from_large_list!(column, row_idx),
         DataType::Dictionary(index_type, _value_type) => match **index_type {
-            DataType::Int8 => dict_array_value_to_string::<Int8Type>(column, row),
-            DataType::Int16 => dict_array_value_to_string::<Int16Type>(column, row),
-            DataType::Int32 => dict_array_value_to_string::<Int32Type>(column, row),
-            DataType::Int64 => dict_array_value_to_string::<Int64Type>(column, row),
-            DataType::UInt8 => dict_array_value_to_string::<UInt8Type>(column, row),
-            DataType::UInt16 => dict_array_value_to_string::<UInt16Type>(column, row),
-            DataType::UInt32 => dict_array_value_to_string::<UInt32Type>(column, row),
-            DataType::UInt64 => dict_array_value_to_string::<UInt64Type>(column, row),
+            DataType::Int8 => dict_array_value_to_string::<Int8Type>(column, row_idx),
+            DataType::Int16 => dict_array_value_to_string::<Int16Type>(column, row_idx),
+            DataType::Int32 => dict_array_value_to_string::<Int32Type>(column, row_idx),
+            DataType::Int64 => dict_array_value_to_string::<Int64Type>(column, row_idx),
+            DataType::UInt8 => dict_array_value_to_string::<UInt8Type>(column, row_idx),
+            DataType::UInt16 => dict_array_value_to_string::<UInt16Type>(column, row_idx),
+            DataType::UInt32 => dict_array_value_to_string::<UInt32Type>(column, row_idx),
+            DataType::UInt64 => dict_array_value_to_string::<UInt64Type>(column, row_idx),
             _ => Err(ArrowError::InvalidArgumentError(format!(
                 "Pretty printing not supported for {:?} due to index type",
                 column.data_type()
             ))),
         },
-        DataType::FixedSizeList(_, _) => make_string_from_fixed_size_list!(column, row),
+        DataType::FixedSizeList(_, _) => {
+            make_string_from_fixed_size_list!(column, row_idx)
+        }
         DataType::Struct(_) => {
             let st = column
                 .as_any()
@@ -458,11 +631,11 @@ pub fn array_value_to_string(
             s.push('{');
             let mut kv_iter = st.columns().iter().zip(st.column_names());
             if let Some((col, name)) = kv_iter.next() {
-                append_struct_field_string(&mut s, name, col, row)?;
+                append_struct_field_string(&mut s, name, col, row_idx)?;
             }
             for (col, name) in kv_iter {
                 s.push_str(", ");
-                append_struct_field_string(&mut s, name, col, row)?;
+                append_struct_field_string(&mut s, name, col, row_idx)?;
             }
             s.push('}');
 
@@ -475,7 +648,7 @@ pub fn array_value_to_string(
                         "Repl error: could not convert column to map array.".to_string(),
                     )
                 })?;
-            let map_entry = map_array.value(row);
+            let map_entry = map_array.value(row_idx);
             let st = map_entry
                 .as_any()
                 .downcast_ref::<StructArray>()
@@ -501,20 +674,44 @@ pub fn array_value_to_string(
             Ok(s)
         }
         DataType::Union(field_vec, type_ids, mode) => {
-            union_to_string(column, row, field_vec, type_ids, mode)
+            union_to_string(column, row_idx, field_vec, type_ids, mode)
         }
         DataType::Duration(unit) => match *unit {
             TimeUnit::Second => {
-                make_string_from_duration!(array::DurationSecondArray, column, row)
+                make_string_from_duration!(
+                    array::DurationSecondArray,
+                    "Duration",
+                    column,
+                    col_idx,
+                    row_idx
+                )
             }
             TimeUnit::Millisecond => {
-                make_string_from_duration!(array::DurationMillisecondArray, column, row)
+                make_string_from_duration!(
+                    array::DurationMillisecondArray,
+                    "Duration",
+                    column,
+                    col_idx,
+                    row_idx
+                )
             }
             TimeUnit::Microsecond => {
-                make_string_from_duration!(array::DurationMicrosecondArray, column, row)
+                make_string_from_duration!(
+                    array::DurationMicrosecondArray,
+                    "Duration",
+                    column,
+                    col_idx,
+                    row_idx
+                )
             }
             TimeUnit::Nanosecond => {
-                make_string_from_duration!(array::DurationNanosecondArray, column, row)
+                make_string_from_duration!(
+                    array::DurationNanosecondArray,
+                    "Duration",
+                    column,
+                    col_idx,
+                    row_idx
+                )
             }
         },
         _ => Err(ArrowError::InvalidArgumentError(format!(
@@ -522,6 +719,22 @@ pub fn array_value_to_string(
             column.data_type()
         ))),
     }
+}
+
+pub fn temporal_array_value_to_string(
+    column: &ArrayRef,
+    col_idx: usize,
+    row_idx: usize,
+    format: Option<&str>,
+) -> Result<String, ArrowError> {
+    array_value_to_string_internal(column, col_idx, row_idx, format)
+}
+
+pub fn array_value_to_string(
+    column: &ArrayRef,
+    row_idx: usize,
+) -> Result<String, ArrowError> {
+    array_value_to_string_internal(column, 0, row_idx, None)
 }
 
 /// Converts the value of the union array at `row` to a String
