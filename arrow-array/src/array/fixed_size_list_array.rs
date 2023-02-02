@@ -69,8 +69,8 @@ pub struct FixedSizeListArray {
 
 impl FixedSizeListArray {
     /// Returns a reference to the values of this list.
-    pub fn values(&self) -> ArrayRef {
-        self.values.clone()
+    pub fn values(&self) -> &ArrayRef {
+        &self.values
     }
 
     /// Returns a clone of the value type of this list.
@@ -261,8 +261,7 @@ mod tests {
             .unwrap();
         let list_array = FixedSizeListArray::from(list_data);
 
-        let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(&value_data, list_array.values().data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(3, list_array.len());
         assert_eq!(0, list_array.null_count());
@@ -291,8 +290,7 @@ mod tests {
             .unwrap();
         let list_array = FixedSizeListArray::from(list_data);
 
-        let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(&value_data, list_array.values().data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(3, list_array.len());
         assert_eq!(0, list_array.null_count());
@@ -368,8 +366,7 @@ mod tests {
             .unwrap();
         let list_array = FixedSizeListArray::from(list_data);
 
-        let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(&value_data, list_array.values().data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(5, list_array.len());
         assert_eq!(2, list_array.null_count());

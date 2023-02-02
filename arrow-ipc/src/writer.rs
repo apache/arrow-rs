@@ -245,7 +245,7 @@ impl IpcDataGenerator {
                     .expect("Unable to downcast to fixed size list array");
                 self.encode_dictionaries(
                     field,
-                    &list.values(),
+                    list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
@@ -264,7 +264,7 @@ impl IpcDataGenerator {
                 // keys
                 self.encode_dictionaries(
                     keys,
-                    &map_array.keys(),
+                    map_array.keys(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
@@ -273,7 +273,7 @@ impl IpcDataGenerator {
                 // values
                 self.encode_dictionaries(
                     values,
-                    &map_array.values(),
+                    map_array.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,

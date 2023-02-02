@@ -333,8 +333,8 @@ fn write_leaves<W: Write>(
                     .as_any()
                     .downcast_ref::<arrow_array::MapArray>()
                     .expect("Unable to get map array");
-                keys.push(map_array.keys());
-                values.push(map_array.values());
+                keys.push(map_array.keys().clone());
+                values.push(map_array.values().clone());
             }
 
             write_leaves(row_group_writer, &keys, levels)?;
