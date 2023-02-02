@@ -508,8 +508,8 @@ fn set_column_for_json_rows(
                 )));
             }
 
-            let keys = as_string_array(&keys);
-            let values = array_to_json_array(&values)?;
+            let keys = as_string_array(keys);
+            let values = array_to_json_array(values)?;
 
             let mut kv = keys.iter().zip(values.into_iter());
 
