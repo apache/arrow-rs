@@ -65,9 +65,7 @@
 
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_cast::display::{
-    array_value_to_string, lexical_to_string, temporal_array_value_to_string,
-};
+use arrow_cast::display::{array_value_to_string, lexical_to_string};
 use arrow_schema::*;
 use std::io::Write;
 

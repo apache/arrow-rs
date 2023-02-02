@@ -290,7 +290,7 @@ pub enum IntervalUnit {
 }
 
 // Sparse or Dense union layouts
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum UnionMode {
     Sparse,

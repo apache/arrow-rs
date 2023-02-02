@@ -105,7 +105,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_schema::*;
 
-use arrow_cast::display::temporal_array_value_to_string;
+use arrow_cast::display::{ArrayFormatter, FormatOptions};
 
 fn primitive_array_to_json<T>(array: &ArrayRef) -> Result<Vec<Value>, ArrowError>
 where
@@ -217,26 +217,6 @@ macro_rules! set_column_by_array_type {
     };
 }
 
-macro_rules! set_temporal_column_by_array_type {
-    ($col_name:ident, $col_idx:ident, $rows:ident, $array:ident, $row_count:ident) => {
-        $rows
-            .iter_mut()
-            .enumerate()
-            .take($row_count)
-            .for_each(|(i, row)| {
-                if !$array.is_null(i) {
-                    row.insert(
-                        $col_name.to_string(),
-                        temporal_array_value_to_string($array, $col_idx, i, None)
-                            .unwrap()
-                            .to_string()
-                            .into(),
-                    );
-                }
-            });
-    };
-}
-
 fn set_column_by_primitive_type<T>(
     rows: &mut [JsonMap<String, Value>],
     row_count: usize,
@@ -315,47 +295,24 @@ fn set_column_for_json_rows(
                 row_count
             );
         }
-        DataType::Date32 => {
-            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
-        }
-        DataType::Date64 => {
-            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
-        }
-        DataType::Timestamp(TimeUnit::Second, _) => {
-            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
-        }
-        DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
-        }
-        DataType::Time32(TimeUnit::Second) => {
-            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
-        }
-        DataType::Time32(TimeUnit::Millisecond) => {
-            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
-        }
-        DataType::Time64(TimeUnit::Microsecond) => {
-            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
-        }
-        DataType::Time64(TimeUnit::Nanosecond) => {
-            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
-        }
-        DataType::Duration(TimeUnit::Second) => {
-            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
-        }
-        DataType::Duration(TimeUnit::Millisecond) => {
-            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
-        }
-        DataType::Duration(TimeUnit::Microsecond) => {
-            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
-        }
-        DataType::Duration(TimeUnit::Nanosecond) => {
-            set_temporal_column_by_array_type!(col_name, col_idx, rows, array, row_count);
+        DataType::Date32
+        | DataType::Date64
+        | DataType::Timestamp(_, _)
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Duration(_) => {
+            // TODO: Set options
+            let options = FormatOptions::default();
+            let formatter = ArrayFormatter::try_new(array.as_ref(), &options)?;
+            let data = array.data();
+            rows.iter_mut().enumerate().for_each(|(idx, row)| {
+                if data.is_valid(idx) {
+                    row.insert(
+                        col_name.to_string(),
+                        formatter.value(idx).to_string().into(),
+                    );
+                }
+            });
         }
         DataType::Struct(_) => {
             let inner_objs =

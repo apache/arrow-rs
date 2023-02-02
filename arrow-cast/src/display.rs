@@ -19,57 +19,544 @@
 //! purposes. See the `pretty` crate for additional functions for
 //! record batch pretty printing.
 
-use std::fmt::Write;
-use std::sync::Arc;
+use std::borrow::Cow;
+use std::fmt::{Debug, Display, Formatter, Write};
+use std::ops::Range;
 
+use arrow_array::cast::*;
+use arrow_array::temporal_conversions::*;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
-use chrono::prelude::SecondsFormat;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 
-fn invalid_cast_error(dt: &str, col_idx: usize, row_idx: usize) -> ArrowError {
-    ArrowError::CastError(format!(
-        "Cannot cast to {dt} at col index: {col_idx} row index: {row_idx}"
-    ))
+/// Options for formatting arrays
+#[derive(Debug, Clone)]
+pub struct FormatOptions {
+    safe: bool,
+    null: Cow<'static, str>,
 }
 
-macro_rules! make_string {
-    ($array_type:ty, $column: ident, $row: ident) => {{
-        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
-
-        Ok(array.value($row).to_string())
-    }};
+impl Default for FormatOptions {
+    fn default() -> Self {
+        Self {
+            safe: true,
+            null: "".into(),
+        }
+    }
 }
 
-macro_rules! make_string_interval_year_month {
-    ($column: ident, $row: ident) => {{
-        let array = $column
-            .as_any()
-            .downcast_ref::<array::IntervalYearMonthArray>()
-            .unwrap();
+impl FormatOptions {
+    /// If set to `true` any formatting errors will be written to the output
+    /// instead of being converted into a [`std::fmt::Error`]
+    pub fn with_display_error(mut self, safe: bool) -> Self {
+        self.safe = safe;
+        self
+    }
 
-        let interval = array.value($row) as f64;
+    /// Overrides the string used to represent a null
+    ///
+    /// Defaults to `""`
+    pub fn with_null(mut self, null: impl Into<Cow<'static, str>>) -> Self {
+        self.null = null.into();
+        self
+    }
+}
+
+/// Implements [`Display`] for a specific array value
+pub struct ValueFormatter<'a> {
+    idx: usize,
+    formatter: &'a ArrayFormatter<'a>,
+}
+
+impl<'a> Display for ValueFormatter<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.formatter.format.fmt(self.idx, f) {
+            Ok(()) => Ok(()),
+            Err(FormatError::Arrow(e)) if self.formatter.safe => {
+                write!(f, "ERROR: {}", e)
+            }
+            Err(_) => Err(std::fmt::Error),
+        }
+    }
+}
+
+/// A string formatter for an [`Array`]
+pub struct ArrayFormatter<'a> {
+    format: Box<dyn DisplayIndex + 'a>,
+    safe: bool,
+}
+
+impl<'a> ArrayFormatter<'a> {
+    /// Returns an [`ArrayFormatter`] that can be used to format `array`
+    ///
+    /// This returns an error if an array of the given data type cannot be formatted
+    pub fn try_new(
+        array: &'a dyn Array,
+        options: &FormatOptions,
+    ) -> Result<Self, ArrowError> {
+        Ok(Self {
+            format: make_formatter(array, options)?,
+            safe: options.safe,
+        })
+    }
+
+    /// Returns a [`ValueFormatter`] that implements [`Display`] for
+    /// the value of the array at `idx`
+    pub fn value(&self, idx: usize) -> ValueFormatter<'_> {
+        ValueFormatter {
+            formatter: self,
+            idx,
+        }
+    }
+}
+
+fn make_formatter<'a>(
+    array: &'a dyn Array,
+    options: &FormatOptions,
+) -> Result<Box<dyn DisplayIndex + 'a>, ArrowError> {
+    downcast_primitive_array! {
+        array => array_format(array, options),
+        DataType::Null => array_format(as_null_array(array), options),
+        DataType::Boolean => array_format(as_boolean_array(array), options),
+        DataType::Utf8 => array_format(as_string_array(array), options),
+        DataType::LargeUtf8 => array_format(as_largestring_array(array), options),
+        DataType::Binary => array_format(as_generic_binary_array::<i32>(array), options),
+        DataType::LargeBinary => array_format(as_generic_binary_array::<i64>(array), options),
+        DataType::Dictionary(_, _) => downcast_dictionary_array! {
+            array => array_format(array, options),
+            _ => unreachable!()
+        }
+        DataType::List(_) => array_format(as_generic_list_array::<i32>(array), options),
+        DataType::LargeList(_) => array_format(as_generic_list_array::<i64>(array), options),
+        DataType::FixedSizeList(_, _) => {
+            let a = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+            array_format(a, options)
+        }
+        DataType::Struct(_) => array_format(as_struct_array(array), options),
+        DataType::Map(_, _) => array_format(as_map_array(array), options),
+        DataType::Union(_, _, _) => array_format(as_union_array(array), options),
+        d => Err(ArrowError::NotYetImplemented(format!("formatting {d} is not yet supported"))),
+    }
+}
+
+/// Either an [`ArrowError`] or [`std::fmt::Error`]
+enum FormatError {
+    Format(std::fmt::Error),
+    Arrow(ArrowError),
+}
+
+type FormatResult = Result<(), FormatError>;
+
+impl From<std::fmt::Error> for FormatError {
+    fn from(value: std::fmt::Error) -> Self {
+        Self::Format(value)
+    }
+}
+
+impl From<ArrowError> for FormatError {
+    fn from(value: ArrowError) -> Self {
+        Self::Arrow(value)
+    }
+}
+
+/// [`Display`] but accepting an index
+trait DisplayIndex {
+    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult;
+}
+
+/// [`DisplayIndex`] with additional state
+trait DisplayIndexState {
+    type State;
+
+    fn prepare(&self, options: &FormatOptions) -> Result<Self::State, ArrowError>;
+
+    fn fmt(&self, state: &Self::State, idx: usize, f: &mut Formatter<'_>)
+        -> FormatResult;
+}
+
+impl<T: DisplayIndex> DisplayIndexState for T {
+    type State = ();
+
+    fn prepare(&self, _options: &FormatOptions) -> Result<Self::State, ArrowError> {
+        Ok(())
+    }
+
+    fn fmt(&self, _: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+        DisplayIndex::fmt(self, idx, f)
+    }
+}
+
+struct ArrayFormat<F: DisplayIndexState> {
+    state: F::State,
+    array: F,
+}
+
+fn array_format<'a, F>(
+    array: &'a F,
+    options: &FormatOptions,
+) -> Result<Box<dyn DisplayIndex + 'a>, ArrowError>
+where
+    &'a F: DisplayIndexState + Array,
+{
+    let state = array.prepare(options)?;
+    Ok(Box::new(ArrayFormat { state, array }))
+}
+
+impl<F: DisplayIndexState + Array> DisplayIndex for ArrayFormat<F> {
+    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+        if self.array.is_null(idx) {
+            return Ok(());
+        }
+        DisplayIndexState::fmt(&self.array, &self.state, idx, f)
+    }
+}
+
+impl<'a> DisplayIndex for &'a BooleanArray {
+    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+        write!(f, "{}", self.value(idx))?;
+        Ok(())
+    }
+}
+
+impl<'a> DisplayIndex for &'a NullArray {
+    fn fmt(&self, _idx: usize, _f: &mut Formatter<'_>) -> FormatResult {
+        Ok(())
+    }
+}
+
+macro_rules! primitive_display {
+    ($($t:ty),+) => {
+        $(impl<'a> DisplayIndex for &'a PrimitiveArray<$t>
+        {
+            fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+                write!(f, "{}", self.value(idx))?;
+                Ok(())
+            }
+        })+
+    };
+}
+
+primitive_display!(Int8Type, Int16Type, Int32Type, Int64Type);
+primitive_display!(UInt8Type, UInt16Type, UInt32Type, UInt64Type);
+primitive_display!(Float16Type, Float32Type, Float64Type);
+
+macro_rules! decimal_display {
+    ($($t:ty),+) => {
+        $(impl<'a> DisplayIndexState for &'a PrimitiveArray<$t> {
+            type State = (u8, i8);
+
+            fn prepare(&self, _options: &FormatOptions) -> Result<Self::State, ArrowError> {
+                Ok((self.precision(), self.scale()))
+            }
+
+            fn fmt(&self, s: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+                write!(f, "{}", <$t>::format_decimal(self.values()[idx], s.0, s.1))?;
+                Ok(())
+            }
+        })+
+    };
+}
+
+decimal_display!(Decimal128Type, Decimal256Type);
+
+macro_rules! timestamp_display {
+    ($($t:ty),+) => {
+        $(impl<'a> DisplayIndexState for &'a PrimitiveArray<$t> {
+            type State = Option<Tz>;
+
+            fn prepare(&self, _options: &FormatOptions) -> Result<Self::State, ArrowError> {
+                match self.data_type() {
+                    DataType::Timestamp(_, tz) => tz.as_ref().map(|x| x.parse()).transpose(),
+                    _ => unreachable!(),
+                }
+            }
+
+            fn fmt(&self, tz: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+                let value = self.value(idx);
+                let naive = as_datetime::<$t>(value).ok_or_else(|| {
+                    ArrowError::CastError(format!(
+                        "Failed to convert {} to datetime for {}",
+                        value,
+                        self.data_type()
+                    ))
+                })?;
+
+                match tz {
+                    Some(tz) => {
+                        let date = Utc.from_utc_datetime(&naive).with_timezone(tz);
+                        write!(f, "{}", format_rfc3339(date))?;
+                    }
+                    None => write!(f, "{naive:?}")?,
+                }
+                Ok(())
+            }
+        })+
+    };
+}
+
+timestamp_display!(
+    TimestampSecondType,
+    TimestampMillisecondType,
+    TimestampMicrosecondType,
+    TimestampNanosecondType
+);
+
+macro_rules! temporal_display {
+    ($convert:ident, $t:ty) => {
+        impl<'a> DisplayIndex for &'a PrimitiveArray<$t> {
+            fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+                let value = self.value(idx);
+                let naive = $convert(value as _).ok_or_else(|| {
+                    ArrowError::CastError(format!(
+                        "Failed to convert {} to temporal for {}",
+                        value,
+                        self.data_type()
+                    ))
+                })?;
+
+                write!(f, "{naive}")?;
+                Ok(())
+            }
+        }
+    };
+}
+
+impl<'a, O: OffsetSizeTrait> DisplayIndex for &'a GenericStringArray<O> {
+    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+        write!(f, "{}", self.value(idx))?;
+        Ok(())
+    }
+}
+
+impl<'a, O: OffsetSizeTrait> DisplayIndex for &'a GenericBinaryArray<O> {
+    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+        let v = self.value(idx);
+        for byte in v {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a, K: ArrowDictionaryKeyType> DisplayIndexState for &'a DictionaryArray<K> {
+    type State = Box<dyn DisplayIndex + 'a>;
+
+    fn prepare(&self, options: &FormatOptions) -> Result<Self::State, ArrowError> {
+        make_formatter(self.values().as_ref(), options)
+    }
+
+    fn fmt(&self, s: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+        let value_idx = self.keys().values()[idx].as_usize();
+        s.as_ref().fmt(value_idx, f)
+    }
+}
+
+fn write_list(
+    f: &mut Formatter<'_>,
+    mut range: Range<usize>,
+    values: &dyn DisplayIndex,
+) -> FormatResult {
+    f.write_char('[')?;
+    if let Some(idx) = range.next() {
+        values.fmt(idx, f)?;
+    }
+    for idx in range {
+        write!(f, ", ")?;
+        values.fmt(idx, f)?;
+    }
+    f.write_char(']')?;
+    Ok(())
+}
+
+impl<'a, O: OffsetSizeTrait> DisplayIndexState for &'a GenericListArray<O> {
+    type State = Box<dyn DisplayIndex + 'a>;
+
+    fn prepare(&self, options: &FormatOptions) -> Result<Self::State, ArrowError> {
+        make_formatter(self.values().as_ref(), options)
+    }
+
+    fn fmt(&self, s: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+        let offsets = self.value_offsets();
+        let end = offsets[idx + 1].as_usize();
+        let start = offsets[idx].as_usize();
+        write_list(f, start..end, s.as_ref())
+    }
+}
+
+impl<'a> DisplayIndexState for &'a FixedSizeListArray {
+    type State = (usize, Box<dyn DisplayIndex + 'a>);
+
+    fn prepare(&self, options: &FormatOptions) -> Result<Self::State, ArrowError> {
+        let values = make_formatter(self.values().as_ref(), options)?;
+        let length = self.value_length();
+        Ok((length as usize, values))
+    }
+
+    fn fmt(&self, s: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+        let start = idx * s.0;
+        let end = start + s.0;
+        write_list(f, start..end, s.1.as_ref())
+    }
+}
+
+/// Pairs a boxed [`DisplayIndex`] with its field name
+type FieldDisplay<'a> = (&'a str, Box<dyn DisplayIndex + 'a>);
+
+impl<'a> DisplayIndexState for &'a StructArray {
+    type State = Vec<FieldDisplay<'a>>;
+
+    fn prepare(&self, options: &FormatOptions) -> Result<Self::State, ArrowError> {
+        let fields = match (*self).data_type() {
+            DataType::Struct(f) => f,
+            _ => unreachable!(),
+        };
+
+        self.columns()
+            .iter()
+            .zip(fields)
+            .map(|(a, f)| {
+                let format = make_formatter(a.as_ref(), options)?;
+                Ok((f.name().as_str(), format))
+            })
+            .collect()
+    }
+
+    fn fmt(&self, s: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+        let mut iter = s.iter();
+        if let Some((name, display)) = iter.next() {
+            write!(f, "{name}: ")?;
+            display.as_ref().fmt(idx, f)?;
+        }
+        for (name, display) in iter {
+            write!(f, ", {name}: ")?;
+            display.as_ref().fmt(idx, f)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> DisplayIndexState for &'a MapArray {
+    type State = (Box<dyn DisplayIndex + 'a>, Box<dyn DisplayIndex + 'a>);
+
+    fn prepare(&self, options: &FormatOptions) -> Result<Self::State, ArrowError> {
+        let keys = make_formatter(self.keys().as_ref(), &options)?;
+        let values = make_formatter(self.values().as_ref(), options)?;
+        Ok((keys, values))
+    }
+
+    fn fmt(&self, s: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+        let offsets = self.value_offsets();
+        let end = offsets[idx + 1].as_usize();
+        let start = offsets[idx].as_usize();
+        let mut iter = start..end;
+
+        f.write_char('{')?;
+        if let Some(idx) = iter.next() {
+            s.0.fmt(idx, f)?;
+            write!(f, ": ")?;
+            s.1.fmt(idx, f)?;
+        }
+
+        for idx in iter {
+            write!(f, ", ")?;
+            s.0.fmt(idx, f)?;
+            write!(f, ": ")?;
+            s.1.fmt(idx, f)?;
+        }
+
+        f.write_char('}')?;
+        Ok(())
+    }
+}
+
+impl<'a> DisplayIndexState for &'a UnionArray {
+    type State = (
+        Vec<Option<(&'a str, Box<dyn DisplayIndex + 'a>)>>,
+        UnionMode,
+    );
+
+    fn prepare(&self, options: &FormatOptions) -> Result<Self::State, ArrowError> {
+        let (fields, type_ids, mode) = match (*self).data_type() {
+            DataType::Union(fields, type_ids, mode) => (fields, type_ids, mode),
+            _ => unreachable!(),
+        };
+
+        let max_id = type_ids.iter().copied().max().unwrap_or_default() as usize;
+        let mut out: Vec<Option<FieldDisplay>> = (0..max_id + 1).map(|_| None).collect();
+        for (i, field) in type_ids.iter().zip(fields) {
+            let formatter = make_formatter(self.child(*i).as_ref(), options)?;
+            out[*i as usize] = Some((field.name().as_str(), formatter))
+        }
+        Ok((out, *mode))
+    }
+
+    fn fmt(&self, s: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+        let idx = match s.1 {
+            UnionMode::Dense => self.value_offset(idx) as usize,
+            UnionMode::Sparse => idx,
+        };
+        let id = self.type_id(idx);
+        let (name, field) = s.0[id as usize].as_ref().unwrap();
+
+        write!(f, "{{{name}=")?;
+        field.fmt(idx, f)
+    }
+}
+
+#[inline]
+fn date32_to_date(value: i32) -> Option<NaiveDate> {
+    Some(date32_to_datetime(value)?.date())
+}
+
+#[inline]
+fn date64_to_date(value: i64) -> Option<NaiveDate> {
+    Some(date64_to_datetime(value)?.date())
+}
+
+temporal_display!(date32_to_date, Date32Type);
+temporal_display!(date64_to_date, Date64Type);
+temporal_display!(time32s_to_time, Time32SecondType);
+temporal_display!(time32ms_to_time, Time32MillisecondType);
+temporal_display!(time64us_to_time, Time64MicrosecondType);
+temporal_display!(time64ns_to_time, Time64NanosecondType);
+
+macro_rules! duration_display {
+    ($convert:ident, $t:ty) => {
+        impl<'a> DisplayIndex for &'a PrimitiveArray<$t> {
+            fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+                write!(f, "{}", $convert(self.value(idx)))?;
+                Ok(())
+            }
+        }
+    };
+}
+
+duration_display!(duration_s_to_duration, DurationSecondType);
+duration_display!(duration_ms_to_duration, DurationMillisecondType);
+duration_display!(duration_us_to_duration, DurationMicrosecondType);
+duration_display!(duration_ns_to_duration, DurationNanosecondType);
+
+impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
+    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+        let interval = self.value(idx) as f64;
         let years = (interval / 12_f64).floor();
         let month = interval - (years * 12_f64);
 
-        Ok(format!(
+        write!(
+            f,
             "{} years {} mons 0 days 0 hours 0 mins 0.00 secs",
             years, month,
-        ))
-    }};
+        )?;
+        Ok(())
+    }
 }
 
-macro_rules! make_string_interval_day_time {
-    ($column: ident, $row: ident) => {{
-        let array = $column
-            .as_any()
-            .downcast_ref::<array::IntervalDayTimeArray>()
-            .unwrap();
-
-        let value: u64 = array.value($row) as u64;
+impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
+    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+        let value: u64 = self.value(idx) as u64;
 
         let days_parts: i32 = ((value & 0xFFFFFFFF00000000) >> 32) as i32;
         let milliseconds_part: i32 = (value & 0xFFFFFFFF) as i32;
@@ -89,7 +576,8 @@ macro_rules! make_string_interval_day_time {
             ""
         };
 
-        Ok(format!(
+        write!(
+            f,
             "0 years 0 mons {} days {} hours {} mins {}{}.{:03} secs",
             days_parts,
             hours,
@@ -97,18 +585,14 @@ macro_rules! make_string_interval_day_time {
             secs_sign,
             secs.abs(),
             milliseconds.abs(),
-        ))
-    }};
+        )?;
+        Ok(())
+    }
 }
 
-macro_rules! make_string_interval_month_day_nano {
-    ($column: ident, $row: ident) => {{
-        let array = $column
-            .as_any()
-            .downcast_ref::<array::IntervalMonthDayNanoArray>()
-            .unwrap();
-
-        let value: u128 = array.value($row) as u128;
+impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalMonthDayNanoType> {
+    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+        let value: u128 = self.value(idx) as u128;
 
         let months_part: i32 =
             ((value & 0xFFFFFFFF000000000000000000000000) >> 96) as i32;
@@ -126,7 +610,8 @@ macro_rules! make_string_interval_month_day_nano {
 
         let secs_sign = if secs < 0 || nanoseconds < 0 { "-" } else { "" };
 
-        Ok(format!(
+        write!(
+            f,
             "0 years {} mons {} days {} hours {} mins {}{}.{:09} secs",
             months_part,
             days_part,
@@ -135,657 +620,43 @@ macro_rules! make_string_interval_month_day_nano {
             secs_sign,
             secs.abs(),
             nanoseconds.abs(),
-        ))
-    }};
-}
-
-macro_rules! make_string_date {
-    ($array_type:ty, $dt:expr, $column: ident, $col_idx:ident, $row_idx: ident) => {{
-        Ok($column
-            .as_any()
-            .downcast_ref::<$array_type>()
-            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
-            .value_as_date($row_idx)
-            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
-            .to_string())
-    }};
-}
-
-macro_rules! make_string_date_with_format {
-    ($array_type:ty, $dt:expr, $format: ident, $column: ident, $col_idx:ident, $row_idx: ident) => {{
-        Ok($column
-            .as_any()
-            .downcast_ref::<$array_type>()
-            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
-            .value_as_datetime($row_idx)
-            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
-            .format($format)
-            .to_string())
-    }};
-}
-
-macro_rules! handle_string_date {
-    ($array_type:ty, $dt:expr, $format: ident, $column: ident, $col_idx:ident, $row_idx: ident) => {{
-        match $format {
-            Some(format) => {
-                make_string_date_with_format!(
-                    $array_type,
-                    $dt,
-                    format,
-                    $column,
-                    $col_idx,
-                    $row_idx
-                )
-            }
-            None => make_string_date!($array_type, $dt, $column, $col_idx, $row_idx),
-        }
-    }};
-}
-
-macro_rules! make_string_time {
-    ($array_type:ty, $dt:expr, $column: ident, $col_idx:ident, $row_idx: ident) => {{
-        Ok($column
-            .as_any()
-            .downcast_ref::<$array_type>()
-            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
-            .value_as_time($row_idx)
-            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
-            .to_string())
-    }};
-}
-
-macro_rules! make_string_time_with_format {
-    ($array_type:ty, $dt:expr, $format: ident, $column: ident, $col_idx:ident, $row_idx: ident) => {{
-        Ok($column
-            .as_any()
-            .downcast_ref::<$array_type>()
-            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
-            .value_as_time($row_idx)
-            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
-            .format($format)
-            .to_string())
-    }};
-}
-
-macro_rules! handle_string_time {
-    ($array_type:ty, $dt:expr, $format: ident, $column: ident, $col_idx:ident, $row_idx: ident) => {
-        match $format {
-            Some(format) => {
-                make_string_time_with_format!(
-                    $array_type,
-                    $dt,
-                    format,
-                    $column,
-                    $col_idx,
-                    $row_idx
-                )
-            }
-            None => make_string_time!($array_type, $dt, $column, $col_idx, $row_idx),
-        }
-    };
-}
-
-macro_rules! make_string_datetime {
-    ($array_type:ty, $dt:expr, $tz_string: ident, $column: ident, $col_idx:ident, $row_idx: ident) => {{
-        let array = $column
-            .as_any()
-            .downcast_ref::<$array_type>()
-            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
-
-        let s = match $tz_string {
-            Some(tz_string) => match tz_string.parse::<Tz>() {
-                Ok(tz) => array
-                    .value_as_datetime_with_tz($row_idx, tz)
-                    .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
-                    .to_rfc3339_opts(SecondsFormat::AutoSi, true)
-                    .to_string(),
-                Err(_) => {
-                    let datetime = array
-                        .value_as_datetime($row_idx)
-                        .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
-                    format!("{:?} (Unknown Time Zone '{}')", datetime, tz_string)
-                }
-            },
-            None => {
-                let datetime = array
-                    .value_as_datetime($row_idx)
-                    .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
-                format!("{:?}", datetime)
-            }
-        };
-
-        Ok(s)
-    }};
-}
-
-macro_rules! make_string_datetime_with_format {
-    ($array_type:ty, $dt:expr, $format: ident, $tz_string: ident, $column: ident, $col_idx:ident, $row_idx: ident) => {{
-        let array = $column
-            .as_any()
-            .downcast_ref::<$array_type>()
-            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
-        let datetime = array
-            .value_as_datetime($row_idx)
-            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?;
-
-        let s = match $tz_string {
-            Some(tz_string) => match tz_string.parse::<Tz>() {
-                Ok(tz) => {
-                    let utc_time = DateTime::<Utc>::from_utc(datetime, Utc);
-                    let local_time = utc_time.with_timezone(&tz);
-                    local_time.format($format).to_string()
-                }
-                Err(_) => {
-                    format!("{:?} (Unknown Time Zone '{}')", datetime, tz_string)
-                }
-            },
-            None => datetime.format($format).to_string(),
-        };
-
-        Ok(s)
-    }};
-}
-
-macro_rules! handle_string_datetime {
-    ($array_type:ty, $dt:expr, $format: ident, $tz_string: ident, $column: ident, $col_idx:ident, $row_idx: ident) => {
-        match $format {
-            Some(format) => make_string_datetime_with_format!(
-                $array_type,
-                $dt,
-                format,
-                $tz_string,
-                $column,
-                $col_idx,
-                $row_idx
-            ),
-            None => make_string_datetime!(
-                $array_type,
-                $dt,
-                $tz_string,
-                $column,
-                $col_idx,
-                $row_idx
-            ),
-        }
-    };
-}
-
-// It's not possible to do array.value($row).to_string() for &[u8], let's format it as hex
-macro_rules! make_string_hex {
-    ($array_type:ty, $column: ident, $row: ident) => {{
-        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
-
-        let mut tmp = "".to_string();
-
-        for character in array.value($row) {
-            let _ = write!(tmp, "{:02x}", character);
-        }
-
-        Ok(tmp)
-    }};
-}
-
-macro_rules! make_string_from_list {
-    ($column: ident, $row: ident) => {{
-        let list = $column
-            .as_any()
-            .downcast_ref::<array::ListArray>()
-            .ok_or(ArrowError::InvalidArgumentError(format!(
-                "Repl error: could not convert list column to list array."
-            )))?
-            .value($row);
-        let string_values = (0..list.len())
-            .map(|i| array_value_to_string(&list.clone(), i))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(format!("[{}]", string_values.join(", ")))
-    }};
-}
-
-macro_rules! make_string_from_large_list {
-    ($column: ident, $row: ident) => {{
-        let list = $column
-            .as_any()
-            .downcast_ref::<array::LargeListArray>()
-            .ok_or(ArrowError::InvalidArgumentError(format!(
-                "Repl error: could not convert large list column to list array."
-            )))?
-            .value($row);
-        let string_values = (0..list.len())
-            .map(|i| array_value_to_string(&list, i))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(format!("[{}]", string_values.join(", ")))
-    }};
-}
-
-macro_rules! make_string_from_fixed_size_list {
-    ($column: ident, $row: ident) => {{
-        let list = $column
-            .as_any()
-            .downcast_ref::<array::FixedSizeListArray>()
-            .ok_or(ArrowError::InvalidArgumentError(format!(
-                "Repl error: could not convert list column to list array."
-            )))?
-            .value($row);
-        let string_values = (0..list.len())
-            .map(|i| array_value_to_string(&list.clone(), i))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(format!("[{}]", string_values.join(", ")))
-    }};
-}
-
-macro_rules! make_string_from_duration {
-    ($array_type:ty, $dt:expr, $column:ident, $col_idx:ident, $row_idx: ident) => {{
-        Ok($column
-            .as_any()
-            .downcast_ref::<$array_type>()
-            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
-            .value_as_duration($row_idx)
-            .ok_or_else(|| invalid_cast_error($dt, $col_idx, $row_idx))?
-            .to_string())
-    }};
-}
-
-#[inline(always)]
-pub fn make_string_from_decimal(
-    column: &Arc<dyn Array>,
-    row: usize,
-) -> Result<String, ArrowError> {
-    let array = column.as_any().downcast_ref::<Decimal128Array>().unwrap();
-
-    Ok(array.value_as_string(row))
-}
-
-fn append_struct_field_string(
-    target: &mut String,
-    name: &str,
-    field_col: &Arc<dyn Array>,
-    row: usize,
-) -> Result<(), ArrowError> {
-    target.push('"');
-    target.push_str(name);
-    target.push_str("\": ");
-
-    if field_col.is_null(row) {
-        target.push_str("null");
-    } else {
-        match field_col.data_type() {
-            DataType::Utf8 | DataType::LargeUtf8 => {
-                target.push('"');
-                target.push_str(array_value_to_string(field_col, row)?.as_str());
-                target.push('"');
-            }
-            _ => {
-                target.push_str(array_value_to_string(field_col, row)?.as_str());
-            }
-        }
+        )?;
+        Ok(())
     }
-
-    Ok(())
 }
 
-fn append_map_field_string(
-    target: &mut String,
-    field_col: &Arc<dyn Array>,
-    row: usize,
-) -> Result<(), ArrowError> {
-    if field_col.is_null(row) {
-        target.push_str("null");
-    } else {
-        match field_col.data_type() {
-            DataType::Utf8 | DataType::LargeUtf8 => {
-                target.push('"');
-                target.push_str(array_value_to_string(field_col, row)?.as_str());
-                target.push('"');
-            }
-            _ => {
-                target.push_str(array_value_to_string(field_col, row)?.as_str());
-            }
-        }
-    }
+fn format_rfc3339(date: DateTime<Tz>) -> impl Display {
+    use chrono::format::*;
 
-    Ok(())
+    const ITEMS: &[Item<'static>] = &[
+        Item::Numeric(Numeric::Year, Pad::Zero),
+        Item::Literal("-"),
+        Item::Numeric(Numeric::Month, Pad::Zero),
+        Item::Literal("-"),
+        Item::Numeric(Numeric::Day, Pad::Zero),
+        Item::Literal("T"),
+        Item::Numeric(Numeric::Hour, Pad::Zero),
+        Item::Literal(":"),
+        Item::Numeric(Numeric::Minute, Pad::Zero),
+        Item::Literal(":"),
+        Item::Numeric(Numeric::Second, Pad::Zero),
+        Item::Fixed(Fixed::Nanosecond),
+        Item::Fixed(Fixed::TimezoneOffsetColonZ),
+    ];
+    date.format_with_items(ITEMS.iter())
 }
 
 /// Get the value at the given row in an array as a String.
 ///
 /// Note this function is quite inefficient and is unlikely to be
 /// suitable for converting large arrays or record batches.
-fn array_value_to_string_internal(
-    column: &ArrayRef,
-    col_idx: usize,
-    row_idx: usize,
-    format: Option<&str>,
-) -> Result<String, ArrowError> {
-    if column.is_null(row_idx) {
-        return Ok("".to_string());
-    }
-    match column.data_type() {
-        DataType::Utf8 => make_string!(array::StringArray, column, row_idx),
-        DataType::LargeUtf8 => make_string!(array::LargeStringArray, column, row_idx),
-        DataType::Binary => make_string_hex!(array::BinaryArray, column, row_idx),
-        DataType::LargeBinary => {
-            make_string_hex!(array::LargeBinaryArray, column, row_idx)
-        }
-        DataType::FixedSizeBinary(_) => {
-            make_string_hex!(array::FixedSizeBinaryArray, column, row_idx)
-        }
-        DataType::Boolean => make_string!(array::BooleanArray, column, row_idx),
-        DataType::Int8 => make_string!(array::Int8Array, column, row_idx),
-        DataType::Int16 => make_string!(array::Int16Array, column, row_idx),
-        DataType::Int32 => make_string!(array::Int32Array, column, row_idx),
-        DataType::Int64 => make_string!(array::Int64Array, column, row_idx),
-        DataType::UInt8 => make_string!(array::UInt8Array, column, row_idx),
-        DataType::UInt16 => make_string!(array::UInt16Array, column, row_idx),
-        DataType::UInt32 => make_string!(array::UInt32Array, column, row_idx),
-        DataType::UInt64 => make_string!(array::UInt64Array, column, row_idx),
-        DataType::Float16 => make_string!(array::Float16Array, column, row_idx),
-        DataType::Float32 => make_string!(array::Float32Array, column, row_idx),
-        DataType::Float64 => make_string!(array::Float64Array, column, row_idx),
-        DataType::Decimal128(..) => make_string_from_decimal(column, row_idx),
-        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Second => {
-            handle_string_datetime!(
-                array::TimestampSecondArray,
-                "Timestamp",
-                format,
-                tz_string_opt,
-                column,
-                col_idx,
-                row_idx
-            )
-        }
-        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Millisecond => {
-            handle_string_datetime!(
-                array::TimestampMillisecondArray,
-                "Timestamp",
-                format,
-                tz_string_opt,
-                column,
-                col_idx,
-                row_idx
-            )
-        }
-        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Microsecond => {
-            handle_string_datetime!(
-                array::TimestampMicrosecondArray,
-                "Timestamp",
-                format,
-                tz_string_opt,
-                column,
-                col_idx,
-                row_idx
-            )
-        }
-        DataType::Timestamp(unit, tz_string_opt) if *unit == TimeUnit::Nanosecond => {
-            handle_string_datetime!(
-                array::TimestampNanosecondArray,
-                "Timestamp",
-                format,
-                tz_string_opt,
-                column,
-                col_idx,
-                row_idx
-            )
-        }
-        DataType::Date32 => {
-            handle_string_date!(
-                array::Date32Array,
-                "Date32",
-                format,
-                column,
-                col_idx,
-                row_idx
-            )
-        }
-        DataType::Date64 => {
-            handle_string_date!(
-                array::Date64Array,
-                "Date64",
-                format,
-                column,
-                col_idx,
-                row_idx
-            )
-        }
-        DataType::Time32(unit) if *unit == TimeUnit::Second => {
-            handle_string_time!(
-                array::Time32SecondArray,
-                "Time32",
-                format,
-                column,
-                col_idx,
-                row_idx
-            )
-        }
-        DataType::Time32(unit) if *unit == TimeUnit::Millisecond => {
-            handle_string_time!(
-                array::Time32MillisecondArray,
-                "Time32",
-                format,
-                column,
-                col_idx,
-                row_idx
-            )
-        }
-        DataType::Time64(unit) if *unit == TimeUnit::Microsecond => {
-            handle_string_time!(
-                array::Time64MicrosecondArray,
-                "Time64",
-                format,
-                column,
-                col_idx,
-                row_idx
-            )
-        }
-        DataType::Time64(unit) if *unit == TimeUnit::Nanosecond => {
-            handle_string_time!(
-                array::Time64NanosecondArray,
-                "Time64",
-                format,
-                column,
-                col_idx,
-                row_idx
-            )
-        }
-        DataType::Interval(unit) => match unit {
-            IntervalUnit::DayTime => {
-                make_string_interval_day_time!(column, row_idx)
-            }
-            IntervalUnit::YearMonth => {
-                make_string_interval_year_month!(column, row_idx)
-            }
-            IntervalUnit::MonthDayNano => {
-                make_string_interval_month_day_nano!(column, row_idx)
-            }
-        },
-        DataType::List(_) => make_string_from_list!(column, row_idx),
-        DataType::LargeList(_) => make_string_from_large_list!(column, row_idx),
-        DataType::Dictionary(index_type, _value_type) => match **index_type {
-            DataType::Int8 => dict_array_value_to_string::<Int8Type>(column, row_idx),
-            DataType::Int16 => dict_array_value_to_string::<Int16Type>(column, row_idx),
-            DataType::Int32 => dict_array_value_to_string::<Int32Type>(column, row_idx),
-            DataType::Int64 => dict_array_value_to_string::<Int64Type>(column, row_idx),
-            DataType::UInt8 => dict_array_value_to_string::<UInt8Type>(column, row_idx),
-            DataType::UInt16 => dict_array_value_to_string::<UInt16Type>(column, row_idx),
-            DataType::UInt32 => dict_array_value_to_string::<UInt32Type>(column, row_idx),
-            DataType::UInt64 => dict_array_value_to_string::<UInt64Type>(column, row_idx),
-            _ => Err(ArrowError::InvalidArgumentError(format!(
-                "Pretty printing not supported for {:?} due to index type",
-                column.data_type()
-            ))),
-        },
-        DataType::FixedSizeList(_, _) => {
-            make_string_from_fixed_size_list!(column, row_idx)
-        }
-        DataType::Struct(_) => {
-            let st = column
-                .as_any()
-                .downcast_ref::<array::StructArray>()
-                .ok_or_else(|| {
-                    ArrowError::InvalidArgumentError(
-                        "Repl error: could not convert struct column to struct array."
-                            .to_string(),
-                    )
-                })?;
-
-            let mut s = String::new();
-            s.push('{');
-            let mut kv_iter = st.columns().iter().zip(st.column_names());
-            if let Some((col, name)) = kv_iter.next() {
-                append_struct_field_string(&mut s, name, col, row_idx)?;
-            }
-            for (col, name) in kv_iter {
-                s.push_str(", ");
-                append_struct_field_string(&mut s, name, col, row_idx)?;
-            }
-            s.push('}');
-
-            Ok(s)
-        }
-        DataType::Map(_, _) => {
-            let map_array =
-                column.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
-                    ArrowError::InvalidArgumentError(
-                        "Repl error: could not convert column to map array.".to_string(),
-                    )
-                })?;
-            let map_entry = map_array.value(row_idx);
-            let st = map_entry
-                .as_any()
-                .downcast_ref::<StructArray>()
-                .ok_or_else(|| {
-                    ArrowError::InvalidArgumentError(
-                        "Repl error: could not convert map entry to struct array."
-                            .to_string(),
-                    )
-                })?;
-            let mut s = String::new();
-            s.push('{');
-            let entries_count = st.column(0).len();
-            for i in 0..entries_count {
-                if i > 0 {
-                    s.push_str(", ");
-                }
-                append_map_field_string(&mut s, st.column(0), i)?;
-                s.push_str(": ");
-                append_map_field_string(&mut s, st.column(1), i)?;
-            }
-            s.push('}');
-
-            Ok(s)
-        }
-        DataType::Union(field_vec, type_ids, mode) => {
-            union_to_string(column, row_idx, field_vec, type_ids, mode)
-        }
-        DataType::Duration(unit) => match *unit {
-            TimeUnit::Second => {
-                make_string_from_duration!(
-                    array::DurationSecondArray,
-                    "Duration",
-                    column,
-                    col_idx,
-                    row_idx
-                )
-            }
-            TimeUnit::Millisecond => {
-                make_string_from_duration!(
-                    array::DurationMillisecondArray,
-                    "Duration",
-                    column,
-                    col_idx,
-                    row_idx
-                )
-            }
-            TimeUnit::Microsecond => {
-                make_string_from_duration!(
-                    array::DurationMicrosecondArray,
-                    "Duration",
-                    column,
-                    col_idx,
-                    row_idx
-                )
-            }
-            TimeUnit::Nanosecond => {
-                make_string_from_duration!(
-                    array::DurationNanosecondArray,
-                    "Duration",
-                    column,
-                    col_idx,
-                    row_idx
-                )
-            }
-        },
-        _ => Err(ArrowError::InvalidArgumentError(format!(
-            "Pretty printing not implemented for {:?} type",
-            column.data_type()
-        ))),
-    }
-}
-
-pub fn temporal_array_value_to_string(
-    column: &ArrayRef,
-    col_idx: usize,
-    row_idx: usize,
-    format: Option<&str>,
-) -> Result<String, ArrowError> {
-    array_value_to_string_internal(column, col_idx, row_idx, format)
-}
-
 pub fn array_value_to_string(
     column: &ArrayRef,
-    row_idx: usize,
-) -> Result<String, ArrowError> {
-    array_value_to_string_internal(column, 0, row_idx, None)
-}
-
-/// Converts the value of the union array at `row` to a String
-fn union_to_string(
-    column: &ArrayRef,
-    row: usize,
-    fields: &[Field],
-    type_ids: &[i8],
-    mode: &UnionMode,
-) -> Result<String, ArrowError> {
-    let list = column
-        .as_any()
-        .downcast_ref::<array::UnionArray>()
-        .ok_or_else(|| {
-            ArrowError::InvalidArgumentError(
-                "Repl error: could not convert union column to union array.".to_string(),
-            )
-        })?;
-    let type_id = list.type_id(row);
-    let field_idx = type_ids.iter().position(|t| t == &type_id).ok_or_else(|| {
-        ArrowError::InvalidArgumentError(format!(
-            "Repl error: could not get field name for type id: {type_id} in union array.",
-        ))
-    })?;
-    let name = fields.get(field_idx).unwrap().name();
-
-    let value = array_value_to_string(
-        list.child(type_id),
-        match mode {
-            UnionMode::Dense => list.value_offset(row) as usize,
-            UnionMode::Sparse => row,
-        },
-    )?;
-
-    Ok(format!("{{{name}={value}}}"))
-}
-/// Converts the value of the dictionary array at `row` to a String
-fn dict_array_value_to_string<K: ArrowPrimitiveType>(
-    colum: &ArrayRef,
     row: usize,
 ) -> Result<String, ArrowError> {
-    let dict_array = colum.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
-
-    let keys_array = dict_array.keys();
-
-    if keys_array.is_null(row) {
-        return Ok(String::from(""));
-    }
-
-    let dict_index = keys_array.value(row).as_usize();
-    array_value_to_string(dict_array.values(), dict_index)
+    let options = FormatOptions::default().with_display_error(true);
+    let formatter = ArrayFormatter::try_new(column.as_ref(), &options)?;
+    Ok(formatter.value(row).to_string())
 }
 
 /// Converts numeric type to a `String`
@@ -808,6 +679,7 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn test_map_arry_to_string() {
@@ -826,7 +698,7 @@ mod tests {
         .unwrap();
         let param = Arc::new(map_array) as ArrayRef;
         assert_eq!(
-            "{\"d\": 30, \"e\": 40, \"f\": 50}",
+            "{d: 30, e: 40, f: 50}",
             array_value_to_string(&param, 1).unwrap()
         );
     }
