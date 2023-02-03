@@ -2263,5 +2263,10 @@ mod tests {
             b"sdf,dsfg\ndksdk,jf\ndsdsfd,hghue\n,sds\nFalhghse,\xFF",
             "Csv error: Encountered invalid UTF-8 data for line 5 and field 2",
         );
+
+        err_test(
+            b"\xFFsdf,dsfg\ndksdk,jf\ndsdsfd,hghue\n,sds\nFalhghse,\xFF",
+            "Csv error: Encountered invalid UTF-8 data for line 1 and field 1",
+        );
     }
 }
