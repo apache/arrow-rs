@@ -154,7 +154,7 @@ impl<W: Write> Writer<W> {
                     a.data_type()
                 ))),
                 DataType::Binary | DataType::LargeBinary => Err(ArrowError::CsvError(
-                    format!("Binary data cannot be written to CSV"),
+                    "Binary data cannot be written to CSV".to_string(),
                 )),
                 _ => ArrayFormatter::try_new(a.as_ref(), &options),
             })
