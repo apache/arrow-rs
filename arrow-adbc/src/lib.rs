@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Rust structs and utilities for building Arrow Database Connectivity (ADBC) drivers.
+//! Rust structs and utilities for using and building Arrow Database Connectivity (ADBC) drivers.
 //!
 //! ADBC drivers provide an ABI-stable interface for interacting with databases,
 //! that:
@@ -48,14 +48,17 @@
 //! let sqlite_database = sqlite_driver.new_database().init()?;
 //! let sqlite_conn = sqlite_database.new_connection().init()?;
 //! let sqlite_statement = sqlite_conn.new_statement();
+//!
 //! sqlite_statement.set_sql_query("SELECT 1");
 //! let results: RecordBatchReader = sqlite_statement.execute()?;
-//! assert_eq!(results.next().unwrap(), record_batch([1], ["1"]));
+//!
+//! let expected: ArrayRef = Arc::new(Int64Array::from(vec![1]));
+//! assert_eq!(results.next().unwrap(), RecordBatch::try_from([expected], vec!["1"]))?;
 //! ```
 //!
 //! ## Implementing ADBC drivers
 //!
-//! To implement an ADBC driver, use the [interface] module. The macro
+//! To implement an ADBC driver, use the [implement] module. The macro
 //! [adbc_init_func] will generate adapters from the safe Rust traits you implement
 //! to the FFI interface recognized by ADBC.
 pub mod driver_manager;

@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! API traits for ADBC structs
+//!
+//! These are the interfaces to ADBC structs made more ergonomic for Rust
+//! developers. They are implemented by the structs in [crate::driver_manager].
+//! And they can be used to implement ADBC drivers along with the utilities in
+//! [crate::implement].
 use arrow::{array::ArrayRef, datatypes::Schema, record_batch::RecordBatchReader};
 
 use crate::ffi::AdbcObjectDepth;
@@ -39,7 +45,7 @@ pub trait DatabaseApi {
 ///
 /// Connections should start in autocommit mode. They can be moved out by
 /// setting `"adbc.connection.autocommit"` to `"false"` (using
-/// [AdbcConnection::set_option]). Turning off autocommit allows customizing
+/// [ConnectionApi::set_option]). Turning off autocommit allows customizing
 /// the isolation level. Read more in [adbc.h](https://github.com/apache/arrow-adbc/blob/main/adbc.h).
 pub trait ConnectionApi {
     type Error;
@@ -176,7 +182,7 @@ pub trait ConnectionApi {
     ///   filter by name. May be a search pattern (see next section).
     /// * **table_type**: Only show tables matching one of the given table
     ///   types. If None, show tables of any type. Valid table types should
-    ///   match those returned by [AdbcConnection::get_table_schema].
+    ///   match those returned by [ConnectionApi::get_table_schema].
     /// * **column_name**: Only show columns with the given name. If
     ///   None, do not filter by name.  May be a search pattern (see next section).
     ///
@@ -248,7 +254,7 @@ pub trait StatementApi {
 
     /// Turn this statement into a prepared statement to be executed multiple times.
     ///
-    /// This should return an error if called before [AdbcStatement::set_sql_query].
+    /// This should return an error if called before [StatementApi::set_sql_query].
     fn prepare(&mut self) -> Result<(), Self::Error>;
 
     /// Set a string option on a statement.
@@ -272,7 +278,7 @@ pub trait StatementApi {
     /// be an empty string.  If the type cannot be determined, the type of
     /// the corresponding field will be NA (NullType).
     ///
-    /// This should return an error if this was called before [AdbcStatement::prepare].
+    /// This should return an error if this was called before [StatementApi::prepare].
     fn get_param_schema(&self) -> Result<Schema, Self::Error>;
 
     /// Bind Arrow data, either for bulk inserts or prepared statements.
@@ -304,7 +310,7 @@ pub trait StatementApi {
     fn execute_partitioned(&mut self) -> Result<PartitionedStatementResult, Self::Error>;
 }
 
-/// Result of calling [AdbcStatement::execute].
+/// Result of calling [StatementApi::execute].
 ///
 /// `result` may be None if there is no meaningful result.
 /// `row_affected` may be -1 if not applicable or if it is not supported.
@@ -315,7 +321,7 @@ pub struct StatementResult {
 
 /// Partitioned results
 ///
-/// [AdbcConnection::read_partition] will be called to get the output stream
+/// [ConnectionApi::read_partition] will be called to get the output stream
 /// for each partition.
 ///
 /// These may be used by a multi-threaded or a distributed client. Each partition

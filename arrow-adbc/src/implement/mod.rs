@@ -18,9 +18,9 @@
 //! Implement ADBC driver without unsafe code.
 //!
 //! Allows implementing ADBC driver in Rust without directly interacting with
-//! FFI types, which requires unsafe code. Implement [AdbcDatabase],
-//! [AdbcConnection], [AdbcStatement], and [AdbcError] first. Then pass the
-//! statement type to [adbc_api] to generate C FFI interface for ADBC.
+//! FFI types, which requires unsafe code. Implement [AdbcDatabaseImpl],
+//! [AdbcConnectionImpl], [AdbcStatementImpl], and [AdbcError] first. Then pass the
+//! statement type to [adbc_init_func] to generate an ADBC entrypoint.
 
 use std::{rc::Rc, sync::Arc};
 
@@ -69,7 +69,7 @@ pub trait AdbcStatementImpl: StatementApi {
 ///
 /// The default name recommended is `AdbcDriverInit` or `<Prefix>DriverInit`.
 ///
-/// The type must implement [AdbcStatement].
+/// The type must implement [AdbcStatementImpl].
 #[macro_export]
 macro_rules! adbc_init_func {
     ($func_name:ident, $statement_type:ident) => {

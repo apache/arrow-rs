@@ -247,7 +247,7 @@ impl FFI_AdbcError {
 /// An error that can be converted into [FFI_AdbcError] and [AdbcStatusCode].
 ///
 /// Can be used in combination with [check_err] when implementing ADBC FFI
-/// functions. Is also required when using [crate::interface::adbc_api].
+/// functions. Is also required when using [crate::implement::adbc_init_func].
 pub trait AdbcError {
     /// The status code this error corresponds to.
     fn status_code(&self) -> AdbcStatusCode;

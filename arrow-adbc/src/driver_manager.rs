@@ -1,3 +1,47 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Load and use ADBC drivers.
+//!
+//! ## Loading a driver
+//!
+//! Drivers are initialized using a function provided by the driver as a main
+//! entrypoint, canonically called `AdbcDriverInit`. (Although many will use a
+//! different name to support statically linking multiple drivers within the
+//! same program.)
+//!
+//! To load from a function, use [AdbcDriver::load_from_init].
+//!
+//! To load from a dynamic library, use [AdbcDriver::load].
+//!
+//! ## Using across threads
+//!
+//! [AdbcDriver] and [AdbcDatabase] can be used across multiple threads. They
+//! hold their inner implementations within [std::sync::Arc], so they are
+//! cheaply copy-able.
+//!
+//! [AdbcConnection] should not be used across multiple threads. Driver
+//! implementations are not guarantee connection APIs are safe to call from
+//! multiple threads, unless calls are carefully sequenced. So instead of using
+//! the same connection across multiple threads, create a connection for each
+//! thread. [AdbcConnectionBuilder] is [core::marker::Send], so it can be moved
+//! to a new thread before initialized into an [AdbcConnection]. [AdbcConnection]
+//! holds it's inner data in a [std::rc::Rc], so it is also cheaply copyable.
+
 use std::{
     cell::RefCell,
     ffi::{c_void, CStr, CString},
@@ -28,6 +72,7 @@ use crate::{
     },
 };
 
+/// An error from an ADBC driver.
 pub struct AdbcDriverManagerError {
     pub message: String,
     pub vendor_code: i32,
@@ -71,16 +116,21 @@ type AdbcDriverInitFunc = unsafe extern "C" fn(
     error: *mut crate::error::FFI_AdbcError,
 ) -> crate::error::AdbcStatusCode;
 
+/// A handle to an ADBC driver.
+///
+/// The internal data is held behind a [std::sync::Arc], so it is cheaply-copyable.
 #[derive(Clone)]
 pub struct AdbcDriver {
     inner: Arc<FFI_AdbcDriver>,
 }
 
 impl AdbcDriver {
+    /// Load a driver from a dynamic library.
     pub fn load(_name: &str, _entrypoint: Option<&str>, _version: u32) -> Result<Self> {
         todo!("Loading from a dynamic library");
     }
 
+    /// Load a driver from an initialization function.
     pub fn load_from_init(init_func: AdbcDriverInitFunc, version: i32) -> Result<Self> {
         let mut error = FFI_AdbcError::empty();
         let mut driver = Arc::new(FFI_AdbcDriver::default());
@@ -97,6 +147,7 @@ impl AdbcDriver {
         Ok(Self { inner: driver })
     }
 
+    /// Create a new database builder to initialize a database.
     pub fn new_database(&self) -> AdbcDatabaseBuilder {
         // TODO: do we even care about setting private_driver?
 
@@ -122,6 +173,10 @@ fn str_to_cstring(value: &str) -> Result<CString> {
     }
 }
 
+/// Builder for an [AdbcDatabase].
+///
+/// Use this to set options on a database. While some databases may allow setting
+/// options after initialization, many do not.
 pub struct AdbcDatabaseBuilder {
     inner: FFI_AdbcDatabase,
     driver: Arc<FFI_AdbcDriver>,
@@ -155,6 +210,9 @@ impl AdbcDatabaseBuilder {
 }
 
 // TODO: make sure this is Send
+/// An ADBC database handle.
+///
+/// See [crate::interface::DatabaseApi] for more details.
 #[derive(Clone)]
 pub struct AdbcDatabase {
     // In general, ADBC objects allow serialized access from multiple threads,
@@ -166,6 +224,11 @@ pub struct AdbcDatabase {
 }
 
 impl AdbcDatabase {
+    /// Set an option on the database.
+    ///
+    /// Some drivers may not support setting options after initialization and
+    /// instead return an error. So when possible prefer setting options on the
+    /// builder.
     pub fn set_option(self, key: &str, value: &str) -> Result<()> {
         let mut error = FFI_AdbcError::empty();
         let key = str_to_cstring(key)?;
@@ -189,6 +252,7 @@ impl AdbcDatabase {
         Ok(())
     }
 
+    /// Get a connection builder to create a [AdbcConnection].
     pub fn new_connection(&self) -> AdbcConnectionBuilder {
         let inner = FFI_AdbcConnection::default();
 
@@ -201,6 +265,7 @@ impl AdbcDatabase {
 }
 
 // TODO: make sure this is Send
+/// Builder for an [AdbcConnection].
 pub struct AdbcConnectionBuilder {
     inner: FFI_AdbcConnection,
     database: Arc<RwLock<FFI_AdbcDatabase>>,
@@ -208,6 +273,7 @@ pub struct AdbcConnectionBuilder {
 }
 
 impl AdbcConnectionBuilder {
+    /// Set an option on a connection.
     pub fn set_option(mut self, key: &str, value: &str) -> Result<Self> {
         let mut error = FFI_AdbcError::empty();
         let key = str_to_cstring(key)?;
@@ -226,6 +292,10 @@ impl AdbcConnectionBuilder {
         Ok(self)
     }
 
+    /// Initialize the connection.
+    ///
+    /// [AdbcConnection] is not [core::marker::Send], so move the builder to
+    /// the destination thread before initializing.
     pub fn init(mut self) -> Result<AdbcConnection> {
         let mut error = FFI_AdbcError::empty();
 
@@ -255,6 +325,8 @@ impl AdbcConnectionBuilder {
 ///
 /// Connections should be used on a single thread. To use a driver from multiple
 /// threads, create a connection for each thread.
+///
+/// See [ConnectionApi] for details of the methods.
 pub struct AdbcConnection {
     inner: Rc<RefCell<FFI_AdbcConnection>>,
     driver: Arc<FFI_AdbcDriver>,
@@ -506,6 +578,7 @@ impl ConnectionApi for AdbcConnection {
 }
 
 impl AdbcConnection {
+    /// Create a new statement.
     pub fn new_statement(&self) -> Result<AdbcStatement> {
         let mut inner = FFI_AdbcStatement::default();
         let mut error = FFI_AdbcError::empty();
@@ -527,9 +600,13 @@ impl AdbcConnection {
     }
 }
 
+/// A handle to an ADBC statement.
+///
+/// See [StatementApi] for details.
 pub struct AdbcStatement {
     inner: FFI_AdbcStatement,
-    // We hold onto the connection to make sure it is kept alive
+    // We hold onto the connection to make sure it is kept alive (and keep
+    // lifetime semantics simple).
     _connection: Rc<RefCell<FFI_AdbcConnection>>,
     driver: Arc<FFI_AdbcDriver>,
 }
