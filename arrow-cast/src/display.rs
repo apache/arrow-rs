@@ -71,9 +71,31 @@ pub struct ValueFormatter<'a> {
     formatter: &'a ArrayFormatter<'a>,
 }
 
+impl<'a> ValueFormatter<'a> {
+    /// Writes this value to the provided `String`
+    ///
+    /// Note: this ignores [`FormatOptions::with_display_error`]
+    pub fn write(&self, s: &mut String) -> Result<(), ArrowError> {
+        match self.formatter.format.write(self.idx, s) {
+            Ok(_) => Ok(()),
+            Err(FormatError::Arrow(e)) => Err(e),
+            Err(FormatError::Format(_)) => {
+                unreachable!("formatting to string is infallible")
+            }
+        }
+    }
+
+    /// Fallibly converts this to a string
+    pub fn try_to_string(&self) -> Result<String, ArrowError> {
+        let mut s = String::new();
+        self.write(&mut s)?;
+        Ok(s)
+    }
+}
+
 impl<'a> Display for ValueFormatter<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self.formatter.format.fmt(self.idx, f) {
+        match self.formatter.format.write(self.idx, f) {
             Ok(()) => Ok(()),
             Err(FormatError::Arrow(e)) if self.formatter.safe => {
                 write!(f, "ERROR: {}", e)
@@ -164,7 +186,7 @@ impl From<ArrowError> for FormatError {
 
 /// [`Display`] but accepting an index
 trait DisplayIndex {
-    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult;
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult;
 }
 
 /// [`DisplayIndex`] with additional state
@@ -173,8 +195,7 @@ trait DisplayIndexState {
 
     fn prepare(&self, options: &FormatOptions) -> Result<Self::State, ArrowError>;
 
-    fn fmt(&self, state: &Self::State, idx: usize, f: &mut Formatter<'_>)
-        -> FormatResult;
+    fn write(&self, state: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult;
 }
 
 impl<T: DisplayIndex> DisplayIndexState for T {
@@ -184,8 +205,8 @@ impl<T: DisplayIndex> DisplayIndexState for T {
         Ok(())
     }
 
-    fn fmt(&self, _: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
-        DisplayIndex::fmt(self, idx, f)
+    fn write(&self, _: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+        DisplayIndex::write(self, idx, f)
     }
 }
 
@@ -206,23 +227,23 @@ where
 }
 
 impl<F: DisplayIndexState + Array> DisplayIndex for ArrayFormat<F> {
-    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         if self.array.is_null(idx) {
             return Ok(());
         }
-        DisplayIndexState::fmt(&self.array, &self.state, idx, f)
+        DisplayIndexState::write(&self.array, &self.state, idx, f)
     }
 }
 
 impl<'a> DisplayIndex for &'a BooleanArray {
-    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         write!(f, "{}", self.value(idx))?;
         Ok(())
     }
 }
 
 impl<'a> DisplayIndex for &'a NullArray {
-    fn fmt(&self, _idx: usize, _f: &mut Formatter<'_>) -> FormatResult {
+    fn write(&self, _idx: usize, _f: &mut dyn Write) -> FormatResult {
         Ok(())
     }
 }
@@ -231,7 +252,7 @@ macro_rules! primitive_display {
     ($($t:ty),+) => {
         $(impl<'a> DisplayIndex for &'a PrimitiveArray<$t>
         {
-            fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+            fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
                 write!(f, "{}", self.value(idx))?;
                 Ok(())
             }
@@ -252,7 +273,7 @@ macro_rules! decimal_display {
                 Ok((self.precision(), self.scale()))
             }
 
-            fn fmt(&self, s: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+            fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
                 write!(f, "{}", <$t>::format_decimal(self.values()[idx], s.0, s.1))?;
                 Ok(())
             }
@@ -274,7 +295,7 @@ macro_rules! timestamp_display {
                 }
             }
 
-            fn fmt(&self, tz: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+            fn write(&self, tz: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
                 let naive = as_datetime::<$t>(value).ok_or_else(|| {
                     ArrowError::CastError(format!(
@@ -307,7 +328,7 @@ timestamp_display!(
 macro_rules! temporal_display {
     ($convert:ident, $t:ty) => {
         impl<'a> DisplayIndex for &'a PrimitiveArray<$t> {
-            fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+            fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
                 let naive = $convert(value as _).ok_or_else(|| {
                     ArrowError::CastError(format!(
@@ -325,14 +346,14 @@ macro_rules! temporal_display {
 }
 
 impl<'a, O: OffsetSizeTrait> DisplayIndex for &'a GenericStringArray<O> {
-    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         write!(f, "{}", self.value(idx))?;
         Ok(())
     }
 }
 
 impl<'a, O: OffsetSizeTrait> DisplayIndex for &'a GenericBinaryArray<O> {
-    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let v = self.value(idx);
         for byte in v {
             write!(f, "{byte:02x}")?;
@@ -348,24 +369,24 @@ impl<'a, K: ArrowDictionaryKeyType> DisplayIndexState for &'a DictionaryArray<K>
         make_formatter(self.values().as_ref(), options)
     }
 
-    fn fmt(&self, s: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+    fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value_idx = self.keys().values()[idx].as_usize();
-        s.as_ref().fmt(value_idx, f)
+        s.as_ref().write(value_idx, f)
     }
 }
 
 fn write_list(
-    f: &mut Formatter<'_>,
+    f: &mut dyn Write,
     mut range: Range<usize>,
     values: &dyn DisplayIndex,
 ) -> FormatResult {
     f.write_char('[')?;
     if let Some(idx) = range.next() {
-        values.fmt(idx, f)?;
+        values.write(idx, f)?;
     }
     for idx in range {
         write!(f, ", ")?;
-        values.fmt(idx, f)?;
+        values.write(idx, f)?;
     }
     f.write_char(']')?;
     Ok(())
@@ -378,7 +399,7 @@ impl<'a, O: OffsetSizeTrait> DisplayIndexState for &'a GenericListArray<O> {
         make_formatter(self.values().as_ref(), options)
     }
 
-    fn fmt(&self, s: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+    fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let offsets = self.value_offsets();
         let end = offsets[idx + 1].as_usize();
         let start = offsets[idx].as_usize();
@@ -395,7 +416,7 @@ impl<'a> DisplayIndexState for &'a FixedSizeListArray {
         Ok((length as usize, values))
     }
 
-    fn fmt(&self, s: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+    fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let start = idx * s.0;
         let end = start + s.0;
         write_list(f, start..end, s.1.as_ref())
@@ -424,15 +445,15 @@ impl<'a> DisplayIndexState for &'a StructArray {
             .collect()
     }
 
-    fn fmt(&self, s: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+    fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let mut iter = s.iter();
         if let Some((name, display)) = iter.next() {
             write!(f, "{name}: ")?;
-            display.as_ref().fmt(idx, f)?;
+            display.as_ref().write(idx, f)?;
         }
         for (name, display) in iter {
             write!(f, ", {name}: ")?;
-            display.as_ref().fmt(idx, f)?;
+            display.as_ref().write(idx, f)?;
         }
         Ok(())
     }
@@ -447,7 +468,7 @@ impl<'a> DisplayIndexState for &'a MapArray {
         Ok((keys, values))
     }
 
-    fn fmt(&self, s: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+    fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let offsets = self.value_offsets();
         let end = offsets[idx + 1].as_usize();
         let start = offsets[idx].as_usize();
@@ -455,16 +476,16 @@ impl<'a> DisplayIndexState for &'a MapArray {
 
         f.write_char('{')?;
         if let Some(idx) = iter.next() {
-            s.0.fmt(idx, f)?;
+            s.0.write(idx, f)?;
             write!(f, ": ")?;
-            s.1.fmt(idx, f)?;
+            s.1.write(idx, f)?;
         }
 
         for idx in iter {
             write!(f, ", ")?;
-            s.0.fmt(idx, f)?;
+            s.0.write(idx, f)?;
             write!(f, ": ")?;
-            s.1.fmt(idx, f)?;
+            s.1.write(idx, f)?;
         }
 
         f.write_char('}')?;
@@ -493,7 +514,7 @@ impl<'a> DisplayIndexState for &'a UnionArray {
         Ok((out, *mode))
     }
 
-    fn fmt(&self, s: &Self::State, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+    fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let idx = match s.1 {
             UnionMode::Dense => self.value_offset(idx) as usize,
             UnionMode::Sparse => idx,
@@ -502,7 +523,7 @@ impl<'a> DisplayIndexState for &'a UnionArray {
         let (name, field) = s.0[id as usize].as_ref().unwrap();
 
         write!(f, "{{{name}=")?;
-        field.fmt(idx, f)
+        field.write(idx, f)
     }
 }
 
@@ -526,7 +547,7 @@ temporal_display!(time64ns_to_time, Time64NanosecondType);
 macro_rules! duration_display {
     ($convert:ident, $t:ty) => {
         impl<'a> DisplayIndex for &'a PrimitiveArray<$t> {
-            fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+            fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
                 write!(f, "{}", $convert(self.value(idx)))?;
                 Ok(())
             }
@@ -540,7 +561,7 @@ duration_display!(duration_us_to_duration, DurationMicrosecondType);
 duration_display!(duration_ns_to_duration, DurationNanosecondType);
 
 impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
-    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let interval = self.value(idx) as f64;
         let years = (interval / 12_f64).floor();
         let month = interval - (years * 12_f64);
@@ -555,7 +576,7 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
 }
 
 impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
-    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value: u64 = self.value(idx) as u64;
 
         let days_parts: i32 = ((value & 0xFFFFFFFF00000000) >> 32) as i32;
@@ -591,7 +612,7 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
 }
 
 impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalMonthDayNanoType> {
-    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> FormatResult {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value: u128 = self.value(idx) as u128;
 
         let months_part: i32 =
