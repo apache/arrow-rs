@@ -279,13 +279,10 @@ impl IpcDataGenerator {
                     write_options,
                 )?;
             }
-            DataType::Union(fields, _, _) => {
+            DataType::Union(fields, type_ids, _) => {
                 let union = as_union_array(column);
-                for (field, column) in fields
-                    .iter()
-                    .enumerate()
-                    .map(|(n, f)| (f, union.child(n as i8)))
-                {
+                for (field, type_id) in fields.iter().zip(type_ids) {
+                    let column = union.child(*type_id);
                     self.encode_dictionaries(
                         field,
                         column,
