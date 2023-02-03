@@ -137,7 +137,6 @@ fn struct_array_to_jsonmap_array(
             row_count,
             struct_col,
             inner_col_names[j],
-            j,
         )?
     }
     Ok(inner_objs)
@@ -244,7 +243,6 @@ fn set_column_for_json_rows(
     row_count: usize,
     array: &ArrayRef,
     col_name: &str,
-    col_idx: usize,
 ) -> Result<(), ArrowError> {
     match array.data_type() {
         DataType::Int8 => {
@@ -356,7 +354,7 @@ fn set_column_for_json_rows(
             let slice = array.slice(0, row_count);
             let hydrated = arrow_cast::cast::cast(&slice, value_type)
                 .expect("cannot cast dictionary to underlying values");
-            set_column_for_json_rows(rows, row_count, &hydrated, col_name, col_idx)?;
+            set_column_for_json_rows(rows, row_count, &hydrated, col_name)?;
         }
         DataType::Map(_, _) => {
             let maparr = as_map_array(array);
@@ -422,7 +420,7 @@ pub fn record_batches_to_json_rows(
             let row_count = batch.num_rows();
             for (j, col) in batch.columns().iter().enumerate() {
                 let col_name = schema.field(j).name();
-                set_column_for_json_rows(&mut rows[base..], row_count, col, col_name, j)?
+                set_column_for_json_rows(&mut rows[base..], row_count, col, col_name)?
             }
             base += row_count;
         }
