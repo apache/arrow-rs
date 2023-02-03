@@ -665,12 +665,14 @@ impl<'a> DisplayIndexState<'a> for &'a StructArray {
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let mut iter = s.iter();
         if let Some((name, display)) = iter.next() {
-            write!(f, "{name}: ")?;
+            write!(f, "{{{name}: ")?;
             display.as_ref().write(idx, f)?;
+            f.write_char('}')?;
         }
         for (name, display) in iter {
-            write!(f, ", {name}: ")?;
+            write!(f, ", {{{name}: ")?;
             display.as_ref().write(idx, f)?;
+            f.write_char('}')?;
         }
         Ok(())
     }
@@ -732,15 +734,17 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
     }
 
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let id = self.type_id(idx);
         let idx = match s.1 {
             UnionMode::Dense => self.value_offset(idx) as usize,
             UnionMode::Sparse => idx,
         };
-        let id = self.type_id(idx);
         let (name, field) = s.0[id as usize].as_ref().unwrap();
 
         write!(f, "{{{name}=")?;
-        field.write(idx, f)
+        field.write(idx, f)?;
+        f.write_char('}')?;
+        Ok(())
     }
 }
 

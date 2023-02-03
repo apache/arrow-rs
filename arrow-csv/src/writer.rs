@@ -63,7 +63,6 @@
 //! }
 //! ```
 
-use arrow_array::types::*;
 use arrow_array::*;
 use arrow_cast::display::*;
 use arrow_schema::*;
@@ -327,6 +326,7 @@ mod tests {
     use super::*;
 
     use crate::Reader;
+    use arrow_array::types::*;
     use std::io::{Cursor, Read, Seek};
     use std::sync::Arc;
 
