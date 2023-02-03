@@ -207,6 +207,10 @@ fn make_formatter<'a>(
         DataType::LargeUtf8 => array_format(as_largestring_array(array), options),
         DataType::Binary => array_format(as_generic_binary_array::<i32>(array), options),
         DataType::LargeBinary => array_format(as_generic_binary_array::<i64>(array), options),
+        DataType::FixedSizeBinary(_) => {
+            let a = array.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
+            array_format(a, options)
+        }
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
             array => array_format(array, options),
             _ => unreachable!()
@@ -570,6 +574,16 @@ impl<'a, O: OffsetSizeTrait> DisplayIndex for &'a GenericStringArray<O> {
 }
 
 impl<'a, O: OffsetSizeTrait> DisplayIndex for &'a GenericBinaryArray<O> {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let v = self.value(idx);
+        for byte in v {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> DisplayIndex for &'a FixedSizeBinaryArray {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let v = self.value(idx);
         for byte in v {
