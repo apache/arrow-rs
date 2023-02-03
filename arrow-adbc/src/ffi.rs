@@ -18,7 +18,7 @@
 //! ADBC FFI structs, as defined in [adbc.h](https://github.com/apache/arrow-adbc/blob/main/adbc.h).
 #![allow(non_snake_case)]
 use std::ffi::CStr;
-use std::ptr::null_mut;
+use std::ptr::{null, null_mut};
 
 use crate::error::{AdbcStatusCode, FFI_AdbcError};
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
@@ -50,7 +50,7 @@ impl Default for FFI_AdbcDatabase {
 impl Drop for FFI_AdbcDatabase {
     fn drop(&mut self) {
         if let Some(private_driver) = unsafe { self.private_driver.as_ref() } {
-            if let Some(release) = unsafe { private_driver.DatabaseRelease.as_ref() } {
+            if let Some(release) = private_driver.DatabaseRelease {
                 let mut error = Box::new(FFI_AdbcError::empty());
                 let status = unsafe { release(self, error.as_mut()) };
                 if status != AdbcStatusCode::Ok {
@@ -82,10 +82,19 @@ pub struct FFI_AdbcConnection {
     pub private_driver: *mut FFI_AdbcDriver,
 }
 
+impl Default for FFI_AdbcConnection {
+    fn default() -> Self {
+        Self {
+            private_data: null_mut(),
+            private_driver: null_mut(),
+        }
+    }
+}
+
 impl Drop for FFI_AdbcConnection {
     fn drop(&mut self) {
         if let Some(private_driver) = unsafe { self.private_driver.as_ref() } {
-            if let Some(release) = unsafe { private_driver.ConnectionRelease.as_ref() } {
+            if let Some(release) = private_driver.ConnectionRelease.as_ref() {
                 let mut error = Box::new(FFI_AdbcError::empty());
                 let status = unsafe { release(self, error.as_mut()) };
                 if status != AdbcStatusCode::Ok {
@@ -127,10 +136,19 @@ pub struct FFI_AdbcStatement {
     pub private_driver: *mut FFI_AdbcDriver,
 }
 
+impl Default for FFI_AdbcStatement {
+    fn default() -> Self {
+        Self {
+            private_data: null_mut(),
+            private_driver: null_mut(),
+        }
+    }
+}
+
 impl Drop for FFI_AdbcStatement {
     fn drop(&mut self) {
         if let Some(private_driver) = unsafe { self.private_driver.as_ref() } {
-            if let Some(release) = unsafe { private_driver.StatementRelease.as_ref() } {
+            if let Some(release) = private_driver.StatementRelease {
                 let mut error = Box::new(FFI_AdbcError::empty());
                 let status = unsafe { release(self, error.as_mut()) };
                 if status != AdbcStatusCode::Ok {
@@ -164,6 +182,18 @@ pub struct FFI_AdbcPartitions {
     /// easier for the driver manager and driver to cooperate.
     pub release:
         ::std::option::Option<unsafe extern "C" fn(partitions: *mut FFI_AdbcPartitions)>,
+}
+
+impl FFI_AdbcPartitions {
+    pub fn empty() -> Self {
+        Self {
+            num_partitions: 0,
+            partitions: null_mut(),
+            partition_lengths: null(),
+            private_data: null_mut(),
+            release: None,
+        }
+    }
 }
 
 impl From<Vec<Vec<u8>>> for FFI_AdbcPartitions {
@@ -303,7 +333,7 @@ pub struct FFI_AdbcDriver {
             arg3: *const ::std::os::raw::c_char,
             arg4: *const ::std::os::raw::c_char,
             arg5: *const ::std::os::raw::c_char,
-            arg6: *mut *const ::std::os::raw::c_char,
+            arg6: *const *const ::std::os::raw::c_char,
             arg7: *const ::std::os::raw::c_char,
             arg8: *mut FFI_ArrowArrayStream,
             arg9: *mut FFI_AdbcError,
@@ -329,7 +359,7 @@ pub struct FFI_AdbcDriver {
     pub ConnectionInit: ::std::option::Option<
         unsafe extern "C" fn(
             arg1: *mut FFI_AdbcConnection,
-            arg2: *mut FFI_AdbcDatabase,
+            arg2: *const FFI_AdbcDatabase,
             arg3: *mut FFI_AdbcError,
         ) -> AdbcStatusCode,
     >,
@@ -371,8 +401,8 @@ pub struct FFI_AdbcDriver {
     pub StatementBind: ::std::option::Option<
         unsafe extern "C" fn(
             arg1: *mut FFI_AdbcStatement,
-            arg2: *mut FFI_ArrowArray,
-            arg3: *mut FFI_ArrowSchema,
+            arg2: *const FFI_ArrowArray,
+            arg3: *const FFI_ArrowSchema,
             arg4: *mut FFI_AdbcError,
         ) -> AdbcStatusCode,
     >,
@@ -402,7 +432,7 @@ pub struct FFI_AdbcDriver {
     >,
     pub StatementGetParameterSchema: ::std::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut FFI_AdbcStatement,
+            arg1: *const FFI_AdbcStatement,
             arg2: *mut FFI_ArrowSchema,
             arg3: *mut FFI_AdbcError,
         ) -> AdbcStatusCode,

@@ -17,13 +17,13 @@
 
 use arrow::{array::ArrayRef, datatypes::Schema, record_batch::RecordBatchReader};
 
-use crate::{error::AdbcError, ffi::AdbcObjectDepth};
+use crate::ffi::AdbcObjectDepth;
 
 /// Databases hold state shared by multiple connections. This typically means
 /// configuration and caches. For in-memory databases, it provides a place to
 /// hold ownership of the in-memory database.
 pub trait DatabaseApi {
-    type Error: AdbcError;
+    type Error;
 
     /// Set an option on the database.
     ///
@@ -42,7 +42,7 @@ pub trait DatabaseApi {
 /// [AdbcConnection::set_option]). Turning off autocommit allows customizing
 /// the isolation level. Read more in [adbc.h](https://github.com/apache/arrow-adbc/blob/main/adbc.h).
 pub trait ConnectionApi {
-    type Error: AdbcError;
+    type Error;
 
     /// Set an option on the connection.
     ///
@@ -215,7 +215,7 @@ pub trait ConnectionApi {
     /// Field Name       | Field Type
     /// -----------------|--------------
     /// `table_type`     | `utf8 not null`
-    fn get_table_types(&self) -> Result<Box<dyn RecordBatchReader>, Self::Error>;
+    fn get_table_types(&self) -> Result<Vec<String>, Self::Error>;
 
     /// Read part of a partitioned result set.
     fn read_partition(
@@ -244,12 +244,12 @@ pub trait ConnectionApi {
 /// However, the driver may block or error if they are used
 /// concurrently (whether from a single thread or multiple threads).
 pub trait StatementApi {
-    type Error: AdbcError;
+    type Error;
 
     /// Turn this statement into a prepared statement to be executed multiple times.
     ///
     /// This should return an error if called before [AdbcStatement::set_sql_query].
-    fn prepare(&self) -> Result<(), Self::Error>;
+    fn prepare(&mut self) -> Result<(), Self::Error>;
 
     /// Set a string option on a statement.
     fn set_option(&mut self, key: &str, value: &str) -> Result<(), Self::Error>;
@@ -287,7 +287,12 @@ pub trait StatementApi {
     /// Execute a statement and get the results.
     ///
     /// See [StatementResult].
-    fn execute(&self) -> Result<StatementResult, Self::Error>;
+    fn execute(&mut self) -> Result<StatementResult, Self::Error>;
+
+    /// Execute a query that doesn't have a result set.
+    ///
+    /// Will return the number of rows affected, or -1 if unknown or unsupported.
+    fn execute_update(&mut self) -> Result<i64, Self::Error>;
 
     /// Execute a statement with a partitioned result set.
     ///
@@ -296,16 +301,16 @@ pub trait StatementApi {
     /// to support threaded or distributed clients.
     ///
     /// See [PartitionedStatementResult].
-    fn execute_partitioned(&self) -> Result<PartitionedStatementResult, Self::Error>;
+    fn execute_partitioned(&mut self) -> Result<PartitionedStatementResult, Self::Error>;
 }
 
 /// Result of calling [AdbcStatement::execute].
 ///
 /// `result` may be None if there is no meaningful result.
-/// `row_affected` may be None if not applicable or if it is not supported.
+/// `row_affected` may be -1 if not applicable or if it is not supported.
 pub struct StatementResult {
     pub result: Option<Box<dyn RecordBatchReader>>,
-    pub rows_affected: Option<i64>,
+    pub rows_affected: i64,
 }
 
 /// Partitioned results
@@ -321,5 +326,5 @@ pub struct StatementResult {
 pub struct PartitionedStatementResult {
     pub schema: Schema,
     pub partition_ids: Vec<Vec<u8>>,
-    pub rows_affected: Option<i64>,
+    pub rows_affected: i64,
 }

@@ -14,10 +14,8 @@ use arrow_adbc::error::AdbcError;
 use arrow_adbc::ffi::{
     AdbcObjectDepth, FFI_AdbcConnection, FFI_AdbcDatabase, FFI_AdbcStatement,
 };
-use arrow_adbc::implement::{
-    AdbcConnectionImpl, AdbcDatabaseImpl, AdbcStatementImpl,
-};
-use arrow_adbc::interface::{DatabaseApi, ConnectionApi, StatementApi};
+use arrow_adbc::implement::{AdbcConnectionImpl, AdbcDatabaseImpl, AdbcStatementImpl};
+use arrow_adbc::interface::{ConnectionApi, DatabaseApi, StatementApi};
 use arrow_adbc::interface::{PartitionedStatementResult, StatementResult};
 use arrow_adbc::{
     error::{self, AdbcStatusCode, FFI_AdbcError},
@@ -138,7 +136,7 @@ impl ConnectionApi for TestConnection {
                 ))
     }
 
-    fn get_table_types(&self) -> Result<Box<dyn RecordBatchReader>, Self::Error> {
+    fn get_table_types(&self) -> Result<Vec<String>, Self::Error> {
         todo!()
     }
 
@@ -161,14 +159,16 @@ impl ConnectionApi for TestConnection {
 }
 
 struct TestStatement {
-    connection: Rc<TestConnection>,
+    _connection: Rc<TestConnection>,
 }
 
 impl AdbcStatementImpl for TestStatement {
     type ConnectionType = TestConnection;
 
     fn new_from_connection(connection: Rc<Self::ConnectionType>) -> Self {
-        Self { connection }
+        Self {
+            _connection: connection,
+        }
     }
 }
 
@@ -193,7 +193,7 @@ impl StatementApi for TestStatement {
         )))
     }
 
-    fn prepare(&self) -> Result<(), Self::Error> {
+    fn prepare(&mut self) -> Result<(), Self::Error> {
         Err(TestError::General(format!(
             "Not implemented: preparing statement."
         )))
@@ -224,11 +224,15 @@ impl StatementApi for TestStatement {
         )))
     }
 
-    fn execute(&self) -> Result<StatementResult, Self::Error> {
+    fn execute(&mut self) -> Result<StatementResult, Self::Error> {
         Err(TestError::General(format!("Not implemented: execute")))
     }
 
-    fn execute_partitioned(&self) -> Result<PartitionedStatementResult, Self::Error> {
+    fn execute_update(&mut self) -> Result<i64, Self::Error> {
+        Err(TestError::General(format!("Not implemented: execute")))
+    }
+
+    fn execute_partitioned(&mut self) -> Result<PartitionedStatementResult, Self::Error> {
         Err(TestError::General(format!(
             "Not implemented: execute partitioned"
         )))

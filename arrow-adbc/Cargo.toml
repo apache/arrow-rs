@@ -8,9 +8,3 @@ rust-version = "1.62"
 
 [dependencies]
 arrow = { version = "31.0.0", path = "../arrow", features = ["ffi"], default_features = false}
-
-
-[[example]]
-name = "datafusion_adbc"
-path = "./examples/datafusion_adbc.rs"
-crate-type = ["dylib"]
