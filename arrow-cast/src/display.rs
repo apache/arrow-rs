@@ -158,7 +158,7 @@ impl<'a> Display for ValueFormatter<'a> {
         match self.formatter.format.write(self.idx, f) {
             Ok(()) => Ok(()),
             Err(FormatError::Arrow(e)) if self.formatter.safe => {
-                write!(f, "ERROR: {}", e)
+                write!(f, "ERROR: {e}")
             }
             Err(_) => Err(std::fmt::Error),
         }
@@ -488,8 +488,7 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
 
         write!(
             f,
-            "{} years {} mons 0 days 0 hours 0 mins 0.00 secs",
-            years, month,
+            "{years} years {month} mons 0 days 0 hours 0 mins 0.00 secs",
         )?;
         Ok(())
     }
@@ -696,7 +695,7 @@ impl<'a> DisplayIndexState<'a> for &'a MapArray {
     type State = (Box<dyn DisplayIndex + 'a>, Box<dyn DisplayIndex + 'a>);
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        let keys = make_formatter(self.keys().as_ref(), &options)?;
+        let keys = make_formatter(self.keys().as_ref(), options)?;
         let values = make_formatter(self.values().as_ref(), options)?;
         Ok((keys, values))
     }
