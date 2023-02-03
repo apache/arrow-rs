@@ -19,7 +19,6 @@
 //! purposes. See the `pretty` crate for additional functions for
 //! record batch pretty printing.
 
-use std::borrow::Cow;
 use std::fmt::{Debug, Display, Formatter, Write};
 use std::ops::Range;
 
@@ -34,21 +33,21 @@ use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 
 /// Options for formatting arrays
 #[derive(Debug, Clone)]
-pub struct FormatOptions {
+pub struct FormatOptions<'a> {
     safe: bool,
-    null: Cow<'static, str>,
+    null: &'a str,
 }
 
-impl Default for FormatOptions {
+impl<'a> Default for FormatOptions<'a> {
     fn default() -> Self {
         Self {
             safe: true,
-            null: "".into(),
+            null: "",
         }
     }
 }
 
-impl FormatOptions {
+impl<'a> FormatOptions<'a> {
     /// If set to `true` any formatting errors will be written to the output
     /// instead of being converted into a [`std::fmt::Error`]
     pub fn with_display_error(mut self, safe: bool) -> Self {
@@ -59,9 +58,8 @@ impl FormatOptions {
     /// Overrides the string used to represent a null
     ///
     /// Defaults to `""`
-    pub fn with_null(mut self, null: impl Into<Cow<'static, str>>) -> Self {
-        self.null = null.into();
-        self
+    pub fn with_null(self, null: &'a str) -> Self {
+        Self { null, ..self }
     }
 }
 
@@ -117,7 +115,7 @@ impl<'a> ArrayFormatter<'a> {
     /// This returns an error if an array of the given data type cannot be formatted
     pub fn try_new(
         array: &'a dyn Array,
-        options: &FormatOptions,
+        options: &FormatOptions<'a>,
     ) -> Result<Self, ArrowError> {
         Ok(Self {
             format: make_formatter(array, options)?,
@@ -137,7 +135,7 @@ impl<'a> ArrayFormatter<'a> {
 
 fn make_formatter<'a>(
     array: &'a dyn Array,
-    options: &FormatOptions,
+    options: &FormatOptions<'a>,
 ) -> Result<Box<dyn DisplayIndex + 'a>, ArrowError> {
     downcast_primitive_array! {
         array => array_format(array, options),
@@ -190,18 +188,18 @@ trait DisplayIndex {
 }
 
 /// [`DisplayIndex`] with additional state
-trait DisplayIndexState {
+trait DisplayIndexState<'a> {
     type State;
 
-    fn prepare(&self, options: &FormatOptions) -> Result<Self::State, ArrowError>;
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError>;
 
     fn write(&self, state: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult;
 }
 
-impl<T: DisplayIndex> DisplayIndexState for T {
+impl<'a, T: DisplayIndex> DisplayIndexState<'a> for T {
     type State = ();
 
-    fn prepare(&self, _options: &FormatOptions) -> Result<Self::State, ArrowError> {
+    fn prepare(&self, _options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
         Ok(())
     }
 
@@ -210,23 +208,23 @@ impl<T: DisplayIndex> DisplayIndexState for T {
     }
 }
 
-struct ArrayFormat<F: DisplayIndexState> {
+struct ArrayFormat<'a, F: DisplayIndexState<'a>> {
     state: F::State,
     array: F,
 }
 
 fn array_format<'a, F>(
-    array: &'a F,
-    options: &FormatOptions,
+    array: F,
+    options: &FormatOptions<'a>,
 ) -> Result<Box<dyn DisplayIndex + 'a>, ArrowError>
 where
-    &'a F: DisplayIndexState + Array,
+    F: DisplayIndexState<'a> + Array + 'a,
 {
     let state = array.prepare(options)?;
     Ok(Box::new(ArrayFormat { state, array }))
 }
 
-impl<F: DisplayIndexState + Array> DisplayIndex for ArrayFormat<F> {
+impl<'a, F: DisplayIndexState<'a> + Array> DisplayIndex for ArrayFormat<'a, F> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         if self.array.is_null(idx) {
             return Ok(());
@@ -266,10 +264,10 @@ primitive_display!(Float16Type, Float32Type, Float64Type);
 
 macro_rules! decimal_display {
     ($($t:ty),+) => {
-        $(impl<'a> DisplayIndexState for &'a PrimitiveArray<$t> {
+        $(impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
             type State = (u8, i8);
 
-            fn prepare(&self, _options: &FormatOptions) -> Result<Self::State, ArrowError> {
+            fn prepare(&self, _options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
                 Ok((self.precision(), self.scale()))
             }
 
@@ -285,10 +283,10 @@ decimal_display!(Decimal128Type, Decimal256Type);
 
 macro_rules! timestamp_display {
     ($($t:ty),+) => {
-        $(impl<'a> DisplayIndexState for &'a PrimitiveArray<$t> {
+        $(impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
             type State = Option<Tz>;
 
-            fn prepare(&self, _options: &FormatOptions) -> Result<Self::State, ArrowError> {
+            fn prepare(&self, _options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
                 match self.data_type() {
                     DataType::Timestamp(_, tz) => tz.as_ref().map(|x| x.parse()).transpose(),
                     _ => unreachable!(),
@@ -362,10 +360,10 @@ impl<'a, O: OffsetSizeTrait> DisplayIndex for &'a GenericBinaryArray<O> {
     }
 }
 
-impl<'a, K: ArrowDictionaryKeyType> DisplayIndexState for &'a DictionaryArray<K> {
+impl<'a, K: ArrowDictionaryKeyType> DisplayIndexState<'a> for &'a DictionaryArray<K> {
     type State = Box<dyn DisplayIndex + 'a>;
 
-    fn prepare(&self, options: &FormatOptions) -> Result<Self::State, ArrowError> {
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
         make_formatter(self.values().as_ref(), options)
     }
 
@@ -392,10 +390,10 @@ fn write_list(
     Ok(())
 }
 
-impl<'a, O: OffsetSizeTrait> DisplayIndexState for &'a GenericListArray<O> {
+impl<'a, O: OffsetSizeTrait> DisplayIndexState<'a> for &'a GenericListArray<O> {
     type State = Box<dyn DisplayIndex + 'a>;
 
-    fn prepare(&self, options: &FormatOptions) -> Result<Self::State, ArrowError> {
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
         make_formatter(self.values().as_ref(), options)
     }
 
@@ -407,10 +405,10 @@ impl<'a, O: OffsetSizeTrait> DisplayIndexState for &'a GenericListArray<O> {
     }
 }
 
-impl<'a> DisplayIndexState for &'a FixedSizeListArray {
+impl<'a> DisplayIndexState<'a> for &'a FixedSizeListArray {
     type State = (usize, Box<dyn DisplayIndex + 'a>);
 
-    fn prepare(&self, options: &FormatOptions) -> Result<Self::State, ArrowError> {
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
         let values = make_formatter(self.values().as_ref(), options)?;
         let length = self.value_length();
         Ok((length as usize, values))
@@ -426,10 +424,10 @@ impl<'a> DisplayIndexState for &'a FixedSizeListArray {
 /// Pairs a boxed [`DisplayIndex`] with its field name
 type FieldDisplay<'a> = (&'a str, Box<dyn DisplayIndex + 'a>);
 
-impl<'a> DisplayIndexState for &'a StructArray {
+impl<'a> DisplayIndexState<'a> for &'a StructArray {
     type State = Vec<FieldDisplay<'a>>;
 
-    fn prepare(&self, options: &FormatOptions) -> Result<Self::State, ArrowError> {
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
         let fields = match (*self).data_type() {
             DataType::Struct(f) => f,
             _ => unreachable!(),
@@ -459,10 +457,10 @@ impl<'a> DisplayIndexState for &'a StructArray {
     }
 }
 
-impl<'a> DisplayIndexState for &'a MapArray {
+impl<'a> DisplayIndexState<'a> for &'a MapArray {
     type State = (Box<dyn DisplayIndex + 'a>, Box<dyn DisplayIndex + 'a>);
 
-    fn prepare(&self, options: &FormatOptions) -> Result<Self::State, ArrowError> {
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
         let keys = make_formatter(self.keys().as_ref(), &options)?;
         let values = make_formatter(self.values().as_ref(), options)?;
         Ok((keys, values))
@@ -493,13 +491,13 @@ impl<'a> DisplayIndexState for &'a MapArray {
     }
 }
 
-impl<'a> DisplayIndexState for &'a UnionArray {
+impl<'a> DisplayIndexState<'a> for &'a UnionArray {
     type State = (
         Vec<Option<(&'a str, Box<dyn DisplayIndex + 'a>)>>,
         UnionMode,
     );
 
-    fn prepare(&self, options: &FormatOptions) -> Result<Self::State, ArrowError> {
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
         let (fields, type_ids, mode) = match (*self).data_type() {
             DataType::Union(fields, type_ids, mode) => (fields, type_ids, mode),
             _ => unreachable!(),
