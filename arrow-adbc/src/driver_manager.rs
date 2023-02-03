@@ -77,7 +77,7 @@ pub struct AdbcDriver {
 }
 
 impl AdbcDriver {
-    pub fn load(name: &str, entrypoint: Option<&str>, version: u32) -> Result<Self> {
+    pub fn load(_name: &str, _entrypoint: Option<&str>, _version: u32) -> Result<Self> {
         todo!("Loading from a dynamic library");
     }
 
@@ -329,10 +329,8 @@ impl ConnectionApi for AdbcConnection {
                 .as_any()
                 .downcast_ref::<StringArray>()
                 .unwrap();
-            for value in column {
-                if let Some(value) = value {
-                    out.push(value.to_string());
-                }
+            for value in column.into_iter().flatten() {
+                out.push(value.to_string());
             }
         }
 
@@ -393,7 +391,7 @@ impl ConnectionApi for AdbcConnection {
         let column_name_ptr = column_name.map(|s| s.as_ptr()).unwrap_or(null());
 
         let table_type: Vec<CString> = table_type
-            .into_iter()
+            .iter()
             .map(|&s| str_to_cstring(s))
             .collect::<Result<_>>()?;
         let mut table_type_ptrs: Vec<_> = table_type.iter().map(|s| s.as_ptr()).collect();

@@ -74,7 +74,7 @@ pub trait AdbcStatementImpl: StatementApi {
 macro_rules! adbc_init_func {
     ($func_name:ident, $statement_type:ident) => {
         #[no_mangle]
-        pub extern "C" fn $func_name(
+        pub unsafe extern "C" fn $func_name(
             version: ::std::os::raw::c_int,
             driver: *mut ::std::os::raw::c_void,
             mut error: *mut arrow_adbc::error::FFI_AdbcError,

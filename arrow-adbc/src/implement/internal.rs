@@ -514,7 +514,7 @@ struct BatchReader {
 
 impl BatchReader {
     pub fn new(batch: RecordBatch) -> Self {
-        let schema = batch.schema().clone();
+        let schema = batch.schema();
         Self {
             batch: Some(batch),
             schema,
@@ -526,7 +526,7 @@ impl Iterator for BatchReader {
     type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.batch.take().map(|b| Ok(b))
+        self.batch.take().map(Ok)
     }
 }
 

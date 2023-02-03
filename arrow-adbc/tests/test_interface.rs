@@ -1,5 +1,5 @@
 use std::ffi::{CStr, CString};
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::{cell::RefCell, ffi::c_void};
@@ -42,13 +42,8 @@ impl AdbcError for TestError {
 // that mutate return an error that includes the arguments passed, to verify
 // they have been passed down correctly.
 
+#[derive(Default)]
 struct TestDatabase {}
-
-impl Default for TestDatabase {
-    fn default() -> Self {
-        Self {}
-    }
-}
 
 impl AdbcDatabaseImpl for TestDatabase {
     fn init(&self) -> Result<(), Self::Error> {
@@ -194,15 +189,15 @@ impl StatementApi for TestStatement {
     }
 
     fn prepare(&mut self) -> Result<(), Self::Error> {
-        Err(TestError::General(format!(
-            "Not implemented: preparing statement."
-        )))
+        Err(TestError::General(
+            "Not implemented: preparing statement.".to_string(),
+        ))
     }
 
     fn get_param_schema(&self) -> Result<Schema, Self::Error> {
-        Err(TestError::General(format!(
-            "Not implemented: get parameter schema."
-        )))
+        Err(TestError::General(
+            "Not implemented: get parameter schema.".to_string(),
+        ))
     }
 
     fn bind_data(&mut self, arr: ArrayRef) -> Result<(), Self::Error> {
@@ -225,17 +220,17 @@ impl StatementApi for TestStatement {
     }
 
     fn execute(&mut self) -> Result<StatementResult, Self::Error> {
-        Err(TestError::General(format!("Not implemented: execute")))
+        Err(TestError::General("Not implemented: execute".to_string()))
     }
 
     fn execute_update(&mut self) -> Result<i64, Self::Error> {
-        Err(TestError::General(format!("Not implemented: execute")))
+        Err(TestError::General("Not implemented: execute".to_string()))
     }
 
     fn execute_partitioned(&mut self) -> Result<PartitionedStatementResult, Self::Error> {
-        Err(TestError::General(format!(
-            "Not implemented: execute partitioned"
-        )))
+        Err(TestError::General(
+            "Not implemented: execute partitioned".to_string(),
+        ))
     }
 }
 
@@ -444,7 +439,7 @@ fn new_statement(
     let statement_ptr =
         unsafe { std::alloc::alloc(statement_layout) as *mut FFI_AdbcStatement };
 
-    let statement = FFI_AdbcStatement {
+    let _statement = FFI_AdbcStatement {
         private_data: null_mut(),
         private_driver: driver,
     };
@@ -481,9 +476,9 @@ fn test_adbc_api() {
     let database: &mut FFI_AdbcDatabase = unsafe { db_ptr.as_mut().unwrap() };
 
     let conn_ptr = new_connection(driver, database, error_ptr);
-    let conn: &mut FFI_AdbcConnection = unsafe { &mut conn_ptr.as_mut().unwrap() };
+    let conn: &mut FFI_AdbcConnection = unsafe { conn_ptr.as_mut().unwrap() };
 
-    let statement_ptr = new_statement(driver, conn, error_ptr);
+    let _statement_ptr = new_statement(driver, conn, error_ptr);
 
     // Cleanup
     let status = unsafe { driver.ConnectionRelease.unwrap()(conn_ptr, error_ptr) };
