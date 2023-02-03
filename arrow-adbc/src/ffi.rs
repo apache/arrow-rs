@@ -63,6 +63,9 @@ impl Drop for FFI_AdbcDatabase {
     }
 }
 
+unsafe impl Send for FFI_AdbcDatabase {}
+unsafe impl Sync for FFI_AdbcDatabase {}
+
 /// An active database connection.
 ///
 /// Provides methods for query execution, managing prepared
@@ -106,6 +109,9 @@ impl Drop for FFI_AdbcConnection {
         }
     }
 }
+
+unsafe impl Send for FFI_AdbcConnection {}
+unsafe impl Sync for FFI_AdbcConnection {}
 
 ///  A container for all state needed to execute a database
 /// query, such as the query itself, parameters for prepared
@@ -506,6 +512,9 @@ impl Drop for FFI_AdbcDriver {
         }
     }
 }
+
+unsafe impl Send for FFI_AdbcDriver {}
+unsafe impl Sync for FFI_AdbcDriver {}
 
 /// Depth parameter for GetObjects method.
 #[derive(Debug)]
