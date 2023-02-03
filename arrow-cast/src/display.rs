@@ -29,13 +29,30 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
-use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use chrono::{NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
+
+type TimeFormat<'a> = Option<&'a str>;
 
 /// Options for formatting arrays
+///
+/// By default nulls are formatted as `""` and temporal types formatted
+/// according to RFC3339
+///
 #[derive(Debug, Clone)]
 pub struct FormatOptions<'a> {
     safe: bool,
+    /// Format string for nulls
     null: &'a str,
+    /// Date format for date arrays
+    date_format: TimeFormat<'a>,
+    /// Format for DateTime arrays
+    datetime_format: TimeFormat<'a>,
+    /// Timestamp format for timestamp arrays
+    timestamp_format: TimeFormat<'a>,
+    /// Timestamp format for timestamp with timezone arrays
+    timestamp_tz_format: TimeFormat<'a>,
+    /// Time format for time arrays
+    time_format: TimeFormat<'a>,
 }
 
 impl<'a> Default for FormatOptions<'a> {
@@ -43,6 +60,11 @@ impl<'a> Default for FormatOptions<'a> {
         Self {
             safe: true,
             null: "",
+            date_format: None,
+            datetime_format: None,
+            timestamp_format: None,
+            timestamp_tz_format: None,
+            time_format: None,
         }
     }
 }
@@ -61,6 +83,46 @@ impl<'a> FormatOptions<'a> {
     pub fn with_null(self, null: &'a str) -> Self {
         Self { null, ..self }
     }
+
+    /// Overrides the format used for [`DataType::Date32`] columns
+    pub fn with_date_format(self, date_format: Option<&'a str>) -> Self {
+        Self {
+            date_format,
+            ..self
+        }
+    }
+
+    /// Overrides the format used for [`DataType::Date64`] columns
+    pub fn with_datetime_format(self, datetime_format: Option<&'a str>) -> Self {
+        Self {
+            datetime_format,
+            ..self
+        }
+    }
+
+    /// Overrides the format used for [`DataType::Timestamp`] columns without a timezone
+    pub fn with_timestamp_format(self, timestamp_format: Option<&'a str>) -> Self {
+        Self {
+            timestamp_format,
+            ..self
+        }
+    }
+
+    /// Overrides the format used for [`DataType::Timestamp`] columns with a timezone
+    pub fn with_timestamp_tz_format(self, timestamp_tz_format: Option<&'a str>) -> Self {
+        Self {
+            timestamp_tz_format,
+            ..self
+        }
+    }
+
+    /// Overrides the format used for [`DataType::Time32`] and [`DataType::Time64`] columns
+    pub fn with_time_format(self, time_format: Option<&'a str>) -> Self {
+        Self {
+            time_format,
+            ..self
+        }
+    }
 }
 
 /// Implements [`Display`] for a specific array value
@@ -70,15 +132,15 @@ pub struct ValueFormatter<'a> {
 }
 
 impl<'a> ValueFormatter<'a> {
-    /// Writes this value to the provided `String`
+    /// Writes this value to the provided [`Write`]
     ///
     /// Note: this ignores [`FormatOptions::with_display_error`]
-    pub fn write(&self, s: &mut String) -> Result<(), ArrowError> {
+    pub fn write(&self, s: &mut dyn Write) -> Result<(), ArrowError> {
         match self.formatter.format.write(self.idx, s) {
             Ok(_) => Ok(()),
             Err(FormatError::Arrow(e)) => Err(e),
             Err(FormatError::Format(_)) => {
-                unreachable!("formatting to string is infallible")
+                Err(ArrowError::CastError("Format error".to_string()))
             }
         }
     }
@@ -211,6 +273,7 @@ impl<'a, T: DisplayIndex> DisplayIndexState<'a> for T {
 struct ArrayFormat<'a, F: DisplayIndexState<'a>> {
     state: F::State,
     array: F,
+    null: &'a str,
 }
 
 fn array_format<'a, F>(
@@ -221,12 +284,19 @@ where
     F: DisplayIndexState<'a> + Array + 'a,
 {
     let state = array.prepare(options)?;
-    Ok(Box::new(ArrayFormat { state, array }))
+    Ok(Box::new(ArrayFormat {
+        state,
+        array,
+        null: options.null,
+    }))
 }
 
 impl<'a, F: DisplayIndexState<'a> + Array> DisplayIndex for ArrayFormat<'a, F> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         if self.array.is_null(idx) {
+            if !self.null.is_empty() {
+                f.write_str(self.null)?
+            }
             return Ok(());
         }
         DisplayIndexState::write(&self.array, &self.state, idx, f)
@@ -281,19 +351,44 @@ macro_rules! decimal_display {
 
 decimal_display!(Decimal128Type, Decimal256Type);
 
+fn write_timestamp(
+    f: &mut dyn Write,
+    naive: NaiveDateTime,
+    timezone: Option<Tz>,
+    format: Option<&str>,
+) -> FormatResult {
+    match timezone {
+        Some(tz) => {
+            let date = Utc.from_utc_datetime(&naive).with_timezone(&tz);
+            match format {
+                Some(s) => write!(f, "{}", date.format(s))?,
+                None => {
+                    write!(f, "{}", date.to_rfc3339_opts(SecondsFormat::AutoSi, true))?
+                }
+            }
+        }
+        None => match format {
+            Some(s) => write!(f, "{}", naive.format(s))?,
+            None => write!(f, "{naive:?}")?,
+        },
+    }
+    Ok(())
+}
+
 macro_rules! timestamp_display {
     ($($t:ty),+) => {
         $(impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
-            type State = Option<Tz>;
+            type State = (Option<Tz>, TimeFormat<'a>);
 
-            fn prepare(&self, _options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+            fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
                 match self.data_type() {
-                    DataType::Timestamp(_, tz) => tz.as_ref().map(|x| x.parse()).transpose(),
+                    DataType::Timestamp(_, Some(tz)) => Ok((Some(tz.parse()?), options.timestamp_tz_format)),
+                    DataType::Timestamp(_, None) => Ok((None, options.timestamp_format)),
                     _ => unreachable!(),
                 }
             }
 
-            fn write(&self, tz: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+            fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
                 let naive = as_datetime::<$t>(value).ok_or_else(|| {
                     ArrowError::CastError(format!(
@@ -303,14 +398,7 @@ macro_rules! timestamp_display {
                     ))
                 })?;
 
-                match tz {
-                    Some(tz) => {
-                        let date = Utc.from_utc_datetime(&naive).with_timezone(tz);
-                        write!(f, "{}", format_rfc3339(date))?;
-                    }
-                    None => write!(f, "{naive:?}")?,
-                }
-                Ok(())
+                write_timestamp(f, naive, s.0, s.1.clone())
             }
         })+
     };
@@ -324,9 +412,23 @@ timestamp_display!(
 );
 
 macro_rules! temporal_display {
-    ($convert:ident, $t:ty) => {
-        impl<'a> DisplayIndex for &'a PrimitiveArray<$t> {
-            fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+    ($convert:ident, $format:ident, $t:ty) => {
+        impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
+            type State = TimeFormat<'a>;
+
+            fn prepare(
+                &self,
+                options: &FormatOptions<'a>,
+            ) -> Result<Self::State, ArrowError> {
+                Ok(options.$format)
+            }
+
+            fn write(
+                &self,
+                fmt: &Self::State,
+                idx: usize,
+                f: &mut dyn Write,
+            ) -> FormatResult {
                 let value = self.value(idx);
                 let naive = $convert(value as _).ok_or_else(|| {
                     ArrowError::CastError(format!(
@@ -336,11 +438,128 @@ macro_rules! temporal_display {
                     ))
                 })?;
 
-                write!(f, "{naive}")?;
+                match fmt {
+                    Some(s) => write!(f, "{}", naive.format(s))?,
+                    None => write!(f, "{naive:?}")?,
+                }
                 Ok(())
             }
         }
     };
+}
+
+#[inline]
+fn date32_to_date(value: i32) -> Option<NaiveDate> {
+    Some(date32_to_datetime(value)?.date())
+}
+
+temporal_display!(date32_to_date, date_format, Date32Type);
+temporal_display!(date64_to_datetime, datetime_format, Date64Type);
+temporal_display!(time32s_to_time, time_format, Time32SecondType);
+temporal_display!(time32ms_to_time, time_format, Time32MillisecondType);
+temporal_display!(time64us_to_time, time_format, Time64MicrosecondType);
+temporal_display!(time64ns_to_time, time_format, Time64NanosecondType);
+
+macro_rules! duration_display {
+    ($convert:ident, $t:ty) => {
+        impl<'a> DisplayIndex for &'a PrimitiveArray<$t> {
+            fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+                write!(f, "{}", $convert(self.value(idx)))?;
+                Ok(())
+            }
+        }
+    };
+}
+
+duration_display!(duration_s_to_duration, DurationSecondType);
+duration_display!(duration_ms_to_duration, DurationMillisecondType);
+duration_display!(duration_us_to_duration, DurationMicrosecondType);
+duration_display!(duration_ns_to_duration, DurationNanosecondType);
+
+impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let interval = self.value(idx) as f64;
+        let years = (interval / 12_f64).floor();
+        let month = interval - (years * 12_f64);
+
+        write!(
+            f,
+            "{} years {} mons 0 days 0 hours 0 mins 0.00 secs",
+            years, month,
+        )?;
+        Ok(())
+    }
+}
+
+impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let value: u64 = self.value(idx) as u64;
+
+        let days_parts: i32 = ((value & 0xFFFFFFFF00000000) >> 32) as i32;
+        let milliseconds_part: i32 = (value & 0xFFFFFFFF) as i32;
+
+        let secs = milliseconds_part / 1_000;
+        let mins = secs / 60;
+        let hours = mins / 60;
+
+        let secs = secs - (mins * 60);
+        let mins = mins - (hours * 60);
+
+        let milliseconds = milliseconds_part % 1_000;
+
+        let secs_sign = if secs < 0 || milliseconds < 0 {
+            "-"
+        } else {
+            ""
+        };
+
+        write!(
+            f,
+            "0 years 0 mons {} days {} hours {} mins {}{}.{:03} secs",
+            days_parts,
+            hours,
+            mins,
+            secs_sign,
+            secs.abs(),
+            milliseconds.abs(),
+        )?;
+        Ok(())
+    }
+}
+
+impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalMonthDayNanoType> {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let value: u128 = self.value(idx) as u128;
+
+        let months_part: i32 =
+            ((value & 0xFFFFFFFF000000000000000000000000) >> 96) as i32;
+        let days_part: i32 = ((value & 0xFFFFFFFF0000000000000000) >> 64) as i32;
+        let nanoseconds_part: i64 = (value & 0xFFFFFFFFFFFFFFFF) as i64;
+
+        let secs = nanoseconds_part / 1_000_000_000;
+        let mins = secs / 60;
+        let hours = mins / 60;
+
+        let secs = secs - (mins * 60);
+        let mins = mins - (hours * 60);
+
+        let nanoseconds = nanoseconds_part % 1_000_000_000;
+
+        let secs_sign = if secs < 0 || nanoseconds < 0 { "-" } else { "" };
+
+        write!(
+            f,
+            "0 years {} mons {} days {} hours {} mins {}{}.{:09} secs",
+            months_part,
+            days_part,
+            hours,
+            mins,
+            secs_sign,
+            secs.abs(),
+            nanoseconds.abs(),
+        )?;
+        Ok(())
+    }
 }
 
 impl<'a, O: OffsetSizeTrait> DisplayIndex for &'a GenericStringArray<O> {
@@ -523,146 +742,6 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
         write!(f, "{{{name}=")?;
         field.write(idx, f)
     }
-}
-
-#[inline]
-fn date32_to_date(value: i32) -> Option<NaiveDate> {
-    Some(date32_to_datetime(value)?.date())
-}
-
-#[inline]
-fn date64_to_date(value: i64) -> Option<NaiveDate> {
-    Some(date64_to_datetime(value)?.date())
-}
-
-temporal_display!(date32_to_date, Date32Type);
-temporal_display!(date64_to_date, Date64Type);
-temporal_display!(time32s_to_time, Time32SecondType);
-temporal_display!(time32ms_to_time, Time32MillisecondType);
-temporal_display!(time64us_to_time, Time64MicrosecondType);
-temporal_display!(time64ns_to_time, Time64NanosecondType);
-
-macro_rules! duration_display {
-    ($convert:ident, $t:ty) => {
-        impl<'a> DisplayIndex for &'a PrimitiveArray<$t> {
-            fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-                write!(f, "{}", $convert(self.value(idx)))?;
-                Ok(())
-            }
-        }
-    };
-}
-
-duration_display!(duration_s_to_duration, DurationSecondType);
-duration_display!(duration_ms_to_duration, DurationMillisecondType);
-duration_display!(duration_us_to_duration, DurationMicrosecondType);
-duration_display!(duration_ns_to_duration, DurationNanosecondType);
-
-impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
-    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        let interval = self.value(idx) as f64;
-        let years = (interval / 12_f64).floor();
-        let month = interval - (years * 12_f64);
-
-        write!(
-            f,
-            "{} years {} mons 0 days 0 hours 0 mins 0.00 secs",
-            years, month,
-        )?;
-        Ok(())
-    }
-}
-
-impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
-    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        let value: u64 = self.value(idx) as u64;
-
-        let days_parts: i32 = ((value & 0xFFFFFFFF00000000) >> 32) as i32;
-        let milliseconds_part: i32 = (value & 0xFFFFFFFF) as i32;
-
-        let secs = milliseconds_part / 1_000;
-        let mins = secs / 60;
-        let hours = mins / 60;
-
-        let secs = secs - (mins * 60);
-        let mins = mins - (hours * 60);
-
-        let milliseconds = milliseconds_part % 1_000;
-
-        let secs_sign = if secs < 0 || milliseconds < 0 {
-            "-"
-        } else {
-            ""
-        };
-
-        write!(
-            f,
-            "0 years 0 mons {} days {} hours {} mins {}{}.{:03} secs",
-            days_parts,
-            hours,
-            mins,
-            secs_sign,
-            secs.abs(),
-            milliseconds.abs(),
-        )?;
-        Ok(())
-    }
-}
-
-impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalMonthDayNanoType> {
-    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        let value: u128 = self.value(idx) as u128;
-
-        let months_part: i32 =
-            ((value & 0xFFFFFFFF000000000000000000000000) >> 96) as i32;
-        let days_part: i32 = ((value & 0xFFFFFFFF0000000000000000) >> 64) as i32;
-        let nanoseconds_part: i64 = (value & 0xFFFFFFFFFFFFFFFF) as i64;
-
-        let secs = nanoseconds_part / 1_000_000_000;
-        let mins = secs / 60;
-        let hours = mins / 60;
-
-        let secs = secs - (mins * 60);
-        let mins = mins - (hours * 60);
-
-        let nanoseconds = nanoseconds_part % 1_000_000_000;
-
-        let secs_sign = if secs < 0 || nanoseconds < 0 { "-" } else { "" };
-
-        write!(
-            f,
-            "0 years {} mons {} days {} hours {} mins {}{}.{:09} secs",
-            months_part,
-            days_part,
-            hours,
-            mins,
-            secs_sign,
-            secs.abs(),
-            nanoseconds.abs(),
-        )?;
-        Ok(())
-    }
-}
-
-fn format_rfc3339(date: DateTime<Tz>) -> impl Display {
-    use chrono::format::*;
-
-    const ITEMS: &[Item<'static>] = &[
-        Item::Numeric(Numeric::Year, Pad::Zero),
-        Item::Literal("-"),
-        Item::Numeric(Numeric::Month, Pad::Zero),
-        Item::Literal("-"),
-        Item::Numeric(Numeric::Day, Pad::Zero),
-        Item::Literal("T"),
-        Item::Numeric(Numeric::Hour, Pad::Zero),
-        Item::Literal(":"),
-        Item::Numeric(Numeric::Minute, Pad::Zero),
-        Item::Literal(":"),
-        Item::Numeric(Numeric::Second, Pad::Zero),
-        Item::Fixed(Fixed::Nanosecond),
-        Item::Fixed(Fixed::TimezoneOffsetColonZ),
-    ];
-    date.format_with_items(ITEMS.iter())
 }
 
 /// Get the value at the given row in an array as a String.

@@ -65,7 +65,7 @@
 
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_cast::display::{ArrayFormatter, FormatOptions};
+use arrow_cast::display::*;
 use arrow_schema::*;
 use csv::ByteRecord;
 use std::io::Write;
@@ -90,10 +90,8 @@ pub struct Writer<W: Write> {
     /// The datetime format for datetime arrays
     datetime_format: Option<String>,
     /// The timestamp format for timestamp arrays
-    #[allow(dead_code)]
     timestamp_format: Option<String>,
     /// The timestamp format for timestamp (with timezone) arrays
-    #[allow(dead_code)]
     timestamp_tz_format: Option<String>,
     /// The time format for time arrays
     time_format: Option<String>,
@@ -140,8 +138,14 @@ impl<W: Write> Writer<W> {
             self.beginning = false;
         }
 
-        // TODO: Set formatting options
-        let options = FormatOptions::default();
+        let options = FormatOptions::default()
+            .with_null(&self.null_value)
+            .with_date_format(self.date_format.as_deref())
+            .with_datetime_format(self.datetime_format.as_deref())
+            .with_timestamp_format(self.timestamp_format.as_deref())
+            .with_timestamp_tz_format(self.timestamp_tz_format.as_deref())
+            .with_time_format(self.time_format.as_deref());
+
         let converters = batch
             .columns()
             .iter()
@@ -166,7 +170,9 @@ impl<W: Write> Writer<W> {
                 buffer.clear();
                 converter.value(row_idx).write(&mut buffer).map_err(|e| {
                     ArrowError::CsvError(format!(
-                        "Error formatting row {row_idx} and column {col_idx}: {e}"
+                        "Error formatting row {} and column {}: {e}",
+                        row_idx + 1,
+                        col_idx + 1
                     ))
                 })?;
                 byte_record.push_field(buffer.as_bytes());
@@ -285,16 +291,13 @@ impl WriterBuilder {
         self
     }
 
-    /// Use RFC3339 format for date/time/timestamps by clearing all
-    /// date/time specific formats.
-    pub fn with_rfc3339(mut self, use_rfc3339: bool) -> Self {
-        if use_rfc3339 {
-            self.date_format = None;
-            self.datetime_format = None;
-            self.time_format = None;
-            self.timestamp_format = None;
-            self.timestamp_tz_format = None;
-        }
+    /// Use RFC3339 format for date/time/timestamps
+    pub fn with_rfc3339(mut self) -> Self {
+        self.date_format = None;
+        self.datetime_format = None;
+        self.time_format = None;
+        self.timestamp_format = None;
+        self.timestamp_tz_format = None;
         self
     }
 
@@ -550,7 +553,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
 
         for batch in batches {
             let err = writer.write(batch).unwrap_err().to_string();
-            assert_eq!(err, "Csv error: Error formatting row 1 and column 1: Cast error: Failed to convert 1926632005177685347 to temporal for Date64")
+            assert_eq!(err, "Csv error: Error formatting row 2 and column 2: Cast error: Failed to convert 1926632005177685347 to temporal for Date64")
         }
         drop(writer);
     }
@@ -588,7 +591,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
 
         let mut file = tempfile::tempfile().unwrap();
 
-        let builder = WriterBuilder::new().with_rfc3339(true);
+        let builder = WriterBuilder::new().with_rfc3339();
         let mut writer = builder.build(&mut file);
         let batches = vec![&batch];
         for batch in batches {
