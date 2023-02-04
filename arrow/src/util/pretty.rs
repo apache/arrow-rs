@@ -376,7 +376,7 @@ mod tests {
             let expected = $EXPECTED_RESULT;
             let actual: Vec<&str> = table.lines().collect();
 
-            assert_eq!(expected, actual, "Actual result:\n\n{:#?}\n\n", actual);
+            assert_eq!(expected, actual, "Actual result:\n\n{actual:#?}\n\n");
         };
     }
 
@@ -412,7 +412,7 @@ mod tests {
             "+---------------------------+",
         ];
         let actual: Vec<&str> = table.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n\n{:#?}\n\n", actual);
+        assert_eq!(expected, actual, "Actual result:\n\n{actual:#?}\n\n");
     }
 
     #[test]
@@ -429,7 +429,7 @@ mod tests {
             "+---------------------------+",
         ];
         let actual: Vec<&str> = table.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n\n{:#?}\n\n", actual);
+        assert_eq!(expected, actual, "Actual result:\n\n{actual:#?}\n\n");
     }
 
     #[test]
@@ -446,7 +446,7 @@ mod tests {
             "+---------------------------+",
         ];
         let actual: Vec<&str> = table.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n\n{:#?}\n\n", actual);
+        assert_eq!(expected, actual, "Actual result:\n\n{actual:#?}\n\n");
     }
 
     #[test]
