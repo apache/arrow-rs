@@ -44,15 +44,14 @@ use arrow_buffer::ArrowNativeType;
 ///
 /// let mut builder =
 /// GenericByteRunBuilder::<Int16Type, BinaryType>::new();
-/// builder.append_value(b"abc");
-/// builder.append_value(b"abc");
-/// builder.append_null();
+/// builder.extend([Some(b"abc"), Some(b"abc"), None, Some(b"def")].into_iter());
 /// builder.append_value(b"def");
+/// builder.append_null();
 /// let array = builder.finish();
 ///
 /// assert_eq!(
 ///     array.run_ends(),
-///     &Int16Array::from(vec![Some(2), Some(3), Some(4)])
+///     &Int16Array::from(vec![Some(2), Some(3), Some(5), Some(6)])
 /// );
 ///
 /// let av = array.values();
@@ -60,6 +59,7 @@ use arrow_buffer::ArrowNativeType;
 /// assert!(!av.is_null(0));
 /// assert!(av.is_null(1));
 /// assert!(!av.is_null(2));
+/// assert!(av.is_null(3));
 ///
 /// // Values are polymorphic and so require a downcast.
 /// let ava: &BinaryArray = as_generic_binary_array(av.as_ref());
@@ -299,6 +299,19 @@ where
     }
 }
 
+impl<R, V, S> Extend<Option<S>> for GenericByteRunBuilder<R, V>
+where
+    R: RunEndIndexType,
+    V: ByteArrayType,
+    S: AsRef<V::Native>,
+{
+    fn extend<T: IntoIterator<Item = Option<S>>>(&mut self, iter: T) {
+        for elem in iter {
+            self.append_option(elem);
+        }
+    }
+}
+
 /// Array builder for [`RunArray`] that encodes strings ([`Utf8Type`]).
 ///
 /// ```
@@ -315,9 +328,7 @@ where
 /// // The builder builds the dictionary value by value
 /// builder.append_value("abc");
 /// builder.append_null();
-/// builder.append_value("def");
-/// builder.append_value("def");
-/// builder.append_value("abc");
+/// builder.extend([Some("def"), Some("def"), Some("abc")]);
 /// let array = builder.finish();
 ///
 /// assert_eq!(
@@ -356,9 +367,7 @@ pub type LargeStringRunBuilder<K> = GenericByteRunBuilder<K, LargeUtf8Type>;
 /// // The builder builds the dictionary value by value
 /// builder.append_value(b"abc");
 /// builder.append_null();
-/// builder.append_value(b"def");
-/// builder.append_value(b"def");
-/// builder.append_value(b"abc");
+/// builder.extend([Some(b"def"), Some(b"def"), Some(b"abc")]);
 /// let array = builder.finish();
 ///
 /// assert_eq!(
@@ -387,7 +396,9 @@ mod tests {
     use super::*;
 
     use crate::array::Array;
-    use crate::types::Int16Type;
+    use crate::cast::as_primitive_array;
+    use crate::cast::as_string_array;
+    use crate::types::{Int16Type, Int32Type};
     use crate::GenericByteArray;
     use crate::Int16Array;
     use crate::Int16RunArray;
@@ -515,5 +526,25 @@ mod tests {
     #[test]
     fn test_binary_run_buider_finish_cloned() {
         test_bytes_run_buider_finish_cloned::<BinaryType>(vec![b"abc", b"def", b"ghi"]);
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = StringRunBuilder::<Int32Type>::new();
+        builder.extend(["a", "a", "a", "", "", "b", "b"].into_iter().map(Some));
+        builder.extend(["b", "cupcakes", "cupcakes"].into_iter().map(Some));
+        let array = builder.finish();
+
+        assert_eq!(array.len(), 10);
+        assert_eq!(
+            as_primitive_array::<Int32Type>(array.run_ends()).values(),
+            &[3, 5, 8, 10]
+        );
+
+        let str_array = as_string_array(array.values().as_ref());
+        assert_eq!(str_array.value(0), "a");
+        assert_eq!(str_array.value(1), "");
+        assert_eq!(str_array.value(2), "b");
+        assert_eq!(str_array.value(3), "cupcakes");
     }
 }
