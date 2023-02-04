@@ -206,15 +206,10 @@ impl<R: RunEndIndexType> RunArray<R> {
 
         let mut physical_indices = vec![0; indices_len];
 
-        let mut physical_index = 0_usize;
         let mut ordered_index = 0_usize;
-        while physical_index < self.run_ends.len() && ordered_index < indices_len {
+        for (physical_index, run_end) in self.run_ends.values().iter().enumerate() {
             // Get the run end index of current physical index
-            let run_end_value =
-                // Safety:
-                //  The check `run_ends_index < self.run_ends.len()` ensures the index
-                //  is in bounds and can be accessed without validation.
-                unsafe { self.run_ends.value_unchecked(physical_index).as_usize() };
+            let run_end_value = run_end.as_usize();
 
             // All the `logical_indices` that are less than current run end index
             // belongs to current physical index.
@@ -225,7 +220,6 @@ impl<R: RunEndIndexType> RunArray<R> {
                 physical_indices[ordered_indices[ordered_index]] = physical_index;
                 ordered_index += 1;
             }
-            physical_index += 1;
         }
 
         // If there are input values >= run_ends.last_value then we'll not be able to convert
