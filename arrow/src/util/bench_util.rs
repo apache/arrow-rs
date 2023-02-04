@@ -151,6 +151,7 @@ pub fn create_primitive_run_array<R: RunEndIndexType, V: ArrowPrimitiveType>(
     logical_array_len: usize,
     physical_array_len: usize,
 ) -> RunArray<R> {
+    assert!(logical_array_len >= physical_array_len);
     // typical length of each run
     let run_len = logical_array_len / physical_array_len;
 
@@ -185,6 +186,7 @@ pub fn create_string_array_for_runs(
     logical_array_len: usize,
     string_len: usize,
 ) -> Vec<String> {
+    assert!(logical_array_len >= physical_array_len);
     let mut rng = thread_rng();
 
     // typical length of each run

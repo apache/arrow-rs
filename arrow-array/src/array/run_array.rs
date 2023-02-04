@@ -512,6 +512,7 @@ mod tests {
 
     use super::*;
     use crate::builder::PrimitiveRunBuilder;
+    use crate::cast::as_primitive_array;
     use crate::types::{Int16Type, Int32Type, Int8Type, UInt32Type};
     use crate::{Array, Int16Array, Int32Array, StringArray};
 
@@ -804,9 +805,8 @@ mod tests {
 
     #[test]
     fn test_get_physical_indices() {
-        let mut logical_len = 10;
         // Test for logical lengths starting from 10 to 250 increasing by 10
-        while logical_len < 260 {
+        for logical_len in (0..250).step_by(10) {
             let input_array = build_input_array(logical_len);
 
             // create run array using input_array
@@ -815,10 +815,12 @@ mod tests {
 
             let run_array = builder.finish();
             let physical_values_array =
-                run_array.downcast::<Int32Array>().unwrap().values();
+                as_primitive_array::<Int32Type>(run_array.values());
 
-            // create an array consisiting of all the indices shuffled.
+            // create an array consisting of all the indices repeated twice and shuffled.
             let mut logical_indices: Vec<u32> = (0_u32..(logical_len as u32)).collect();
+            // add same indices once more
+            logical_indices.append(&mut logical_indices.clone());
             let mut rng = thread_rng();
             logical_indices.shuffle(&mut rng);
 
@@ -836,6 +838,7 @@ mod tests {
                     let expected = input_array[logical_ix];
                     match expected {
                         Some(val) => {
+                            assert!(physical_values_array.is_valid(*physical_ix));
                             let actual = physical_values_array.value(*physical_ix);
                             assert_eq!(val, actual);
                         }
@@ -844,8 +847,6 @@ mod tests {
                         }
                     };
                 });
-
-            logical_len += 10;
         }
     }
 }
