@@ -30,6 +30,7 @@ use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
 use chrono::{NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
+use lexical_core::FormattedSize;
 
 type TimeFormat<'a> = Option<&'a str>;
 
@@ -325,7 +326,14 @@ macro_rules! primitive_display {
         $(impl<'a> DisplayIndex for &'a PrimitiveArray<$t>
         {
             fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-                write!(f, "{}", self.value(idx))?;
+                let value = self.value(idx);
+                let mut buffer = [0u8; <$t as ArrowPrimitiveType>::Native::FORMATTED_SIZE];
+                // SAFETY:
+                // buffer is T::FORMATTED_SIZE
+                let b = unsafe { lexical_core::write_unchecked(value, &mut buffer) };
+                // Lexical core produces valid UTF-8
+                let s = unsafe { std::str::from_utf8_unchecked(b) };
+                f.write_str(s)?;
                 Ok(())
             }
         })+
@@ -334,7 +342,14 @@ macro_rules! primitive_display {
 
 primitive_display!(Int8Type, Int16Type, Int32Type, Int64Type);
 primitive_display!(UInt8Type, UInt16Type, UInt32Type, UInt64Type);
-primitive_display!(Float16Type, Float32Type, Float64Type);
+primitive_display!(Float32Type, Float64Type);
+
+impl<'a> DisplayIndex for &'a PrimitiveArray<Float16Type> {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+        write!(f, "{}", self.value(idx))?;
+        Ok(())
+    }
+}
 
 macro_rules! decimal_display {
     ($($t:ty),+) => {
