@@ -162,6 +162,13 @@ impl Path {
         })
     }
 
+    /// Parse a url encoded string as a [`Path`], returning a [`Error`] if invalid,
+    /// as defined on the docstring for [`Path`]
+    pub fn from_url_path(path: impl AsRef<str>) -> Result<Self, Error> {
+        let decoded_path = percent_encoding::percent_decode_str(path.as_ref()).decode_utf8_lossy();
+        Self::parse(decoded_path.as_ref())
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     /// Convert a filesystem path to a [`Path`] relative to the filesystem root
     ///
@@ -549,6 +556,15 @@ mod tests {
         assert_eq!(a.raw, "foo bar/baz");
         assert_eq!(a.raw, b.raw);
         assert_eq!(b.raw, c.raw);
+    }
+
+    #[test]
+    fn from_url_path() {
+        let a = Path::from_url_path("foo%20bar/baz").unwrap();
+        assert_eq!(a.raw, "foo bar/baz");
+
+        let b = Path::from_url_path("bar/baz").unwrap();
+        assert_eq!(b.raw, "bar/baz");
     }
 
     #[test]
