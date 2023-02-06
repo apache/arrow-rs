@@ -233,7 +233,34 @@ impl<T: ByteArrayType, V: AsRef<T::Native>> Extend<Option<V>> for GenericByteBui
     }
 }
 
-///  Array builder for [`GenericStringArray`][crate::GenericStringArray]
+/// Array builder for [`GenericStringArray`][crate::GenericStringArray]
+///
+/// Values can be appended using [`GenericByteBuilder::append_value`], and nulls with
+/// [`GenericByteBuilder::append_null`] as normal.
+///
+/// Additionally implements [`std::fmt::Write`] with any written data included in the next
+/// appended value. This allows use with [`std::fmt::Display`] without intermediate allocations
+///
+/// ```
+/// # use std::fmt::Write;
+/// # use arrow_array::builder::GenericStringBuilder;
+/// let mut builder = GenericStringBuilder::<i32>::new();
+///
+/// // Write data
+/// write!(builder, "foo").unwrap();
+/// write!(builder, "bar").unwrap();
+///
+/// // Finish value
+/// builder.append_value("baz");
+///
+/// // Write second value
+/// write!(builder, "v2").unwrap();
+/// builder.append_value("");
+///
+/// let array = builder.finish();
+/// assert_eq!(array.value(0), "foobarbaz");
+/// assert_eq!(array.value(1), "v2");
+/// ```
 pub type GenericStringBuilder<O> = GenericByteBuilder<GenericStringType<O>>;
 
 impl<O: OffsetSizeTrait> Write for GenericStringBuilder<O> {
