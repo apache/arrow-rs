@@ -151,7 +151,7 @@ make_type!(
     Date64Type,
     i64,
     DataType::Date64,
-    "A 64-bit date type representing the elapsed time since UNIX epoch in days(32 bits)."
+    "A 64-bit date type representing the elapsed time since UNIX epoch in milliseconds(64 bits)."
 );
 make_type!(
     Time32SecondType,
