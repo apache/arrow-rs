@@ -166,7 +166,7 @@ impl Path {
     /// Convert a filesystem path to a [`Path`] relative to the filesystem root
     ///
     /// This will return an error if the path contains illegal character sequences
-    /// as defined by [`Path::parse`] or does not exist
+    /// as defined on the docstring for [`Path`] or does not exist
     ///
     /// Note: this will canonicalize the provided path, resolving any symlinks
     pub fn from_filesystem_path(
@@ -182,8 +182,8 @@ impl Path {
     #[cfg(not(target_arch = "wasm32"))]
     /// Convert an absolute filesystem path to a [`Path`] relative to the filesystem root
     ///
-    /// This will return an error if the path contains illegal character sequences
-    /// as defined by [`Path::parse`], or `base` is not an absolute path
+    /// This will return an error if the path contains illegal character sequences,
+    /// as defined on the docstring for [`Path`], or `base` is not an absolute path
     pub fn from_absolute_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
         Self::from_absolute_path_with_base(path, None)
     }
@@ -191,9 +191,9 @@ impl Path {
     #[cfg(not(target_arch = "wasm32"))]
     /// Convert a filesystem path to a [`Path`] relative to the provided base
     ///
-    /// This will return an error if the path contains illegal character sequences
-    /// as defined by [`Path::parse`], or `base` does not refer to a parent path of `path`,
-    /// or `base` is not an absolute path
+    /// This will return an error if the path contains illegal character sequences,
+    /// as defined on the docstring for [`Path`], or `base` does not refer to a parent
+    /// path of `path`, or `base` is not an absolute path
     pub(crate) fn from_absolute_path_with_base(
         path: impl AsRef<std::path::Path>,
         base: Option<&Url>,
@@ -213,9 +213,12 @@ impl Path {
         Self::from_url_path(path)
     }
 
-    /// Parse a url encoded string as a [`Path`], returning a [`Error`] if invalid,
+    /// Parse a url encoded string as a [`Path`], returning a [`Error`] if invalid
+    ///
+    /// This will return an error if the path contains illegal character sequences
     /// as defined on the docstring for [`Path`]
-    pub fn from_url_path(path: &str) -> Result<Self, Error> {
+    pub fn from_url_path(path: impl AsRef<str>) -> Result<Self, Error> {
+        let path = path.as_ref();
         let decoded = percent_decode(path.as_bytes())
             .decode_utf8()
             .context(NonUnicodeSnafu { path })?;
