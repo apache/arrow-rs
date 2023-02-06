@@ -36,6 +36,7 @@
 //! ```
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Timelike};
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use crate::display::{array_value_to_string, lexical_to_string};
@@ -1687,12 +1688,16 @@ pub fn cast_with_options(
             let to_size = time_unit_multiple(to_unit);
             // we either divide or multiply, depending on size of each unit
             // units are never the same when the types are the same
-            let converted = if from_size >= to_size {
-                let divisor = from_size / to_size;
-                time_array.unary::<_, Int64Type>(|o| o / divisor)
-            } else {
-                let mul = to_size / from_size;
-                time_array.unary::<_, Int64Type>(|o| o * mul)
+            let converted = match from_size.cmp(&to_size) {
+                Ordering::Greater => {
+                    let divisor = from_size / to_size;
+                    time_array.unary::<_, Int64Type>(|o| o / divisor)
+                }
+                Ordering::Equal => time_array.clone(),
+                Ordering::Less => {
+                    let mul = to_size / from_size;
+                    time_array.unary::<_, Int64Type>(|o| o * mul)
+                }
             };
             Ok(make_timestamp_array(
                 &converted,
@@ -7843,5 +7848,39 @@ mod tests {
         assert_eq!(1609459200000000000, c.value(0));
         assert_eq!(1640995200000000000, c.value(1));
         assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_timezone_cast() {
+        let a = StringArray::from(vec![
+            "2000-01-01T12:00:00", // date + time valid
+            "2020-12-15T12:34:56", // date + time valid
+        ]);
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Nanosecond, None)).unwrap();
+        let v = as_primitive_array::<TimestampNanosecondType>(b.as_ref());
+
+        assert_eq!(v.value(0), 946728000000000000);
+        assert_eq!(v.value(1), 1608035696000000000);
+
+        let b = cast(
+            &b,
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_string())),
+        )
+        .unwrap();
+        let v = as_primitive_array::<TimestampNanosecondType>(b.as_ref());
+
+        assert_eq!(v.value(0), 946728000000000000);
+        assert_eq!(v.value(1), 1608035696000000000);
+
+        let b = cast(
+            &b,
+            &DataType::Timestamp(TimeUnit::Millisecond, Some("+02:00".to_string())),
+        )
+        .unwrap();
+        let v = as_primitive_array::<TimestampMillisecondType>(b.as_ref());
+
+        assert_eq!(v.value(0), 946728000000);
+        assert_eq!(v.value(1), 1608035696000);
     }
 }
