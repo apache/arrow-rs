@@ -18,7 +18,6 @@
 //! Path abstraction for Object Storage
 
 use itertools::Itertools;
-#[cfg(not(target_arch = "wasm32"))]
 use percent_encoding::percent_decode;
 use snafu::{ensure, ResultExt, Snafu};
 use std::fmt::Formatter;
