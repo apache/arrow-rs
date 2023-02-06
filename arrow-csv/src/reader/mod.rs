@@ -2231,4 +2231,42 @@ mod tests {
             }
         }
     }
+
+    fn err_test(csv: &[u8], expected: &str) {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("text1", DataType::Utf8, false),
+            Field::new("text2", DataType::Utf8, false),
+        ]));
+        let buffer = std::io::BufReader::with_capacity(2, Cursor::new(csv));
+        let b = ReaderBuilder::new()
+            .with_schema(schema)
+            .with_batch_size(2)
+            .build_buffered(buffer)
+            .unwrap();
+        let err = b.collect::<Result<Vec<_>, _>>().unwrap_err().to_string();
+        assert_eq!(err, expected)
+    }
+
+    #[test]
+    fn test_invalid_utf8() {
+        err_test(
+            b"sdf,dsfg\ndfd,hgh\xFFue\n,sds\nFalhghse,",
+            "Csv error: Encountered invalid UTF-8 data for line 2 and field 2",
+        );
+
+        err_test(
+            b"sdf,dsfg\ndksdk,jf\nd\xFFfd,hghue\n,sds\nFalhghse,",
+            "Csv error: Encountered invalid UTF-8 data for line 3 and field 1",
+        );
+
+        err_test(
+            b"sdf,dsfg\ndksdk,jf\ndsdsfd,hghue\n,sds\nFalhghse,\xFF",
+            "Csv error: Encountered invalid UTF-8 data for line 5 and field 2",
+        );
+
+        err_test(
+            b"\xFFsdf,dsfg\ndksdk,jf\ndsdsfd,hghue\n,sds\nFalhghse,\xFF",
+            "Csv error: Encountered invalid UTF-8 data for line 1 and field 1",
+        );
+    }
 }
