@@ -19,6 +19,10 @@ use crate::data::ArrayData;
 
 use super::equal_range;
 
+/// The current implementation of comparison of run array does support partial comparison.
+/// Comparing run encoded array based on logical indices (`lhs_start`, `rhs_start`) will
+/// be time consuming as converting from logical index to physical index cannot be done
+/// in constat time. The current comparison compares the underlying physical arrays.
 pub(super) fn run_equal(
     lhs: &ArrayData,
     rhs: &ArrayData,
@@ -26,10 +30,12 @@ pub(super) fn run_equal(
     rhs_start: usize,
     len: usize,
 ) -> bool {
-    // Comparing run encoded array based on logical indices (`lhs_start`, `rhs_start`) will
-    // be time consuming as converting from logical index to physical index cannot be done
-    // in constat time. The current comparison compares the underlying physical arrays.
-    if lhs_start != 0 || rhs_start != 0 || (lhs.len() != len && rhs.len() != len) {
+    if lhs_start != 0
+        || rhs_start != 0
+        || (lhs.len() != len && rhs.len() != len)
+        || lhs.offset() > 0
+        || rhs.offset() > 0
+    {
         unimplemented!("Partial comparison for run array not supported.")
     }
 
@@ -37,7 +43,7 @@ pub(super) fn run_equal(
         return false;
     }
 
-    // This method does few validation of the lhs array and rhs array required to do its
+    // This method does validation of the lhs array and rhs array required to do its
     // function. This method does not ensure the validity of lhs and rhs array as run array.
     if lhs.child_data().len() != 2 || rhs.child_data().len() != 2 {
         panic!(

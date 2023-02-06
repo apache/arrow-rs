@@ -221,7 +221,7 @@ impl IpcDataGenerator {
             DataType::RunEndEncoded(run_ends, values) => {
                 if column.data().child_data().len() != 2 {
                     return Err(ArrowError::InvalidArgumentError(format!(
-                        "The run encoded array should have exactly two chil arrays. Found {}",
+                        "The run encoded array should have exactly two child arrays. Found {}",
                         column.data().child_data().len()
                     )));
                 }
@@ -554,6 +554,26 @@ impl IpcDataGenerator {
             ipc_message: finished_data.to_vec(),
             arrow_data,
         })
+    }
+}
+
+macro_rules! unslice_run_array_helper {
+    ($t:ty, $arr:ident) => {
+        Ok(RunArray::<$t>::from($arr)
+            .into_non_sliced_array()?
+            .into_data())
+    };
+}
+
+pub(crate) fn unslice_run_array(arr: ArrayData) -> Result<ArrayData, ArrowError> {
+    match arr.data_type() {
+        DataType::RunEndEncoded(k, _) => downcast_run_end_index! {
+            k.data_type() => (unslice_run_array_helper, arr),
+            d => unreachable!("Unexpected data type {d}"),
+        },
+        d => Err(ArrowError::InvalidArgumentError(format!(
+            "The given array is not a run array. Data type of given array: {d}"
+        ))),
     }
 }
 
@@ -1269,24 +1289,45 @@ fn write_array_data(
         }
     }
 
-    if !matches!(array_data.data_type(), DataType::Dictionary(_, _)) {
-        // recursively write out nested structures
-        for data_ref in array_data.child_data() {
-            // write the nested data (e.g list data)
-            offset = write_array_data(
-                data_ref,
-                buffers,
-                arrow_data,
-                nodes,
-                offset,
-                data_ref.len(),
-                data_ref.null_count(),
-                compression_codec,
-                write_options,
-            )?;
+    match array_data.data_type() {
+        DataType::Dictionary(_, _) => {}
+        DataType::RunEndEncoded(_, _) => {
+            // unslice the run encoded array.
+            let arr = unslice_run_array(array_data.clone())?;
+            // recursively write out nested structures
+            for data_ref in arr.child_data() {
+                // write the nested data (e.g list data)
+                offset = write_array_data(
+                    data_ref,
+                    buffers,
+                    arrow_data,
+                    nodes,
+                    offset,
+                    data_ref.len(),
+                    data_ref.null_count(),
+                    compression_codec,
+                    write_options,
+                )?;
+            }
+        }
+        _ => {
+            // recursively write out nested structures
+            for data_ref in array_data.child_data() {
+                // write the nested data (e.g list data)
+                offset = write_array_data(
+                    data_ref,
+                    buffers,
+                    arrow_data,
+                    nodes,
+                    offset,
+                    data_ref.len(),
+                    data_ref.null_count(),
+                    compression_codec,
+                    write_options,
+                )?;
+            }
         }
     }
-
     Ok(offset)
 }
 

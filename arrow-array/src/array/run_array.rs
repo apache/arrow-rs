@@ -144,15 +144,16 @@ impl<R: RunEndIndexType> RunArray<R> {
         })
     }
 
-    /// Returns index to the physical array for the given index to the logical array.
-    /// Performs a binary search on the run_ends array for the input index.
     #[inline]
-    pub fn get_physical_index(&self, logical_index: usize) -> Option<usize> {
-        if logical_index >= self.len() {
+    fn get_physical_index_from_run_ends_array(
+        run_ends: &PrimitiveArray<R>,
+        logical_index: usize,
+    ) -> Option<usize> {
+        if logical_index >= Self::logical_len(run_ends) {
             return None;
         }
         let mut st: usize = 0;
-        let mut en: usize = self.run_ends().len();
+        let mut en: usize = run_ends.len();
         while st + 1 < en {
             let mid: usize = (st + en) / 2;
             if logical_index
@@ -164,7 +165,7 @@ impl<R: RunEndIndexType> RunArray<R> {
                     // `en` starts with len. The condition `st + 1 < en` ensures
                     // `st` and `en` differs atleast by two. So the value of `mid`
                     // will never be either `st` or `en`
-                    self.run_ends().value_unchecked(mid - 1).as_usize()
+                    run_ends.value_unchecked(mid - 1).as_usize()
                 }
             {
                 en = mid
@@ -173,6 +174,19 @@ impl<R: RunEndIndexType> RunArray<R> {
             }
         }
         Some(st)
+    }
+
+    /// Returns index to the physical array for the given index to the logical array.
+    /// Performs a binary search on the run_ends array for the input index.
+    #[inline]
+    pub fn get_physical_index(&self, logical_index: usize) -> Option<usize> {
+        if logical_index >= self.len() {
+            return None;
+        }
+        Self::get_physical_index_from_run_ends_array(
+            &self.run_ends,
+            logical_index + self.offset(),
+        )
     }
 
     /// Returns the physical indices of the input logical indices. Returns error if any of the logical
@@ -192,6 +206,10 @@ impl<R: RunEndIndexType> RunArray<R> {
     {
         let indices_len = logical_indices.len();
 
+        if indices_len == 0 {
+            return Ok(vec![]);
+        }
+
         // `ordered_indices` store index into `logical_indices` and can be used
         // to iterate `logical_indices` in sorted order.
         let mut ordered_indices: Vec<usize> = (0..indices_len).collect();
@@ -204,12 +222,36 @@ impl<R: RunEndIndexType> RunArray<R> {
                 .unwrap()
         });
 
+        // Return early if all the logical indices cannot be converted to physical indices.
+        let largest_logical_index =
+            logical_indices[*ordered_indices.last().unwrap()].as_usize();
+        if largest_logical_index >= self.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Cannot convert all logical indices to physical indices. The logical index cannot be converted is {largest_logical_index}.",
+            )));
+        }
+
+        // Skip some physical indices based on offset.
+        let skip_value = if self.offset() > 0 {
+            Self::get_physical_index_from_run_ends_array(self.run_ends(), self.offset())
+                .ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Cannot convert offset {} to physical index.",
+                    self.offset()
+                ))
+            })?
+        } else {
+            0
+        };
+
         let mut physical_indices = vec![0; indices_len];
 
         let mut ordered_index = 0_usize;
-        for (physical_index, run_end) in self.run_ends.values().iter().enumerate() {
-            // Get the run end index of current physical index
-            let run_end_value = run_end.as_usize();
+        for (physical_index, run_end) in
+            self.run_ends.values().iter().enumerate().skip(skip_value)
+        {
+            // Get the run end index (relative to offset) of current physical index
+            let run_end_value = run_end.as_usize() - self.offset();
 
             // All the `logical_indices` that are less than current run end index
             // belongs to current physical index.
@@ -234,52 +276,61 @@ impl<R: RunEndIndexType> RunArray<R> {
         Ok(physical_indices)
     }
 
-    /// Returns the physical indices of input logical indices. Returns error
-    /// if any of the logical index cannot be converted to physical index.
-    /// TODO: Potential future optimization would be to skip sorting
-    /// if the indices are already in sorted order.
-    #[inline]
-    pub fn get_physical_indices_using_loop<I>(
-        &self,
-        indices: &[I],
-    ) -> Result<Vec<usize>, ArrowError>
-    where
-        I: ArrowNativeType,
-    {
-        let indices_len = indices.len();
-        let mut order: Vec<usize> = (0..indices_len).collect();
-        order.sort_unstable_by(|lhs, rhs| {
-            indices[*lhs].partial_cmp(&indices[*rhs]).unwrap()
-        });
-        let mut physical_indices = vec![0; indices_len];
-
-        let mut physical_index = 0_usize;
-        let mut ordered_index = 0_usize;
-        for (physical_index, run_end) in self.run_ends.values().iter().enumerate() {
-            // Get the run end index of current physical index
-            let run_end_value = run_end.as_usize();
-
-            // All the `logical_indices` that are less than current run end index
-            // belongs to current physical index.
-            while ordered_index < indices_len
-                && logical_indices[ordered_indices[ordered_index]].as_usize()
-                    < run_end_value
-            {
-                physical_indices[ordered_indices[ordered_index]] = physical_index;
-                ordered_index += 1;
-            }
+    /// Returns a `RunArray` with zero offset and length matching the last value
+    /// in run_ends array.
+    pub fn into_non_sliced_array(self) -> Result<Self, ArrowError> {
+        if self.data.offset() == 0 && self.data.len() == Self::logical_len(&self.run_ends)
+        {
+            return Ok(self);
         }
+        // The physical index of original run_ends array from which the `ArrayData`is sliced.
+        let start_physical_index = Self::get_physical_index_from_run_ends_array(
+            &self.run_ends,
+            self.data.offset(),
+        )
+        .ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Cannot convert the offset {} to physical index",
+                self.data.offset()
+            ))
+        })?;
 
-        // If there are input values >= run_ends.last_value then we'll not be able to convert
-        // all logical indices to physical indices.
-        if ordered_index < logical_indices.len() {
-            let logical_index =
-                logical_indices[ordered_indices[ordered_index]].as_usize();
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot convert all logical indices to physical indices. The logical index cannot be converted is {logical_index}.",
-            )));
-        }
-        Ok(physical_indices)
+        // The logical length of original run_ends array until which the `ArrayData` is sliced.
+        let end_logical_index = self.data.offset() + self.data.len() - 1;
+        // The physical index of original run_ends array until which the `ArrayData`is sliced.
+        let end_physical_index =
+            Self::get_physical_index_from_run_ends_array(&self.run_ends, end_logical_index).ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Cannot convert the `offset + len - 1` {end_logical_index} to physical index"
+                ))
+            })?;
+
+        let physical_length = end_physical_index - start_physical_index + 1;
+
+        // build new run_ends array by subtrating offset from run ends.
+        let new_run_ends: PrimitiveArray<R> = self
+            .run_ends
+            .values()
+            .iter()
+            .skip(start_physical_index)
+            .take(physical_length)
+            .map(|f| f.as_usize() - self.data.offset())
+            .map(|f| f.min(self.len()))
+            .map(R::Native::from_usize)
+            .collect();
+
+        // build new values by slicing physical indices.
+        let new_values = self
+            .values
+            .slice(start_physical_index, physical_length)
+            .into_data();
+
+        let builder = ArrayDataBuilder::new(self.data_type().clone())
+            .len(self.len())
+            .add_child_data(new_run_ends.into_data())
+            .add_child_data(new_values);
+        let array_data = builder.build()?;
+        Ok(array_data.into())
     }
 }
 
@@ -600,6 +651,33 @@ mod tests {
         result
     }
 
+    fn compare_logical_and_physical_indices(
+        logical_indices: &Vec<u32>,
+        logical_array: &Vec<Option<i32>>,
+        physical_indices: &Vec<usize>,
+        physical_array: &PrimitiveArray<Int32Type>,
+    ) {
+        assert_eq!(logical_indices.len(), physical_indices.len());
+
+        // check value in logical index in the input_array matches physical index in typed_run_array
+        logical_indices
+            .iter()
+            .map(|f| f.as_usize())
+            .zip(physical_indices.iter())
+            .for_each(|(logical_ix, physical_ix)| {
+                let expected = logical_array[logical_ix];
+                match expected {
+                    Some(val) => {
+                        assert!(physical_array.is_valid(*physical_ix));
+                        let actual = physical_array.value(*physical_ix);
+                        assert_eq!(val, actual);
+                    }
+                    None => {
+                        assert!(physical_array.is_null(*physical_ix))
+                    }
+                };
+            });
+    }
     #[test]
     fn test_run_array() {
         // Construct a value array
@@ -846,6 +924,54 @@ mod tests {
     }
 
     #[test]
+    fn test_run_array_unslice() {
+        let total_len = 80;
+        let input_array = build_input_array(total_len);
+
+        // Encode the input_array to run array
+        let mut builder =
+            PrimitiveRunBuilder::<Int16Type, Int32Type>::with_capacity(input_array.len());
+        builder.extend(input_array.iter().copied());
+        let run_array = builder.finish();
+
+        // test for all slice lengths.
+        for slice_len in 1..=total_len {
+            // test for offset = 0, slice length = slice_len
+            let sliced_run_array: RunArray<Int16Type> =
+                run_array.slice(0, slice_len).into_data().into();
+
+            // Create unsliced run array.
+            let unsliced_run_array = sliced_run_array.into_non_sliced_array().unwrap();
+            let typed = unsliced_run_array
+                .downcast::<PrimitiveArray<Int32Type>>()
+                .unwrap();
+            let expected: Vec<Option<i32>> =
+                input_array.iter().take(slice_len).map(|f| *f).collect();
+            let actual: Vec<Option<i32>> = typed.into_iter().collect();
+            assert_eq!(expected, actual);
+
+            // test for offset = total_len - slice_len, length = slice_len
+            let sliced_run_array: RunArray<Int16Type> = run_array
+                .slice(total_len - slice_len, slice_len)
+                .into_data()
+                .into();
+
+            // Create unsliced run array.
+            let unsliced_run_array = sliced_run_array.into_non_sliced_array().unwrap();
+            let typed = unsliced_run_array
+                .downcast::<PrimitiveArray<Int32Type>>()
+                .unwrap();
+            let expected: Vec<Option<i32>> = input_array
+                .iter()
+                .skip(total_len - slice_len)
+                .map(|f| *f)
+                .collect();
+            let actual: Vec<Option<i32>> = typed.into_iter().collect();
+            assert_eq!(expected, actual);
+        }
+    }
+
+    #[test]
     fn test_get_physical_indices() {
         // Test for logical lengths starting from 10 to 250 increasing by 10
         for logical_len in (0..250).step_by(10) {
@@ -872,23 +998,82 @@ mod tests {
             assert_eq!(logical_indices.len(), physical_indices.len());
 
             // check value in logical index in the input_array matches physical index in typed_run_array
-            logical_indices
+            compare_logical_and_physical_indices(
+                &logical_indices,
+                &input_array,
+                &physical_indices,
+                physical_values_array,
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_physical_indices_sliced() {
+        let total_len = 80;
+        let input_array = build_input_array(total_len);
+
+        // Encode the input_array to run array
+        let mut builder =
+            PrimitiveRunBuilder::<Int16Type, Int32Type>::with_capacity(input_array.len());
+        builder.extend(input_array.iter().copied());
+        let run_array = builder.finish();
+        let physical_values_array = as_primitive_array::<Int32Type>(run_array.values());
+
+        // test for all slice lengths.
+        for slice_len in 1..=total_len {
+            // create an array consisting of all the indices repeated twice and shuffled.
+            let mut logical_indices: Vec<u32> = (0_u32..(slice_len as u32)).collect();
+            // add same indices once more
+            logical_indices.append(&mut logical_indices.clone());
+            let mut rng = thread_rng();
+            logical_indices.shuffle(&mut rng);
+
+            // test for offset = 0 and slice length = slice_len
+            // slice the input array using which the run array was built.
+            let sliced_input_array: Vec<Option<i32>> =
+                input_array.iter().take(slice_len).map(|f| *f).collect();
+
+            // slice the run array
+            let sliced_run_array: RunArray<Int16Type> =
+                run_array.slice(0, slice_len).into_data().into();
+
+            // Get physical indices.
+            let physical_indices = sliced_run_array
+                .get_physical_indices(&logical_indices)
+                .unwrap();
+
+            compare_logical_and_physical_indices(
+                &logical_indices,
+                &sliced_input_array,
+                &physical_indices,
+                physical_values_array,
+            );
+
+            // test for offset = total_len - slice_len and slice length = slice_len
+            // slice the input array using which the run array was built.
+            let sliced_input_array: Vec<Option<i32>> = input_array
                 .iter()
-                .map(|f| f.as_usize())
-                .zip(physical_indices.iter())
-                .for_each(|(logical_ix, physical_ix)| {
-                    let expected = input_array[logical_ix];
-                    match expected {
-                        Some(val) => {
-                            assert!(physical_values_array.is_valid(*physical_ix));
-                            let actual = physical_values_array.value(*physical_ix);
-                            assert_eq!(val, actual);
-                        }
-                        None => {
-                            assert!(physical_values_array.is_null(*physical_ix))
-                        }
-                    };
-                });
+                .skip(total_len - slice_len)
+                .map(|f| *f)
+                .collect();
+
+            // slice the run array
+            let sliced_run_array: RunArray<Int16Type> = run_array
+                .slice(total_len - slice_len, slice_len)
+                .into_data()
+                .into();
+
+            // Get physical indices
+            let physical_indices = sliced_run_array
+                .get_physical_indices(&logical_indices)
+                .unwrap();
+
+            compare_logical_and_physical_indices(
+                &logical_indices,
+                &sliced_input_array,
+                &physical_indices,
+                physical_values_array,
+            );
         }
     }
 }

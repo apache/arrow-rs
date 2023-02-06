@@ -259,20 +259,6 @@ harness = false
 required-features = ["test_utils"]
 
 [[bench]]
-name = "string_run_iterator"
-harness = false
-
-[[bench]]
-name = "primitive_run_accessor"
-harness = false
-required-features = ["test_utils"]
-
-[[bench]]
-name = "primitive_run_take"
-harness = false
-required-features = ["test_utils"]
-
-[[bench]]
 name = "substring_kernels"
 harness = false
 required-features = ["test_utils"]

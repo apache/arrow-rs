@@ -1244,6 +1244,8 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 
 #[cfg(test)]
 mod tests {
+    use crate::writer::unslice_run_array;
+
     use super::*;
 
     use arrow_array::builder::{PrimitiveRunBuilder, UnionBuilder};
@@ -1578,9 +1580,11 @@ mod tests {
     }
 
     #[test]
-    fn test_roundtrip_stream_run_array() {
-        let run_array_1: Int32RunArray =
-            vec!["a", "a", "b", "c", "c"].into_iter().collect();
+    fn test_roundtrip_stream_run_array_sliced() {
+        let run_array_1: Int32RunArray = vec!["a", "a", "a", "b", "b", "c", "c", "c"]
+            .into_iter()
+            .collect();
+        let run_array_1_sliced = run_array_1.slice(2, 5);
 
         let run_array_2_inupt = vec![Some(1_i32), None, None, Some(2), Some(2)];
         let mut run_array_2_builder = PrimitiveRunBuilder::<Int16Type, Int32Type>::new();
@@ -1588,16 +1592,28 @@ mod tests {
         let run_array_2 = run_array_2_builder.finish();
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new("run_array_1", run_array_1.data_type().clone(), false),
+            Field::new(
+                "run_array_1_sliced",
+                run_array_1_sliced.data_type().clone(),
+                false,
+            ),
             Field::new("run_array_2", run_array_2.data_type().clone(), false),
         ]));
         let input_batch = RecordBatch::try_new(
             schema,
-            vec![Arc::new(run_array_1), Arc::new(run_array_2)],
+            vec![Arc::new(run_array_1_sliced.clone()), Arc::new(run_array_2)],
         )
         .unwrap();
         let output_batch = roundtrip_ipc_stream(&input_batch);
-        assert_eq!(input_batch, output_batch);
+
+        // As partial comparison not yet supported for run arrays, the sliced run array
+        // has to be unsliced before comparing with the output. the second run array
+        // can be compared as such.
+        assert_eq!(input_batch.column(1), output_batch.column(1));
+
+        let run_array_1_unsliced =
+            unslice_run_array(run_array_1_sliced.into_data()).unwrap();
+        assert_eq!(run_array_1_unsliced, output_batch.column(0).into_data());
     }
 
     #[test]
