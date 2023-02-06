@@ -35,15 +35,14 @@
 //! assert_eq!(7.0, c.value(2));
 //! ```
 
-use chrono::{DateTime, NaiveDateTime, NaiveTime, Timelike};
+use chrono::{NaiveTime, Timelike};
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use crate::display::{array_value_to_string, lexical_to_string};
+use crate::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use crate::parse::string_to_timestamp_nanos;
 use arrow_array::{
-    builder::*, cast::*, iterator::ArrayIter, temporal_conversions::*, timezone::Tz,
-    types::*, *,
+    builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *,
 };
 use arrow_buffer::{i256, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayData;
@@ -1152,75 +1151,12 @@ pub fn cast_with_options(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
-        (_, Utf8) => match from_type {
-            LargeUtf8 => cast_byte_container::<LargeUtf8Type, Utf8Type, str>(array),
-            UInt8 => cast_numeric_to_string::<UInt8Type, i32>(array),
-            UInt16 => cast_numeric_to_string::<UInt16Type, i32>(array),
-            UInt32 => cast_numeric_to_string::<UInt32Type, i32>(array),
-            UInt64 => cast_numeric_to_string::<UInt64Type, i32>(array),
-            Int8 => cast_numeric_to_string::<Int8Type, i32>(array),
-            Int16 => cast_numeric_to_string::<Int16Type, i32>(array),
-            Int32 => cast_numeric_to_string::<Int32Type, i32>(array),
-            Int64 => cast_numeric_to_string::<Int64Type, i32>(array),
-            Float32 => cast_numeric_to_string::<Float32Type, i32>(array),
-            Float64 => cast_numeric_to_string::<Float64Type, i32>(array),
-            Timestamp(TimeUnit::Nanosecond, tz) => cast_timestamp_to_string::<
-                TimestampNanosecondType,
-                i32,
-            >(array, tz.as_ref()),
-            Timestamp(TimeUnit::Microsecond, tz) => cast_timestamp_to_string::<
-                TimestampMicrosecondType,
-                i32,
-            >(array, tz.as_ref()),
-            Timestamp(TimeUnit::Millisecond, tz) => cast_timestamp_to_string::<
-                TimestampMillisecondType,
-                i32,
-            >(array, tz.as_ref()),
-            Timestamp(TimeUnit::Second, tz) => {
-                cast_timestamp_to_string::<TimestampSecondType, i32>(array, tz.as_ref())
-            }
-            Date32 => cast_date32_to_string::<i32>(array),
-            Date64 => cast_date64_to_string::<i32>(array),
-            Binary => cast_binary_to_string::<i32>(array, cast_options),
-            LargeBinary => cast_binary_to_generic_string::<i64, i32>(array, cast_options),
-            _ => Err(ArrowError::CastError(format!(
-                "Casting from {from_type:?} to {to_type:?} not supported",
-            ))),
-        },
-        (_, LargeUtf8) => match from_type {
-            UInt8 => cast_numeric_to_string::<UInt8Type, i64>(array),
-            UInt16 => cast_numeric_to_string::<UInt16Type, i64>(array),
-            UInt32 => cast_numeric_to_string::<UInt32Type, i64>(array),
-            UInt64 => cast_numeric_to_string::<UInt64Type, i64>(array),
-            Int8 => cast_numeric_to_string::<Int8Type, i64>(array),
-            Int16 => cast_numeric_to_string::<Int16Type, i64>(array),
-            Int32 => cast_numeric_to_string::<Int32Type, i64>(array),
-            Int64 => cast_numeric_to_string::<Int64Type, i64>(array),
-            Float32 => cast_numeric_to_string::<Float32Type, i64>(array),
-            Float64 => cast_numeric_to_string::<Float64Type, i64>(array),
-            Timestamp(TimeUnit::Nanosecond, tz) => cast_timestamp_to_string::<
-                TimestampNanosecondType,
-                i64,
-            >(array, tz.as_ref()),
-            Timestamp(TimeUnit::Microsecond, tz) => cast_timestamp_to_string::<
-                TimestampMicrosecondType,
-                i64,
-            >(array, tz.as_ref()),
-            Timestamp(TimeUnit::Millisecond, tz) => cast_timestamp_to_string::<
-                TimestampMillisecondType,
-                i64,
-            >(array, tz.as_ref()),
-            Timestamp(TimeUnit::Second, tz) => {
-                cast_timestamp_to_string::<TimestampSecondType, i64>(array, tz.as_ref())
-            }
-            Date32 => cast_date32_to_string::<i64>(array),
-            Date64 => cast_date64_to_string::<i64>(array),
-            Binary => cast_binary_to_generic_string::<i32, i64>(array, cast_options),
-            LargeBinary => cast_binary_to_string::<i64>(array, cast_options),
-            _ => Err(ArrowError::CastError(format!(
-                "Casting from {from_type:?} to {to_type:?} not supported",
-            ))),
-        },
+        (Binary, Utf8) => cast_binary_to_string::<i32>(array, cast_options),
+        (LargeBinary, LargeUtf8) => cast_binary_to_string::<i64>(array, cast_options),
+        (LargeBinary, Utf8) => cast_binary_to_generic_string::<i64, i32>(array, cast_options),
+        (Binary, LargeUtf8) => cast_binary_to_generic_string::<i32, i64>(array, cast_options),
+        (_, LargeUtf8) => value_to_string::<i64>(array),
+        (_, Utf8) => value_to_string::<i32>(array),
         (LargeUtf8, _) => match to_type {
             UInt8 => cast_string_to_numeric::<UInt8Type, i64>(array, cast_options),
             UInt16 => cast_string_to_numeric::<UInt16Type, i64>(array, cast_options),
@@ -2171,170 +2107,23 @@ where
     from.unary_opt::<_, R>(num::cast::cast::<T::Native, R::Native>)
 }
 
-fn as_time_with_string_op<
-    A: ArrayAccessor<Item = T::Native>,
-    OffsetSize,
-    T: ArrowTemporalType,
-    F,
->(
-    iter: ArrayIter<A>,
-    mut builder: GenericStringBuilder<OffsetSize>,
-    op: F,
-) -> ArrayRef
-where
-    OffsetSize: OffsetSizeTrait,
-    F: Fn(NaiveDateTime) -> String,
-    i64: From<T::Native>,
-{
-    iter.into_iter().for_each(|value| {
-        if let Some(value) = value {
-            match as_datetime::<T>(<i64 as From<_>>::from(value)) {
-                Some(dt) => builder.append_value(op(dt)),
-                None => builder.append_null(),
+fn value_to_string<O: OffsetSizeTrait>(
+    array: &dyn Array,
+) -> Result<ArrayRef, ArrowError> {
+    let mut builder = GenericStringBuilder::<O>::new();
+    let options = FormatOptions::default();
+    let formatter = ArrayFormatter::try_new(array, &options)?;
+    let data = array.data();
+    for i in 0..data.len() {
+        match data.is_null(i) {
+            true => builder.append_null(),
+            false => {
+                formatter.value(i).write(&mut builder)?;
+                builder.append_value("");
             }
-        } else {
-            builder.append_null();
-        }
-    });
-
-    Arc::new(builder.finish())
-}
-
-fn extract_component_from_datetime_array<
-    A: ArrayAccessor<Item = T::Native>,
-    OffsetSize,
-    T: ArrowTemporalType,
-    F,
->(
-    iter: ArrayIter<A>,
-    mut builder: GenericStringBuilder<OffsetSize>,
-    tz: &str,
-    op: F,
-) -> Result<ArrayRef, ArrowError>
-where
-    OffsetSize: OffsetSizeTrait,
-    F: Fn(DateTime<Tz>) -> String,
-    i64: From<T::Native>,
-{
-    let tz: Tz = tz.parse()?;
-    for value in iter {
-        match value {
-            Some(value) => match as_datetime_with_timezone::<T>(value.into(), tz) {
-                Some(time) => builder.append_value(op(time)),
-                _ => {
-                    return Err(ArrowError::ComputeError(
-                        "Unable to read value as datetime".to_string(),
-                    ));
-                }
-            },
-            None => builder.append_null(),
         }
     }
     Ok(Arc::new(builder.finish()))
-}
-
-/// Cast timestamp types to Utf8/LargeUtf8
-fn cast_timestamp_to_string<T, OffsetSize>(
-    array: &dyn Array,
-    tz: Option<&String>,
-) -> Result<ArrayRef, ArrowError>
-where
-    T: ArrowTemporalType + ArrowPrimitiveType,
-    i64: From<<T as ArrowPrimitiveType>::Native>,
-    OffsetSize: OffsetSizeTrait,
-{
-    let array = array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
-
-    let builder = GenericStringBuilder::<OffsetSize>::new();
-
-    if let Some(tz) = tz {
-        // The macro calls `as_datetime` on timestamp values of the array.
-        // After applying timezone offset on the datatime, calling `to_string` to get
-        // the strings.
-        let iter = ArrayIter::new(array);
-        extract_component_from_datetime_array::<_, OffsetSize, T, _>(
-            iter,
-            builder,
-            tz,
-            |t| t.to_string(),
-        )
-    } else {
-        // No timezone available. Calling `to_string` on the datatime value simply.
-        let iter = ArrayIter::new(array);
-        Ok(as_time_with_string_op::<_, OffsetSize, T, _>(
-            iter,
-            builder,
-            |t| t.to_string(),
-        ))
-    }
-}
-
-/// Cast date32 types to Utf8/LargeUtf8
-fn cast_date32_to_string<OffsetSize: OffsetSizeTrait>(
-    array: &dyn Array,
-) -> Result<ArrayRef, ArrowError> {
-    let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
-
-    Ok(Arc::new(
-        (0..array.len())
-            .map(|ix| {
-                if array.is_null(ix) {
-                    None
-                } else {
-                    array.value_as_date(ix).map(|v| v.to_string())
-                }
-            })
-            .collect::<GenericStringArray<OffsetSize>>(),
-    ))
-}
-
-/// Cast date64 types to Utf8/LargeUtf8
-fn cast_date64_to_string<OffsetSize: OffsetSizeTrait>(
-    array: &dyn Array,
-) -> Result<ArrayRef, ArrowError> {
-    let array = array.as_any().downcast_ref::<Date64Array>().unwrap();
-
-    Ok(Arc::new(
-        (0..array.len())
-            .map(|ix| {
-                if array.is_null(ix) {
-                    None
-                } else {
-                    array.value_as_datetime(ix).map(|v| v.to_string())
-                }
-            })
-            .collect::<GenericStringArray<OffsetSize>>(),
-    ))
-}
-
-/// Cast numeric types to Utf8
-fn cast_numeric_to_string<FROM, OffsetSize>(
-    array: &dyn Array,
-) -> Result<ArrayRef, ArrowError>
-where
-    FROM: ArrowPrimitiveType,
-    FROM::Native: lexical_core::ToLexical,
-    OffsetSize: OffsetSizeTrait,
-{
-    Ok(Arc::new(numeric_to_string_cast::<FROM, OffsetSize>(
-        array
-            .as_any()
-            .downcast_ref::<PrimitiveArray<FROM>>()
-            .unwrap(),
-    )))
-}
-
-fn numeric_to_string_cast<T, OffsetSize>(
-    from: &PrimitiveArray<T>,
-) -> GenericStringArray<OffsetSize>
-where
-    T: ArrowPrimitiveType + ArrowPrimitiveType,
-    T::Native: lexical_core::ToLexical,
-    OffsetSize: OffsetSizeTrait,
-{
-    from.iter()
-        .map(|maybe_value| maybe_value.map(lexical_to_string))
-        .collect()
 }
 
 /// Cast numeric types to Utf8
@@ -5521,8 +5310,8 @@ mod tests {
         let b = cast(&array, &DataType::Utf8).unwrap();
         let c = b.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(&DataType::Utf8, c.data_type());
-        assert_eq!("1997-05-19 00:00:00", c.value(0));
-        assert_eq!("2018-12-25 00:00:00", c.value(1));
+        assert_eq!("1997-05-19T00:00:00", c.value(0));
+        assert_eq!("2018-12-25T00:00:00", c.value(1));
     }
 
     #[test]
