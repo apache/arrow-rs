@@ -17,26 +17,8 @@
 
 use arrow::array::StringRunBuilder;
 use arrow::datatypes::Int32Type;
+use arrow::util::bench_util::create_string_array_for_runs;
 use criterion::{criterion_group, criterion_main, Criterion};
-use rand::{thread_rng, Rng};
-
-fn build_strings(
-    physical_array_len: usize,
-    logical_array_len: usize,
-    string_len: usize,
-) -> Vec<String> {
-    let mut rng = thread_rng();
-    let run_len = logical_array_len / physical_array_len;
-    let mut values: Vec<String> = (0..physical_array_len)
-        .map(|_| (0..string_len).map(|_| rng.gen::<char>()).collect())
-        .flat_map(|s| std::iter::repeat(s).take(run_len))
-        .collect();
-    while values.len() < logical_array_len {
-        let last_val = values[values.len() - 1].clone();
-        values.push(last_val);
-    }
-    values
-}
 
 fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("string_run_builder");
@@ -50,7 +32,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 ),
                 |b| {
                     let strings =
-                        build_strings(physical_array_len, logical_array_len, string_len);
+                    create_string_array_for_runs(physical_array_len, logical_array_len, string_len);
                     b.iter(|| {
                         let mut builder = StringRunBuilder::<Int32Type>::with_capacity(
                             physical_array_len,
