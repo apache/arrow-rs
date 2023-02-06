@@ -20,7 +20,6 @@
 //! record batch pretty printing.
 
 use std::fmt::Write;
-use std::sync::Arc;
 
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
@@ -387,7 +386,7 @@ macro_rules! make_string_from_duration {
 
 #[inline(always)]
 pub fn make_string_from_decimal(
-    column: &Arc<dyn Array>,
+    column: &dyn Array,
     row: usize,
 ) -> Result<String, ArrowError> {
     let array = column.as_any().downcast_ref::<Decimal128Array>().unwrap();
@@ -398,7 +397,7 @@ pub fn make_string_from_decimal(
 fn append_struct_field_string(
     target: &mut String,
     name: &str,
-    field_col: &Arc<dyn Array>,
+    field_col: &dyn Array,
     row: usize,
 ) -> Result<(), ArrowError> {
     target.push('"');
@@ -425,7 +424,7 @@ fn append_struct_field_string(
 
 fn append_map_field_string(
     target: &mut String,
-    field_col: &Arc<dyn Array>,
+    field_col: &dyn Array,
     row: usize,
 ) -> Result<(), ArrowError> {
     if field_col.is_null(row) {
@@ -451,7 +450,7 @@ fn append_map_field_string(
 /// Note this function is quite inefficient and is unlikely to be
 /// suitable for converting large arrays or record batches.
 fn array_value_to_string_internal(
-    column: &ArrayRef,
+    column: &dyn Array,
     col_idx: usize,
     row_idx: usize,
     format: Option<&str>,
@@ -722,7 +721,7 @@ fn array_value_to_string_internal(
 }
 
 pub fn temporal_array_value_to_string(
-    column: &ArrayRef,
+    column: &dyn Array,
     col_idx: usize,
     row_idx: usize,
     format: Option<&str>,
@@ -731,7 +730,7 @@ pub fn temporal_array_value_to_string(
 }
 
 pub fn array_value_to_string(
-    column: &ArrayRef,
+    column: &dyn Array,
     row_idx: usize,
 ) -> Result<String, ArrowError> {
     array_value_to_string_internal(column, 0, row_idx, None)
@@ -739,7 +738,7 @@ pub fn array_value_to_string(
 
 /// Converts the value of the union array at `row` to a String
 fn union_to_string(
-    column: &ArrayRef,
+    column: &dyn Array,
     row: usize,
     fields: &[Field],
     type_ids: &[i8],
@@ -773,7 +772,7 @@ fn union_to_string(
 }
 /// Converts the value of the dictionary array at `row` to a String
 fn dict_array_value_to_string<K: ArrowPrimitiveType>(
-    colum: &ArrayRef,
+    colum: &dyn Array,
     row: usize,
 ) -> Result<String, ArrowError> {
     let dict_array = colum.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
@@ -824,35 +823,30 @@ mod tests {
             &entry_offsets,
         )
         .unwrap();
-        let param = Arc::new(map_array) as ArrayRef;
         assert_eq!(
             "{\"d\": 30, \"e\": 40, \"f\": 50}",
-            array_value_to_string(&param, 1).unwrap()
+            array_value_to_string(&map_array, 1).unwrap()
         );
     }
 
     #[test]
     fn test_array_value_to_string_duration() {
-        let ns_array =
-            Arc::new(DurationNanosecondArray::from(vec![Some(1), None])) as ArrayRef;
+        let ns_array = DurationNanosecondArray::from(vec![Some(1), None]);
         assert_eq!(
             array_value_to_string(&ns_array, 0).unwrap(),
             "PT0.000000001S"
         );
         assert_eq!(array_value_to_string(&ns_array, 1).unwrap(), "");
 
-        let us_array =
-            Arc::new(DurationMicrosecondArray::from(vec![Some(1), None])) as ArrayRef;
+        let us_array = DurationMicrosecondArray::from(vec![Some(1), None]);
         assert_eq!(array_value_to_string(&us_array, 0).unwrap(), "PT0.000001S");
         assert_eq!(array_value_to_string(&us_array, 1).unwrap(), "");
 
-        let ms_array =
-            Arc::new(DurationMillisecondArray::from(vec![Some(1), None])) as ArrayRef;
+        let ms_array = DurationMillisecondArray::from(vec![Some(1), None]);
         assert_eq!(array_value_to_string(&ms_array, 0).unwrap(), "PT0.001S");
         assert_eq!(array_value_to_string(&ms_array, 1).unwrap(), "");
 
-        let s_array =
-            Arc::new(DurationSecondArray::from(vec![Some(1), None])) as ArrayRef;
+        let s_array = DurationSecondArray::from(vec![Some(1), None]);
         assert_eq!(array_value_to_string(&s_array, 0).unwrap(), "PT1S");
         assert_eq!(array_value_to_string(&s_array, 1).unwrap(), "");
     }
