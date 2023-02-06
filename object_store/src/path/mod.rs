@@ -162,13 +162,6 @@ impl Path {
         })
     }
 
-    /// Parse a url encoded string as a [`Path`], returning a [`Error`] if invalid,
-    /// as defined on the docstring for [`Path`]
-    pub fn from_url_path(path: impl AsRef<str>) -> Result<Self, Error> {
-        let decoded_path = percent_encoding::percent_decode_str(path.as_ref()).decode_utf8_lossy();
-        Self::parse(decoded_path.as_ref())
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     /// Convert a filesystem path to a [`Path`] relative to the filesystem root
     ///
@@ -217,6 +210,12 @@ impl Path {
         };
 
         // Reverse any percent encoding performed by conversion to URL
+        Self::from_url_path(path)
+    }
+
+    /// Parse a url encoded string as a [`Path`], returning a [`Error`] if invalid,
+    /// as defined on the docstring for [`Path`]
+    pub fn from_url_path(path: &str) -> Result<Self, Error> {
         let decoded = percent_decode(path.as_bytes())
             .decode_utf8()
             .context(NonUnicodeSnafu { path })?;
@@ -560,11 +559,19 @@ mod tests {
 
     #[test]
     fn from_url_path() {
-        let a = Path::from_url_path("foo%20bar/baz").unwrap();
-        assert_eq!(a.raw, "foo bar/baz");
+        let a = Path::from_url_path("foo%20bar").unwrap();
+        let b = Path::from_url_path("foo/%2E%2E/bar").unwrap_err();
+        let c = Path::from_url_path("foo%2F%252E%252E%2Fbar").unwrap();
+        let d = Path::from_url_path("foo/%252E%252E/bar").unwrap();
+        let e = Path::from_url_path("%48%45%4C%4C%4F").unwrap();
+        let f = Path::from_url_path("foo/%FF/as").unwrap_err();
 
-        let b = Path::from_url_path("bar/baz").unwrap();
-        assert_eq!(b.raw, "bar/baz");
+        assert_eq!(a.raw, "foo bar");
+        assert!(matches!(b, Error::BadSegment { .. }));
+        assert_eq!(c.raw, "foo/%2E%2E/bar");
+        assert_eq!(d.raw, "foo/%2E%2E/bar");
+        assert_eq!(e.raw, "HELLO");
+        assert!(matches!(f, Error::NonUnicode { .. }));
     }
 
     #[test]
