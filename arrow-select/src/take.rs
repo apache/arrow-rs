@@ -19,13 +19,15 @@
 
 use std::sync::Arc;
 
-use arrow_array::types::*;
 use arrow_array::*;
+use arrow_array::{builder::PrimitiveRunBuilder, types::*};
 use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
-use arrow_array::cast::{as_generic_binary_array, as_largestring_array, as_string_array};
+use arrow_array::cast::{
+    as_generic_binary_array, as_largestring_array, as_primitive_array, as_string_array,
+};
 use num::{ToPrimitive, Zero};
 
 /// Take elements by index from [Array], creating a new [Array] from those indexes.
@@ -200,6 +202,10 @@ where
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
             values => Ok(Arc::new(take_dict(values, indices)?)),
             t => unimplemented!("Take not supported for dictionary type {:?}", t)
+        }
+        DataType::RunEndEncoded(_, _) => downcast_run_array! {
+            values => Ok(Arc::new(take_run(values, indices)?)),
+            t => unimplemented!("Take not supported for run type {:?}", t)
         }
         DataType::Binary => {
             Ok(Arc::new(take_bytes(as_generic_binary_array::<i32>(values), indices)?))
@@ -808,6 +814,72 @@ where
     };
 
     Ok(DictionaryArray::<T>::from(data))
+}
+
+macro_rules! primitive_run_take {
+    ($t:ty, $o:ty, $indices:ident, $value:ident) => {
+        take_primitive_run_values::<$o, $t>(
+            $indices,
+            as_primitive_array::<$t>($value.values()),
+        )
+    };
+}
+
+/// `take` implementation for run arrays
+///
+/// Finds physical indices for the given logical indices and builds output run array
+/// by taking values in the input run array at the physical indices.
+/// for e.g. an input `RunArray{ run_ends = [2,4,6,8], values=[1,2,1,2] }` and `indices=[2,7]`
+/// would be converted to `physical_indices=[1,3]` which will be used to build
+/// output `RunArray{ run_ends=[2], values=[2] }`
+
+fn take_run<T, I>(
+    run_array: &RunArray<T>,
+    logical_indices: &PrimitiveArray<I>,
+) -> Result<RunArray<T>, ArrowError>
+where
+    T: RunEndIndexType,
+    T::Native: num::Num,
+    I: ArrowPrimitiveType,
+    I::Native: ToPrimitive,
+{
+    match run_array.data_type() {
+        DataType::RunEndEncoded(_, fl) => {
+            let physical_indices =
+                run_array.get_physical_indices(logical_indices.values())?;
+
+            downcast_primitive! {
+                fl.data_type() => (primitive_run_take, T, physical_indices, run_array),
+                dt => Err(ArrowError::NotYetImplemented(format!("take_run is not implemented for {dt:?}")))
+            }
+        }
+        dt => Err(ArrowError::InvalidArgumentError(format!(
+            "Expected DataType::RunEndEncoded found {dt:?}"
+        ))),
+    }
+}
+
+// Builds a `RunArray` by taking values from given array for the given indices.
+fn take_primitive_run_values<R, V>(
+    physical_indices: Vec<usize>,
+    values: &PrimitiveArray<V>,
+) -> Result<RunArray<R>, ArrowError>
+where
+    R: RunEndIndexType,
+    V: ArrowPrimitiveType,
+{
+    let mut builder = PrimitiveRunBuilder::<R, V>::new();
+    let values_len = values.len();
+    for ix in physical_indices {
+        if ix >= values_len {
+            return Err(ArrowError::InvalidArgumentError("The requested index {ix} is out of bounds for values array with length {values_len}".to_string()));
+        } else if values.is_null(ix) {
+            builder.append_null()
+        } else {
+            builder.append_value(values.value(ix))
+        }
+    }
+    Ok(builder.finish())
 }
 
 /// Takes/filters a list array's inner data using the offsets of the list array.
@@ -2084,6 +2156,28 @@ mod tests {
         assert_eq!(indexed, Int64Array::from(vec![5, 6, 7, 8, 9, 0, 1]));
         assert_eq!(offsets, vec![0, 5, 7]);
         assert_eq!(null_buf.as_slice(), &[0b11111111]);
+    }
+
+    #[test]
+    fn test_take_runs() {
+        let logical_array: Vec<i32> = vec![1_i32, 1, 2, 2, 1, 1, 2, 2, 1, 1, 2, 2];
+
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend(logical_array.into_iter().map(Some));
+        let run_array = builder.finish();
+
+        let take_indices: PrimitiveArray<Int32Type> =
+            vec![2, 7, 10].into_iter().collect();
+
+        let take_out = take_run(&run_array, &take_indices).unwrap();
+
+        assert_eq!(take_out.len(), 3);
+
+        assert_eq!(take_out.run_ends().len(), 1);
+        assert_eq!(take_out.run_ends().value(0), 3);
+
+        let take_out_values = as_primitive_array::<Int32Type>(take_out.values());
+        assert_eq!(take_out_values.value(0), 2);
     }
 
     #[test]

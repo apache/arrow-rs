@@ -1019,6 +1019,14 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
         Self::from(data).with_timezone_opt(timezone)
     }
 
+    /// Returns the timezone of this array if any
+    pub fn timezone(&self) -> Option<&str> {
+        match self.data_type() {
+            DataType::Timestamp(_, tz) => tz.as_deref(),
+            _ => unreachable!(),
+        }
+    }
+
     /// Construct a timestamp array with new timezone
     pub fn with_timezone(&self, timezone: impl Into<String>) -> Self {
         self.with_timezone_opt(Some(timezone.into()))
@@ -2213,5 +2221,14 @@ mod tests {
     fn test_invalid_interval_type() {
         let array = IntervalDayTimeArray::from(vec![1, 2, 3]);
         let _ = IntervalMonthDayNanoArray::from(array.into_data());
+    }
+
+    #[test]
+    fn test_timezone() {
+        let array = TimestampNanosecondArray::from_iter_values([1, 2]);
+        assert_eq!(array.timezone(), None);
+
+        let array = array.with_timezone("+02:00");
+        assert_eq!(array.timezone(), Some("+02:00"));
     }
 }
