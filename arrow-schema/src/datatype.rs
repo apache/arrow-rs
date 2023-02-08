@@ -410,6 +410,39 @@ impl DataType {
         }
     }
 
+    /// Returns the bit width of this type if it is a primitive type
+    ///
+    /// Returns `None` if not a primitive type
+    #[inline]
+    pub fn primitive_width(&self) -> Option<usize> {
+        match self {
+            DataType::Null => None,
+            DataType::Boolean => None,
+            DataType::Int8 | DataType::UInt8 => Some(1),
+            DataType::Int16 | DataType::UInt16 | DataType::Float16 => Some(2),
+            DataType::Int32 | DataType::UInt32 | DataType::Float32 => Some(4),
+            DataType::Int64 | DataType::UInt64 | DataType::Float64 => Some(8),
+            DataType::Timestamp(_, _) => Some(8),
+            DataType::Date32 | DataType::Time32(_) => Some(4),
+            DataType::Date64 | DataType::Time64(_) => Some(8),
+            DataType::Duration(_) => Some(8),
+            DataType::Interval(IntervalUnit::YearMonth) => Some(4),
+            DataType::Interval(IntervalUnit::DayTime) => Some(8),
+            DataType::Interval(IntervalUnit::MonthDayNano) => Some(16),
+            DataType::Decimal128(_, _) => Some(16),
+            DataType::Decimal256(_, _) => Some(32),
+            DataType::Utf8 | DataType::LargeUtf8 => None,
+            DataType::Binary | DataType::LargeBinary => None,
+            DataType::FixedSizeBinary(_) => None,
+            DataType::List(_) | DataType::LargeList(_) | DataType::Map(_, _) => None,
+            DataType::FixedSizeList(_, _) => None,
+            DataType::Struct(_) => None,
+            DataType::Union(_, _, _) => None,
+            DataType::Dictionary(_, _) => None,
+            DataType::RunEndEncoded(_, _) => None,
+        }
+    }
+
     /// Return size of this instance in bytes.
     ///
     /// Includes the size of `Self`.
