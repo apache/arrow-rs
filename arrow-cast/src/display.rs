@@ -26,6 +26,7 @@ use arrow_array::cast::*;
 use arrow_array::temporal_conversions::*;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
+use arrow_array::ArrayRef;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
@@ -135,7 +136,8 @@ pub struct ValueFormatter<'a> {
 impl<'a> ValueFormatter<'a> {
     /// Writes this value to the provided [`Write`]
     ///
-    /// Note: this ignores [`FormatOptions::with_display_error`]
+    /// Note: this ignores [`FormatOptions::with_display_error`] and
+    /// will return an error on formatting issue
     pub fn write(&self, s: &mut dyn Write) -> Result<(), ArrowError> {
         match self.formatter.format.write(self.idx, s) {
             Ok(_) => Ok(()),
@@ -167,6 +169,57 @@ impl<'a> Display for ValueFormatter<'a> {
 }
 
 /// A string formatter for an [`Array`]
+///
+/// This can be used with [`std::write`] to write type-erased `dyn Array`
+///
+/// ```
+/// # use std::fmt::{Display, Formatter, Write};
+/// # use arrow_array::{Array, ArrayRef, Int32Array};
+/// # use arrow_cast::display::{ArrayFormatter, FormatOptions};
+/// # use arrow_schema::ArrowError;
+/// struct MyContainer {
+///     values: ArrayRef,
+/// }
+///
+/// impl Display for MyContainer {
+///     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+///         let options = FormatOptions::default();
+///         let formatter = ArrayFormatter::try_new(self.values.as_ref(), &options)
+///             .map_err(|_| std::fmt::Error)?;
+///
+///         let mut iter = 0..self.values.len();
+///         if let Some(idx) = iter.next() {
+///             write!(f, "{}", formatter.value(idx))?;
+///         }
+///         for idx in iter {
+///             write!(f, ", {}", formatter.value(idx))?;
+///         }
+///         Ok(())
+///     }
+/// }
+/// ```
+///
+/// [`ValueFormatter::write`] can also be used to get a semantic error, instead of the
+/// opaque [`std::fmt::Error`]
+///
+/// ```
+/// # use std::fmt::Write;
+/// # use arrow_array::Array;
+/// # use arrow_cast::display::{ArrayFormatter, FormatOptions};
+/// # use arrow_schema::ArrowError;
+/// fn format_array(
+///     f: &mut dyn Write,
+///     array: &dyn Array,
+///     options: &FormatOptions,
+/// ) -> Result<(), ArrowError> {
+///     let formatter = ArrayFormatter::try_new(array, options)?;
+///     for i in 0..array.len() {
+///         formatter.value(i).write(f)?
+///     }
+///     Ok(())
+/// }
+/// ```
+///
 pub struct ArrayFormatter<'a> {
     format: Box<dyn DisplayIndex + 'a>,
     safe: bool,
@@ -780,6 +833,8 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
 ///
 /// Note this function is quite inefficient and is unlikely to be
 /// suitable for converting large arrays or record batches.
+///
+/// Please see [`ArrayFormatter`] for a more performant interface
 pub fn array_value_to_string(
     column: &ArrayRef,
     row: usize,

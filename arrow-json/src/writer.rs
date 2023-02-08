@@ -299,7 +299,6 @@ fn set_column_for_json_rows(
         | DataType::Time32(_)
         | DataType::Time64(_)
         | DataType::Duration(_) => {
-            // TODO: Set options
             let options = FormatOptions::default();
             let formatter = ArrayFormatter::try_new(array.as_ref(), &options)?;
             let data = array.data();
