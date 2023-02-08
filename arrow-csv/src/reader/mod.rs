@@ -438,10 +438,10 @@ impl<R: BufRead> BufReader<R> {
         loop {
             let buf = self.reader.fill_buf()?;
             let decoded = self.decoder.decode(buf)?;
-            if decoded == 0 {
+            self.reader.consume(decoded);
+            if decoded == 0 || self.decoder.capacity() == 0 {
                 break;
             }
-            self.reader.consume(decoded);
         }
 
         self.decoder.flush()
@@ -573,6 +573,11 @@ impl Decoder {
         )?;
         self.line_number += rows.len();
         Ok(Some(batch))
+    }
+
+    /// Returns the number of records that can be read before requiring a call to [`Self::flush`]
+    pub fn capacity(&self) -> usize {
+        self.batch_size - self.record_decoder.len()
     }
 }
 
