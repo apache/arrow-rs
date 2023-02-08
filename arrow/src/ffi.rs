@@ -718,6 +718,10 @@ pub trait ArrowArrayRef {
             dt => dt,
         };
 
+        // `ffi::ArrowArray` records array offset, we need to add it back to the
+        // buffer length to get the actual buffer length.
+        let length = self.array().length as usize + self.array().offset as usize;
+
         // Inner type is not important for buffer length.
         Ok(match (&data_type, i) {
             (DataType::Utf8, 1)
@@ -730,7 +734,7 @@ pub trait ArrowArrayRef {
                 // the len of the offset buffer (buffer 1) equals length + 1
                 let bits = bit_width(data_type, i)?;
                 debug_assert_eq!(bits % 8, 0);
-                (self.array().length as usize + 1) * (bits / 8)
+                (length + 1) * (bits / 8)
             }
             (DataType::Utf8, 2) | (DataType::Binary, 2) => {
                 // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
@@ -759,7 +763,7 @@ pub trait ArrowArrayRef {
             // buffer len of primitive types
             _ => {
                 let bits = bit_width(data_type, i)?;
-                bit_util::ceil(self.array().length as usize * bits, 8)
+                bit_util::ceil(length * bits, 8)
             }
         })
     }
@@ -769,7 +773,10 @@ pub trait ArrowArrayRef {
     /// The C Data interface's null buffer is part of the array of buffers.
     fn null_bit_buffer(&self) -> Option<Buffer> {
         // similar to `self.buffer_len(0)`, but without `Result`.
-        let buffer_len = bit_util::ceil(self.array().length as usize, 8);
+        // `ffi::ArrowArray` records array offset, we need to add it back to the
+        // buffer length to get the actual buffer length.
+        let length = self.array().length as usize + self.array().offset as usize;
+        let buffer_len = bit_util::ceil(length, 8);
 
         unsafe { create_buffer(self.owner().clone(), self.array(), 0, buffer_len) }
     }
@@ -977,6 +984,33 @@ mod tests {
 
         // verify
         assert_eq!(array, Int32Array::from(vec![2, 4, 6]));
+
+        // (drop/release)
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_with_offset() -> Result<()> {
+        // create an array natively
+        let array = Int32Array::from(vec![Some(1), Some(2), None, Some(3), None]);
+
+        let array = array.slice(1, 2);
+
+        // export it
+        let array = ArrowArray::try_from(array.into_data())?;
+
+        // (simulate consumer) import it
+        let data = ArrayData::try_from(array)?;
+        let array = make_array(data);
+
+        // perform some operation
+        let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(array, &Int32Array::from(vec![Some(2), None]));
+
+        let array = kernels::arithmetic::add(array, array).unwrap();
+
+        // verify
+        assert_eq!(array, Int32Array::from(vec![Some(4), None]));
 
         // (drop/release)
         Ok(())
