@@ -1145,10 +1145,7 @@ pub fn cast_with_options(
             Time64(TimeUnit::Nanosecond) => {
                 cast_string_to_time64nanosecond::<i32>(array, cast_options)
             }
-            Timestamp(TimeUnit::Nanosecond, None) => {
-                cast_string_to_timestamp_ns::<i32>(array, cast_options)
-            }
-            Timestamp(TimeUnit::Nanosecond, tz) if *tz == Some("+00:00".to_owned()) => {
+            Timestamp(TimeUnit::Nanosecond, _) => {
                 cast_string_to_timestamp_ns::<i32>(array, cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
@@ -1257,7 +1254,7 @@ pub fn cast_with_options(
             Time64(TimeUnit::Nanosecond) => {
                 cast_string_to_time64nanosecond::<i64>(array, cast_options)
             }
-            Timestamp(TimeUnit::Nanosecond, None) => {
+            Timestamp(TimeUnit::Nanosecond, _) => {
                 cast_string_to_timestamp_ns::<i64>(array, cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
@@ -7839,38 +7836,39 @@ mod tests {
 
     #[test]
     fn test_cast_utf8_to_timestamp() {
-        let valid = StringArray::from(vec![
-            "2023-01-01 04:05:06.789000-08:00",
-            "2023-01-01 04:05:06.789000-07:00",
-            "2023-01-01 04:05:06.789 -0800",
-            "2023-01-01 04:05:06.789 -08:00",
-            "2023-01-01 040506 +0730",
-            "2023-01-01 040506 +07:30",
-            "2023-01-01 04:05:06.789",
-            "2023-01-01 04:05:06",
-            "2023-01-01",
-        ]);
+        fn test_tz(tz: String) {
+            let valid = StringArray::from(vec![
+                "2023-01-01 04:05:06.789000-08:00",
+                "2023-01-01 04:05:06.789000-07:00",
+                "2023-01-01 04:05:06.789 -0800",
+                "2023-01-01 04:05:06.789 -08:00",
+                "2023-01-01 040506 +0730",
+                "2023-01-01 040506 +07:30",
+                "2023-01-01 04:05:06.789",
+                "2023-01-01 04:05:06",
+                "2023-01-01",
+            ]);
 
-        let array = Arc::new(valid) as ArrayRef;
-        let b = cast(
-            &array,
-            &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_string())),
-        )
-        .unwrap();
-        dbg!(&array);
-        dbg!(&b);
-        let c = b
-            .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
-            .unwrap();
-        assert_eq!(1672574706789000000, c.value(0));
-        assert_eq!(1672571106789000000, c.value(1));
-        assert_eq!(1672574706789000000, c.value(2));
-        assert_eq!(1672574706789000000, c.value(3));
-        assert_eq!(1672518906000000000, c.value(4));
-        assert_eq!(1672518906000000000, c.value(5));
-        assert_eq!(1672545906789000000, c.value(6));
-        assert_eq!(1672545906000000000, c.value(7));
-        assert_eq!(1672531200000000000, c.value(8));
+            let array = Arc::new(valid) as ArrayRef;
+            let b = cast(&array, &DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)))
+                .unwrap();
+
+            let c = b
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .unwrap();
+            assert_eq!(1672574706789000000, c.value(0));
+            assert_eq!(1672571106789000000, c.value(1));
+            assert_eq!(1672574706789000000, c.value(2));
+            assert_eq!(1672574706789000000, c.value(3));
+            assert_eq!(1672518906000000000, c.value(4));
+            assert_eq!(1672518906000000000, c.value(5));
+            assert_eq!(1672545906789000000, c.value(6));
+            assert_eq!(1672545906000000000, c.value(7));
+            assert_eq!(1672531200000000000, c.value(8));
+        }
+
+        test_tz("+00:00".to_owned());
+        test_tz("+02:00".to_owned());
     }
 }

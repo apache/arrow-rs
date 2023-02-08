@@ -69,13 +69,13 @@ use chrono::prelude::*;
 /// timestamp will be interpreted as though it were
 /// `1997-01-31T09:26:56.123-05:00`
 ///
-/// Some formats that supported by PG https://www.postgresql.org/docs/current/datatype-datetime.html#DATATYPE-DATETIME-TIME-TABLE
+/// Some formats that supported by PostgresSql <https://www.postgresql.org/docs/current/datatype-datetime.html#DATATYPE-DATETIME-TIME-TABLE>
 /// still not supported by chrono, like
-/// "2023-01-01 040506 America/Los_Angeles",
-/// "2023-01-01 04:05:06.789 +07:30:00",
-/// "2023-01-01 040506 +07:30:00",
-/// "2023-01-01 04:05:06.789 PST",
-/// "2023-01-01 04:05:06.789 -08",
+///     "2023-01-01 040506 America/Los_Angeles",
+///     "2023-01-01 04:05:06.789 +07:30:00",
+///     "2023-01-01 040506 +07:30:00",
+///     "2023-01-01 04:05:06.789 PST",
+///     "2023-01-01 04:05:06.789 -08",
 #[inline]
 pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     // Fast path:  RFC3339 timestamp (with a T)
