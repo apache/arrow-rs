@@ -667,7 +667,7 @@ impl ArrayData {
                             let i = i64::from_usize(len).expect("run overflow");
                             Buffer::from_slice_ref([i])
                         }
-                        _ => unreachable!(),
+                        dt => unreachable!("Invalid run ends data type {dt}"),
                     };
 
                     let builder = ArrayData::builder(r.data_type().clone())
