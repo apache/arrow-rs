@@ -652,9 +652,9 @@ mod tests {
     }
 
     fn compare_logical_and_physical_indices(
-        logical_indices: &Vec<u32>,
-        logical_array: &Vec<Option<i32>>,
-        physical_indices: &Vec<usize>,
+        logical_indices: &[u32],
+        logical_array: &[Option<i32>],
+        physical_indices: &[usize],
         physical_array: &PrimitiveArray<Int32Type>,
     ) {
         assert_eq!(logical_indices.len(), physical_indices.len());
@@ -946,7 +946,7 @@ mod tests {
                 .downcast::<PrimitiveArray<Int32Type>>()
                 .unwrap();
             let expected: Vec<Option<i32>> =
-                input_array.iter().take(slice_len).map(|f| *f).collect();
+                input_array.iter().take(slice_len).copied().collect();
             let actual: Vec<Option<i32>> = typed.into_iter().collect();
             assert_eq!(expected, actual);
 
@@ -964,7 +964,7 @@ mod tests {
             let expected: Vec<Option<i32>> = input_array
                 .iter()
                 .skip(total_len - slice_len)
-                .map(|f| *f)
+                .copied()
                 .collect();
             let actual: Vec<Option<i32>> = typed.into_iter().collect();
             assert_eq!(expected, actual);
@@ -1031,7 +1031,7 @@ mod tests {
             // test for offset = 0 and slice length = slice_len
             // slice the input array using which the run array was built.
             let sliced_input_array: Vec<Option<i32>> =
-                input_array.iter().take(slice_len).map(|f| *f).collect();
+                input_array.iter().take(slice_len).copied().collect();
 
             // slice the run array
             let sliced_run_array: RunArray<Int16Type> =
@@ -1054,7 +1054,7 @@ mod tests {
             let sliced_input_array: Vec<Option<i32>> = input_array
                 .iter()
                 .skip(total_len - slice_len)
-                .map(|f| *f)
+                .copied()
                 .collect();
 
             // slice the run array
