@@ -177,7 +177,7 @@ pub type Date32Array = PrimitiveArray<Date32Type>;
 /// A primitive array where each element is a 64-bit value
 /// representing the elapsed time since the UNIX epoch in milliseconds.
 ///
-/// This type is similar to the [`chrono::DateTime`] type and can hold
+/// This type is similar to the [`chrono::NaiveDateTime`] type and can hold
 /// values such as `2018-11-13T17:11:10.011`
 pub type Date64Array = PrimitiveArray<Date64Type>;
 
