@@ -93,7 +93,7 @@ fn test_export_csv_timestamps_using_rfc3339() {
 
     let mut sw = Vec::new();
     let mut writer = arrow_csv::WriterBuilder::new()
-        .with_rfc3339(true)
+        .with_rfc3339()
         .build(&mut sw);
     let batches = vec![&batch];
     for batch in batches {

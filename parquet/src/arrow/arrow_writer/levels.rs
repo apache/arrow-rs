@@ -1360,8 +1360,8 @@ mod tests {
             r#""#.to_string(),
             r#""#.to_string(),
             r#"[]"#.to_string(),
-            r#"[{"list": [3, ], "integers": null}]"#.to_string(),
-            r#"[, {"list": null, "integers": 5}]"#.to_string(),
+            r#"[{list: [3, ], integers: }]"#.to_string(),
+            r#"[, {list: , integers: 5}]"#.to_string(),
             r#"[]"#.to_string(),
         ];
 

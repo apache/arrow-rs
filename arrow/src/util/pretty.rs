@@ -19,6 +19,7 @@
 //! available unless `feature = "prettyprint"` is enabled.
 
 use crate::{array::ArrayRef, record_batch::RecordBatch};
+use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use comfy_table::{Cell, Table};
 use std::fmt::Display;
 
@@ -68,12 +69,19 @@ fn create_table(results: &[RecordBatch]) -> Result<Table> {
     }
     table.set_header(header);
 
+    let options = FormatOptions::default().with_display_error(true);
+
     for batch in results {
+        let formatters = batch
+            .columns()
+            .iter()
+            .map(|c| ArrayFormatter::try_new(c.as_ref(), &options))
+            .collect::<Result<Vec<_>>>()?;
+
         for row in 0..batch.num_rows() {
             let mut cells = Vec::new();
-            for col in 0..batch.num_columns() {
-                let column = batch.column(col);
-                cells.push(Cell::new(array_value_to_string(column, row)?));
+            for formatter in &formatters {
+                cells.push(Cell::new(formatter.value(row)));
             }
             table.add_row(cells);
         }
@@ -123,6 +131,8 @@ mod tests {
     use std::fmt::Write;
     use std::sync::Arc;
 
+    use arrow_array::builder::PrimitiveBuilder;
+    use arrow_array::types::{ArrowTimestampType, TimestampSecondType};
     use half::f16;
 
     #[test]
@@ -366,42 +376,33 @@ mod tests {
             let expected = $EXPECTED_RESULT;
             let actual: Vec<&str> = table.lines().collect();
 
-            assert_eq!(expected, actual, "Actual result:\n\n{:#?}\n\n", actual);
+            assert_eq!(expected, actual, "Actual result:\n\n{actual:#?}\n\n");
         };
     }
 
-    /// Generate an array with type $ARRAYTYPE with a numeric value of
-    /// $VALUE, and compare $EXPECTED_RESULT to the output of
-    /// formatting that array with `pretty_format_batches`
-    macro_rules! check_datetime_with_timezone {
-        ($ARRAYTYPE:ident, $VALUE:expr, $TZ_STRING:expr, $EXPECTED_RESULT:expr) => {
-            let mut builder = $ARRAYTYPE::builder(10);
-            builder.append_value($VALUE);
-            builder.append_null();
-            let array = builder.finish();
-            let array = array.with_timezone($TZ_STRING);
+    fn timestamp_batch<T: ArrowTimestampType>(
+        timezone: &str,
+        value: T::Native,
+    ) -> RecordBatch {
+        let mut builder = PrimitiveBuilder::<T>::with_capacity(10);
+        builder.append_value(value);
+        builder.append_null();
+        let array = builder.finish();
+        let array = array.with_timezone(timezone);
 
-            let schema = Arc::new(Schema::new(vec![Field::new(
-                "f",
-                array.data_type().clone(),
-                true,
-            )]));
-            let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
-
-            let table = pretty_format_batches(&[batch])
-                .expect("formatting batches")
-                .to_string();
-
-            let expected = $EXPECTED_RESULT;
-            let actual: Vec<&str> = table.lines().collect();
-
-            assert_eq!(expected, actual, "Actual result:\n\n{:#?}\n\n", actual);
-        };
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "f",
+            array.data_type().clone(),
+            true,
+        )]));
+        RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap()
     }
 
     #[test]
     #[cfg(features = "chrono-tz")]
     fn test_pretty_format_timestamp_second_with_utc_timezone() {
+        let batch = timestamp_batch::<TimestampSecondType>("UTC", 11111111);
+        let table = pretty_format_batches(&[batch]).unwrap().to_string();
         let expected = vec![
             "+---------------------------+",
             "| f                         |",
@@ -410,17 +411,15 @@ mod tests {
             "|                           |",
             "+---------------------------+",
         ];
-        check_datetime_with_timezone!(
-            TimestampSecondArray,
-            11111111,
-            "UTC".to_string(),
-            expected
-        );
+        let actual: Vec<&str> = table.lines().collect();
+        assert_eq!(expected, actual, "Actual result:\n\n{actual:#?}\n\n");
     }
 
     #[test]
     #[cfg(features = "chrono-tz")]
     fn test_pretty_format_timestamp_second_with_non_utc_timezone() {
+        let batch = timestamp_batch::<TimestampSecondType>("Asia/Taipei", 11111111);
+        let table = pretty_format_batches(&[batch]).unwrap().to_string();
         let expected = vec![
             "+---------------------------+",
             "| f                         |",
@@ -429,16 +428,15 @@ mod tests {
             "|                           |",
             "+---------------------------+",
         ];
-        check_datetime_with_timezone!(
-            TimestampSecondArray,
-            11111111,
-            "Asia/Taipei".to_string(),
-            expected
-        );
+        let actual: Vec<&str> = table.lines().collect();
+        assert_eq!(expected, actual, "Actual result:\n\n{actual:#?}\n\n");
     }
 
     #[test]
     fn test_pretty_format_timestamp_second_with_fixed_offset_timezone() {
+        let batch = timestamp_batch::<TimestampSecondType>("+08:00", 11111111);
+        let table = pretty_format_batches(&[batch]).unwrap().to_string();
+
         let expected = vec![
             "+---------------------------+",
             "| f                         |",
@@ -447,48 +445,24 @@ mod tests {
             "|                           |",
             "+---------------------------+",
         ];
-        check_datetime_with_timezone!(
-            TimestampSecondArray,
-            11111111,
-            "+08:00".to_string(),
-            expected
-        );
+        let actual: Vec<&str> = table.lines().collect();
+        assert_eq!(expected, actual, "Actual result:\n\n{actual:#?}\n\n");
     }
 
     #[test]
+    #[cfg(not(feature = "chrono-tz"))]
     fn test_pretty_format_timestamp_second_with_incorrect_fixed_offset_timezone() {
-        let expected = vec![
-            "+-------------------------------------------------+",
-            "| f                                               |",
-            "+-------------------------------------------------+",
-            "| 1970-05-09T14:25:11 (Unknown Time Zone '08:00') |",
-            "|                                                 |",
-            "+-------------------------------------------------+",
-        ];
-        check_datetime_with_timezone!(
-            TimestampSecondArray,
-            11111111,
-            "08:00".to_string(),
-            expected
-        );
+        let batch = timestamp_batch::<TimestampSecondType>("08:00", 11111111);
+        let err = pretty_format_batches(&[batch]).err().unwrap().to_string();
+        assert_eq!(err, "Parser error: Invalid timezone \"08:00\": only offset based timezones supported without chrono-tz feature");
     }
 
     #[test]
+    #[cfg(not(feature = "chrono-tz"))]
     fn test_pretty_format_timestamp_second_with_unknown_timezone() {
-        let expected = vec![
-            "+---------------------------------------------------+",
-            "| f                                                 |",
-            "+---------------------------------------------------+",
-            "| 1970-05-09T14:25:11 (Unknown Time Zone 'Unknown') |",
-            "|                                                   |",
-            "+---------------------------------------------------+",
-        ];
-        check_datetime_with_timezone!(
-            TimestampSecondArray,
-            11111111,
-            "Unknown".to_string(),
-            expected
-        );
+        let batch = timestamp_batch::<TimestampSecondType>("unknown", 11111111);
+        let err = pretty_format_batches(&[batch]).err().unwrap().to_string();
+        assert_eq!(err, "Parser error: Invalid timezone \"unknown\": only offset based timezones supported without chrono-tz feature");
     }
 
     #[test]
@@ -559,12 +533,12 @@ mod tests {
     #[test]
     fn test_pretty_format_date_64() {
         let expected = vec![
-            "+------------+",
-            "| f          |",
-            "+------------+",
-            "| 2005-03-18 |",
-            "|            |",
-            "+------------+",
+            "+---------------------+",
+            "| f                   |",
+            "+---------------------+",
+            "| 2005-03-18T01:58:20 |",
+            "|                     |",
+            "+---------------------+",
         ];
         check_datetime!(Date64Array, 1111111100000, expected);
     }
@@ -751,13 +725,13 @@ mod tests {
 
         let table = pretty_format_batches(&[batch])?.to_string();
         let expected = vec![
-            r#"+-------------------------------------+----+"#,
-            r#"| c1                                  | c2 |"#,
-            r#"+-------------------------------------+----+"#,
-            r#"| {"c11": 1, "c12": {"c121": "e"}}    | a  |"#,
-            r#"| {"c11": null, "c12": {"c121": "f"}} | b  |"#,
-            r#"| {"c11": 5, "c12": {"c121": "g"}}    | c  |"#,
-            r#"+-------------------------------------+----+"#,
+            "+--------------------------+----+",
+            "| c1                       | c2 |",
+            "+--------------------------+----+",
+            "| {c11: 1, c12: {c121: e}} | a  |",
+            "| {c11: , c12: {c121: f}}  | b  |",
+            "| {c11: 5, c12: {c121: g}} | c  |",
+            "+--------------------------+----+",
         ];
 
         let actual: Vec<&str> = table.lines().collect();
