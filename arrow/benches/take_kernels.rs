@@ -139,6 +139,13 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("take str null values null indices 1024", |b| {
         b.iter(|| bench_take(&values, &indices))
     });
+
+    let values = create_primitive_run_array::<Int32Type, Int32Type>(1024, 512);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function(
+        "take primitive run logical len: 1024, physical len: 512, indices: 1024",
+        |b| b.iter(|| bench_take(&values, &indices)),
+    );
 }
 
 criterion_group!(benches, add_benchmark);

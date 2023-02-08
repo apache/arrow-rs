@@ -186,7 +186,7 @@
 //! where
 //!     I: IntoIterator<Item=&'a str>,
 //! {
-//!     let array = Arc::new(StringArray::from_iter(iter.into_iter().map(Some))) as _;
+//!     let array = StringArray::from_iter(iter.into_iter().map(Some));
 //!     arrow::compute::cast(&array, to_data_type)
 //! }
 //!

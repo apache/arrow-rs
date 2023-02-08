@@ -18,7 +18,6 @@
 //! Path abstraction for Object Storage
 
 use itertools::Itertools;
-#[cfg(not(target_arch = "wasm32"))]
 use percent_encoding::percent_decode;
 use snafu::{ensure, ResultExt, Snafu};
 use std::fmt::Formatter;
@@ -166,7 +165,7 @@ impl Path {
     /// Convert a filesystem path to a [`Path`] relative to the filesystem root
     ///
     /// This will return an error if the path contains illegal character sequences
-    /// as defined by [`Path::parse`] or does not exist
+    /// as defined on the docstring for [`Path`] or does not exist
     ///
     /// Note: this will canonicalize the provided path, resolving any symlinks
     pub fn from_filesystem_path(
@@ -182,8 +181,8 @@ impl Path {
     #[cfg(not(target_arch = "wasm32"))]
     /// Convert an absolute filesystem path to a [`Path`] relative to the filesystem root
     ///
-    /// This will return an error if the path contains illegal character sequences
-    /// as defined by [`Path::parse`], or `base` is not an absolute path
+    /// This will return an error if the path contains illegal character sequences,
+    /// as defined on the docstring for [`Path`], or `base` is not an absolute path
     pub fn from_absolute_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
         Self::from_absolute_path_with_base(path, None)
     }
@@ -191,9 +190,9 @@ impl Path {
     #[cfg(not(target_arch = "wasm32"))]
     /// Convert a filesystem path to a [`Path`] relative to the provided base
     ///
-    /// This will return an error if the path contains illegal character sequences
-    /// as defined by [`Path::parse`], or `base` does not refer to a parent path of `path`,
-    /// or `base` is not an absolute path
+    /// This will return an error if the path contains illegal character sequences,
+    /// as defined on the docstring for [`Path`], or `base` does not refer to a parent
+    /// path of `path`, or `base` is not an absolute path
     pub(crate) fn from_absolute_path_with_base(
         path: impl AsRef<std::path::Path>,
         base: Option<&Url>,
@@ -210,6 +209,15 @@ impl Path {
         };
 
         // Reverse any percent encoding performed by conversion to URL
+        Self::from_url_path(path)
+    }
+
+    /// Parse a url encoded string as a [`Path`], returning a [`Error`] if invalid
+    ///
+    /// This will return an error if the path contains illegal character sequences
+    /// as defined on the docstring for [`Path`]
+    pub fn from_url_path(path: impl AsRef<str>) -> Result<Self, Error> {
+        let path = path.as_ref();
         let decoded = percent_decode(path.as_bytes())
             .decode_utf8()
             .context(NonUnicodeSnafu { path })?;
@@ -549,6 +557,23 @@ mod tests {
         assert_eq!(a.raw, "foo bar/baz");
         assert_eq!(a.raw, b.raw);
         assert_eq!(b.raw, c.raw);
+    }
+
+    #[test]
+    fn from_url_path() {
+        let a = Path::from_url_path("foo%20bar").unwrap();
+        let b = Path::from_url_path("foo/%2E%2E/bar").unwrap_err();
+        let c = Path::from_url_path("foo%2F%252E%252E%2Fbar").unwrap();
+        let d = Path::from_url_path("foo/%252E%252E/bar").unwrap();
+        let e = Path::from_url_path("%48%45%4C%4C%4F").unwrap();
+        let f = Path::from_url_path("foo/%FF/as").unwrap_err();
+
+        assert_eq!(a.raw, "foo bar");
+        assert!(matches!(b, Error::BadSegment { .. }));
+        assert_eq!(c.raw, "foo/%2E%2E/bar");
+        assert_eq!(d.raw, "foo/%2E%2E/bar");
+        assert_eq!(e.raw, "HELLO");
+        assert!(matches!(f, Error::NonUnicode { .. }));
     }
 
     #[test]

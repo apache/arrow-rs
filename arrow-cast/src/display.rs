@@ -19,14 +19,13 @@
 //! purposes. See the `pretty` crate for additional functions for
 //! record batch pretty printing.
 
-use std::fmt::{Debug, Display, Formatter, Write};
+use std::fmt::{Display, Formatter, Write};
 use std::ops::Range;
 
 use arrow_array::cast::*;
 use arrow_array::temporal_conversions::*;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
-use arrow_array::ArrayRef;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
@@ -836,11 +835,11 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
 ///
 /// Please see [`ArrayFormatter`] for a more performant interface
 pub fn array_value_to_string(
-    column: &ArrayRef,
+    column: &dyn Array,
     row: usize,
 ) -> Result<String, ArrowError> {
     let options = FormatOptions::default().with_display_error(true);
-    let formatter = ArrayFormatter::try_new(column.as_ref(), &options)?;
+    let formatter = ArrayFormatter::try_new(column, &options)?;
     Ok(formatter.value(row).to_string())
 }
 
@@ -864,7 +863,6 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     #[test]
     fn test_map_arry_to_string() {
@@ -881,35 +879,30 @@ mod tests {
             &entry_offsets,
         )
         .unwrap();
-        let param = Arc::new(map_array) as ArrayRef;
         assert_eq!(
             "{d: 30, e: 40, f: 50}",
-            array_value_to_string(&param, 1).unwrap()
+            array_value_to_string(&map_array, 1).unwrap()
         );
     }
 
     #[test]
     fn test_array_value_to_string_duration() {
-        let ns_array =
-            Arc::new(DurationNanosecondArray::from(vec![Some(1), None])) as ArrayRef;
+        let ns_array = DurationNanosecondArray::from(vec![Some(1), None]);
         assert_eq!(
             array_value_to_string(&ns_array, 0).unwrap(),
             "PT0.000000001S"
         );
         assert_eq!(array_value_to_string(&ns_array, 1).unwrap(), "");
 
-        let us_array =
-            Arc::new(DurationMicrosecondArray::from(vec![Some(1), None])) as ArrayRef;
+        let us_array = DurationMicrosecondArray::from(vec![Some(1), None]);
         assert_eq!(array_value_to_string(&us_array, 0).unwrap(), "PT0.000001S");
         assert_eq!(array_value_to_string(&us_array, 1).unwrap(), "");
 
-        let ms_array =
-            Arc::new(DurationMillisecondArray::from(vec![Some(1), None])) as ArrayRef;
+        let ms_array = DurationMillisecondArray::from(vec![Some(1), None]);
         assert_eq!(array_value_to_string(&ms_array, 0).unwrap(), "PT0.001S");
         assert_eq!(array_value_to_string(&ms_array, 1).unwrap(), "");
 
-        let s_array =
-            Arc::new(DurationSecondArray::from(vec![Some(1), None])) as ArrayRef;
+        let s_array = DurationSecondArray::from(vec![Some(1), None]);
         assert_eq!(array_value_to_string(&s_array, 0).unwrap(), "PT1S");
         assert_eq!(array_value_to_string(&s_array, 1).unwrap(), "");
     }

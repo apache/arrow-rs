@@ -95,6 +95,53 @@ macro_rules! downcast_integer {
     };
 }
 
+/// Given one or more expressions evaluating to an integer [`DataType`] invokes the provided macro
+/// `m` with the corresponding integer [`RunEndIndexType`], followed by any additional arguments
+///
+/// ```
+/// # use arrow_array::{downcast_primitive, ArrowPrimitiveType, downcast_run_end_index};
+/// # use arrow_schema::{DataType, Field};
+///
+/// macro_rules! run_end_size_helper {
+///   ($t:ty, $o:ty) => {
+///       std::mem::size_of::<<$t as ArrowPrimitiveType>::Native>() as $o
+///   };
+/// }
+///
+/// fn run_end_index_size(t: &DataType) -> u8 {
+///     match t {
+///         DataType::RunEndEncoded(k, _) => downcast_run_end_index! {
+///             k.data_type() => (run_end_size_helper, u8),
+///             _ => unreachable!(),
+///         },
+///         _ => u8::MAX,
+///     }
+/// }
+///
+/// assert_eq!(run_end_index_size(&DataType::RunEndEncoded(Box::new(Field::new("a", DataType::Int32, false)), Box::new(Field::new("b", DataType::Utf8, true)))), 4);
+/// assert_eq!(run_end_index_size(&DataType::RunEndEncoded(Box::new(Field::new("a", DataType::Int64, false)), Box::new(Field::new("b", DataType::Utf8, true)))), 8);
+/// assert_eq!(run_end_index_size(&DataType::RunEndEncoded(Box::new(Field::new("a", DataType::Int16, false)), Box::new(Field::new("b", DataType::Utf8, true)))), 2);
+/// ```
+///
+/// [`DataType`]: arrow_schema::DataType
+#[macro_export]
+macro_rules! downcast_run_end_index {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($($p:pat),+ => $fallback:expr $(,)*)*) => {
+        match ($($data_type),+) {
+            $crate::repeat_pat!(arrow_schema::DataType::Int16, $($data_type),+) => {
+                $m!($crate::types::Int16Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Int32, $($data_type),+) => {
+                $m!($crate::types::Int32Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Int64, $($data_type),+) => {
+                $m!($crate::types::Int64Type $(, $args)*)
+            }
+            $(($($p),+) => $fallback,)*
+        }
+    };
+}
+
 /// Given one or more expressions evaluating to primitive [`DataType`] invokes the provided macro
 /// `m` with the corresponding [`ArrowPrimitiveType`], followed by any additional arguments
 ///
@@ -447,6 +494,85 @@ where
     arr.as_any()
         .downcast_ref::<DictionaryArray<T>>()
         .expect("Unable to downcast to dictionary array")
+}
+
+/// Force downcast of an [`Array`], such as an [`ArrayRef`] to
+/// [`RunArray<T>`], panic'ing on failure.
+///
+/// # Example
+///
+/// ```
+/// # use arrow_array::{ArrayRef, RunArray};
+/// # use arrow_array::cast::as_run_array;
+/// # use arrow_array::types::Int32Type;
+///
+/// let arr: RunArray<Int32Type> = vec![Some("foo")].into_iter().collect();
+/// let arr: ArrayRef = std::sync::Arc::new(arr);
+/// let run_array: &RunArray<Int32Type> = as_run_array::<Int32Type>(&arr);
+/// ```
+pub fn as_run_array<T>(arr: &dyn Array) -> &RunArray<T>
+where
+    T: RunEndIndexType,
+{
+    arr.as_any()
+        .downcast_ref::<RunArray<T>>()
+        .expect("Unable to downcast to run array")
+}
+
+#[macro_export]
+#[doc(hidden)]
+macro_rules! downcast_run_array_helper {
+    ($t:ty, $($values:ident),+, $e:block) => {{
+        $(let $values = $crate::cast::as_run_array::<$t>($values);)+
+        $e
+    }};
+}
+
+/// Downcast an [`Array`] to a [`RunArray`] based on its [`DataType`], accepts
+/// a number of subsequent patterns to match the data type
+///
+/// ```
+/// # use arrow_array::{Array, StringArray, downcast_run_array, cast::as_string_array};
+/// # use arrow_schema::DataType;
+///
+/// fn print_strings(array: &dyn Array) {
+///     downcast_run_array!(
+///         array => match array.values().data_type() {
+///             DataType::Utf8 => {
+///                 for v in array.downcast::<StringArray>().unwrap() {
+///                     println!("{:?}", v);
+///                 }
+///             }
+///             t => println!("Unsupported run array value type {}", t),
+///         },
+///         DataType::Utf8 => {
+///             for v in as_string_array(array) {
+///                 println!("{:?}", v);
+///             }
+///         }
+///         t => println!("Unsupported datatype {}", t)
+///     )
+/// }
+/// ```
+///
+/// [`DataType`]: arrow_schema::DataType
+#[macro_export]
+macro_rules! downcast_run_array {
+    ($values:ident => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
+        downcast_run_array!($values => {$e} $($p => $fallback)*)
+    };
+
+    ($values:ident => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
+        match $values.data_type() {
+            arrow_schema::DataType::RunEndEncoded(k, _) => {
+                $crate::downcast_run_end_index! {
+                    k.data_type() => ($crate::downcast_run_array_helper, $values, $e),
+                    k => unreachable!("unsupported run end index type: {}", k)
+                }
+            }
+            $($p => $fallback,)*
+        }
+    }
 }
 
 /// Force downcast of an [`Array`], such as an [`ArrayRef`] to
