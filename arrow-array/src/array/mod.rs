@@ -857,12 +857,29 @@ mod tests {
                     assert_eq!(array.null_count(), 0);
                     assert_eq!(array.values().len(), 1);
                     assert_eq!(array.values().null_count(), 1);
+                    assert_eq!(array.run_ends().values(), &[4]);
 
                     let idx = array.get_physical_indices(&[0, 1, 2, 3]).unwrap();
                     assert_eq!(idx, &[0,0,0,0]);
                 }
                 d => unreachable!("{d}")
             }
+        }
+    }
+
+    #[test]
+    fn test_null_fixed_size_binary() {
+        for size in [1, 2, 7] {
+            let array = new_null_array(&DataType::FixedSizeBinary(size), 6);
+            let array = array
+                .as_ref()
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .unwrap();
+
+            assert_eq!(array.len(), 6);
+            assert_eq!(array.null_count(), 6);
+            array.iter().for_each(|x| assert!(x.is_none()));
         }
     }
 

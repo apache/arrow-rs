@@ -671,7 +671,7 @@ impl ArrayData {
                     };
 
                     let builder = ArrayData::builder(r.data_type().clone())
-                        .len(2)
+                        .len(1)
                         .buffers(vec![runs]);
 
                     // SAFETY:
