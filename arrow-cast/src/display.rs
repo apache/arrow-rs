@@ -41,6 +41,8 @@ type TimeFormat<'a> = Option<&'a str>;
 ///
 #[derive(Debug, Clone)]
 pub struct FormatOptions<'a> {
+    /// If set to `true` any formatting errors will be written to the output
+    /// instead of being converted into a [`std::fmt::Error`]
     safe: bool,
     /// Format string for nulls
     null: &'a str,
