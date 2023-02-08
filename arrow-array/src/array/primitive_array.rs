@@ -197,13 +197,13 @@ pub type Time32MillisecondArray = PrimitiveArray<Time32MillisecondType>;
 /// since midnight.
 ///
 /// This type is similar to the [`chrono::NaiveTime`] type and can
-/// hold values such as `00:02:00.000123`
+/// hold values such as `00:02:00.123456`
 pub type Time64MicrosecondArray = PrimitiveArray<Time64MicrosecondType>;
 /// An array where each element is of 64-bit type representing time elapsed in nanoseconds
 /// since midnight.
 ///
 /// This type is similar to the [`chrono::NaiveTime`] type and can
-/// hold values such as `00:02:00.000000123`
+/// hold values such as `00:02:00.123456789`
 pub type Time64NanosecondArray = PrimitiveArray<Time64NanosecondType>;
 
 /// An array where each element is a “calendar” interval in months.
