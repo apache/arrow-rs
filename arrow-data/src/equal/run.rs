@@ -19,7 +19,7 @@ use crate::data::ArrayData;
 
 use super::equal_range;
 
-/// The current implementation of comparison of run array does support partial comparison.
+/// The current implementation of comparison of run array support partial comparison.
 /// Comparing run encoded array based on logical indices (`lhs_start`, `rhs_start`) will
 /// be time consuming as converting from logical index to physical index cannot be done
 /// in constat time. The current comparison compares the underlying physical arrays.
