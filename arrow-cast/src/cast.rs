@@ -2123,6 +2123,7 @@ fn value_to_string<O: OffsetSizeTrait>(
             true => builder.append_null(),
             false => {
                 formatter.value(i).write(&mut builder)?;
+                // tell the builder the row is finished
                 builder.append_value("");
             }
         }
