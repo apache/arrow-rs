@@ -24,14 +24,15 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
 
+use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
 use flatbuffers::FlatBufferBuilder;
 
 use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::*;
 use arrow_buffer::bit_util;
-use arrow_buffer::{Buffer, MutableBuffer};
-use arrow_data::{layout, ArrayData, BufferSpec};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
+use arrow_data::{layout, ArrayData, ArrayDataBuilder, BufferSpec};
 use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
@@ -218,22 +219,16 @@ impl IpcDataGenerator {
                     )?;
                 }
             }
-            DataType::RunEndEncoded(run_ends, values) => {
+            DataType::RunEndEncoded(_, values) => {
                 if column.data().child_data().len() != 2 {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "The run encoded array should have exactly two child arrays. Found {}",
                         column.data().child_data().len()
                     )));
                 }
-                let run_ends_array = make_array(column.data().child_data()[0].clone());
+                // The run_ends array is not expected to be dictionoary encoded. Hence encode dictionaries
+                // only for values array.
                 let values_array = make_array(column.data().child_data()[1].clone());
-                self.encode_dictionaries(
-                    run_ends,
-                    &run_ends_array,
-                    encoded_dictionaries,
-                    dictionary_tracker,
-                    write_options,
-                )?;
                 self.encode_dictionaries(
                     values,
                     &values_array,
@@ -557,24 +552,100 @@ impl IpcDataGenerator {
     }
 }
 
-macro_rules! unslice_run_array_helper {
-    ($t:ty, $arr:ident) => {
-        Ok(RunArray::<$t>::from($arr)
-            .into_non_sliced_array()?
-            .into_data())
-    };
-}
-
 pub(crate) fn unslice_run_array(arr: ArrayData) -> Result<ArrayData, ArrowError> {
     match arr.data_type() {
-        DataType::RunEndEncoded(k, _) => downcast_run_end_index! {
-            k.data_type() => (unslice_run_array_helper, arr),
+        DataType::RunEndEncoded(k, _) => match k.data_type() {
+            DataType::Int16 => Ok(into_zero_offset_run_array(RunArray::<Int16Type>::from(
+                arr,
+            ))?
+            .into_data()),
+            DataType::Int32 => Ok(into_zero_offset_run_array(RunArray::<Int32Type>::from(
+                arr,
+            ))?
+            .into_data()),
+            DataType::Int64 => Ok(into_zero_offset_run_array(RunArray::<Int64Type>::from(
+                arr,
+            ))?
+            .into_data()),
             d => unreachable!("Unexpected data type {d}"),
         },
         d => Err(ArrowError::InvalidArgumentError(format!(
             "The given array is not a run array. Data type of given array: {d}"
         ))),
     }
+}
+
+// Returns a `RunArray` with zero offset and length matching the last value
+// in run_ends array.
+fn into_zero_offset_run_array<R: RunEndIndexType>(
+    run_array: RunArray<R>,
+) -> Result<RunArray<R>, ArrowError> {
+    if run_array.offset() == 0
+        && run_array.len() == RunArray::<R>::logical_len(run_array.run_ends())
+    {
+        return Ok(run_array);
+    }
+    // The physical index of original run_ends array from which the `ArrayData`is sliced.
+    let start_physical_index = run_array
+        .get_zero_offset_physical_index(run_array.offset())
+        .ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Cannot convert the offset {} to physical index",
+                run_array.offset()
+            ))
+        })?;
+
+    // The logical length of original run_ends array until which the `ArrayData` is sliced.
+    let end_logical_index = run_array.offset() + run_array.len() - 1;
+    // The physical index of original run_ends array until which the `ArrayData`is sliced.
+    let end_physical_index =
+            run_array.get_zero_offset_physical_index(end_logical_index).ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Cannot convert the `offset + len - 1` {end_logical_index} to physical index"
+                ))
+            })?;
+
+    let physical_length = end_physical_index - start_physical_index + 1;
+
+    // build new run_ends array by subtrating offset from run ends.
+    let mut builder = BufferBuilder::<R::Native>::new(physical_length);
+    for ix in start_physical_index..end_physical_index {
+        let run_end_value = unsafe {
+            // Safety:
+            // start_physical_index and end_physical_index are within
+            // run_ends array bounds.
+            run_array.run_ends().value_unchecked(ix).as_usize()
+        };
+        let run_end_value = run_end_value - run_array.offset();
+        builder.append(R::Native::from_usize(run_end_value).unwrap());
+    }
+    builder.append(R::Native::from_usize(run_array.len()).unwrap());
+    let new_run_ends = unsafe {
+        // Safety:
+        // The function builds a valid run_ends array and hence need not be validated.
+        ArrayDataBuilder::new(run_array.run_ends().data_type().clone())
+            .len(physical_length)
+            .null_count(0)
+            .add_buffer(builder.finish())
+            .build_unchecked()
+    };
+
+    // build new values by slicing physical indices.
+    let new_values = run_array
+        .values()
+        .slice(start_physical_index, physical_length)
+        .into_data();
+
+    let builder = ArrayDataBuilder::new(run_array.data_type().clone())
+        .len(run_array.len())
+        .add_child_data(new_run_ends)
+        .add_child_data(new_values);
+    let array_data = unsafe {
+        // Safety:
+        //  This function builds a valid run array and hence can skip validation.
+        builder.build_unchecked()
+    };
+    Ok(array_data.into())
 }
 
 /// Keeps track of dictionaries that have been written, to avoid emitting the same dictionary
@@ -1390,6 +1461,7 @@ mod tests {
     use crate::MetadataVersion;
 
     use crate::reader::*;
+    use arrow_array::builder::PrimitiveRunBuilder;
     use arrow_array::builder::UnionBuilder;
     use arrow_array::types::*;
     use arrow_schema::DataType;
@@ -2059,5 +2131,63 @@ mod tests {
         let mut reader = StreamReader::try_new(Cursor::new(data), None).unwrap();
         let batch2 = reader.next().unwrap().unwrap();
         assert_eq!(batch, batch2);
+    }
+
+    #[test]
+    fn test_run_array_unslice() {
+        let total_len = 80;
+        let vals: Vec<Option<i32>> =
+            vec![Some(1), None, Some(2), Some(3), Some(4), None, Some(5)];
+        let repeats: Vec<usize> = vec![3, 4, 1, 2];
+        let mut input_array: Vec<Option<i32>> = Vec::with_capacity(total_len);
+        for ix in 0_usize..32 {
+            let repeat: usize = repeats[ix % repeats.len()];
+            let val: Option<i32> = vals[ix % vals.len()];
+            input_array.resize(input_array.len() + repeat, val);
+        }
+
+        // Encode the input_array to run array
+        let mut builder =
+            PrimitiveRunBuilder::<Int16Type, Int32Type>::with_capacity(input_array.len());
+        builder.extend(input_array.iter().copied());
+        let run_array = builder.finish();
+
+        // test for all slice lengths.
+        for slice_len in 1..=total_len {
+            // test for offset = 0, slice length = slice_len
+            let sliced_run_array: RunArray<Int16Type> =
+                run_array.slice(0, slice_len).into_data().into();
+
+            // Create unsliced run array.
+            let unsliced_run_array =
+                into_zero_offset_run_array(sliced_run_array).unwrap();
+            let typed = unsliced_run_array
+                .downcast::<PrimitiveArray<Int32Type>>()
+                .unwrap();
+            let expected: Vec<Option<i32>> =
+                input_array.iter().take(slice_len).copied().collect();
+            let actual: Vec<Option<i32>> = typed.into_iter().collect();
+            assert_eq!(expected, actual);
+
+            // test for offset = total_len - slice_len, length = slice_len
+            let sliced_run_array: RunArray<Int16Type> = run_array
+                .slice(total_len - slice_len, slice_len)
+                .into_data()
+                .into();
+
+            // Create unsliced run array.
+            let unsliced_run_array =
+                into_zero_offset_run_array(sliced_run_array).unwrap();
+            let typed = unsliced_run_array
+                .downcast::<PrimitiveArray<Int32Type>>()
+                .unwrap();
+            let expected: Vec<Option<i32>> = input_array
+                .iter()
+                .skip(total_len - slice_len)
+                .copied()
+                .collect();
+            let actual: Vec<Option<i32>> = typed.into_iter().collect();
+            assert_eq!(expected, actual);
+        }
     }
 }

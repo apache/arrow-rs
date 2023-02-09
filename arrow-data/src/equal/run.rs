@@ -19,10 +19,10 @@ use crate::data::ArrayData;
 
 use super::equal_range;
 
-/// The current implementation of comparison of run array support partial comparison.
+/// The current implementation of comparison of run array support physical comparison.
 /// Comparing run encoded array based on logical indices (`lhs_start`, `rhs_start`) will
 /// be time consuming as converting from logical index to physical index cannot be done
-/// in constat time. The current comparison compares the underlying physical arrays.
+/// in constant time. The current comparison compares the underlying physical arrays.
 pub(super) fn run_equal(
     lhs: &ArrayData,
     rhs: &ArrayData,
@@ -36,7 +36,7 @@ pub(super) fn run_equal(
         || lhs.offset() > 0
         || rhs.offset() > 0
     {
-        unimplemented!("Partial comparison for run array not supported.")
+        unimplemented!("Logical comparison for run array not supported.")
     }
 
     if lhs.len() != rhs.len() {
