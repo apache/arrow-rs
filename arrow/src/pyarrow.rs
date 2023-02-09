@@ -19,6 +19,7 @@
 //! arrays from and to Python.
 
 use std::convert::{From, TryFrom};
+use std::ptr::addr_of_mut;
 use std::sync::Arc;
 
 use pyo3::ffi::Py_uintptr_t;
@@ -30,7 +31,7 @@ use crate::array::{make_array, Array, ArrayData};
 use crate::datatypes::{DataType, Field, Schema};
 use crate::error::ArrowError;
 use crate::ffi;
-use crate::ffi::FFI_ArrowSchema;
+use crate::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use crate::ffi_stream::{
     export_reader_into_raw, ArrowArrayStreamReader, FFI_ArrowArrayStream,
 };
@@ -111,8 +112,8 @@ impl PyArrowConvert for Schema {
 impl PyArrowConvert for ArrayData {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         // prepare a pointer to receive the Array struct
-        let (array_pointer, schema_pointer) =
-            ffi::ArrowArray::into_raw(unsafe { ffi::ArrowArray::empty() });
+        let mut array = FFI_ArrowArray::empty();
+        let mut schema = FFI_ArrowSchema::empty();
 
         // make the conversion through PyArrow's private API
         // this changes the pointer's memory and is thus unsafe.
@@ -120,15 +121,12 @@ impl PyArrowConvert for ArrayData {
         value.call_method1(
             "_export_to_c",
             (
-                array_pointer as Py_uintptr_t,
-                schema_pointer as Py_uintptr_t,
+                addr_of_mut!(array) as Py_uintptr_t,
+                addr_of_mut!(schema) as Py_uintptr_t,
             ),
         )?;
 
-        let ffi_array = unsafe {
-            ffi::ArrowArray::try_from_raw(array_pointer, schema_pointer)
-                .map_err(to_py_err)?
-        };
+        let ffi_array = ffi::ArrowArray::new(array, schema);
         let data = ArrayData::try_from(ffi_array).map_err(to_py_err)?;
 
         Ok(data)

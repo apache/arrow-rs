@@ -24,68 +24,63 @@
 //! The second interface maps native Rust types to the Rust-specific implementation of Arrow such as `format` to `Datatype`,
 //! `Buffer`, etc. This is handled by `ArrowArray`.
 //!
+//!
+//! Export to FFI
+//!
 //! ```rust
 //! # use std::sync::Arc;
-//! # use arrow::array::{Int32Array, Array, ArrayData, export_array_into_raw, make_array, make_array_from_raw};
-//! # use arrow::error::{Result, ArrowError};
+//! # use arrow::array::{Int32Array, Array, ArrayData, make_array};
+//! # use arrow::error::Result;
 //! # use arrow::compute::kernels::arithmetic;
 //! # use arrow::ffi::{ArrowArray, FFI_ArrowArray, FFI_ArrowSchema};
-//! # use std::convert::TryFrom;
 //! # fn main() -> Result<()> {
 //! // create an array natively
 //! let array = Int32Array::from(vec![Some(1), None, Some(3)]);
+//! let data = array.into_data();
 //!
-//! // export it
-//!
-//! let ffi_array = ArrowArray::try_new(array.data().clone())?;
-//! let (array_ptr, schema_ptr) = ArrowArray::into_raw(ffi_array);
-//!
-//! // consumed and used by something else...
+//! // Export it
+//! let out_array = FFI_ArrowArray::new(&data);
+//! let out_schema = FFI_ArrowSchema::try_from(data.data_type())?;
 //!
 //! // import it
-//! let array = unsafe { make_array_from_raw(array_ptr, schema_ptr)? };
+//! let array = ArrowArray::new(out_array, out_schema);
+//! let array = Int32Array::from(ArrayData::try_from(array)?);
 //!
 //! // perform some operation
-//! let array = array.as_any().downcast_ref::<Int32Array>().ok_or(
-//!     ArrowError::ParseError("Expects an int32".to_string()),
-//! )?;
 //! let array = arithmetic::add(&array, &array)?;
 //!
 //! // verify
 //! assert_eq!(array, Int32Array::from(vec![Some(2), None, Some(6)]));
+//! #
+//! # Ok(())
+//! # }
+//! ```
 //!
-//! // Simulate if raw pointers are provided by consumer
-//! let array = make_array(Int32Array::from(vec![Some(1), None, Some(3)]).into_data());
+//! Import from FFI
 //!
-//! let out_array = Box::new(FFI_ArrowArray::empty());
-//! let out_schema = Box::new(FFI_ArrowSchema::empty());
-//! let out_array_ptr = Box::into_raw(out_array);
-//! let out_schema_ptr = Box::into_raw(out_schema);
+//! ```
+//! # use std::ptr::addr_of_mut;
+//! # use arrow::ffi::{ArrowArray, FFI_ArrowArray, FFI_ArrowSchema};
+//! # use arrow_array::{ArrayRef, make_array};
+//! # use arrow_schema::ArrowError;
+//! #
+//! /// A foreign data container that can export to C Data interface
+//! struct ForeignArray {};
 //!
-//! // export array into raw pointers from consumer
-//! unsafe { export_array_into_raw(array, out_array_ptr, out_schema_ptr)?; };
-//!
-//! // import it
-//! let array = unsafe { make_array_from_raw(out_array_ptr, out_schema_ptr)? };
-//!
-//! // perform some operation
-//! let array = array.as_any().downcast_ref::<Int32Array>().ok_or(
-//!     ArrowError::ParseError("Expects an int32".to_string()),
-//! )?;
-//! let array = arithmetic::add(&array, &array)?;
-//!
-//! // verify
-//! assert_eq!(array, Int32Array::from(vec![Some(2), None, Some(6)]));
-//!
-//! // (drop/release)
-//! unsafe {
-//!     Box::from_raw(out_array_ptr);
-//!     Box::from_raw(out_schema_ptr);
-//!     Arc::from_raw(array_ptr);
-//!     Arc::from_raw(schema_ptr);
+//! impl ForeignArray {
+//!     /// Export from foreign array representation to C Data interface
+//!     /// e.g. <https://github.com/apache/arrow/blob/fc1f9ebbc4c3ae77d5cfc2f9322f4373d3d19b8a/python/pyarrow/array.pxi#L1552>
+//!     fn export_to_c(&self, array: *mut FFI_ArrowArray, schema: *mut FFI_ArrowSchema) {
+//!         // ...
+//!     }
 //! }
 //!
-//! Ok(())
+//! /// Import an [`ArrayRef`] from a [`ForeignArray`]
+//! fn import_array(foreign: &ForeignArray) -> Result<ArrayRef, ArrowError> {
+//!     let mut schema = FFI_ArrowSchema::empty();
+//!     let mut array = FFI_ArrowArray::empty();
+//!     foreign.export_to_c(addr_of_mut!(array), addr_of_mut!(schema));
+//!     Ok(make_array(ArrowArray::new(array, schema).try_into()?))
 //! }
 //! ```
 
@@ -139,7 +134,15 @@ bitflags! {
 
 /// ABI-compatible struct for `ArrowSchema` from C Data Interface
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
-/// This was created by bindgen
+///
+/// ```
+/// # use arrow::ffi::FFI_ArrowSchema;
+/// # use arrow_data::ArrayData;
+/// fn array_schema(data: &ArrayData) -> FFI_ArrowSchema {
+///     FFI_ArrowSchema::try_from(data.data_type()).unwrap()
+/// }
+/// ```
+///
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_ArrowSchema {
@@ -394,7 +397,14 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
 
 /// ABI-compatible struct for ArrowArray from C Data Interface
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
-/// This was created by bindgen
+///
+/// ```
+/// # use arrow::ffi::FFI_ArrowArray;
+/// # use arrow_array::Array;
+/// fn export_array(array: &dyn Array) -> FFI_ArrowArray {
+///     FFI_ArrowArray::new(array.data())
+/// }
+/// ```
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_ArrowArray {
@@ -859,6 +869,14 @@ impl<'a> ArrowArrayRef for ArrowArrayChild<'a> {
 }
 
 impl ArrowArray {
+    /// Creates a new [`ArrowArray`] from the provided array and schema
+    pub fn new(array: FFI_ArrowArray, schema: FFI_ArrowSchema) -> Self {
+        Self {
+            array: Arc::new(array),
+            schema: Arc::new(schema),
+        }
+    }
+
     /// creates a new `ArrowArray`. This is used to export to the C Data Interface.
     ///
     /// # Memory Leaks
@@ -878,6 +896,7 @@ impl ArrowArray {
     /// on managing the allocation of the structs by themselves.
     /// # Error
     /// Errors if any of the pointers is null
+    #[deprecated(note = "Use ArrowArray::new")]
     pub unsafe fn try_from_raw(
         array: *const FFI_ArrowArray,
         schema: *const FFI_ArrowSchema,
@@ -911,6 +930,7 @@ impl ArrowArray {
     }
 
     /// exports [ArrowArray] to the C Data Interface
+    #[deprecated(note = "Use FFI_ArrowArray and FFI_ArrowSchema directly")]
     pub fn into_raw(this: ArrowArray) -> (*const FFI_ArrowArray, *const FFI_ArrowSchema) {
         (Arc::into_raw(this.array), Arc::into_raw(this.schema))
     }
@@ -946,28 +966,49 @@ mod tests {
     use arrow_array::types::{Float64Type, Int32Type};
     use arrow_array::{Float64Array, UnionArray};
     use std::convert::TryFrom;
+    use std::mem::ManuallyDrop;
+    use std::ptr::addr_of_mut;
 
     #[test]
-    fn test_round_trip() -> Result<()> {
+    fn test_round_trip() {
         // create an array natively
         let array = Int32Array::from(vec![1, 2, 3]);
 
         // export it
-        let array = ArrowArray::try_from(array.into_data())?;
+        let array = ArrowArray::try_from(array.into_data()).unwrap();
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
-        let array = make_array(data);
-
-        // perform some operation
-        let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
-        let array = kernels::arithmetic::add(array, array).unwrap();
+        let array = Int32Array::from(ArrayData::try_from(array).unwrap());
+        let array = kernels::arithmetic::add(&array, &array).unwrap();
 
         // verify
         assert_eq!(array, Int32Array::from(vec![2, 4, 6]));
+    }
 
-        // (drop/release)
-        Ok(())
+    #[test]
+    fn test_import() {
+        // Model receiving const pointers from an external system
+
+        // Create an array natively
+        let data = Int32Array::from(vec![1, 2, 3]).into_data();
+        let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
+        let array = FFI_ArrowArray::new(&data);
+
+        // Use ManuallyDrop to avoid Box:Drop recursing
+        let schema = Box::new(ManuallyDrop::new(schema));
+        let array = Box::new(ManuallyDrop::new(array));
+
+        let schema_ptr = &**schema as *const _;
+        let array_ptr = &**array as *const _;
+
+        // We can read them back to memory
+        // SAFETY:
+        // Pointers are aligned and valid
+        let array =
+            unsafe { ArrowArray::new(ptr::read(array_ptr), ptr::read(schema_ptr)) };
+
+        let array = Int32Array::from(ArrayData::try_from(array).unwrap());
+        assert_eq!(array, Int32Array::from(vec![1, 2, 3]));
     }
 
     #[test]
@@ -1424,31 +1465,28 @@ mod tests {
         let array = make_array(Int32Array::from(vec![1, 2, 3]).into_data());
 
         // Assume two raw pointers provided by the consumer
-        let out_array = Box::new(FFI_ArrowArray::empty());
-        let out_schema = Box::new(FFI_ArrowSchema::empty());
-        let out_array_ptr = Box::into_raw(out_array);
-        let out_schema_ptr = Box::into_raw(out_schema);
+        let mut out_array = FFI_ArrowArray::empty();
+        let mut out_schema = FFI_ArrowSchema::empty();
 
-        unsafe {
-            export_array_into_raw(array, out_array_ptr, out_schema_ptr)?;
+        {
+            let out_array_ptr = addr_of_mut!(out_array);
+            let out_schema_ptr = addr_of_mut!(out_schema);
+            unsafe {
+                export_array_into_raw(array, out_array_ptr, out_schema_ptr)?;
+            }
         }
 
         // (simulate consumer) import it
-        unsafe {
-            let array = ArrowArray::try_from_raw(out_array_ptr, out_schema_ptr).unwrap();
-            let data = ArrayData::try_from(array)?;
-            let array = make_array(data);
+        let array = ArrowArray::new(out_array, out_schema);
+        let data = ArrayData::try_from(array)?;
+        let array = make_array(data);
 
-            // perform some operation
-            let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
-            let array = kernels::arithmetic::add(array, array).unwrap();
+        // perform some operation
+        let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+        let array = kernels::arithmetic::add(array, array).unwrap();
 
-            // verify
-            assert_eq!(array, Int32Array::from(vec![2, 4, 6]));
-
-            drop(Box::from_raw(out_array_ptr));
-            drop(Box::from_raw(out_schema_ptr));
-        }
+        // verify
+        assert_eq!(array, Int32Array::from(vec![2, 4, 6]));
         Ok(())
     }
 

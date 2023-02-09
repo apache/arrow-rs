@@ -34,6 +34,7 @@ pub use arrow_data::{
 pub use arrow_data::transform::{Capacities, MutableArrayData};
 
 #[cfg(feature = "ffi")]
+#[allow(deprecated)]
 pub use self::ffi::{export_array_into_raw, make_array_from_raw};
 
 // --------------------- Array's values comparison ---------------------
