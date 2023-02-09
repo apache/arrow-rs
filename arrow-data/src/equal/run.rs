@@ -43,16 +43,6 @@ pub(super) fn run_equal(
         return false;
     }
 
-    // This method does validation of the lhs array and rhs array required to do its
-    // function. This method does not ensure the validity of lhs and rhs array as run array.
-    if lhs.child_data().len() != 2 || rhs.child_data().len() != 2 {
-        panic!(
-            "Run array should have exactly two child arrays. lhs has {}, rhs has {}",
-            lhs.child_data().len(),
-            rhs.child_data().len()
-        )
-    }
-
     let lhs_run_ends_array = lhs.child_data().get(0).unwrap();
     let lhs_values_array = lhs.child_data().get(1).unwrap();
 

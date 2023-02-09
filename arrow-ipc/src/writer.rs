@@ -588,22 +588,14 @@ fn into_zero_offset_run_array<R: RunEndIndexType>(
     // The physical index of original run_ends array from which the `ArrayData`is sliced.
     let start_physical_index = run_array
         .get_zero_offset_physical_index(run_array.offset())
-        .ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "Cannot convert the offset {} to physical index",
-                run_array.offset()
-            ))
-        })?;
+        .unwrap();
 
     // The logical length of original run_ends array until which the `ArrayData` is sliced.
     let end_logical_index = run_array.offset() + run_array.len() - 1;
     // The physical index of original run_ends array until which the `ArrayData`is sliced.
-    let end_physical_index =
-            run_array.get_zero_offset_physical_index(end_logical_index).ok_or_else(|| {
-                ArrowError::InvalidArgumentError(format!(
-                    "Cannot convert the `offset + len - 1` {end_logical_index} to physical index"
-                ))
-            })?;
+    let end_physical_index = run_array
+        .get_zero_offset_physical_index(end_logical_index)
+        .unwrap();
 
     let physical_length = end_physical_index - start_physical_index + 1;
 

@@ -230,13 +230,7 @@ impl<R: RunEndIndexType> RunArray<R> {
 
         // Skip some physical indices based on offset.
         let skip_value = if self.offset() > 0 {
-            self.get_zero_offset_physical_index(self.offset())
-                .ok_or_else(|| {
-                    ArrowError::InvalidArgumentError(format!(
-                        "Cannot convert offset {} to physical index.",
-                        self.offset()
-                    ))
-                })?
+            self.get_zero_offset_physical_index(self.offset()).unwrap()
         } else {
             0
         };
