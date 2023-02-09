@@ -56,8 +56,8 @@ fn test_cast_timestamp_to_string() {
     let b = cast(&array, &DataType::Utf8).unwrap();
     let c = b.as_any().downcast_ref::<StringArray>().unwrap();
     assert_eq!(&DataType::Utf8, c.data_type());
-    assert_eq!("1997-05-19 00:00:00.005 +00:00", c.value(0));
-    assert_eq!("2018-12-25 00:00:00.001 +00:00", c.value(1));
+    assert_eq!("1997-05-19T00:00:00.005Z", c.value(0));
+    assert_eq!("2018-12-25T00:00:00.001Z", c.value(1));
     assert!(c.is_null(2));
 }
 
@@ -442,9 +442,9 @@ fn test_timestamp_cast_utf8() {
     let out = cast(&(Arc::new(array) as ArrayRef), &DataType::Utf8).unwrap();
 
     let expected = StringArray::from(vec![
-        Some("1970-01-01 10:30:00"),
+        Some("1970-01-01T10:30:00"),
         None,
-        Some("1970-01-01 23:58:59"),
+        Some("1970-01-01T23:58:59"),
     ]);
 
     assert_eq!(
@@ -458,9 +458,9 @@ fn test_timestamp_cast_utf8() {
     let out = cast(&(Arc::new(array) as ArrayRef), &DataType::Utf8).unwrap();
 
     let expected = StringArray::from(vec![
-        Some("1970-01-01 20:30:00 +10:00"),
+        Some("1970-01-01T20:30:00+10:00"),
         None,
-        Some("1970-01-02 09:58:59 +10:00"),
+        Some("1970-01-02T09:58:59+10:00"),
     ]);
 
     assert_eq!(
