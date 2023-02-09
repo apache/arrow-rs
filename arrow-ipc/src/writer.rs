@@ -555,17 +555,17 @@ impl IpcDataGenerator {
 pub(crate) fn unslice_run_array(arr: ArrayData) -> Result<ArrayData, ArrowError> {
     match arr.data_type() {
         DataType::RunEndEncoded(k, _) => match k.data_type() {
-            DataType::Int16 => Ok(into_zero_offset_run_array(RunArray::<Int16Type>::from(
-                arr,
-            ))?
+            DataType::Int16 => Ok(into_zero_offset_run_array(
+                RunArray::<Int16Type>::from(arr),
+            )?
             .into_data()),
-            DataType::Int32 => Ok(into_zero_offset_run_array(RunArray::<Int32Type>::from(
-                arr,
-            ))?
+            DataType::Int32 => Ok(into_zero_offset_run_array(
+                RunArray::<Int32Type>::from(arr),
+            )?
             .into_data()),
-            DataType::Int64 => Ok(into_zero_offset_run_array(RunArray::<Int64Type>::from(
-                arr,
-            ))?
+            DataType::Int64 => Ok(into_zero_offset_run_array(
+                RunArray::<Int64Type>::from(arr),
+            )?
             .into_data()),
             d => unreachable!("Unexpected data type {d}"),
         },
