@@ -2274,4 +2274,73 @@ mod tests {
             "Csv error: Encountered invalid UTF-8 data for line 1 and field 1",
         );
     }
+
+    struct InstrumentedRead<R> {
+        r: R,
+        fill_count: usize,
+        fill_sizes: Vec<usize>,
+    }
+
+    impl<R> InstrumentedRead<R> {
+        fn new(r: R) -> Self {
+            Self {
+                r,
+                fill_count: 0,
+                fill_sizes: vec![],
+            }
+        }
+    }
+
+    impl<R: Seek> Seek for InstrumentedRead<R> {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.r.seek(pos)
+        }
+    }
+
+    impl<R: BufRead> Read for InstrumentedRead<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.r.read(buf)
+        }
+    }
+
+    impl<R: BufRead> BufRead for InstrumentedRead<R> {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            self.fill_count += 1;
+            let buf = self.r.fill_buf()?;
+            self.fill_sizes.push(buf.len());
+            Ok(buf)
+        }
+
+        fn consume(&mut self, amt: usize) {
+            self.r.consume(amt)
+        }
+    }
+
+    #[test]
+    fn test_io() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
+        let csv = "foo,bar\nbaz,foo\na,b\nc,d";
+        let mut read = InstrumentedRead::new(Cursor::new(csv.as_bytes()));
+        let reader = ReaderBuilder::new()
+            .with_schema(schema)
+            .with_batch_size(3)
+            .build_buffered(&mut read)
+            .unwrap();
+
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), 3);
+        assert_eq!(batches[1].num_rows(), 1);
+
+        // Expect 4 calls to fill_buf
+        // 1. Read first 3 rows
+        // 2. Read final row
+        // 3. Delimit and flush final row
+        // 4. Iterator finished
+        assert_eq!(&read.fill_sizes, &[23, 3, 0, 0]);
+        assert_eq!(read.fill_count, 4);
+    }
 }
