@@ -648,7 +648,11 @@ impl ArrayData {
 
                     let children = f
                         .iter()
-                        .map(|f| Self::new_null(f.data_type(), len))
+                        .enumerate()
+                        .map(|(idx, f)| match idx {
+                            0 => Self::new_null(f.data_type(), len),
+                            _ => Self::new_empty(f.data_type()),
+                        })
                         .collect();
 
                     (buffers, children, false)
