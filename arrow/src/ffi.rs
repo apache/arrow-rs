@@ -120,7 +120,6 @@ use std::{
     sync::Arc,
 };
 
-use arrow_buffer::i256;
 use arrow_schema::UnionMode;
 use bitflags::bitflags;
 
@@ -311,39 +310,21 @@ impl Drop for FFI_ArrowSchema {
 // This is set by the Arrow specification
 #[allow(clippy::manual_bits)]
 fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
+    if let Some(primitive) = data_type.primitive_width() {
+        return match i {
+            0 => Err(ArrowError::CDataInterface(format!(
+                "The datatype \"{data_type:?}\" doesn't expect buffer at index 0. Please verify that the C data interface is correctly implemented."
+            ))),
+            1 => Ok(primitive * 8),
+            i => Err(ArrowError::CDataInterface(format!(
+                "The datatype \"{data_type:?}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
+            ))),
+        };
+    }
+
     Ok(match (data_type, i) {
-        // primitive types first buffer's size is given by the native types
         (DataType::Boolean, 1) => 1,
-        (DataType::UInt8, 1) => size_of::<u8>() * 8,
-        (DataType::UInt16, 1) => size_of::<u16>() * 8,
-        (DataType::UInt32, 1) => size_of::<u32>() * 8,
-        (DataType::UInt64, 1) => size_of::<u64>() * 8,
-        (DataType::Int8, 1) => size_of::<i8>() * 8,
-        (DataType::Int16, 1) => size_of::<i16>() * 8,
-        (DataType::Int32, 1) | (DataType::Date32, 1) | (DataType::Time32(_), 1) => size_of::<i32>() * 8,
-        (DataType::Int64, 1) | (DataType::Date64, 1) | (DataType::Time64(_), 1) => size_of::<i64>() * 8,
-        (DataType::Float32, 1) => size_of::<f32>() * 8,
-        (DataType::Float64, 1) => size_of::<f64>() * 8,
-        (DataType::Decimal128(..), 1) => size_of::<i128>() * 8,
-        (DataType::Decimal256(..), 1) => size_of::<i256>() * 8,
-        (DataType::Timestamp(..), 1) => size_of::<i64>() * 8,
-        (DataType::Duration(..), 1) => size_of::<i64>() * 8,
-        // primitive types have a single buffer
-        (DataType::Boolean, _) |
-        (DataType::UInt8, _) |
-        (DataType::UInt16, _) |
-        (DataType::UInt32, _) |
-        (DataType::UInt64, _) |
-        (DataType::Int8, _) |
-        (DataType::Int16, _) |
-        (DataType::Int32, _) | (DataType::Date32, _) | (DataType::Time32(_), _) |
-        (DataType::Int64, _) | (DataType::Date64, _) | (DataType::Time64(_), _) |
-        (DataType::Float32, _) |
-        (DataType::Float64, _) |
-        (DataType::Decimal128(..), _) |
-        (DataType::Decimal256(..), _) |
-        (DataType::Timestamp(..), _) |
-        (DataType::Duration(..), _) => {
+        (DataType::Boolean, _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type:?}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
