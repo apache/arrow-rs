@@ -68,16 +68,18 @@
 //! struct ForeignArray {};
 //!
 //! impl ForeignArray {
-//!     /// Export to C Data interface
-//!     fn export(&self, array: *mut FFI_ArrowArray, schema: *mut FFI_ArrowSchema) {
+//!     /// Export from foreign array representation to C Data interface
+//!     /// e.g. <https://github.com/apache/arrow/blob/fc1f9ebbc4c3ae77d5cfc2f9322f4373d3d19b8a/python/pyarrow/array.pxi#L1552>
+//!     fn export_to_c(&self, array: *mut FFI_ArrowArray, schema: *mut FFI_ArrowSchema) {
 //!         // ...
 //!     }
 //! }
 //!
-//! fn import_from_python(foreign: &ForeignArray) -> Result<ArrayRef, ArrowError> {
+//! /// Import an [`ArrayRef`] from a [`ForeignArray`]
+//! fn import_array(foreign: &ForeignArray) -> Result<ArrayRef, ArrowError> {
 //!     let mut schema = FFI_ArrowSchema::empty();
 //!     let mut array = FFI_ArrowArray::empty();
-//!     foreign.export(addr_of_mut!(array), addr_of_mut!(schema));
+//!     foreign.export_to_c(addr_of_mut!(array), addr_of_mut!(schema));
 //!     Ok(make_array(ArrowArray::new(array, schema).try_into()?))
 //! }
 //! ```
