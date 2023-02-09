@@ -966,7 +966,8 @@ mod tests {
     use arrow_array::types::{Float64Type, Int32Type};
     use arrow_array::{Float64Array, UnionArray};
     use std::convert::TryFrom;
-    use std::ptr::{addr_of, addr_of_mut};
+    use std::mem::ManuallyDrop;
+    use std::ptr::addr_of_mut;
 
     #[test]
     fn test_round_trip() {
@@ -987,19 +988,18 @@ mod tests {
     #[test]
     fn test_import() {
         // Model receiving const pointers from an external system
-        let (schema_ptr, array_ptr) = {
-            // create an array natively
-            let data = Int32Array::from(vec![1, 2, 3]).into_data();
-            let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
-            let array = FFI_ArrowArray::new(&data);
 
-            // Models receiving pointers from some external system
-            let schema_ptr = addr_of!(schema);
-            let array_ptr = addr_of!(array);
-            std::mem::forget(schema);
-            std::mem::forget(array);
-            (schema_ptr, array_ptr)
-        };
+        // Create an array natively
+        let data = Int32Array::from(vec![1, 2, 3]).into_data();
+        let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
+        let array = FFI_ArrowArray::new(&data);
+
+        // Use ManuallyDrop to avoid Box:Drop recursing
+        let schema = Box::new(ManuallyDrop::new(schema));
+        let array = Box::new(ManuallyDrop::new(array));
+
+        let schema_ptr = &**schema as *const _;
+        let array_ptr = &**array as *const _;
 
         // We can read them back to memory
         // SAFETY:
