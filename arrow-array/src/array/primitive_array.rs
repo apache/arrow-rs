@@ -168,22 +168,42 @@ pub type TimestampNanosecondArray = PrimitiveArray<TimestampNanosecondType>;
 
 // TODO: give examples for the below types
 
-/// A primitive array where each element is of 32-bit date type.
+/// A primitive array where each element is of 32-bit value
+/// representing the elapsed time since UNIX epoch in days."
+///
+/// This type is similar to the [`chrono::NaiveDate`] type and can hold
+/// values such as `2018-11-13`
 pub type Date32Array = PrimitiveArray<Date32Type>;
-/// A primitive array where each element is of 64-bit date type.
+/// A primitive array where each element is a 64-bit value
+/// representing the elapsed time since the UNIX epoch in milliseconds.
+///
+/// This type is similar to the [`chrono::NaiveDateTime`] type and can hold
+/// values such as `2018-11-13T17:11:10.011`
 pub type Date64Array = PrimitiveArray<Date64Type>;
 
 /// An array where each element is of 32-bit type representing time elapsed in seconds
 /// since midnight.
+///
+/// This type is similar to the [`chrono::NaiveTime`] type and can
+/// hold values such as `00:02:00`
 pub type Time32SecondArray = PrimitiveArray<Time32SecondType>;
 /// An array where each element is of 32-bit type representing time elapsed in milliseconds
 /// since midnight.
+///
+/// This type is similar to the [`chrono::NaiveTime`] type and can
+/// hold values such as `00:02:00.123`
 pub type Time32MillisecondArray = PrimitiveArray<Time32MillisecondType>;
 /// An array where each element is of 64-bit type representing time elapsed in microseconds
 /// since midnight.
+///
+/// This type is similar to the [`chrono::NaiveTime`] type and can
+/// hold values such as `00:02:00.123456`
 pub type Time64MicrosecondArray = PrimitiveArray<Time64MicrosecondType>;
 /// An array where each element is of 64-bit type representing time elapsed in nanoseconds
 /// since midnight.
+///
+/// This type is similar to the [`chrono::NaiveTime`] type and can
+/// hold values such as `00:02:00.123456789`
 pub type Time64NanosecondArray = PrimitiveArray<Time64NanosecondType>;
 
 /// An array where each element is a “calendar” interval in months.
