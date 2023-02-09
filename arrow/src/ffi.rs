@@ -964,29 +964,49 @@ mod tests {
     use arrow_array::types::{Float64Type, Int32Type};
     use arrow_array::{Float64Array, UnionArray};
     use std::convert::TryFrom;
-    use std::ptr::addr_of_mut;
+    use std::ptr::{addr_of, addr_of_mut};
 
     #[test]
-    fn test_round_trip() -> Result<()> {
+    fn test_round_trip() {
         // create an array natively
         let array = Int32Array::from(vec![1, 2, 3]);
 
         // export it
-        let array = ArrowArray::try_from(array.into_data())?;
+        let array = ArrowArray::try_from(array.into_data()).unwrap();
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
-        let array = make_array(data);
-
-        // perform some operation
-        let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
-        let array = kernels::arithmetic::add(array, array).unwrap();
+        let array = Int32Array::from(ArrayData::try_from(array).unwrap());
+        let array = kernels::arithmetic::add(&array, &array).unwrap();
 
         // verify
         assert_eq!(array, Int32Array::from(vec![2, 4, 6]));
+    }
 
-        // (drop/release)
-        Ok(())
+    #[test]
+    fn test_import() {
+        // Model receiving const pointers from an external system
+        let (schema_ptr, array_ptr) = {
+            // create an array natively
+            let data = Int32Array::from(vec![1, 2, 3]).into_data();
+            let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
+            let array = FFI_ArrowArray::new(&data);
+
+            // Models receiving pointers from some external system
+            let schema_ptr = addr_of!(schema);
+            let array_ptr = addr_of!(array);
+            std::mem::forget(schema);
+            std::mem::forget(array);
+            (schema_ptr, array_ptr)
+        };
+
+        // We can read them back to memory
+        // SAFETY:
+        // Pointers are aligned and valid
+        let array =
+            unsafe { ArrowArray::new(ptr::read(array_ptr), ptr::read(schema_ptr)) };
+
+        let array = Int32Array::from(ArrayData::try_from(array).unwrap());
+        assert_eq!(array, Int32Array::from(vec![1, 2, 3]));
     }
 
     #[test]
