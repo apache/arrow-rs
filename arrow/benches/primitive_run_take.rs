@@ -24,14 +24,14 @@ use arrow_array::UInt32Array;
 use criterion::{criterion_group, criterion_main, Criterion};
 use rand::Rng;
 
-fn create_random_index(size: usize, null_density: f32) -> UInt32Array {
+fn create_random_index(size: usize, null_density: f32, max_value: usize) -> UInt32Array {
     let mut rng = seedable_rng();
     let mut builder = UInt32Builder::with_capacity(size);
     for _ in 0..size {
         if rng.gen::<f32>() < null_density {
             builder.append_null();
         } else {
-            let value = rng.gen_range::<u32, _>(0u32..size as u32);
+            let value = rng.gen_range::<u32, _>(0u32..max_value as u32);
             builder.append_value(value);
         }
     }
@@ -48,7 +48,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             logical_array_len,
             physical_array_len,
         );
-        let indices = create_random_index(take_len, 0.0);
+        let indices = create_random_index(take_len, 0.0, logical_array_len);
         group.bench_function(
             format!(
                 "(run_array_len:{logical_array_len}, physical_array_len:{physical_array_len}, take_len:{take_len})"),
