@@ -219,6 +219,7 @@ impl FFI_ArrowArray {
     ///
     /// # Panic
     /// Panics if index exceeds the number of buffers or the buffer is not correctly aligned
+    #[inline]
     pub fn buffer(&self, index: usize) -> *const u8 {
         assert!(!self.buffers.is_null());
         assert!(index < self.num_buffers());
@@ -228,11 +229,13 @@ impl FFI_ArrowArray {
     }
 
     /// Returns the number of buffers
+    #[inline]
     pub fn num_buffers(&self) -> usize {
         self.n_buffers as _
     }
 
     /// Returns the child at the provided index
+    #[inline]
     pub fn child(&self, index: usize) -> &FFI_ArrowArray {
         assert!(!self.children.is_null());
         assert!(index < self.num_children());
@@ -245,11 +248,13 @@ impl FFI_ArrowArray {
     }
 
     /// Returns the number of children
+    #[inline]
     pub fn num_children(&self) -> usize {
         self.n_children as _
     }
 
     /// Returns the dictionary if any
+    #[inline]
     pub fn dictionary(&self) -> Option<&Self> {
         // Safety:
         // If dictionary is not null should be valid for reads of `Self`
