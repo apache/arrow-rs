@@ -28,3 +28,6 @@ pub mod transform;
 pub mod bit_iterator;
 pub mod bit_mask;
 pub mod decimal;
+
+#[cfg(feature = "ffi")]
+pub mod ffi;

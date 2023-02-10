@@ -104,19 +104,9 @@ To import an array, unsafely create an `ArrowArray` from two pointers using [Arr
 To export an array, create an `ArrowArray` using [ArrowArray::try_new].
 */
 
-use std::{
-    convert::TryFrom,
-    ffi::CStr,
-    ffi::CString,
-    iter,
-    mem::size_of,
-    os::raw::{c_char, c_void},
-    ptr::{self, NonNull},
-    sync::Arc,
-};
+use std::{mem::size_of, ptr::NonNull, sync::Arc};
 
 use arrow_schema::UnionMode;
-use bitflags::bitflags;
 
 use crate::array::{layout, ArrayData};
 use crate::buffer::{Buffer, MutableBuffer};
@@ -124,194 +114,11 @@ use crate::datatypes::DataType;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
 
-bitflags! {
-    pub struct Flags: i64 {
-        const DICTIONARY_ORDERED = 0b00000001;
-        const NULLABLE = 0b00000010;
-        const MAP_KEYS_SORTED = 0b00000100;
-    }
-}
-
-/// ABI-compatible struct for `ArrowSchema` from C Data Interface
-/// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
-///
-/// ```
-/// # use arrow::ffi::FFI_ArrowSchema;
-/// # use arrow_data::ArrayData;
-/// fn array_schema(data: &ArrayData) -> FFI_ArrowSchema {
-///     FFI_ArrowSchema::try_from(data.data_type()).unwrap()
-/// }
-/// ```
-///
-#[repr(C)]
-#[derive(Debug)]
-pub struct FFI_ArrowSchema {
-    pub(crate) format: *const c_char,
-    pub(crate) name: *const c_char,
-    pub(crate) metadata: *const c_char,
-    pub(crate) flags: i64,
-    pub(crate) n_children: i64,
-    pub(crate) children: *mut *mut FFI_ArrowSchema,
-    pub(crate) dictionary: *mut FFI_ArrowSchema,
-    pub(crate) release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
-    pub(crate) private_data: *mut c_void,
-}
-
-struct SchemaPrivateData {
-    children: Box<[*mut FFI_ArrowSchema]>,
-    dictionary: *mut FFI_ArrowSchema,
-}
-
-// callback used to drop [FFI_ArrowSchema] when it is exported.
-unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
-    if schema.is_null() {
-        return;
-    }
-    let schema = &mut *schema;
-
-    // take ownership back to release it.
-    drop(CString::from_raw(schema.format as *mut c_char));
-    if !schema.name.is_null() {
-        drop(CString::from_raw(schema.name as *mut c_char));
-    }
-    if !schema.private_data.is_null() {
-        let private_data = Box::from_raw(schema.private_data as *mut SchemaPrivateData);
-        for child in private_data.children.iter() {
-            drop(Box::from_raw(*child))
-        }
-        if !private_data.dictionary.is_null() {
-            drop(Box::from_raw(private_data.dictionary));
-        }
-
-        drop(private_data);
-    }
-
-    schema.release = None;
-}
-
-impl FFI_ArrowSchema {
-    /// create a new [`FFI_ArrowSchema`]. This fails if the fields'
-    /// [`DataType`] is not supported.
-    pub fn try_new(
-        format: &str,
-        children: Vec<FFI_ArrowSchema>,
-        dictionary: Option<FFI_ArrowSchema>,
-    ) -> Result<Self> {
-        let mut this = Self::empty();
-
-        let children_ptr = children
-            .into_iter()
-            .map(Box::new)
-            .map(Box::into_raw)
-            .collect::<Box<_>>();
-
-        this.format = CString::new(format).unwrap().into_raw();
-        this.release = Some(release_schema);
-        this.n_children = children_ptr.len() as i64;
-
-        let dictionary_ptr = dictionary
-            .map(|d| Box::into_raw(Box::new(d)))
-            .unwrap_or(std::ptr::null_mut());
-
-        let mut private_data = Box::new(SchemaPrivateData {
-            children: children_ptr,
-            dictionary: dictionary_ptr,
-        });
-
-        // intentionally set from private_data (see https://github.com/apache/arrow-rs/issues/580)
-        this.children = private_data.children.as_mut_ptr();
-
-        this.dictionary = dictionary_ptr;
-
-        this.private_data = Box::into_raw(private_data) as *mut c_void;
-
-        Ok(this)
-    }
-
-    pub fn with_name(mut self, name: &str) -> Result<Self> {
-        self.name = CString::new(name).unwrap().into_raw();
-        Ok(self)
-    }
-
-    pub fn with_flags(mut self, flags: Flags) -> Result<Self> {
-        self.flags = flags.bits();
-        Ok(self)
-    }
-
-    pub fn empty() -> Self {
-        Self {
-            format: std::ptr::null_mut(),
-            name: std::ptr::null_mut(),
-            metadata: std::ptr::null_mut(),
-            flags: 0,
-            n_children: 0,
-            children: ptr::null_mut(),
-            dictionary: std::ptr::null_mut(),
-            release: None,
-            private_data: std::ptr::null_mut(),
-        }
-    }
-
-    /// returns the format of this schema.
-    pub fn format(&self) -> &str {
-        assert!(!self.format.is_null());
-        // safe because the lifetime of `self.format` equals `self`
-        unsafe { CStr::from_ptr(self.format) }
-            .to_str()
-            .expect("The external API has a non-utf8 as format")
-    }
-
-    /// returns the name of this schema.
-    pub fn name(&self) -> &str {
-        assert!(!self.name.is_null());
-        // safe because the lifetime of `self.name` equals `self`
-        unsafe { CStr::from_ptr(self.name) }
-            .to_str()
-            .expect("The external API has a non-utf8 as name")
-    }
-
-    pub fn flags(&self) -> Option<Flags> {
-        Flags::from_bits(self.flags)
-    }
-
-    pub fn child(&self, index: usize) -> &Self {
-        assert!(index < self.n_children as usize);
-        unsafe { self.children.add(index).as_ref().unwrap().as_ref().unwrap() }
-    }
-
-    pub fn children(&self) -> impl Iterator<Item = &Self> {
-        (0..self.n_children as usize).map(move |i| self.child(i))
-    }
-
-    pub fn nullable(&self) -> bool {
-        (self.flags / 2) & 1 == 1
-    }
-
-    pub fn dictionary(&self) -> Option<&Self> {
-        unsafe { self.dictionary.as_ref() }
-    }
-
-    pub fn map_keys_sorted(&self) -> bool {
-        self.flags & 0b00000100 != 0
-    }
-
-    pub fn dictionary_ordered(&self) -> bool {
-        self.flags & 0b00000001 != 0
-    }
-}
-
-impl Drop for FFI_ArrowSchema {
-    fn drop(&mut self) {
-        match self.release {
-            None => (),
-            Some(release) => unsafe { release(self) },
-        };
-    }
-}
+pub use arrow_data::ffi::FFI_ArrowArray;
+pub use arrow_schema::ffi::{FFI_ArrowSchema, Flags};
 
 // returns the number of bits that buffer `i` (in the C data interface) is expected to have.
 // This is set by the Arrow specification
-#[allow(clippy::manual_bits)]
 fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
     if let Some(primitive) = data_type.primitive_width() {
         return match i {
@@ -332,7 +139,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
                 "The datatype \"{data_type:?}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
-        (DataType::FixedSizeBinary(num_bytes), 1) => size_of::<u8>() * (*num_bytes as usize) * 8,
+        (DataType::FixedSizeBinary(num_bytes), 1) => *num_bytes as usize * u8::BITS as usize,
         (DataType::FixedSizeList(f, num_elems), 1) => {
             let child_bit_width = bit_width(f.data_type(), 1)?;
             child_bit_width * (*num_elems as usize)
@@ -345,8 +152,8 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         // Variable-size list and map have one i32 buffer.
         // Variable-sized binaries: have two buffers.
         // "small": first buffer is i32, second is in bytes
-        (DataType::Utf8, 1) | (DataType::Binary, 1) | (DataType::List(_), 1) | (DataType::Map(_, _), 1) => size_of::<i32>() * 8,
-        (DataType::Utf8, 2) | (DataType::Binary, 2) => size_of::<u8>() * 8,
+        (DataType::Utf8, 1) | (DataType::Binary, 1) | (DataType::List(_), 1) | (DataType::Map(_, _), 1) => i32::BITS as _,
+        (DataType::Utf8, 2) | (DataType::Binary, 2) => u8::BITS as _,
         (DataType::List(_), _) | (DataType::Map(_, _), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type:?}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
@@ -359,17 +166,17 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         }
         // Variable-sized binaries: have two buffers.
         // LargeUtf8: first buffer is i64, second is in bytes
-        (DataType::LargeUtf8, 1) | (DataType::LargeBinary, 1) | (DataType::LargeList(_), 1) => size_of::<i64>() * 8,
-        (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) | (DataType::LargeList(_), 2)=> size_of::<u8>() * 8,
+        (DataType::LargeUtf8, 1) | (DataType::LargeBinary, 1) | (DataType::LargeList(_), 1) => i64::BITS as _,
+        (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) | (DataType::LargeList(_), 2)=> u8::BITS as _,
         (DataType::LargeUtf8, _) | (DataType::LargeBinary, _) | (DataType::LargeList(_), _)=> {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type:?}\" expects 3 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
         // type ids. UnionArray doesn't have null bitmap so buffer index begins with 0.
-        (DataType::Union(_, _, _), 0) => size_of::<i8>() * 8,
+        (DataType::Union(_, _, _), 0) => i8::BITS as _,
         // Only DenseUnion has 2nd buffer
-        (DataType::Union(_, _, UnionMode::Dense), 1) => size_of::<i32>() * 8,
+        (DataType::Union(_, _, UnionMode::Dense), 1) => i32::BITS as _,
         (DataType::Union(_, _, UnionMode::Sparse), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type:?}\" expects 1 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
@@ -395,190 +202,6 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
     })
 }
 
-/// ABI-compatible struct for ArrowArray from C Data Interface
-/// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
-///
-/// ```
-/// # use arrow::ffi::FFI_ArrowArray;
-/// # use arrow_array::Array;
-/// fn export_array(array: &dyn Array) -> FFI_ArrowArray {
-///     FFI_ArrowArray::new(array.data())
-/// }
-/// ```
-#[repr(C)]
-#[derive(Debug)]
-pub struct FFI_ArrowArray {
-    pub(crate) length: i64,
-    pub(crate) null_count: i64,
-    pub(crate) offset: i64,
-    pub(crate) n_buffers: i64,
-    pub(crate) n_children: i64,
-    pub(crate) buffers: *mut *const c_void,
-    pub(crate) children: *mut *mut FFI_ArrowArray,
-    pub(crate) dictionary: *mut FFI_ArrowArray,
-    pub(crate) release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
-    // When exported, this MUST contain everything that is owned by this array.
-    // for example, any buffer pointed to in `buffers` must be here, as well
-    // as the `buffers` pointer itself.
-    // In other words, everything in [FFI_ArrowArray] must be owned by
-    // `private_data` and can assume that they do not outlive `private_data`.
-    pub(crate) private_data: *mut c_void,
-}
-
-impl Drop for FFI_ArrowArray {
-    fn drop(&mut self) {
-        match self.release {
-            None => (),
-            Some(release) => unsafe { release(self) },
-        };
-    }
-}
-
-unsafe impl Send for FFI_ArrowArray {}
-unsafe impl Sync for FFI_ArrowArray {}
-
-// callback used to drop [FFI_ArrowArray] when it is exported
-unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) {
-    if array.is_null() {
-        return;
-    }
-    let array = &mut *array;
-
-    // take ownership of `private_data`, therefore dropping it`
-    let private = Box::from_raw(array.private_data as *mut ArrayPrivateData);
-    for child in private.children.iter() {
-        let _ = Box::from_raw(*child);
-    }
-    if !private.dictionary.is_null() {
-        let _ = Box::from_raw(private.dictionary);
-    }
-
-    array.release = None;
-}
-
-struct ArrayPrivateData {
-    #[allow(dead_code)]
-    buffers: Vec<Option<Buffer>>,
-    buffers_ptr: Box<[*const c_void]>,
-    children: Box<[*mut FFI_ArrowArray]>,
-    dictionary: *mut FFI_ArrowArray,
-}
-
-impl FFI_ArrowArray {
-    /// creates a new `FFI_ArrowArray` from existing data.
-    /// # Memory Leaks
-    /// This method releases `buffers`. Consumers of this struct *must* call `release` before
-    /// releasing this struct, or contents in `buffers` leak.
-    pub fn new(data: &ArrayData) -> Self {
-        let data_layout = layout(data.data_type());
-
-        let buffers = if data_layout.can_contain_null_mask {
-            // * insert the null buffer at the start
-            // * make all others `Option<Buffer>`.
-            iter::once(data.null_buffer().cloned())
-                .chain(data.buffers().iter().map(|b| Some(b.clone())))
-                .collect::<Vec<_>>()
-        } else {
-            data.buffers().iter().map(|b| Some(b.clone())).collect()
-        };
-
-        // `n_buffers` is the number of buffers by the spec.
-        let n_buffers = {
-            data_layout.buffers.len() + {
-                // If the layout has a null buffer by Arrow spec.
-                // Note that even the array doesn't have a null buffer because it has
-                // no null value, we still need to count 1 here to follow the spec.
-                usize::from(data_layout.can_contain_null_mask)
-            }
-        } as i64;
-
-        let buffers_ptr = buffers
-            .iter()
-            .flat_map(|maybe_buffer| match maybe_buffer {
-                // note that `raw_data` takes into account the buffer's offset
-                Some(b) => Some(b.as_ptr() as *const c_void),
-                // This is for null buffer. We only put a null pointer for
-                // null buffer if by spec it can contain null mask.
-                None if data_layout.can_contain_null_mask => Some(std::ptr::null()),
-                None => None,
-            })
-            .collect::<Box<[_]>>();
-
-        let empty = vec![];
-        let (child_data, dictionary) = match data.data_type() {
-            DataType::Dictionary(_, _) => (
-                empty.as_slice(),
-                Box::into_raw(Box::new(FFI_ArrowArray::new(&data.child_data()[0]))),
-            ),
-            _ => (data.child_data(), std::ptr::null_mut()),
-        };
-
-        let children = child_data
-            .iter()
-            .map(|child| Box::into_raw(Box::new(FFI_ArrowArray::new(child))))
-            .collect::<Box<_>>();
-        let n_children = children.len() as i64;
-
-        // create the private data owning everything.
-        // any other data must be added here, e.g. via a struct, to track lifetime.
-        let mut private_data = Box::new(ArrayPrivateData {
-            buffers,
-            buffers_ptr,
-            children,
-            dictionary,
-        });
-
-        Self {
-            length: data.len() as i64,
-            null_count: data.null_count() as i64,
-            offset: data.offset() as i64,
-            n_buffers,
-            n_children,
-            buffers: private_data.buffers_ptr.as_mut_ptr(),
-            children: private_data.children.as_mut_ptr(),
-            dictionary,
-            release: Some(release_array),
-            private_data: Box::into_raw(private_data) as *mut c_void,
-        }
-    }
-
-    /// create an empty `FFI_ArrowArray`, which can be used to import data into
-    pub fn empty() -> Self {
-        Self {
-            length: 0,
-            null_count: 0,
-            offset: 0,
-            n_buffers: 0,
-            n_children: 0,
-            buffers: std::ptr::null_mut(),
-            children: std::ptr::null_mut(),
-            dictionary: std::ptr::null_mut(),
-            release: None,
-            private_data: std::ptr::null_mut(),
-        }
-    }
-
-    /// the length of the array
-    pub fn len(&self) -> usize {
-        self.length as usize
-    }
-
-    /// whether the array is empty
-    pub fn is_empty(&self) -> bool {
-        self.length == 0
-    }
-
-    /// the offset of the array
-    pub fn offset(&self) -> usize {
-        self.offset as usize
-    }
-
-    /// the null count of the array
-    pub fn null_count(&self) -> usize {
-        self.null_count as usize
-    }
-}
-
 /// returns a new buffer corresponding to the index `i` of the FFI array. It may not exist (null pointer).
 /// `bits` is the number of bits that the native type of this buffer has.
 /// The size of the buffer will be `ceil(self.length * bits, 8)`.
@@ -592,36 +215,11 @@ unsafe fn create_buffer(
     index: usize,
     len: usize,
 ) -> Option<Buffer> {
-    if array.buffers.is_null() || array.n_buffers == 0 {
+    if array.num_buffers() == 0 {
         return None;
     }
-    let buffers = array.buffers as *mut *const u8;
-
-    assert!(index < array.n_buffers as usize);
-    let ptr = *buffers.add(index);
-
-    NonNull::new(ptr as *mut u8)
+    NonNull::new(array.buffer(index) as _)
         .map(|ptr| Buffer::from_custom_allocation(ptr, len, owner))
-}
-
-fn create_child(
-    owner: Arc<FFI_ArrowArray>,
-    array: &FFI_ArrowArray,
-    schema: &FFI_ArrowSchema,
-    index: usize,
-) -> ArrowArrayChild<'static> {
-    assert!(index < array.n_children as usize);
-    assert!(!array.children.is_null());
-    assert!(!array.children.is_null());
-    unsafe {
-        let arr_ptr = *array.children.add(index);
-        let schema_ptr = *schema.children.add(index);
-        assert!(!arr_ptr.is_null());
-        assert!(!schema_ptr.is_null());
-        let arr_ptr = &*arr_ptr;
-        let schema_ptr = &*schema_ptr;
-        ArrowArrayChild::from_raw(arr_ptr, schema_ptr, owner)
-    }
 }
 
 pub trait ArrowArrayRef {
@@ -640,7 +238,7 @@ pub trait ArrowArrayRef {
             None
         };
 
-        let mut child_data: Vec<ArrayData> = (0..self.array().n_children as usize)
+        let mut child_data: Vec<ArrayData> = (0..self.array().num_children())
             .map(|i| {
                 let child = self.child(i);
                 child.to_data()
@@ -673,11 +271,9 @@ pub trait ArrowArrayRef {
     /// in the spec of the type)
     fn buffers(&self, can_contain_null_mask: bool) -> Result<Vec<Buffer>> {
         // + 1: skip null buffer
-        let buffer_begin = can_contain_null_mask as i64;
-        (buffer_begin..self.array().n_buffers)
+        let buffer_begin = can_contain_null_mask as usize;
+        (buffer_begin..self.array().num_buffers())
             .map(|index| {
-                let index = index as usize;
-
                 let len = self.buffer_len(index)?;
 
                 match unsafe {
@@ -711,7 +307,7 @@ pub trait ArrowArrayRef {
 
         // `ffi::ArrowArray` records array offset, we need to add it back to the
         // buffer length to get the actual buffer length.
-        let length = self.array().length as usize + self.array().offset as usize;
+        let length = self.array().len() + self.array().offset();
 
         // Inner type is not important for buffer length.
         Ok(match (&data_type, i) {
@@ -733,9 +329,7 @@ pub trait ArrowArrayRef {
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
                 #[allow(clippy::cast_ptr_alignment)]
-                let offset_buffer = unsafe {
-                    *(self.array().buffers as *mut *const u8).add(1) as *const i32
-                };
+                let offset_buffer = self.array().buffer(1) as *const i32;
                 // get last offset
                 (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
             }
@@ -745,9 +339,7 @@ pub trait ArrowArrayRef {
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i64`, as Large uses `i64` offsets.
                 #[allow(clippy::cast_ptr_alignment)]
-                let offset_buffer = unsafe {
-                    *(self.array().buffers as *mut *const u8).add(1) as *const i64
-                };
+                let offset_buffer = self.array().buffer(1) as *const i64;
                 // get last offset
                 (unsafe { *offset_buffer.add(len / size_of::<i64>() - 1) }) as usize
             }
@@ -766,14 +358,18 @@ pub trait ArrowArrayRef {
         // similar to `self.buffer_len(0)`, but without `Result`.
         // `ffi::ArrowArray` records array offset, we need to add it back to the
         // buffer length to get the actual buffer length.
-        let length = self.array().length as usize + self.array().offset as usize;
+        let length = self.array().len() + self.array().offset();
         let buffer_len = bit_util::ceil(length, 8);
 
         unsafe { create_buffer(self.owner().clone(), self.array(), 0, buffer_len) }
     }
 
     fn child(&self, index: usize) -> ArrowArrayChild {
-        create_child(self.owner().clone(), self.array(), self.schema(), index)
+        ArrowArrayChild {
+            array: self.array().child(index),
+            schema: self.schema().child(index),
+            owner: self.owner(),
+        }
     }
 
     fn owner(&self) -> &Arc<FFI_ArrowArray>;
@@ -781,18 +377,14 @@ pub trait ArrowArrayRef {
     fn schema(&self) -> &FFI_ArrowSchema;
     fn data_type(&self) -> Result<DataType>;
     fn dictionary(&self) -> Option<ArrowArrayChild> {
-        unsafe {
-            assert!(!(self.array().dictionary.is_null() ^ self.schema().dictionary.is_null()),
-                    "Dictionary should both be set or not set in FFI_ArrowArray and FFI_ArrowSchema");
-            if !self.array().dictionary.is_null() {
-                Some(ArrowArrayChild::from_raw(
-                    &*self.array().dictionary,
-                    &*self.schema().dictionary,
-                    self.owner().clone(),
-                ))
-            } else {
-                None
-            }
+        match (self.array().dictionary(), self.schema().dictionary()) {
+            (Some(array), Some(schema)) => Some(ArrowArrayChild {
+                array,
+                schema,
+                owner: self.owner(),
+            }),
+            (None, None) => None,
+            _ => panic!("Dictionary should both be set or not set in FFI_ArrowArray and FFI_ArrowSchema")
         }
     }
 }
@@ -827,7 +419,7 @@ pub struct ArrowArray {
 pub struct ArrowArrayChild<'a> {
     array: &'a FFI_ArrowArray,
     schema: &'a FFI_ArrowSchema,
-    owner: Arc<FFI_ArrowArray>,
+    owner: &'a Arc<FFI_ArrowArray>,
 }
 
 impl ArrowArrayRef for ArrowArray {
@@ -864,7 +456,7 @@ impl<'a> ArrowArrayRef for ArrowArrayChild<'a> {
     }
 
     fn owner(&self) -> &Arc<FFI_ArrowArray> {
-        &self.owner
+        self.owner
     }
 }
 
@@ -936,20 +528,6 @@ impl ArrowArray {
     }
 }
 
-impl<'a> ArrowArrayChild<'a> {
-    fn from_raw(
-        array: &'a FFI_ArrowArray,
-        schema: &'a FFI_ArrowSchema,
-        owner: Arc<FFI_ArrowArray>,
-    ) -> Self {
-        Self {
-            array,
-            schema,
-            owner,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -957,7 +535,7 @@ mod tests {
         export_array_into_raw, make_array, Array, ArrayData, BooleanArray,
         Decimal128Array, DictionaryArray, DurationSecondArray, FixedSizeBinaryArray,
         FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericStringArray,
-        Int32Array, MapArray, NullArray, OffsetSizeTrait, Time32MillisecondArray,
+        Int32Array, MapArray, OffsetSizeTrait, Time32MillisecondArray,
         TimestampMillisecondArray, UInt32Array,
     };
     use crate::compute::kernels;
@@ -1004,8 +582,9 @@ mod tests {
         // We can read them back to memory
         // SAFETY:
         // Pointers are aligned and valid
-        let array =
-            unsafe { ArrowArray::new(ptr::read(array_ptr), ptr::read(schema_ptr)) };
+        let array = unsafe {
+            ArrowArray::new(std::ptr::read(array_ptr), std::ptr::read(schema_ptr))
+        };
 
         let array = Int32Array::from(ArrayData::try_from(array).unwrap());
         assert_eq!(array, Int32Array::from(vec![1, 2, 3]));
@@ -1523,24 +1102,6 @@ mod tests {
         );
 
         // (drop/release)
-        Ok(())
-    }
-
-    #[test]
-    fn null_array_n_buffers() -> Result<()> {
-        let array = NullArray::new(10);
-        let data = array.data();
-
-        let ffi_array = FFI_ArrowArray::new(data);
-        assert_eq!(0, ffi_array.n_buffers);
-
-        let private_data =
-            unsafe { Box::from_raw(ffi_array.private_data as *mut ArrayPrivateData) };
-
-        assert_eq!(0, private_data.buffers_ptr.len());
-
-        Box::into_raw(private_data);
-
         Ok(())
     }
 

@@ -60,6 +60,7 @@
 //! }
 //! ```
 
+use std::ptr::addr_of;
 use std::{
     convert::TryFrom,
     ffi::CString,
@@ -203,11 +204,11 @@ impl ExportedArrayStream {
         let schema = FFI_ArrowSchema::try_from(reader.schema().as_ref());
 
         match schema {
-            Ok(mut schema) => unsafe {
-                std::ptr::copy(&schema as *const FFI_ArrowSchema, out, 1);
-                schema.release = None;
+            Ok(schema) => {
+                unsafe { std::ptr::copy(addr_of!(schema), out, 1) };
+                std::mem::forget(schema);
                 0
-            },
+            }
             Err(ref err) => {
                 private_data.last_error = err.to_string();
                 get_error_code(err)
@@ -222,21 +223,17 @@ impl ExportedArrayStream {
         let ret_code = match reader.next() {
             None => {
                 // Marks ArrowArray released to indicate reaching the end of stream.
-                unsafe {
-                    (*out).release = None;
-                }
+                unsafe { std::ptr::write(out, FFI_ArrowArray::empty()) }
                 0
             }
             Some(next_batch) => {
                 if let Ok(batch) = next_batch {
                     let struct_array = StructArray::from(batch);
-                    let mut array = FFI_ArrowArray::new(struct_array.data());
+                    let array = FFI_ArrowArray::new(struct_array.data());
 
-                    unsafe {
-                        std::ptr::copy(&array as *const FFI_ArrowArray, out, 1);
-                        array.release = None;
-                        0
-                    }
+                    unsafe { std::ptr::copy(addr_of!(array), out, 1) };
+                    std::mem::forget(array);
+                    0
                 } else {
                     let err = &next_batch.unwrap_err();
                     private_data.last_error = err.to_string();
@@ -362,7 +359,9 @@ impl Iterator for ArrowArrayStreamReader {
             let ffi_array = unsafe { Arc::from_raw(array_ptr) };
 
             // The end of stream has been reached
-            ffi_array.release?;
+            if ffi_array.is_released() {
+                return None;
+            }
 
             let schema_ref = self.schema();
             let schema = FFI_ArrowSchema::try_from(schema_ref.as_ref()).ok()?;
@@ -482,7 +481,7 @@ mod tests {
 
             // The end of stream has been reached
             let ffi_array = unsafe { Arc::from_raw(array_ptr) };
-            if ffi_array.release.is_none() {
+            if ffi_array.is_released() {
                 break;
             }
 
