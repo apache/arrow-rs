@@ -439,6 +439,11 @@ impl<R: BufRead> BufReader<R> {
             let buf = self.reader.fill_buf()?;
             let decoded = self.decoder.decode(buf)?;
             self.reader.consume(decoded);
+            // Yield if decoded no bytes or the decoder is full
+            //
+            // The capacity check avoids looping around and potentially
+            // blocking reading data in fill_buf that isn't needed
+            // to flush the next batch
             if decoded == 0 || self.decoder.capacity() == 0 {
                 break;
             }
