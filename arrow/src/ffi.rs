@@ -104,11 +104,7 @@ To import an array, unsafely create an `ArrowArray` from two pointers using [Arr
 To export an array, create an `ArrowArray` using [ArrowArray::try_new].
 */
 
-use std::{
-    mem::size_of,
-    ptr::{self, NonNull},
-    sync::Arc,
-};
+use std::{mem::size_of, ptr::NonNull, sync::Arc};
 
 use arrow_schema::UnionMode;
 
@@ -586,8 +582,9 @@ mod tests {
         // We can read them back to memory
         // SAFETY:
         // Pointers are aligned and valid
-        let array =
-            unsafe { ArrowArray::new(ptr::read(array_ptr), ptr::read(schema_ptr)) };
+        let array = unsafe {
+            ArrowArray::new(std::ptr::read(array_ptr), std::ptr::read(schema_ptr))
+        };
 
         let array = Int32Array::from(ArrayData::try_from(array).unwrap());
         assert_eq!(array, Int32Array::from(vec![1, 2, 3]));
