@@ -17,8 +17,6 @@
 
 //! Transfer data between the Arrow memory format and CSV (comma-separated values).
 
-extern crate core;
-
 pub mod reader;
 pub mod writer;
 
