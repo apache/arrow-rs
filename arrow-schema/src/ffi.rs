@@ -60,15 +60,15 @@ bitflags! {
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_ArrowSchema {
-    pub(crate) format: *const c_char,
-    pub(crate) name: *const c_char,
-    pub(crate) metadata: *const c_char,
-    pub(crate) flags: i64,
-    pub(crate) n_children: i64,
-    pub(crate) children: *mut *mut FFI_ArrowSchema,
-    pub(crate) dictionary: *mut FFI_ArrowSchema,
-    pub(crate) release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
-    pub(crate) private_data: *mut c_void,
+    format: *const c_char,
+    name: *const c_char,
+    metadata: *const c_char,
+    flags: i64,
+    n_children: i64,
+    children: *mut *mut FFI_ArrowSchema,
+    dictionary: *mut FFI_ArrowSchema,
+    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
+    private_data: *mut c_void,
 }
 
 struct SchemaPrivateData {

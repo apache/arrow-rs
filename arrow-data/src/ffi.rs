@@ -35,21 +35,21 @@ use std::ffi::c_void;
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_ArrowArray {
-    pub(crate) length: i64,
-    pub(crate) null_count: i64,
-    pub(crate) offset: i64,
-    pub(crate) n_buffers: i64,
-    pub(crate) n_children: i64,
-    pub(crate) buffers: *mut *const c_void,
-    pub(crate) children: *mut *mut FFI_ArrowArray,
-    pub(crate) dictionary: *mut FFI_ArrowArray,
-    pub(crate) release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
+    length: i64,
+    null_count: i64,
+    offset: i64,
+    n_buffers: i64,
+    n_children: i64,
+    buffers: *mut *const c_void,
+    children: *mut *mut FFI_ArrowArray,
+    dictionary: *mut FFI_ArrowArray,
+    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
     // When exported, this MUST contain everything that is owned by this array.
     // for example, any buffer pointed to in `buffers` must be here, as well
     // as the `buffers` pointer itself.
     // In other words, everything in [FFI_ArrowArray] must be owned by
     // `private_data` and can assume that they do not outlive `private_data`.
-    pub(crate) private_data: *mut c_void,
+    private_data: *mut c_void,
 }
 
 impl Drop for FFI_ArrowArray {
