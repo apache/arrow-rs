@@ -223,7 +223,7 @@ impl ExportedArrayStream {
         let ret_code = match reader.next() {
             None => {
                 // Marks ArrowArray released to indicate reaching the end of stream.
-                unsafe { std::ptr::drop_in_place(out) }
+                unsafe { std::ptr::write(out, FFI_ArrowArray::empty()) }
                 0
             }
             Some(next_batch) => {
