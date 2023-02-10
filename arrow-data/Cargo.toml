@@ -42,6 +42,11 @@ bench = false
 # this is not enabled by default as it is too computationally expensive
 # but is run as part of our CI checks
 force_validate = []
+# Enable ffi support
+ffi = ["arrow-schema/ffi"]
+
+[package.metadata.docs.rs]
+features = ["ffi"]
 
 [dependencies]
 
