@@ -3219,7 +3219,7 @@ fn cast_binary_to_string<O: OffsetSizeTrait>(
                 builder.extend(iter);
                 Ok(Arc::new(builder.finish()))
             }
-            false => return Err(e),
+            false => Err(e),
         },
     }
 }
