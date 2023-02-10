@@ -832,7 +832,6 @@ macro_rules! primitive_run_take {
 /// for e.g. an input `RunArray{ run_ends = [2,4,6,8], values=[1,2,1,2] }` and `indices=[2,7]`
 /// would be converted to `physical_indices=[1,3]` which will be used to build
 /// output `RunArray{ run_ends=[2], values=[2] }`
-
 fn take_run<T, I>(
     run_array: &RunArray<T>,
     logical_indices: &PrimitiveArray<I>,

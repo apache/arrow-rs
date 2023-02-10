@@ -364,6 +364,18 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
 
             DataType::Struct(fields)
         }
+        crate::Type::RunEndEncoded => {
+            let children = field.children().unwrap();
+            if children.len() != 2 {
+                panic!(
+                    "RunEndEncoded type should have exactly two children. Found {}",
+                    children.len()
+                )
+            }
+            let run_ends_field = children.get(0).into();
+            let values_field = children.get(1).into();
+            DataType::RunEndEncoded(Box::new(run_ends_field), Box::new(values_field))
+        }
         crate::Type::Map => {
             let map = field.type_as_map().unwrap();
             let children = field.children().unwrap();
@@ -710,7 +722,18 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&children[..])),
             }
         }
-        RunEndEncoded(_, _) => todo!(),
+        RunEndEncoded(run_ends, values) => {
+            let run_ends_field = build_field(fbb, run_ends);
+            let values_field = build_field(fbb, values);
+            let children = vec![run_ends_field, values_field];
+            FBFieldType {
+                type_type: crate::Type::RunEndEncoded,
+                type_: crate::RunEndEncodedBuilder::new(fbb)
+                    .finish()
+                    .as_union_value(),
+                children: Some(fbb.create_vector(&children[..])),
+            }
+        }
         Map(map_field, keys_sorted) => {
             let child = build_field(fbb, map_field);
             let mut field_type = crate::MapBuilder::new(fbb);

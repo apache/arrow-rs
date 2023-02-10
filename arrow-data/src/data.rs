@@ -1290,9 +1290,9 @@ impl ArrayData {
             DataType::RunEndEncoded(run_ends, _values) => {
                 let run_ends_data = self.child_data()[0].clone();
                 match run_ends.data_type() {
-                    DataType::Int16 => run_ends_data.check_run_ends::<i16>(self.len()),
-                    DataType::Int32 => run_ends_data.check_run_ends::<i32>(self.len()),
-                    DataType::Int64 => run_ends_data.check_run_ends::<i64>(self.len()),
+                    DataType::Int16 => run_ends_data.check_run_ends::<i16>(),
+                    DataType::Int32 => run_ends_data.check_run_ends::<i32>(),
+                    DataType::Int64 => run_ends_data.check_run_ends::<i64>(),
                     _ => unreachable!(),
                 }
             }
@@ -1451,7 +1451,7 @@ impl ArrayData {
     }
 
     /// Validates that each value in run_ends array is positive and strictly increasing.
-    fn check_run_ends<T>(&self, array_len: usize) -> Result<(), ArrowError>
+    fn check_run_ends<T>(&self) -> Result<(), ArrowError>
     where
         T: ArrowNativeType + TryInto<i64> + num::Num + std::fmt::Display,
     {
@@ -1478,9 +1478,10 @@ impl ArrayData {
             Ok(())
         })?;
 
-        if prev_value.as_usize() != array_len {
+        if prev_value.as_usize() < (self.offset + self.len) {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "The length of array does not match the last value in the run_ends array. The last value of run_ends array is {prev_value} and length of array is {array_len}."
+                "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {}.",
+                self.offset + self.len
             )));
         }
         Ok(())
