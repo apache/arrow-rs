@@ -226,17 +226,6 @@ unsafe fn create_buffer(
         .map(|ptr| Buffer::from_custom_allocation(ptr, len, owner))
 }
 
-fn create_child<'a>(
-    owner: Arc<FFI_ArrowArray>,
-    array: &'a FFI_ArrowArray,
-    schema: &'a FFI_ArrowSchema,
-    index: usize,
-) -> ArrowArrayChild<'a> {
-    let array = array.child(index);
-    let schema = schema.child(index);
-    ArrowArrayChild::from_raw(array, schema, owner)
-}
-
 pub trait ArrowArrayRef {
     fn to_data(&self) -> Result<ArrayData> {
         let data_type = self.data_type()?;
@@ -380,7 +369,11 @@ pub trait ArrowArrayRef {
     }
 
     fn child(&self, index: usize) -> ArrowArrayChild {
-        create_child(self.owner().clone(), self.array(), self.schema(), index)
+        ArrowArrayChild {
+            array: self.array().child(index),
+            schema: self.schema().child(index),
+            owner: self.owner(),
+        }
     }
 
     fn owner(&self) -> &Arc<FFI_ArrowArray>;
@@ -389,11 +382,11 @@ pub trait ArrowArrayRef {
     fn data_type(&self) -> Result<DataType>;
     fn dictionary(&self) -> Option<ArrowArrayChild> {
         match (self.array().dictionary(), self.schema().dictionary()) {
-            (Some(array), Some(schema)) => Some(ArrowArrayChild::from_raw(
+            (Some(array), Some(schema)) => Some(ArrowArrayChild {
                 array,
                 schema,
-                self.owner().clone(),
-            )),
+                owner: self.owner(),
+            }),
             (None, None) => None,
             _ => panic!("Dictionary should both be set or not set in FFI_ArrowArray and FFI_ArrowSchema")
         }
@@ -430,7 +423,7 @@ pub struct ArrowArray {
 pub struct ArrowArrayChild<'a> {
     array: &'a FFI_ArrowArray,
     schema: &'a FFI_ArrowSchema,
-    owner: Arc<FFI_ArrowArray>,
+    owner: &'a Arc<FFI_ArrowArray>,
 }
 
 impl ArrowArrayRef for ArrowArray {
@@ -467,7 +460,7 @@ impl<'a> ArrowArrayRef for ArrowArrayChild<'a> {
     }
 
     fn owner(&self) -> &Arc<FFI_ArrowArray> {
-        &self.owner
+        self.owner
     }
 }
 
@@ -536,20 +529,6 @@ impl ArrowArray {
     #[deprecated(note = "Use FFI_ArrowArray and FFI_ArrowSchema directly")]
     pub fn into_raw(this: ArrowArray) -> (*const FFI_ArrowArray, *const FFI_ArrowSchema) {
         (Arc::into_raw(this.array), Arc::into_raw(this.schema))
-    }
-}
-
-impl<'a> ArrowArrayChild<'a> {
-    fn from_raw(
-        array: &'a FFI_ArrowArray,
-        schema: &'a FFI_ArrowSchema,
-        owner: Arc<FFI_ArrowArray>,
-    ) -> Self {
-        Self {
-            array,
-            schema,
-            owner,
-        }
     }
 }
 
