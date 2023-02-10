@@ -177,6 +177,7 @@ impl<R: RunEndIndexType> RunArray<R> {
     }
 
     /// Returns index to the physical array for the given index to the logical array.
+    /// This function adjusts the input logical index based on `ArrayData::offset`
     /// Performs a binary search on the run_ends array for the input index.
     #[inline]
     pub fn get_physical_index(&self, logical_index: usize) -> Option<usize> {

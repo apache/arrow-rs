@@ -1516,7 +1516,7 @@ impl ArrayData {
 
         if prev_value.as_usize() < (self.offset + self.len) {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "The offset + length of array should be lte last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {}.",
+                "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {}.",
                 self.offset + self.len
             )));
         }
