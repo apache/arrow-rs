@@ -1734,7 +1734,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Invalid UTF-8 sequence")]
+    #[should_panic(expected = "Encountered non UTF-8 data")]
     fn test_invalid_utf8() {
         let mut converter =
             RowConverter::new(vec![SortField::new(DataType::Binary)]).unwrap();
