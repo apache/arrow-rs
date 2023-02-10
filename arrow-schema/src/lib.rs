@@ -26,6 +26,9 @@ pub use field::*;
 mod schema;
 pub use schema::*;
 
+#[cfg(feature = "ffi")]
+pub mod ffi;
+
 /// Options that define the sort order of a given column
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SortOptions {

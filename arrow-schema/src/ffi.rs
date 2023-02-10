@@ -1,0 +1,703 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Contains declarations to bind to the [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).
+//!
+//! ```
+//! # use arrow_schema::{DataType, Field, Schema};
+//! # use arrow_schema::ffi::FFI_ArrowSchema;
+//!
+//! // Create from data type
+//! let ffi_data_type = FFI_ArrowSchema::try_from(&DataType::LargeUtf8).unwrap();
+//! let back = DataType::try_from(&ffi_data_type).unwrap();
+//! assert_eq!(back, DataType::LargeUtf8);
+//!
+//! // Create from schema
+//! let schema = Schema::new(vec![Field::new("foo", DataType::Int64, false)]);
+//! let ffi_schema = FFI_ArrowSchema::try_from(&schema).unwrap();
+//! let back = Schema::try_from(&ffi_schema).unwrap();
+//!
+//! assert_eq!(schema, back);
+//! ```
+
+use crate::{ArrowError, DataType, Field, Schema, TimeUnit, UnionMode};
+use bitflags::bitflags;
+use std::ffi::{c_char, c_void, CStr, CString};
+
+bitflags! {
+    pub struct Flags: i64 {
+        const DICTIONARY_ORDERED = 0b00000001;
+        const NULLABLE = 0b00000010;
+        const MAP_KEYS_SORTED = 0b00000100;
+    }
+}
+
+/// ABI-compatible struct for `ArrowSchema` from C Data Interface
+/// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
+///
+/// ```
+/// # use arrow_schema::DataType;
+/// # use arrow_schema::ffi::FFI_ArrowSchema;
+/// fn array_schema(data_type: &DataType) -> FFI_ArrowSchema {
+///     FFI_ArrowSchema::try_from(data_type).unwrap()
+/// }
+/// ```
+///
+#[repr(C)]
+#[derive(Debug)]
+pub struct FFI_ArrowSchema {
+    pub(crate) format: *const c_char,
+    pub(crate) name: *const c_char,
+    pub(crate) metadata: *const c_char,
+    pub(crate) flags: i64,
+    pub(crate) n_children: i64,
+    pub(crate) children: *mut *mut FFI_ArrowSchema,
+    pub(crate) dictionary: *mut FFI_ArrowSchema,
+    pub(crate) release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
+    pub(crate) private_data: *mut c_void,
+}
+
+struct SchemaPrivateData {
+    children: Box<[*mut FFI_ArrowSchema]>,
+    dictionary: *mut FFI_ArrowSchema,
+}
+
+// callback used to drop [FFI_ArrowSchema] when it is exported.
+unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
+    if schema.is_null() {
+        return;
+    }
+    let schema = &mut *schema;
+
+    // take ownership back to release it.
+    drop(CString::from_raw(schema.format as *mut c_char));
+    if !schema.name.is_null() {
+        drop(CString::from_raw(schema.name as *mut c_char));
+    }
+    if !schema.private_data.is_null() {
+        let private_data = Box::from_raw(schema.private_data as *mut SchemaPrivateData);
+        for child in private_data.children.iter() {
+            drop(Box::from_raw(*child))
+        }
+        if !private_data.dictionary.is_null() {
+            drop(Box::from_raw(private_data.dictionary));
+        }
+
+        drop(private_data);
+    }
+
+    schema.release = None;
+}
+
+impl FFI_ArrowSchema {
+    /// create a new [`FFI_ArrowSchema`]. This fails if the fields'
+    /// [`DataType`] is not supported.
+    pub fn try_new(
+        format: &str,
+        children: Vec<FFI_ArrowSchema>,
+        dictionary: Option<FFI_ArrowSchema>,
+    ) -> Result<Self, ArrowError> {
+        let mut this = Self::empty();
+
+        let children_ptr = children
+            .into_iter()
+            .map(Box::new)
+            .map(Box::into_raw)
+            .collect::<Box<_>>();
+
+        this.format = CString::new(format).unwrap().into_raw();
+        this.release = Some(release_schema);
+        this.n_children = children_ptr.len() as i64;
+
+        let dictionary_ptr = dictionary
+            .map(|d| Box::into_raw(Box::new(d)))
+            .unwrap_or(std::ptr::null_mut());
+
+        let mut private_data = Box::new(SchemaPrivateData {
+            children: children_ptr,
+            dictionary: dictionary_ptr,
+        });
+
+        // intentionally set from private_data (see https://github.com/apache/arrow-rs/issues/580)
+        this.children = private_data.children.as_mut_ptr();
+
+        this.dictionary = dictionary_ptr;
+
+        this.private_data = Box::into_raw(private_data) as *mut c_void;
+
+        Ok(this)
+    }
+
+    pub fn with_name(mut self, name: &str) -> Result<Self, ArrowError> {
+        self.name = CString::new(name).unwrap().into_raw();
+        Ok(self)
+    }
+
+    pub fn with_flags(mut self, flags: Flags) -> Result<Self, ArrowError> {
+        self.flags = flags.bits();
+        Ok(self)
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            format: std::ptr::null_mut(),
+            name: std::ptr::null_mut(),
+            metadata: std::ptr::null_mut(),
+            flags: 0,
+            n_children: 0,
+            children: std::ptr::null_mut(),
+            dictionary: std::ptr::null_mut(),
+            release: None,
+            private_data: std::ptr::null_mut(),
+        }
+    }
+
+    /// returns the format of this schema.
+    pub fn format(&self) -> &str {
+        assert!(!self.format.is_null());
+        // safe because the lifetime of `self.format` equals `self`
+        unsafe { CStr::from_ptr(self.format) }
+            .to_str()
+            .expect("The external API has a non-utf8 as format")
+    }
+
+    /// returns the name of this schema.
+    pub fn name(&self) -> &str {
+        assert!(!self.name.is_null());
+        // safe because the lifetime of `self.name` equals `self`
+        unsafe { CStr::from_ptr(self.name) }
+            .to_str()
+            .expect("The external API has a non-utf8 as name")
+    }
+
+    pub fn flags(&self) -> Option<Flags> {
+        Flags::from_bits(self.flags)
+    }
+
+    pub fn child(&self, index: usize) -> &Self {
+        assert!(index < self.n_children as usize);
+        unsafe { self.children.add(index).as_ref().unwrap().as_ref().unwrap() }
+    }
+
+    pub fn children(&self) -> impl Iterator<Item = &Self> {
+        (0..self.n_children as usize).map(move |i| self.child(i))
+    }
+
+    pub fn nullable(&self) -> bool {
+        (self.flags / 2) & 1 == 1
+    }
+
+    pub fn dictionary(&self) -> Option<&Self> {
+        unsafe { self.dictionary.as_ref() }
+    }
+
+    pub fn map_keys_sorted(&self) -> bool {
+        self.flags & 0b00000100 != 0
+    }
+
+    pub fn dictionary_ordered(&self) -> bool {
+        self.flags & 0b00000001 != 0
+    }
+}
+
+impl Drop for FFI_ArrowSchema {
+    fn drop(&mut self) {
+        match self.release {
+            None => (),
+            Some(release) => unsafe { release(self) },
+        };
+    }
+}
+
+impl TryFrom<&FFI_ArrowSchema> for DataType {
+    type Error = ArrowError;
+
+    /// See [CDataInterface docs](https://arrow.apache.org/docs/format/CDataInterface.html#data-type-description-format-strings)
+    fn try_from(c_schema: &FFI_ArrowSchema) -> Result<Self, ArrowError> {
+        let mut dtype = match c_schema.format() {
+            "n" => DataType::Null,
+            "b" => DataType::Boolean,
+            "c" => DataType::Int8,
+            "C" => DataType::UInt8,
+            "s" => DataType::Int16,
+            "S" => DataType::UInt16,
+            "i" => DataType::Int32,
+            "I" => DataType::UInt32,
+            "l" => DataType::Int64,
+            "L" => DataType::UInt64,
+            "e" => DataType::Float16,
+            "f" => DataType::Float32,
+            "g" => DataType::Float64,
+            "z" => DataType::Binary,
+            "Z" => DataType::LargeBinary,
+            "u" => DataType::Utf8,
+            "U" => DataType::LargeUtf8,
+            "tdD" => DataType::Date32,
+            "tdm" => DataType::Date64,
+            "tts" => DataType::Time32(TimeUnit::Second),
+            "ttm" => DataType::Time32(TimeUnit::Millisecond),
+            "ttu" => DataType::Time64(TimeUnit::Microsecond),
+            "ttn" => DataType::Time64(TimeUnit::Nanosecond),
+            "tDs" => DataType::Duration(TimeUnit::Second),
+            "tDm" => DataType::Duration(TimeUnit::Millisecond),
+            "tDu" => DataType::Duration(TimeUnit::Microsecond),
+            "tDn" => DataType::Duration(TimeUnit::Nanosecond),
+            "+l" => {
+                let c_child = c_schema.child(0);
+                DataType::List(Box::new(Field::try_from(c_child)?))
+            }
+            "+L" => {
+                let c_child = c_schema.child(0);
+                DataType::LargeList(Box::new(Field::try_from(c_child)?))
+            }
+            "+s" => {
+                let fields = c_schema.children().map(Field::try_from);
+                DataType::Struct(fields.collect::<Result<Vec<_>, ArrowError>>()?)
+            }
+            "+m" => {
+                let c_child = c_schema.child(0);
+                let map_keys_sorted = c_schema.map_keys_sorted();
+                DataType::Map(Box::new(Field::try_from(c_child)?), map_keys_sorted)
+            }
+            // Parametrized types, requiring string parse
+            other => {
+                match other.splitn(2, ':').collect::<Vec<&str>>().as_slice() {
+                    // FixedSizeBinary type in format "w:num_bytes"
+                    ["w", num_bytes] => {
+                        let parsed_num_bytes = num_bytes.parse::<i32>().map_err(|_| {
+                            ArrowError::CDataInterface(
+                                "FixedSizeBinary requires an integer parameter representing number of bytes per element".to_string())
+                        })?;
+                        DataType::FixedSizeBinary(parsed_num_bytes)
+                    },
+                    // FixedSizeList type in format "+w:num_elems"
+                    ["+w", num_elems] => {
+                        let c_child = c_schema.child(0);
+                        let parsed_num_elems = num_elems.parse::<i32>().map_err(|_| {
+                            ArrowError::CDataInterface(
+                                "The FixedSizeList type requires an integer parameter representing number of elements per list".to_string())
+                        })?;
+                        DataType::FixedSizeList(Box::new(Field::try_from(c_child)?), parsed_num_elems)
+                    },
+                    // Decimal types in format "d:precision,scale" or "d:precision,scale,bitWidth"
+                    ["d", extra] => {
+                        match extra.splitn(3, ',').collect::<Vec<&str>>().as_slice() {
+                            [precision, scale] => {
+                                let parsed_precision = precision.parse::<u8>().map_err(|_| {
+                                    ArrowError::CDataInterface(
+                                        "The decimal type requires an integer precision".to_string(),
+                                    )
+                                })?;
+                                let parsed_scale = scale.parse::<i8>().map_err(|_| {
+                                    ArrowError::CDataInterface(
+                                        "The decimal type requires an integer scale".to_string(),
+                                    )
+                                })?;
+                                DataType::Decimal128(parsed_precision, parsed_scale)
+                            },
+                            [precision, scale, bits] => {
+                                if *bits != "128" && *bits != "256" {
+                                    return Err(ArrowError::CDataInterface("Only 128/256 bit wide decimal is supported in the Rust implementation".to_string()));
+                                }
+                                let parsed_precision = precision.parse::<u8>().map_err(|_| {
+                                    ArrowError::CDataInterface(
+                                        "The decimal type requires an integer precision".to_string(),
+                                    )
+                                })?;
+                                let parsed_scale = scale.parse::<i8>().map_err(|_| {
+                                    ArrowError::CDataInterface(
+                                        "The decimal type requires an integer scale".to_string(),
+                                    )
+                                })?;
+                                if *bits == "128" {
+                                    DataType::Decimal128(parsed_precision, parsed_scale)
+                                } else {
+                                    DataType::Decimal256(parsed_precision, parsed_scale)
+                                }
+                            }
+                            _ => {
+                                return Err(ArrowError::CDataInterface(format!(
+                                    "The decimal pattern \"d:{extra:?}\" is not supported in the Rust implementation"
+                                )))
+                            }
+                        }
+                    }
+                    // DenseUnion
+                    ["+ud", extra] => {
+                        let type_ids = extra.split(',').map(|t| t.parse::<i8>().map_err(|_| {
+                            ArrowError::CDataInterface(
+                                "The Union type requires an integer type id".to_string(),
+                            )
+                        })).collect::<Result<Vec<_>, ArrowError>>()?;
+                        let mut fields = Vec::with_capacity(type_ids.len());
+                        for idx in 0..c_schema.n_children {
+                            let c_child = c_schema.child(idx as usize);
+                            let field = Field::try_from(c_child)?;
+                            fields.push(field);
+                        }
+
+                        if fields.len() != type_ids.len() {
+                            return Err(ArrowError::CDataInterface(
+                                "The Union type requires same number of fields and type ids".to_string(),
+                            ));
+                        }
+
+                        DataType::Union(fields, type_ids, UnionMode::Dense)
+                    }
+                    // SparseUnion
+                    ["+us", extra] => {
+                        let type_ids = extra.split(',').map(|t| t.parse::<i8>().map_err(|_| {
+                            ArrowError::CDataInterface(
+                                "The Union type requires an integer type id".to_string(),
+                            )
+                        })).collect::<Result<Vec<_>, ArrowError>>()?;
+                        let mut fields = Vec::with_capacity(type_ids.len());
+                        for idx in 0..c_schema.n_children {
+                            let c_child = c_schema.child(idx as usize);
+                            let field = Field::try_from(c_child)?;
+                            fields.push(field);
+                        }
+
+                        if fields.len() != type_ids.len() {
+                            return Err(ArrowError::CDataInterface(
+                                "The Union type requires same number of fields and type ids".to_string(),
+                            ));
+                        }
+
+                        DataType::Union(fields, type_ids, UnionMode::Sparse)
+                    }
+
+                    // Timestamps in format "tts:" and "tts:America/New_York" for no timezones and timezones resp.
+                    ["tss", ""] => DataType::Timestamp(TimeUnit::Second, None),
+                    ["tsm", ""] => DataType::Timestamp(TimeUnit::Millisecond, None),
+                    ["tsu", ""] => DataType::Timestamp(TimeUnit::Microsecond, None),
+                    ["tsn", ""] => DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    ["tss", tz] => {
+                        DataType::Timestamp(TimeUnit::Second, Some(tz.to_string()))
+                    }
+                    ["tsm", tz] => {
+                        DataType::Timestamp(TimeUnit::Millisecond, Some(tz.to_string()))
+                    }
+                    ["tsu", tz] => {
+                        DataType::Timestamp(TimeUnit::Microsecond, Some(tz.to_string()))
+                    }
+                    ["tsn", tz] => {
+                        DataType::Timestamp(TimeUnit::Nanosecond, Some(tz.to_string()))
+                    }
+                    _ => {
+                        return Err(ArrowError::CDataInterface(format!(
+                            "The datatype \"{other:?}\" is still not supported in Rust implementation"
+                        )))
+                    }
+                }
+            }
+        };
+
+        if let Some(dict_schema) = c_schema.dictionary() {
+            let value_type = Self::try_from(dict_schema)?;
+            dtype = DataType::Dictionary(Box::new(dtype), Box::new(value_type));
+        }
+
+        Ok(dtype)
+    }
+}
+
+impl TryFrom<&FFI_ArrowSchema> for Field {
+    type Error = ArrowError;
+
+    fn try_from(c_schema: &FFI_ArrowSchema) -> Result<Self, ArrowError> {
+        let dtype = DataType::try_from(c_schema)?;
+        let field = Field::new(c_schema.name(), dtype, c_schema.nullable());
+        Ok(field)
+    }
+}
+
+impl TryFrom<&FFI_ArrowSchema> for Schema {
+    type Error = ArrowError;
+
+    fn try_from(c_schema: &FFI_ArrowSchema) -> Result<Self, ArrowError> {
+        // interpret it as a struct type then extract its fields
+        let dtype = DataType::try_from(c_schema)?;
+        if let DataType::Struct(fields) = dtype {
+            Ok(Schema::new(fields))
+        } else {
+            Err(ArrowError::CDataInterface(
+                "Unable to interpret C data struct as a Schema".to_string(),
+            ))
+        }
+    }
+}
+
+impl TryFrom<&DataType> for FFI_ArrowSchema {
+    type Error = ArrowError;
+
+    /// See [CDataInterface docs](https://arrow.apache.org/docs/format/CDataInterface.html#data-type-description-format-strings)
+    fn try_from(dtype: &DataType) -> Result<Self, ArrowError> {
+        let format = get_format_string(dtype)?;
+        // allocate and hold the children
+        let children = match dtype {
+            DataType::List(child)
+            | DataType::LargeList(child)
+            | DataType::FixedSizeList(child, _)
+            | DataType::Map(child, _) => {
+                vec![FFI_ArrowSchema::try_from(child.as_ref())?]
+            }
+            DataType::Union(fields, _, _) => fields
+                .iter()
+                .map(FFI_ArrowSchema::try_from)
+                .collect::<Result<Vec<_>, ArrowError>>()?,
+            DataType::Struct(fields) => fields
+                .iter()
+                .map(FFI_ArrowSchema::try_from)
+                .collect::<Result<Vec<_>, ArrowError>>()?,
+            _ => vec![],
+        };
+        let dictionary = if let DataType::Dictionary(_, value_data_type) = dtype {
+            Some(Self::try_from(value_data_type.as_ref())?)
+        } else {
+            None
+        };
+
+        let flags = match dtype {
+            DataType::Map(_, true) => Flags::MAP_KEYS_SORTED,
+            _ => Flags::empty(),
+        };
+
+        FFI_ArrowSchema::try_new(&format, children, dictionary)?.with_flags(flags)
+    }
+}
+
+fn get_format_string(dtype: &DataType) -> Result<String, ArrowError> {
+    match dtype {
+        DataType::Null => Ok("n".to_string()),
+        DataType::Boolean => Ok("b".to_string()),
+        DataType::Int8 => Ok("c".to_string()),
+        DataType::UInt8 => Ok("C".to_string()),
+        DataType::Int16 => Ok("s".to_string()),
+        DataType::UInt16 => Ok("S".to_string()),
+        DataType::Int32 => Ok("i".to_string()),
+        DataType::UInt32 => Ok("I".to_string()),
+        DataType::Int64 => Ok("l".to_string()),
+        DataType::UInt64 => Ok("L".to_string()),
+        DataType::Float16 => Ok("e".to_string()),
+        DataType::Float32 => Ok("f".to_string()),
+        DataType::Float64 => Ok("g".to_string()),
+        DataType::Binary => Ok("z".to_string()),
+        DataType::LargeBinary => Ok("Z".to_string()),
+        DataType::Utf8 => Ok("u".to_string()),
+        DataType::LargeUtf8 => Ok("U".to_string()),
+        DataType::FixedSizeBinary(num_bytes) => Ok(format!("w:{num_bytes}")),
+        DataType::FixedSizeList(_, num_elems) => Ok(format!("+w:{num_elems}")),
+        DataType::Decimal128(precision, scale) => Ok(format!("d:{precision},{scale}")),
+        DataType::Decimal256(precision, scale) => {
+            Ok(format!("d:{precision},{scale},256"))
+        }
+        DataType::Date32 => Ok("tdD".to_string()),
+        DataType::Date64 => Ok("tdm".to_string()),
+        DataType::Time32(TimeUnit::Second) => Ok("tts".to_string()),
+        DataType::Time32(TimeUnit::Millisecond) => Ok("ttm".to_string()),
+        DataType::Time64(TimeUnit::Microsecond) => Ok("ttu".to_string()),
+        DataType::Time64(TimeUnit::Nanosecond) => Ok("ttn".to_string()),
+        DataType::Timestamp(TimeUnit::Second, None) => Ok("tss:".to_string()),
+        DataType::Timestamp(TimeUnit::Millisecond, None) => Ok("tsm:".to_string()),
+        DataType::Timestamp(TimeUnit::Microsecond, None) => Ok("tsu:".to_string()),
+        DataType::Timestamp(TimeUnit::Nanosecond, None) => Ok("tsn:".to_string()),
+        DataType::Timestamp(TimeUnit::Second, Some(tz)) => Ok(format!("tss:{tz}")),
+        DataType::Timestamp(TimeUnit::Millisecond, Some(tz)) => Ok(format!("tsm:{tz}")),
+        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => Ok(format!("tsu:{tz}")),
+        DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)) => Ok(format!("tsn:{tz}")),
+        DataType::Duration(TimeUnit::Second) => Ok("tDs".to_string()),
+        DataType::Duration(TimeUnit::Millisecond) => Ok("tDm".to_string()),
+        DataType::Duration(TimeUnit::Microsecond) => Ok("tDu".to_string()),
+        DataType::Duration(TimeUnit::Nanosecond) => Ok("tDn".to_string()),
+        DataType::List(_) => Ok("+l".to_string()),
+        DataType::LargeList(_) => Ok("+L".to_string()),
+        DataType::Struct(_) => Ok("+s".to_string()),
+        DataType::Map(_, _) => Ok("+m".to_string()),
+        DataType::Dictionary(key_data_type, _) => get_format_string(key_data_type),
+        DataType::Union(_, type_ids, mode) => {
+            let formats = type_ids.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+            match mode {
+                UnionMode::Dense => Ok(format!("{}:{}", "+ud", formats.join(","))),
+                UnionMode::Sparse => Ok(format!("{}:{}", "+us", formats.join(","))),
+            }
+        }
+        other => Err(ArrowError::CDataInterface(format!(
+            "The datatype \"{other:?}\" is still not supported in Rust implementation"
+        ))),
+    }
+}
+
+impl TryFrom<&Field> for FFI_ArrowSchema {
+    type Error = ArrowError;
+
+    fn try_from(field: &Field) -> Result<Self, ArrowError> {
+        let mut flags = if field.is_nullable() {
+            Flags::NULLABLE
+        } else {
+            Flags::empty()
+        };
+
+        if let Some(true) = field.dict_is_ordered() {
+            flags |= Flags::DICTIONARY_ORDERED;
+        }
+
+        FFI_ArrowSchema::try_from(field.data_type())?
+            .with_name(field.name())?
+            .with_flags(flags)
+    }
+}
+
+impl TryFrom<&Schema> for FFI_ArrowSchema {
+    type Error = ArrowError;
+
+    fn try_from(schema: &Schema) -> Result<Self, ArrowError> {
+        let dtype = DataType::Struct(schema.fields().clone());
+        let c_schema = FFI_ArrowSchema::try_from(&dtype)?;
+        Ok(c_schema)
+    }
+}
+
+impl TryFrom<DataType> for FFI_ArrowSchema {
+    type Error = ArrowError;
+
+    fn try_from(dtype: DataType) -> Result<Self, ArrowError> {
+        FFI_ArrowSchema::try_from(&dtype)
+    }
+}
+
+impl TryFrom<Field> for FFI_ArrowSchema {
+    type Error = ArrowError;
+
+    fn try_from(field: Field) -> Result<Self, ArrowError> {
+        FFI_ArrowSchema::try_from(&field)
+    }
+}
+
+impl TryFrom<Schema> for FFI_ArrowSchema {
+    type Error = ArrowError;
+
+    fn try_from(schema: Schema) -> Result<Self, ArrowError> {
+        FFI_ArrowSchema::try_from(&schema)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn round_trip_type(dtype: DataType) {
+        let c_schema = FFI_ArrowSchema::try_from(&dtype).unwrap();
+        let restored = DataType::try_from(&c_schema).unwrap();
+        assert_eq!(restored, dtype);
+    }
+
+    fn round_trip_field(field: Field) {
+        let c_schema = FFI_ArrowSchema::try_from(&field).unwrap();
+        let restored = Field::try_from(&c_schema).unwrap();
+        assert_eq!(restored, field);
+    }
+
+    fn round_trip_schema(schema: Schema) {
+        let c_schema = FFI_ArrowSchema::try_from(&schema).unwrap();
+        let restored = Schema::try_from(&c_schema).unwrap();
+        assert_eq!(restored, schema);
+    }
+
+    #[test]
+    fn test_type() {
+        round_trip_type(DataType::Int64);
+        round_trip_type(DataType::UInt64);
+        round_trip_type(DataType::Float64);
+        round_trip_type(DataType::Date64);
+        round_trip_type(DataType::Time64(TimeUnit::Nanosecond));
+        round_trip_type(DataType::FixedSizeBinary(12));
+        round_trip_type(DataType::FixedSizeList(
+            Box::new(Field::new("a", DataType::Int64, false)),
+            5,
+        ));
+        round_trip_type(DataType::Utf8);
+        round_trip_type(DataType::List(Box::new(Field::new(
+            "a",
+            DataType::Int16,
+            false,
+        ))));
+        round_trip_type(DataType::Struct(vec![Field::new(
+            "a",
+            DataType::Utf8,
+            true,
+        )]));
+    }
+
+    #[test]
+    fn test_field() {
+        let dtype = DataType::Struct(vec![Field::new("a", DataType::Utf8, true)]);
+        round_trip_field(Field::new("test", dtype, true));
+    }
+
+    #[test]
+    fn test_schema() {
+        let schema = Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("address", DataType::Utf8, false),
+            Field::new("priority", DataType::UInt8, false),
+        ]);
+        round_trip_schema(schema);
+
+        // test that we can interpret struct types as schema
+        let dtype = DataType::Struct(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Int16, false),
+        ]);
+        let c_schema = FFI_ArrowSchema::try_from(&dtype).unwrap();
+        let schema = Schema::try_from(&c_schema).unwrap();
+        assert_eq!(schema.fields().len(), 2);
+
+        // test that we assert the input type
+        let c_schema = FFI_ArrowSchema::try_from(&DataType::Float64).unwrap();
+        let result = Schema::try_from(&c_schema);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_map_keys_sorted() {
+        let keys = Field::new("keys", DataType::Int32, false);
+        let values = Field::new("values", DataType::UInt32, false);
+        let entry_struct = DataType::Struct(vec![keys, values]);
+
+        // Construct a map array from the above two
+        let map_data_type =
+            DataType::Map(Box::new(Field::new("entries", entry_struct, true)), true);
+
+        let arrow_schema = FFI_ArrowSchema::try_from(map_data_type).unwrap();
+        assert!(arrow_schema.map_keys_sorted());
+    }
+
+    #[test]
+    fn test_dictionary_ordered() {
+        let schema = Schema::new(vec![Field::new_dict(
+            "dict",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+            0,
+            true,
+        )]);
+
+        let arrow_schema = FFI_ArrowSchema::try_from(schema).unwrap();
+        assert!(arrow_schema.child(0).dictionary_ordered());
+    }
+}
