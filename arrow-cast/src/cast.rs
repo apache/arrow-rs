@@ -3202,49 +3202,25 @@ fn cast_binary_to_string<O: OffsetSizeTrait>(
         .downcast_ref::<GenericByteArray<GenericBinaryType<O>>>()
         .unwrap();
 
-    if !cast_options.safe {
-        let offsets = array.value_offsets();
-        let values = array.value_data();
+    match GenericStringArray::<O>::try_from_binary(array.clone()) {
+        Ok(a) => Ok(Arc::new(a)),
+        Err(e) => match cast_options.safe {
+            true => {
+                // Fallback to slow method to convert invalid sequences to nulls
+                let mut builder = GenericStringBuilder::<O>::with_capacity(
+                    array.len(),
+                    array.value_data().len(),
+                );
 
-        // We only need to validate that all values are valid UTF-8
-        let validated = std::str::from_utf8(values)
-            .map_err(|_| ArrowError::CastError("Invalid UTF-8 sequence".to_string()))?;
-        // Checks if the offsets are valid but does not re-encode
-        for offset in offsets.iter() {
-            if !validated.is_char_boundary(offset.as_usize()) {
-                return Err(ArrowError::CastError("Invalid UTF-8 sequence".to_string()));
+                let iter = array
+                    .iter()
+                    .map(|v| v.and_then(|v| std::str::from_utf8(v).ok()));
+
+                builder.extend(iter);
+                Ok(Arc::new(builder.finish()))
             }
-        }
-
-        let builder = array
-            .into_data()
-            .into_builder()
-            .data_type(GenericStringArray::<O>::DATA_TYPE);
-        // SAFETY:
-        // Validated UTF-8 above
-        Ok(Arc::new(GenericStringArray::<O>::from(unsafe {
-            builder.build_unchecked()
-        })))
-    } else {
-        let mut null_builder = BooleanBufferBuilder::new(array.len());
-        array.iter().for_each(|maybe_value| {
-            null_builder.append(
-                maybe_value
-                    .and_then(|value| std::str::from_utf8(value).ok())
-                    .is_some(),
-            );
-        });
-
-        let builder = array
-            .into_data()
-            .into_builder()
-            .null_bit_buffer(Some(null_builder.finish()))
-            .data_type(GenericStringArray::<O>::DATA_TYPE);
-        // SAFETY:
-        // Validated UTF-8 above
-        Ok(Arc::new(GenericStringArray::<O>::from(unsafe {
-            builder.build_unchecked()
-        })))
+            false => return Err(e),
+        },
     }
 }
 
@@ -7587,5 +7563,22 @@ mod tests {
 
         test_tz("+00:00".to_owned());
         test_tz("+02:00".to_owned());
+    }
+
+    #[test]
+    fn test_cast_invalid_utf8() {
+        let v1: &[u8] = b"\xFF invalid";
+        let v2: &[u8] = b"\x00 Foo";
+        let s = BinaryArray::from(vec![v1, v2]);
+        let options = CastOptions { safe: true };
+        let array = cast_with_options(&s, &DataType::Utf8, &options).unwrap();
+        let a = as_string_array(array.as_ref());
+        a.data().validate_full().unwrap();
+
+        assert_eq!(a.null_count(), 1);
+        assert_eq!(a.len(), 2);
+        assert!(a.is_null(0));
+        assert_eq!(a.value(0), "");
+        assert_eq!(a.value(1), "\x00 Foo");
     }
 }

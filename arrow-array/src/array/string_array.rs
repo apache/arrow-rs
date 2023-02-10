@@ -21,7 +21,7 @@ use crate::{
 };
 use arrow_buffer::{bit_util, MutableBuffer};
 use arrow_data::ArrayData;
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType};
 
 /// Generic struct for \[Large\]StringArray
 ///
@@ -99,6 +99,31 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     ) -> impl Iterator<Item = Option<&str>> + 'a {
         indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
     }
+
+    /// Fallibly creates a [`GenericStringArray`] from a [`GenericBinaryArray`] returning
+    /// an error if [`GenericBinaryArray`] contains invalid UTF-8 data
+    pub fn try_from_binary(
+        v: GenericBinaryArray<OffsetSize>,
+    ) -> Result<Self, ArrowError> {
+        let offsets = v.value_offsets();
+        let values = v.value_data();
+
+        // We only need to validate that all values are valid UTF-8
+        let validated = std::str::from_utf8(values).map_err(|e| {
+            ArrowError::CastError(format!("Encountered non UTF-8 data: {}", e))
+        })?;
+
+        for offset in offsets.iter() {
+            if !validated.is_char_boundary(offset.as_usize()) {
+                return Err(ArrowError::CastError(format!("Split UTF-8 codepoint")));
+            }
+        }
+
+        let builder = v.into_data().into_builder().data_type(Self::DATA_TYPE);
+        // SAFETY:
+        // Validated UTF-8 above
+        Ok(Self::from(unsafe { builder.build_unchecked() }))
+    }
 }
 
 impl<'a, Ptr, OffsetSize: OffsetSizeTrait> FromIterator<&'a Option<Ptr>>
@@ -172,22 +197,7 @@ impl<OffsetSize: OffsetSizeTrait> From<GenericBinaryArray<OffsetSize>>
     for GenericStringArray<OffsetSize>
 {
     fn from(v: GenericBinaryArray<OffsetSize>) -> Self {
-        let offsets = v.value_offsets();
-        let values = v.value_data();
-
-        // We only need to validate that all values are valid UTF-8
-        let validated = std::str::from_utf8(values).expect("Invalid UTF-8 sequence");
-        for offset in offsets.iter() {
-            assert!(
-                validated.is_char_boundary(offset.as_usize()),
-                "Invalid UTF-8 sequence"
-            )
-        }
-
-        let builder = v.into_data().into_builder().data_type(Self::DATA_TYPE);
-        // SAFETY:
-        // Validated UTF-8 above
-        Self::from(unsafe { builder.build_unchecked() })
+        Self::try_from_binary(v).unwrap()
     }
 }
 
@@ -650,7 +660,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Invalid UTF-8 sequence: Utf8Error")]
+    #[should_panic(
+        expected = "Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
+    )]
     fn test_list_array_utf8_validation() {
         let mut builder = ListBuilder::new(PrimitiveBuilder::<UInt8Type>::new());
         builder.values().append_value(0xFF);
