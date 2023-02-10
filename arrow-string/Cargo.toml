@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-string"
-version = "32.0.0"
+version = "33.0.0"
 description = "String kernels for arrow arrays"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -38,11 +38,11 @@ path = "src/lib.rs"
 bench = false
 
 [dependencies]
-arrow-buffer = { version = "32.0.0", path = "../arrow-buffer" }
-arrow-data = { version = "32.0.0", path = "../arrow-data" }
-arrow-schema = { version = "32.0.0", path = "../arrow-schema" }
-arrow-array = { version = "32.0.0", path = "../arrow-array" }
-arrow-select = { version = "32.0.0", path = "../arrow-select" }
+arrow-buffer = { version = "33.0.0", path = "../arrow-buffer" }
+arrow-data = { version = "33.0.0", path = "../arrow-data" }
+arrow-schema = { version = "33.0.0", path = "../arrow-schema" }
+arrow-array = { version = "33.0.0", path = "../arrow-array" }
+arrow-select = { version = "33.0.0", path = "../arrow-select" }
 regex = { version = "1.7.0", default-features = false, features = ["std", "unicode", "perf"] }
 regex-syntax = { version = "0.6.27", default-features = false, features = ["unicode"] }
 

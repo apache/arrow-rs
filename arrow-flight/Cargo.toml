@@ -18,7 +18,7 @@
 [package]
 name = "arrow-flight"
 description = "Apache Arrow Flight"
-version = "32.0.0"
+version = "33.0.0"
 edition = "2021"
 rust-version = "1.62"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -27,12 +27,12 @@ repository = "https://github.com/apache/arrow-rs"
 license = "Apache-2.0"
 
 [dependencies]
-arrow-array = { version = "32.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "32.0.0", path = "../arrow-buffer" }
+arrow-array = { version = "33.0.0", path = "../arrow-array" }
+arrow-buffer = { version = "33.0.0", path = "../arrow-buffer" }
 # Cast is needed to work around https://github.com/apache/arrow-rs/issues/3389
-arrow-cast = { version = "32.0.0", path = "../arrow-cast" }
-arrow-ipc = { version = "32.0.0", path = "../arrow-ipc" }
-arrow-schema = { version = "32.0.0", path = "../arrow-schema" }
+arrow-cast = { version = "33.0.0", path = "../arrow-cast" }
+arrow-ipc = { version = "33.0.0", path = "../arrow-ipc" }
+arrow-schema = { version = "33.0.0", path = "../arrow-schema" }
 base64 = { version = "0.21", default-features = false, features = ["std"] }
 tonic = { version = "0.8", default-features = false, features = ["transport", "codegen", "prost"] }
 bytes = { version = "1", default-features = false }
@@ -50,7 +50,7 @@ flight-sql-experimental = []
 tls = ["tonic/tls"]
 
 [dev-dependencies]
-arrow = { version = "32.0.0", path = "../arrow", features = ["prettyprint"] }
+arrow = { version = "33.0.0", path = "../arrow", features = ["prettyprint"] }
 tempfile = "3.3"
 tokio-stream = { version = "0.1", features = ["net"] }
 tower = "0.4.13"
