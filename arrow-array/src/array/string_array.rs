@@ -110,12 +110,15 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
 
         // We only need to validate that all values are valid UTF-8
         let validated = std::str::from_utf8(values).map_err(|e| {
-            ArrowError::CastError(format!("Encountered non UTF-8 data: {}", e))
+            ArrowError::CastError(format!("Encountered non UTF-8 data: {e}"))
         })?;
 
         for offset in offsets.iter() {
-            if !validated.is_char_boundary(offset.as_usize()) {
-                return Err(ArrowError::CastError(format!("Split UTF-8 codepoint")));
+            let o = offset.as_usize();
+            if !validated.is_char_boundary(o) {
+                return Err(ArrowError::CastError(format!(
+                    "Split UTF-8 codepoint at offset {o}"
+                )));
             }
         }
 
