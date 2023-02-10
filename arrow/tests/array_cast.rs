@@ -97,7 +97,7 @@ fn test_can_cast_types() {
 
 /// Create instances of arrays with varying types for cast tests
 fn get_arrays_of_all_types() -> Vec<ArrayRef> {
-    let tz_name = String::from("America/New_York");
+    let tz_name = String::from("+08:00");
     let binary_data: Vec<&[u8]> = vec![b"foo", b"bar"];
     vec![
         Arc::new(BinaryArray::from(binary_data.clone())),
@@ -349,7 +349,7 @@ fn create_decimal_array(
 // Get a selection of datatypes to try and cast to
 fn get_all_types() -> Vec<DataType> {
     use DataType::*;
-    let tz_name = String::from("America/New_York");
+    let tz_name = String::from("+08:00");
 
     let mut types = vec![
         Null,
