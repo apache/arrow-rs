@@ -400,6 +400,7 @@ pub struct MicrosoftAzureBuilder {
     object_id: Option<String>,
     msi_resource_id: Option<String>,
     federated_token_file: Option<String>,
+    use_azure_cli: bool,
     retry_config: RetryConfig,
     client_options: ClientOptions,
 }
@@ -533,6 +534,13 @@ pub enum AzureConfigKey {
     /// - `azure_federated_token_file`
     /// - `federated_token_file`
     FederatedTokenFile,
+
+    /// Use azure cli for acquiring access token
+    ///
+    /// Supported keys:
+    /// - `azure_use_azure_cli`
+    /// - `use_azure_cli`
+    UseAzureCli,
 }
 
 impl AsRef<str> for AzureConfigKey {
@@ -550,6 +558,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::ObjectId => "azure_object_id",
             Self::MsiResourceId => "azure_msi_resource_id",
             Self::FederatedTokenFile => "azure_federated_token_file",
+            Self::UseAzureCli => "azure_use_azure_cli",
         }
     }
 }
@@ -593,6 +602,7 @@ impl FromStr for AzureConfigKey {
             "azure_federated_token_file" | "federated_token_file" => {
                 Ok(Self::FederatedTokenFile)
             }
+            "azure_use_azure_cli" | "use_azure_cli" => Ok(Self::UseAzureCli),
             _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
         }
     }
@@ -703,6 +713,9 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::MsiResourceId => self.msi_resource_id = Some(value.into()),
             AzureConfigKey::FederatedTokenFile => {
                 self.federated_token_file = Some(value.into())
+            }
+            AzureConfigKey::UseAzureCli => {
+                self.use_azure_cli = str_is_truthy(&value.into())
             }
             AzureConfigKey::UseEmulator => {
                 self.use_emulator = str_is_truthy(&value.into())
@@ -887,6 +900,12 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// Set if the Azure Cli should be used for acquiring access token
+    pub fn with_use_azure_cli(mut self, use_azure_cli: bool) -> Self {
+        self.use_azure_cli = use_azure_cli;
+        self
+    }
+
     /// Configure a connection to container with given name on Microsoft Azure
     /// Blob store.
     pub fn build(mut self) -> Result<MicrosoftAzure> {
@@ -949,6 +968,11 @@ impl MicrosoftAzureBuilder {
                 credential::CredentialProvider::SASToken(query_pairs)
             } else if let Some(sas) = self.sas_key {
                 credential::CredentialProvider::SASToken(split_sas(&sas)?)
+            } else if self.use_azure_cli {
+                credential::CredentialProvider::TokenCredential(
+                    TokenCache::default(),
+                    Box::new(credential::AzureCliCredential::default()),
+                )
             } else {
                 let client =
                     self.client_options.clone().with_allow_http(true).client()?;

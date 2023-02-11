@@ -21,7 +21,7 @@ use crate::util::hmac_sha256;
 use crate::RetryConfig;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use reqwest::header::ACCEPT;
 use reqwest::{
     header::{
@@ -34,6 +34,7 @@ use reqwest::{
 use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::borrow::Cow;
+use std::process::Command;
 use std::str;
 use std::time::{Duration, Instant};
 use url::Url;
@@ -61,6 +62,12 @@ pub enum Error {
 
     #[snafu(display("Error reading federated token file "))]
     FederatedTokenFile,
+
+    #[snafu(display("'az account get-access-token' command failed: {message}"))]
+    AzureCli { message: String },
+
+    #[snafu(display("Failed to parse azure cli response: {source}"))]
+    AzureCliResponse { source: serde_json::Error },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -538,6 +545,107 @@ impl TokenCredential for WorkloadIdentityOAuthProvider {
         };
 
         Ok(token)
+    }
+}
+
+mod az_cli_date_format {
+    use chrono::{DateTime, TimeZone};
+    use serde::{self, Deserialize, Deserializer};
+
+    pub fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> Result<DateTime<chrono::Local>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        // expiresOn from azure cli uses the local timezone
+        let date = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S.%6f")
+            .map_err(serde::de::Error::custom)?;
+        chrono::Local
+            .from_local_datetime(&date)
+            .single()
+            .ok_or(serde::de::Error::custom(
+                "azure cli returned ambiguous expiry date",
+            ))
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AzureCliTokenResponse {
+    pub access_token: String,
+    #[serde(with = "az_cli_date_format")]
+    pub expires_on: DateTime<chrono::Local>,
+}
+
+#[derive(Default, Debug)]
+pub struct AzureCliCredential {
+    _private: (),
+}
+
+#[async_trait::async_trait]
+impl TokenCredential for AzureCliCredential {
+    /// Fetch a token
+    async fn fetch_token(
+        &self,
+        _client: &Client,
+        _retry: &RetryConfig,
+    ) -> Result<TemporaryToken<String>> {
+        // on window az is a cmd and it should be called like this
+        // see https://doc.rust-lang.org/nightly/std/process/struct.Command.html
+        let program = if cfg!(target_os = "windows") {
+            "cmd"
+        } else {
+            "az"
+        };
+        let mut args = Vec::new();
+        if cfg!(target_os = "windows") {
+            args.push("/C");
+            args.push("az");
+        }
+        args.push("account");
+        args.push("get-access-token");
+        args.push("--output");
+        args.push("json");
+        args.push("--scope");
+        args.push(AZURE_STORAGE_SCOPE);
+
+        match Command::new(program).args(args).output() {
+            Ok(az_output) if az_output.status.success() => {
+                let output =
+                    str::from_utf8(&az_output.stdout).map_err(|_| Error::AzureCli {
+                        message: "az response is not a valid utf-8 string".to_string(),
+                    })?;
+
+                let token_response =
+                    serde_json::from_str::<AzureCliTokenResponse>(output)
+                        .context(AzureCliResponseSnafu)?;
+                let duration = token_response.expires_on.naive_local()
+                    - chrono::Local::now().naive_local();
+                Ok(TemporaryToken {
+                    token: token_response.access_token,
+                    expiry: Instant::now()
+                        + duration.to_std().map_err(|_| Error::AzureCli {
+                            message: "az returned invalid lifetime".to_string(),
+                        })?,
+                })
+            }
+            Ok(az_output) => {
+                let message = String::from_utf8_lossy(&az_output.stderr);
+                Err(Error::AzureCli {
+                    message: message.into(),
+                })
+            }
+            Err(e) => match e.kind() {
+                std::io::ErrorKind::NotFound => Err(Error::AzureCli {
+                    message: "Azure Cli not installed".into(),
+                }),
+                error_kind => Err(Error::AzureCli {
+                    message: format!("io error: {error_kind:?}"),
+                }),
+            },
+        }
     }
 }
 
