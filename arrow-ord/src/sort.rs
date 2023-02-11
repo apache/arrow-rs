@@ -359,6 +359,8 @@ pub fn sort_to_indices(
         DataType::LargeBinary => sort_binary::<i64>(values, v, n, &options, limit),
         DataType::RunEndEncoded(run_ends_field, _) => match run_ends_field.data_type() {
             DataType::Int16 => sort_run_to_indices::<Int16Type>(values, &options, limit),
+            DataType::Int32 => sort_run_to_indices::<Int32Type>(values, &options, limit),
+            DataType::Int64 => sort_run_to_indices::<Int64Type>(values, &options, limit),
             dt => {
                 return Err(ArrowError::ComputeError(format!(
                     "Inavlid run end data type: {dt}"
@@ -637,22 +639,31 @@ fn sort_run_to_indices<R: RunEndIndexType>(
         // as values indices are indexed on sliced run_array.values, the start_physical_index has to
         // be added back to get physical index relative to run_array.values.
         let index = indices_iter.next().unwrap().unwrap() as usize + start_physical_index;
-        let run_length = unsafe {
+        let (run_length, logical_index) = unsafe {
             // Safety:
             // The index will be within bounds as its in bounds of start_physical_index
             // and len both of which are withing bounds of run_array
             if index == start_physical_index {
-                run_ends.value_unchecked(index).as_usize() - run_array.offset()
+                (
+                    run_ends.value_unchecked(index).as_usize() - run_array.offset(),
+                    0,
+                )
+            } else if index == end_physical_index {
+                (
+                    run_array.offset() + run_array.len()
+                        - run_ends.value_unchecked(index - 1).as_usize(),
+                    run_array.len() - 1,
+                )
             } else {
-                run_ends.value_unchecked(index).as_usize()
-                    - run_ends.value_unchecked(index - 1).as_usize()
+                (
+                    run_ends.value_unchecked(index).as_usize()
+                        - run_ends.value_unchecked(index - 1).as_usize(),
+                    run_ends.value_unchecked(index - 1).as_usize() - run_array.offset(),
+                )
             }
         };
         let new_run_length = run_length.min(len);
-        result.resize(
-            result.len() + new_run_length,
-            (index - start_physical_index) as u32,
-        );
+        result.resize(result.len() + new_run_length, logical_index as u32);
         len -= new_run_length;
     }
 
@@ -2949,7 +2960,7 @@ mod tests {
         let total_len = 80;
         let vals: Vec<Option<i32>> =
             vec![Some(1), None, Some(2), Some(3), Some(4), None, Some(5)];
-        let repeats: Vec<usize> = vec![3, 4, 1, 2];
+        let repeats: Vec<usize> = vec![1, 3, 2, 4];
         let mut input_array: Vec<Option<i32>> = Vec::with_capacity(total_len);
         for ix in 0_usize..32 {
             let repeat: usize = repeats[ix % repeats.len()];
@@ -2965,7 +2976,9 @@ mod tests {
         let run_array = builder.finish();
 
         // slice lengths that are tested
-        let slice_lens = [1, 2, 3, 39, 40, 41, 78, 79, 80];
+        let slice_lens = [
+            1, 2, 3, 4, 5, 6, 7, 37, 38, 39, 40, 41, 42, 43, 74, 75, 76, 77, 78, 79, 80,
+        ];
         for slice_len in slice_lens {
             test_sort_run_to_indices_inner(
                 input_array.as_slice(),
