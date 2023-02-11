@@ -634,37 +634,46 @@ fn sort_run_to_indices<R: RunEndIndexType>(
 
     // calculate new_run_length for sorted run_array.value indices and add them to output.
     let run_ends = run_array.run_ends();
-    let mut indices_iter = values_indices.into_iter();
-    while len > 0 {
-        // as values indices are indexed on sliced run_array.values, the start_physical_index has to
-        // be added back to get physical index relative to run_array.values.
-        let index = indices_iter.next().unwrap().unwrap() as usize + start_physical_index;
+    //let mut indices_iter = values_indices.into_iter();
+    for physical_index in values_indices.into_iter() {
+        // As the values were sliced with offset = start_physical_index, it has to be added back
+        // before accesing `RunArray::run_ends`
+        let physical_index = physical_index.unwrap() as usize + start_physical_index;
+
+        // calculate the run length and logical index of sorted values
         let (run_length, logical_index) = unsafe {
             // Safety:
             // The index will be within bounds as its in bounds of start_physical_index
-            // and len both of which are withing bounds of run_array
-            if index == start_physical_index {
+            // and len, both of which are within bounds of run_array
+            if physical_index == start_physical_index {
                 (
-                    run_ends.value_unchecked(index).as_usize() - run_array.offset(),
+                    run_ends.value_unchecked(physical_index).as_usize()
+                        - run_array.offset(),
                     0,
                 )
-            } else if index == end_physical_index {
+            } else if physical_index == end_physical_index {
+                let prev_run_end =
+                    run_ends.value_unchecked(physical_index - 1).as_usize();
                 (
-                    run_array.offset() + run_array.len()
-                        - run_ends.value_unchecked(index - 1).as_usize(),
-                    run_array.len() - 1,
+                    run_array.offset() + run_array.len() - prev_run_end,
+                    prev_run_end - run_array.offset(),
                 )
             } else {
+                let prev_run_end =
+                    run_ends.value_unchecked(physical_index - 1).as_usize();
                 (
-                    run_ends.value_unchecked(index).as_usize()
-                        - run_ends.value_unchecked(index - 1).as_usize(),
-                    run_ends.value_unchecked(index - 1).as_usize() - run_array.offset(),
+                    run_ends.value_unchecked(physical_index).as_usize() - prev_run_end,
+                    prev_run_end - run_array.offset(),
                 )
             }
         };
         let new_run_length = run_length.min(len);
         result.resize(result.len() + new_run_length, logical_index as u32);
         len -= new_run_length;
+    }
+
+    if len > 0 {
+        panic!("Length should be zero its values is {len}")
     }
 
     UInt32Array::from(result)
