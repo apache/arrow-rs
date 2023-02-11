@@ -357,6 +357,14 @@ pub fn sort_to_indices(
             sort_binary::<i32>(values, v, n, &options, limit)
         }
         DataType::LargeBinary => sort_binary::<i64>(values, v, n, &options, limit),
+        DataType::RunEndEncoded(run_ends_field, _) => match run_ends_field.data_type() {
+            DataType::Int16 => sort_run_to_indices::<Int16Type>(values, &options, limit),
+            dt => {
+                return Err(ArrowError::ComputeError(format!(
+                    "Inavlid run end data type: {dt}"
+                )))
+            }
+        },
         t => {
             return Err(ArrowError::ComputeError(format!(
                 "Sort not supported for data type {t:?}"
@@ -595,6 +603,60 @@ fn insert_valid_values<T>(result_slice: &mut [u32], offset: usize, valids: &[(u3
     };
 
     append_valids(&mut result_slice[offset..offset + valids.len()]);
+}
+
+// Sort to indices for run encoded array
+fn sort_run_to_indices<R: RunEndIndexType>(
+    values: &ArrayRef,
+    options: &SortOptions,
+    limit: Option<usize>,
+) -> UInt32Array {
+    let run_array = values.as_any().downcast_ref::<RunArray<R>>().unwrap();
+
+    // slice the run_array.values based on offset and length.
+    let start_physical_index = run_array.get_offset_physical_index();
+    let end_physical_index = run_array.get_slice_end_physical_index();
+    let physical_len = end_physical_index - start_physical_index + 1;
+    let run_values = run_array.values().slice(start_physical_index, physical_len);
+
+    // All the values have to be sorted irrespective of input limit.
+    let values_indices = sort_to_indices(&run_values, Some(*options), None).unwrap();
+
+    let mut len = if let Some(limit) = limit {
+        limit.min(run_array.len())
+    } else {
+        run_array.len()
+    };
+
+    let mut result: Vec<u32> = Vec::with_capacity(len);
+
+    // calculate new_run_length for sorted run_array.value indices and add them to output.
+    let run_ends = run_array.run_ends();
+    let mut indices_iter = values_indices.into_iter();
+    while len > 0 {
+        // as values indices are indexed on sliced run_array.values, the start_physical_index has to
+        // be added back to get physical index relative to run_array.values.
+        let index = indices_iter.next().unwrap().unwrap() as usize + start_physical_index;
+        let run_length = unsafe {
+            // Safety:
+            // The index will be within bounds as its in bounds of start_physical_index
+            // and len both of which are withing bounds of run_array
+            if index == start_physical_index {
+                run_ends.value_unchecked(index).as_usize() - run_array.offset()
+            } else {
+                run_ends.value_unchecked(index).as_usize()
+                    - run_ends.value_unchecked(index - 1).as_usize()
+            }
+        };
+        let new_run_length = run_length.min(len);
+        result.resize(
+            result.len() + new_run_length,
+            (index - start_physical_index) as u32,
+        );
+        len -= new_run_length;
+    }
+
+    UInt32Array::from(result)
 }
 
 /// Sort strings
@@ -1055,6 +1117,7 @@ fn sort_valids_array<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::builder::PrimitiveRunBuilder;
     use arrow_buffer::i256;
     use rand::rngs::StdRng;
     use rand::{Rng, RngCore, SeedableRng};
@@ -2878,6 +2941,95 @@ mod tests {
             Some(2),
             vec![Some("def"), None],
         );
+    }
+
+    #[test]
+    fn test_sort_run_to_indices() {
+        // Create an input array for testing
+        let total_len = 80;
+        let vals: Vec<Option<i32>> =
+            vec![Some(1), None, Some(2), Some(3), Some(4), None, Some(5)];
+        let repeats: Vec<usize> = vec![3, 4, 1, 2];
+        let mut input_array: Vec<Option<i32>> = Vec::with_capacity(total_len);
+        for ix in 0_usize..32 {
+            let repeat: usize = repeats[ix % repeats.len()];
+            let val: Option<i32> = vals[ix % vals.len()];
+            input_array.resize(input_array.len() + repeat, val);
+        }
+
+        // create run array using input_array
+        // Encode the input_array to run array
+        let mut builder =
+            PrimitiveRunBuilder::<Int16Type, Int32Type>::with_capacity(input_array.len());
+        builder.extend(input_array.iter().copied());
+        let run_array = builder.finish();
+
+        // slice lengths that are tested
+        let slice_lens = [1, 2, 3, 39, 40, 41, 78, 79, 80];
+        for slice_len in slice_lens {
+            test_sort_run_to_indices_inner(
+                input_array.as_slice(),
+                &run_array,
+                0,
+                slice_len,
+                None,
+            );
+            test_sort_run_to_indices_inner(
+                input_array.as_slice(),
+                &run_array,
+                total_len - slice_len,
+                slice_len,
+                None,
+            );
+            // Test with non zero limit
+            if slice_len > 1 {
+                test_sort_run_to_indices_inner(
+                    input_array.as_slice(),
+                    &run_array,
+                    0,
+                    slice_len,
+                    Some(slice_len / 2),
+                );
+                test_sort_run_to_indices_inner(
+                    input_array.as_slice(),
+                    &run_array,
+                    total_len - slice_len,
+                    slice_len,
+                    Some(slice_len / 2),
+                );
+            }
+        }
+    }
+
+    fn test_sort_run_to_indices_inner(
+        input_array: &[Option<i32>],
+        run_array: &RunArray<Int16Type>,
+        offset: usize,
+        length: usize,
+        limit: Option<usize>,
+    ) {
+        // Run the sort and build actual result
+        let sliced_array = run_array.slice(offset, length);
+        let sorted_sliced_array = sort_limit(&sliced_array, None, limit).unwrap();
+        let sorted_run_array = sorted_sliced_array
+            .as_any()
+            .downcast_ref::<RunArray<Int16Type>>()
+            .unwrap();
+        let typed_run_array = sorted_run_array
+            .downcast::<PrimitiveArray<Int32Type>>()
+            .unwrap();
+        let actual: Vec<Option<i32>> = typed_run_array.into_iter().collect();
+
+        // build expected result.
+        let mut sliced_input = input_array[offset..(offset + length)].to_owned();
+        sliced_input.sort();
+        let expected = if let Some(limit) = limit {
+            sliced_input.iter().take(limit).copied().collect()
+        } else {
+            sliced_input
+        };
+
+        assert_eq!(expected, actual)
     }
 
     #[test]
