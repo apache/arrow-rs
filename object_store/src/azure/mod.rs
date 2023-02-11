@@ -916,7 +916,7 @@ impl MicrosoftAzureBuilder {
             let url = Url::parse(&account_url)
                 .context(UnableToParseUrlSnafu { url: account_url })?;
             let credential = if let Some(bearer_token) = self.bearer_token {
-                credential::CredentialProvider::AccessKey(bearer_token)
+                credential::CredentialProvider::BearerToken(bearer_token)
             } else if let Some(access_key) = self.access_key {
                 credential::CredentialProvider::AccessKey(access_key)
             } else if let (Some(client_id), Some(tenant_id), Some(federated_token_file)) =

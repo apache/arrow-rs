@@ -69,6 +69,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Debug)]
 pub enum CredentialProvider {
     AccessKey(String),
+    BearerToken(String),
     SASToken(Vec<(String, String)>),
     TokenCredential(TokenCache<String>, Box<dyn TokenCredential>),
 }
