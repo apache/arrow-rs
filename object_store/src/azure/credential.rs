@@ -584,6 +584,12 @@ pub struct AzureCliCredential {
     _private: (),
 }
 
+impl AzureCliCredential {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
 #[async_trait::async_trait]
 impl TokenCredential for AzureCliCredential {
     /// Fetch a token

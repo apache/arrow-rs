@@ -971,7 +971,7 @@ impl MicrosoftAzureBuilder {
             } else if self.use_azure_cli {
                 credential::CredentialProvider::TokenCredential(
                     TokenCache::default(),
-                    Box::new(credential::AzureCliCredential::default()),
+                    Box::new(credential::AzureCliCredential::new()),
                 )
             } else {
                 let client =
