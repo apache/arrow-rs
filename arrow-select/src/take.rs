@@ -866,7 +866,7 @@ where
 
     let take_value_indices: PrimitiveArray<I> = unsafe {
         // Safety:
-        // The function builds a valid run_ends array and hence need not be validated.
+        // The function builds a valid take_value_indices array and hence need not be validated.
         ArrayDataBuilder::new(I::DATA_TYPE)
             .len(new_physical_len)
             .null_count(0)
