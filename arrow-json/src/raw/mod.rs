@@ -21,6 +21,7 @@
 
 use crate::raw::boolean_array::BooleanArrayDecoder;
 use crate::raw::list_array::ListArrayDecoder;
+use crate::raw::map_array::MapArrayDecoder;
 use crate::raw::primitive_array::PrimitiveArrayDecoder;
 use crate::raw::string_array::StringArrayDecoder;
 use crate::raw::struct_array::StructArrayDecoder;
@@ -33,6 +34,7 @@ use std::io::BufRead;
 
 mod boolean_array;
 mod list_array;
+mod map_array;
 mod primitive_array;
 mod string_array;
 mod struct_array;
@@ -283,6 +285,7 @@ fn make_decoder(
         DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
             Err(ArrowError::JsonError(format!("{data_type} is not supported by JSON")))
         }
+        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, is_nullable)?)),
         d => Err(ArrowError::NotYetImplemented(format!("Support for {d} in JSON reader")))
     }
 }
@@ -297,8 +300,8 @@ mod tests {
     use crate::reader::infer_json_schema;
     use crate::ReaderBuilder;
     use arrow_array::cast::{
-        as_boolean_array, as_largestring_array, as_list_array, as_primitive_array,
-        as_string_array, as_struct_array,
+        as_boolean_array, as_largestring_array, as_list_array, as_map_array,
+        as_primitive_array, as_string_array, as_struct_array,
     };
     use arrow_array::types::Int32Type;
     use arrow_array::Array;
@@ -539,6 +542,41 @@ mod tests {
         assert_eq!(c.values(), &[5, 0]);
         assert_eq!(c.null_count(), 1);
         assert!(c.is_null(1));
+    }
+
+    #[test]
+    fn test_map() {
+        let buf = r#"
+           {"map": {"a": ["foo", null]}}
+           {"map": {"a": [null], "b": []}}
+           {"map": {"c": null, "a": ["baz"]}}
+        "#;
+        let list = DataType::List(Box::new(Field::new("element", DataType::Utf8, true)));
+        let entries = DataType::Struct(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", list, true),
+        ]);
+
+        let map = DataType::Map(Box::new(Field::new("entries", entries, true)), false);
+        let schema = Arc::new(Schema::new(vec![Field::new("map", map, true)]));
+
+        let batches = do_read(buf, 1024, schema);
+        assert_eq!(batches.len(), 1);
+
+        let map = as_map_array(batches[0].column(0).as_ref());
+        let map_keys = as_string_array(map.keys().as_ref());
+        let map_values = as_list_array(map.values().as_ref());
+        assert_eq!(map.value_offsets(), &[0, 1, 3, 5]);
+
+        let k: Vec<_> = map_keys.iter().map(|x| x.unwrap()).collect();
+        assert_eq!(&k, &["a", "a", "b", "c", "a"]);
+
+        let list_values = as_string_array(map_values.values().as_ref());
+        let lv: Vec<_> = list_values.iter().collect();
+        assert_eq!(&lv, &[Some("foo"), None, None, Some("baz")]);
+        assert_eq!(map_values.value_offsets(), &[0, 2, 3, 3, 3, 4]);
+        assert_eq!(map_values.null_count(), 1);
+        assert!(map_values.is_null(3))
     }
 
     #[test]
