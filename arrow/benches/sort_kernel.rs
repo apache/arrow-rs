@@ -24,8 +24,8 @@ use std::sync::Arc;
 extern crate arrow;
 
 use arrow::compute::kernels::sort::{lexsort, SortColumn};
-use arrow::compute::sort_to_indices;
-use arrow::datatypes::Int32Type;
+use arrow::compute::{sort_limit, sort_to_indices};
+use arrow::datatypes::{Int16Type, Int32Type};
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};
 
@@ -59,6 +59,10 @@ fn bench_sort(array_a: &ArrayRef, array_b: &ArrayRef, limit: Option<usize>) {
 
 fn bench_sort_to_indices(array: &ArrayRef, limit: Option<usize>) {
     criterion::black_box(sort_to_indices(array, None, limit).unwrap());
+}
+
+fn bench_sort_run(array: &ArrayRef, limit: Option<usize>) {
+    criterion::black_box(sort_limit(array, None, limit).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -105,6 +109,19 @@ fn add_benchmark(c: &mut Criterion) {
     )) as ArrayRef;
     c.bench_function("dict string 2^12", |b| {
         b.iter(|| bench_sort_to_indices(&dict_arr, None))
+    });
+
+    let run_encoded_array = Arc::new(create_primitive_run_array::<Int16Type, Int32Type>(
+        2u64.pow(12) as usize,
+        2u64.pow(10) as usize,
+    )) as ArrayRef;
+
+    c.bench_function("sort primitive run to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&run_encoded_array, None))
+    });
+
+    c.bench_function("sort primitive run to run 2^12", |b| {
+        b.iter(|| bench_sort_run(&run_encoded_array, None))
     });
 
     // with limit

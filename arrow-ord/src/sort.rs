@@ -18,14 +18,17 @@
 //! Defines sort kernel for `ArrayRef`
 
 use crate::ord::{build_compare, DynComparator};
+use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, MutableBuffer};
 use arrow_data::ArrayData;
+use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use arrow_select::take::take;
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 pub use arrow_schema::SortOptions;
 
@@ -55,6 +58,9 @@ pub fn sort(
     values: &ArrayRef,
     options: Option<SortOptions>,
 ) -> Result<ArrayRef, ArrowError> {
+    if let DataType::RunEndEncoded(_, _) = values.data_type() {
+        return sort_run(values, options, None);
+    }
     let indices = sort_to_indices(values, options, None)?;
     take(values.as_ref(), &indices, None)
 }
@@ -94,6 +100,9 @@ pub fn sort_limit(
     options: Option<SortOptions>,
     limit: Option<usize>,
 ) -> Result<ArrayRef, ArrowError> {
+    if let DataType::RunEndEncoded(_, _) = values.data_type() {
+        return sort_run(values, options, limit);
+    }
     let indices = sort_to_indices(values, options, limit)?;
     take(values.as_ref(), &indices, None)
 }
@@ -607,7 +616,127 @@ fn insert_valid_values<T>(result_slice: &mut [u32], offset: usize, valids: &[(u3
     append_valids(&mut result_slice[offset..offset + valids.len()]);
 }
 
-// Sort to indices for run encoded array
+// Sort run array and return sorted run array.
+// The output RunArray will be encoded at the same level as input run array.
+// For e.g. an input RunArray { run_ends = [2,4,6,8], values = [1,2,1,2] }
+// will result in output RunArray { run_ends = [2,4,6,8], values = [1,1,2,2] }
+// and not RunArray { run_ends = [4,8], values = [1,2] }
+fn sort_run(
+    values: &ArrayRef,
+    options: Option<SortOptions>,
+    limit: Option<usize>,
+) -> Result<ArrayRef, ArrowError> {
+    match values.data_type() {
+        DataType::RunEndEncoded(run_ends_field, _) => match run_ends_field.data_type() {
+            DataType::Int16 => sort_run_downcasted::<Int16Type>(values, options, limit),
+            DataType::Int32 => sort_run_downcasted::<Int32Type>(values, options, limit),
+            DataType::Int64 => sort_run_downcasted::<Int64Type>(values, options, limit),
+            dt => unreachable!("Not valid run ends data type {dt}"),
+        },
+        dt => Err(ArrowError::InvalidArgumentError(format!(
+            "Input is not a run encoded array. Input data type {dt}"
+        ))),
+    }
+}
+
+fn sort_run_downcasted<R: RunEndIndexType>(
+    values: &ArrayRef,
+    options: Option<SortOptions>,
+    limit: Option<usize>,
+) -> Result<ArrayRef, ArrowError> {
+    let run_array = values.as_any().downcast_ref::<RunArray<R>>().unwrap();
+
+    // slice the run_array.values based on offset and length.
+    let start_physical_index = run_array.get_offset_physical_index();
+    let end_physical_index = run_array.get_slice_end_physical_index();
+    let physical_len = end_physical_index - start_physical_index + 1;
+    let run_values = run_array.values().slice(start_physical_index, physical_len);
+
+    // All the values have to be sorted irrespective of input limit.
+    let values_indices = sort_to_indices(&run_values, options, None)?;
+
+    let mut remaining_len = if let Some(limit) = limit {
+        limit.min(run_array.len())
+    } else {
+        run_array.len()
+    };
+
+    let mut new_run_ends_builder = BufferBuilder::<R::Native>::new(physical_len);
+    let mut new_run_end: usize = 0;
+    let mut new_physical_len: usize = 0;
+
+    // calculate new_run_length for sorted run_array.value indices and add them to output.
+    let run_ends = run_array.run_ends();
+
+    //let mut indices_iter = values_indices.into_iter();
+    for physical_index in values_indices.into_iter() {
+        // As the values were sliced with offset = start_physical_index, it has to be added back
+        // before accesing `RunArray::run_ends`
+        let physical_index = physical_index.unwrap() as usize + start_physical_index;
+
+        // calculate the run length
+        let run_length = unsafe {
+            // Safety:
+            // The index will be within bounds as its in bounds of start_physical_index
+            // and len, both of which are within bounds of run_array
+            if physical_index == start_physical_index {
+                run_ends.value_unchecked(physical_index).as_usize() - run_array.offset()
+            } else if physical_index == end_physical_index {
+                run_array.offset() + run_array.len()
+                    - run_ends.value_unchecked(physical_index - 1).as_usize()
+            } else {
+                run_ends.value_unchecked(physical_index).as_usize()
+                    - run_ends.value_unchecked(physical_index - 1).as_usize()
+            }
+        };
+        let run_length = run_length.min(remaining_len);
+        new_run_end += run_length;
+        new_run_ends_builder.append(R::Native::from_usize(new_run_end).unwrap());
+        new_physical_len += 1;
+        remaining_len -= run_length;
+        if remaining_len == 0 {
+            break;
+        }
+    }
+
+    if remaining_len > 0 {
+        panic!("Length should be zero its values is {remaining_len}")
+    }
+
+    let new_run_ends = unsafe {
+        // Safety:
+        // The function builds a valid run_ends array and hence need not be validated.
+        ArrayDataBuilder::new(run_array.run_ends().data_type().clone())
+            .len(new_physical_len)
+            .null_count(0)
+            .add_buffer(new_run_ends_builder.finish())
+            .build_unchecked()
+    };
+
+    let new_values_indices: PrimitiveArray<UInt32Type> = values_indices
+        .slice(0, new_run_ends.len())
+        .into_data()
+        .into();
+
+    let new_values = take(&run_values, &new_values_indices, None)?;
+
+    // Build sorted run array
+    let builder = ArrayDataBuilder::new(run_array.data_type().clone())
+        .len(new_run_end)
+        .add_child_data(new_run_ends)
+        .add_child_data(new_values.into_data());
+    let array_data: RunArray<R> = unsafe {
+        // Safety:
+        //  This function builds a valid run array and hence can skip validation.
+        builder.build_unchecked().into()
+    };
+    Ok(Arc::new(array_data))
+}
+
+// Sort to indices for run encoded array.
+// This function will be slow for run array as it decodes the physical indices to
+// logical indices and to get the run array back, the logical indices has to be
+// encoded back to run array.
 fn sort_run_to_indices<R: RunEndIndexType>(
     values: &ArrayRef,
     options: &SortOptions,
@@ -634,6 +763,7 @@ fn sort_run_to_indices<R: RunEndIndexType>(
 
     // calculate new_run_length for sorted run_array.value indices and add them to output.
     let run_ends = run_array.run_ends();
+
     //let mut indices_iter = values_indices.into_iter();
     for physical_index in values_indices.into_iter() {
         // As the values were sliced with offset = start_physical_index, it has to be added back
@@ -670,6 +800,10 @@ fn sort_run_to_indices<R: RunEndIndexType>(
         let new_run_length = run_length.min(len);
         result.resize(result.len() + new_run_length, logical_index as u32);
         len -= new_run_length;
+
+        if len == 0 {
+            break;
+        }
     }
 
     if len > 0 {
@@ -2964,7 +3098,28 @@ mod tests {
     }
 
     #[test]
+    fn test_sort_run() {
+        test_sort_run_abstract(|array, sort_options, limit| {
+            sort_run(array, sort_options, limit)
+        });
+    }
+
+    #[test]
     fn test_sort_run_to_indices() {
+        test_sort_run_abstract(|array, sort_options, limit| {
+            let indices = sort_to_indices(array, sort_options, limit).unwrap();
+            take(array, &indices, None)
+        });
+    }
+
+    fn test_sort_run_abstract<F>(sort_fn: F)
+    where
+        F: Fn(
+            &ArrayRef,
+            Option<SortOptions>,
+            Option<usize>,
+        ) -> Result<ArrayRef, ArrowError>,
+    {
         // Create an input array for testing
         let total_len = 80;
         let vals: Vec<Option<i32>> =
@@ -2995,6 +3150,7 @@ mod tests {
                 0,
                 slice_len,
                 None,
+                &sort_fn,
             );
             test_sort_run_to_indices_inner(
                 input_array.as_slice(),
@@ -3002,6 +3158,7 @@ mod tests {
                 total_len - slice_len,
                 slice_len,
                 None,
+                &sort_fn,
             );
             // Test with non zero limit
             if slice_len > 1 {
@@ -3011,6 +3168,7 @@ mod tests {
                     0,
                     slice_len,
                     Some(slice_len / 2),
+                    &sort_fn,
                 );
                 test_sort_run_to_indices_inner(
                     input_array.as_slice(),
@@ -3018,21 +3176,29 @@ mod tests {
                     total_len - slice_len,
                     slice_len,
                     Some(slice_len / 2),
+                    &sort_fn,
                 );
             }
         }
     }
 
-    fn test_sort_run_to_indices_inner(
+    fn test_sort_run_to_indices_inner<F>(
         input_array: &[Option<i32>],
         run_array: &RunArray<Int16Type>,
         offset: usize,
         length: usize,
         limit: Option<usize>,
-    ) {
+        sort_fn: &F,
+    ) where
+        F: Fn(
+            &ArrayRef,
+            Option<SortOptions>,
+            Option<usize>,
+        ) -> Result<ArrayRef, ArrowError>,
+    {
         // Run the sort and build actual result
         let sliced_array = run_array.slice(offset, length);
-        let sorted_sliced_array = sort_limit(&sliced_array, None, limit).unwrap();
+        let sorted_sliced_array = sort_fn(&sliced_array, None, limit).unwrap();
         let sorted_run_array = sorted_sliced_array
             .as_any()
             .downcast_ref::<RunArray<Int16Type>>()
