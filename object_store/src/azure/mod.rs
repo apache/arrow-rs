@@ -901,6 +901,7 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Set if the Azure Cli should be used for acquiring access token
+    /// <https://learn.microsoft.com/en-us/cli/azure/account?view=azure-cli-latest#az-account-get-access-token>
     pub fn with_use_azure_cli(mut self, use_azure_cli: bool) -> Self {
         self.use_azure_cli = use_azure_cli;
         self
