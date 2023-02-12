@@ -190,7 +190,7 @@ impl AzureClient {
                     .context(AuthorizationSnafu)?;
                 Ok(AzureCredential::AuthorizationToken(
                     // we do the conversion to a HeaderValue here, since it is fallible
-                    // and we wna to use it in an infallible function
+                    // and we want to use it in an infallible function
                     HeaderValue::from_str(&format!("Bearer {token}")).map_err(|err| {
                         crate::Error::Generic {
                             store: "MicrosoftAzure",

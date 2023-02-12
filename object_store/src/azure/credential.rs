@@ -577,6 +577,7 @@ struct AzureCliTokenResponse {
     pub access_token: String,
     #[serde(with = "az_cli_date_format")]
     pub expires_on: DateTime<chrono::Local>,
+    pub token_type: String,
 }
 
 #[derive(Default, Debug)]
@@ -627,6 +628,14 @@ impl TokenCredential for AzureCliCredential {
                 let token_response =
                     serde_json::from_str::<AzureCliTokenResponse>(output)
                         .context(AzureCliResponseSnafu)?;
+                if !token_response.token_type.eq_ignore_ascii_case("bearer") {
+                    return Err(Error::AzureCli {
+                        message: format!(
+                            "got unexpected token type from azure cli: {0}",
+                            token_response.token_type
+                        ),
+                    });
+                }
                 let duration = token_response.expires_on.naive_local()
                     - chrono::Local::now().naive_local();
                 Ok(TemporaryToken {
