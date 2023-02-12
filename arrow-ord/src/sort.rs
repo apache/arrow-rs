@@ -655,30 +655,30 @@ fn sort_run_downcasted<R: RunEndIndexType>(
     // All the values have to be sorted irrespective of input limit.
     let values_indices = sort_to_indices(&run_values, options, None)?;
 
+    // Determine the length of output run array.
     let mut remaining_len = if let Some(limit) = limit {
         limit.min(run_array.len())
     } else {
         run_array.len()
     };
 
+    let run_ends = run_array.run_ends();
+
     let mut new_run_ends_builder = BufferBuilder::<R::Native>::new(physical_len);
     let mut new_run_end: usize = 0;
     let mut new_physical_len: usize = 0;
 
-    // calculate new_run_length for sorted run_array.value indices and add them to output.
-    let run_ends = run_array.run_ends();
-
-    //let mut indices_iter = values_indices.into_iter();
+    // calculate run length of sorted value indices and add them to new_run_ends.
     for physical_index in values_indices.into_iter() {
         // As the values were sliced with offset = start_physical_index, it has to be added back
         // before accesing `RunArray::run_ends`
         let physical_index = physical_index.unwrap() as usize + start_physical_index;
 
-        // calculate the run length
+        // calculate the run length.
         let run_length = unsafe {
             // Safety:
             // The index will be within bounds as its in bounds of start_physical_index
-            // and len, both of which are within bounds of run_array
+            // and remaining_len, both of which are within bounds of run_array
             if physical_index == start_physical_index {
                 run_ends.value_unchecked(physical_index).as_usize() - run_array.offset()
             } else if physical_index == end_physical_index {
@@ -693,6 +693,7 @@ fn sort_run_downcasted<R: RunEndIndexType>(
         new_run_end += run_length;
         new_run_ends_builder.append(R::Native::from_usize(new_run_end).unwrap());
         new_physical_len += 1;
+
         remaining_len -= run_length;
         if remaining_len == 0 {
             break;
@@ -700,7 +701,7 @@ fn sort_run_downcasted<R: RunEndIndexType>(
     }
 
     if remaining_len > 0 {
-        panic!("Length should be zero its values is {remaining_len}")
+        panic!("Remaining length should be zero its values is {remaining_len}")
     }
 
     let new_run_ends = unsafe {
@@ -713,6 +714,7 @@ fn sort_run_downcasted<R: RunEndIndexType>(
             .build_unchecked()
     };
 
+    // slice the sorted value indices based on limit.
     let new_values_indices: PrimitiveArray<UInt32Type> = values_indices
         .slice(0, new_run_ends.len())
         .into_data()
@@ -753,18 +755,19 @@ fn sort_run_to_indices<R: RunEndIndexType>(
     // All the values have to be sorted irrespective of input limit.
     let values_indices = sort_to_indices(&run_values, Some(*options), None).unwrap();
 
-    let mut len = if let Some(limit) = limit {
+    let mut remaining_len = if let Some(limit) = limit {
         limit.min(run_array.len())
     } else {
         run_array.len()
     };
 
-    let mut result: Vec<u32> = Vec::with_capacity(len);
+    let mut result: Vec<u32> = Vec::with_capacity(remaining_len);
 
-    // calculate new_run_length for sorted run_array.value indices and add them to output.
     let run_ends = run_array.run_ends();
 
-    //let mut indices_iter = values_indices.into_iter();
+    // Calculate `run length` of sorted value indices.
+    // Find the `logical index` of the value index.
+    // Add `logical index` to the output `run length` times.
     for physical_index in values_indices.into_iter() {
         // As the values were sliced with offset = start_physical_index, it has to be added back
         // before accesing `RunArray::run_ends`
@@ -797,17 +800,17 @@ fn sort_run_to_indices<R: RunEndIndexType>(
                 )
             }
         };
-        let new_run_length = run_length.min(len);
+        let new_run_length = run_length.min(remaining_len);
         result.resize(result.len() + new_run_length, logical_index as u32);
-        len -= new_run_length;
+        remaining_len -= new_run_length;
 
-        if len == 0 {
+        if remaining_len == 0 {
             break;
         }
     }
 
-    if len > 0 {
-        panic!("Length should be zero its values is {len}")
+    if remaining_len > 0 {
+        panic!("Remaining length should be zero its values is {remaining_len}")
     }
 
     UInt32Array::from(result)
