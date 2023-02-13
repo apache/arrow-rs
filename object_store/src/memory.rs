@@ -163,13 +163,21 @@ impl ObjectStore for InMemory {
         &self,
         prefix: Option<&Path>,
     ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+        let root = Path::default();
+        let prefix = prefix.unwrap_or(&root);
         let last_modified = Utc::now();
 
         let storage = self.storage.read();
         let values: Vec<_> = storage
-            .iter()
-            .filter(move |(key, _)| prefix.map(|p| key.prefix_matches(p)).unwrap_or(true))
-            .map(move |(key, value)| {
+            .range((prefix)..)
+            .take_while(|(key, _)| key.as_ref().starts_with(prefix.as_ref()))
+            .filter(|(key, _)| {
+                // Don't return for exact prefix match
+                key.prefix_match(prefix)
+                    .map(|mut x| x.next().is_some())
+                    .unwrap_or(false)
+            })
+            .map(|(key, value)| {
                 Ok(ObjectMeta {
                     location: key.clone(),
                     last_modified,
@@ -195,14 +203,19 @@ impl ObjectStore for InMemory {
         // response. Otherwise, we just collect the common prefixes.
         let mut objects = vec![];
         for (k, v) in self.storage.read().range((prefix)..) {
+            if !k.as_ref().starts_with(prefix.as_ref()) {
+                break;
+            }
+
             let mut parts = match k.prefix_match(prefix) {
                 Some(parts) => parts,
-                None => break,
+                None => continue,
             };
 
             // Pop first element
             let common_prefix = match parts.next() {
                 Some(p) => p,
+                // Should only return children of the prefix
                 None => continue,
             };
 

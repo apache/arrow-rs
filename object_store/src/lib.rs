@@ -911,9 +911,29 @@ mod tests {
         let content_list = flatten_list_stream(storage, Some(&prefix)).await.unwrap();
         assert_eq!(content_list, &[location1.clone()]);
 
+        let result = storage.list_with_delimiter(Some(&prefix)).await.unwrap();
+        assert_eq!(result.objects.len(), 1);
+        assert_eq!(result.objects[0].location, location1);
+        assert_eq!(result.common_prefixes, &[]);
+
+        // Listing an existing path (file) should return an empty list:
+        // https://github.com/apache/arrow-rs/issues/3712
+        let content_list = flatten_list_stream(storage, Some(&location1))
+            .await
+            .unwrap();
+        assert_eq!(content_list, &[]);
+
+        let list = storage.list_with_delimiter(Some(&location1)).await.unwrap();
+        assert_eq!(list.objects, &[]);
+        assert_eq!(list.common_prefixes, &[]);
+
         let prefix = Path::from("foo/x");
         let content_list = flatten_list_stream(storage, Some(&prefix)).await.unwrap();
         assert_eq!(content_list, &[]);
+
+        let list = storage.list_with_delimiter(Some(&prefix)).await.unwrap();
+        assert_eq!(list.objects, &[]);
+        assert_eq!(list.common_prefixes, &[]);
     }
 
     pub(crate) async fn list_with_delimiter(storage: &DynObjectStore) {
