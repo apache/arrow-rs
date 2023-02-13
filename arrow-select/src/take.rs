@@ -2167,24 +2167,24 @@ mod tests {
 
     #[test]
     fn test_take_runs() {
-        let logical_array: Vec<i32> = vec![1_i32, 1, 2, 2, 1, 1, 2, 2, 1, 1, 2, 2];
+        let logical_array: Vec<i32> = vec![1_i32, 1, 2, 2, 1, 1, 1, 2, 2, 1, 1, 2, 2];
 
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
         builder.extend(logical_array.into_iter().map(Some));
         let run_array = builder.finish();
 
         let take_indices: PrimitiveArray<Int32Type> =
-            vec![7, 2, 3, 7, 10].into_iter().collect();
+            vec![7, 2, 3, 7, 11, 4, 6].into_iter().collect();
 
         let take_out = take_run(&run_array, &take_indices).unwrap();
 
-        assert_eq!(take_out.len(), 5);
+        assert_eq!(take_out.len(), 7);
 
-        assert_eq!(take_out.run_ends().len(), 4);
-        assert_eq!(take_out.run_ends().values(), &[1_i32, 3, 4, 5]);
+        assert_eq!(take_out.run_ends().len(), 5);
+        assert_eq!(take_out.run_ends().values(), &[1_i32, 3, 4, 5, 7]);
 
         let take_out_values = as_primitive_array::<Int32Type>(take_out.values());
-        assert_eq!(take_out_values.values(), &[2, 2, 2, 2]);
+        assert_eq!(take_out_values.values(), &[2, 2, 2, 2, 1]);
     }
 
     #[test]
