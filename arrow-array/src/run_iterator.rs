@@ -19,9 +19,7 @@
 
 use arrow_buffer::ArrowNativeType;
 
-use crate::{
-    array::ArrayAccessor, types::RunEndIndexType, Array, TypedRunArray,
-};
+use crate::{array::ArrayAccessor, types::RunEndIndexType, Array, TypedRunArray};
 
 /// The [`RunArrayIter`] provides an idiomatic way to iterate over the run array.
 /// It returns Some(T) if there is a value or None if the value is null.
@@ -59,12 +57,8 @@ where
 {
     /// create a new iterator
     pub fn new(array: TypedRunArray<'a, R, V>) -> Self {
-        let current_front_physical: usize =
-            array.run_array().get_start_physical_index();
-        let current_back_physical: usize = array
-            .run_array()
-            .get_end_physical_index()
-            + 1;
+        let current_front_physical: usize = array.run_array().get_start_physical_index();
+        let current_back_physical: usize = array.run_array().get_end_physical_index() + 1;
         RunArrayIter {
             array,
             current_front_logical: array.offset(),
