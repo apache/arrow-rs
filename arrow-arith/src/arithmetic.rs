@@ -1177,7 +1177,8 @@ pub fn multiply_decimal(
     right: &PrimitiveArray<Decimal128Type>,
 ) -> Result<ArrayRef, ArrowError> {
     let precision = left.precision();
-    let mut product_scale = left.scale() + right.scale();
+    let product_scale = left.scale() + right.scale();
+    let mut min_product_scale = product_scale;
 
     math_checked_op(left, right, |a, b| {
         let a = i256::from_i128(a);
@@ -1185,6 +1186,8 @@ pub fn multiply_decimal(
 
         a.checked_mul(b)
             .map(|mut a| {
+                let mut product_scale = product_scale;
+
                 // Round the value if an exact representation is not possible.
                 // ref: java.math.BigDecimal#doRound
                 let mut digits = a.to_string().len() as i8;
@@ -1198,9 +1201,21 @@ pub fn multiply_decimal(
                     digits = a.to_string().len() as i8;
                     diff = digits - (Decimal128Type::MAX_PRECISION as i8);
                 }
-                a
+                if product_scale < min_product_scale {
+                    min_product_scale = product_scale;
+                }
+                (a, product_scale)
             })
-            .and_then(|a| a.to_i128())
+            .and_then(|(a, scale)| {
+                if scale > min_product_scale {
+                    let divisor = i256::from_i128(10)
+                        .pow_wrapping((scale - min_product_scale) as u32);
+                    let a = divide_and_round::<Decimal256Type>(a, divisor);
+                    a.to_i128()
+                } else {
+                    a.to_i128()
+                }
+            })
             .ok_or_else(|| {
                 ArrowError::ComputeError(format!(
                     "Overflow happened on: {:?} * {:?}, {:?}",
@@ -1211,7 +1226,10 @@ pub fn multiply_decimal(
             })
     })
     .and_then(|a| {
-        Ok(Arc::new(a.with_precision_and_scale(precision, product_scale)?) as ArrayRef)
+        Ok(
+            Arc::new(a.with_precision_and_scale(precision, min_product_scale)?)
+                as ArrayRef,
+        )
     })
 }
 
@@ -3333,20 +3351,23 @@ mod tests {
         );
 
         // Rounding case
-        let a = Decimal128Array::from(vec![123456789555555555555555555])
-            .with_precision_and_scale(38, 18)
-            .unwrap();
+        let a =
+            Decimal128Array::from(vec![123456789555555555555555555, 1555555555555555555])
+                .with_precision_and_scale(38, 18)
+                .unwrap();
 
-        let b = Decimal128Array::from(vec![11222222222222222222])
+        let b = Decimal128Array::from(vec![11222222222222222222, 1])
             .with_precision_and_scale(38, 18)
             .unwrap();
 
         let result = multiply_decimal(&a, &b).unwrap();
         let result = as_primitive_array::<Decimal128Type>(&result).clone();
-        let expected =
-            Decimal128Array::from(vec![13854595272345679012071330528765432099])
-                .with_precision_and_scale(38, 28)
-                .unwrap();
+        let expected = Decimal128Array::from(vec![
+            13854595272345679012071330528765432099,
+            15555555556,
+        ])
+        .with_precision_and_scale(38, 28)
+        .unwrap();
 
         assert_eq!(&expected, &result);
         // Rounded the value "1385459527.234567901207133052876543209876543210".
@@ -3354,5 +3375,6 @@ mod tests {
             result.value_as_string(0),
             "1385459527.2345679012071330528765432099"
         );
+        assert_eq!(result.value_as_string(1), "0.0000000000000000015555555556");
     }
 }
