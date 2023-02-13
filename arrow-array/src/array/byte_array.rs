@@ -93,10 +93,11 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         }
     }
 
-    /// Returns the element at index `i`
+
+    /// Returns the raw bytes for the element at index `i`
     /// # Safety
     /// Caller is responsible for ensuring that the index is within the bounds of the array
-    pub unsafe fn value_unchecked(&self, i: usize) -> &T::Native {
+    pub unsafe fn raw_value_unchecked(&self, i: usize) -> &[u8] {
         let end = *self.value_offsets().get_unchecked(i + 1);
         let start = *self.value_offsets().get_unchecked(i);
 
@@ -109,14 +110,38 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         // OffsetSizeTrait. Currently, only i32 and i64 implement OffsetSizeTrait,
         // both of which should cleanly cast to isize on an architecture that supports
         // 32/64-bit offsets
-        let b = std::slice::from_raw_parts(
+        std::slice::from_raw_parts(
             self.value_data.as_ptr().offset(start.to_isize().unwrap()),
             (end - start).to_usize().unwrap(),
-        );
+        )
+    }
+
+    /// Returns the element at index `i`
+    /// # Safety
+    /// Caller is responsible for ensuring that the index is within the bounds of the array
+    pub unsafe fn value_unchecked(&self, i: usize) -> &T::Native {
+        let b = self.raw_value_unchecked(i);
 
         // SAFETY:
         // ArrayData is valid
         T::Native::from_bytes_unchecked(b)
+    }
+
+    /// Returns the raw data for the element at index `i`
+    /// # Panics
+    /// Panics if index `i` is out of bounds.
+    pub fn raw_value(&self, i: usize) -> &[u8] {
+        assert!(
+            i < self.data.len(),
+            "Trying to access an element at index {} from a {}{}Array of length {}",
+            i,
+            T::Offset::PREFIX,
+            T::PREFIX,
+            self.len()
+        );
+        // SAFETY:
+        // Verified length above
+        unsafe { self.raw_value_unchecked(i) }
     }
 
     /// Returns the element at index `i`

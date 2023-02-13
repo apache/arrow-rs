@@ -719,4 +719,13 @@ mod tests {
         let err_return = array.into_builder().unwrap_err();
         assert_eq!(&err_return, &shared_array);
     }
+
+    #[test]
+    fn test_raw_values() {
+        let data = vec!["a", "b"];
+        let s = StringArray::from_iter_values(data.clone());
+        let values = vec![s.raw_value(0), s.raw_value(1)];
+        let expected: Vec<&[u8]> = data.iter().map(|&v| v.as_bytes()).collect();
+        assert_eq!(values, expected);
+    }
 }
