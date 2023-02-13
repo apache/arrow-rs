@@ -472,6 +472,11 @@ impl<'a, R: RunEndIndexType, V> TypedRunArray<'a, R, V> {
     pub fn values(&self) -> &'a V {
         self.values
     }
+
+    /// Returns the run array of this [`TypedRunArray`]
+    pub fn run_array(&self) -> &'a RunArray<R> {
+        self.run_array
+    }
 }
 
 impl<'a, R: RunEndIndexType, V: Sync> Array for TypedRunArray<'a, R, V> {
