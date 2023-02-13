@@ -18,3 +18,5 @@
 [build-system]
 requires = ["maturin"]
 build-backend = "maturin"
+
+dependencies = ["pyarrow>=1"]
