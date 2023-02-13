@@ -126,7 +126,7 @@ impl<R: RunEndIndexType> RunArray<R> {
         &self.values
     }
 
-    /// Returns the physical at which the array slice starts.
+    /// Returns the physical index at which the array slice starts.
     pub fn get_start_physical_index(&self) -> usize {
         if self.offset() == 0 {
             return 0;
