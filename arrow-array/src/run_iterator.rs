@@ -59,30 +59,18 @@ where
 {
     /// create a new iterator
     pub fn new(array: TypedRunArray<'a, R, V>) -> Self {
-        let current_front_physical: usize = if array.offset() > 0 {
-            array
-                .run_array()
-                .get_zero_offset_physical_index(array.offset())
-                .unwrap()
-        } else {
-            0
-        };
-        let sliced_end: usize = array.offset() + array.len();
-        let current_back_physical: usize =
-            if sliced_end == RunArray::<R>::logical_len(array.run_ends()) {
-                array.run_ends().len()
-            } else {
-                array
-                    .run_array()
-                    .get_zero_offset_physical_index(sliced_end - 1)
-                    .unwrap()
-                    + 1
-            };
+        let current_front_physical: usize =
+            array.run_array().get_physical_index(0).unwrap();
+        let current_back_physical: usize = array
+            .run_array()
+            .get_physical_index(array.len() - 1)
+            .unwrap()
+            + 1;
         RunArrayIter {
             array,
             current_front_logical: array.offset(),
             current_front_physical,
-            current_back_logical: sliced_end,
+            current_back_logical: array.offset() + array.len(),
             current_back_physical,
         }
     }

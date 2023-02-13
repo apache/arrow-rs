@@ -505,8 +505,10 @@ where
 fn sorted_rank(sorted_value_indices: &UInt32Array) -> Vec<u32> {
     assert_eq!(sorted_value_indices.null_count(), 0);
     let sorted_indices = sorted_value_indices.values();
-    let mut out: Vec<_> = (0..sorted_indices.len() as u32).collect();
-    out.sort_unstable_by_key(|x| sorted_indices[*x as usize]);
+    let mut out: Vec<_> = vec![0_u32; sorted_indices.len()];
+    for (ix, val) in sorted_indices.iter().enumerate() {
+        out[*val as usize] = ix as u32;
+    }
     out
 }
 
