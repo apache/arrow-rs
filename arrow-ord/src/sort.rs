@@ -649,8 +649,8 @@ fn sort_run_downcasted<R: RunEndIndexType>(
     let run_array = values.as_any().downcast_ref::<RunArray<R>>().unwrap();
 
     // slice the run_array.values based on offset and length.
-    let start_physical_index = run_array.get_offset_physical_index();
-    let end_physical_index = run_array.get_slice_end_physical_index();
+    let start_physical_index = run_array.get_start_physical_index();
+    let end_physical_index = run_array.get_end_physical_index();
     let physical_len = end_physical_index - start_physical_index + 1;
     let run_values = run_array.values().slice(start_physical_index, physical_len);
 
@@ -749,8 +749,8 @@ fn sort_run_to_indices<R: RunEndIndexType>(
     let run_array = values.as_any().downcast_ref::<RunArray<R>>().unwrap();
 
     // slice the run_array.values based on offset and length.
-    let start_physical_index = run_array.get_offset_physical_index();
-    let end_physical_index = run_array.get_slice_end_physical_index();
+    let start_physical_index = run_array.get_start_physical_index();
+    let end_physical_index = run_array.get_end_physical_index();
     let physical_len = end_physical_index - start_physical_index + 1;
     let run_values = run_array.values().slice(start_physical_index, physical_len);
 

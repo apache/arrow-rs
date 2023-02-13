@@ -20,7 +20,7 @@
 use arrow_buffer::ArrowNativeType;
 
 use crate::{
-    array::ArrayAccessor, types::RunEndIndexType, Array, RunArray, TypedRunArray,
+    array::ArrayAccessor, types::RunEndIndexType, Array, TypedRunArray,
 };
 
 /// The [`RunArrayIter`] provides an idiomatic way to iterate over the run array.
@@ -60,11 +60,10 @@ where
     /// create a new iterator
     pub fn new(array: TypedRunArray<'a, R, V>) -> Self {
         let current_front_physical: usize =
-            array.run_array().get_physical_index(0).unwrap();
+            array.run_array().get_start_physical_index();
         let current_back_physical: usize = array
             .run_array()
-            .get_physical_index(array.len() - 1)
-            .unwrap()
+            .get_end_physical_index()
             + 1;
         RunArrayIter {
             array,

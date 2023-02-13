@@ -126,8 +126,8 @@ impl<R: RunEndIndexType> RunArray<R> {
         &self.values
     }
 
-    /// Returns the physical index of offset.
-    pub fn get_offset_physical_index(&self) -> usize {
+    /// Returns the physical at which the array slice starts.
+    pub fn get_start_physical_index(&self) -> usize {
         if self.offset() == 0 {
             return 0;
         }
@@ -135,7 +135,7 @@ impl<R: RunEndIndexType> RunArray<R> {
     }
 
     /// Returns the physical index at which the array slice ends.
-    pub fn get_slice_end_physical_index(&self) -> usize {
+    pub fn get_end_physical_index(&self) -> usize {
         if self.offset() + self.len() == Self::logical_len(&self.run_ends) {
             return self.run_ends.len() - 1;
         }
@@ -250,7 +250,7 @@ impl<R: RunEndIndexType> RunArray<R> {
         }
 
         // Skip some physical indices based on offset.
-        let skip_value = self.get_offset_physical_index();
+        let skip_value = self.get_start_physical_index();
 
         let mut physical_indices = vec![0; indices_len];
 
