@@ -1318,7 +1318,7 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new("city", DataType::Utf8, false),
             Field::new("lat", DataType::Decimal128(38, 6), false),
-            Field::new("lng", DataType::Decimal128(38, 6), false),
+            Field::new("lng", DataType::Decimal256(38, 6), false),
         ]);
 
         let file = File::open("test/data/decimal_test.csv").unwrap();
@@ -1343,6 +1343,23 @@ mod tests {
         assert_eq!("123.000000", lat.value_as_string(7));
         assert_eq!("123.000000", lat.value_as_string(8));
         assert_eq!("-50.760000", lat.value_as_string(9));
+
+        let lng = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Decimal256Array>()
+            .unwrap();
+
+        assert_eq!("-3.335724", lng.value_as_string(0));
+        assert_eq!("-2.179404", lng.value_as_string(1));
+        assert_eq!("-1.778197", lng.value_as_string(2));
+        assert_eq!("-3.179090", lng.value_as_string(3));
+        assert_eq!("-3.179090", lng.value_as_string(4));
+        assert_eq!("0.290472", lng.value_as_string(5));
+        assert_eq!("0.290472", lng.value_as_string(6));
+        assert_eq!("0.290472", lng.value_as_string(7));
+        assert_eq!("0.290472", lng.value_as_string(8));
+        assert_eq!("0.290472", lng.value_as_string(9));
     }
 
     #[test]
