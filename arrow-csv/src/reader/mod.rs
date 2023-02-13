@@ -42,6 +42,7 @@
 
 mod records;
 
+use arrow_buffer::i256;
 use lazy_static::lazy_static;
 use regex::{Regex, RegexSet};
 use std::collections::HashSet;
@@ -50,7 +51,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader as StdBufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
-use arrow_array::builder::Decimal128Builder;
+use arrow_array::builder::{Decimal128Builder, Decimal256Builder};
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_cast::parse::Parser;
@@ -58,7 +59,7 @@ use arrow_schema::*;
 
 use crate::map_csv_error;
 use crate::reader::records::{RecordDecoder, StringRecords};
-use arrow_data::decimal::validate_decimal_precision;
+use arrow_data::decimal::{validate_decimal256_precision, validate_decimal_precision};
 use csv::StringRecord;
 use std::ops::Neg;
 
@@ -610,6 +611,9 @@ fn parse(
                 DataType::Decimal128(precision, scale) => {
                     build_decimal_array(line_number, rows, i, *precision, *scale)
                 }
+                DataType::Decimal256(precision, scale) => {
+                    build_decimal256_array(line_number, rows, i, *precision, *scale)
+                }
                 DataType::Int8 => {
                     build_primitive_array::<Int8Type>(line_number, rows, i, None)
                 }
@@ -814,6 +818,41 @@ fn build_decimal_array(
     ))
 }
 
+//TODO: is possible to use generic function replace this?
+// parse the column string to an Arrow Array
+fn build_decimal256_array(
+    _line_number: usize,
+    rows: &StringRecords<'_>,
+    col_idx: usize,
+    precision: u8,
+    scale: i8,
+) -> Result<ArrayRef, ArrowError> {
+    let mut decimal_builder = Decimal256Builder::with_capacity(rows.len());
+    for row in rows.iter() {
+        let s = row.get(col_idx);
+        if s.is_empty() {
+            // append null
+            decimal_builder.append_null();
+        } else {
+            let decimal_value: Result<i256, _> =
+                parse_decimal256_with_parameter(s, precision, scale);
+            match decimal_value {
+                Ok(v) => {
+                    decimal_builder.append_value(v);
+                }
+                Err(e) => {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Ok(Arc::new(
+        decimal_builder
+            .finish()
+            .with_precision_and_scale(precision, scale)?,
+    ))
+}
+
 // Parse the string format decimal value to i128 format and checking the precision and scale.
 // The result i128 value can't be out of bounds.
 fn parse_decimal_with_parameter(
@@ -871,6 +910,77 @@ fn parse_decimal_with_parameter(
             Ok(_) => Ok(result),
             Err(e) => Err(ArrowError::ParseError(format!(
                 "parse decimal overflow: {e}"
+            ))),
+        }
+    } else {
+        Err(ArrowError::ParseError(format!(
+            "can't parse the string value {s} to decimal"
+        )))
+    }
+}
+
+// Parse the string format decimal value to i256 format and checking the precision and scale.
+// The result i256 value can't be out of bounds.
+fn parse_decimal256_with_parameter(
+    s: &str,
+    precision: u8,
+    scale: i8,
+) -> Result<i256, ArrowError> {
+    if PARSE_DECIMAL_RE.is_match(s) {
+        let mut offset = s.len();
+        let len = s.len();
+        let mut base = i256::from_i128(1);
+        let scale_usize = usize::from(scale as u8);
+
+        // handle the value after the '.' and meet the scale
+        let delimiter_position = s.find('.');
+        match delimiter_position {
+            None => {
+                // there is no '.'
+                // FIXME: Is it appropriate to write like this?
+                base = i256::from_i128(10).wrapping_pow(scale as u32);
+            }
+            Some(mid) => {
+                // there is the '.'
+                if len - mid >= scale_usize + 1 {
+                    // If the string value is "123.12345" and the scale is 2, we should just remain '.12' and drop the '345' value.
+                    offset -= len - mid - 1 - scale_usize;
+                } else {
+                    // If the string value is "123.12" and the scale is 4, we should append '00' to the tail.
+                    base = i256::from_i128(10)
+                        .wrapping_pow((scale_usize + 1 + mid - len) as u32);
+                }
+            }
+        };
+
+        // each byte is digit、'-' or '.'
+        let bytes = s.as_bytes();
+        let mut negative = false;
+        let mut result = i256::from_i128(0);
+
+        bytes[0..offset].iter().rev().for_each(|&byte| match byte {
+            b'-' => {
+                negative = true;
+            }
+            b'0'..=b'9' => {
+                //TODO: support '+=' and '*=' for i256
+                //TODO: support i256::from_byte for i256
+                result = result + i256::from_i128((byte - b'0').into()) * base;
+                //TODO: support Mul<i32> for i256
+                base = base * i256::from_i128(10);
+            }
+            // because of the PARSE_DECIMAL_RE, bytes just contains digit、'-' and '.'.
+            _ => {}
+        });
+
+        if negative {
+            result = result.neg();
+        }
+
+        match validate_decimal256_precision(result, precision) {
+            Ok(_) => Ok(result),
+            Err(e) => Err(ArrowError::ParseError(format!(
+                "parse decimal256 overflow: {e}"
             ))),
         }
     } else {
