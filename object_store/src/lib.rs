@@ -916,6 +916,8 @@ mod tests {
         assert_eq!(result.objects[0].location, location1);
         assert_eq!(result.common_prefixes, &[]);
 
+        // Listing an existing path (file) should return an empty list:
+        // https://github.com/apache/arrow-rs/issues/3712
         let content_list = flatten_list_stream(storage, Some(&location1))
             .await
             .unwrap();
