@@ -17,12 +17,12 @@
 
 //! Data types that connect Parquet physical types with their Rust-specific
 //! representations.
+use bytes::Bytes;
 use std::cmp::Ordering;
 use std::fmt;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::str::from_utf8;
-use bytes::Bytes;
 
 use crate::basic::Type;
 use crate::column::reader::{ColumnReader, ColumnReaderImpl};
