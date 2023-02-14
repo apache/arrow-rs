@@ -171,7 +171,7 @@ name = "parquet-index"
 required-features = ["cli"]
 
 [[bin]]
-name = "parquet-qcompression"
+name = "parquet-column-qcompression"
 required-features = ["arrow", "experimental", "cli"]
 
 [[bin]]
