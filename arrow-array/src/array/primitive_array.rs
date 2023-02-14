@@ -233,8 +233,7 @@ pub type Decimal256Array = PrimitiveArray<Decimal256Type>;
 /// static-typed nature of rust types ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
 pub trait ArrowPrimitiveType: 'static {
     /// Corresponding Rust native type for the primitive type.
-    // FIXME: this may affect other code, is this correct?
-    type Native: ArrowNativeType + ArrowNativeTypeOp;
+    type Native: ArrowNativeTypeOp;
 
     /// the corresponding Arrow data type of this primitive type.
     const DATA_TYPE: DataType;
