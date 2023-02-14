@@ -388,7 +388,7 @@ impl AzureClient {
                 .context(InvalidListResponseSnafu)?;
         let token = response.next_marker.take();
 
-        Ok((response.try_into()?, token))
+        Ok((to_list_result(response, prefix)?, token))
     }
 
     /// Perform a list operation automatically handling pagination
@@ -419,33 +419,37 @@ struct ListResultInternal {
     pub blobs: Blobs,
 }
 
-impl TryFrom<ListResultInternal> for ListResult {
-    type Error = crate::Error;
+fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<ListResult> {
+    let prefix = prefix.map(Path::from).unwrap_or_else(Path::default);
+    let common_prefixes = value
+        .blobs
+        .blob_prefix
+        .into_iter()
+        .map(|x| Ok(Path::parse(x.name)?))
+        .collect::<Result<_>>()?;
 
-    fn try_from(value: ListResultInternal) -> Result<Self> {
-        let common_prefixes = value
-            .blobs
-            .blob_prefix
-            .into_iter()
-            .map(|x| Ok(Path::parse(x.name)?))
-            .collect::<Result<_>>()?;
-
-        let objects = value
-            .blobs
-            .blobs
-            .into_iter()
-            .map(ObjectMeta::try_from)
-            // Note: workaround for gen2 accounts with hierarchical namespaces. These accounts also
-            // return path segments as "directories". When we cant directories, its always via
-            // the BlobPrefix mechanics.
-            .filter_map_ok(|obj| if obj.size > 0 { Some(obj) } else { None })
-            .collect::<Result<_>>()?;
-
-        Ok(Self {
-            common_prefixes,
-            objects,
+    let objects = value
+        .blobs
+        .blobs
+        .into_iter()
+        .map(ObjectMeta::try_from)
+        // Note: workaround for gen2 accounts with hierarchical namespaces. These accounts also
+        // return path segments as "directories" and include blobs in list requests with prefix,
+        // if the prefix mateches the blob. When we want directories, its always via
+        // the BlobPrefix mechanics, and during lists we state that prefixes are evaluated on path segement basis.
+        .filter_map_ok(|obj| {
+            if obj.size > 0 && obj.location != prefix {
+                Some(obj)
+            } else {
+                None
+            }
         })
-    }
+        .collect::<Result<_>>()?;
+
+    Ok(ListResult {
+        common_prefixes,
+        objects,
+    })
 }
 
 /// Collection of blobs and potentially shared prefixes returned from list requests.
