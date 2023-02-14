@@ -846,10 +846,7 @@ fn parse_decimal_with_parameter<T: DecimalType>(
         match delimiter_position {
             None => {
                 // there is no '.'
-                // FIXME: i saw '#[rustc_inherit_overflow_checks]' in the pow of 'int_impl!', so use the pow_checked
-                base = T::Native::usize_as(10)
-                    .pow_checked(scale as u32)
-                    .expect("pow overflow!");
+                base = T::Native::usize_as(10).pow_checked(scale as u32)?;
             }
             Some(mid) => {
                 // there is the '.'
@@ -859,8 +856,7 @@ fn parse_decimal_with_parameter<T: DecimalType>(
                 } else {
                     // If the string value is "123.12" and the scale is 4, we should append '00' to the tail.
                     base = T::Native::usize_as(10)
-                        .pow_checked((scale_usize + 1 + mid - len) as u32)
-                        .expect("pow overflow!");
+                        .pow_checked((scale_usize + 1 + mid - len) as u32)?;
                 }
             }
         };
@@ -870,26 +866,24 @@ fn parse_decimal_with_parameter<T: DecimalType>(
         let mut negative = false;
         let mut result = T::Native::usize_as(0);
 
-        bytes[0..offset].iter().rev().for_each(|&byte| match byte {
-            b'-' => {
-                negative = true;
+        for byte in bytes[0..offset].iter().rev() {
+            match byte {
+                b'-' => {
+                    negative = true;
+                }
+                b'0'..=b'9' => {
+                    let add =
+                        T::Native::usize_as((byte - b'0') as usize).mul_checked(base)?;
+                    result = result.add_checked(add)?;
+                    base = base.mul_checked(T::Native::usize_as(10))?;
+                }
+                // because of the PARSE_DECIMAL_RE, bytes just contains digit、'-' and '.'.
+                _ => {}
             }
-            b'0'..=b'9' => {
-                // FIXME: Is this appropriate? maybe should use mul_wrapping instead of mul_checked
-                let add = T::Native::usize_as((byte - b'0') as usize)
-                    .mul_checked(base)
-                    .expect("mul overflow!");
-                result = result.add_checked(add).expect("add overflow!");
-                base = base
-                    .mul_checked(T::Native::usize_as(10))
-                    .expect("mul overflow!");
-            }
-            // because of the PARSE_DECIMAL_RE, bytes just contains digit、'-' and '.'.
-            _ => {}
-        });
+        }
 
         if negative {
-            result = result.neg_checked().expect("neg overflow!");
+            result = result.neg_checked()?;
         }
 
         match T::validate_decimal_precision(result, precision) {
