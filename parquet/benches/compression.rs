@@ -1057,6 +1057,6 @@ fn compare_compress_generic(c: &mut Criterion) {
 
 criterion_group!(
 	name = benches;
-	config = Criterion::default().sample_size(20);
+	config = Criterion::default().sample_size(10);
 	targets = compare_compress_generic);
 criterion_main!(benches);
