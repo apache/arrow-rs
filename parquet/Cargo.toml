@@ -35,6 +35,8 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
+arrow = {version = "32.0.0", path="../arrow", features = ["csv"], default-features=false}
+# parquet-column-export needs
 arrow-array = { version = "32.0.0", path = "../arrow-array", default-features = false, optional = true }
 arrow-buffer = { version = "32.0.0", path = "../arrow-buffer", default-features = false, optional = true }
 arrow-cast = { version = "32.0.0", path = "../arrow-cast", default-features = false, optional = true }
@@ -66,6 +68,11 @@ hashbrown = { version = "0.13", default-features = false }
 twox-hash = { version = "1.6", default-features = false }
 paste = { version = "1.0" }
 
+# compression extension
+byteorder = { version = "1" }
+q_compress = { version = "0.11.4" }
+criterion = { version = "0.4" }
+
 [dev-dependencies]
 base64 = { version = "0.21", default-features = false, features = ["std"] }
 criterion = { version = "0.4", default-features = false }
@@ -79,6 +86,10 @@ serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { path = "../arrow", version = "32.0.0", default-features = false, features = ["ipc", "test_utils", "prettyprint", "json"] }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "io-util", "fs"] }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+
+# compression extension
+byteorder = { version = "1" }
+q_compress = { version = "0.11.4" }
 
 [package.metadata.docs.rs]
 all-features = true
@@ -110,9 +121,22 @@ name = "async_read_parquet"
 required-features = ["arrow", "async"]
 path = "./examples/async_read_parquet.rs"
 
+[[example]]
+name = "compression"
+required-features = ["arrow", "experimental"]
+path = "./examples/compression.rs"
+
 [[test]]
 name = "arrow_writer_layout"
 required-features = ["arrow"]
+
+[[test]]
+name = "compression_char"
+required-features = ["arrow", "experimental"]
+
+[[test]]
+name = "compression_f64"
+required-features = ["arrow", "experimental"]
 
 [[bin]]
 name = "parquet-read"
@@ -146,6 +170,14 @@ required-features = ["cli"]
 name = "parquet-index"
 required-features = ["cli"]
 
+[[bin]]
+name = "parquet-compression"
+required-features = ["arrow", "experimental", "cli"]
+
+[[bin]]
+name = "parquet-column-export"
+required-features = ["cli"]
+
 [[bench]]
 name = "arrow_writer"
 required-features = ["arrow"]
@@ -153,6 +185,11 @@ harness = false
 
 [[bench]]
 name = "arrow_reader"
+required-features = ["arrow", "test_common", "experimental"]
+harness = false
+
+[[bench]]
+name = "compression"
 required-features = ["arrow", "test_common", "experimental"]
 harness = false
 
