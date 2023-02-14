@@ -23,8 +23,8 @@ use crate::temporal_conversions::{
 };
 use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
-use crate::types::*;
 use crate::{print_long_array, Array, ArrayAccessor};
+use crate::{types::*, ArrowNativeTypeOp};
 use arrow_buffer::{i256, ArrowNativeType, Buffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::ArrayData;
@@ -233,7 +233,8 @@ pub type Decimal256Array = PrimitiveArray<Decimal256Type>;
 /// static-typed nature of rust types ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
 pub trait ArrowPrimitiveType: 'static {
     /// Corresponding Rust native type for the primitive type.
-    type Native: ArrowNativeType;
+    // FIXME: this may affect other code, is this correct?
+    type Native: ArrowNativeType + ArrowNativeTypeOp;
 
     /// the corresponding Arrow data type of this primitive type.
     const DATA_TYPE: DataType;
