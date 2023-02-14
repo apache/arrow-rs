@@ -909,6 +909,8 @@ fn parse_decimal_with_parameter<T: DecimalType>(
 // Like "125.12" to 12512_i128.
 #[cfg(test)]
 fn parse_decimal(s: &str) -> Result<i128, ArrowError> {
+    use std::ops::Neg;
+
     if PARSE_DECIMAL_RE.is_match(s) {
         let mut offset = s.len();
         // each byte is digit、'-' or '.'
