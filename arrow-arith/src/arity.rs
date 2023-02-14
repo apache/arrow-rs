@@ -77,7 +77,7 @@ pub fn try_unary<I, F, O>(
 where
     I: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
-    F: Fn(I::Native) -> Result<O::Native, ArrowError>,
+    F: FnMut(I::Native) -> Result<O::Native, ArrowError>,
 {
     array.try_unary(op)
 }
