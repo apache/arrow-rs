@@ -305,6 +305,7 @@ mod tests {
     };
     use arrow_array::types::Int32Type;
     use arrow_array::Array;
+    use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_schema::{DataType, Field, Schema};
     use std::fs::File;
     use std::io::{BufReader, Cursor, Seek};
@@ -576,7 +577,13 @@ mod tests {
         assert_eq!(&lv, &[Some("foo"), None, None, Some("baz")]);
         assert_eq!(map_values.value_offsets(), &[0, 2, 3, 3, 3, 4]);
         assert_eq!(map_values.null_count(), 1);
-        assert!(map_values.is_null(3))
+        assert!(map_values.is_null(3));
+
+        let options = FormatOptions::default().with_null("null");
+        let formatter = ArrayFormatter::try_new(map, &options).unwrap();
+        assert_eq!(formatter.value(0).to_string(), "{a: [foo, null]}");
+        assert_eq!(formatter.value(1).to_string(), "{a: [null], b: []}");
+        assert_eq!(formatter.value(2).to_string(), "{c: null, a: [baz]}");
     }
 
     #[test]
