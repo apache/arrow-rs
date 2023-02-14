@@ -438,7 +438,7 @@ fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<Lis
         // if the prefix mateches the blob. When we want directories, its always via
         // the BlobPrefix mechanics, and during lists we state that prefixes are evaluated on path segement basis.
         .filter_map_ok(|obj| {
-            if obj.size > 0 && obj.location != prefix {
+            if obj.size > 0 && obj.location.as_ref().len() > prefix.as_ref().len() {
                 Some(obj)
             } else {
                 None
