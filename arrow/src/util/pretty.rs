@@ -26,8 +26,6 @@ use std::fmt::Display;
 
 use crate::error::Result;
 
-use super::display::array_value_to_string;
-
 /// Create a visual representation of record batches
 pub fn pretty_format_batches(results: &[RecordBatch]) -> Result<impl Display> {
     let options = FormatOptions::default().with_display_error(true);
