@@ -296,3 +296,9 @@ required-features = ["pyarrow"]
 [[test]]
 name = "array_cast"
 required-features = ["chrono-tz"]
+
+[[bench]]
+name = "cow"
+harness = false
+required-features = ["test_utils"]
+

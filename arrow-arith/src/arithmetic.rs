@@ -939,6 +939,20 @@ where
     unary_dyn::<_, T>(array, |value| value.add_wrapping(scalar))
 }
 
+pub fn add_scalar_dyn_mut<T>(
+    array: ArrayRef,
+    scalar: T::Native,
+) -> Result<ArrayRef, ArrowError>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    match unary_dyn_mut::<_, T>(array, |value| value.add_wrapping(scalar)) {
+        Ok(array) => Ok(array),
+        Err(array) => add_scalar_dyn::<T>(&array, scalar),
+    }
+}
+
 /// Add every value in an array by a scalar. If any value in the array is null then the
 /// result is also null. The given array must be a `PrimitiveArray` of the type same as
 /// the scalar, or a `DictionaryArray` of the value type same as the scalar.

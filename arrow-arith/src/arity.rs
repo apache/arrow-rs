@@ -583,6 +583,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arithmetic::{add_scalar_dyn, add_scalar_dyn_mut};
     use arrow_array::builder::*;
     use arrow_array::cast::*;
     use arrow_array::types::*;
@@ -626,6 +627,22 @@ mod tests {
         let slice = input.slice(1, 4);
         let result = unary_dyn_mut::<_, Float64Type>(slice, |n| n + 1.0);
         assert!(result.is_err())
+    }
+    #[test]
+    fn profile() {
+        let mut vec = vec![];
+        let batch_size = 16384;
+        for i in 0..1024 {
+            let array = PrimitiveArray::<Float32Type>::from_iter_values(
+                (0..batch_size).map(|x| x as f32),
+            );
+            vec.push(make_array(array.into_data()));
+        }
+
+        for i in 0..vec.len() {
+            add_scalar_dyn::<Float32Type>(vec.pop().unwrap().as_ref(), 1 as f32)
+                .expect("panic message");
+        }
     }
 
     #[test]
