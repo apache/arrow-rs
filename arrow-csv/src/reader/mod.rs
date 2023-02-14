@@ -1251,6 +1251,7 @@ impl ReaderBuilder {
 mod tests {
     use super::*;
 
+    use arrow_buffer::i256;
     use std::io::{Cursor, Write};
     use tempfile::NamedTempFile;
 
@@ -1826,26 +1827,42 @@ mod tests {
             ("-123.", -123000i128),
         ];
         for (s, i) in tests {
-            let result = parse_decimal_with_parameter::<Decimal128Type>(s, 20, 3);
-            assert_eq!(i, result.unwrap())
+            let result_128 = parse_decimal_with_parameter::<Decimal128Type>(s, 20, 3);
+            assert_eq!(i, result_128.unwrap());
+            let result_256 = parse_decimal_with_parameter::<Decimal256Type>(s, 20, 3);
+            assert_eq!(i256::from_i128(i), result_256.unwrap());
         }
         let can_not_parse_tests = ["123,123", ".", "123.123.123"];
         for s in can_not_parse_tests {
-            let result = parse_decimal_with_parameter::<Decimal128Type>(s, 20, 3);
+            let result_128 = parse_decimal_with_parameter::<Decimal128Type>(s, 20, 3);
             assert_eq!(
                 format!("Parser error: can't parse the string value {s} to decimal"),
-                result.unwrap_err().to_string()
+                result_128.unwrap_err().to_string()
+            );
+            let result_256 = parse_decimal_with_parameter::<Decimal256Type>(s, 20, 3);
+            assert_eq!(
+                format!("Parser error: can't parse the string value {s} to decimal"),
+                result_256.unwrap_err().to_string()
             );
         }
         let overflow_parse_tests = ["12345678", "12345678.9", "99999999.99"];
         for s in overflow_parse_tests {
-            let result = parse_decimal_with_parameter::<Decimal128Type>(s, 10, 3);
-            let expected = "Parser error: parse decimal overflow";
-            let actual = result.unwrap_err().to_string();
+            let result_128 = parse_decimal_with_parameter::<Decimal128Type>(s, 10, 3);
+            let expected_128 = "Parser error: parse decimal overflow";
+            let actual_128 = result_128.unwrap_err().to_string();
 
             assert!(
-                actual.contains(expected),
-                "actual: '{actual}', expected: '{expected}'"
+                actual_128.contains(expected_128),
+                "actual: '{actual_128}', expected: '{expected_128}'"
+            );
+
+            let result_256 = parse_decimal_with_parameter::<Decimal256Type>(s, 10, 3);
+            let expected_256 = "Parser error: parse decimal overflow";
+            let actual_256 = result_256.unwrap_err().to_string();
+
+            assert!(
+                actual_256.contains(expected_256),
+                "actual: '{actual_256}', expected: '{expected_256}'"
             );
         }
     }
