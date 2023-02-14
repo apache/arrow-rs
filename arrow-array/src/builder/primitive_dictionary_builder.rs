@@ -118,7 +118,7 @@ where
     /// # Panics
     ///
     /// This method panics if `keys_builder` or `values_builder` is not empty.
-    pub fn new_from_builders(
+    pub fn new_from_empty_builders(
         keys_builder: PrimitiveBuilder<K>,
         values_builder: PrimitiveBuilder<V>,
     ) -> Self {
@@ -130,6 +130,30 @@ where
             keys_builder,
             values_builder,
             map: HashMap::new(),
+        }
+    }
+
+    /// Creates a new `PrimitiveDictionaryBuilder` from existing `PrimitiveBuilder`s of keys and values.
+    ///
+    /// # Safety
+    ///
+    /// caller must ensure that the passed in builders are valid for DictionaryArray.
+    pub unsafe fn new_from_builders(
+        keys_builder: PrimitiveBuilder<K>,
+        values_builder: PrimitiveBuilder<V>,
+    ) -> Self {
+        let keys = keys_builder.values_slice();
+        let values = values_builder.values_slice();
+        let mut map = HashMap::with_capacity(values.len());
+
+        keys.iter().zip(values.iter()).for_each(|(key, value)| {
+            map.insert(Value(*value), K::Native::to_usize(*key).unwrap());
+        });
+
+        Self {
+            keys_builder,
+            values_builder,
+            map,
         }
     }
 
@@ -276,6 +300,16 @@ where
 
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
+
+    /// Returns the current dictionary values buffer as a slice
+    pub fn values_slice(&self) -> &[V::Native] {
+        self.values_builder.values_slice()
+    }
+
+    /// Returns the current dictionary values buffer as a mutable slice
+    pub fn values_slice_mut(&mut self) -> &mut [V::Native] {
+        self.values_builder.values_slice_mut()
+    }
 }
 
 impl<K: ArrowPrimitiveType, P: ArrowPrimitiveType> Extend<Option<P::Native>>
@@ -357,7 +391,7 @@ mod tests {
         let values_builder =
             Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
         let mut builder =
-            PrimitiveDictionaryBuilder::<Int32Type, Decimal128Type>::new_from_builders(
+            PrimitiveDictionaryBuilder::<Int32Type, Decimal128Type>::new_from_empty_builders(
                 keys_builder,
                 values_builder,
             );
