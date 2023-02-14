@@ -582,6 +582,7 @@ where
 /// [`RawDecoder`]: crate::raw::RawDecoder
 /// [#3610]: https://github.com/apache/arrow-rs/issues/3610
 #[derive(Debug)]
+#[deprecated(note = "Use RawDecoder instead")]
 pub struct Decoder {
     /// Explicit schema for the JSON file
     schema: SchemaRef,
@@ -638,6 +639,7 @@ impl DecoderOptions {
     }
 }
 
+#[allow(deprecated)]
 impl Decoder {
     /// Create a new JSON decoder from some value that implements an
     /// iterator over [`serde_json::Value`]s (aka implements the
@@ -1604,12 +1606,15 @@ fn flatten_json_string_values(values: &[Value]) -> Vec<Option<String>> {
 /// [`RawReader`]: crate::raw::RawReader
 /// [#3610]: https://github.com/apache/arrow-rs/issues/3610
 #[derive(Debug)]
+#[deprecated(note = "Use RawReader instead")]
+#[allow(deprecated)]
 pub struct Reader<R: Read> {
     reader: BufReader<R>,
     /// JSON value decoder
     decoder: Decoder,
 }
 
+#[allow(deprecated)]
 impl<R: Read> Reader<R> {
     /// Create a new JSON Reader from any value that implements the `Read` trait.
     ///
@@ -1656,6 +1661,7 @@ impl<R: Read> Reader<R> {
 /// [#3610]: https://github.com/apache/arrow-rs/issues/3610
 ///
 #[derive(Debug, Default)]
+#[deprecated(note = "Use RawReaderBuilder instead")]
 pub struct ReaderBuilder {
     /// Optional schema for the JSON file
     ///
@@ -1670,6 +1676,7 @@ pub struct ReaderBuilder {
     options: DecoderOptions,
 }
 
+#[allow(deprecated)]
 impl ReaderBuilder {
     /// Create a new builder for configuring JSON parsing options.
     ///
@@ -1750,6 +1757,7 @@ impl ReaderBuilder {
     }
 }
 
+#[allow(deprecated)]
 impl<R: Read> Iterator for Reader<R> {
     type Item = Result<RecordBatch, ArrowError>;
 
@@ -1759,6 +1767,7 @@ impl<R: Read> Iterator for Reader<R> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use arrow_array::cast::{

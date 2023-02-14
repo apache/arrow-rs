@@ -295,6 +295,7 @@ fn tape_error(d: TapeElement, expected: &str) -> ArrowError {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::reader::infer_json_schema;

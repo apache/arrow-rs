@@ -1218,6 +1218,7 @@ mod tests {
         );
     }
 
+    #[allow(deprecated)]
     fn test_write_for_file(test_file: &str) {
         let builder = ReaderBuilder::new()
             .infer_schema(None)
@@ -1295,6 +1296,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn json_list_roundtrip() {
         let json_content = r#"
         {"list": [{"ints": 1}]}
@@ -1406,6 +1408,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_write_single_batch() {
         let test_file = "test/data/basic.json";
         let builder = ReaderBuilder::new()
