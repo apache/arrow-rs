@@ -19,6 +19,7 @@
 //! available unless `feature = "prettyprint"` is enabled.
 
 use crate::{array::ArrayRef, record_batch::RecordBatch};
+use arrow_array::Array;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use comfy_table::{Cell, Table};
 use std::fmt::Display;
@@ -27,33 +28,51 @@ use crate::error::Result;
 
 use super::display::array_value_to_string;
 
-///! Create a visual representation of record batches
+/// Create a visual representation of record batches
 pub fn pretty_format_batches(results: &[RecordBatch]) -> Result<impl Display> {
-    create_table(results)
+    let options = FormatOptions::default().with_display_error(true);
+    pretty_format_batches_with_options(results, &options)
 }
 
-///! Create a visual representation of columns
+/// Create a visual representation of record batches
+pub fn pretty_format_batches_with_options(
+    results: &[RecordBatch],
+    options: &FormatOptions,
+) -> Result<impl Display> {
+    create_table(results, options)
+}
+
+/// Create a visual representation of columns
 pub fn pretty_format_columns(
     col_name: &str,
     results: &[ArrayRef],
 ) -> Result<impl Display> {
-    create_column(col_name, results)
+    let options = FormatOptions::default().with_display_error(true);
+    pretty_format_columns_with_options(col_name, results, &options)
 }
 
-///! Prints a visual representation of record batches to stdout
+pub fn pretty_format_columns_with_options(
+    col_name: &str,
+    results: &[ArrayRef],
+    options: &FormatOptions,
+) -> Result<impl Display> {
+    create_column(col_name, results, options)
+}
+
+/// Prints a visual representation of record batches to stdout
 pub fn print_batches(results: &[RecordBatch]) -> Result<()> {
-    println!("{}", create_table(results)?);
+    println!("{}", pretty_format_batches(results)?);
     Ok(())
 }
 
-///! Prints a visual representation of a list of column to stdout
+/// Prints a visual representation of a list of column to stdout
 pub fn print_columns(col_name: &str, results: &[ArrayRef]) -> Result<()> {
-    println!("{}", create_column(col_name, results)?);
+    println!("{}", pretty_format_columns(col_name, results)?);
     Ok(())
 }
 
-///! Convert a series of record batches into a table
-fn create_table(results: &[RecordBatch]) -> Result<Table> {
+/// Convert a series of record batches into a table
+fn create_table(results: &[RecordBatch], options: &FormatOptions) -> Result<Table> {
     let mut table = Table::new();
     table.load_preset("||--+-++|    ++++++");
 
@@ -69,13 +88,11 @@ fn create_table(results: &[RecordBatch]) -> Result<Table> {
     }
     table.set_header(header);
 
-    let options = FormatOptions::default().with_display_error(true);
-
     for batch in results {
         let formatters = batch
             .columns()
             .iter()
-            .map(|c| ArrayFormatter::try_new(c.as_ref(), &options))
+            .map(|c| ArrayFormatter::try_new(c.as_ref(), options))
             .collect::<Result<Vec<_>>>()?;
 
         for row in 0..batch.num_rows() {
@@ -90,7 +107,11 @@ fn create_table(results: &[RecordBatch]) -> Result<Table> {
     Ok(table)
 }
 
-fn create_column(field: &str, columns: &[ArrayRef]) -> Result<Table> {
+fn create_column(
+    field: &str,
+    columns: &[ArrayRef],
+    options: &FormatOptions,
+) -> Result<Table> {
     let mut table = Table::new();
     table.load_preset("||--+-++|    ++++++");
 
@@ -102,8 +123,9 @@ fn create_column(field: &str, columns: &[ArrayRef]) -> Result<Table> {
     table.set_header(header);
 
     for col in columns {
+        let formatter = ArrayFormatter::try_new(col.as_ref(), options)?;
         for row in 0..col.len() {
-            let cells = vec![Cell::new(array_value_to_string(col, row)?)];
+            let cells = vec![Cell::new(formatter.value(row))];
             table.add_row(cells);
         }
     }
@@ -1056,5 +1078,44 @@ mod tests {
         assert_eq!(expected, actual, "Actual result:\n{table}");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_format_options() {
+        let options = FormatOptions::default().with_null("null");
+        let array = Int32Array::from(vec![Some(1), Some(2), None, Some(3), Some(4)]);
+        let batch =
+            RecordBatch::try_from_iter([("my_column_name", Arc::new(array) as _)])
+                .unwrap();
+
+        let column = pretty_format_columns_with_options(
+            "my_column_name",
+            &[batch.column(0).clone()],
+            &options,
+        )
+        .unwrap()
+        .to_string();
+
+        let batch = pretty_format_batches_with_options(&[batch], &options)
+            .unwrap()
+            .to_string();
+
+        let expected = vec![
+            "+----------------+",
+            "| my_column_name |",
+            "+----------------+",
+            "| 1              |",
+            "| 2              |",
+            "| null           |",
+            "| 3              |",
+            "| 4              |",
+            "+----------------+",
+        ];
+
+        let actual: Vec<&str> = column.lines().collect();
+        assert_eq!(expected, actual, "Actual result:\n{column}");
+
+        let actual: Vec<&str> = batch.lines().collect();
+        assert_eq!(expected, actual, "Actual result:\n{batch}");
     }
 }
