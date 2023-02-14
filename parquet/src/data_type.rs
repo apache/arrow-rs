@@ -22,6 +22,7 @@ use std::fmt;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::str::from_utf8;
+use bytes::Bytes;
 
 use crate::basic::Type;
 use crate::column::reader::{ColumnReader, ColumnReaderImpl};
@@ -211,6 +212,12 @@ impl<'a> From<&'a str> for ByteArray {
 impl From<ByteBufferPtr> for ByteArray {
     fn from(ptr: ByteBufferPtr) -> ByteArray {
         Self { data: Some(ptr) }
+    }
+}
+
+impl From<Bytes> for ByteArray {
+    fn from(value: Bytes) -> Self {
+        ByteBufferPtr::from(value).into()
     }
 }
 
