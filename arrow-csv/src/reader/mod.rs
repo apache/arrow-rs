@@ -1339,7 +1339,7 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new("city", DataType::Utf8, false),
             Field::new("lat", DataType::Decimal128(38, 6), false),
-            Field::new("lng", DataType::Decimal256(38, 6), false),
+            Field::new("lng", DataType::Decimal256(76, 6), false),
         ]);
 
         let file = File::open("test/data/decimal_test.csv").unwrap();

@@ -412,7 +412,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
     fn test_write_csv_decimal() {
         let schema = Schema::new(vec![
             Field::new("c1", DataType::Decimal128(38, 6), true),
-            Field::new("c2", DataType::Decimal256(38, 6), true),
+            Field::new("c2", DataType::Decimal256(76, 6), true),
         ]);
 
         let mut c1_builder =
@@ -421,7 +421,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         let c1 = c1_builder.finish();
 
         let mut c2_builder =
-            Decimal256Builder::new().with_data_type(DataType::Decimal256(38, 6));
+            Decimal256Builder::new().with_data_type(DataType::Decimal256(76, 6));
         c2_builder.extend(vec![
             Some(i256::from_i128(-3335724)),
             Some(i256::from_i128(2179404)),
