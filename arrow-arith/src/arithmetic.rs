@@ -1172,6 +1172,9 @@ pub fn multiply_dyn_checked(
 ///
 /// This performs decimal multiplication which allows precision loss if an exact representation
 /// is not possible for the result. In the case, the result will be rounded.
+///
+/// Note that this kernel is not optimized for performance yet. It is implemented for compatibility
+/// with precision loss `multiply` function provided by other data processing engines.
 pub fn multiply_decimal(
     left: &PrimitiveArray<Decimal128Type>,
     right: &PrimitiveArray<Decimal128Type>,
