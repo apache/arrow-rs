@@ -153,6 +153,7 @@ mod tests {
 
     use arrow_array::builder::PrimitiveBuilder;
     use arrow_array::types::{ArrowTimestampType, TimestampSecondType};
+    use arrow_cast::display::array_value_to_string;
     use half::f16;
 
     #[test]
