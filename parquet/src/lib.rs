@@ -82,7 +82,10 @@ experimental!(#[macro_use] mod util);
 #[cfg(feature = "arrow")]
 pub mod arrow;
 pub mod column;
-experimental!(mod compression);
+
+// external calling compression needs it to be pub
+experimental!(pub mod compression);
+
 experimental!(mod encodings);
 pub mod bloom_filter;
 pub mod file;

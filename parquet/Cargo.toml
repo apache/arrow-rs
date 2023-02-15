@@ -35,6 +35,8 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
+arrow = {version = "32.0.0", path="../arrow", features = ["csv"], default-features=false}
+# parquet-column-export needs
 arrow-array = { version = "32.0.0", path = "../arrow-array", default-features = false, optional = true }
 arrow-buffer = { version = "32.0.0", path = "../arrow-buffer", default-features = false, optional = true }
 arrow-cast = { version = "32.0.0", path = "../arrow-cast", default-features = false, optional = true }
@@ -66,19 +68,45 @@ hashbrown = { version = "0.13", default-features = false }
 twox-hash = { version = "1.6", default-features = false }
 paste = { version = "1.0" }
 
+# compression extension
+byteorder = { version = "1" }
+q_compress = { version = "0.11.4" }
+criterion = { version = "0.4" }
+
 [dev-dependencies]
 base64 = { version = "0.21", default-features = false, features = ["std"] }
 criterion = { version = "0.4", default-features = false }
-snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
-brotli = { version = "3.3", default-features = false, features = ["std"] }
-flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
-lz4 = { version = "1.23", default-features = false }
-zstd = { version = "0.12", default-features = false }
 serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { path = "../arrow", version = "32.0.0", default-features = false, features = ["ipc", "test_utils", "prettyprint", "json"] }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "io-util", "fs"] }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+
+# compress packages: parquet needs the following packages
+brotli = { version = "3.3", default-features = false, features = ["std"] }
+snap = { version = "1.0", default-features = false }
+flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
+lz4 = { version = "1.23", default-features = false }
+zstd = { version = "0.12", default-features = false }
+
+# compression packages: parquet does not need the following packages (benches/compression.rs needs them)
+deflate = "0.8.6"
+lz4-compression = "0.7.0"
+lz4_flex = "0.3.6"
+lzzzz = "0.7.2"
+lz4-compress = "0.1.1"
+lz-fear = "0.1.1"
+lzma-rs = "0.1.3"
+rar = "0.2.0"
+yazi = "0.1.3"
+zip = "0.5.8"
+zopfli = "0.4.0"
+#zstd = { version = "0.12.3+zstd.1.5.2"}
+num-format = "0.4.0"
+
+# compression extension
+byteorder = { version = "1" }
+q_compress = { version = "0.11.4" }
 
 [package.metadata.docs.rs]
 all-features = true
@@ -110,9 +138,22 @@ name = "async_read_parquet"
 required-features = ["arrow", "async"]
 path = "./examples/async_read_parquet.rs"
 
+[[example]]
+name = "compression"
+required-features = ["arrow", "experimental"]
+path = "./examples/compression.rs"
+
 [[test]]
 name = "arrow_writer_layout"
 required-features = ["arrow"]
+
+[[test]]
+name = "compression_char"
+required-features = ["arrow", "experimental"]
+
+[[test]]
+name = "compression_f64"
+required-features = ["arrow", "experimental"]
 
 [[bin]]
 name = "parquet-read"
@@ -146,6 +187,14 @@ required-features = ["cli"]
 name = "parquet-index"
 required-features = ["cli"]
 
+[[bin]]
+name = "parquet-column-qcompression"
+required-features = ["arrow", "experimental", "cli"]
+
+[[bin]]
+name = "parquet-column-export"
+required-features = ["cli"]
+
 [[bench]]
 name = "arrow_writer"
 required-features = ["arrow"]
@@ -153,6 +202,11 @@ harness = false
 
 [[bench]]
 name = "arrow_reader"
+required-features = ["arrow", "test_common", "experimental"]
+harness = false
+
+[[bench]]
+name = "compression"
 required-features = ["arrow", "test_common", "experimental"]
 harness = false
 
