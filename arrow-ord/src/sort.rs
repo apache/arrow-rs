@@ -776,7 +776,7 @@ fn sort_run_to_indices<R: RunEndIndexType>(
         let physical_index = physical_index.unwrap() as usize + start_physical_index;
 
         // calculate the run length and logical index of sorted values
-        let (run_length, logical_index) = unsafe {
+        let (run_length, logical_index_start) = unsafe {
             // Safety:
             // The index will be within bounds as its in bounds of start_physical_index
             // and len, both of which are within bounds of run_array
@@ -803,7 +803,9 @@ fn sort_run_to_indices<R: RunEndIndexType>(
             }
         };
         let new_run_length = run_length.min(remaining_len);
-        result.resize(result.len() + new_run_length, logical_index as u32);
+        result.extend(
+            logical_index_start as u32..(logical_index_start + new_run_length) as u32,
+        );
         remaining_len -= new_run_length;
 
         if remaining_len == 0 {
