@@ -37,6 +37,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
+use itertools::Itertools;
 use snafu::{OptionExt, ResultExt, Snafu};
 use tokio::io::AsyncWrite;
 use url::Url;
@@ -163,6 +164,7 @@ impl ObjectStore for HttpStore {
         &self,
         prefix: Option<&Path>,
     ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+        let prefix_len = prefix.map(|p| p.as_ref().len()).unwrap_or_default();
         let status = self.client.list(prefix, "infinity").await?;
         Ok(futures::stream::iter(
             status
@@ -172,7 +174,9 @@ impl ObjectStore for HttpStore {
                 .map(|response| {
                     response.check_ok()?;
                     response.object_meta(self.client.base_url())
-                }),
+                })
+                // Filter out exact prefix matches
+                .filter_ok(move |r| r.location.as_ref().len() > prefix_len),
         )
         .boxed())
     }
@@ -186,7 +190,13 @@ impl ObjectStore for HttpStore {
         for response in status.response {
             response.check_ok()?;
             match response.is_dir() {
-                false => objects.push(response.object_meta(self.client.base_url())?),
+                false => {
+                    let meta = response.object_meta(self.client.base_url())?;
+                    // Filter out exact prefix matches
+                    if meta.location.as_ref().len() > prefix_len {
+                        objects.push(meta);
+                    }
+                }
                 true => {
                     let path = response.path(self.client.base_url())?;
                     // Exclude the current object

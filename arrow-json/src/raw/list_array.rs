@@ -79,16 +79,9 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
                 child_pos.push(cur_idx);
 
                 // Advance to next field
-                cur_idx = match tape.get(cur_idx) {
-                    TapeElement::String(_)
-                    | TapeElement::Number(_)
-                    | TapeElement::True
-                    | TapeElement::False
-                    | TapeElement::Null => cur_idx + 1,
-                    TapeElement::StartList(end_idx) => end_idx + 1,
-                    TapeElement::StartObject(end_idx) => end_idx + 1,
-                    d => return Err(tape_error(d, "list value")),
-                }
+                cur_idx = tape
+                    .next(cur_idx)
+                    .map_err(|d| tape_error(d, "list value"))?;
             }
 
             let offset = O::from_usize(child_pos.len()).ok_or_else(|| {
@@ -100,7 +93,7 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
             offsets.append(offset)
         }
 
-        let child_data = self.decoder.decode(tape, &child_pos).unwrap();
+        let child_data = self.decoder.decode(tape, &child_pos)?;
 
         let data = ArrayDataBuilder::new(self.data_type.clone())
             .len(pos.len())

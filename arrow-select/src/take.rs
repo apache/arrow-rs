@@ -127,20 +127,6 @@ where
             let values = values.as_any().downcast_ref::<BooleanArray>().unwrap();
             Ok(Arc::new(take_boolean(values, indices)?))
         }
-        DataType::Decimal128(p, s) => {
-            let decimal_values = values.as_any().downcast_ref::<Decimal128Array>().unwrap();
-            let array = take_primitive(decimal_values, indices)?
-                .with_precision_and_scale(*p, *s)
-                .unwrap();
-            Ok(Arc::new(array))
-        }
-        DataType::Decimal256(p, s) => {
-            let decimal_values = values.as_any().downcast_ref::<Decimal256Array>().unwrap();
-            let array = take_primitive(decimal_values, indices)?
-                .with_precision_and_scale(*p, *s)
-                .unwrap();
-            Ok(Arc::new(array))
-        }
         DataType::Utf8 => {
             Ok(Arc::new(take_bytes(as_string_array(values), indices)?))
         }

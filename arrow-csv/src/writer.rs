@@ -326,7 +326,9 @@ mod tests {
     use super::*;
 
     use crate::Reader;
+    use arrow_array::builder::{Decimal128Builder, Decimal256Builder};
     use arrow_array::types::*;
+    use arrow_buffer::i256;
     use std::io::{Cursor, Read, Seek};
     use std::sync::Arc;
 
@@ -402,6 +404,59 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
 consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
 sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
+"#;
+        assert_eq!(expected.to_string(), String::from_utf8(buffer).unwrap());
+    }
+
+    #[test]
+    fn test_write_csv_decimal() {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Decimal128(38, 6), true),
+            Field::new("c2", DataType::Decimal256(76, 6), true),
+        ]);
+
+        let mut c1_builder =
+            Decimal128Builder::new().with_data_type(DataType::Decimal128(38, 6));
+        c1_builder.extend(vec![Some(-3335724), Some(2179404), None, Some(290472)]);
+        let c1 = c1_builder.finish();
+
+        let mut c2_builder =
+            Decimal256Builder::new().with_data_type(DataType::Decimal256(76, 6));
+        c2_builder.extend(vec![
+            Some(i256::from_i128(-3335724)),
+            Some(i256::from_i128(2179404)),
+            None,
+            Some(i256::from_i128(290472)),
+        ]);
+        let c2 = c2_builder.finish();
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)])
+                .unwrap();
+
+        let mut file = tempfile::tempfile().unwrap();
+
+        let mut writer = Writer::new(&mut file);
+        let batches = vec![&batch, &batch];
+        for batch in batches {
+            writer.write(batch).unwrap();
+        }
+        drop(writer);
+
+        // check that file was written successfully
+        file.rewind().unwrap();
+        let mut buffer: Vec<u8> = vec![];
+        file.read_to_end(&mut buffer).unwrap();
+
+        let expected = r#"c1,c2
+-3.335724,-3.335724
+2.179404,2.179404
+,
+0.290472,0.290472
+-3.335724,-3.335724
+2.179404,2.179404
+,
+0.290472,0.290472
 "#;
         assert_eq!(expected.to_string(), String::from_utf8(buffer).unwrap());
     }

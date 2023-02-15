@@ -110,6 +110,23 @@ impl<'a> Tape<'a> {
         self.elements[idx as usize]
     }
 
+    /// Returns the index of the next field at the same level as `cur_idx`
+    ///
+    /// Return an error containing the [`TapeElement`] at `cur_idx` if it
+    /// is not the start of a field
+    pub fn next(&self, cur_idx: u32) -> Result<u32, TapeElement> {
+        match self.get(cur_idx) {
+            TapeElement::String(_)
+            | TapeElement::Number(_)
+            | TapeElement::True
+            | TapeElement::False
+            | TapeElement::Null => Ok(cur_idx + 1),
+            TapeElement::StartList(end_idx) => Ok(end_idx + 1),
+            TapeElement::StartObject(end_idx) => Ok(end_idx + 1),
+            d => Err(d),
+        }
+    }
+
     /// Returns the number of rows
     pub fn num_rows(&self) -> usize {
         self.num_rows

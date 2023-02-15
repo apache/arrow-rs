@@ -84,16 +84,9 @@ impl ArrayDecoder for StructArrayDecoder {
                 }
 
                 // Advance to next field
-                cur_idx = match tape.get(cur_idx + 1) {
-                    TapeElement::String(_)
-                    | TapeElement::Number(_)
-                    | TapeElement::True
-                    | TapeElement::False
-                    | TapeElement::Null => cur_idx + 2,
-                    TapeElement::StartList(end_idx) => end_idx + 1,
-                    TapeElement::StartObject(end_idx) => end_idx + 1,
-                    d => return Err(tape_error(d, "field value")),
-                }
+                cur_idx = tape
+                    .next(cur_idx + 1)
+                    .map_err(|d| tape_error(d, "field value"))?;
             }
         }
 
