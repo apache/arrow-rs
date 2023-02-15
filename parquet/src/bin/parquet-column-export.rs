@@ -97,23 +97,35 @@ fn print_schema(
         let mut schema_hashmap = HashMap::new();
 	
 	for (_pos, column) in fields.iter().enumerate() {
-		let name = column.name();		       
-		let p_type = column.get_physical_type();
-		let output_rust_type = match p_type {					
-			PhysicalType::FIXED_LEN_BYTE_ARRAY=>"String",
-			PhysicalType::BYTE_ARRAY=> "String",
-			PhysicalType::INT64=>"i64",
-			PhysicalType::INT32=> "i32",
-			PhysicalType::FLOAT => "f32",
-			PhysicalType::DOUBLE=> "f64",
-			_ =>panic!(
-				"Cannot convert  this parquet file, unhandled data type for column {}", 
-				name),									
-		};
-        let mut vec_type = Vec::new();
-        vec_type.push(output_rust_type.to_string());
-        schema_hashmap.insert(name, vec_type);
-		// println!("{} {} {}",pos, name, output_rust_type);			
+		let name = column.name();		
+        if column.is_group() {
+            // group type
+            // skip
+            let _typeptr = column.get_fields();
+            println!("Skip group type {:?}", column.get_basic_info());
+        } 
+        if column.is_primitive() {
+            // primitive type
+            let p_type = column.get_physical_type();
+            let output_rust_type = match p_type {					
+                PhysicalType::FIXED_LEN_BYTE_ARRAY=>"String (fixed-length array)",
+                PhysicalType::BYTE_ARRAY=> "String (byte array)",
+                // PhysicalType::INT96=> "i96",
+                PhysicalType::INT64=>"i64",
+                PhysicalType::INT32=> "i32",
+                PhysicalType::FLOAT => "f32",
+                PhysicalType::DOUBLE=> "f64",
+                PhysicalType::BOOLEAN=> { "boolean" },
+                _ =>panic!(
+                    "Cannot convert  this parquet file, unhandled data type for column {}", 
+                    name),									
+            };
+            let mut vec_type = Vec::new();
+            vec_type.push(output_rust_type.to_string());
+            schema_hashmap.insert(name, vec_type);
+            // println!("{} {} {}",pos, name, output_rust_type);
+        }
+					
 	} // for each column
     schema_hashmap	
 }
@@ -244,20 +256,22 @@ fn main(){
                 break;
             }
 
-            for _ in 0..(20+15+15+2*3+4) { print!("_"); }
+            for _ in 0..(30+30+30+2*3+4) { print!("_"); }
             println!("");
 
-            println!("| {:<20} | {:<15} | {:<15} |", "Column Name", "Physical Type", "Data Type");
-            for _ in 0..(20+15+15+2*3+4) { print!("-"); }
+            println!("| {:<30} | {:<30} | {:<30} |", "Column Name", "Physical Type", "Data Type");
+            for _ in 0..(30+30+30+2*3+4) { print!("_"); }
             println!("");
 
             for (k, v) in schema_hashmap.iter() {
-                print!("| {:<20} ", k);
+                print!("| {:<30} ", k);
                 for x in v.iter() {
-                    print!("| {:<15} ", x);
+                    print!("| {:<30} ", x);
                 }
                 println!("|");
             }
+            for _ in 0..(30+30+30+2*3+4) { print!("_"); }
+            println!("");
         },
 
         SubCommand::Export {
