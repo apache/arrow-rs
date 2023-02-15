@@ -57,8 +57,8 @@ where
 {
     /// create a new iterator
     pub fn new(array: TypedRunArray<'a, R, V>) -> Self {
-        let current_front_physical: usize = array.run_array().get_start_physical_index();
-        let current_back_physical: usize = array.run_array().get_end_physical_index() + 1;
+        let current_front_physical = array.run_array().get_start_physical_index();
+        let current_back_physical = array.run_array().get_end_physical_index() + 1;
         RunArrayIter {
             array,
             current_front_logical: array.offset(),
