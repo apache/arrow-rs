@@ -83,12 +83,23 @@ fn test_overloaded_not_sort_options() {
         },
     ];
 
-    assert_eq!(!sort_options_array[0].descending, true);
-    assert_eq!(!sort_options_array[0].nulls_first, true);
-    assert_eq!(!sort_options_array[1].descending, true);
-    assert_eq!(!sort_options_array[1].nulls_first, false);
-    assert_eq!(!sort_options_array[2].descending, false);
-    assert_eq!(!sort_options_array[2].nulls_first, true);
-    assert_eq!(!sort_options_array[3].descending, false);
-    assert_eq!(!sort_options_array[3].nulls_first, false);
+    // asserts true ( = !false)
+    assert!((!sort_options_array[0]).descending);
+    // asserts true ( = !false)
+    assert!((!sort_options_array[0]).nulls_first);
+
+    // asserts true ( = !false)
+    assert!((!sort_options_array[1]).descending);
+    // asserts false ( = !true)
+    assert!(!(!sort_options_array[1]).nulls_first);
+
+    // asserts false ( = !true)
+    assert!(!(!sort_options_array[2]).descending);
+    // asserts true ( = !false)
+    assert!((!sort_options_array[2]).nulls_first);
+
+    // asserts false ( = !true)
+    assert!(!(!sort_options_array[3]).descending);
+    // asserts false ( = !true)
+    assert!(!(!sort_options_array[3]).nulls_first);
 }
