@@ -523,6 +523,81 @@ macro_rules! dyn_compare_scalar {
                 let left = as_primitive_array::<Decimal128Type>($LEFT);
                 $OP::<Decimal128Type>(left, right)
             }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let right = try_to_type!($RIGHT, to_i64)?;
+                let left = as_primitive_array::<TimestampNanosecondType>($LEFT);
+                $OP::<TimestampNanosecondType>(left, right)
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                let right = try_to_type!($RIGHT, to_i64)?;
+                let left = as_primitive_array::<TimestampMicrosecondType>($LEFT);
+                $OP::<TimestampMicrosecondType>(left, right)
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                let right = try_to_type!($RIGHT, to_i64)?;
+                let left = as_primitive_array::<TimestampMillisecondType>($LEFT);
+                $OP::<TimestampMillisecondType>(left, right)
+            }
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                let right = try_to_type!($RIGHT, to_i64)?;
+                let left = as_primitive_array::<TimestampSecondType>($LEFT);
+                $OP::<TimestampSecondType>(left, right)
+            }
+            DataType::Time32(TimeUnit::Second) => {
+                let right = try_to_type!($RIGHT, to_i32)?;
+                let left = as_primitive_array::<Time32SecondType>($LEFT);
+                $OP::<Time32SecondType>(left, right)
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                let right = try_to_type!($RIGHT, to_i32)?;
+                let left = as_primitive_array::<Time32MillisecondType>($LEFT);
+                $OP::<Time32MillisecondType>(left, right)
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                let right = try_to_type!($RIGHT, to_i64)?;
+                let left = as_primitive_array::<Time64MicrosecondType>($LEFT);
+                $OP::<Time64MicrosecondType>(left, right)
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                let right = try_to_type!($RIGHT, to_i64)?;
+                let left = as_primitive_array::<Time64NanosecondType>($LEFT);
+                $OP::<Time64NanosecondType>(left, right)
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                let right = try_to_type!($RIGHT, to_i32)?;
+                let left = as_primitive_array::<IntervalYearMonthType>($LEFT);
+                $OP::<IntervalYearMonthType>(left, right)
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                let right = try_to_type!($RIGHT, to_i64)?;
+                let left = as_primitive_array::<IntervalDayTimeType>($LEFT);
+                $OP::<IntervalDayTimeType>(left, right)
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                let right = try_to_type!($RIGHT, to_i128)?;
+                let left = as_primitive_array::<IntervalMonthDayNanoType>($LEFT);
+                $OP::<IntervalMonthDayNanoType>(left, right)
+            }
+            DataType::Duration(TimeUnit::Second) => {
+                let right = try_to_type!($RIGHT, to_i64)?;
+                let left = as_primitive_array::<DurationSecondType>($LEFT);
+                $OP::<DurationSecondType>(left, right)
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                let right = try_to_type!($RIGHT, to_i64)?;
+                let left = as_primitive_array::<DurationMillisecondType>($LEFT);
+                $OP::<DurationMillisecondType>(left, right)
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                let right = try_to_type!($RIGHT, to_i64)?;
+                let left = as_primitive_array::<DurationMicrosecondType>($LEFT);
+                $OP::<DurationMicrosecondType>(left, right)
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                let right = try_to_type!($RIGHT, to_i64)?;
+                let left = as_primitive_array::<DurationNanosecondType>($LEFT);
+                $OP::<DurationNanosecondType>(left, right)
+            }
             _ => Err(ArrowError::ComputeError(format!(
                 "Unsupported data type {:?} for comparison {} with {:?}",
                 $LEFT.data_type(),
@@ -1707,6 +1782,22 @@ macro_rules! typed_compares {
                 DataType::Interval(IntervalUnit::MonthDayNano),
                 DataType::Interval(IntervalUnit::MonthDayNano),
             ) => cmp_primitive_array::<IntervalMonthDayNanoType, _>($LEFT, $RIGHT, $OP),
+            (
+                DataType::Duration(TimeUnit::Second),
+                DataType::Duration(TimeUnit::Second),
+            ) => cmp_primitive_array::<DurationSecondType, _>($LEFT, $RIGHT, $OP),
+            (
+                DataType::Duration(TimeUnit::Millisecond),
+                DataType::Duration(TimeUnit::Millisecond),
+            ) => cmp_primitive_array::<DurationMillisecondType, _>($LEFT, $RIGHT, $OP),
+            (
+                DataType::Duration(TimeUnit::Microsecond),
+                DataType::Duration(TimeUnit::Microsecond),
+            ) => cmp_primitive_array::<DurationMicrosecondType, _>($LEFT, $RIGHT, $OP),
+            (
+                DataType::Duration(TimeUnit::Nanosecond),
+                DataType::Duration(TimeUnit::Nanosecond),
+            ) => cmp_primitive_array::<DurationNanosecondType, _>($LEFT, $RIGHT, $OP),
             (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                 "Comparing arrays of type {} is not yet implemented",
                 t1
