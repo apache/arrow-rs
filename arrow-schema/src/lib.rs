@@ -31,7 +31,7 @@ use std::ops;
 pub mod ffi;
 
 /// Options that define the sort order of a given column
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SortOptions {
     /// Whether to sort in descending order
     pub descending: bool,
