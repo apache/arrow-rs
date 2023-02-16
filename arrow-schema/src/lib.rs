@@ -25,6 +25,7 @@ mod field;
 pub use field::*;
 mod schema;
 pub use schema::*;
+use std::ops;
 
 #[cfg(feature = "ffi")]
 pub mod ffi;
@@ -46,4 +47,48 @@ impl Default for SortOptions {
             nulls_first: true,
         }
     }
+}
+
+/// `!` operator is overloaded for `SortOptions` to invert boolean
+/// fields of the struct.
+impl ops::Not for SortOptions {
+    type Output = SortOptions;
+
+    fn not(self) -> SortOptions {
+        SortOptions {
+            descending: !self.descending,
+            nulls_first: !self.nulls_first,
+        }
+    }
+}
+
+#[test]
+fn test_overloaded_not_sort_options() {
+    let sort_options_array = [
+        SortOptions {
+            descending: false,
+            nulls_first: false,
+        },
+        SortOptions {
+            descending: false,
+            nulls_first: true,
+        },
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+        SortOptions {
+            descending: true,
+            nulls_first: true,
+        },
+    ];
+
+    assert_eq!(!sort_options_array[0].descending, true);
+    assert_eq!(!sort_options_array[0].nulls_first, true);
+    assert_eq!(!sort_options_array[1].descending, true);
+    assert_eq!(!sort_options_array[1].nulls_first, false);
+    assert_eq!(!sort_options_array[2].descending, false);
+    assert_eq!(!sort_options_array[2].nulls_first, true);
+    assert_eq!(!sort_options_array[3].descending, false);
+    assert_eq!(!sort_options_array[3].nulls_first, false);
 }
