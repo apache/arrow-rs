@@ -269,6 +269,9 @@ fn set_column_for_json_rows(
         DataType::UInt64 => {
             set_column_by_primitive_type::<UInt64Type>(rows, row_count, array, col_name);
         }
+        DataType::Float16 => {
+            set_column_by_primitive_type::<Float16Type>(rows, row_count, array, col_name);
+        }
         DataType::Float32 => {
             set_column_by_primitive_type::<Float32Type>(rows, row_count, array, col_name);
         }
@@ -609,6 +612,7 @@ mod tests {
     use crate::reader::*;
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::ArrayData;
+    use half::f16;
     use serde_json::json;
 
     use super::*;
@@ -655,6 +659,50 @@ mod tests {
 {"c1":3,"c2":"c"}
 {"c2":"d"}
 {"c1":5}
+"#,
+        );
+    }
+
+    #[test]
+    fn write_float_special_constant() {
+        let schema = Schema::new(vec![
+            Field::new("f64", DataType::Float64, false),
+            Field::new("f32", DataType::Float32, false),
+            Field::new("f16", DataType::Float16, false),
+        ]);
+
+        let a = Float64Array::from(vec![
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+            Some(f64::NEG_INFINITY),
+        ]);
+
+        let b = Float32Array::from(vec![
+            Some(f32::NAN),
+            Some(f32::INFINITY),
+            Some(f32::NEG_INFINITY),
+        ]);
+
+        let c =
+            Float16Array::from_iter_values([f16::NAN, f16::INFINITY, f16::NEG_INFINITY]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(a), Arc::new(b), Arc::new(c)],
+        )
+        .unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"f64":"NaN","f32":"NaN","f16":"NaN"}
+{"f64":"Infinity","f32":"Infinity","f16":"Infinity"}
+{"f64":"-Infinity","f32":"-Infinity","f16":"-Infinity"}
 "#,
         );
     }

@@ -71,18 +71,45 @@ impl JsonSerializable for i128 {
 
 impl JsonSerializable for f16 {
     fn into_json_value(self) -> Option<Value> {
+        if self.is_nan() {
+            return Some(Value::String("NaN".to_owned()));
+        } else if self.is_infinite() {
+            if self.is_sign_positive() {
+                return Some(Value::String("Infinity".to_owned()));
+            } else {
+                return Some(Value::String("-Infinity".to_owned()));
+            }
+        }
         Number::from_f64(f64::round(f64::from(self) * 1000.0) / 1000.0).map(Value::Number)
     }
 }
 
 impl JsonSerializable for f32 {
     fn into_json_value(self) -> Option<Value> {
+        if self.is_nan() {
+            return Some(Value::String("NaN".to_owned()));
+        } else if self.is_infinite() {
+            if self.is_sign_positive() {
+                return Some(Value::String("Infinity".to_owned()));
+            } else {
+                return Some(Value::String("-Infinity".to_owned()));
+            }
+        }
         Number::from_f64(f64::round(self as f64 * 1000.0) / 1000.0).map(Value::Number)
     }
 }
 
 impl JsonSerializable for f64 {
     fn into_json_value(self) -> Option<Value> {
+        if self.is_nan() {
+            return Some(Value::String("NaN".to_owned()));
+        } else if self.is_infinite() {
+            if self.is_sign_positive() {
+                return Some(Value::String("Infinity".to_owned()));
+            } else {
+                return Some(Value::String("-Infinity".to_owned()));
+            }
+        }
         Number::from_f64(self).map(Value::Number)
     }
 }
@@ -116,6 +143,35 @@ mod tests {
             Some(VNumber(Number::from_f64(0.01f64).unwrap())),
             0.01f64.into_json_value()
         );
-        assert_eq!(None, f32::NAN.into_json_value());
+
+        assert_eq!(Some(VString("NaN".to_string())), f16::NAN.into_json_value());
+        assert_eq!(Some(VString("NaN".to_string())), f32::NAN.into_json_value());
+        assert_eq!(Some(VString("NaN".to_string())), f64::NAN.into_json_value());
+
+        assert_eq!(
+            Some(VString("Infinity".to_string())),
+            f16::INFINITY.into_json_value()
+        );
+        assert_eq!(
+            Some(VString("Infinity".to_string())),
+            f32::INFINITY.into_json_value()
+        );
+        assert_eq!(
+            Some(VString("Infinity".to_string())),
+            f64::INFINITY.into_json_value()
+        );
+
+        assert_eq!(
+            Some(VString("-Infinity".to_string())),
+            f16::NEG_INFINITY.into_json_value()
+        );
+        assert_eq!(
+            Some(VString("-Infinity".to_string())),
+            f32::NEG_INFINITY.into_json_value()
+        );
+        assert_eq!(
+            Some(VString("-Infinity".to_string())),
+            f64::NEG_INFINITY.into_json_value()
+        );
     }
 }
