@@ -46,6 +46,7 @@
 //! let batch = json.next().unwrap().unwrap();
 //! ```
 
+use std::borrow::Borrow;
 use std::io::{BufRead, BufReader, Read, Seek};
 use std::sync::Arc;
 
@@ -526,16 +527,17 @@ fn collect_field_types_from_object(
 /// The reason we diverge here is because we don't have utilities to deal with JSON data once it's
 /// interpreted as Strings. We should match Spark's behavior once we added more JSON parsing
 /// kernels in the future.
-pub fn infer_json_schema_from_iterator<I>(value_iter: I) -> Result<Schema, ArrowError>
+pub fn infer_json_schema_from_iterator<I, V>(value_iter: I) -> Result<Schema, ArrowError>
 where
-    I: Iterator<Item = Result<Value, ArrowError>>,
+    I: Iterator<Item = Result<V, ArrowError>>,
+    V: Borrow<Value>,
 {
     let mut field_types: HashMap<String, InferredType> = HashMap::new();
 
     for record in value_iter {
-        match record? {
+        match record?.borrow() {
             Value::Object(map) => {
-                collect_field_types_from_object(&mut field_types, &map)?;
+                collect_field_types_from_object(&mut field_types, map)?;
             }
             value => {
                 return Err(ArrowError::JsonError(format!(
