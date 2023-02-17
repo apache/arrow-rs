@@ -511,8 +511,7 @@ mod tests {
         )
         .expect("cannot create record batch");
 
-        prepare_batch_for_flight(&batch, batch.schema())
-            .expect("failed to optimize");
+        prepare_batch_for_flight(&batch, batch.schema()).expect("failed to optimize");
     }
 
     pub fn make_flight_data(
