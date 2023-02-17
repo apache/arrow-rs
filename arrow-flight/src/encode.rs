@@ -18,7 +18,7 @@
 use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 
 use crate::{error::Result, FlightData, SchemaAsIpc};
-use arrow_array::{ArrayRef, RecordBatch};
+use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use bytes::Bytes;
@@ -422,8 +422,11 @@ fn prepare_batch_for_flight(
         .iter()
         .map(hydrate_dictionary)
         .collect::<Result<Vec<_>>>()?;
+    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
 
-    Ok(RecordBatch::try_new(schema, columns)?)
+    Ok(RecordBatch::try_new_with_options(
+        schema, columns, &options,
+    )?)
 }
 
 /// Hydrates a dictionary to its underlying type
@@ -497,6 +500,18 @@ mod tests {
             baseline_flight_batch.data_body.len()
                 > optimized_small_flight_batch.data_body.len()
         );
+    }
+
+    #[test]
+    fn test_encode_no_column_batch() {
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(10)),
+        )
+        .expect("cannot create record batch");
+
+        prepare_batch_for_flight(&batch, batch.schema()).expect("failed to optimize");
     }
 
     pub fn make_flight_data(
