@@ -34,9 +34,16 @@
 //!
 //! The binary can also be built from the source code and run as follows:
 //! ```
+//! 1. use parquet file as input
+//! 
 //! export FILE_TO_COMPRESS="./data/devinrsmith-air-quality.20220714.zstd.parquet" 
 //! export PARQUET_COLUMN="timestamp"
 //! cargo bench --bench compression --features="arrow test_common experimental"
+//! 
+//! 2. use randomly generated data as input
+//! export RANDOM_DATA="1"
+//! cargo bench --bench compression --features="arrow test_common experimental"
+//! 
 //! ```
 //!
 
@@ -49,6 +56,7 @@ use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
+use rand::Rng;
 
 use q_compress::{auto_compress, auto_decompress, data_types::NumberLike, DEFAULT_COMPRESSION_LEVEL};
 use byteorder::{ByteOrder, BigEndian};
@@ -164,6 +172,16 @@ use byteorder::{ByteOrder, BigEndian};
 /// }
 /// ```
 
+const DATALENGTH: usize = 100_000;
+
+// create test data in a vector
+fn generate_random_data(output: &mut Vec<parquet::record::Field>) -> parquet::basic::Type {
+
+    for _i in 0..DATALENGTH {
+        output.push(parquet::record::Field::Long(rand::thread_rng().gen::<i64>()));
+    }
+    return parquet::basic::Type::INT64;
+}
 
 fn extract_column_data_from_parquet(input: &str, column: &str, output: &mut Vec<parquet::record::Field>) -> parquet::basic::Type {
 
@@ -754,30 +772,38 @@ fn compare_compress_generic(c: &mut Criterion) {
 
     group.plot_config(plot_config_compress);
 
-	// prepare raw data, load into memory
-
-	// let uncompressed_u8 = std::fs::read(
-	// 	std::env::var("FILE_TO_COMPRESS").expect("set $FILE_TO_COMPRESS")
-	// ).expect("reading $FILE_TO_COMPRESS");
-
-	// // q-compress
-	// let i64_len = uncompressed_u8 / std::mem::size_of::<i64>();
-	// let mut numbers_got: Vec<i64> = Vec::with_capacity(i64_len);
-    // numbers_got.resize(i64_len, 0i64);
-
-	// BigEndian::read_i64_into(&uncompressed_u8, &mut numbers_got);
-
 	let mut uncompressed_field: Vec<parquet::record::Field> = Vec::new();
 
-	let element_type = extract_column_data_from_parquet(
-		// parquet file
-		&std::env::var("FILE_TO_COMPRESS").expect("set $FILE_TO_COMPRESS"), 
-		// column in parquet
-		&std::env::var("PARQUET_COLUMN").expect("set $PARQUET_COLUMN"),
-		// store data in a vec 
-		&mut uncompressed_field);
-	
+	let mut flag_random_data = false;
+	let mut element_type = parquet::basic::Type::INT64;
+
+	if let Ok(key_random_data) = std::env::var("RANDOM_DATA") {
+		// use random data
+		if key_random_data == "1" {
+			flag_random_data = true;
+		}else{
+			println!("val_random_data {:?}", key_random_data);
+		}
+	} 
+
+	if flag_random_data == true { 
+		// random i64
+		element_type = generate_random_data(&mut uncompressed_field);
+		
+	} else {
+		// use parquet file data
+		element_type = extract_column_data_from_parquet(
+			// parquet file
+			&std::env::var("FILE_TO_COMPRESS").expect("set $FILE_TO_COMPRESS"), 
+			// column in parquet
+			&std::env::var("PARQUET_COLUMN").expect("set $PARQUET_COLUMN"),
+			// store data in a vec 
+			&mut uncompressed_field);
+	}
+
 	assert!(uncompressed_field.len() >= 1);
+
+	println!("Data for benchmark: type {:?} size {:?}", element_type, uncompressed_field.len());
 
 	let first_element = &uncompressed_field[0];
 
