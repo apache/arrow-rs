@@ -28,10 +28,16 @@ pub struct StructArrayDecoder {
 }
 
 impl StructArrayDecoder {
-    pub fn new(data_type: DataType, is_nullable: bool) -> Result<Self, ArrowError> {
+    pub fn new(
+        data_type: DataType,
+        coerce_primitive: bool,
+        is_nullable: bool,
+    ) -> Result<Self, ArrowError> {
         let decoders = struct_fields(&data_type)
             .iter()
-            .map(|f| make_decoder(f.data_type().clone(), f.is_nullable()))
+            .map(|f| {
+                make_decoder(f.data_type().clone(), coerce_primitive, f.is_nullable())
+            })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
         Ok(Self {

@@ -27,14 +27,23 @@ use crate::raw::{tape_error, ArrayDecoder};
 const TRUE: &str = "true";
 const FALSE: &str = "false";
 
-#[derive(Default)]
 pub struct StringArrayDecoder<O: OffsetSizeTrait> {
+    coerce_primitive: bool,
     phantom: PhantomData<O>,
+}
+
+impl<O: OffsetSizeTrait> StringArrayDecoder<O> {
+    pub fn new(coerce_primitive: bool) -> Self {
+        Self {
+            coerce_primitive,
+            phantom: Default::default(),
+        }
+    }
 }
 
 impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
-        let coerce_primitive = tape.coerce_primitive();
+        let coerce_primitive = self.coerce_primitive;
 
         let mut data_capacity = 0;
         for p in pos {

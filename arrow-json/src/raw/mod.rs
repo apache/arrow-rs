@@ -87,16 +87,16 @@ impl RawReaderBuilder {
 
     /// Create a [`RawDecoder`]
     pub fn build_decoder(self) -> Result<RawDecoder, ArrowError> {
-        let decoder = make_decoder(DataType::Struct(self.schema.fields.clone()), false)?;
+        let decoder = make_decoder(
+            DataType::Struct(self.schema.fields.clone()),
+            self.coerce_primitive,
+            false,
+        )?;
         let num_fields = self.schema.all_fields().len();
 
         Ok(RawDecoder {
             decoder,
-            tape_decoder: TapeDecoder::new(
-                self.batch_size,
-                self.coerce_primitive,
-                num_fields,
-            ),
+            tape_decoder: TapeDecoder::new(self.batch_size, num_fields),
             batch_size: self.batch_size,
             schema: self.schema,
         })
@@ -284,6 +284,7 @@ macro_rules! primitive_decoder {
 
 fn make_decoder(
     data_type: DataType,
+    coerce_primitive: bool,
     is_nullable: bool,
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
     downcast_integer! {
@@ -291,15 +292,15 @@ fn make_decoder(
         DataType::Float32 => primitive_decoder!(Float32Type, data_type),
         DataType::Float64 => primitive_decoder!(Float64Type, data_type),
         DataType::Boolean => Ok(Box::<BooleanArrayDecoder>::default()),
-        DataType::Utf8 => Ok(Box::<StringArrayDecoder::<i32>>::default()),
-        DataType::LargeUtf8 => Ok(Box::<StringArrayDecoder::<i64>>::default()),
-        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, is_nullable)?)),
-        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, is_nullable)?)),
-        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, is_nullable)?)),
+        DataType::Utf8 => Ok(Box::new(StringArrayDecoder::<i32>::new(coerce_primitive))),
+        DataType::LargeUtf8 => Ok(Box::new(StringArrayDecoder::<i64>::new(coerce_primitive))),
+        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, coerce_primitive, is_nullable)?)),
+        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, coerce_primitive, is_nullable)?)),
+        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, coerce_primitive, is_nullable)?)),
         DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
             Err(ArrowError::JsonError(format!("{data_type} is not supported by JSON")))
         }
-        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, is_nullable)?)),
+        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, is_nullable)?)),
         d => Err(ArrowError::NotYetImplemented(format!("Support for {d} in JSON reader")))
     }
 }

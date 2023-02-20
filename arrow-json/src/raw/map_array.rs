@@ -30,7 +30,11 @@ pub struct MapArrayDecoder {
 }
 
 impl MapArrayDecoder {
-    pub fn new(data_type: DataType, is_nullable: bool) -> Result<Self, ArrowError> {
+    pub fn new(
+        data_type: DataType,
+        coerce_primitive: bool,
+        is_nullable: bool,
+    ) -> Result<Self, ArrowError> {
         let fields = match &data_type {
             DataType::Map(_, true) => {
                 return Err(ArrowError::NotYetImplemented(
@@ -48,9 +52,16 @@ impl MapArrayDecoder {
             _ => unreachable!(),
         };
 
-        let keys = make_decoder(fields[0].data_type().clone(), fields[0].is_nullable())?;
-        let values =
-            make_decoder(fields[1].data_type().clone(), fields[1].is_nullable())?;
+        let keys = make_decoder(
+            fields[0].data_type().clone(),
+            coerce_primitive,
+            fields[0].is_nullable(),
+        )?;
+        let values = make_decoder(
+            fields[1].data_type().clone(),
+            coerce_primitive,
+            fields[1].is_nullable(),
+        )?;
 
         Ok(Self {
             data_type,
