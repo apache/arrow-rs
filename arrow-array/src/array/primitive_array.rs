@@ -15,16 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::print_long_array;
 use crate::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
 use crate::iterator::PrimitiveIter;
-use crate::raw_pointer::RawPtrBox;
 use crate::temporal_conversions::{
     as_date, as_datetime, as_datetime_with_timezone, as_duration, as_time,
 };
 use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
-use crate::{print_long_array, Array, ArrayAccessor};
 use crate::{types::*, ArrowNativeTypeOp};
+use crate::{Array, ArrayAccessor};
+use arrow_buffer::buffer::ScalarBuffer;
 use arrow_buffer::{i256, ArrowNativeType, Buffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::ArrayData;
@@ -266,22 +267,16 @@ pub trait ArrowPrimitiveType: 'static {
 /// ```
 pub struct PrimitiveArray<T: ArrowPrimitiveType> {
     /// Underlying ArrayData
-    /// # Safety
-    /// must have exactly one buffer, aligned to type T
     data: ArrayData,
-    /// Pointer to the value array. The lifetime of this must be <= to the value buffer
-    /// stored in `data`, so it's safe to store.
-    /// # Safety
-    /// raw_values must have a value equivalent to `data.buffers()[0].raw_data()`
-    /// raw_values must have alignment for type T::NativeType
-    raw_values: RawPtrBox<T::Native>,
+    /// Values data
+    raw_values: ScalarBuffer<T::Native>,
 }
 
 impl<T: ArrowPrimitiveType> Clone for PrimitiveArray<T> {
     fn clone(&self) -> Self {
         Self {
             data: self.data.clone(),
-            raw_values: self.raw_values,
+            raw_values: self.raw_values.clone(),
         }
     }
 }
@@ -301,15 +296,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// Returns a slice of the values of this array
     #[inline]
     pub fn values(&self) -> &[T::Native] {
-        // Soundness
-        //     raw_values alignment & location is ensured by fn from(ArrayDataRef)
-        //     buffer bounds/offset is ensured by the ArrayData instance.
-        unsafe {
-            std::slice::from_raw_parts(
-                self.raw_values.as_ptr().add(self.data.offset()),
-                self.len(),
-            )
-        }
+        &self.raw_values
     }
 
     /// Returns a new primitive array builder
@@ -339,8 +326,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// caller must ensure that the passed in offset is less than the array len()
     #[inline]
     pub unsafe fn value_unchecked(&self, i: usize) -> T::Native {
-        let offset = i + self.offset();
-        *self.raw_values.as_ptr().add(offset)
+        *self.raw_values.get_unchecked(i)
     }
 
     /// Returns the primitive value at index `i`.
@@ -632,6 +618,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             .slice_with_length(self.data.offset() * element_len, len * element_len);
 
         drop(self.data);
+        drop(self.raw_values);
 
         let try_mutable_null_buffer = match null_bit_buffer {
             None => Ok(None),
@@ -724,6 +711,7 @@ impl<'a, T: ArrowPrimitiveType> ArrayAccessor for &'a PrimitiveArray<T> {
         PrimitiveArray::value(self, index)
     }
 
+    #[inline]
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         PrimitiveArray::value_unchecked(self, index)
     }
@@ -1085,13 +1073,9 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for PrimitiveArray<T> {
             "PrimitiveArray data should contain a single buffer only (values buffer)"
         );
 
-        let ptr = data.buffers()[0].as_ptr();
-        Self {
-            data,
-            // SAFETY:
-            // ArrayData must be valid, and validated data type above
-            raw_values: unsafe { RawPtrBox::new(ptr) },
-        }
+        let raw_values =
+            ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len());
+        Self { data, raw_values }
     }
 }
 

@@ -61,7 +61,7 @@ impl Bytes {
     /// bytes. If the `ptr` and `capacity` come from a `Buffer`, then this is guaranteed.
     #[inline]
     pub(crate) unsafe fn new(
-        ptr: std::ptr::NonNull<u8>,
+        ptr: NonNull<u8>,
         len: usize,
         deallocation: Deallocation,
     ) -> Bytes {

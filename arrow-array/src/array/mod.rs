@@ -637,7 +637,7 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
 }
 
 // Helper function for printing potentially long arrays.
-pub(crate) fn print_long_array<A, F>(
+fn print_long_array<A, F>(
     array: &A,
     f: &mut std::fmt::Formatter,
     print_item: F,

@@ -179,7 +179,6 @@ pub mod builder;
 pub mod cast;
 mod delta;
 pub mod iterator;
-mod raw_pointer;
 pub mod run_iterator;
 pub mod temporal_conversions;
 pub mod timezone;

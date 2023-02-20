@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::print_long_array;
 use crate::iterator::FixedSizeBinaryIter;
-use crate::raw_pointer::RawPtrBox;
-use crate::{print_long_array, Array, ArrayAccessor, FixedSizeListArray};
+use crate::{Array, ArrayAccessor, FixedSizeListArray};
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
@@ -50,7 +50,7 @@ use std::any::Any;
 #[derive(Clone)]
 pub struct FixedSizeBinaryArray {
     data: ArrayData,
-    value_data: RawPtrBox<u8>,
+    value_data: Buffer,
     length: i32,
 }
 
@@ -357,14 +357,14 @@ impl From<ArrayData> for FixedSizeBinaryArray {
             1,
             "FixedSizeBinaryArray data should contain 1 buffer only (values)"
         );
-        let value_data = data.buffers()[0].as_ptr();
+        let value_data = data.buffers()[0].clone();
         let length = match data.data_type() {
             DataType::FixedSizeBinary(len) => *len,
             _ => panic!("Expected data type to be FixedSizeBinary"),
         };
         Self {
             data,
-            value_data: unsafe { RawPtrBox::new(value_data) },
+            value_data,
             length,
         }
     }
