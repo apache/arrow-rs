@@ -869,20 +869,20 @@ fn parse_decimal_with_parameter<T: DecimalType>(
         bytes[0..offset]
             .iter()
             .rev()
-            .try_for_each::<_, Result<(), ArrowError>>(|&byte| match byte {
-                b'-' => {
-                    negative = true;
-                    Ok(())
+            .try_for_each::<_, Result<(), ArrowError>>(|&byte| {
+                match byte {
+                    b'-' => {
+                        negative = true;
+                    }
+                    b'0'..=b'9' => {
+                        let add = T::Native::usize_as((byte - b'0') as usize)
+                            .mul_checked(base)?;
+                        result = result.add_checked(add)?;
+                        base = base.mul_checked(T::Native::usize_as(10))?;
+                    }
+                    _ => (),
                 }
-                b'0'..=b'9' => {
-                    let add =
-                        T::Native::usize_as((byte - b'0') as usize).mul_checked(base)?;
-                    result = result.add_checked(add)?;
-                    base = base.mul_checked(T::Native::usize_as(10))?;
-                    Ok(())
-                }
-                // because of the PARSE_DECIMAL_RE, bytes just contains digit、'-' and '.'.
-                _ => Ok(()),
+                Ok(())
             })?;
 
         if negative {
