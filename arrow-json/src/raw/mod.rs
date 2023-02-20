@@ -43,6 +43,7 @@ mod tape;
 /// A builder for [`RawReader`] and [`RawDecoder`]
 pub struct RawReaderBuilder {
     batch_size: usize,
+    coerce_primitive: bool,
 
     schema: SchemaRef,
 }
@@ -58,6 +59,7 @@ impl RawReaderBuilder {
     pub fn new(schema: SchemaRef) -> Self {
         Self {
             batch_size: 1024,
+            coerce_primitive: false,
             schema,
         }
     }
@@ -65,6 +67,14 @@ impl RawReaderBuilder {
     /// Sets the batch size in rows to read
     pub fn with_batch_size(self, batch_size: usize) -> Self {
         Self { batch_size, ..self }
+    }
+
+    /// Sets if the decoder should coerce primitive values (bool and number) into string when the Schema's column is Utf8 or LargeUtf8.
+    pub fn coerce_primitive(self, coerce_primitive: bool) -> Self {
+        Self {
+            coerce_primitive,
+            ..self
+        }
     }
 
     /// Create a [`RawReader`] with the provided [`BufRead`]
@@ -82,7 +92,11 @@ impl RawReaderBuilder {
 
         Ok(RawDecoder {
             decoder,
-            tape_decoder: TapeDecoder::new(self.batch_size, num_fields),
+            tape_decoder: TapeDecoder::new(
+                self.batch_size,
+                self.coerce_primitive,
+                num_fields,
+            ),
             batch_size: self.batch_size,
             schema: self.schema,
         })
@@ -311,13 +325,19 @@ mod tests {
     use std::io::{BufReader, Cursor, Seek};
     use std::sync::Arc;
 
-    fn do_read(buf: &str, batch_size: usize, schema: SchemaRef) -> Vec<RecordBatch> {
+    fn do_read(
+        buf: &str,
+        batch_size: usize,
+        coerce_primitive: bool,
+        schema: SchemaRef,
+    ) -> Vec<RecordBatch> {
         let mut unbuffered = vec![];
 
         // Test with different batch sizes to test for boundary conditions
         for batch_size in [1, 3, 100, batch_size] {
             unbuffered = RawReaderBuilder::new(schema.clone())
                 .with_batch_size(batch_size)
+                .coerce_primitive(coerce_primitive)
                 .build(Cursor::new(buf.as_bytes()))
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
@@ -331,6 +351,7 @@ mod tests {
             for b in [1, 3, 5] {
                 let buffered = RawReaderBuilder::new(schema.clone())
                     .with_batch_size(batch_size)
+                    .coerce_primitive(coerce_primitive)
                     .build(BufReader::with_capacity(b, Cursor::new(buf.as_bytes())))
                     .unwrap()
                     .collect::<Result<Vec<_>, _>>()
@@ -360,7 +381,7 @@ mod tests {
             Field::new("c", DataType::Boolean, true),
         ]));
 
-        let batches = do_read(buf, 1024, schema);
+        let batches = do_read(buf, 1024, false, schema);
         assert_eq!(batches.len(), 1);
 
         let col1 = as_primitive_array::<Int64Type>(batches[0].column(0));
@@ -397,7 +418,7 @@ mod tests {
             Field::new("b", DataType::LargeUtf8, true),
         ]));
 
-        let batches = do_read(buf, 1024, schema);
+        let batches = do_read(buf, 1024, false, schema);
         assert_eq!(batches.len(), 1);
 
         let col1 = as_string_array(batches[0].column(0));
@@ -454,7 +475,7 @@ mod tests {
             ),
         ]));
 
-        let batches = do_read(buf, 1024, schema);
+        let batches = do_read(buf, 1024, false, schema);
         assert_eq!(batches.len(), 1);
 
         let list = as_list_array(batches[0].column(0).as_ref());
@@ -517,7 +538,7 @@ mod tests {
             ),
         ]));
 
-        let batches = do_read(buf, 1024, schema);
+        let batches = do_read(buf, 1024, false, schema);
         assert_eq!(batches.len(), 1);
 
         let nested = as_struct_array(batches[0].column(0).as_ref());
@@ -561,7 +582,7 @@ mod tests {
         let map = DataType::Map(Box::new(Field::new("entries", entries, true)), false);
         let schema = Arc::new(Schema::new(vec![Field::new("map", map, true)]));
 
-        let batches = do_read(buf, 1024, schema);
+        let batches = do_read(buf, 1024, false, schema);
         assert_eq!(batches.len(), 1);
 
         let map = as_map_array(batches[0].column(0).as_ref());
@@ -611,5 +632,85 @@ mod tests {
 
             assert_eq!(a_result, b_result);
         }
+    }
+
+    #[test]
+    fn test_not_coercing_primitive_into_string_without_flag() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+
+        let buf = r#"{"a": 1}"#;
+        let result = RawReaderBuilder::new(schema.clone())
+            .with_batch_size(1024)
+            .build(Cursor::new(buf.as_bytes()))
+            .unwrap()
+            .read();
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Json error: expected string got number".to_string()
+        );
+
+        let buf = r#"{"a": true}"#;
+        let result = RawReaderBuilder::new(schema)
+            .with_batch_size(1024)
+            .build(Cursor::new(buf.as_bytes()))
+            .unwrap()
+            .read();
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Json error: expected string got true".to_string()
+        );
+    }
+
+    #[test]
+    fn test_coercing_primitive_into_string() {
+        let buf = r#"
+        {"a": 1, "b": 2, "c": true}
+        {"a": 2E0, "b": 4, "c": false}
+
+        {"b": 6, "a": 2.0}
+        {"b": "5", "a": 2}
+        {"b": 4e0}
+        {"b": 7, "a": null}
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Utf8, true),
+        ]));
+
+        let batches = do_read(buf, 1024, true, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col1 = as_string_array(batches[0].column(0));
+        assert_eq!(col1.null_count(), 2);
+        assert_eq!(col1.value(0), "1");
+        assert_eq!(col1.value(1), "2E0");
+        assert_eq!(col1.value(2), "2.0");
+        assert_eq!(col1.value(3), "2");
+        assert!(col1.is_null(4));
+        assert!(col1.is_null(5));
+
+        let col2 = as_string_array(batches[0].column(1));
+        assert_eq!(col2.null_count(), 0);
+        assert_eq!(col2.value(0), "2");
+        assert_eq!(col2.value(1), "4");
+        assert_eq!(col2.value(2), "6");
+        assert_eq!(col2.value(3), "5");
+        assert_eq!(col2.value(4), "4e0");
+        assert_eq!(col2.value(5), "7");
+
+        let col3 = as_string_array(batches[0].column(2));
+        assert_eq!(col3.null_count(), 4);
+        assert_eq!(col3.value(0), "true");
+        assert_eq!(col3.value(1), "false");
+        assert!(col3.is_null(2));
+        assert!(col3.is_null(3));
+        assert!(col3.is_null(4));
+        assert!(col3.is_null(5));
     }
 }
