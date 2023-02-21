@@ -107,7 +107,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// Returns the offset values in the offsets buffer
     #[inline]
     pub fn value_offsets(&self) -> &[OffsetSize] {
-        &*self.value_offsets
+        &self.value_offsets
     }
 
     /// Returns the length for value at index `i`.

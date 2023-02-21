@@ -37,7 +37,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// Create a new [`OffsetBuffer`] containing a single 0 value
     pub fn new_empty() -> Self {
         let buffer = MutableBuffer::from_len_zeroed(std::mem::size_of::<O>());
-        return Self(buffer.into_buffer().into());
+        Self(buffer.into_buffer().into())
     }
 }
 
@@ -46,7 +46,7 @@ impl<T: ArrowNativeType> Deref for OffsetBuffer<T> {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        &*self.0
+        &self.0
     }
 }
 

@@ -87,7 +87,7 @@ impl MapArray {
     /// Returns the offset values in the offsets buffer
     #[inline]
     pub fn value_offsets(&self) -> &[i32] {
-        &*self.value_offsets
+        &self.value_offsets
     }
 
     /// Returns the length for value at index `i`.

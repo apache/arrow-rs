@@ -82,7 +82,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// Returns the offset values in the offsets buffer
     #[inline]
     pub fn value_offsets(&self) -> &[T::Offset] {
-        &*self.value_offsets
+        &self.value_offsets
     }
 
     /// Returns the element at index `i`
