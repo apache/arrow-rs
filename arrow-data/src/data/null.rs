@@ -17,6 +17,7 @@
 
 use arrow_buffer::buffer::BooleanBuffer;
 
+#[derive(Debug, Clone)]
 pub struct NullBuffer {
     buffer: BooleanBuffer,
     null_count: usize,
@@ -38,6 +39,12 @@ impl NullBuffer {
         Self { buffer, null_count }
     }
 
+    /// Returns the length of this [`NullBuffer`]
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.buffer.len()
+    }
+
     /// Returns the null count for this [`NullBuffer`]
     #[inline]
     pub fn null_count(&self) -> usize {
@@ -54,6 +61,12 @@ impl NullBuffer {
     #[inline]
     pub fn is_null(&self, idx: usize) -> bool {
         !self.is_valid(idx)
+    }
+
+    /// Returns the inner buffer
+    #[inline]
+    pub fn inner(&self) -> &BooleanBuffer {
+        &self.buffer
     }
 }
 

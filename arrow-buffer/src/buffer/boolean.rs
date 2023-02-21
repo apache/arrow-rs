@@ -17,6 +17,7 @@
 
 use crate::{bit_util, Buffer};
 
+#[derive(Debug, Clone)]
 pub struct BooleanBuffer {
     buffer: Buffer,
     offset: usize,

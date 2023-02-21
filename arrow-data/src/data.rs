@@ -32,6 +32,12 @@ use crate::equal;
 mod null;
 pub use null::*;
 
+mod primitive;
+pub use primitive::*;
+
+mod types;
+pub use types::*;
+
 #[inline]
 pub(crate) fn contains_nulls(
     null_bit_buffer: Option<&Buffer>,
