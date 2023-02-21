@@ -29,6 +29,9 @@ use std::sync::Arc;
 
 use crate::equal;
 
+mod null;
+pub use null::*;
+
 #[inline]
 pub(crate) fn contains_nulls(
     null_bit_buffer: Option<&Buffer>,

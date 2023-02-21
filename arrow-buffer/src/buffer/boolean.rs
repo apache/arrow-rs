@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::bit_chunk_iterator::BitChunks;
 use crate::{bit_util, Buffer};
 
 pub struct BooleanBuffer {
@@ -39,6 +38,11 @@ impl BooleanBuffer {
             offset,
             len,
         }
+    }
+
+    /// Returns the number of set bits in this buffer
+    pub fn count_set_bits(&self) -> usize {
+        self.buffer.count_set_bits_offset(self.offset, self.len)
     }
 
     /// Returns `true` if the bit at index `i` is set
