@@ -29,3 +29,5 @@ mod scalar;
 pub use scalar::*;
 
 pub use ops::*;
+mod boolean;
+pub use boolean::*;
