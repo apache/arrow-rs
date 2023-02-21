@@ -523,6 +523,16 @@ macro_rules! dyn_compare_scalar {
                 let left = as_primitive_array::<Decimal128Type>($LEFT);
                 $OP::<Decimal128Type>(left, right)
             }
+            DataType::Date32 => {
+                let right = try_to_type!($RIGHT, to_i32)?;
+                let left = as_primitive_array::<Date32Type>($LEFT);
+                $OP::<Date32Type>(left, right)
+            }
+            DataType::Date64 => {
+                let right = try_to_type!($RIGHT, to_i64)?;
+                let left = as_primitive_array::<Date64Type>($LEFT);
+                $OP::<Date64Type>(left, right)
+            }
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 let right = try_to_type!($RIGHT, to_i64)?;
                 let left = as_primitive_array::<TimestampNanosecondType>($LEFT);
@@ -4095,6 +4105,124 @@ mod tests {
                 vec![Some(true), Some(true), Some(true), Some(true), Some(false)]
             )
         );
+    }
+
+    fn test_primitive_dyn_scalar<T: ArrowPrimitiveType>(array: PrimitiveArray<T>) {
+        let a_eq = eq_dyn_scalar(&array, 8).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(false), None, Some(true), None, Some(false)])
+        );
+
+        let a_eq = gt_eq_dyn_scalar(&array, 8).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(false), None, Some(true), None, Some(true)])
+        );
+
+        let a_eq = gt_dyn_scalar(&array, 8).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(false), None, Some(false), None, Some(true)])
+        );
+
+        let a_eq = lt_eq_dyn_scalar(&array, 8).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(true), None, Some(true), None, Some(false)])
+        );
+
+        let a_eq = lt_dyn_scalar(&array, 8).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(true), None, Some(false), None, Some(false)])
+        );
+    }
+
+    #[test]
+    fn test_timestamp_dyn_scalar() {
+        let array =
+            TimestampSecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
+
+        let array =
+            TimestampMicrosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
+
+        let array =
+            TimestampMicrosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
+
+        let array =
+            TimestampNanosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
+    }
+
+    #[test]
+    fn test_date32_dyn_scalar() {
+        let array = Date32Array::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
+    }
+
+    #[test]
+    fn test_date64_dyn_scalar() {
+        let array = Date64Array::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
+    }
+
+    #[test]
+    fn test_time32_dyn_scalar() {
+        let array = Time32SecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
+
+        let array =
+            Time32MillisecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
+    }
+
+    #[test]
+    fn test_time64_dyn_scalar() {
+        let array =
+            Time64MicrosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
+
+        let array =
+            Time64NanosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
+    }
+
+    #[test]
+    fn test_interval_dyn_scalar() {
+        let array =
+            IntervalDayTimeArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
+
+        let array =
+            IntervalMonthDayNanoArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
+
+        let array =
+            IntervalYearMonthArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
+    }
+
+    #[test]
+    fn test_duration_dyn_scalar() {
+        let array =
+            DurationSecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
+
+        let array =
+            DurationMicrosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
+
+        let array =
+            DurationMillisecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
+
+        let array =
+            DurationNanosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        test_primitive_dyn_scalar(array);
     }
 
     #[test]
