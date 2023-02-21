@@ -880,6 +880,7 @@ fn parse_decimal_with_parameter<T: DecimalType>(
                         result = result.add_checked(add)?;
                         base = base.mul_checked(T::Native::usize_as(10))?;
                     }
+                    // because of the PARSE_DECIMAL_RE, bytes just contains digit、'-' and '.'.
                     _ => (),
                 }
                 Ok(())
