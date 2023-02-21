@@ -385,6 +385,7 @@ pub struct AmazonS3Builder {
     retry_config: RetryConfig,
     imdsv1_fallback: bool,
     virtual_hosted_style_request: bool,
+    unsigned_payload: bool,
     metadata_endpoint: Option<String>,
     profile: Option<String>,
     client_options: ClientOptions,
@@ -822,6 +823,12 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Sets the client to not include payload checksum in signature calculation.
+    pub fn with_unsigned_payload(mut self) -> Self {
+        self.unsigned_payload = true;
+        self
+    }
+
     /// Set the [instance metadata endpoint](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html),
     /// used primarily within AWS EC2.
     ///
@@ -967,6 +974,7 @@ impl AmazonS3Builder {
             credentials,
             retry_config: self.retry_config,
             client_options: self.client_options,
+            sign_payload: !self.unsigned_payload,
         };
 
         let client = Arc::new(S3Client::new(config)?);
