@@ -45,6 +45,12 @@ impl NullBuffer {
         self.buffer.len()
     }
 
+    /// Returns true if this [`NullBuffer`] is empty
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+
     /// Returns the null count for this [`NullBuffer`]
     #[inline]
     pub fn null_count(&self) -> usize {

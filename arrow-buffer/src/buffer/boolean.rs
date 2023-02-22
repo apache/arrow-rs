@@ -69,6 +69,12 @@ impl BooleanBuffer {
         self.len
     }
 
+    /// Returns true if this [`BooleanBuffer`] is empty
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     /// Returns the packed values of this [`BooleanBuffer`] not including any offset
     #[inline]
     pub fn values(&self) -> &[u8] {

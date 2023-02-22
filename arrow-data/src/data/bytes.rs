@@ -21,30 +21,67 @@ use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_schema::DataType;
 use std::marker::PhantomData;
 
+mod private {
+    use super::*;
+
+    pub trait BytesSealed {
+        /// Create from bytes without performing any validation
+        ///
+        /// # Safety
+        ///
+        /// If `str`, `b` must be a valid UTF-8 sequence
+        unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self;
+
+        /// Downcast [`ArrayDataBytes`] to `[ArrayDataBytesOffset`]
+        fn downcast_ref(data: &ArrayDataBytes) -> Option<&ArrayDataBytesOffset<Self>>
+        where
+            Self: Bytes;
+
+        /// Downcast [`ArrayDataBytes`] to `[ArrayDataBytesOffset`]
+        fn downcast(data: ArrayDataBytes) -> Option<ArrayDataBytesOffset<Self>>
+        where
+            Self: Bytes;
+
+        /// Cast [`ArrayDataBytesOffset`] to [`ArrayDataBytes`]
+        fn upcast(v: ArrayDataBytesOffset<Self>) -> ArrayDataBytes
+        where
+            Self: Bytes;
+    }
+
+    pub trait BytesOffsetSealed {
+        /// Downcast [`ArrayDataBytesOffset`] to `[BytesArrayData`]
+        fn downcast_ref<B: Bytes + ?Sized>(
+            data: &ArrayDataBytesOffset<B>,
+        ) -> Option<&BytesArrayData<Self, B>>
+        where
+            Self: BytesOffset;
+
+        /// Downcast [`ArrayDataBytesOffset`] to `[BytesArrayData`]
+        fn downcast<B: Bytes + ?Sized>(
+            data: ArrayDataBytesOffset<B>,
+        ) -> Option<BytesArrayData<Self, B>>
+        where
+            Self: BytesOffset;
+
+        /// Cast [`BytesArrayData`] to [`ArrayDataBytesOffset`]
+        fn upcast<B: Bytes + ?Sized>(
+            v: BytesArrayData<Self, B>,
+        ) -> ArrayDataBytesOffset<B>
+        where
+            Self: BytesOffset;
+    }
+}
+
 /// Types backed by a variable length slice of bytes
-pub trait Bytes {
+pub trait Bytes: private::BytesSealed {
     const TYPE: BytesType;
-
-    /// Create from bytes without performing any validation
-    ///
-    /// # Safety
-    ///
-    /// If `str`, `b` must be a valid UTF-8 sequence
-    unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self;
-
-    /// Downcast [`ArrayDataBytes`] to `[ArrayDataBytesOffset`]
-    fn downcast_ref(data: &ArrayDataBytes) -> Option<&ArrayDataBytesOffset<Self>>;
-
-    /// Downcast [`ArrayDataBytes`] to `[ArrayDataBytesOffset`]
-    fn downcast(data: ArrayDataBytes) -> Option<ArrayDataBytesOffset<Self>>;
-
-    /// Cast [`ArrayDataBytesOffset`] to [`ArrayDataBytes`]
-    fn upcast(v: ArrayDataBytesOffset<Self>) -> ArrayDataBytes;
 }
 
 impl Bytes for [u8] {
     const TYPE: BytesType = BytesType::Binary;
+}
 
+impl private::BytesSealed for [u8] {
     unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
         b
     }
@@ -70,7 +107,9 @@ impl Bytes for [u8] {
 
 impl Bytes for str {
     const TYPE: BytesType = BytesType::Utf8;
+}
 
+impl private::BytesSealed for str {
     unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
         std::str::from_utf8_unchecked(b)
     }
@@ -95,26 +134,15 @@ impl Bytes for str {
 }
 
 /// Types of offset used by variable length byte arrays
-pub trait BytesOffset: ArrowNativeType {
+pub trait BytesOffset: private::BytesOffsetSealed + ArrowNativeType {
     const TYPE: OffsetType;
-
-    /// Downcast [`ArrayDataBytesOffset`] to `[BytesArrayData`]
-    fn downcast_ref<B: Bytes + ?Sized>(
-        data: &ArrayDataBytesOffset<B>,
-    ) -> Option<&BytesArrayData<Self, B>>;
-
-    /// Downcast [`ArrayDataBytesOffset`] to `[BytesArrayData`]
-    fn downcast<B: Bytes + ?Sized>(
-        data: ArrayDataBytesOffset<B>,
-    ) -> Option<BytesArrayData<Self, B>>;
-
-    /// Cast [`BytesArrayData`] to [`ArrayDataBytesOffset`]
-    fn upcast<B: Bytes + ?Sized>(v: BytesArrayData<Self, B>) -> ArrayDataBytesOffset<B>;
 }
 
 impl BytesOffset for i32 {
     const TYPE: OffsetType = OffsetType::Small;
+}
 
+impl private::BytesOffsetSealed for i32 {
     fn downcast_ref<B: Bytes + ?Sized>(
         data: &ArrayDataBytesOffset<B>,
     ) -> Option<&BytesArrayData<Self, B>> {
@@ -140,7 +168,9 @@ impl BytesOffset for i32 {
 
 impl BytesOffset for i64 {
     const TYPE: OffsetType = OffsetType::Large;
+}
 
+impl private::BytesOffsetSealed for i64 {
     fn downcast_ref<B: Bytes + ?Sized>(
         data: &ArrayDataBytesOffset<B>,
     ) -> Option<&BytesArrayData<Self, B>> {

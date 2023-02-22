@@ -21,24 +21,37 @@ use arrow_buffer::{i256, ArrowNativeType};
 use arrow_schema::DataType;
 use half::f16;
 
-pub trait Primitive: ArrowNativeType {
+mod private {
+    use super::*;
+
+    pub trait PrimitiveSealed {
+        /// Downcast [`ArrayDataPrimitive`] to `[PrimitiveArrayData`]
+        fn downcast_ref(data: &ArrayDataPrimitive) -> Option<&PrimitiveArrayData<Self>>
+        where
+            Self: Primitive;
+
+        /// Downcast [`ArrayDataPrimitive`] to `[PrimitiveArrayData`]
+        fn downcast(data: ArrayDataPrimitive) -> Option<PrimitiveArrayData<Self>>
+        where
+            Self: Primitive;
+
+        /// Cast [`ArrayDataPrimitive`] to [`ArrayDataPrimitive`]
+        fn upcast(v: PrimitiveArrayData<Self>) -> ArrayDataPrimitive
+        where
+            Self: Primitive;
+    }
+}
+
+pub trait Primitive: private::PrimitiveSealed + ArrowNativeType {
     const VARIANT: PrimitiveType;
-
-    /// Downcast [`ArrayDataPrimitive`] to `[PrimitiveArrayData`]
-    fn downcast_ref(data: &ArrayDataPrimitive) -> Option<&PrimitiveArrayData<Self>>;
-
-    /// Downcast [`ArrayDataPrimitive`] to `[PrimitiveArrayData`]
-    fn downcast(data: ArrayDataPrimitive) -> Option<PrimitiveArrayData<Self>>;
-
-    /// Cast [`ArrayDataPrimitive`] to [`ArrayDataPrimitive`]
-    fn upcast(v: PrimitiveArrayData<Self>) -> ArrayDataPrimitive;
 }
 
 macro_rules! primitive {
     ($t:ty,$v:ident) => {
         impl Primitive for $t {
             const VARIANT: PrimitiveType = PrimitiveType::$v;
-
+        }
+        impl private::PrimitiveSealed for $t {
             fn downcast_ref(
                 data: &ArrayDataPrimitive,
             ) -> Option<&PrimitiveArrayData<Self>> {
