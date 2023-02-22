@@ -25,6 +25,11 @@ use std::marker::PhantomData;
 pub trait Bytes {
     const TYPE: BytesType;
 
+    /// Create from bytes without performing any validation
+    ///
+    /// # Safety
+    ///
+    /// If `str`, `b` must be a valid UTF-8 sequence
     unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self;
 
     /// Downcast [`ArrayDataBytes`] to `[ArrayDataBytesOffset`]
