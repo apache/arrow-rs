@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::data::types::{BytesType, OffsetType};
-use arrow_buffer::buffer::{ScalarBuffer, NullBuffer};
+use arrow_buffer::buffer::{NullBuffer, ScalarBuffer};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_schema::DataType;
 use std::marker::PhantomData;
