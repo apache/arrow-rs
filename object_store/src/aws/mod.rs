@@ -505,6 +505,15 @@ pub enum AmazonS3ConfigKey {
     /// - `virtual_hosted_style_request`
     VirtualHostedStyleRequest,
 
+    /// Avoid computing payload checksum when calculating signature.
+    ///
+    /// See [`AmazonS3Builder::with_unsigned_payload`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_unsigned_payload`
+    /// - `unsigned_payload`
+    UnsignedPayload,
+
     /// Set the instance metadata endpoint
     ///
     /// See [`AmazonS3Builder::with_metadata_endpoint`] for details.
@@ -536,6 +545,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::DefaultRegion => "aws_default_region",
             Self::MetadataEndpoint => "aws_metadata_endpoint",
             Self::Profile => "aws_profile",
+            Self::UnsignedPayload => "aws_unsigned_payload",
         }
     }
 }
@@ -564,6 +574,7 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_profile" | "profile" => Ok(Self::Profile),
             "aws_imdsv1_fallback" | "imdsv1_fallback" => Ok(Self::ImdsV1Fallback),
             "aws_metadata_endpoint" | "metadata_endpoint" => Ok(Self::MetadataEndpoint),
+            "aws_unsigned_payload" | "unsigned_payload" => Ok(Self::UnsignedPayload),
             _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
         }
     }
@@ -680,6 +691,9 @@ impl AmazonS3Builder {
                 self.metadata_endpoint = Some(value.into())
             }
             AmazonS3ConfigKey::Profile => self.profile = Some(value.into()),
+            AmazonS3ConfigKey::UnsignedPayload => {
+                self.unsigned_payload = str_is_truthy(&value.into())
+            }
         };
         Ok(self)
     }
