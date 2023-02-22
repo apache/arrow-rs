@@ -42,7 +42,7 @@ use std::any::Any;
 /// ```
 ///    use arrow_array::{Array, FixedSizeBinaryArray};
 ///    let input_arg = vec![ None, Some(vec![7, 8]), Some(vec![9, 10]), None, Some(vec![13, 14]) ];
-///    let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
+///    let arr = FixedSizeBinaryArray::try_from_sparse_iter_with_size(input_arg.into_iter(), 2).unwrap();
 ///    assert_eq!(5, arr.len())
 ///
 /// ```

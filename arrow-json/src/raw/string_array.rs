@@ -24,13 +24,27 @@ use std::marker::PhantomData;
 use crate::raw::tape::{Tape, TapeElement};
 use crate::raw::{tape_error, ArrayDecoder};
 
-#[derive(Default)]
+const TRUE: &str = "true";
+const FALSE: &str = "false";
+
 pub struct StringArrayDecoder<O: OffsetSizeTrait> {
+    coerce_primitive: bool,
     phantom: PhantomData<O>,
+}
+
+impl<O: OffsetSizeTrait> StringArrayDecoder<O> {
+    pub fn new(coerce_primitive: bool) -> Self {
+        Self {
+            coerce_primitive,
+            phantom: Default::default(),
+        }
+    }
 }
 
 impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+        let coerce_primitive = self.coerce_primitive;
+
         let mut data_capacity = 0;
         for p in pos {
             match tape.get(*p) {
@@ -38,6 +52,15 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
                     data_capacity += tape.get_string(idx).len();
                 }
                 TapeElement::Null => {}
+                TapeElement::True if coerce_primitive => {
+                    data_capacity += TRUE.len();
+                }
+                TapeElement::False if coerce_primitive => {
+                    data_capacity += FALSE.len();
+                }
+                TapeElement::Number(idx) if coerce_primitive => {
+                    data_capacity += tape.get_string(idx).len();
+                }
                 d => return Err(tape_error(d, "string")),
             }
         }
@@ -58,6 +81,15 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
                     builder.append_value(tape.get_string(idx));
                 }
                 TapeElement::Null => builder.append_null(),
+                TapeElement::True if coerce_primitive => {
+                    builder.append_value(TRUE);
+                }
+                TapeElement::False if coerce_primitive => {
+                    builder.append_value(FALSE);
+                }
+                TapeElement::Number(idx) if coerce_primitive => {
+                    builder.append_value(tape.get_string(idx));
+                }
                 _ => unreachable!(),
             }
         }

@@ -160,7 +160,7 @@ required-features = ["test_utils"]
 [[bench]]
 name = "comparison_kernels"
 harness = false
-required-features = ["test_utils", "dyn_cmp_dict"]
+required-features = ["test_utils"]
 
 [[bench]]
 name = "filter_kernels"
