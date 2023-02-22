@@ -1178,6 +1178,7 @@ mod tests {
             ("aws_default_region", aws_default_region.clone()),
             ("aws_endpoint", aws_endpoint.clone()),
             ("aws_session_token", aws_session_token.clone()),
+            ("aws_unsigned_payload", "true".to_string()),
         ]);
 
         let builder = AmazonS3Builder::new()
@@ -1190,6 +1191,7 @@ mod tests {
         assert_eq!(builder.region.unwrap(), aws_default_region);
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
+        assert_eq!(builder.unsigned_payload, true);
     }
 
     #[test]
@@ -1205,6 +1207,7 @@ mod tests {
             (AmazonS3ConfigKey::DefaultRegion, aws_default_region.clone()),
             (AmazonS3ConfigKey::Endpoint, aws_endpoint.clone()),
             (AmazonS3ConfigKey::Token, aws_session_token.clone()),
+            (AmazonS3ConfigKey::UnsignedPayload, "true".to_string()),
         ]);
 
         let builder = AmazonS3Builder::new()
@@ -1217,6 +1220,7 @@ mod tests {
         assert_eq!(builder.region.unwrap(), aws_default_region);
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
+        assert_eq!(builder.unsigned_payload, true);
     }
 
     #[test]
