@@ -838,6 +838,7 @@ impl AmazonS3Builder {
     }
 
     /// Sets the client to not include payload checksum in signature calculation.
+    /// See [unsigned payload option](https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html)
     pub fn with_unsigned_payload(mut self) -> Self {
         self.unsigned_payload = true;
         self
