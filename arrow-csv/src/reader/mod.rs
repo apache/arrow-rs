@@ -67,7 +67,10 @@ lazy_static! {
         r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$", //DECIMAL
         r"^-?(\d+)$", //INTEGER
         r"^\d{4}-\d\d-\d\d$", //DATE32
-        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d$", //DATE64
+        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d$", //Timestamp(Second)
+        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d.\d{1,3}$", //Timestamp(Millisecond)
+        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d.\d{1,6}$", //Timestamp(Microsecond)
+        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d.\d{1,9}$", //Timestamp(Nanosecond)
     ]).unwrap();
     //The order should match with REGEX_SET
     static ref MATCH_DATA_TYPE: Vec<DataType> = vec![
@@ -75,12 +78,13 @@ lazy_static! {
         DataType::Float64,
         DataType::Int64,
         DataType::Date32,
-        DataType::Date64,
+        DataType::Timestamp(TimeUnit::Second, None),
+        DataType::Timestamp(TimeUnit::Millisecond, None),
+        DataType::Timestamp(TimeUnit::Microsecond, None),
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
     ];
     static ref PARSE_DECIMAL_RE: Regex =
         Regex::new(r"^-?(\d+\.?\d*|\d*\.?\d+)$").unwrap();
-    static ref DATETIME_RE: Regex =
-        Regex::new(r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,9}$").unwrap();
 }
 
 /// Infer the data type of a record
@@ -94,14 +98,12 @@ fn infer_field_schema(string: &str, datetime_re: Option<Regex>) -> DataType {
     // match regex in a particular order
     match matches {
         Some(ix) => MATCH_DATA_TYPE[ix].clone(),
-        None => {
-            let datetime_re = datetime_re.unwrap_or_else(|| DATETIME_RE.clone());
-            if datetime_re.is_match(string) {
+        None => match datetime_re {
+            Some(datetime_re) if datetime_re.is_match(string) => {
                 DataType::Timestamp(TimeUnit::Nanosecond, None)
-            } else {
-                DataType::Utf8
             }
-        }
+            _ => DataType::Utf8,
+        },
     }
 }
 
@@ -681,6 +683,22 @@ fn parse(
                 >(
                     line_number, rows, i, None
                 ),
+                DataType::Timestamp(TimeUnit::Second, _) => {
+                    build_primitive_array::<TimestampSecondType>(
+                        line_number,
+                        rows,
+                        i,
+                        None,
+                    )
+                }
+                DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                    build_primitive_array::<TimestampMillisecondType>(
+                        line_number,
+                        rows,
+                        i,
+                        None,
+                    )
+                }
                 DataType::Timestamp(TimeUnit::Microsecond, _) => {
                     build_primitive_array::<TimestampMicrosecondType>(
                         line_number,
@@ -1637,7 +1655,7 @@ mod tests {
         assert_eq!(&DataType::Float64, schema.field(2).data_type());
         assert_eq!(&DataType::Boolean, schema.field(3).data_type());
         assert_eq!(&DataType::Date32, schema.field(4).data_type());
-        assert_eq!(&DataType::Date64, schema.field(5).data_type());
+        assert_eq!(&DataType::Timestamp(TimeUnit::Second, None), schema.field(5).data_type());
 
         let names: Vec<&str> =
             schema.fields().iter().map(|x| x.name().as_str()).collect();
@@ -1712,22 +1730,22 @@ mod tests {
         assert_eq!(infer_field_schema("2020-11-08", None), DataType::Date32);
         assert_eq!(
             infer_field_schema("2020-11-08T14:20:01", None),
-            DataType::Date64
+            DataType::Timestamp(TimeUnit::Second, None)
         );
         assert_eq!(
             infer_field_schema("2020-11-08 14:20:01", None),
-            DataType::Date64
+            DataType::Timestamp(TimeUnit::Second, None)
         );
         let reg = Regex::new(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$").ok();
         assert_eq!(
             infer_field_schema("2020-11-08 14:20:01", reg),
-            DataType::Date64
+            DataType::Timestamp(TimeUnit::Second, None)
         );
         assert_eq!(infer_field_schema("-5.13", None), DataType::Float64);
         assert_eq!(infer_field_schema("0.1300", None), DataType::Float64);
         assert_eq!(
             infer_field_schema("2021-12-19 13:12:30.921", None),
-            DataType::Timestamp(TimeUnit::Nanosecond, None)
+            DataType::Timestamp(TimeUnit::Millisecond, None)
         );
         assert_eq!(
             infer_field_schema("2021-12-19T13:12:30.123456789", None),
