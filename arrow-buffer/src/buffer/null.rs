@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::buffer::BooleanBuffer;
+use crate::buffer::BooleanBuffer;
 
 #[derive(Debug, Clone)]
 pub struct NullBuffer {
