@@ -1251,6 +1251,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn s3_test_unsigned_payload() {
+        let config = maybe_skip_integration!().with_unsigned_payload();
+        let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
+        let integration = config.build().unwrap();
+        put_get_delete_list_opts(&integration, is_local).await;
+    }
+
+    #[tokio::test]
     async fn s3_test_get_nonexistent_location() {
         let config = maybe_skip_integration!();
         let integration = config.build().unwrap();
