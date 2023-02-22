@@ -17,6 +17,7 @@
 
 use crate::{bit_util, Buffer};
 
+/// A slice-able [`Buffer`] containing bit-packed booleans
 #[derive(Debug, Clone)]
 pub struct BooleanBuffer {
     buffer: Buffer,
