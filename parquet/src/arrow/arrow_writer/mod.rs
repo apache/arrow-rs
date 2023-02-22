@@ -1026,9 +1026,7 @@ mod tests {
             true,
         );
         let schema = Arc::new(Schema::new(vec![stocks_field]));
-        let builder = arrow::json::ReaderBuilder::new()
-            .with_schema(schema)
-            .with_batch_size(64);
+        let builder = arrow::json::RawReaderBuilder::new(schema).with_batch_size(64);
         let mut reader = builder.build(std::io::Cursor::new(json_content)).unwrap();
 
         let batch = reader.next().unwrap().unwrap();

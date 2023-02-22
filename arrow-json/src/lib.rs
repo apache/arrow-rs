@@ -28,6 +28,7 @@ pub mod writer;
 mod raw;
 
 pub use self::raw::{RawDecoder, RawReader, RawReaderBuilder};
+#[allow(deprecated)]
 pub use self::reader::{Reader, ReaderBuilder};
 pub use self::writer::{ArrayWriter, LineDelimitedWriter, Writer};
 use half::f16;
