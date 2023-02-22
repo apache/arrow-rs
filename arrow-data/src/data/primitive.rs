@@ -77,6 +77,7 @@ primitive!(f16, Float16);
 primitive!(f32, Float32);
 primitive!(f64, Float64);
 
+/// An enumeration of the types of [`PrimitiveArrayData`]
 pub enum ArrayDataPrimitive {
     Int8(PrimitiveArrayData<i8>),
     Int16(PrimitiveArrayData<i16>),
@@ -105,6 +106,7 @@ impl ArrayDataPrimitive {
     }
 }
 
+/// ArrayData for arrays of [`Primitive`]
 #[derive(Debug, Clone)]
 pub struct PrimitiveArrayData<T: Primitive> {
     data_type: DataType,

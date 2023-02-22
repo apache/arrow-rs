@@ -29,6 +29,9 @@ use std::sync::Arc;
 
 use crate::equal;
 
+mod bytes;
+pub use bytes::*;
+
 mod null;
 pub use null::*;
 
