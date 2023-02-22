@@ -1148,6 +1148,7 @@ mod tests {
             "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
             &container_creds_relative_uri,
         );
+        env::set_var("AWS_UNSIGNED_PAYLOAD", "true");
 
         let builder = AmazonS3Builder::from_env();
         assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
@@ -1159,7 +1160,7 @@ mod tests {
 
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
-
+        assert_eq!(builder.unsigned_payload, true);
         let metadata_uri = format!("{METADATA_ENDPOINT}{container_creds_relative_uri}");
         assert_eq!(builder.metadata_endpoint.unwrap(), metadata_uri);
     }
