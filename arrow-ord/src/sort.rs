@@ -648,17 +648,8 @@ fn sort_run_downcasted<R: RunEndIndexType>(
 ) -> Result<ArrayRef, ArrowError> {
     let run_array = values.as_any().downcast_ref::<RunArray<R>>().unwrap();
 
-    // slice the run_array.values based on offset and length.
-    let start_physical_index = run_array.get_start_physical_index();
-    let end_physical_index = run_array.get_end_physical_index();
-    let physical_len = end_physical_index - start_physical_index + 1;
-    let run_values = run_array.values().slice(start_physical_index, physical_len);
-
-    // All the values have to be sorted irrespective of input limit.
-    let values_indices = sort_to_indices(&run_values, options, None)?;
-
     // Determine the length of output run array.
-    let mut remaining_len = if let Some(limit) = limit {
+    let output_len = if let Some(limit) = limit {
         limit.min(run_array.len())
     } else {
         run_array.len()
@@ -666,45 +657,18 @@ fn sort_run_downcasted<R: RunEndIndexType>(
 
     let run_ends = run_array.run_ends();
 
-    let mut new_run_ends_builder = BufferBuilder::<R::Native>::new(physical_len);
+    let mut new_run_ends_builder = BufferBuilder::<R::Native>::new(run_ends.len());
     let mut new_run_end: usize = 0;
     let mut new_physical_len: usize = 0;
 
-    // calculate run length of sorted value indices and add them to new_run_ends.
-    for physical_index in values_indices.into_iter() {
-        // As the values were sliced with offset = start_physical_index, it has to be added back
-        // before accesing `RunArray::run_ends`
-        let physical_index = physical_index.unwrap() as usize + start_physical_index;
-
-        // calculate the run length.
-        let run_length = unsafe {
-            // Safety:
-            // The index will be within bounds as its in bounds of start_physical_index
-            // and remaining_len, both of which are within bounds of run_array
-            if physical_index == start_physical_index {
-                run_ends.value_unchecked(physical_index).as_usize() - run_array.offset()
-            } else if physical_index == end_physical_index {
-                run_array.offset() + run_array.len()
-                    - run_ends.value_unchecked(physical_index - 1).as_usize()
-            } else {
-                run_ends.value_unchecked(physical_index).as_usize()
-                    - run_ends.value_unchecked(physical_index - 1).as_usize()
-            }
-        };
-        let run_length = run_length.min(remaining_len);
+    let consume_runs = |run_length, _| {
         new_run_end += run_length;
-        new_run_ends_builder.append(R::Native::from_usize(new_run_end).unwrap());
         new_physical_len += 1;
+        new_run_ends_builder.append(R::Native::from_usize(new_run_end).unwrap());
+    };
 
-        remaining_len -= run_length;
-        if remaining_len == 0 {
-            break;
-        }
-    }
-
-    if remaining_len > 0 {
-        panic!("Remaining length should be zero its values is {remaining_len}")
-    }
+    let (values_indices, run_values) =
+        sort_run_inner(run_array, options, output_len, consume_runs);
 
     let new_run_ends = unsafe {
         // Safety:
@@ -747,7 +711,31 @@ fn sort_run_to_indices<R: RunEndIndexType>(
     limit: Option<usize>,
 ) -> UInt32Array {
     let run_array = values.as_any().downcast_ref::<RunArray<R>>().unwrap();
+    let output_len = if let Some(limit) = limit {
+        limit.min(run_array.len())
+    } else {
+        run_array.len()
+    };
+    let mut result: Vec<u32> = Vec::with_capacity(output_len);
 
+    //Add all logical indices belonging to a physical index to the output
+    let consume_runs = |run_length, logical_start| {
+        result.extend(logical_start as u32..(logical_start + run_length) as u32);
+    };
+    sort_run_inner(run_array, Some(*options), output_len, consume_runs);
+
+    UInt32Array::from(result)
+}
+
+fn sort_run_inner<R: RunEndIndexType, F>(
+    run_array: &RunArray<R>,
+    options: Option<SortOptions>,
+    output_len: usize,
+    mut consume_runs: F,
+) -> (PrimitiveArray<UInt32Type>, ArrayRef)
+where
+    F: FnMut(usize, usize),
+{
     // slice the run_array.values based on offset and length.
     let start_physical_index = run_array.get_start_physical_index();
     let end_physical_index = run_array.get_end_physical_index();
@@ -755,25 +743,26 @@ fn sort_run_to_indices<R: RunEndIndexType>(
     let run_values = run_array.values().slice(start_physical_index, physical_len);
 
     // All the values have to be sorted irrespective of input limit.
-    let values_indices = sort_to_indices(&run_values, Some(*options), None).unwrap();
+    let values_indices = sort_to_indices(&run_values, options, None).unwrap();
 
-    let mut remaining_len = if let Some(limit) = limit {
-        limit.min(run_array.len())
-    } else {
-        run_array.len()
-    };
-
-    let mut result: Vec<u32> = Vec::with_capacity(remaining_len);
+    let mut remaining_len = output_len;
 
     let run_ends = run_array.run_ends();
 
+    assert_eq!(
+        0,
+        values_indices.null_count(),
+        "The output of sort_to_indices should not have null values. Its values is {}",
+        values_indices.null_count()
+    );
+
     // Calculate `run length` of sorted value indices.
-    // Find the `logical index` of the value index.
-    // Add `logical index` to the output `run length` times.
-    for physical_index in values_indices.into_iter() {
+    // Find the `logical index` at which the run starts.
+    // Call the consumer using the run length and starting logical index.
+    for physical_index in values_indices.values() {
         // As the values were sliced with offset = start_physical_index, it has to be added back
         // before accesing `RunArray::run_ends`
-        let physical_index = physical_index.unwrap() as usize + start_physical_index;
+        let physical_index = *physical_index as usize + start_physical_index;
 
         // calculate the run length and logical index of sorted values
         let (run_length, logical_index_start) = unsafe {
@@ -803,9 +792,7 @@ fn sort_run_to_indices<R: RunEndIndexType>(
             }
         };
         let new_run_length = run_length.min(remaining_len);
-        result.extend(
-            logical_index_start as u32..(logical_index_start + new_run_length) as u32,
-        );
+        consume_runs(new_run_length, logical_index_start);
         remaining_len -= new_run_length;
 
         if remaining_len == 0 {
@@ -816,8 +803,7 @@ fn sort_run_to_indices<R: RunEndIndexType>(
     if remaining_len > 0 {
         panic!("Remaining length should be zero its values is {remaining_len}")
     }
-
-    UInt32Array::from(result)
+    (values_indices, run_values)
 }
 
 /// Sort strings
@@ -3105,21 +3091,21 @@ mod tests {
     }
 
     #[test]
-    fn test_sort_run() {
-        test_sort_run_abstract(|array, sort_options, limit| {
+    fn test_sort_run_to_run() {
+        test_sort_run_inner(|array, sort_options, limit| {
             sort_run(array, sort_options, limit)
         });
     }
 
     #[test]
     fn test_sort_run_to_indices() {
-        test_sort_run_abstract(|array, sort_options, limit| {
+        test_sort_run_inner(|array, sort_options, limit| {
             let indices = sort_to_indices(array, sort_options, limit).unwrap();
             take(array, &indices, None)
         });
     }
 
-    fn test_sort_run_abstract<F>(sort_fn: F)
+    fn test_sort_run_inner<F>(sort_fn: F)
     where
         F: Fn(
             &ArrayRef,
@@ -3151,7 +3137,7 @@ mod tests {
             1, 2, 3, 4, 5, 6, 7, 37, 38, 39, 40, 41, 42, 43, 74, 75, 76, 77, 78, 79, 80,
         ];
         for slice_len in slice_lens {
-            test_sort_run_to_indices_inner(
+            test_sort_run_inner2(
                 input_array.as_slice(),
                 &run_array,
                 0,
@@ -3159,7 +3145,7 @@ mod tests {
                 None,
                 &sort_fn,
             );
-            test_sort_run_to_indices_inner(
+            test_sort_run_inner2(
                 input_array.as_slice(),
                 &run_array,
                 total_len - slice_len,
@@ -3169,7 +3155,7 @@ mod tests {
             );
             // Test with non zero limit
             if slice_len > 1 {
-                test_sort_run_to_indices_inner(
+                test_sort_run_inner2(
                     input_array.as_slice(),
                     &run_array,
                     0,
@@ -3177,7 +3163,7 @@ mod tests {
                     Some(slice_len / 2),
                     &sort_fn,
                 );
-                test_sort_run_to_indices_inner(
+                test_sort_run_inner2(
                     input_array.as_slice(),
                     &run_array,
                     total_len - slice_len,
@@ -3189,7 +3175,7 @@ mod tests {
         }
     }
 
-    fn test_sort_run_to_indices_inner<F>(
+    fn test_sort_run_inner2<F>(
         input_array: &[Option<i32>],
         run_array: &RunArray<Int16Type>,
         offset: usize,
