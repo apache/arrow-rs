@@ -29,17 +29,14 @@ use std::sync::Arc;
 
 use crate::equal;
 
+#[allow(unused)] // Private until ready (#1176)
 mod bytes;
-pub use bytes::*;
-
+#[allow(unused)] // Private until ready (#1176)
 mod null;
-pub use null::*;
-
+#[allow(unused)] // Private until ready (#1176)
 mod primitive;
-pub use primitive::*;
-
+#[allow(unused)] // Private until ready (#1176)
 mod types;
-pub use types::*;
 
 #[inline]
 pub(crate) fn contains_nulls(

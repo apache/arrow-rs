@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::data::types::PrimitiveType;
-use crate::{NullBuffer, PhysicalType};
+use crate::data::types::{PhysicalType, PrimitiveType};
 use arrow_buffer::buffer::ScalarBuffer;
 use arrow_buffer::{i256, ArrowNativeType};
 use arrow_schema::DataType;
 use half::f16;
+use crate::data::null::NullBuffer;
 
 pub trait Primitive: ArrowNativeType {
     const VARIANT: PrimitiveType;

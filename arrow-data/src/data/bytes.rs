@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{BytesType, NullBuffer, OffsetType};
+use crate::data::null::NullBuffer;
+use crate::data::types::{BytesType, OffsetType};
 use arrow_buffer::buffer::ScalarBuffer;
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_schema::DataType;
