@@ -768,5 +768,37 @@ mod tests {
         let b = Buffer::from(MutableBuffer::new(10));
         let b = b.into_vec::<u8>().unwrap_err();
         b.into_vec::<u64>().unwrap_err();
+
+        // Test slicing
+        let mut a: Vec<i128> = Vec::with_capacity(20);
+        a.extend_from_slice(&[1, 4, 7, 8, 9, 3, 6]);
+        let b = Buffer::from_vec(a);
+        let slice = b.slice_with_length(0, 64);
+
+        // Shared reference fails
+        let slice = slice.into_vec::<i128>().unwrap_err();
+        drop(b);
+
+        // Succeeds as no outstanding shared reference
+        let back = slice.into_vec::<i128>().unwrap();
+        assert_eq!(&back, &[1, 4, 7, 8]);
+        assert_eq!(back.capacity(), 20);
+
+        // Slicing by non-multiple length truncates
+        let mut a: Vec<i128> = Vec::with_capacity(8);
+        a.extend_from_slice(&[1, 4, 7, 3]);
+
+        let b = Buffer::from_vec(a);
+        let slice = b.slice_with_length(0, 34);
+        drop(b);
+
+        let back = slice.into_vec::<i128>().unwrap();
+        assert_eq!(&back, &[1, 4]);
+        assert_eq!(back.capacity(), 8);
+
+        // Offset prevents conversion
+        let a: Vec<u32> = vec![1, 3, 4, 6];
+        let b = Buffer::from_vec(a).slice(2);
+        b.into_vec::<u32>().unwrap_err();
     }
 }
