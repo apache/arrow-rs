@@ -112,15 +112,35 @@ impl<R: RunEndIndexType> RunArray<R> {
 
     /// Returns a reference to run_ends array
     ///
-    /// Note: any slicing of this array is not applied to the returned array
+    /// Note: any slicing of this [`RunArray`] array is not applied to the returned array
     /// and must be handled separately
     pub fn run_ends(&self) -> &PrimitiveArray<R> {
         &self.run_ends
     }
 
     /// Returns a reference to values array
+    ///
+    /// Note: any slicing of this [`RunArray`] array is not applied to the returned array
+    /// and must be handled separately
     pub fn values(&self) -> &ArrayRef {
         &self.values
+    }
+
+    /// Returns the physical index at which the array slice starts.
+    pub fn get_start_physical_index(&self) -> usize {
+        if self.offset() == 0 {
+            return 0;
+        }
+        self.get_zero_offset_physical_index(self.offset()).unwrap()
+    }
+
+    /// Returns the physical index at which the array slice ends.
+    pub fn get_end_physical_index(&self) -> usize {
+        if self.offset() + self.len() == Self::logical_len(&self.run_ends) {
+            return self.run_ends.len() - 1;
+        }
+        self.get_zero_offset_physical_index(self.offset() + self.len() - 1)
+            .unwrap()
     }
 
     /// Downcast this [`RunArray`] to a [`TypedRunArray`]
@@ -230,11 +250,7 @@ impl<R: RunEndIndexType> RunArray<R> {
         }
 
         // Skip some physical indices based on offset.
-        let skip_value = if self.offset() > 0 {
-            self.get_zero_offset_physical_index(self.offset()).unwrap()
-        } else {
-            0
-        };
+        let skip_value = self.get_start_physical_index();
 
         let mut physical_indices = vec![0; indices_len];
 
