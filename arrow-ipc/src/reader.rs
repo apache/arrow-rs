@@ -865,7 +865,7 @@ impl<R: Read + Seek> FileReader<R> {
         let schema = crate::convert::fb_to_schema(ipc_schema);
 
         // Create an array of optional dictionary value arrays, one per field.
-        let mut dictionaries_by_id = HashMap::new();
+        let mut dictionaries_by_id = HashMap::with_capacity(schema.fields().len());
         if let Some(dictionaries) = footer.dictionaries() {
             for block in dictionaries {
                 // read length from end of offset
@@ -1112,7 +1112,7 @@ impl<R: Read> StreamReader<R> {
         let schema = crate::convert::fb_to_schema(ipc_schema);
 
         // Create an array of optional dictionary value arrays, one per field.
-        let dictionaries_by_id = HashMap::new();
+        let dictionaries_by_id = HashMap::with_capacity(schema.fields().len());
 
         let projection = match projection {
             Some(projection_indices) => {
