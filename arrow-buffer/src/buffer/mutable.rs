@@ -16,23 +16,28 @@
 // under the License.
 
 use super::Buffer;
-use crate::alloc::Deallocation;
+use crate::alloc::{Deallocation, ALIGNMENT};
 use crate::{
     alloc,
     bytes::Bytes,
     native::{ArrowNativeType, ToByteSlice},
     util::bit_util,
 };
+use std::alloc::Layout;
 use std::mem;
 use std::ptr::NonNull;
 
 /// A [`MutableBuffer`] is Arrow's interface to build a [`Buffer`] out of items or slices of items.
+///
 /// [`Buffer`]s created from [`MutableBuffer`] (via `into`) are guaranteed to have its pointer aligned
 /// along cache lines and in multiple of 64 bytes.
+///
 /// Use [MutableBuffer::push] to insert an item, [MutableBuffer::extend_from_slice]
 /// to insert many items, and `into` to convert it to [`Buffer`].
 ///
-/// For a safe, strongly typed API consider using `arrow::array::BufferBuilder`
+/// For a safe, strongly typed API consider using `Vec`
+///
+/// Note: this may be deprecated in a future release (#1176)[https://github.com/apache/arrow-rs/issues/1176]
 ///
 /// # Example
 ///
@@ -62,6 +67,7 @@ impl MutableBuffer {
 
     /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`.
     #[inline]
+    #[allow(deprecated)]
     pub fn with_capacity(capacity: usize) -> Self {
         let capacity = bit_util::round_upto_multiple_of_64(capacity);
         let ptr = alloc::allocate_aligned(capacity);
@@ -83,6 +89,7 @@ impl MutableBuffer {
     /// let data = buffer.as_slice_mut();
     /// assert_eq!(data[126], 0u8);
     /// ```
+    #[allow(deprecated)]
     pub fn from_len_zeroed(len: usize) -> Self {
         let new_capacity = bit_util::round_upto_multiple_of_64(len);
         let ptr = alloc::allocate_aligned_zeroed(new_capacity);
@@ -95,12 +102,14 @@ impl MutableBuffer {
 
     /// Allocates a new [MutableBuffer] from given `Bytes`.
     pub(crate) fn from_bytes(bytes: Bytes) -> Result<Self, Bytes> {
-        if !matches!(bytes.deallocation(), Deallocation::Arrow(_)) {
-            return Err(bytes);
-        }
+        let capacity = match bytes.deallocation() {
+            Deallocation::Standard(layout) if layout.align() == ALIGNMENT => {
+                layout.size()
+            }
+            _ => return Err(bytes),
+        };
 
         let len = bytes.len();
-        let capacity = bytes.capacity();
         let ptr = bytes.ptr();
         mem::forget(bytes);
 
@@ -224,6 +233,7 @@ impl MutableBuffer {
     /// buffer.shrink_to_fit();
     /// assert!(buffer.capacity() >= 64 && buffer.capacity() < 128);
     /// ```
+    #[allow(deprecated)]
     pub fn shrink_to_fit(&mut self) {
         let new_capacity = bit_util::round_upto_multiple_of_64(self.len);
         if new_capacity < self.capacity {
@@ -300,9 +310,9 @@ impl MutableBuffer {
 
     #[inline]
     pub(super) fn into_buffer(self) -> Buffer {
-        let bytes = unsafe {
-            Bytes::new(self.data, self.len, Deallocation::Arrow(self.capacity))
-        };
+        let layout = Layout::from_size_align(self.capacity, ALIGNMENT).unwrap();
+        let bytes =
+            unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(layout)) };
         std::mem::forget(self);
         Buffer::from_bytes(bytes)
     }
@@ -448,6 +458,7 @@ impl MutableBuffer {
 /// # Safety
 /// `ptr` must be allocated for `old_capacity`.
 #[cold]
+#[allow(deprecated)]
 unsafe fn reallocate(
     ptr: NonNull<u8>,
     old_capacity: usize,
@@ -630,6 +641,7 @@ impl std::ops::DerefMut for MutableBuffer {
 }
 
 impl Drop for MutableBuffer {
+    #[allow(deprecated)]
     fn drop(&mut self) {
         unsafe { alloc::free_aligned(self.data, self.capacity) };
     }

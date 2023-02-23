@@ -45,6 +45,7 @@ fn dangling_ptr() -> NonNull<u8> {
 /// Allocates a cache-aligned memory region of `size` bytes with uninitialized values.
 /// This is more performant than using [allocate_aligned_zeroed] when all bytes will have
 /// an unknown or non-zero value and is semantically similar to `malloc`.
+#[deprecated(note = "Use Vec")]
 pub fn allocate_aligned(size: usize) -> NonNull<u8> {
     unsafe {
         if size == 0 {
@@ -60,6 +61,7 @@ pub fn allocate_aligned(size: usize) -> NonNull<u8> {
 /// Allocates a cache-aligned memory region of `size` bytes with `0` on all of them.
 /// This is more performant than using [allocate_aligned] and setting all bytes to zero
 /// and is semantically similar to `calloc`.
+#[deprecated(note = "Use Vec")]
 pub fn allocate_aligned_zeroed(size: usize) -> NonNull<u8> {
     unsafe {
         if size == 0 {
@@ -80,6 +82,7 @@ pub fn allocate_aligned_zeroed(size: usize) -> NonNull<u8> {
 /// * ptr must denote a block of memory currently allocated via this allocator,
 ///
 /// * size must be the same size that was used to allocate that block of memory,
+#[deprecated(note = "Use Vec")]
 pub unsafe fn free_aligned(ptr: NonNull<u8>, size: usize) {
     if size != 0 {
         std::alloc::dealloc(
@@ -100,6 +103,8 @@ pub unsafe fn free_aligned(ptr: NonNull<u8>, size: usize) {
 ///
 /// * new_size, when rounded up to the nearest multiple of [ALIGNMENT], must not overflow (i.e.,
 /// the rounded value must be less than usize::MAX).
+#[deprecated(note = "Use Vec")]
+#[allow(deprecated)]
 pub unsafe fn reallocate(
     ptr: NonNull<u8>,
     old_size: usize,
@@ -132,9 +137,8 @@ impl<T: RefUnwindSafe + Send + Sync> Allocation for T {}
 
 /// Mode of deallocating memory regions
 pub(crate) enum Deallocation {
-    /// An allocation of the given capacity that needs to be deallocated using arrows's cache aligned allocator.
-    /// See [allocate_aligned] and [free_aligned].
-    Arrow(usize),
+    /// An allocation using [`std::alloc`]
+    Standard(Layout),
     /// An allocation from an external source like the FFI interface or a Rust Vec.
     /// Deallocation will happen
     Custom(Arc<dyn Allocation>),
@@ -143,8 +147,8 @@ pub(crate) enum Deallocation {
 impl Debug for Deallocation {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            Deallocation::Arrow(capacity) => {
-                write!(f, "Deallocation::Arrow {{ capacity: {capacity} }}")
+            Deallocation::Standard(layout) => {
+                write!(f, "Deallocation::Standard {layout:?}")
             }
             Deallocation::Custom(_) => {
                 write!(f, "Deallocation::Custom {{ capacity: unknown }}")
