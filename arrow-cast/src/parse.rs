@@ -485,6 +485,26 @@ pub(crate) fn parse_interval_month_day_nano(
     ))
 }
 
+#[inline]
+pub(crate) fn year_month_interval_to_string(n: i32) -> String {
+    format!("{n} months")
+}
+
+#[inline]
+pub(crate) fn day_time_interval_to_string(n: i64) -> String {
+    format!("{} days {} milliseconds", n >> 32, n & ((1 << 32) - 1))
+}
+
+#[inline]
+pub(crate) fn month_day_nano_interval_to_string(n: i128) -> String {
+    format!(
+        "{} months {} days {} nanos",
+        n >> 96,
+        (n >> 64) & ((1 << 32) - 1),
+        n & ((1 << 64) - 1)
+    )
+}
+
 const SECONDS_PER_HOUR: f64 = 3_600_f64;
 const NANOS_PER_SECOND: f64 = 1_000_000_000_f64;
 
