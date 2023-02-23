@@ -581,10 +581,10 @@ impl MutableBuffer {
     pub unsafe fn try_from_trusted_len_iter<
         E,
         T: ArrowNativeType,
-        I: Iterator<Item = std::result::Result<T, E>>,
+        I: Iterator<Item = Result<T, E>>,
     >(
         iterator: I,
-    ) -> std::result::Result<Self, E> {
+    ) -> Result<Self, E> {
         let item_size = std::mem::size_of::<T>();
         let (_, upper) = iterator.size_hint();
         let upper = upper.expect("try_from_trusted_len_iter requires an upper limit");

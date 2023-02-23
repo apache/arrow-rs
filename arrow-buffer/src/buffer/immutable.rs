@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::convert::AsRef;
 use std::fmt::Debug;
 use std::iter::FromIterator;
 use std::ptr::NonNull;
 use std::sync::Arc;
-use std::{convert::AsRef, usize};
 
 use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
@@ -30,26 +30,41 @@ use super::MutableBuffer;
 
 /// Buffer represents a contiguous memory region that can be shared with other buffers and across
 /// thread boundaries.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Debug)]
 pub struct Buffer {
     /// the internal byte buffer.
     data: Arc<Bytes>,
 
-    /// The offset into the buffer.
-    offset: usize,
+    /// Pointer into `data` valid
+    ///
+    /// We store a pointer instead of an offset to avoid pointer arithmetic
+    /// which causes LLVM to fail to vectorise code correctly
+    ptr: *const u8,
 
     /// Byte length of the buffer.
     length: usize,
 }
+
+impl PartialEq for Buffer {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice().eq(other.as_slice())
+    }
+}
+
+impl Eq for Buffer {}
+
+unsafe impl Send for Buffer where Bytes: Send {}
+unsafe impl Sync for Buffer where Bytes: Sync {}
 
 impl Buffer {
     /// Auxiliary method to create a new Buffer
     #[inline]
     pub fn from_bytes(bytes: Bytes) -> Self {
         let length = bytes.len();
+        let ptr = bytes.as_ptr();
         Buffer {
             data: Arc::new(bytes),
-            offset: 0,
+            ptr,
             length,
         }
     }
@@ -108,9 +123,10 @@ impl Buffer {
         deallocation: Deallocation,
     ) -> Self {
         let bytes = Bytes::new(ptr, len, deallocation);
+        let ptr = bytes.as_ptr();
         Buffer {
+            ptr,
             data: Arc::new(bytes),
-            offset: 0,
             length: len,
         }
     }
@@ -136,7 +152,7 @@ impl Buffer {
 
     /// Returns the byte slice stored in this buffer
     pub fn as_slice(&self) -> &[u8] {
-        &self.data[self.offset..(self.offset + self.length)]
+        unsafe { std::slice::from_raw_parts(self.ptr, self.length) }
     }
 
     /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`.
@@ -145,13 +161,18 @@ impl Buffer {
     /// Panics iff `offset` is larger than `len`.
     pub fn slice(&self, offset: usize) -> Self {
         assert!(
-            offset <= self.len(),
+            offset <= self.length,
             "the offset of the new Buffer cannot exceed the existing length"
         );
+        // Safety:
+        // This cannot overflow as
+        // `self.offset + self.length < self.data.len()`
+        // `offset < self.length`
+        let ptr = unsafe { self.ptr.add(offset) };
         Self {
             data: self.data.clone(),
-            offset: self.offset + offset,
             length: self.length - offset,
+            ptr,
         }
     }
 
@@ -162,12 +183,15 @@ impl Buffer {
     /// Panics iff `(offset + length)` is larger than the existing length.
     pub fn slice_with_length(&self, offset: usize, length: usize) -> Self {
         assert!(
-            offset + length <= self.len(),
+            offset.saturating_add(length) <= self.length,
             "the offset of the new Buffer cannot exceed the existing length"
         );
+        // Safety:
+        // offset + length <= self.length
+        let ptr = unsafe { self.ptr.add(offset) };
         Self {
             data: self.data.clone(),
-            offset: self.offset + offset,
+            ptr,
             length,
         }
     }
@@ -178,7 +202,7 @@ impl Buffer {
     /// stored anywhere, to avoid dangling pointers.
     #[inline]
     pub fn as_ptr(&self) -> *const u8 {
-        unsafe { self.data.ptr().as_ptr().add(self.offset) }
+        self.ptr
     }
 
     /// View buffer as a slice of a specific type.
@@ -231,18 +255,17 @@ impl Buffer {
     /// Returns `MutableBuffer` for mutating the buffer if this buffer is not shared.
     /// Returns `Err` if this is shared or its allocation is from an external source.
     pub fn into_mutable(self) -> Result<MutableBuffer, Self> {
-        let offset_ptr = self.as_ptr();
-        let offset = self.offset;
+        let ptr = self.ptr;
         let length = self.length;
         Arc::try_unwrap(self.data)
             .and_then(|bytes| {
                 // The pointer of underlying buffer should not be offset.
-                assert_eq!(offset_ptr, bytes.ptr().as_ptr());
+                assert_eq!(ptr, bytes.ptr().as_ptr());
                 MutableBuffer::from_bytes(bytes).map_err(Arc::new)
             })
             .map_err(|bytes| Buffer {
                 data: bytes,
-                offset,
+                ptr,
                 length,
             })
     }
@@ -262,7 +285,7 @@ impl<T: AsRef<[u8]>> From<T> for Buffer {
 }
 
 /// Creating a `Buffer` instance by storing the boolean values into the buffer
-impl std::iter::FromIterator<bool> for Buffer {
+impl FromIterator<bool> for Buffer {
     fn from_iter<I>(iter: I) -> Self
     where
         I: IntoIterator<Item = bool>,
@@ -321,10 +344,10 @@ impl Buffer {
     pub unsafe fn try_from_trusted_len_iter<
         E,
         T: ArrowNativeType,
-        I: Iterator<Item = std::result::Result<T, E>>,
+        I: Iterator<Item = Result<T, E>>,
     >(
         iterator: I,
-    ) -> std::result::Result<Self, E> {
+    ) -> Result<Self, E> {
         Ok(MutableBuffer::try_from_trusted_len_iter(iterator)?.into())
     }
 }
@@ -599,5 +622,14 @@ mod tests {
 
         let slice = buffer.typed_data::<i32>();
         assert_eq!(slice, &[2, 3, 4, 5]);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "the offset of the new Buffer cannot exceed the existing length"
+    )]
+    fn slice_overflow() {
+        let buffer = Buffer::from(MutableBuffer::from_len_zeroed(12));
+        buffer.slice_with_length(2, usize::MAX);
     }
 }

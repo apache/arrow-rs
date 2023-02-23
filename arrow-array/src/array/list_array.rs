@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::make_array;
+use crate::array::{get_offsets, make_array, print_long_array};
 use crate::builder::{GenericListBuilder, PrimitiveBuilder};
 use crate::{
-    iterator::GenericListArrayIter, print_long_array, raw_pointer::RawPtrBox, Array,
-    ArrayAccessor, ArrayRef, ArrowPrimitiveType,
+    iterator::GenericListArrayIter, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType,
 };
+use arrow_buffer::buffer::OffsetBuffer;
 use arrow_buffer::ArrowNativeType;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
@@ -45,35 +45,24 @@ impl OffsetSizeTrait for i64 {
     const PREFIX: &'static str = "Large";
 }
 
-/// Returns a slice of `OffsetSize` consisting of a single zero value
-#[inline]
-pub(crate) fn empty_offsets<OffsetSize: OffsetSizeTrait>() -> &'static [OffsetSize] {
-    static OFFSET: &[i64] = &[0];
-    // SAFETY:
-    // OffsetSize is ArrowNativeType and is therefore trivially transmutable
-    let (prefix, val, suffix) = unsafe { OFFSET.align_to::<OffsetSize>() };
-    assert!(prefix.is_empty() && suffix.is_empty());
-    val
-}
-
 /// Generic struct for a variable-size list array.
 ///
 /// Columnar format in Apache Arrow:
 /// <https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout>
 ///
 /// For non generic lists, you may wish to consider using [`ListArray`] or [`LargeListArray`]`
-pub struct GenericListArray<OffsetSize> {
+pub struct GenericListArray<OffsetSize: OffsetSizeTrait> {
     data: ArrayData,
     values: ArrayRef,
-    value_offsets: RawPtrBox<OffsetSize>,
+    value_offsets: OffsetBuffer<OffsetSize>,
 }
 
-impl<OffsetSize> Clone for GenericListArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> Clone for GenericListArray<OffsetSize> {
     fn clone(&self) -> Self {
         Self {
             data: self.data.clone(),
             values: self.values.clone(),
-            value_offsets: self.value_offsets,
+            value_offsets: self.value_offsets.clone(),
         }
     }
 }
@@ -118,15 +107,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// Returns the offset values in the offsets buffer
     #[inline]
     pub fn value_offsets(&self) -> &[OffsetSize] {
-        // Soundness
-        //     pointer alignment & location is ensured by RawPtrBox
-        //     buffer bounds/offset is ensured by the ArrayData instance.
-        unsafe {
-            std::slice::from_raw_parts(
-                self.value_offsets.as_ptr().add(self.data.offset()),
-                self.len() + 1,
-            )
-        }
+        &self.value_offsets
     }
 
     /// Returns the length for value at index `i`.
@@ -242,15 +223,10 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         }
 
         let values = make_array(values);
-        // Handle case of empty offsets
-        let offsets = match data.is_empty() && data.buffers()[0].is_empty() {
-            true => empty_offsets::<OffsetSize>().as_ptr() as *const _,
-            false => data.buffers()[0].as_ptr(),
-        };
-
         // SAFETY:
-        // Verified list type in call to `Self::get_type`
-        let value_offsets = unsafe { RawPtrBox::new(offsets) };
+        // ArrayData is valid, and verified type above
+        let value_offsets = unsafe { get_offsets(&data) };
+
         Ok(Self {
             data,
             values,
