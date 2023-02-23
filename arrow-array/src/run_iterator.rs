@@ -349,6 +349,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_sliced_run_array_iterator() {
         let total_len = 80;
         let input_array = build_input_array(total_len);

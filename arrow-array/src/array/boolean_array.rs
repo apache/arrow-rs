@@ -542,6 +542,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_true_false_count() {
         let mut rng = thread_rng();
 

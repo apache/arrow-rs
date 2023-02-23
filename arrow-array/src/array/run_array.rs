@@ -881,6 +881,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_get_physical_indices() {
         // Test for logical lengths starting from 10 to 250 increasing by 10
         for logical_len in (0..250).step_by(10) {
@@ -917,6 +918,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_get_physical_indices_sliced() {
         let total_len = 80;
         let input_array = build_input_array(total_len);
