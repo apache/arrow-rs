@@ -166,6 +166,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Time32(TimeUnit::Millisecond)
             | Time64(TimeUnit::Microsecond)
             | Time64(TimeUnit::Nanosecond)
+            | Timestamp(TimeUnit::Second, _)
+            | Timestamp(TimeUnit::Millisecond, _)
+            | Timestamp(TimeUnit::Microsecond, _)
             | Timestamp(TimeUnit::Nanosecond, _)
         ) => true,
         (Utf8, _) => to_type.is_numeric() && to_type != &Float16,
@@ -179,6 +182,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Time32(TimeUnit::Millisecond)
             | Time64(TimeUnit::Microsecond)
             | Time64(TimeUnit::Nanosecond)
+            | Timestamp(TimeUnit::Second, _)
+            | Timestamp(TimeUnit::Millisecond, _)
+            | Timestamp(TimeUnit::Microsecond, _)
             | Timestamp(TimeUnit::Nanosecond, _)
         ) => true,
         (LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
@@ -1141,8 +1147,17 @@ pub fn cast_with_options(
             Time64(TimeUnit::Nanosecond) => {
                 cast_string_to_time64nanosecond::<i32>(array, cast_options)
             }
+            Timestamp(TimeUnit::Second, _) => {
+                cast_string_to_timestamp::<i32, TimestampSecondType>(array, cast_options)
+            }
+            Timestamp(TimeUnit::Millisecond, _) => {
+                cast_string_to_timestamp::<i32, TimestampMillisecondType>(array, cast_options)
+            }
+            Timestamp(TimeUnit::Microsecond, _) => {
+                cast_string_to_timestamp::<i32, TimestampMicrosecondType>(array, cast_options)
+            }
             Timestamp(TimeUnit::Nanosecond, _) => {
-                cast_string_to_timestamp_ns::<i32>(array, cast_options)
+                cast_string_to_timestamp::<i32, TimestampNanosecondType>(array, cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
@@ -1182,8 +1197,17 @@ pub fn cast_with_options(
             Time64(TimeUnit::Nanosecond) => {
                 cast_string_to_time64nanosecond::<i64>(array, cast_options)
             }
+            Timestamp(TimeUnit::Second, _) => {
+                cast_string_to_timestamp::<i64, TimestampSecondType>(array, cast_options)
+            }
+            Timestamp(TimeUnit::Millisecond, _) => {
+                cast_string_to_timestamp::<i64, TimestampMillisecondType>(array, cast_options)
+            }
+            Timestamp(TimeUnit::Microsecond, _) => {
+                cast_string_to_timestamp::<i64, TimestampMicrosecondType>(array, cast_options)
+            }
             Timestamp(TimeUnit::Nanosecond, _) => {
-                cast_string_to_timestamp_ns::<i64>(array, cast_options)
+                cast_string_to_timestamp::<i64, TimestampNanosecondType>(array, cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
@@ -2552,8 +2576,11 @@ fn cast_string_to_time64nanosecond<Offset: OffsetSizeTrait>(
     Ok(Arc::new(array) as ArrayRef)
 }
 
-/// Casts generic string arrays to TimeStampNanosecondArray
-fn cast_string_to_timestamp_ns<Offset: OffsetSizeTrait>(
+/// Casts generic string arrays to an ArrowTimestampType (TimeStampNanosecondArray, etc.)
+fn cast_string_to_timestamp<
+    Offset: OffsetSizeTrait,
+    TimestampType: ArrowTimestampType<Native = i64>,
+>(
     array: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
@@ -2562,26 +2589,36 @@ fn cast_string_to_timestamp_ns<Offset: OffsetSizeTrait>(
         .downcast_ref::<GenericStringArray<Offset>>()
         .unwrap();
 
+    let scale_factor = match TimestampType::get_time_unit() {
+        TimeUnit::Second => 1_000_000_000,
+        TimeUnit::Millisecond => 1_000_000,
+        TimeUnit::Microsecond => 1_000,
+        TimeUnit::Nanosecond => 1,
+    };
+
     let array = if cast_options.safe {
-        let iter = string_array
-            .iter()
-            .map(|v| v.and_then(|v| string_to_timestamp_nanos(v).ok()));
+        let iter = string_array.iter().map(|v| {
+            v.and_then(|v| string_to_timestamp_nanos(v).ok().map(|t| t / scale_factor))
+        });
         // Benefit:
         //     20% performance improvement
         // Soundness:
         //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { TimestampNanosecondArray::from_trusted_len_iter(iter) }
+        unsafe { PrimitiveArray::<TimestampType>::from_trusted_len_iter(iter) }
     } else {
         let vec = string_array
             .iter()
-            .map(|v| v.map(string_to_timestamp_nanos).transpose())
+            .map(|v| {
+                v.map(|v| string_to_timestamp_nanos(v).map(|t| t / scale_factor))
+                    .transpose()
+            })
             .collect::<Result<Vec<Option<i64>>, _>>()?;
 
         // Benefit:
         //     20% performance improvement
         // Soundness:
         //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { TimestampNanosecondArray::from_trusted_len_iter(vec.iter()) }
+        unsafe { PrimitiveArray::<TimestampType>::from_trusted_len_iter(vec.iter()) }
     };
 
     Ok(Arc::new(array) as ArrayRef)
@@ -4704,32 +4741,69 @@ mod tests {
     #[test]
     fn test_cast_string_to_timestamp() {
         let a1 = Arc::new(StringArray::from(vec![
-            Some("2020-09-08T12:00:00+00:00"),
+            Some("2020-09-08T12:00:00.123456789+00:00"),
             Some("Not a valid date"),
             None,
         ])) as ArrayRef;
         let a2 = Arc::new(LargeStringArray::from(vec![
-            Some("2020-09-08T12:00:00+00:00"),
+            Some("2020-09-08T12:00:00.123456789+00:00"),
             Some("Not a valid date"),
             None,
         ])) as ArrayRef;
         for array in &[a1, a2] {
-            let to_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
-            let b = cast(array, &to_type).unwrap();
-            let c = b
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap();
-            assert_eq!(1599566400000000000, c.value(0));
-            assert!(c.is_null(1));
-            assert!(c.is_null(2));
+            for time_unit in &[
+                TimeUnit::Second,
+                TimeUnit::Millisecond,
+                TimeUnit::Microsecond,
+                TimeUnit::Nanosecond,
+            ] {
+                let to_type = DataType::Timestamp(time_unit.clone(), None);
+                let b = cast(array, &to_type).unwrap();
 
-            let options = CastOptions { safe: false };
-            let err = cast_with_options(array, &to_type, &options).unwrap_err();
-            assert_eq!(
-                err.to_string(),
-                "Cast error: Error parsing 'Not a valid date' as timestamp"
-            );
+                match time_unit {
+                    TimeUnit::Second => {
+                        let c =
+                            b.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+                        assert_eq!(1599566400, c.value(0));
+                        assert!(c.is_null(1));
+                        assert!(c.is_null(2));
+                    }
+                    TimeUnit::Millisecond => {
+                        let c = b
+                            .as_any()
+                            .downcast_ref::<TimestampMillisecondArray>()
+                            .unwrap();
+                        assert_eq!(1599566400123, c.value(0));
+                        assert!(c.is_null(1));
+                        assert!(c.is_null(2));
+                    }
+                    TimeUnit::Microsecond => {
+                        let c = b
+                            .as_any()
+                            .downcast_ref::<TimestampMicrosecondArray>()
+                            .unwrap();
+                        assert_eq!(1599566400123456, c.value(0));
+                        assert!(c.is_null(1));
+                        assert!(c.is_null(2));
+                    }
+                    TimeUnit::Nanosecond => {
+                        let c = b
+                            .as_any()
+                            .downcast_ref::<TimestampNanosecondArray>()
+                            .unwrap();
+                        assert_eq!(1599566400123456789, c.value(0));
+                        assert!(c.is_null(1));
+                        assert!(c.is_null(2));
+                    }
+                }
+
+                let options = CastOptions { safe: false };
+                let err = cast_with_options(array, &to_type, &options).unwrap_err();
+                assert_eq!(
+                    err.to_string(),
+                    "Cast error: Error parsing 'Not a valid date' as timestamp"
+                );
+            }
         }
     }
 
