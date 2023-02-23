@@ -549,7 +549,7 @@ impl ToPrimitive for i256 {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))] // llvm.x86.subborrow.64 not supported by MIRI
 mod tests {
     use super::*;
     use num::{BigInt, FromPrimitive, Signed, ToPrimitive};
