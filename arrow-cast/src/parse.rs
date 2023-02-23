@@ -19,6 +19,7 @@ use arrow_array::types::*;
 use arrow_array::ArrowPrimitiveType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;
+use std::str::FromStr;
 
 /// Accepts a string in RFC3339 / ISO8601 standard format and some
 /// variants and converts it to a nanosecond precision timestamp.
@@ -443,6 +444,217 @@ impl Parser for Date64Type {
             Some(date_time.timestamp_millis())
         }
     }
+}
+
+pub(crate) fn parse_interval_year_month(
+    value: &str,
+) -> Result<<IntervalYearMonthType as ArrowPrimitiveType>::Native, ArrowError> {
+    let (result_months, result_days, result_nanos) = parse_interval("years", value)?;
+    if result_days != 0 || result_nanos != 0 {
+        return Err(ArrowError::CastError(format!(
+            "Cannot cast ${value} to IntervalYearMonth because the value isn't multiple of months"
+        )));
+    }
+    Ok(IntervalYearMonthType::make_value(0, result_months))
+}
+
+pub(crate) fn parse_interval_day_time(
+    value: &str,
+) -> Result<<IntervalDayTimeType as ArrowPrimitiveType>::Native, ArrowError> {
+    let (result_months, mut result_days, result_nanos) = parse_interval("days", value)?;
+    if result_nanos % 1_000_000 != 0 {
+        return Err(ArrowError::CastError(format!(
+            "Cannot cast ${value} to IntervalDayTime because the nanos part isn't multiple of milliseconds"
+        )));
+    }
+    result_days += result_months * 30;
+    Ok(IntervalDayTimeType::make_value(
+        result_days,
+        (result_nanos / 1_000_000) as i32,
+    ))
+}
+
+pub(crate) fn parse_interval_month_day_nano(
+    value: &str,
+) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError> {
+    let (result_months, result_days, result_nanos) = parse_interval("months", value)?;
+    Ok(IntervalMonthDayNanoType::make_value(
+        result_months,
+        result_days,
+        result_nanos,
+    ))
+}
+
+const SECONDS_PER_HOUR: f64 = 3_600_f64;
+const NANOS_PER_SECOND: f64 = 1_000_000_000_f64;
+
+#[derive(Clone, Copy)]
+#[repr(u16)]
+enum IntervalType {
+    Century = 0b_00_0000_0001,
+    Decade = 0b_00_0000_0010,
+    Year = 0b_00_0000_0100,
+    Month = 0b_00_0000_1000,
+    Week = 0b_00_0001_0000,
+    Day = 0b_00_0010_0000,
+    Hour = 0b_00_0100_0000,
+    Minute = 0b_00_1000_0000,
+    Second = 0b_01_0000_0000,
+    Millisecond = 0b_10_0000_0000,
+}
+
+impl FromStr for IntervalType {
+    type Err = ArrowError;
+
+    fn from_str(s: &str) -> Result<Self, ArrowError> {
+        match s.to_lowercase().as_str() {
+            "century" | "centuries" => Ok(Self::Century),
+            "decade" | "decades" => Ok(Self::Decade),
+            "year" | "years" => Ok(Self::Year),
+            "month" | "months" => Ok(Self::Month),
+            "week" | "weeks" => Ok(Self::Week),
+            "day" | "days" => Ok(Self::Day),
+            "hour" | "hours" => Ok(Self::Hour),
+            "minute" | "minutes" => Ok(Self::Minute),
+            "second" | "seconds" => Ok(Self::Second),
+            "millisecond" | "milliseconds" => Ok(Self::Millisecond),
+            _ => Err(ArrowError::NotYetImplemented(format!(
+                "Unknown interval type: {s}"
+            ))),
+        }
+    }
+}
+
+pub type MonthDayNano = (i32, i32, i64);
+
+/// parse string value to a triple of aligned months, days, nanos
+pub fn parse_interval(
+    leading_field: &str,
+    value: &str,
+) -> Result<MonthDayNano, ArrowError> {
+    // We are storing parts as integers, it's why we need to align parts fractional
+    // INTERVAL '0.5 MONTH' = 15 days, INTERVAL '1.5 MONTH' = 1 month 15 days
+    // INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
+    let align_interval_parts =
+        |month_part: f64, mut day_part: f64, mut nanos_part: f64| -> (i64, i64, f64) {
+            // Convert fractional month to days, It's not supported by Arrow types, but anyway
+            day_part += (month_part - (month_part as i64) as f64) * 30_f64;
+
+            // Convert fractional days to hours
+            nanos_part += (day_part - ((day_part as i64) as f64))
+                * 24_f64
+                * SECONDS_PER_HOUR
+                * NANOS_PER_SECOND;
+
+            (month_part as i64, day_part as i64, nanos_part)
+        };
+
+    let mut used_interval_types = 0;
+
+    let mut calculate_from_part = |interval_period_str: &str,
+                                   interval_type: &str|
+     -> Result<(i64, i64, f64), ArrowError> {
+        // @todo It's better to use Decimal in order to protect rounding errors
+        // Wait https://github.com/apache/arrow/pull/9232
+        let interval_period = match f64::from_str(interval_period_str) {
+            Ok(n) => n,
+            Err(_) => {
+                return Err(ArrowError::NotYetImplemented(format!(
+                    "Unsupported Interval Expression with value {value:?}"
+                )));
+            }
+        };
+
+        if interval_period > (i64::MAX as f64) {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Interval field value out of range: {value:?}"
+            )));
+        }
+
+        let it = IntervalType::from_str(interval_type).map_err(|_| {
+            ArrowError::InvalidArgumentError(format!(
+                "Invalid input syntax for type interval: {value:?}"
+            ))
+        })?;
+
+        // Disallow duplicate interval types
+        if used_interval_types & (it as u16) != 0 {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid input syntax for type interval: {value:?}. Repeated type '{interval_type}'"
+            )));
+        } else {
+            used_interval_types |= it as u16;
+        }
+
+        match it {
+            IntervalType::Century => {
+                Ok(align_interval_parts(interval_period * 1200_f64, 0.0, 0.0))
+            }
+            IntervalType::Decade => {
+                Ok(align_interval_parts(interval_period * 120_f64, 0.0, 0.0))
+            }
+            IntervalType::Year => {
+                Ok(align_interval_parts(interval_period * 12_f64, 0.0, 0.0))
+            }
+            IntervalType::Month => Ok(align_interval_parts(interval_period, 0.0, 0.0)),
+            IntervalType::Week => {
+                Ok(align_interval_parts(0.0, interval_period * 7_f64, 0.0))
+            }
+            IntervalType::Day => Ok(align_interval_parts(0.0, interval_period, 0.0)),
+            IntervalType::Hour => {
+                Ok((0, 0, interval_period * SECONDS_PER_HOUR * NANOS_PER_SECOND))
+            }
+            IntervalType::Minute => {
+                Ok((0, 0, interval_period * 60_f64 * NANOS_PER_SECOND))
+            }
+            IntervalType::Second => Ok((0, 0, interval_period * NANOS_PER_SECOND)),
+            IntervalType::Millisecond => Ok((0, 0, interval_period * 1_000_000f64)),
+        }
+    };
+
+    let mut result_month: i64 = 0;
+    let mut result_days: i64 = 0;
+    let mut result_nanos: i128 = 0;
+
+    let mut parts = value.split_whitespace();
+
+    loop {
+        let interval_period_str = parts.next();
+        if interval_period_str.is_none() {
+            break;
+        }
+
+        let unit = parts.next().unwrap_or(leading_field);
+
+        let (diff_month, diff_days, diff_nanos) =
+            calculate_from_part(interval_period_str.unwrap(), unit)?;
+
+        result_month += diff_month;
+
+        if result_month > (i32::MAX as i64) {
+            return Err(ArrowError::NotYetImplemented(format!(
+                "Interval field value out of range: {value:?}"
+            )));
+        }
+
+        result_days += diff_days;
+
+        if result_days > (i32::MAX as i64) {
+            return Err(ArrowError::NotYetImplemented(format!(
+                "Interval field value out of range: {value:?}"
+            )));
+        }
+
+        result_nanos += diff_nanos as i128;
+
+        if result_nanos > (i64::MAX as i128) {
+            return Err(ArrowError::NotYetImplemented(format!(
+                "Interval field value out of range: {value:?}"
+            )));
+        }
+    }
+
+    Ok((result_month as i32, result_days as i32, result_nanos as i64))
 }
 
 #[cfg(test)]

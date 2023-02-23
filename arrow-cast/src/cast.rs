@@ -40,7 +40,10 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use crate::display::{array_value_to_string, ArrayFormatter, FormatOptions};
-use crate::parse::string_to_timestamp_nanos;
+use crate::parse::{
+    parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
+    string_to_timestamp_nanos,
+};
 use arrow_array::{
     builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *,
 };
@@ -1159,6 +1162,15 @@ pub fn cast_with_options(
             Timestamp(TimeUnit::Nanosecond, _) => {
                 cast_string_to_timestamp::<i32, TimestampNanosecondType>(array, cast_options)
             }
+            Interval(IntervalUnit::YearMonth) => {
+                cast_string_to_year_month_interval::<i32>(array, cast_options)
+            }
+            Interval(IntervalUnit::DayTime) => {
+                cast_string_to_day_time_interval::<i32>(array, cast_options)
+            }
+            Interval(IntervalUnit::MonthDayNano) => {
+                cast_string_to_month_day_nano_interval::<i32>(array, cast_options)
+            }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -1208,6 +1220,15 @@ pub fn cast_with_options(
             }
             Timestamp(TimeUnit::Nanosecond, _) => {
                 cast_string_to_timestamp::<i64, TimestampNanosecondType>(array, cast_options)
+            }
+            Interval(IntervalUnit::YearMonth) => {
+                cast_string_to_year_month_interval::<i64>(array, cast_options)
+            }
+            Interval(IntervalUnit::DayTime) => {
+                cast_string_to_day_time_interval::<i64>(array, cast_options)
+            }
+            Interval(IntervalUnit::MonthDayNano) => {
+                cast_string_to_month_day_nano_interval::<i64>(array, cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
@@ -2622,6 +2643,75 @@ fn cast_string_to_timestamp<
     };
 
     Ok(Arc::new(array) as ArrayRef)
+}
+
+fn cast_string_to_year_month_interval<Offset: OffsetSizeTrait>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let string_array = array
+        .as_any()
+        .downcast_ref::<GenericStringArray<Offset>>()
+        .unwrap();
+    let interval_array = if cast_options.safe {
+        let iter = string_array
+            .iter()
+            .map(|v| v.and_then(|v| parse_interval_year_month(v).ok()));
+        unsafe { IntervalYearMonthArray::from_trusted_len_iter(iter) }
+    } else {
+        let vec = string_array
+            .iter()
+            .map(|v| v.map(parse_interval_year_month).transpose())
+            .collect::<Result<Vec<_>, ArrowError>>()?;
+        unsafe { IntervalYearMonthArray::from_trusted_len_iter(vec) }
+    };
+    Ok(Arc::new(interval_array) as ArrayRef)
+}
+
+fn cast_string_to_day_time_interval<Offset: OffsetSizeTrait>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let string_array = array
+        .as_any()
+        .downcast_ref::<GenericStringArray<Offset>>()
+        .unwrap();
+    let interval_array = if cast_options.safe {
+        let iter = string_array
+            .iter()
+            .map(|v| v.and_then(|v| parse_interval_day_time(v).ok()));
+        unsafe { IntervalDayTimeArray::from_trusted_len_iter(iter) }
+    } else {
+        let vec = string_array
+            .iter()
+            .map(|v| v.map(parse_interval_day_time).transpose())
+            .collect::<Result<Vec<_>, ArrowError>>()?;
+        unsafe { IntervalDayTimeArray::from_trusted_len_iter(vec) }
+    };
+    Ok(Arc::new(interval_array) as ArrayRef)
+}
+
+fn cast_string_to_month_day_nano_interval<Offset: OffsetSizeTrait>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let string_array = array
+        .as_any()
+        .downcast_ref::<GenericStringArray<Offset>>()
+        .unwrap();
+    let interval_array = if cast_options.safe {
+        let iter = string_array
+            .iter()
+            .map(|v| v.and_then(|v| parse_interval_month_day_nano(v).ok()));
+        unsafe { IntervalMonthDayNanoArray::from_trusted_len_iter(iter) }
+    } else {
+        let vec = string_array
+            .iter()
+            .map(|v| v.map(parse_interval_month_day_nano).transpose())
+            .collect::<Result<Vec<_>, ArrowError>>()?;
+        unsafe { IntervalMonthDayNanoArray::from_trusted_len_iter(vec) }
+    };
+    Ok(Arc::new(interval_array) as ArrayRef)
 }
 
 /// Casts Utf8 to Boolean
