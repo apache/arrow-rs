@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::print_long_array;
+use crate::array::{get_offsets, print_long_array};
 use crate::builder::GenericByteBuilder;
 use crate::iterator::ArrayIter;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::ByteArrayType;
 use crate::{Array, ArrayAccessor, OffsetSizeTrait};
-use arrow_buffer::buffer::{OffsetBuffer, ScalarBuffer};
+use arrow_buffer::buffer::OffsetBuffer;
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
@@ -274,20 +274,9 @@ impl<T: ByteArrayType> From<ArrayData> for GenericByteArray<T> {
             T::Offset::PREFIX,
             T::PREFIX,
         );
-        // Handle case of empty offsets
-        let value_offsets = match data.is_empty() && data.buffers()[0].is_empty() {
-            true => OffsetBuffer::new_empty(),
-            false => {
-                let buffer = ScalarBuffer::new(
-                    data.buffers()[0].clone(),
-                    data.offset(),
-                    data.len() + 1,
-                );
-                // Safety:
-                // ArrayData is valid
-                unsafe { OffsetBuffer::new_unchecked(buffer) }
-            }
-        };
+        // SAFETY:
+        // ArrayData is valid, and verified type above
+        let value_offsets = unsafe { get_offsets(&data) };
         let value_data = data.buffers()[1].clone();
         Self {
             data,
