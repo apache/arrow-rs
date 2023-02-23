@@ -37,7 +37,7 @@ use std::ptr::NonNull;
 ///
 /// For a safe, strongly typed API consider using `Vec`
 ///
-/// Note: this may be deprecated in a future release (#1176)[https://github.com/apache/arrow-rs/issues/1176]
+/// Note: this may be deprecated in a future release ([#1176](https://github.com/apache/arrow-rs/issues/1176))
 ///
 /// # Example
 ///
