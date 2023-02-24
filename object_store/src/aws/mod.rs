@@ -837,7 +837,7 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Sets if unsigned payload option is to be used.
+    /// Sets if unsigned payload option has to be used.
     /// See [unsigned payload option](https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html)
     /// * false (default): Signed payload option is used, where the checksum for the request body is computed and included when constructing a canonical request.
     /// * true: Unsigned payload option is used. `UNSIGNED-PAYLOAD` literal is included when constructing a canonical request,
