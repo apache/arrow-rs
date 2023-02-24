@@ -19,6 +19,79 @@
 
 # Historical Changelog
 
+## [33.0.0](https://github.com/apache/arrow-rs/tree/33.0.0) (2023-02-10)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/32.0.0...33.0.0)
+
+**Breaking changes:**
+
+- Use ArrayFormatter in Cast Kernel [\#3668](https://github.com/apache/arrow-rs/pull/3668) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Use dyn Array in cast kernels [\#3667](https://github.com/apache/arrow-rs/pull/3667) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Return references from FixedSizeListArray and MapArray [\#3652](https://github.com/apache/arrow-rs/pull/3652) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Lazy array display \(\#3638\) [\#3647](https://github.com/apache/arrow-rs/pull/3647) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Use array\_value\_to\_string in arrow-csv [\#3514](https://github.com/apache/arrow-rs/pull/3514) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([JayjeetAtGithub](https://github.com/JayjeetAtGithub))
+
+**Implemented enhancements:**
+
+- Support UTF8 cast to Timestamp with timezone [\#3664](https://github.com/apache/arrow-rs/issues/3664)
+- Add modulus\_dyn and modulus\_scalar\_dyn [\#3648](https://github.com/apache/arrow-rs/issues/3648) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- A trait for append\_value and append\_null on ArrayBuilders [\#3644](https://github.com/apache/arrow-rs/issues/3644)
+- Improve error messge "batches\[0\] schema is different with argument schema" [\#3628](https://github.com/apache/arrow-rs/issues/3628) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Specified version of helper function to cast binary to string [\#3623](https://github.com/apache/arrow-rs/issues/3623) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Casting generic binary to generic string [\#3606](https://github.com/apache/arrow-rs/issues/3606) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Use `array_value_to_string` in `arrow-csv`  [\#3483](https://github.com/apache/arrow-rs/issues/3483) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+
+**Fixed bugs:**
+
+- ArrowArray::try\_from\_raw Misleading Signature [\#3684](https://github.com/apache/arrow-rs/issues/3684) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- PyArrowConvert Leaks Memory [\#3683](https://github.com/apache/arrow-rs/issues/3683) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Arrow-csv reader cannot produce RecordBatch even if the bytes are necessary [\#3674](https://github.com/apache/arrow-rs/issues/3674)
+- FFI Fails to Account For Offsets [\#3671](https://github.com/apache/arrow-rs/issues/3671) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Regression in CSV reader error handling [\#3656](https://github.com/apache/arrow-rs/issues/3656) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- UnionArray Child and Value Fail to Account for non-contiguous Type IDs [\#3653](https://github.com/apache/arrow-rs/issues/3653) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Panic when accessing RecordBatch from pyarrow [\#3646](https://github.com/apache/arrow-rs/issues/3646) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Multiplication for decimals is incorrect [\#3645](https://github.com/apache/arrow-rs/issues/3645)
+- Inconsistent output between pretty print and CSV writer for Arrow [\#3513](https://github.com/apache/arrow-rs/issues/3513) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+
+**Closed issues:**
+
+- Release 33.0.0 of arrow/arrow-flight/parquet/parquet-derive \(next release after 32.0.0\)  [\#3682](https://github.com/apache/arrow-rs/issues/3682)
+- Release `32.0.0` of `arrow`/`arrow-flight`/`parquet`/`parquet-derive` \(next release after `31.0.0`\) [\#3584](https://github.com/apache/arrow-rs/issues/3584) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+
+**Merged pull requests:**
+
+- Move FFI to sub-crates [\#3687](https://github.com/apache/arrow-rs/pull/3687) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Update to 33.0.0 and update changelog [\#3686](https://github.com/apache/arrow-rs/pull/3686) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([iajoiner](https://github.com/iajoiner))
+- Cleanup FFI interface \(\#3684\) \(\#3683\) [\#3685](https://github.com/apache/arrow-rs/pull/3685) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- fix: take\_run benchmark parameter [\#3679](https://github.com/apache/arrow-rs/pull/3679) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([askoa](https://github.com/askoa))
+- Minor: Add some examples to Date\*Array and Time\*Array [\#3678](https://github.com/apache/arrow-rs/pull/3678) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- Add CSV Decoder::capacity \(\#3674\) [\#3677](https://github.com/apache/arrow-rs/pull/3677) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Add ArrayData::new\_null and DataType::primitive\_width [\#3676](https://github.com/apache/arrow-rs/pull/3676) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Fix FFI which fails to account for offsets [\#3675](https://github.com/apache/arrow-rs/pull/3675) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Support UTF8 cast to Timestamp with timezone [\#3673](https://github.com/apache/arrow-rs/pull/3673) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([comphead](https://github.com/comphead))
+- Fix Date64Array docs [\#3670](https://github.com/apache/arrow-rs/pull/3670) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Update proc-macro2 requirement from =1.0.50 to =1.0.51 [\#3669](https://github.com/apache/arrow-rs/pull/3669) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([dependabot[bot]](https://github.com/apps/dependabot))
+- Add timezone accessor for Timestamp\*Array [\#3666](https://github.com/apache/arrow-rs/pull/3666) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Faster timezone cast [\#3665](https://github.com/apache/arrow-rs/pull/3665) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- feat + fix: IPC support for run encoded array. [\#3662](https://github.com/apache/arrow-rs/pull/3662) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([askoa](https://github.com/askoa))
+- Implement std::fmt::Write for StringBuilder \(\#3638\) [\#3659](https://github.com/apache/arrow-rs/pull/3659) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Include line and field number in CSV UTF-8 error \(\#3656\) [\#3657](https://github.com/apache/arrow-rs/pull/3657) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Handle non-contiguous type\_ids in UnionArray \(\#3653\) [\#3654](https://github.com/apache/arrow-rs/pull/3654) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Add modulus\_dyn and modulus\_scalar\_dyn [\#3649](https://github.com/apache/arrow-rs/pull/3649) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Improve error messge with detailed schema [\#3637](https://github.com/apache/arrow-rs/pull/3637) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Veeupup](https://github.com/Veeupup))
+- Add limit to ArrowReaderBuilder to push limit down to parquet reader [\#3633](https://github.com/apache/arrow-rs/pull/3633) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([thinkharderdev](https://github.com/thinkharderdev))
+- chore: delete wrong comment and refactor set\_metadata in `Field` [\#3630](https://github.com/apache/arrow-rs/pull/3630) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([chunshao90](https://github.com/chunshao90))
+- Fix typo in comment [\#3627](https://github.com/apache/arrow-rs/pull/3627) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([kjschiroo](https://github.com/kjschiroo))
+- Minor: Update doc strings about Page Index / Column Index [\#3625](https://github.com/apache/arrow-rs/pull/3625) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
+- Specified version of helper function to cast binary to string [\#3624](https://github.com/apache/arrow-rs/pull/3624) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- feat: take kernel for RunArray [\#3622](https://github.com/apache/arrow-rs/pull/3622) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([askoa](https://github.com/askoa))
+- Remove BitSliceIterator specialization from try\_for\_each\_valid\_idx [\#3621](https://github.com/apache/arrow-rs/pull/3621) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Reduce PrimitiveArray::try\_unary codegen [\#3619](https://github.com/apache/arrow-rs/pull/3619) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Reduce Dictionary Builder Codegen [\#3616](https://github.com/apache/arrow-rs/pull/3616) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Minor: Add test for dictionary encoding of batches [\#3608](https://github.com/apache/arrow-rs/pull/3608) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([alamb](https://github.com/alamb))
+- Casting generic binary to generic string [\#3607](https://github.com/apache/arrow-rs/pull/3607) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Add ArrayAccessor, Iterator, Extend and benchmarks for RunArray [\#3603](https://github.com/apache/arrow-rs/pull/3603) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([askoa](https://github.com/askoa))
+
 ## [32.0.0](https://github.com/apache/arrow-rs/tree/32.0.0) (2023-01-27)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/31.0.0...32.0.0)
@@ -94,6 +167,7 @@
 - No panic on timestamp buffer overflow [\#3519](https://github.com/apache/arrow-rs/pull/3519) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([comphead](https://github.com/comphead))
 - Support casting from binary to dictionary of binary [\#3482](https://github.com/apache/arrow-rs/pull/3482) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
 - Add Raw JSON Reader \(~2.5x faster\) [\#3479](https://github.com/apache/arrow-rs/pull/3479) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+
 ## [31.0.0](https://github.com/apache/arrow-rs/tree/31.0.0) (2023-01-13)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/30.0.1...31.0.0)

@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow"
-version = "33.0.0"
+version = "34.0.0"
 description = "Rust implementation of Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -45,19 +45,19 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
-arrow-arith = { version = "33.0.0", path = "../arrow-arith" }
-arrow-array = { version = "33.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "33.0.0", path = "../arrow-buffer" }
-arrow-cast = { version = "33.0.0", path = "../arrow-cast" }
-arrow-csv = { version = "33.0.0", path = "../arrow-csv", optional = true }
-arrow-data = { version = "33.0.0", path = "../arrow-data" }
-arrow-ipc = { version = "33.0.0", path = "../arrow-ipc", optional = true }
-arrow-json = { version = "33.0.0", path = "../arrow-json", optional = true }
-arrow-ord = { version = "33.0.0", path = "../arrow-ord" }
-arrow-row = { version = "33.0.0", path = "../arrow-row" }
-arrow-schema = { version = "33.0.0", path = "../arrow-schema" }
-arrow-select = { version = "33.0.0", path = "../arrow-select" }
-arrow-string = { version = "33.0.0", path = "../arrow-string" }
+arrow-arith = { version = "34.0.0", path = "../arrow-arith" }
+arrow-array = { version = "34.0.0", path = "../arrow-array" }
+arrow-buffer = { version = "34.0.0", path = "../arrow-buffer" }
+arrow-cast = { version = "34.0.0", path = "../arrow-cast" }
+arrow-csv = { version = "34.0.0", path = "../arrow-csv", optional = true }
+arrow-data = { version = "34.0.0", path = "../arrow-data" }
+arrow-ipc = { version = "34.0.0", path = "../arrow-ipc", optional = true }
+arrow-json = { version = "34.0.0", path = "../arrow-json", optional = true }
+arrow-ord = { version = "34.0.0", path = "../arrow-ord" }
+arrow-row = { version = "34.0.0", path = "../arrow-row" }
+arrow-schema = { version = "34.0.0", path = "../arrow-schema" }
+arrow-select = { version = "34.0.0", path = "../arrow-select" }
+arrow-string = { version = "34.0.0", path = "../arrow-string" }
 
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 comfy-table = { version = "6.0", optional = true, default-features = false }
