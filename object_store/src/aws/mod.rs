@@ -1162,9 +1162,9 @@ mod tests {
 
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
-        assert_eq!(builder.unsigned_payload, true);
         let metadata_uri = format!("{METADATA_ENDPOINT}{container_creds_relative_uri}");
         assert_eq!(builder.metadata_endpoint.unwrap(), metadata_uri);
+        assert!(builder.unsigned_payload);
     }
 
     #[test]
@@ -1193,7 +1193,7 @@ mod tests {
         assert_eq!(builder.region.unwrap(), aws_default_region);
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
-        assert_eq!(builder.unsigned_payload, true);
+        assert!(builder.unsigned_payload);
     }
 
     #[test]
@@ -1222,7 +1222,7 @@ mod tests {
         assert_eq!(builder.region.unwrap(), aws_default_region);
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
-        assert_eq!(builder.unsigned_payload, true);
+        assert!(builder.unsigned_payload);
     }
 
     #[test]
