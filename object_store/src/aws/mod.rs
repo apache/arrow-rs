@@ -837,10 +837,12 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Sets the client to not include payload checksum in signature calculation.
+    /// Sets if unsigned payload option is to be used.
     /// See [unsigned payload option](https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html)
-    pub fn with_unsigned_payload(mut self) -> Self {
-        self.unsigned_payload = true;
+    /// * false (default): Signed payload option is used, where the checksum for the request body is computed and included when constructing a canonical request.
+    /// * true: Unsigned payload option is used. `UNSIGNED-PAYLOAD` literal is included when constructing a canonical request,
+    pub fn with_unsigned_payload(mut self, unsigned_payload: bool) -> Self {
+        self.unsigned_payload = unsigned_payload;
         self
     }
 
@@ -1252,7 +1254,7 @@ mod tests {
 
     #[tokio::test]
     async fn s3_test_unsigned_payload() {
-        let config = maybe_skip_integration!().with_unsigned_payload();
+        let config = maybe_skip_integration!().with_unsigned_payload(true);
         let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
         let integration = config.build().unwrap();
         put_get_delete_list_opts(&integration, is_local).await;
