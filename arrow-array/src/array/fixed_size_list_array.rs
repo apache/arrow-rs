@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::print_long_array;
 use crate::builder::{FixedSizeListBuilder, PrimitiveBuilder};
-use crate::{
-    make_array, print_long_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType,
-};
+use crate::{make_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 use std::any::Any;

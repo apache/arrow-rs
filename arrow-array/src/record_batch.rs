@@ -603,7 +603,7 @@ mod tests {
         let record_batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
                 .unwrap();
-        assert_eq!(record_batch.get_array_memory_size(), 592);
+        assert_eq!(record_batch.get_array_memory_size(), 640);
     }
 
     fn check_batch(record_batch: RecordBatch, num_rows: usize) {

@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::raw_pointer::RawPtrBox;
-use crate::{make_array, print_long_array, Array, ArrayRef, StringArray, StructArray};
+use crate::array::{get_offsets, print_long_array};
+use crate::{make_array, Array, ArrayRef, StringArray, StructArray};
+use arrow_buffer::buffer::OffsetBuffer;
 use arrow_buffer::{ArrowNativeType, Buffer, ToByteSlice};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
@@ -38,7 +39,7 @@ pub struct MapArray {
     /// The second child of `entries`, the "values" of this MapArray
     values: ArrayRef,
     /// The start and end offsets of each entry
-    value_offsets: RawPtrBox<i32>,
+    value_offsets: OffsetBuffer<i32>,
 }
 
 impl MapArray {
@@ -86,15 +87,7 @@ impl MapArray {
     /// Returns the offset values in the offsets buffer
     #[inline]
     pub fn value_offsets(&self) -> &[i32] {
-        // Soundness
-        //     pointer alignment & location is ensured by RawPtrBox
-        //     buffer bounds/offset is ensured by the ArrayData instance.
-        unsafe {
-            std::slice::from_raw_parts(
-                self.value_offsets.as_ptr().add(self.data.offset()),
-                self.len() + 1,
-            )
-        }
+        &self.value_offsets
     }
 
     /// Returns the length for value at index `i`.
@@ -159,18 +152,10 @@ impl MapArray {
         let keys = make_array(entries.child_data()[0].clone());
         let values = make_array(entries.child_data()[1].clone());
         let entries = make_array(entries);
-        let value_offsets = data.buffers()[0].as_ptr();
 
         // SAFETY:
         // ArrayData is valid, and verified type above
-        let value_offsets = unsafe { RawPtrBox::<i32>::new(value_offsets) };
-        unsafe {
-            if (*value_offsets.as_ptr().offset(0)) != 0 {
-                return Err(ArrowError::InvalidArgumentError(String::from(
-                    "offsets do not start at zero",
-                )));
-            }
-        }
+        let value_offsets = unsafe { get_offsets(&data) };
 
         Ok(Self {
             data,

@@ -20,6 +20,8 @@
 mod binary_array;
 
 use crate::types::*;
+use arrow_buffer::buffer::{OffsetBuffer, ScalarBuffer};
+use arrow_buffer::ArrowNativeType;
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;
@@ -636,8 +638,29 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
     make_array(ArrayData::new_null(data_type, length))
 }
 
-// Helper function for printing potentially long arrays.
-pub(crate) fn print_long_array<A, F>(
+/// Helper function that gets offset from an [`ArrayData`]
+///
+/// # Safety
+///
+/// - ArrayData must contain a valid [`OffsetBuffer`] as its first buffer
+unsafe fn get_offsets<O: ArrowNativeType>(data: &ArrayData) -> OffsetBuffer<O> {
+    match data.is_empty() && data.buffers()[0].is_empty() {
+        true => OffsetBuffer::new_empty(),
+        false => {
+            let buffer = ScalarBuffer::new(
+                data.buffers()[0].clone(),
+                data.offset(),
+                data.len() + 1,
+            );
+            // Safety:
+            // ArrayData is valid
+            unsafe { OffsetBuffer::new_unchecked(buffer) }
+        }
+    }
+}
+
+/// Helper function for printing potentially long arrays.
+fn print_long_array<A, F>(
     array: &A,
     f: &mut std::fmt::Formatter,
     print_item: F,

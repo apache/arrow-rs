@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::print_long_array;
 use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
-use crate::raw_pointer::RawPtrBox;
-use crate::{print_long_array, Array, ArrayAccessor};
+use crate::{Array, ArrayAccessor};
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayData;
@@ -67,9 +67,7 @@ use std::any::Any;
 #[derive(Clone)]
 pub struct BooleanArray {
     data: ArrayData,
-    /// Pointer to the value array. The lifetime of this must be <= to the value buffer
-    /// stored in `data`, so it's safe to store.
-    raw_values: RawPtrBox<u8>,
+    raw_values: Buffer,
 }
 
 impl std::fmt::Debug for BooleanArray {
@@ -102,7 +100,7 @@ impl BooleanArray {
     ///
     /// Note this doesn't take the offset of this array into account.
     pub fn values(&self) -> &Buffer {
-        &self.data.buffers()[0]
+        &self.raw_values
     }
 
     /// Returns the number of non null, true values within this array
@@ -328,13 +326,8 @@ impl From<ArrayData> for BooleanArray {
             1,
             "BooleanArray data should contain a single buffer only (values buffer)"
         );
-        let ptr = data.buffers()[0].as_ptr();
-        Self {
-            data,
-            // SAFETY:
-            // ArrayData must be valid, and validated data type above
-            raw_values: unsafe { RawPtrBox::new(ptr) },
-        }
+        let raw_values = data.buffers()[0].clone();
+        Self { data, raw_values }
     }
 }
 
@@ -549,6 +542,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_true_false_count() {
         let mut rng = thread_rng();
 
