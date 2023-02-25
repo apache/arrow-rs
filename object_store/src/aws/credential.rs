@@ -520,7 +520,7 @@ mod profile {
     use aws_config::provider_config::ProviderConfig;
     use aws_credential_types::provider::ProvideCredentials;
     use aws_types::region::Region;
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime};
 
     #[derive(Debug)]
     pub struct ProfileProvider {
@@ -553,18 +553,7 @@ mod profile {
                             store: "S3",
                             source: Box::new(source),
                         })?;
-
-                let t_now = SystemTime::now();
-                let expiry = match c.expiry().and_then(|e| e.duration_since(t_now).ok()) {
-                    Some(ttl) => Instant::now() + ttl,
-                    None => {
-                        return Err(crate::Error::Generic {
-                            store: "S3",
-                            source: "Invalid expiry".into(),
-                        })
-                    }
-                };
-
+                let expiry = Instant::now() + Duration::from_secs(3600);
                 Ok(TemporaryToken {
                     token: Arc::new(AwsCredential {
                         key_id: c.access_key_id().to_string(),
