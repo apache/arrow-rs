@@ -173,6 +173,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Timestamp(TimeUnit::Millisecond, _)
             | Timestamp(TimeUnit::Microsecond, _)
             | Timestamp(TimeUnit::Nanosecond, _)
+            | Interval(_)
         ) => true,
         (Utf8, _) => to_type.is_numeric() && to_type != &Float16,
         (LargeUtf8,
@@ -189,6 +190,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Timestamp(TimeUnit::Millisecond, _)
             | Timestamp(TimeUnit::Microsecond, _)
             | Timestamp(TimeUnit::Nanosecond, _)
+            | Interval(_)
         ) => true,
         (LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
         (_, Utf8 | LargeUtf8) => from_type.is_primitive(),
