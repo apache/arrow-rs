@@ -185,6 +185,12 @@ impl<W: Write> Writer<W> {
 
         Ok(())
     }
+
+    /// Unwraps this `Writer<W>`, returning the underlying writer.
+    pub fn into_inner(self) -> W {
+        // Safe to call `unwrap` since `write` always flushes the writer.
+        self.writer.into_inner().unwrap()
+    }
 }
 
 /// A CSV writer builder
