@@ -41,9 +41,8 @@ use std::sync::Arc;
 
 use crate::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use crate::parse::{
-    day_time_interval_to_string, month_day_nano_interval_to_string,
     parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
-    string_to_timestamp_nanos, year_month_interval_to_string,
+    string_to_timestamp_nanos,
 };
 use arrow_array::{
     builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *,
@@ -1973,24 +1972,6 @@ pub fn cast_with_options(
         (Int64, Interval(IntervalUnit::DayTime)) => {
             cast_reinterpret_arrays::<Int64Type, IntervalDayTimeType>(array)
         }
-        (Interval(IntervalUnit::YearMonth), Utf8) => {
-            cast_year_month_interval_to_string::<i32>(array, cast_options)
-        }
-        (Interval(IntervalUnit::YearMonth), LargeUtf8) => {
-            cast_year_month_interval_to_string::<i64>(array, cast_options)
-        }
-        (Interval(IntervalUnit::DayTime), Utf8) => {
-            cast_day_time_interval_to_string::<i32>(array, cast_options)
-        }
-        (Interval(IntervalUnit::DayTime), LargeUtf8) => {
-            cast_day_time_interval_to_string::<i64>(array, cast_options)
-        }
-        (Interval(IntervalUnit::MonthDayNano), Utf8) => {
-            cast_month_day_nano_interval_to_string::<i32>(array, cast_options)
-        }
-        (Interval(IntervalUnit::MonthDayNano), LargeUtf8) => {
-            cast_month_day_nano_interval_to_string::<i64>(array, cast_options)
-        }
         (_, _) => Err(ArrowError::CastError(format!(
             "Casting from {from_type:?} to {to_type:?} not supported",
         ))),
@@ -2731,51 +2712,6 @@ fn cast_string_to_month_day_nano_interval<Offset: OffsetSizeTrait>(
         unsafe { IntervalMonthDayNanoArray::from_trusted_len_iter(vec) }
     };
     Ok(Arc::new(interval_array) as ArrayRef)
-}
-
-fn cast_year_month_interval_to_string<Offset: OffsetSizeTrait>(
-    array: &dyn Array,
-    _cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
-    let interval_array = array
-        .as_any()
-        .downcast_ref::<IntervalYearMonthArray>()
-        .unwrap();
-    let iter = interval_array
-        .iter()
-        .map(|v| v.map(year_month_interval_to_string));
-    let string_array = GenericStringArray::<Offset>::from_iter(iter);
-    Ok(Arc::new(string_array))
-}
-
-fn cast_day_time_interval_to_string<Offset: OffsetSizeTrait>(
-    array: &dyn Array,
-    _cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
-    let interval_array = array
-        .as_any()
-        .downcast_ref::<IntervalDayTimeArray>()
-        .unwrap();
-    let iter = interval_array
-        .iter()
-        .map(|v| v.map(day_time_interval_to_string));
-    let string_array = GenericStringArray::<Offset>::from_iter(iter);
-    Ok(Arc::new(string_array))
-}
-
-fn cast_month_day_nano_interval_to_string<Offset: OffsetSizeTrait>(
-    array: &dyn Array,
-    _cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
-    let interval_array = array
-        .as_any()
-        .downcast_ref::<IntervalMonthDayNanoArray>()
-        .unwrap();
-    let iter = interval_array
-        .iter()
-        .map(|v| v.map(month_day_nano_interval_to_string));
-    let string_array = GenericStringArray::<Offset>::from_iter(iter);
-    Ok(Arc::new(string_array))
 }
 
 /// Casts Utf8 to Boolean
@@ -5130,6 +5066,56 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_string_to_interval() {
+        let interval_string_values = vec![
+            Some("1 year 1 month 1 day"),
+            None,
+            Some("1.5 years 13 month 35 days 1.4 milliseconds"),
+            Some("3 days"),
+            Some("8 seconds"),
+            None,
+            Some("1 day 29800 milliseconds"),
+            Some("3 months 1 second"),
+            Some("6 minutes 120 second"),
+            Some("2 years 39 months 9 days 19 hours 1 minute 83 seconds 399222 milliseconds"),
+        ];
+        let string_array =
+            Arc::new(StringArray::from(interval_string_values.clone())) as ArrayRef;
+        let options = CastOptions { safe: false };
+        let array_ref = cast_with_options(
+            &string_array.clone(),
+            &DataType::Interval(IntervalUnit::MonthDayNano),
+            &options,
+        )
+        .unwrap();
+        let interval_array = array_ref
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .unwrap()
+            .clone() as IntervalMonthDayNanoArray;
+        let interval_string_array =
+            cast_with_options(&interval_array, &DataType::Utf8, &options)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .clone();
+        let expect_string_array = StringArray::from(vec![
+            Some("0 years 13 mons 1 days 0 hours 0 mins 0.000000000 secs"),
+            None,
+            Some("0 years 31 mons 35 days 0 hours 0 mins 0.001400000 secs"),
+            Some("0 years 0 mons 3 days 0 hours 0 mins 0.000000000 secs"),
+            Some("0 years 0 mons 0 days 0 hours 0 mins 8.000000000 secs"),
+            None,
+            Some("0 years 0 mons 1 days 0 hours 0 mins 29.800000000 secs"),
+            Some("0 years 3 mons 0 days 0 hours 0 mins 1.000000000 secs"),
+            Some("0 years 0 mons 0 days 0 hours 8 mins 0.000000000 secs"),
+            Some("0 years 63 mons 9 days 19 hours 9 mins 2.222000000 secs"),
+        ]);
+        assert_eq!(expect_string_array, interval_string_array);
+    }
+
+    #[test]
     fn test_cast_string_to_binary() {
         let string_1 = "Hi";
         let string_2 = "Hello";
@@ -5497,6 +5483,9 @@ mod tests {
             assert_eq!(base.as_slice(), result.values());
         }
     }
+
+    #[test]
+    fn test_cast_interval_to_string() {}
 
     #[test]
     fn test_cast_to_strings() {
