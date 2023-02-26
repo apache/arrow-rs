@@ -520,7 +520,7 @@ mod profile {
     use aws_config::provider_config::ProviderConfig;
     use aws_credential_types::provider::ProvideCredentials;
     use aws_types::region::Region;
-    use std::time::{Duration, SystemTime};
+    use std::time::Duration;
 
     #[derive(Debug)]
     pub struct ProfileProvider {
