@@ -118,18 +118,18 @@ impl ArrayDataPrimitive {
     }
 }
 
+impl<P: Primitive> From<PrimitiveArrayData<P>> for ArrayDataPrimitive {
+    fn from(value: PrimitiveArrayData<P>) -> Self {
+        P::upcast(value)
+    }
+}
+
 /// ArrayData for [fixed size arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout) of [`Primitive`]
 #[derive(Debug, Clone)]
 pub struct PrimitiveArrayData<T: Primitive> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
     values: ScalarBuffer<T>,
-}
-
-impl<P: Primitive> From<PrimitiveArrayData<P>> for ArrayDataPrimitive {
-    fn from(value: PrimitiveArrayData<P>) -> Self {
-        P::upcast(value)
-    }
 }
 
 impl<T: Primitive> PrimitiveArrayData<T> {

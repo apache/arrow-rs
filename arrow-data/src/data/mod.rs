@@ -38,6 +38,8 @@ mod list;
 #[allow(unused)] // Private until ready (#1176)
 mod primitive;
 #[allow(unused)] // Private until ready (#1176)
+mod run;
+#[allow(unused)] // Private until ready (#1176)
 mod r#struct;
 #[allow(unused)] // Private until ready (#1176)
 mod types;
