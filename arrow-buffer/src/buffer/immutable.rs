@@ -79,7 +79,8 @@ impl Buffer {
         let ptr = unsafe { NonNull::new_unchecked(vec.as_ptr() as _) };
         let len = vec.len() * std::mem::size_of::<T>();
         // Safety
-        // Layout guaranteed to be valid
+        // Vec guaranteed to have a valid layout matching that of `Layout::array`
+        // This is based on `RawVec::current_memory`
         let layout = unsafe { Layout::array::<T>(vec.capacity()).unwrap_unchecked() };
         std::mem::forget(vec);
         let b = unsafe { Bytes::new(ptr, len, Deallocation::Standard(layout)) };
@@ -290,8 +291,10 @@ impl Buffer {
             })
     }
 
-    /// Returns `Vec` for mutating the buffer if this buffer is not offset and was
-    /// allocated with the correct layout for `Vec<T>`
+    /// Returns `Vec` for mutating the buffer
+    ///
+    /// Returns `Err(self)` if this buffer does not have the same [`Layout`] as
+    /// the destination Vec or contains a non-zero offset
     pub fn into_vec<T: ArrowNativeType>(self) -> Result<Vec<T>, Self> {
         let layout = match self.data.deallocation() {
             Deallocation::Standard(l) => l,

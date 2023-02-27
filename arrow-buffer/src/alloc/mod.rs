@@ -139,8 +139,8 @@ impl<T: RefUnwindSafe + Send + Sync> Allocation for T {}
 pub(crate) enum Deallocation {
     /// An allocation using [`std::alloc`]
     Standard(Layout),
-    /// An allocation from an external source like the FFI interface or a Rust Vec.
-    /// Deallocation will happen
+    /// An allocation from an external source like the FFI interface
+    /// Deallocation will happen on `Allocation::drop`
     Custom(Arc<dyn Allocation>),
 }
 
