@@ -41,6 +41,8 @@ mod primitive;
 mod r#struct;
 #[allow(unused)] // Private until ready (#1176)
 mod types;
+#[allow(unused)] // Private until ready (#1176)
+mod union;
 
 #[inline]
 pub(crate) fn contains_nulls(

@@ -16,57 +16,53 @@
 // under the License.
 
 use crate::ArrayData;
-use arrow_buffer::buffer::NullBuffer;
+use arrow_buffer::buffer::ScalarBuffer;
 use arrow_schema::DataType;
 
-/// ArrayData for StructArray
-pub struct StructArrayData {
+/// ArrayData for union arrays
+pub struct UnionArrayData {
     data_type: DataType,
-    len: usize,
-    nulls: Option<NullBuffer>,
+    type_ids: ScalarBuffer<i8>,
+    offsets: Option<ScalarBuffer<i32>>,
     children: Vec<ArrayData>,
 }
 
-impl StructArrayData {
-    /// Create a new [`StructArrayData`]
+impl UnionArrayData {
+    /// Creates a new [`UnionArrayData`]
     ///
     /// # Safety
     ///
-    /// - data_type must be a StructArray with fields matching `child_data`
-    /// - all child data and nulls must have length matching `len`
+    /// - `data_type` must be valid for this layout
+    /// - `type_ids` must only contain values corresponding to a field in `data_type`
+    /// - `children` must match the field definitions in `data_type`
+    /// - For each value id in type_ids, the corresponding offset, must be in bounds for the child
     pub unsafe fn new_unchecked(
         data_type: DataType,
-        len: usize,
-        nulls: Option<NullBuffer>,
+        type_ids: ScalarBuffer<i8>,
+        offsets: Option<ScalarBuffer<i32>>,
         children: Vec<ArrayData>,
     ) -> Self {
         Self {
             data_type,
-            len,
-            nulls,
+            type_ids,
+            offsets,
             children,
         }
     }
 
-    /// Returns the length of this [`StructArrayData`]
+    /// Returns the type ids for this array if this is a dense union
     #[inline]
-    pub fn len(&self) -> usize {
-        self.len
+    pub fn type_ids(&self) -> &[i8] {
+        &self.type_ids
     }
 
-    /// Returns `true` if this [`StructArrayData`] has zero length
+    /// Returns the offsets for this array if this is a dense union
     #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
+    pub fn offsets(&self) -> Option<&[i32]> {
+        self.offsets.as_deref()
     }
 
-    /// Returns the null buffer if any
-    #[inline]
-    pub fn nulls(&self) -> Option<&NullBuffer> {
-        self.nulls.as_ref()
-    }
-
-    /// Returns the primitive values
+    /// Returns the children of this array
     #[inline]
     pub fn children(&self) -> &[ArrayData] {
         &self.children
