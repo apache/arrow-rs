@@ -32,6 +32,8 @@ use crate::equal;
 #[allow(unused)] // Private until ready (#1176)
 mod bytes;
 #[allow(unused)] // Private until ready (#1176)
+mod dictionary;
+#[allow(unused)] // Private until ready (#1176)
 mod primitive;
 #[allow(unused)] // Private until ready (#1176)
 mod r#struct;
