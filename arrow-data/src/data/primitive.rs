@@ -118,7 +118,7 @@ impl ArrayDataPrimitive {
     }
 }
 
-/// ArrayData for arrays of [`Primitive`]
+/// ArrayData for [fixed size arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout) of [`Primitive`]
 #[derive(Debug, Clone)]
 pub struct PrimitiveArrayData<T: Primitive> {
     data_type: DataType,

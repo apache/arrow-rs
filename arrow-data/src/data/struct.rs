@@ -19,7 +19,7 @@ use crate::ArrayData;
 use arrow_buffer::buffer::NullBuffer;
 use arrow_schema::DataType;
 
-/// ArrayData for StructArray
+/// ArrayData for [struct arrays](https://arrow.apache.org/docs/format/Columnar.html#struct-layout)
 pub struct StructArrayData {
     data_type: DataType,
     len: usize,

@@ -228,7 +228,7 @@ impl<O: BytesOffset, B: Bytes + ?Sized> From<BytesArrayData<O, B>> for ArrayData
     }
 }
 
-/// ArrayData for arrays of [`Bytes`]
+/// ArrayData for [variable-sized arrays](https://arrow.apache.org/docs/format/Columnar.html#variable-size-binary-layout) of [`Bytes`]
 pub struct BytesArrayData<O: BytesOffset, B: Bytes + ?Sized> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
@@ -287,7 +287,7 @@ impl<O: BytesOffset, B: Bytes> BytesArrayData<O, B> {
     }
 }
 
-/// ArrayData for fixed size binary arrays
+/// ArrayData for [fixed-size arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout) of bytes
 pub struct FixedSizeBinaryArrayData {
     data_type: DataType,
     nulls: Option<NullBuffer>,

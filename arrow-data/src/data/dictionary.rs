@@ -114,6 +114,7 @@ impl<K: DictionaryKey> From<DictionaryArrayData<K>> for ArrayDataDictionary {
     }
 }
 
+/// ArrayData for [dictionary arrays](https://arrow.apache.org/docs/format/Columnar.html#dictionary-encoded-layout)
 pub struct DictionaryArrayData<K: DictionaryKey> {
     data_type: DataType,
     nulls: Option<NullBuffer>,

@@ -19,7 +19,7 @@ use crate::ArrayData;
 use arrow_buffer::buffer::ScalarBuffer;
 use arrow_schema::DataType;
 
-/// ArrayData for union arrays
+/// ArrayData for [union arrays](https://arrow.apache.org/docs/format/Columnar.html#union-layout)
 pub struct UnionArrayData {
     data_type: DataType,
     type_ids: ScalarBuffer<i8>,

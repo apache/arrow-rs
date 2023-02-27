@@ -137,6 +137,7 @@ impl<O: ListOffset> From<ListArrayData<O>> for ArrayDataList {
     }
 }
 
+/// ArrayData for [variable-size list arrays](https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout)
 pub struct ListArrayData<O: ListOffset> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
@@ -190,3 +191,5 @@ impl<O: ListOffset> ListArrayData<O> {
         &self.data_type
     }
 }
+
+
