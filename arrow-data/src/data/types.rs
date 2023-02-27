@@ -80,7 +80,6 @@ pub enum PhysicalType {
     Bytes(OffsetType, BytesType),
     FixedSizeList,
     List(OffsetType),
-    Map,
     Struct,
     Union,
     Dictionary(DictionaryKeyType),
@@ -141,7 +140,7 @@ impl From<&DataType> for PhysicalType {
                 DataType::UInt64 => Self::Dictionary(DictionaryKeyType::UInt64),
                 d => panic!("illegal dictionary key data type {d}"),
             },
-            DataType::Map(_, _) => Self::Map,
+            DataType::Map(_, _) => Self::List(OffsetType::Int32),
             DataType::RunEndEncoded(f, _) => match f.data_type() {
                 DataType::Int16 => Self::Run(RunEndType::Int16),
                 DataType::Int32 => Self::Run(RunEndType::Int32),

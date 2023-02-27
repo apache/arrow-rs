@@ -286,3 +286,48 @@ impl<O: BytesOffset, B: Bytes> BytesArrayData<O, B> {
         &self.data_type
     }
 }
+
+/// ArrayData for fixed size binary arrays
+pub struct FixedSizeBinaryArrayData {
+    data_type: DataType,
+    nulls: Option<NullBuffer>,
+    values: Buffer,
+}
+
+impl FixedSizeBinaryArrayData {
+    /// Creates a new [`FixedSizeBinaryArrayData`]
+    ///
+    /// # Safety
+    ///
+    /// - `data_type` must be valid for this layout
+    /// - `nulls.len() == values.len() / element_size`
+    pub unsafe fn new_unchecked(
+        data_type: DataType,
+        values: Buffer,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        Self {
+            data_type,
+            nulls,
+            values,
+        }
+    }
+
+    /// Returns the raw byte data
+    #[inline]
+    pub fn values(&self) -> &[u8] {
+        &self.values
+    }
+
+    /// Returns the null buffer if any
+    #[inline]
+    pub fn null_buffer(&self) -> Option<&NullBuffer> {
+        self.nulls.as_ref()
+    }
+
+    /// Returns the data type of this array
+    #[inline]
+    pub fn data_type(&self) -> &DataType {
+        &self.data_type
+    }
+}
