@@ -438,7 +438,7 @@ async fn instance_creds(
     let ttl = (creds.expiration - now).to_std().unwrap_or_default();
     Ok(TemporaryToken {
         token: Arc::new(creds.into()),
-        expiry: Instant::now() + ttl,
+        expiry: Some(Instant::now() + ttl),
     })
 }
 
@@ -509,7 +509,7 @@ async fn web_identity(
 
     Ok(TemporaryToken {
         token: Arc::new(creds.into()),
-        expiry: Instant::now() + ttl,
+        expiry: Some(Instant::now() + ttl),
     })
 }
 
@@ -520,7 +520,7 @@ mod profile {
     use aws_config::provider_config::ProviderConfig;
     use aws_credential_types::provider::ProvideCredentials;
     use aws_types::region::Region;
-    use std::time::Duration;
+    use std::time::SystemTime;
 
     #[derive(Debug)]
     pub struct ProfileProvider {
@@ -553,7 +553,12 @@ mod profile {
                             store: "S3",
                             source: Box::new(source),
                         })?;
-                let expiry = Instant::now() + Duration::from_secs(3600);
+                let t_now = SystemTime::now();
+                let expiry = match c.expiry().and_then(|e| e.duration_since(t_now).ok()) {
+                    Some(ttl) => Some(Instant::now() + ttl),
+                    None => None
+                };
+
                 Ok(TemporaryToken {
                     token: Arc::new(AwsCredential {
                         key_id: c.access_key_id().to_string(),

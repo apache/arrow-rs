@@ -25,7 +25,8 @@ pub struct TemporaryToken<T> {
     /// The temporary credential
     pub token: T,
     /// The instant at which this credential is no longer valid
-    pub expiry: Instant,
+    /// None means the credential does not expire
+    pub expiry: Option<Instant>,
 }
 
 /// Provides [`TokenCache::get_or_insert_with`] which can be used to cache a
@@ -53,13 +54,12 @@ impl<T: Clone + Send> TokenCache<T> {
         let mut locked = self.cache.lock().await;
 
         if let Some(cached) = locked.as_ref() {
-            let delta = cached
-                .expiry
-                .checked_duration_since(now)
-                .unwrap_or_default();
-
-            if delta.as_secs() > 300 {
-                return Ok(cached.token.clone());
+            match cached.expiry {
+                Some(ttl) if ttl.checked_duration_since(now).unwrap_or_default().as_secs() > 300 => {
+                    return Ok(cached.token.clone());
+                },
+                None => return Ok(cached.token.clone()),
+                _ => (),
             }
         }
 
