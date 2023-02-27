@@ -537,23 +537,6 @@ pub fn parse_interval(
     leading_field: &str,
     value: &str,
 ) -> Result<MonthDayNano, ArrowError> {
-    // We are storing parts as integers, it's why we need to align parts fractional
-    // INTERVAL '0.5 MONTH' = 15 days, INTERVAL '1.5 MONTH' = 1 month 15 days
-    // INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
-    let align_interval_parts =
-        |month_part: f64, mut day_part: f64, mut nanos_part: f64| -> (i64, i64, f64) {
-            // Convert fractional month to days, It's not supported by Arrow types, but anyway
-            day_part += (month_part - (month_part as i64) as f64) * 30_f64;
-
-            // Convert fractional days to hours
-            nanos_part += (day_part - ((day_part as i64) as f64))
-                * 24_f64
-                * SECONDS_PER_HOUR
-                * NANOS_PER_SECOND;
-
-            (month_part as i64, day_part as i64, nanos_part)
-        };
-
     let mut used_interval_types = 0;
 
     let mut calculate_from_part = |interval_period_str: &str,
@@ -660,6 +643,26 @@ pub fn parse_interval(
     }
 
     Ok((result_month as i32, result_days as i32, result_nanos as i64))
+}
+
+/// We are storing parts as integers, it's why we need to align parts fractional
+/// INTERVAL '0.5 MONTH' = 15 days, INTERVAL '1.5 MONTH' = 1 month 15 days
+/// INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
+fn align_interval_parts(
+    month_part: f64,
+    mut day_part: f64,
+    mut nanos_part: f64,
+) -> (i64, i64, f64) {
+    // Convert fractional month to days, It's not supported by Arrow types, but anyway
+    day_part += (month_part - (month_part as i64) as f64) * 30_f64;
+
+    // Convert fractional days to hours
+    nanos_part += (day_part - ((day_part as i64) as f64))
+        * 24_f64
+        * SECONDS_PER_HOUR
+        * NANOS_PER_SECOND;
+
+    (month_part as i64, day_part as i64, nanos_part)
 }
 
 #[cfg(test)]
