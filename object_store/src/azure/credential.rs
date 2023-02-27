@@ -640,10 +640,12 @@ impl TokenCredential for AzureCliCredential {
                     - chrono::Local::now().naive_local();
                 Ok(TemporaryToken {
                     token: token_response.access_token,
-                    expiry: Some(Instant::now()
-                        + duration.to_std().map_err(|_| Error::AzureCli {
-                            message: "az returned invalid lifetime".to_string(),
-                        })?),
+                    expiry: Some(
+                        Instant::now()
+                            + duration.to_std().map_err(|_| Error::AzureCli {
+                                message: "az returned invalid lifetime".to_string(),
+                            })?,
+                    ),
                 })
             }
             Ok(az_output) => {

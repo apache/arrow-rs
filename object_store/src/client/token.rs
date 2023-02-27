@@ -55,9 +55,15 @@ impl<T: Clone + Send> TokenCache<T> {
 
         if let Some(cached) = locked.as_ref() {
             match cached.expiry {
-                Some(ttl) if ttl.checked_duration_since(now).unwrap_or_default().as_secs() > 300 => {
+                Some(ttl)
+                    if ttl
+                        .checked_duration_since(now)
+                        .unwrap_or_default()
+                        .as_secs()
+                        > 300 =>
+                {
                     return Ok(cached.token.clone());
-                },
+                }
                 None => return Ok(cached.token.clone()),
                 _ => (),
             }

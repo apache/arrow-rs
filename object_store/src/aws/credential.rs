@@ -554,9 +554,10 @@ mod profile {
                             source: Box::new(source),
                         })?;
                 let t_now = SystemTime::now();
-                let expiry = c.expiry().
-                    and_then(|e| e.duration_since(t_now).ok()).
-                    map(|ttl| Instant::now() + ttl);
+                let expiry = c
+                    .expiry()
+                    .and_then(|e| e.duration_since(t_now).ok())
+                    .map(|ttl| Instant::now() + ttl);
 
                 Ok(TemporaryToken {
                     token: Arc::new(AwsCredential {
