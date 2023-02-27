@@ -1250,10 +1250,8 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
-    }
 
-    #[tokio::test]
-    async fn s3_test_unsigned_payload() {
+        // run integration test with unsigned payload enabled
         let config = maybe_skip_integration!().with_unsigned_payload(true);
         let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
         let integration = config.build().unwrap();
