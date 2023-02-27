@@ -192,4 +192,47 @@ impl<O: ListOffset> ListArrayData<O> {
     }
 }
 
+/// ArrayData for [fixed-size list arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-list-layout)
+pub struct FixedSizeListArrayData {
+    data_type: DataType,
+    nulls: Option<NullBuffer>,
+    child: Box<ArrayData>,
+}
 
+impl FixedSizeListArrayData {
+    /// Create a new [`FixedSizeListArrayData`]
+    ///
+    /// # Safety
+    ///
+    /// - `data_type` must be valid for this layout
+    /// - `nulls.len() == values.len() / element_size`
+    pub unsafe fn new_unchecked(
+        data_type: DataType,
+        nulls: Option<NullBuffer>,
+        child: ArrayData,
+    ) -> Self {
+        Self {
+            data_type,
+            nulls,
+            child: Box::new(child),
+        }
+    }
+
+    /// Returns the null buffer if any
+    #[inline]
+    pub fn nulls(&self) -> Option<&NullBuffer> {
+        self.nulls.as_ref()
+    }
+
+    /// Returns the child data
+    #[inline]
+    pub fn child(&self) -> &ArrayData {
+        self.child.as_ref()
+    }
+
+    /// Returns the data type of this array
+    #[inline]
+    pub fn data_type(&self) -> &DataType {
+        &self.data_type
+    }
+}
