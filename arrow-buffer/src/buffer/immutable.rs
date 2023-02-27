@@ -803,5 +803,15 @@ mod tests {
         let a: Vec<u32> = vec![1, 3, 4, 6];
         let b = Buffer::from_vec(a).slice(2);
         b.into_vec::<u32>().unwrap_err();
+
+        let b = MutableBuffer::new(16).into_buffer();
+        let b = b.into_vec::<u8>().unwrap_err(); // Invalid layout
+        let b = b.into_vec::<u32>().unwrap_err(); // Invalid layout
+        b.into_mutable().unwrap();
+
+        let b = Buffer::from_vec(vec![1_u32, 3, 5]);
+        let b = b.into_mutable().unwrap_err(); // Invalid layout
+        let b = b.into_vec::<u32>().unwrap();
+        assert_eq!(b, &[1, 3, 5]);
     }
 }
