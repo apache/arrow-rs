@@ -25,7 +25,10 @@ pub use immutable::*;
 mod mutable;
 pub use mutable::*;
 mod ops;
+pub use ops::*;
 mod scalar;
 pub use scalar::*;
-
-pub use ops::*;
+mod boolean;
+pub use boolean::*;
+mod null;
+pub use null::*;
