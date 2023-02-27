@@ -139,7 +139,7 @@ pub trait BytesOffset: private::BytesOffsetSealed + ArrowNativeType {
 }
 
 impl BytesOffset for i32 {
-    const TYPE: OffsetType = OffsetType::Small;
+    const TYPE: OffsetType = OffsetType::Int32;
 }
 
 impl private::BytesOffsetSealed for i32 {
@@ -167,7 +167,7 @@ impl private::BytesOffsetSealed for i32 {
 }
 
 impl BytesOffset for i64 {
-    const TYPE: OffsetType = OffsetType::Large;
+    const TYPE: OffsetType = OffsetType::Int64;
 }
 
 impl private::BytesOffsetSealed for i64 {

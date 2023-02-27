@@ -148,7 +148,8 @@ impl<T: Primitive> PrimitiveArrayData<T> {
         let physical = PhysicalType::from(&data_type);
         assert!(
             matches!(physical, PhysicalType::Primitive(p) if p == T::VARIANT),
-            "Illegal physical type for PrimitiveArrayData, expected {:?} got {:?}",
+            "Illegal physical type for PrimitiveArrayData of datatype {:?}, expected {:?} got {:?}",
+            data_type,
             T::VARIANT,
             physical
         );

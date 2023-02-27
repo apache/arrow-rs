@@ -38,8 +38,8 @@ pub enum PrimitiveType {
 /// An enumeration of the types of offsets for variable length encodings
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum OffsetType {
-    Small,
-    Large,
+    Int32,
+    Int64,
 }
 
 /// An enumeration of the types of variable length byte arrays
@@ -120,14 +120,14 @@ impl From<&DataType> for PhysicalType {
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 Self::Primitive(PrimitiveType::Int128)
             }
-            DataType::Binary => Self::Bytes(OffsetType::Small, BytesType::Binary),
             DataType::FixedSizeBinary(_) => Self::FixedSizeBinary,
-            DataType::LargeBinary => Self::Bytes(OffsetType::Large, BytesType::Binary),
-            DataType::Utf8 => Self::Bytes(OffsetType::Small, BytesType::Utf8),
-            DataType::LargeUtf8 => Self::Bytes(OffsetType::Large, BytesType::Utf8),
-            DataType::List(_) => Self::List(OffsetType::Small),
+            DataType::Binary => Self::Bytes(OffsetType::Int32, BytesType::Binary),
+            DataType::LargeBinary => Self::Bytes(OffsetType::Int64, BytesType::Binary),
+            DataType::Utf8 => Self::Bytes(OffsetType::Int32, BytesType::Utf8),
+            DataType::LargeUtf8 => Self::Bytes(OffsetType::Int64, BytesType::Utf8),
+            DataType::List(_) => Self::List(OffsetType::Int32),
             DataType::FixedSizeList(_, _) => Self::FixedSizeList,
-            DataType::LargeList(_) => Self::List(OffsetType::Large),
+            DataType::LargeList(_) => Self::List(OffsetType::Int64),
             DataType::Struct(_) => Self::Struct,
             DataType::Union(_, _, _) => Self::Union,
             DataType::Dictionary(k, _) => match k.as_ref() {
