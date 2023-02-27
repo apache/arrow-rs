@@ -5487,9 +5487,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_interval_to_string() {}
-
-    #[test]
     fn test_cast_to_strings() {
         let a = Int32Array::from(vec![1, 2, 3]);
         let out = cast(&a, &DataType::Utf8).unwrap();
