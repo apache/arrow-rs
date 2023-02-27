@@ -47,17 +47,6 @@ pub trait DictionaryKey: private::DictionaryKeySealed + ArrowNativeType {
     const TYPE: DictionaryKeyType;
 }
 
-pub enum ArrayDataDictionary {
-    Int8(DictionaryArrayData<i8>),
-    Int16(DictionaryArrayData<i16>),
-    Int32(DictionaryArrayData<i32>),
-    Int64(DictionaryArrayData<i64>),
-    UInt8(DictionaryArrayData<u8>),
-    UInt16(DictionaryArrayData<u16>),
-    UInt32(DictionaryArrayData<u32>),
-    UInt64(DictionaryArrayData<u64>),
-}
-
 macro_rules! dictionary {
     ($t:ty,$v:ident) => {
         impl DictionaryKey for $t {
@@ -96,6 +85,19 @@ dictionary!(u16, UInt16);
 dictionary!(u32, UInt32);
 dictionary!(u64, UInt64);
 
+/// An enumeration of the types of [`DictionaryArrayData`]
+#[derive(Debug, Clone)]
+pub enum ArrayDataDictionary {
+    Int8(DictionaryArrayData<i8>),
+    Int16(DictionaryArrayData<i16>),
+    Int32(DictionaryArrayData<i32>),
+    Int64(DictionaryArrayData<i64>),
+    UInt8(DictionaryArrayData<u8>),
+    UInt16(DictionaryArrayData<u16>),
+    UInt32(DictionaryArrayData<u32>),
+    UInt64(DictionaryArrayData<u64>),
+}
+
 impl ArrayDataDictionary {
     /// Downcast this [`ArrayDataDictionary`] to the corresponding [`DictionaryArrayData`]
     pub fn downcast_ref<K: DictionaryKey>(&self) -> Option<&DictionaryArrayData<K>> {
@@ -115,6 +117,7 @@ impl<K: DictionaryKey> From<DictionaryArrayData<K>> for ArrayDataDictionary {
 }
 
 /// ArrayData for [dictionary arrays](https://arrow.apache.org/docs/format/Columnar.html#dictionary-encoded-layout)
+#[derive(Debug, Clone)]
 pub struct DictionaryArrayData<K: DictionaryKey> {
     data_type: DataType,
     nulls: Option<NullBuffer>,

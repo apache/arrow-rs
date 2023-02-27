@@ -20,6 +20,7 @@ use arrow_buffer::buffer::NullBuffer;
 use arrow_schema::DataType;
 
 /// ArrayData for [struct arrays](https://arrow.apache.org/docs/format/Columnar.html#struct-layout)
+#[derive(Debug, Clone)]
 pub struct StructArrayData {
     data_type: DataType,
     len: usize,

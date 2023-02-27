@@ -113,7 +113,8 @@ impl private::ListOffsetSealed for i64 {
     }
 }
 
-/// ArrayData for variable length list arrays
+/// An enumeration of the types of [`ListArrayData`]
+#[derive(Debug, Clone)]
 pub enum ArrayDataList {
     Small(ListArrayData<i32>),
     Large(ListArrayData<i64>),
@@ -138,6 +139,7 @@ impl<O: ListOffset> From<ListArrayData<O>> for ArrayDataList {
 }
 
 /// ArrayData for [variable-size list arrays](https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout)
+#[derive(Debug, Clone)]
 pub struct ListArrayData<O: ListOffset> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
@@ -193,6 +195,7 @@ impl<O: ListOffset> ListArrayData<O> {
 }
 
 /// ArrayData for [fixed-size list arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-list-layout)
+#[derive(Debug, Clone)]
 pub struct FixedSizeListArrayData {
     data_type: DataType,
     nulls: Option<NullBuffer>,

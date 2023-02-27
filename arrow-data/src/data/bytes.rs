@@ -73,7 +73,7 @@ mod private {
 }
 
 /// Types backed by a variable length slice of bytes
-pub trait Bytes: private::BytesSealed {
+pub trait Bytes: private::BytesSealed + std::fmt::Debug {
     const TYPE: BytesType;
 }
 
@@ -195,6 +195,7 @@ impl private::BytesOffsetSealed for i64 {
 }
 
 /// An enumeration of the types of [`ArrayDataBytesOffset`]
+#[derive(Debug, Clone)]
 pub enum ArrayDataBytes {
     Binary(ArrayDataBytesOffset<[u8]>),
     Utf8(ArrayDataBytesOffset<str>),
@@ -217,9 +218,19 @@ impl ArrayDataBytes {
 }
 
 /// An enumeration of the types of [`BytesArrayData`]
+#[derive(Debug)]
 pub enum ArrayDataBytesOffset<B: Bytes + ?Sized> {
     Small(BytesArrayData<i32, B>),
     Large(BytesArrayData<i64, B>),
+}
+
+impl<B: Bytes + ?Sized> Clone for ArrayDataBytesOffset<B> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Small(v) => Self::Small(v.clone()),
+            Self::Large(v) => Self::Large(v.clone()),
+        }
+    }
 }
 
 impl<O: BytesOffset, B: Bytes + ?Sized> From<BytesArrayData<O, B>> for ArrayDataBytes {
@@ -229,6 +240,7 @@ impl<O: BytesOffset, B: Bytes + ?Sized> From<BytesArrayData<O, B>> for ArrayData
 }
 
 /// ArrayData for [variable-sized arrays](https://arrow.apache.org/docs/format/Columnar.html#variable-size-binary-layout) of [`Bytes`]
+#[derive(Debug)]
 pub struct BytesArrayData<O: BytesOffset, B: Bytes + ?Sized> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
@@ -237,7 +249,19 @@ pub struct BytesArrayData<O: BytesOffset, B: Bytes + ?Sized> {
     phantom: PhantomData<B>,
 }
 
-impl<O: BytesOffset, B: Bytes> BytesArrayData<O, B> {
+impl<O: BytesOffset, B: Bytes + ?Sized> Clone for BytesArrayData<O, B> {
+    fn clone(&self) -> Self {
+        Self {
+            data_type: self.data_type.clone(),
+            nulls: self.nulls.clone(),
+            offsets: self.offsets.clone(),
+            values: self.values.clone(),
+            phantom: Default::default(),
+        }
+    }
+}
+
+impl<O: BytesOffset, B: Bytes + ?Sized> BytesArrayData<O, B> {
     /// Creates a new [`BytesArrayData`]
     ///
     /// # Safety
@@ -288,6 +312,7 @@ impl<O: BytesOffset, B: Bytes> BytesArrayData<O, B> {
 }
 
 /// ArrayData for [fixed-size arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout) of bytes
+#[derive(Debug, Clone)]
 pub struct FixedSizeBinaryArrayData {
     data_type: DataType,
     nulls: Option<NullBuffer>,
