@@ -270,7 +270,7 @@ impl<O: BytesOffset, B: Bytes> BytesArrayData<O, B> {
 
     /// Returns the offsets
     #[inline]
-    pub fn value_offsets(&self) -> &[O] {
+    pub fn offsets(&self) -> &[O] {
         &self.offsets
     }
 
