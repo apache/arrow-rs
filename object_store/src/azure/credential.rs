@@ -360,7 +360,7 @@ impl TokenCredential for ClientSecretOAuthProvider {
 
         let token = TemporaryToken {
             token: response.access_token,
-            expiry: Instant::now() + Duration::from_secs(response.expires_in),
+            expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
         };
 
         Ok(token)
@@ -467,7 +467,7 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
 
         let token = TemporaryToken {
             token: response.access_token,
-            expiry: Instant::now() + Duration::from_secs(response.expires_in),
+            expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
         };
 
         Ok(token)
@@ -541,7 +541,7 @@ impl TokenCredential for WorkloadIdentityOAuthProvider {
 
         let token = TemporaryToken {
             token: response.access_token,
-            expiry: Instant::now() + Duration::from_secs(response.expires_in),
+            expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
         };
 
         Ok(token)
@@ -640,10 +640,12 @@ impl TokenCredential for AzureCliCredential {
                     - chrono::Local::now().naive_local();
                 Ok(TemporaryToken {
                     token: token_response.access_token,
-                    expiry: Instant::now()
-                        + duration.to_std().map_err(|_| Error::AzureCli {
-                            message: "az returned invalid lifetime".to_string(),
-                        })?,
+                    expiry: Some(
+                        Instant::now()
+                            + duration.to_std().map_err(|_| Error::AzureCli {
+                                message: "az returned invalid lifetime".to_string(),
+                            })?,
+                    ),
                 })
             }
             Ok(az_output) => {

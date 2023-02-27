@@ -438,7 +438,7 @@ async fn instance_creds(
     let ttl = (creds.expiration - now).to_std().unwrap_or_default();
     Ok(TemporaryToken {
         token: Arc::new(creds.into()),
-        expiry: Instant::now() + ttl,
+        expiry: Some(Instant::now() + ttl),
     })
 }
 
@@ -509,7 +509,7 @@ async fn web_identity(
 
     Ok(TemporaryToken {
         token: Arc::new(creds.into()),
-        expiry: Instant::now() + ttl,
+        expiry: Some(Instant::now() + ttl),
     })
 }
 
@@ -553,17 +553,11 @@ mod profile {
                             store: "S3",
                             source: Box::new(source),
                         })?;
-
                 let t_now = SystemTime::now();
-                let expiry = match c.expiry().and_then(|e| e.duration_since(t_now).ok()) {
-                    Some(ttl) => Instant::now() + ttl,
-                    None => {
-                        return Err(crate::Error::Generic {
-                            store: "S3",
-                            source: "Invalid expiry".into(),
-                        })
-                    }
-                };
+                let expiry = c
+                    .expiry()
+                    .and_then(|e| e.duration_since(t_now).ok())
+                    .map(|ttl| Instant::now() + ttl);
 
                 Ok(TemporaryToken {
                     token: Arc::new(AwsCredential {

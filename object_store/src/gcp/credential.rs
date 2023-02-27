@@ -220,7 +220,7 @@ impl TokenProvider for OAuthProvider {
 
         let token = TemporaryToken {
             token: response.access_token,
-            expiry: Instant::now() + Duration::from_secs(response.expires_in),
+            expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
         };
 
         Ok(token)
@@ -393,7 +393,7 @@ impl TokenProvider for InstanceCredentialProvider {
                 .await?;
         let token = TemporaryToken {
             token: response.access_token,
-            expiry: Instant::now() + Duration::from_secs(response.expires_in),
+            expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
         };
         Ok(token)
     }
@@ -467,7 +467,7 @@ impl TokenProvider for ApplicationDefaultCredentials {
             .context(TokenResponseBodySnafu)?;
         let token = TemporaryToken {
             token: response.access_token,
-            expiry: Instant::now() + Duration::from_secs(response.expires_in),
+            expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
         };
         Ok(token)
     }
