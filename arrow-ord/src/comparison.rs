@@ -1433,10 +1433,7 @@ where
         result_remainder.copy_from_slice(remainder_mask_as_bytes);
     }
 
-    let null_bit_buffer = left
-        .data_ref()
-        .null_buffer()
-        .map(|b| b.bit_slice(left.offset(), left.len()));
+    let null_bit_buffer = left.data().nulls().map(|b| b.inner().sliced());
 
     // null count is the same as in the input since the right side of the scalar comparison cannot be null
     let null_count = left.null_count();

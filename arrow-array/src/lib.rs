@@ -141,18 +141,18 @@
 //!
 //! For example, the type [`Int16Array`] represents an array of 16-bit integers and consists of:
 //!
-//! * An optional [`Bitmap`] identifying any null values
+//! * An optional [`NullBuffer`] identifying any null values
 //! * A contiguous [`Buffer`] of 16-bit integers
 //!
 //! Similarly, the type [`StringArray`] represents an array of UTF-8 strings and consists of:
 //!
-//! * An optional [`Bitmap`] identifying any null values
+//! * An optional [`NullBuffer`] identifying any null values
 //! * An offsets [`Buffer`] of 32-bit integers identifying valid UTF-8 sequences within the values buffer
 //! * A values [`Buffer`] of UTF-8 encoded string data
 //!
 //! [Arrow specification]: https://arrow.apache.org/docs/format/Columnar.html
 //! [`&dyn Array`]: Array
-//! [`Bitmap`]: arrow_data::Bitmap
+//! [`NullBuffer`]: arrow_buffer::buffer::NullBuffer
 //! [`Buffer`]: arrow_buffer::Buffer
 //! [`compute`]: https://docs.rs/arrow/latest/arrow/compute/index.html
 //! [`json`]: https://docs.rs/arrow/latest/arrow/json/index.html
