@@ -114,10 +114,18 @@ where
     }
 
     /// Creates a new `PrimitiveDictionaryBuilder` from the provided keys and values builders.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if `keys_builder` or `values_builder` is not empty.
     pub fn new_from_builders(
         keys_builder: PrimitiveBuilder<K>,
         values_builder: PrimitiveBuilder<V>,
     ) -> Self {
+        assert!(
+            keys_builder.is_empty() && values_builder.is_empty(),
+            "keys and values builders must be empty"
+        );
         Self {
             keys_builder,
             values_builder,
