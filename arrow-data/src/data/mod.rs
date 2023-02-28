@@ -45,7 +45,9 @@ pub(crate) fn contains_nulls(
 ) -> bool {
     match null_bit_buffer {
         Some(buffer) => {
-            match BitSliceIterator::new(buffer.validity(), buffer.offset() + offset, len).next() {
+            match BitSliceIterator::new(buffer.validity(), buffer.offset() + offset, len)
+                .next()
+            {
                 Some((start, end)) => start != 0 || end != len,
                 None => len != 0, // No non-null values
             }
@@ -796,8 +798,7 @@ impl ArrayData {
             let needed_len = bit_util::ceil(len_plus_offset, 8);
             if actual_len < needed_len {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "null_bit_buffer size too small. got {} needed {}",
-                    actual_len, needed_len
+                    "null_bit_buffer size too small. got {actual_len} needed {needed_len}",
                 )));
             }
 
@@ -1791,6 +1792,7 @@ impl ArrayDataBuilder {
     ///
     /// The same caveats as [`ArrayData::new_unchecked`]
     /// apply.
+    #[allow(clippy::let_and_return)]
     pub unsafe fn build_unchecked(self) -> ArrayData {
         let nulls = self.nulls.or_else(|| {
             let buffer = self.null_bit_buffer?;
@@ -1817,8 +1819,10 @@ impl ArrayDataBuilder {
     }
 
     /// Creates an array data, validating all inputs
+    #[allow(clippy::let_and_return)]
     pub fn build(self) -> Result<ArrayData, ArrowError> {
         let data = unsafe { self.build_unchecked() };
+        #[cfg(not(feature = "force_validate"))]
         data.validate_data()?;
         Ok(data)
     }
