@@ -269,7 +269,6 @@ impl Config {
 impl ObjectStore for LocalFileSystem {
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
         let path = self.config.path_to_filesystem(location)?;
-
         maybe_spawn_blocking(move || {
             let (mut file, suffix) = new_staged_upload(&path)?;
             let staging_path = staged_upload_path(&path, &suffix);
@@ -311,6 +310,50 @@ impl ObjectStore for LocalFileSystem {
             Ok(())
         })
         .await
+    }
+
+    async fn append(
+        &self,
+        location: &Path,
+    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+        // Get the path to the file from the configuration.
+        let path = self.config.path_to_filesystem(location)?;
+        loop {
+            // Create new `OpenOptions`.
+            let mut options = tokio::fs::OpenOptions::new();
+
+            // Attempt to open the file with the given options.
+            match options
+                .write(true)
+                .truncate(false)
+                .create(true)
+                .open(&path)
+                .await
+            {
+                // If the file was successfully opened, return it wrapped in a boxed `AsyncWrite` trait object.
+                Ok(file) => return Ok(Box::new(file)),
+                // If the error is that the file was not found, attempt to create the file and any necessary parent directories.
+                Err(err) if err.kind() == ErrorKind::NotFound => {
+                    // Get the path to the parent directory of the file.
+                    let parent = path
+                        .parent()
+                        // If the parent directory does not exist, return a `UnableToCreateFileSnafu` error.
+                        .context(UnableToCreateFileSnafu { path: &path, err })?;
+
+                    // Create the parent directory and any necessary ancestors.
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        // If creating the directory fails, return a `UnableToCreateDirSnafu` error.
+                        .context(UnableToCreateDirSnafu { path: parent })?;
+                    // Try again to open the file.
+                    continue;
+                }
+                // If any other error occurs, return a `UnableToOpenFile` error.
+                Err(source) => {
+                    return Err(Error::UnableToOpenFile { source, path }.into())
+                }
+            }
+        }
     }
 
     async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -960,6 +1003,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn creates_dir_if_not_present_append() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let location = Path::from("nested/file/test_file");
+
+        let data = Bytes::from("arbitrary data");
+        let expected_data = data.clone();
+
+        let mut writer = integration.append(&location).await.unwrap();
+
+        writer.write_all(data.as_ref()).await.unwrap();
+
+        let read_data = integration
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(&*read_data, expected_data);
+    }
+
+    #[tokio::test]
+    async fn unknown_length_append() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let location = Path::from("some_file");
+
+        let data = Bytes::from("arbitrary data");
+        let expected_data = data.clone();
+        let mut writer = integration.append(&location).await.unwrap();
+
+        writer.write_all(data.as_ref()).await.unwrap();
+
+        let read_data = integration
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(&*read_data, expected_data);
+    }
+
+    #[tokio::test]
     async fn unknown_length() {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
@@ -970,6 +1060,34 @@ mod tests {
         let expected_data = data.clone();
 
         integration.put(&location, data).await.unwrap();
+
+        let read_data = integration
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(&*read_data, expected_data);
+    }
+
+    #[tokio::test]
+    async fn multiple_append() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let location = Path::from("some_file");
+
+        let data = vec![
+            Bytes::from("arbitrary"),
+            Bytes::from("data"),
+            Bytes::from("gnz"),
+        ];
+        let expected_data = Bytes::from("arbitrarydatagnz");
+        let mut writer = integration.append(&location).await.unwrap();
+        for d in data {
+            writer.write_all(d.as_ref()).await.unwrap();
+        }
 
         let read_data = integration
             .get(&location)

@@ -194,7 +194,7 @@ impl<W: Write> Writer<W> {
 }
 
 /// A CSV writer builder
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct WriterBuilder {
     /// Optional column delimiter. Defaults to `b','`
     delimiter: Option<u8>,
