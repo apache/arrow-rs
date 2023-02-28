@@ -107,9 +107,9 @@ impl ArrayDecoder for StructArrayDecoder {
             .iter()
             .for_each(|x| assert_eq!(x.len(), pos.len()));
 
-        let nulls = nulls.as_mut().map(|x| {
-            NullBuffer::new(BooleanBuffer::new(x.finish(), 0, pos.len()))
-        });
+        let nulls = nulls
+            .as_mut()
+            .map(|x| NullBuffer::new(BooleanBuffer::new(x.finish(), 0, pos.len())));
 
         let data = ArrayDataBuilder::new(self.data_type.clone())
             .len(pos.len())

@@ -157,7 +157,8 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
     let mask = filter.values();
     let offset = filter.offset();
 
-    let new_mask = buffer_bin_and(mask, offset, nulls.buffer(), nulls.offset(), filter.len());
+    let new_mask =
+        buffer_bin_and(mask, offset, nulls.buffer(), nulls.offset(), filter.len());
 
     let array_data = ArrayData::builder(DataType::Boolean)
         .len(filter.len())

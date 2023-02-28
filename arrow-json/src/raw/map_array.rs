@@ -139,9 +139,9 @@ impl ArrayDecoder for MapArrayDecoder {
         // Valid by construction
         let struct_data = unsafe { struct_data.build_unchecked() };
 
-        let nulls = nulls.as_mut().map(|x| {
-            NullBuffer::new(BooleanBuffer::new(x.finish(), 0, pos.len()))
-        });
+        let nulls = nulls
+            .as_mut()
+            .map(|x| NullBuffer::new(BooleanBuffer::new(x.finish(), 0, pos.len())));
 
         let builder = ArrayDataBuilder::new(self.data_type.clone())
             .len(pos.len())

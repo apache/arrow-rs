@@ -72,12 +72,18 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     let (combined, null_count) = match left_data.nulls() {
         Some(left) => {
             let mut valid_count = 0;
-            let b =
-                bitwise_bin_op_helper(left.buffer(), left.offset(), &right, r_offset, len, |l, r| {
+            let b = bitwise_bin_op_helper(
+                left.buffer(),
+                left.offset(),
+                &right,
+                r_offset,
+                len,
+                |l, r| {
                     let t = l & !r;
                     valid_count += t.count_ones() as usize;
                     t
-                });
+                },
+            );
             (b, len - valid_count)
         }
         None => {
