@@ -19,6 +19,7 @@ use crate::raw::tape::{Tape, TapeElement};
 use crate::raw::{make_decoder, tape_error, ArrayDecoder};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_array::OffsetSizeTrait;
+use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::marker::PhantomData;
@@ -62,7 +63,6 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
         let mut offsets = BufferBuilder::<O>::new(pos.len() + 1);
         offsets.append(O::from_usize(0).unwrap());
 
-        let mut null_count = 0;
         let mut nulls = self
             .is_nullable
             .then(|| BooleanBufferBuilder::new(pos.len()));
@@ -76,7 +76,6 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
                 }
                 (TapeElement::Null, Some(nulls)) => {
                     nulls.append(false);
-                    null_count += 1;
                     *p + 1
                 }
                 (d, _) => return Err(tape_error(d, "[")),
@@ -102,11 +101,13 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
         }
 
         let child_data = self.decoder.decode(tape, &child_pos)?;
+        let nulls = nulls.as_mut().map(|x| {
+            NullBuffer::new(BooleanBuffer::new(x.finish(), 0, pos.len()))
+        });
 
         let data = ArrayDataBuilder::new(self.data_type.clone())
             .len(pos.len())
-            .null_bit_buffer(nulls.as_mut().map(|x| x.finish()))
-            .null_count(null_count)
+            .nulls(nulls)
             .add_buffer(offsets.finish())
             .child_data(vec![child_data]);
 

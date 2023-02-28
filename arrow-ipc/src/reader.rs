@@ -227,10 +227,8 @@ fn create_array(
             buffer_index = values_triple.2;
 
             let run_array_length = run_node.length() as usize;
-            let run_array_null_count = run_node.null_count() as usize;
             let data = ArrayData::builder(data_type.clone())
                 .len(run_array_length)
-                .null_count(run_array_null_count)
                 .offset(0)
                 .add_child_data(run_ends_triple.0.into_data())
                 .add_child_data(values_triple.0.into_data())

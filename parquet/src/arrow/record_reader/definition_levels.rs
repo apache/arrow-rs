@@ -20,7 +20,6 @@ use std::ops::Range;
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use arrow_buffer::Buffer;
-use arrow_data::Bitmap;
 
 use crate::arrow::buffer::bit_util::count_set_bits;
 use crate::arrow::record_reader::buffer::BufferQueue;
@@ -105,7 +104,7 @@ impl DefinitionLevelBuffer {
     }
 
     /// Split `len` levels out of `self`
-    pub fn split_bitmask(&mut self, len: usize) -> Bitmap {
+    pub fn split_bitmask(&mut self, len: usize) -> Buffer {
         let old_builder = match &mut self.inner {
             BufferInner::Full { nulls, .. } => nulls,
             BufferInner::Mask { nulls } => nulls,
@@ -124,7 +123,7 @@ impl DefinitionLevelBuffer {
 
         // Swap into self
         self.len = new_builder.len();
-        Bitmap::from(std::mem::replace(old_builder, new_builder).finish())
+        std::mem::replace(old_builder, new_builder).finish()
     }
 
     pub fn nulls(&self) -> &BooleanBufferBuilder {
@@ -516,7 +515,7 @@ mod tests {
         let bitmap = buffer.split_bitmask(19);
 
         // Should have split off 19 records leaving, 81 behind
-        assert_eq!(bitmap.bit_len(), 3 * 8); // Note: bitmask only tracks bytes not bits
+        assert_eq!(bitmap.len(), 3); // Note: bitmask only tracks bytes not bits
         assert_eq!(buffer.nulls().len(), 81);
     }
 }

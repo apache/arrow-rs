@@ -16,8 +16,9 @@
 // under the License.
 
 use crate::buffer::BooleanBuffer;
+use crate::{Buffer, MutableBuffer};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct NullBuffer {
     buffer: BooleanBuffer,
     null_count: usize,
@@ -28,6 +29,16 @@ impl NullBuffer {
     pub fn new(buffer: BooleanBuffer) -> Self {
         let null_count = buffer.len() - buffer.count_set_bits();
         Self { buffer, null_count }
+    }
+
+    /// Create a new [`NullBuffer`] of length `len` where all values are null
+    pub fn new_null(len: usize) -> Self {
+        let buffer = MutableBuffer::new_null(len).into_buffer();
+        let buffer = BooleanBuffer::new(buffer, 0, len);
+        Self {
+            buffer,
+            null_count: len,
+        }
     }
 
     /// Create a new [`NullBuffer`] with the provided `buffer` and `null_count`
@@ -43,6 +54,12 @@ impl NullBuffer {
     #[inline]
     pub fn len(&self) -> usize {
         self.buffer.len()
+    }
+
+    /// Returns the offset of this [`NullBuffer`] in bits
+    #[inline]
+    pub fn offset(&self) -> usize {
+        self.buffer.offset()
     }
 
     /// Returns true if this [`NullBuffer`] is empty
@@ -69,10 +86,27 @@ impl NullBuffer {
         !self.is_valid(idx)
     }
 
-    /// Returns the inner buffer
+    /// Returns the packed validity of this [`BooleanBuffer`] not including any offset
+    #[inline]
+    pub fn validity(&self) -> &[u8] {
+        self.buffer.values()
+    }
+
+    /// Slices this [`NullBuffer`] by the provided `offset` and `length`
+    pub fn slice(&self, offset: usize, len: usize) -> Self {
+        Self::new(self.buffer.slice(offset, len))
+    }
+
+    /// Returns the inner [`BooleanBuffer`]
     #[inline]
     pub fn inner(&self) -> &BooleanBuffer {
         &self.buffer
+    }
+
+    /// Returns the underlying [`Buffer`]
+    #[inline]
+    pub fn buffer(&self) -> &Buffer {
+        self.buffer.inner()
     }
 }
 

@@ -18,7 +18,6 @@
 use std::cmp::{max, min};
 
 use arrow_buffer::Buffer;
-use arrow_data::Bitmap;
 
 use crate::arrow::record_reader::{
     buffer::{BufferQueue, ScalarBuffer, ValuesBuffer},
@@ -271,7 +270,7 @@ where
     /// Returns currently stored null bitmap data.
     /// The side effect is similar to `consume_def_levels`.
     pub fn consume_bitmap_buffer(&mut self) -> Option<Buffer> {
-        self.consume_bitmap().map(|b| b.into_buffer())
+        self.consume_bitmap()
     }
 
     /// Reset state of record reader.
@@ -284,7 +283,7 @@ where
     }
 
     /// Returns bitmap data.
-    pub fn consume_bitmap(&mut self) -> Option<Bitmap> {
+    pub fn consume_bitmap(&mut self) -> Option<Buffer> {
         self.def_levels
             .as_mut()
             .map(|levels| levels.split_bitmask(self.num_values))
@@ -409,7 +408,6 @@ fn packed_null_mask(descr: &ColumnDescPtr) -> bool {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::bitmap::Bitmap;
     use arrow::buffer::Buffer;
     use arrow_array::builder::{Int16BufferBuilder, Int32BufferBuilder};
 
@@ -584,8 +582,7 @@ mod tests {
         // Verify bitmap
         let expected_valid = &[false, true, false, true, true, false, true];
         let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
-        let expected_bitmap = Bitmap::from(expected_buffer);
-        assert_eq!(Some(expected_bitmap), record_reader.consume_bitmap());
+        assert_eq!(Some(expected_buffer), record_reader.consume_bitmap());
 
         // Verify result record data
         let actual = record_reader.consume_record_data();
@@ -695,8 +692,7 @@ mod tests {
         // Verify bitmap
         let expected_valid = &[true, false, false, true, true, true, true, true, true];
         let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
-        let expected_bitmap = Bitmap::from(expected_buffer);
-        assert_eq!(Some(expected_bitmap), record_reader.consume_bitmap());
+        assert_eq!(Some(expected_buffer), record_reader.consume_bitmap());
 
         // Verify result record data
         let actual = record_reader.consume_record_data();
@@ -966,8 +962,7 @@ mod tests {
         // Verify bitmap
         let expected_valid = &[false, true, true];
         let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
-        let expected_bitmap = Bitmap::from(expected_buffer);
-        assert_eq!(Some(expected_bitmap), record_reader.consume_bitmap());
+        assert_eq!(Some(expected_buffer), record_reader.consume_bitmap());
 
         // Verify result record data
         let actual = record_reader.consume_record_data();

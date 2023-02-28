@@ -2942,22 +2942,15 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
                 )));
             }
 
-            // keys are data, child_data is values (dictionary)
-            let data = unsafe {
-                ArrayData::new_unchecked(
-                    to_type.clone(),
-                    cast_keys.len(),
-                    Some(cast_keys.null_count()),
-                    cast_keys
-                        .data()
-                        .null_bitmap()
-                        .cloned()
-                        .map(|bitmap| bitmap.into_buffer()),
-                    cast_keys.data().offset(),
-                    cast_keys.data().buffers().to_vec(),
-                    vec![cast_values.into_data()],
-                )
-            };
+            let data = cast_keys.into_data();
+            let builder = data
+                .into_builder()
+                .data_type(to_type.clone())
+                .child_data(vec![cast_values.into_data()]);
+
+            // Safety
+            // Cast keys are still valid
+            let data = unsafe { builder.build_unchecked() };
 
             // create the appropriate array type
             let new_array: ArrayRef = match **to_index_type {
@@ -3184,11 +3177,7 @@ fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
             to_type.clone(),
             array.len(),
             Some(cast_array.null_count()),
-            cast_array
-                .data()
-                .null_bitmap()
-                .cloned()
-                .map(|bitmap| bitmap.into_buffer()),
+            cast_array.data().nulls().map(|b| b.inner().sliced()),
             0,
             vec![offsets.into()],
             vec![cast_array.into_data()],
@@ -3207,23 +3196,18 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
     to_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    let data = array.data_ref();
+    let data = array.data().clone();
     let underlying_array = make_array(data.child_data()[0].clone());
-    let cast_array = cast_with_options(&underlying_array, to.data_type(), cast_options)?;
-    let array_data = unsafe {
-        ArrayData::new_unchecked(
-            to_type.clone(),
-            array.len(),
-            Some(data.null_count()),
-            data.null_bitmap()
-                .cloned()
-                .map(|bitmap| bitmap.into_buffer()),
-            array.offset(),
-            // reuse offset buffer
-            data.buffers().to_vec(),
-            vec![cast_array.into_data()],
-        )
-    };
+    let cast_array =
+        cast_with_options(underlying_array.as_ref(), to.data_type(), cast_options)?;
+    let builder = data
+        .into_builder()
+        .data_type(to_type.clone())
+        .child_data(vec![cast_array.into_data()]);
+
+    // Safety
+    // Data was valid before
+    let array_data = unsafe { builder.build_unchecked() };
     let list = GenericListArray::<OffsetSize>::from(array_data);
     Ok(Arc::new(list) as ArrayRef)
 }
@@ -3302,7 +3286,7 @@ where
         .len(array.len())
         .add_buffer(offset_buffer)
         .add_buffer(str_values_buf)
-        .null_bit_buffer(data.null_buffer().cloned());
+        .nulls(data.nulls().cloned());
 
     let array_data = unsafe { builder.build_unchecked() };
 
@@ -3377,7 +3361,7 @@ where
         .len(array.len())
         .add_buffer(offset_buffer)
         .add_child_data(value_data)
-        .null_bit_buffer(data.null_buffer().cloned());
+        .nulls(data.nulls().cloned());
 
     let array_data = unsafe { builder.build_unchecked() };
     Ok(make_array(array_data))

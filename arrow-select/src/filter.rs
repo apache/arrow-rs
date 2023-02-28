@@ -153,11 +153,11 @@ pub fn build_filter(filter: &BooleanArray) -> Result<Filter, ArrowError> {
 /// Remove null values by do a bitmask AND operation with null bits and the boolean bits.
 pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
     let array_data = filter.data_ref();
-    let null_bitmap = array_data.null_buffer().unwrap();
+    let nulls = array_data.nulls().unwrap();
     let mask = filter.values();
     let offset = filter.offset();
 
-    let new_mask = buffer_bin_and(mask, offset, null_bitmap, offset, filter.len());
+    let new_mask = buffer_bin_and(mask, offset, nulls.buffer(), nulls.offset(), filter.len());
 
     let array_data = ArrayData::builder(DataType::Boolean)
         .len(filter.len())
@@ -410,7 +410,8 @@ fn filter_null_mask(
         return None;
     }
 
-    let nulls = filter_bits(data.null_buffer()?, data.offset(), predicate);
+    let nulls = data.nulls()?;
+    let nulls = filter_bits(nulls.buffer(), nulls.offset(), predicate);
     // The filtered `nulls` has a length of `predicate.count` bits and
     // therefore the null count is this minus the number of valid bits
     let null_count = predicate.count - nulls.count_set_bits_offset(0, predicate.count);

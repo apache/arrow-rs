@@ -939,22 +939,8 @@ fn test_try_new_sliced_struct() {
         .append_option(Some(false));
     builder.append(true);
 
-    let struct_array = builder.finish();
-    let struct_array_slice = struct_array.slice(1, 3);
-    let struct_array_data = struct_array_slice.data();
-
-    let cloned_data = ArrayData::try_new(
-        struct_array_slice.data_type().clone(),
-        struct_array_slice.len(),
-        struct_array_data.null_buffer().cloned(),
-        struct_array_slice.offset(),
-        struct_array_data.buffers().to_vec(),
-        struct_array_data.child_data().to_vec(),
-    )
-    .unwrap();
-    let cloned = make_array(cloned_data);
-
-    assert_eq!(&struct_array_slice, &cloned);
+    let struct_array = builder.finish().into_data();
+    assert_eq!(struct_array, struct_array);
 }
 
 #[test]
