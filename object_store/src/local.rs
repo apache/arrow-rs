@@ -27,8 +27,8 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::{stream::BoxStream, StreamExt};
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
-use std::fs::{metadata, symlink_metadata, File};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::fs::{metadata, symlink_metadata, File, OpenOptions};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -62,6 +62,11 @@ pub(crate) enum Error {
 
     #[snafu(display("Unable to copy data to file: {}", source))]
     UnableToCopyDataToFile {
+        source: io::Error,
+    },
+
+    #[snafu(display("Unable to rename file: {}", source))]
+    UnableToRenameFile {
         source: io::Error,
     },
 
@@ -266,10 +271,13 @@ impl ObjectStore for LocalFileSystem {
         let path = self.config.path_to_filesystem(location)?;
 
         maybe_spawn_blocking(move || {
-            let mut file = open_writable_file(&path)?;
+            let (mut file, suffix) = new_staged_upload(&path)?;
+            let staging_path = staged_upload_path(&path, &suffix);
 
             file.write_all(&bytes)
                 .context(UnableToCopyDataToFileSnafu)?;
+
+            std::fs::rename(staging_path, path).context(UnableToRenameFileSnafu)?;
 
             Ok(())
         })
@@ -282,28 +290,10 @@ impl ObjectStore for LocalFileSystem {
     ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
         let dest = self.config.path_to_filesystem(location)?;
 
-        // Generate an id in case of concurrent writes
-        let mut multipart_id = 1;
-
-        // Will write to a temporary path
-        let staging_path = loop {
-            let staging_path = get_upload_stage_path(&dest, &multipart_id.to_string());
-
-            match std::fs::metadata(&staging_path) {
-                Err(err) if err.kind() == io::ErrorKind::NotFound => break staging_path,
-                Err(err) => {
-                    return Err(Error::UnableToCopyDataToFile { source: err }.into())
-                }
-                Ok(_) => multipart_id += 1,
-            }
-        };
-        let multipart_id = multipart_id.to_string();
-
-        let file = open_writable_file(&staging_path)?;
-
+        let (file, suffix) = new_staged_upload(&dest)?;
         Ok((
-            multipart_id.clone(),
-            Box::new(LocalUpload::new(dest, multipart_id, Arc::new(file))),
+            suffix.clone(),
+            Box::new(LocalUpload::new(dest, suffix, Arc::new(file))),
         ))
     }
 
@@ -313,7 +303,7 @@ impl ObjectStore for LocalFileSystem {
         multipart_id: &MultipartId,
     ) -> Result<()> {
         let dest = self.config.path_to_filesystem(location)?;
-        let staging_path: PathBuf = get_upload_stage_path(&dest, multipart_id);
+        let staging_path: PathBuf = staged_upload_path(&dest, multipart_id);
 
         maybe_spawn_blocking(move || {
             std::fs::remove_file(&staging_path)
@@ -553,9 +543,40 @@ impl ObjectStore for LocalFileSystem {
     }
 }
 
-fn get_upload_stage_path(dest: &std::path::Path, multipart_id: &MultipartId) -> PathBuf {
+/// Generates a unique file path `{base}#{suffix}`, returning the opened `File` and `suffix`
+///
+/// Creates any directories if necessary
+fn new_staged_upload(base: &PathBuf) -> Result<(File, String)> {
+    let mut multipart_id = 1;
+    loop {
+        let suffix = multipart_id.to_string();
+        let path = staged_upload_path(base, &suffix);
+        let mut options = OpenOptions::new();
+        match options.read(true).write(true).create_new(true).open(&path) {
+            Ok(f) => return Ok((f, suffix)),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                multipart_id += 1;
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                let parent = path
+                    .parent()
+                    .context(UnableToCreateFileSnafu { path: &path, err })?;
+
+                std::fs::create_dir_all(parent)
+                    .context(UnableToCreateDirSnafu { path: parent })?;
+
+                continue;
+            }
+            Err(source) => return Err(Error::UnableToOpenFile { source, path }.into()),
+        }
+    }
+}
+
+/// Returns the unique upload for the given path and suffix
+fn staged_upload_path(dest: &PathBuf, suffix: &str) -> PathBuf {
     let mut staging_path = dest.as_os_str().to_owned();
-    staging_path.push(format!("#{multipart_id}"));
+    staging_path.push("#");
+    staging_path.push(suffix);
     staging_path.into()
 }
 
@@ -700,7 +721,7 @@ impl AsyncWrite for LocalUpload {
                         Poll::Ready(res) => {
                             res?;
                             let staging_path =
-                                get_upload_stage_path(&self.dest, &self.multipart_id);
+                                staged_upload_path(&self.dest, &self.multipart_id);
                             let dest = self.dest.clone();
                             self.inner_state = LocalUploadState::Committing(Box::pin(
                                 runtime
@@ -741,7 +762,7 @@ impl AsyncWrite for LocalUpload {
                 }
             }
         } else {
-            let staging_path = get_upload_stage_path(&self.dest, &self.multipart_id);
+            let staging_path = staged_upload_path(&self.dest, &self.multipart_id);
             match &mut self.inner_state {
                 LocalUploadState::Idle(file) => {
                     let file = Arc::clone(file);
@@ -800,33 +821,6 @@ fn open_file(path: &PathBuf) -> Result<File> {
         }
     })?;
     Ok(file)
-}
-
-fn open_writable_file(path: &PathBuf) -> Result<File> {
-    match File::create(path) {
-        Ok(f) => Ok(f),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            let parent = path
-                .parent()
-                .context(UnableToCreateFileSnafu { path: &path, err })?;
-            std::fs::create_dir_all(parent)
-                .context(UnableToCreateDirSnafu { path: parent })?;
-
-            match File::create(path) {
-                Ok(f) => Ok(f),
-                Err(err) => Err(Error::UnableToCreateFile {
-                    path: path.to_path_buf(),
-                    err,
-                }
-                .into()),
-            }
-        }
-        Err(err) => Err(Error::UnableToCreateFile {
-            path: path.to_path_buf(),
-            err,
-        }
-        .into()),
-    }
 }
 
 fn convert_entry(entry: DirEntry, location: Path) -> Result<ObjectMeta> {
