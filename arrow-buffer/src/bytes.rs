@@ -23,10 +23,10 @@ use core::slice;
 use std::ptr::NonNull;
 use std::{fmt::Debug, fmt::Formatter};
 
-use crate::alloc;
 use crate::alloc::Deallocation;
 
 /// A continuous, fixed-size, immutable memory region that knows how to de-allocate itself.
+///
 /// This structs' API is inspired by the `bytes::Bytes`, but it is not limited to using rust's
 /// global allocator nor u8 alignment.
 ///
@@ -53,7 +53,7 @@ impl Bytes {
     ///
     /// * `ptr` - Pointer to raw parts
     /// * `len` - Length of raw parts in **bytes**
-    /// * `capacity` - Total allocated memory for the pointer `ptr`, in **bytes**
+    /// * `deallocation` - Type of allocation
     ///
     /// # Safety
     ///
@@ -93,7 +93,7 @@ impl Bytes {
 
     pub fn capacity(&self) -> usize {
         match self.deallocation {
-            Deallocation::Arrow(capacity) => capacity,
+            Deallocation::Standard(layout) => layout.size(),
             // we cannot determine this in general,
             // and thus we state that this is externally-owned memory
             Deallocation::Custom(_) => 0,
@@ -115,9 +115,10 @@ impl Drop for Bytes {
     #[inline]
     fn drop(&mut self) {
         match &self.deallocation {
-            Deallocation::Arrow(capacity) => {
-                unsafe { alloc::free_aligned(self.ptr, *capacity) };
-            }
+            Deallocation::Standard(layout) => match layout.size() {
+                0 => {} // Nothing to do
+                _ => unsafe { std::alloc::dealloc(self.ptr.as_ptr(), *layout) },
+            },
             // The automatic drop implementation will free the memory once the reference count reaches zero
             Deallocation::Custom(_allocation) => (),
         }

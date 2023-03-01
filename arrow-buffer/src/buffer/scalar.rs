@@ -90,6 +90,15 @@ impl<T: ArrowNativeType> From<Buffer> for ScalarBuffer<T> {
     }
 }
 
+impl<T: ArrowNativeType> From<Vec<T>> for ScalarBuffer<T> {
+    fn from(value: Vec<T>) -> Self {
+        Self {
+            buffer: Buffer::from_vec(value),
+            phantom: Default::default(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -829,6 +829,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "memory is not aligned")]
+    #[allow(deprecated)]
     fn test_primitive_array_alignment() {
         let ptr = arrow_buffer::alloc::allocate_aligned(8);
         let buf = unsafe { Buffer::from_raw_parts(ptr, 8, 8) };
@@ -845,6 +846,7 @@ mod tests {
     // Different error messages, so skip for now
     // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]
+    #[allow(deprecated)]
     fn test_list_array_alignment() {
         let ptr = arrow_buffer::alloc::allocate_aligned(8);
         let buf = unsafe { Buffer::from_raw_parts(ptr, 8, 8) };
