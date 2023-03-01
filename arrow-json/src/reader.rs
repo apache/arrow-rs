@@ -2210,7 +2210,7 @@ mod tests {
                 .unwrap();
             // test that the list offsets are correct
             assert_eq!(
-                cc.data().buffers()[0],
+                *cc.data().buffers()[0],
                 Buffer::from_slice_ref([0i32, 2, 2, 4, 5])
             );
             let cc = as_boolean_array(cc.values());
@@ -2230,7 +2230,7 @@ mod tests {
                 .unwrap();
             // test that the list offsets are correct
             assert_eq!(
-                dd.data().buffers()[0],
+                *dd.data().buffers()[0],
                 Buffer::from_slice_ref([0i32, 1, 1, 2, 6])
             );
 
@@ -2374,7 +2374,7 @@ mod tests {
         let read: &ListArray = read.as_any().downcast_ref::<ListArray>().unwrap();
         let expected = expected.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(
-            read.data().buffers()[0],
+            *read.data().buffers()[0],
             Buffer::from_slice_ref([0i32, 2, 3, 6, 6, 6, 7])
         );
         // compare list null buffers
