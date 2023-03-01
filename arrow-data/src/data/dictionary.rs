@@ -42,7 +42,7 @@ mod private {
     }
 }
 
-/// Types of offset used by variable length byte arrays
+/// Types of dictionary key used by dictionary arrays
 pub trait DictionaryKey: private::DictionaryKeySealed + ArrowNativeType {
     const TYPE: DictionaryKeyType;
 }

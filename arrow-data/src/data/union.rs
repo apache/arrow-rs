@@ -51,7 +51,7 @@ impl UnionArrayData {
         }
     }
 
-    /// Returns the type ids for this array if this is a dense union
+    /// Returns the type ids for this array
     #[inline]
     pub fn type_ids(&self) -> &[i8] {
         &self.type_ids

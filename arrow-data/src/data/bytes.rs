@@ -267,7 +267,7 @@ impl<O: BytesOffset, B: Bytes + ?Sized> BytesArrayData<O, B> {
     /// # Safety
     ///
     /// - Each consecutive window of `offsets` must identify a valid slice of `values`
-    /// - `nulls.len() == offsets.len() + 1`
+    /// - `nulls.len() == offsets.len() - 1`
     /// - `data_type` must be valid for this layout
     pub unsafe fn new_unchecked(
         data_type: DataType,

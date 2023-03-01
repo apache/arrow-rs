@@ -42,7 +42,7 @@ mod private {
     }
 }
 
-/// Types of offset used by variable length byte arrays
+/// Types of offset used by variable length list arrays
 pub trait ListOffset: private::ListOffsetSealed + ArrowNativeType {
     const TYPE: OffsetType;
 }
@@ -153,7 +153,7 @@ impl<O: ListOffset> ListArrayData<O> {
     /// # Safety
     ///
     /// - Each consecutive window of `offsets` must identify a valid slice of `child`
-    /// - `nulls.len() == offsets.len() + 1`
+    /// - `nulls.len() == offsets.len() - 1`
     /// - `data_type` must be valid for this layout
     pub unsafe fn new_unchecked(
         data_type: DataType,
