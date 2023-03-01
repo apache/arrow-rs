@@ -82,7 +82,7 @@ impl<'a> IndexIterator<'a> {
     fn new(filter: &'a BooleanArray, remaining: usize) -> Self {
         assert_eq!(filter.null_count(), 0);
         let data = filter.data();
-        let iter = BitIndexIterator::new(&data.buffers()[0], data.offset(), data.len());
+        let iter = BitIndexIterator::new(data.buffers()[0], data.offset(), data.len());
         Self { remaining, iter }
     }
 }
@@ -468,7 +468,7 @@ fn filter_boolean(values: &BooleanArray, predicate: &FilterPredicate) -> Boolean
     assert_eq!(data.buffers().len(), 1);
     assert_eq!(data.child_data().len(), 0);
 
-    let values = filter_bits(&data.buffers()[0], data.offset(), predicate);
+    let values = filter_bits(data.buffers()[0], data.offset(), predicate);
 
     let mut builder = ArrayDataBuilder::new(DataType::Boolean)
         .len(predicate.count)
@@ -570,7 +570,7 @@ where
 
         Self {
             src_offsets: array.value_offsets(),
-            src_values: &array.data().buffers()[1],
+            src_values: array.data().buffers()[1],
             dst_offsets,
             dst_values,
             cur_offset,

@@ -2482,7 +2482,7 @@ mod tests {
             for v in *values {
                 t.update(v, None)
             }
-            assert_eq!(&t.get(), expected, "{:?}", values)
+            assert_eq!(&t.get(), expected, "{values:?}")
         }
     }
 }
