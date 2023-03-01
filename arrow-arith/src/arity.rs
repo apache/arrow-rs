@@ -287,7 +287,7 @@ where
         .zip(b.values())
         .for_each(|(l, r)| *l = op(*l, *r));
 
-    let array_builder = builder.finish().data().clone().into_builder().nulls(nulls);
+    let array_builder = builder.finish().into_data().into_builder().nulls(nulls);
 
     let array_data = unsafe { array_builder.build_unchecked() };
     Ok(Ok(PrimitiveArray::<T>::from(array_data)))

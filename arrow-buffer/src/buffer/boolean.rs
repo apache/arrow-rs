@@ -64,8 +64,8 @@ impl BooleanBuffer {
         self.buffer.count_set_bits_offset(self.offset, self.len)
     }
 
-    /// Returns a `BitChunks` instance which can be used to iterate over this buffers bits
-    /// in larger chunks and starting at arbitrary bit offsets.
+    /// Returns a `BitChunks` instance which can be used to iterate over
+    /// this buffer's bits in `u64` chunks
     pub fn bit_chunks(&self) -> BitChunks {
         BitChunks::new(self.values(), self.offset, self.len)
     }
