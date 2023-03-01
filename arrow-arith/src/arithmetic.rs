@@ -26,6 +26,8 @@ use crate::arity::*;
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
+use arrow_buffer::i256;
+use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
 use num::traits::Pow;
 use std::sync::Arc;
@@ -61,7 +63,7 @@ fn math_checked_op<LT, RT, F>(
 where
     LT: ArrowNumericType,
     RT: ArrowNumericType,
-    F: Fn(LT::Native, RT::Native) -> Result<LT::Native, ArrowError>,
+    F: FnMut(LT::Native, RT::Native) -> Result<LT::Native, ArrowError>,
 {
     try_binary(left, right, op)
 }
@@ -1162,6 +1164,74 @@ pub fn multiply_dyn_checked(
                 )))
             )
         }
+    }
+}
+
+/// Perform `left * right` operation on two decimal arrays. If either left or right value is
+/// null then the result is also null.
+///
+/// This performs decimal multiplication which allows precision loss if an exact representation
+/// is not possible for the result. In the case, the result will be rounded.
+pub fn multiply_decimal(
+    left: &PrimitiveArray<Decimal128Type>,
+    right: &PrimitiveArray<Decimal128Type>,
+) -> Result<ArrayRef, ArrowError> {
+    let precision = left.precision();
+    let mut product_scale = left.scale() + right.scale();
+
+    math_checked_op(left, right, |a, b| {
+        let a = i256::from_i128(a);
+        let b = i256::from_i128(b);
+
+        a.checked_mul(b)
+            .map(|mut a| {
+                // Round the value if an exact representation is not possible.
+                // ref: java.math.BigDecimal#doRound
+                let mut digits = a.to_string().len() as i8;
+                let mut diff = digits - (Decimal128Type::MAX_PRECISION as i8);
+
+                while diff > 0 {
+                    let divisor = i256::from_i128(10).pow_wrapping(diff as u32);
+                    a = divide_and_round::<Decimal256Type>(a, divisor);
+                    product_scale -= diff;
+
+                    digits = a.to_string().len() as i8;
+                    diff = digits - (Decimal128Type::MAX_PRECISION as i8);
+                }
+                a
+            })
+            .and_then(|a| a.to_i128())
+            .ok_or_else(|| {
+                ArrowError::ComputeError(format!(
+                    "Overflow happened on: {:?} * {:?}, {:?}",
+                    a,
+                    b,
+                    a.checked_mul(b)
+                ))
+            })
+    })
+    .and_then(|a| {
+        Ok(Arc::new(a.with_precision_and_scale(precision, product_scale)?) as ArrayRef)
+    })
+}
+
+/// Divide a decimal native value by given divisor and round the result.
+fn divide_and_round<I>(input: I::Native, div: I::Native) -> I::Native
+where
+    I: DecimalType,
+    I::Native: ArrowNativeTypeOp,
+{
+    let d = input.div_wrapping(div);
+    let r = input.mod_wrapping(div);
+
+    let half = div.div_wrapping(I::Native::from_usize(2).unwrap());
+    let half_neg = half.neg_wrapping();
+
+    // Round result
+    match input >= I::Native::ZERO {
+        true if r >= half => d.add_wrapping(I::Native::ONE),
+        false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
+        _ => d,
     }
 }
 
@@ -3230,5 +3300,59 @@ mod tests {
             .unwrap();
 
         assert_eq!(&expected, &result);
+    }
+
+    #[test]
+    fn test_decimal_multiply_allow_precision_loss() {
+        // Overflow happening as i128 cannot hold multiplying result.
+        let a = Decimal128Array::from(vec![123456789000000000000000000])
+            .with_precision_and_scale(38, 18)
+            .unwrap();
+
+        let b = Decimal128Array::from(vec![10000000000000000000])
+            .with_precision_and_scale(38, 18)
+            .unwrap();
+
+        let err = multiply_dyn_checked(&a, &b).unwrap_err();
+        assert!(err.to_string().contains(
+            "Overflow happened on: 123456789000000000000000000 * 10000000000000000000"
+        ));
+
+        // Allow precision loss.
+        let result = multiply_decimal(&a, &b).unwrap();
+        let result = as_primitive_array::<Decimal128Type>(&result).clone();
+        let expected =
+            Decimal128Array::from(vec![12345678900000000000000000000000000000])
+                .with_precision_and_scale(38, 28)
+                .unwrap();
+
+        assert_eq!(&expected, &result);
+        assert_eq!(
+            result.value_as_string(0),
+            "1234567890.0000000000000000000000000000"
+        );
+
+        // Rounding case
+        let a = Decimal128Array::from(vec![123456789555555555555555555])
+            .with_precision_and_scale(38, 18)
+            .unwrap();
+
+        let b = Decimal128Array::from(vec![11222222222222222222])
+            .with_precision_and_scale(38, 18)
+            .unwrap();
+
+        let result = multiply_decimal(&a, &b).unwrap();
+        let result = as_primitive_array::<Decimal128Type>(&result).clone();
+        let expected =
+            Decimal128Array::from(vec![13854595272345679012071330528765432099])
+                .with_precision_and_scale(38, 28)
+                .unwrap();
+
+        assert_eq!(&expected, &result);
+        // Rounded the value "1385459527.234567901207133052876543209876543210".
+        assert_eq!(
+            result.value_as_string(0),
+            "1385459527.2345679012071330528765432099"
+        );
     }
 }
