@@ -29,6 +29,9 @@ use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
 use crate::errors::{ParquetError, Result};
 use crate::util::{bit_util::FromBytes, memory::ByteBufferPtr};
 
+// convert byte array
+use byteorder::{ByteOrder, BigEndian};
+
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
 /// The type only takes 12 bytes, without extra padding.
 #[derive(Clone, Copy, Debug, PartialOrd, Default, PartialEq, Eq)]
@@ -1230,6 +1233,187 @@ macro_rules! ensure_phys_ty {
             $($ty => (),)*
             _ => panic!($err),
         };
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ColumnData {
+    VecU8 (Vec<u8>),
+    VecU16(Vec<u16>),
+    VecU32(Vec<u32>),
+    VecU64(Vec<u64>),
+    VecI8 (Vec<i8>),
+    VecI16(Vec<i16>),
+    VecI32(Vec<i32>),
+    VecI64(Vec<i64>),
+    VecF32(Vec<f32>),
+    VecF64(Vec<f64>),
+}
+
+impl ColumnData {
+    pub fn convert_from_u8(&mut self, input: &Vec<u8>) {
+        match self {
+            ColumnData::VecU8(x) => {
+                x.extend_from_slice(input);
+            },
+            ColumnData::VecU16(x) => {
+                let orig_output_len = x.len();
+                x.resize(orig_output_len + input.len() / std::mem::size_of::<u16>(), 0u16);
+                BigEndian::read_u16_into(input, &mut x[orig_output_len..]); 
+            },
+            ColumnData::VecU32(x) => {
+                let orig_output_len = x.len();
+                x.resize(input.len() / std::mem::size_of::<u32>(), 0u32);
+                BigEndian::read_u32_into(input, &mut x[orig_output_len..]); 
+            },
+            ColumnData::VecU64(x) => {
+                let orig_output_len = x.len();
+                x.resize(input.len() / std::mem::size_of::<u64>(), 0u64);
+                BigEndian::read_u64_into(input, &mut x[orig_output_len..]); 
+            },
+            ColumnData::VecI8(x) => {
+                x.extend_from_slice(&input.iter().map(|&x| x as i8).collect::<Vec<_>>());
+            },
+            ColumnData::VecI16(x) => {
+                let orig_output_len = x.len();
+                x.resize(input.len() / std::mem::size_of::<i16>(), 0i16);
+                BigEndian::read_i16_into(input, &mut x[orig_output_len..]); 
+            },
+            ColumnData::VecI32(x) => {
+                let orig_output_len = x.len();
+                x.resize(input.len() / std::mem::size_of::<i32>(), 0i32);
+                BigEndian::read_i32_into(input, &mut x[orig_output_len..]); 
+            },
+            ColumnData::VecI64(x) => {
+                let orig_output_len = x.len();
+                x.resize(input.len() / std::mem::size_of::<i64>(), 0i64);
+                BigEndian::read_i64_into(input, &mut x[orig_output_len..]); 
+            },
+            ColumnData::VecF32(x) => {
+                let orig_output_len = x.len();
+                x.resize(input.len() / std::mem::size_of::<f32>(), 0f32);
+                BigEndian::read_f32_into(input, &mut x[orig_output_len..]); 
+            },
+            ColumnData::VecF64(x) => {
+                let orig_output_len = x.len();
+                x.resize(input.len() / std::mem::size_of::<f64>(), 0f64);
+                BigEndian::read_f64_into(input, &mut x[orig_output_len..]); 
+            },
+        }
+    }
+
+    pub fn convert_to_u8(&self, output: &mut Vec<u8>) {
+        let orig_output_len = output.len();
+        match self {
+            ColumnData::VecU8(x) => {
+                output.extend_from_slice(&x);
+            },
+            ColumnData::VecU16(x) => {
+                output.resize(orig_output_len + x.len() * std::mem::size_of::<u16>(), 0u8);
+                BigEndian::write_u16_into(&x, &mut output[orig_output_len..]); 
+            },
+            ColumnData::VecU32(x) => {
+                output.resize(orig_output_len + x.len() * std::mem::size_of::<u32>(), 0u8);
+                BigEndian::write_u32_into(&x, &mut output[orig_output_len..]);  
+            },
+            ColumnData::VecU64(x) => {
+                output.resize(orig_output_len + x.len() * std::mem::size_of::<u64>(), 0u8);
+                BigEndian::write_u64_into(&x, &mut output[orig_output_len..]); 
+            },
+            ColumnData::VecI8(x) => {
+                output.extend_from_slice(&x.iter().map(|&x| x as u8).collect::<Vec<_>>());
+            },
+            ColumnData::VecI16(x) => {
+                output.resize(orig_output_len + x.len() * std::mem::size_of::<i16>(), 0u8);
+                BigEndian::write_i16_into(&x, &mut output[orig_output_len..]); 
+            },
+            ColumnData::VecI32(x) => {
+                output.resize(orig_output_len + x.len() * std::mem::size_of::<i32>(), 0u8);
+                BigEndian::write_i32_into(&x, &mut output[orig_output_len..]); 
+            },
+            ColumnData::VecI64(x) => {
+                output.resize(orig_output_len + x.len() * std::mem::size_of::<i64>(), 0u8);
+                BigEndian::write_i64_into(&x, &mut output[orig_output_len..]);  
+            },
+            ColumnData::VecF32(x) => {
+                output.resize(orig_output_len + x.len() * std::mem::size_of::<f32>(), 0u8);
+                BigEndian::write_f32_into(&x, &mut output[orig_output_len..]); 
+            },
+            ColumnData::VecF64(x) => {
+                output.resize(orig_output_len + x.len() * std::mem::size_of::<f64>(), 0u8);
+                BigEndian::write_f64_into(&x, &mut output[orig_output_len..]);  
+            },
+        }
+    }
+
+    pub fn clear(&mut self) {
+        match self {
+            ColumnData::VecU8(x) => {
+                x.clear();
+            },
+            ColumnData::VecU16(x) => {
+                x.clear();
+            },
+            ColumnData::VecU32(x) => {
+                x.clear();
+            },
+            ColumnData::VecU64(x) => {
+                x.clear();
+            },
+            ColumnData::VecI8(x) => {
+                x.clear();
+            },
+            ColumnData::VecI16(x) => {
+                x.clear();
+            },
+            ColumnData::VecI32(x) => {
+                x.clear();
+            },
+            ColumnData::VecI64(x) => {
+                x.clear();
+            },
+            ColumnData::VecF32(x) => {
+                x.clear();
+            },
+            ColumnData::VecF64(x) => {
+                x.clear();
+            },
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            ColumnData::VecU8(x) => {
+                x.len()
+            },
+            ColumnData::VecU16(x) => {
+                x.len()
+            },
+            ColumnData::VecU32(x) => {
+                x.len()
+            },
+            ColumnData::VecU64(x) => {
+                x.len()
+            },
+            ColumnData::VecI8(x) => {
+                x.len()
+            },
+            ColumnData::VecI16(x) => {
+                x.len()
+            },
+            ColumnData::VecI32(x) => {
+                x.len()
+            },
+            ColumnData::VecI64(x) => {
+                x.len()
+            },
+            ColumnData::VecF32(x) => {
+                x.len()
+            },
+            ColumnData::VecF64(x) => {
+                x.len()
+            },
+        }
     }
 }
 

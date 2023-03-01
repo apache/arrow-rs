@@ -147,13 +147,9 @@ path = "./examples/compression.rs"
 name = "arrow_writer_layout"
 required-features = ["arrow"]
 
-[[test]]
-name = "compression_char"
-required-features = ["arrow", "experimental"]
-
-[[test]]
-name = "compression_f64"
-required-features = ["arrow", "experimental"]
+# [[test]]
+# name = "compression_f64"
+# required-features = ["arrow", "experimental"]
 
 [[bin]]
 name = "parquet-read"

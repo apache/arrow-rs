@@ -695,7 +695,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
                 if let Some(ref mut cmpr) = self.compressor {
                     let mut compressed_buf = Vec::with_capacity(uncompressed_size);
-                    cmpr.compress(&buffer[..], &mut compressed_buf)?;
+
+                    let input_buf_columndata = ColumnData::VecU8(buffer[..].to_vec());
+                    cmpr.compress(&input_buf_columndata, &mut compressed_buf)?;
+
                     buffer = compressed_buf;
                 }
 
@@ -735,7 +738,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 // Data Page v2 compresses values only.
                 match self.compressor {
                     Some(ref mut cmpr) => {
-                        cmpr.compress(values_data.buf.data(), &mut buffer)?;
+                        let input_buf_columndata = ColumnData::VecU8(values_data.buf.data().to_vec());
+                        cmpr.compress(&input_buf_columndata, &mut buffer)?;
                     }
                     None => buffer.extend_from_slice(values_data.buf.data()),
                 }
@@ -890,7 +894,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
             if let Some(ref mut cmpr) = self.compressor {
                 let mut output_buf = Vec::with_capacity(uncompressed_size);
-                cmpr.compress(page.buf.data(), &mut output_buf)?;
+                let input_buf_columndata = ColumnData::VecU8(page.buf.data().to_vec());
+                cmpr.compress(&input_buf_columndata, &mut output_buf)?;
                 page.buf = ByteBufferPtr::new(output_buf);
             }
 

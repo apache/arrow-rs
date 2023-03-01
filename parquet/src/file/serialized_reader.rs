@@ -47,6 +47,8 @@ use thrift::protocol::{TCompactInputProtocol, TSerializable};
 // re-use the logic in their own ParquetFileWriter wrappers
 pub use crate::util::io::FileSource;
 
+use crate::data_type::ColumnData;
+
 // ----------------------------------------------------------------------
 // Implementations of traits facilitating the creation of a new reader
 
@@ -474,11 +476,16 @@ pub(crate) fn decode_page(
             let mut decompressed = Vec::with_capacity(uncompressed_size);
             let compressed = &buffer.as_ref()[offset..];
             decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
+
+            let mut output_buf_columndata = ColumnData::VecU8(decompressed.clone());
             decompressor.decompress(
                 compressed,
-                &mut decompressed,
+                &mut output_buf_columndata,
                 Some(uncompressed_size - offset),
             )?;
+
+            decompressed.clear();
+            output_buf_columndata.convert_to_u8(&mut decompressed);
 
             if decompressed.len() != uncompressed_size {
                 return Err(general_err!(

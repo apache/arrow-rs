@@ -50,6 +50,9 @@ assert_eq!(output, data);
 use crate::basic::Compression as CodecType;
 use crate::errors::{ParquetError, Result};
 
+// enum for columnar data
+use crate::data_type::ColumnData;
+
 /// Parquet compression codec interface.
 pub trait Codec: Send {
     /// Compresses data stored in slice `input_buf` and appends the compressed result
@@ -57,7 +60,7 @@ pub trait Codec: Send {
     ///
     /// Note that you'll need to call `clear()` before reusing the same `output_buf`
     /// across different `compress` calls.
-    fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()>;
+    fn compress(&mut self, input_buf_columndata: &ColumnData, output_buf: &mut Vec<u8>) -> Result<()>;
 
     /// Decompresses data stored in slice `input_buf` and appends output to `output_buf`.
     ///
@@ -69,7 +72,7 @@ pub trait Codec: Send {
     fn decompress(
         &mut self,
         input_buf: &[u8],
-        output_buf: &mut Vec<u8>,
+        output_buf_columndata: &mut ColumnData,
         uncompress_size: Option<usize>,
     ) -> Result<usize>;
 }
@@ -143,6 +146,8 @@ pub fn create_codec(
         CodecType::ZSTD => Ok(Some(Box::new(ZSTDCodec::new()))),
         #[cfg(any(feature = "lz4", test))]
         CodecType::LZ4_RAW => Ok(Some(Box::new(LZ4RawCodec::new()))),
+        #[cfg(any(feature = "qcom", test))]
+        CodecType::QCOM => Ok(Some(Box::new(QComCodec::new()))),
         CodecType::UNCOMPRESSED => Ok(None),
         _ => Err(nyi_err!("The codec type {} is not supported yet", codec)),
     }
@@ -154,6 +159,9 @@ mod snappy_codec {
 
     use crate::compression::Codec;
     use crate::errors::Result;
+
+    // enum for columnar data
+    use crate::data_type::ColumnData;
 
     /// Codec for Snappy compression format.
     pub struct SnappyCodec {
@@ -175,27 +183,37 @@ mod snappy_codec {
         fn decompress(
             &mut self,
             input_buf: &[u8],
-            output_buf: &mut Vec<u8>,
+            output_buf_columndata: &mut ColumnData,
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
+
+            let mut output_buf = Vec::new();
+
             let len = match uncompress_size {
                 Some(size) => size,
                 None => decompress_len(input_buf)?,
             };
             let offset = output_buf.len();
             output_buf.resize(offset + len, 0);
-            self.decoder
+            let ret = self.decoder
                 .decompress(input_buf, &mut output_buf[offset..])
-                .map_err(|e| e.into())
+                .map_err(|e| e.into());
+            
+            output_buf_columndata.convert_from_u8(&output_buf);
+
+            ret
         }
 
-        fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
+        fn compress(&mut self, input_buf_columndata: &ColumnData, output_buf: &mut Vec<u8>) -> Result<()> {
+            let mut input_buf = Vec::new();
+            input_buf_columndata.convert_to_u8(&mut input_buf);
+
             let output_buf_len = output_buf.len();
             let required_len = max_compress_len(input_buf.len());
             output_buf.resize(output_buf_len + required_len, 0);
             let n = self
                 .encoder
-                .compress(input_buf, &mut output_buf[output_buf_len..])?;
+                .compress(&input_buf, &mut output_buf[output_buf_len..])?;
             output_buf.truncate(output_buf_len + n);
             Ok(())
         }
@@ -214,6 +232,9 @@ mod gzip_codec {
     use crate::compression::Codec;
     use crate::errors::Result;
 
+    // enum for columnar data
+    use crate::data_type::ColumnData;
+
     /// Codec for GZIP compression algorithm.
     pub struct GZipCodec {}
 
@@ -228,16 +249,26 @@ mod gzip_codec {
         fn decompress(
             &mut self,
             input_buf: &[u8],
-            output_buf: &mut Vec<u8>,
+            output_buf_columndata: &mut ColumnData,
             _uncompress_size: Option<usize>,
         ) -> Result<usize> {
+
+            let mut output_buf: Vec<u8> = Vec::new();
+
             let mut decoder = read::GzDecoder::new(input_buf);
-            decoder.read_to_end(output_buf).map_err(|e| e.into())
+            let ret = decoder.read_to_end(&mut output_buf).map_err(|e| e.into());
+
+            output_buf_columndata.convert_from_u8(&output_buf);
+
+            ret
         }
 
-        fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
+        fn compress(&mut self, input_buf_columndata: &ColumnData, output_buf: &mut Vec<u8>) -> Result<()> {
+            let mut input_buf = Vec::new();
+            input_buf_columndata.convert_to_u8(&mut input_buf);
+
             let mut encoder = write::GzEncoder::new(output_buf, Compression::default());
-            encoder.write_all(input_buf)?;
+            encoder.write_all(&input_buf)?;
             encoder.try_finish().map_err(|e| e.into())
         }
     }
@@ -252,6 +283,9 @@ mod brotli_codec {
 
     use crate::compression::Codec;
     use crate::errors::Result;
+
+    // enum for columnar data
+    use crate::data_type::ColumnData;
 
     const BROTLI_DEFAULT_BUFFER_SIZE: usize = 4096;
     const BROTLI_DEFAULT_COMPRESSION_QUALITY: u32 = 1; // supported levels 0-9
@@ -271,23 +305,32 @@ mod brotli_codec {
         fn decompress(
             &mut self,
             input_buf: &[u8],
-            output_buf: &mut Vec<u8>,
+            output_buf_columndata: &mut ColumnData,
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
+            let mut output_buf: Vec<u8> = Vec::new();
+
             let buffer_size = uncompress_size.unwrap_or(BROTLI_DEFAULT_BUFFER_SIZE);
-            brotli::Decompressor::new(input_buf, buffer_size)
-                .read_to_end(output_buf)
-                .map_err(|e| e.into())
+            let ret = brotli::Decompressor::new(input_buf, buffer_size)
+                .read_to_end(&mut output_buf)
+                .map_err(|e| e.into());
+
+            output_buf_columndata.convert_from_u8(&output_buf);
+
+            ret
         }
 
-        fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
+        fn compress(&mut self, input_buf_columndata: &ColumnData, output_buf: &mut Vec<u8>) -> Result<()> {
+            let mut input_buf = Vec::new();
+            input_buf_columndata.convert_to_u8(&mut input_buf);
+
             let mut encoder = brotli::CompressorWriter::new(
                 output_buf,
                 BROTLI_DEFAULT_BUFFER_SIZE,
                 BROTLI_DEFAULT_COMPRESSION_QUALITY,
                 BROTLI_DEFAULT_LG_WINDOW_SIZE,
             );
-            encoder.write_all(input_buf)?;
+            encoder.write_all(&input_buf)?;
             encoder.flush().map_err(|e| e.into())
         }
     }
@@ -301,6 +344,9 @@ mod lz4_codec {
 
     use crate::compression::Codec;
     use crate::errors::Result;
+
+    // enum for columnar data
+    use crate::data_type::ColumnData;
 
     const LZ4_BUFFER_SIZE: usize = 4096;
 
@@ -318,9 +364,12 @@ mod lz4_codec {
         fn decompress(
             &mut self,
             input_buf: &[u8],
-            output_buf: &mut Vec<u8>,
+            output_buf_columndata: &mut ColumnData,
             _uncompress_size: Option<usize>,
         ) -> Result<usize> {
+
+            let mut output_buf = Vec::new();
+
             let mut decoder = lz4::Decoder::new(input_buf)?;
             let mut buffer: [u8; LZ4_BUFFER_SIZE] = [0; LZ4_BUFFER_SIZE];
             let mut total_len = 0;
@@ -332,10 +381,16 @@ mod lz4_codec {
                 total_len += len;
                 output_buf.write_all(&buffer[0..len])?;
             }
+
+            output_buf_columndata.convert_from_u8(&output_buf);
+
             Ok(total_len)
         }
 
-        fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
+        fn compress(&mut self, input_buf_columndata: &ColumnData, output_buf: &mut Vec<u8>) -> Result<()> {
+            let mut input_buf = Vec::new();
+            input_buf_columndata.convert_to_u8(&mut input_buf);
+
             let mut encoder = lz4::EncoderBuilder::new().build(output_buf)?;
             let mut from = 0;
             loop {
@@ -360,6 +415,9 @@ mod zstd_codec {
     use crate::compression::Codec;
     use crate::errors::Result;
 
+    // enum for columnar data
+    use crate::data_type::ColumnData;
+
     /// Codec for Zstandard compression algorithm.
     pub struct ZSTDCodec {}
 
@@ -377,19 +435,29 @@ mod zstd_codec {
         fn decompress(
             &mut self,
             input_buf: &[u8],
-            output_buf: &mut Vec<u8>,
+            output_buf_columndata: &mut ColumnData,
             _uncompress_size: Option<usize>,
         ) -> Result<usize> {
+
+            let mut output_buf = Vec::new();
+
             let mut decoder = zstd::Decoder::new(input_buf)?;
-            match io::copy(&mut decoder, output_buf) {
+            let ret = match io::copy(&mut decoder, &mut output_buf) {
                 Ok(n) => Ok(n as usize),
                 Err(e) => Err(e.into()),
-            }
+            };
+
+            output_buf_columndata.convert_from_u8(&output_buf);
+
+            ret
         }
 
-        fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
+        fn compress(&mut self, input_buf_columndata: &ColumnData, output_buf: &mut Vec<u8>) -> Result<()> {
+            let mut input_buf = Vec::new();
+            input_buf_columndata.convert_to_u8(&mut input_buf);
+
             let mut encoder = zstd::Encoder::new(output_buf, ZSTD_COMPRESSION_LEVEL)?;
-            encoder.write_all(input_buf)?;
+            encoder.write_all(&input_buf)?;
             match encoder.finish() {
                 Ok(_) => Ok(()),
                 Err(e) => Err(e.into()),
@@ -406,6 +474,9 @@ mod lz4_raw_codec {
     use crate::errors::ParquetError;
     use crate::errors::Result;
 
+    // enum for columnar data
+    use crate::data_type::ColumnData;
+
     /// Codec for LZ4 Raw compression algorithm.
     pub struct LZ4RawCodec {}
 
@@ -420,9 +491,11 @@ mod lz4_raw_codec {
         fn decompress(
             &mut self,
             input_buf: &[u8],
-            output_buf: &mut Vec<u8>,
+            output_buf_columndata: &mut ColumnData,
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
+            let mut output_buf = Vec::new();
+
             let offset = output_buf.len();
             let required_len = match uncompress_size {
                 Some(uncompress_size) => uncompress_size,
@@ -433,7 +506,7 @@ mod lz4_raw_codec {
                 }
             };
             output_buf.resize(offset + required_len, 0);
-            match lz4::block::decompress_to_buffer(
+            let ret = match lz4::block::decompress_to_buffer(
                 input_buf,
                 Some(required_len.try_into().unwrap()),
                 &mut output_buf[offset..],
@@ -447,15 +520,22 @@ mod lz4_raw_codec {
                     Ok(n)
                 }
                 Err(e) => Err(e.into()),
-            }
+            };
+
+            output_buf_columndata.convert_from_u8(&output_buf);
+
+            ret
         }
 
-        fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
+        fn compress(&mut self, input_buf_columndata: &ColumnData, output_buf: &mut Vec<u8>) -> Result<()> {
+            let mut input_buf = Vec::new();
+            input_buf_columndata.convert_to_u8(&mut input_buf);
+
             let offset = output_buf.len();
             let required_len = lz4::block::compress_bound(input_buf.len())?;
             output_buf.resize(offset + required_len, 0);
             match lz4::block::compress_to_buffer(
-                input_buf,
+                &input_buf,
                 None,
                 false,
                 &mut output_buf[offset..],
@@ -479,6 +559,9 @@ mod lz4_hadoop_codec {
     use crate::compression::Codec;
     use crate::errors::{ParquetError, Result};
     use std::io;
+
+    // enum for columnar data
+    use crate::data_type::ColumnData;
 
     /// Size of u32 type.
     const SIZE_U32: usize = std::mem::size_of::<u32>();
@@ -583,9 +666,12 @@ mod lz4_hadoop_codec {
         fn decompress(
             &mut self,
             input_buf: &[u8],
-            output_buf: &mut Vec<u8>,
+            output_buf_columndata: &mut ColumnData,
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
+
+            let mut output_buf = Vec::new();
+
             let output_len = output_buf.len();
             let required_len = match uncompress_size {
                 Some(n) => n,
@@ -596,7 +682,7 @@ mod lz4_hadoop_codec {
                 }
             };
             output_buf.resize(output_len + required_len, 0);
-            match try_decompress_hadoop(input_buf, &mut output_buf[output_len..]) {
+            let ret = match try_decompress_hadoop(input_buf, &mut output_buf[output_len..]) {
                 Ok(n) => {
                     if n != required_len {
                         return Err(ParquetError::General(
@@ -614,7 +700,7 @@ mod lz4_hadoop_codec {
                     output_buf.truncate(output_len);
                     match LZ4Codec::new().decompress(
                         input_buf,
-                        output_buf,
+                        output_buf_columndata,
                         uncompress_size,
                     ) {
                         Ok(n) => Ok(n),
@@ -623,22 +709,29 @@ mod lz4_hadoop_codec {
                             output_buf.truncate(output_len);
                             LZ4RawCodec::new().decompress(
                                 input_buf,
-                                output_buf,
+                                output_buf_columndata,
                                 uncompress_size,
                             )
                         }
                     }
                 }
-            }
+            };
+
+            output_buf_columndata.convert_from_u8(&output_buf);
+
+            ret
         }
 
-        fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
+        fn compress(&mut self, input_buf_columndata: &ColumnData, output_buf: &mut Vec<u8>) -> Result<()> {
+            let mut input_buf = Vec::new();
+            input_buf_columndata.convert_to_u8(&mut input_buf);
+
             // Allocate memory to store the LZ4_HADOOP prefix.
             let offset = output_buf.len();
             output_buf.resize(offset + PREFIX_LEN, 0);
 
             // Append LZ4_RAW compressed bytes after prefix.
-            LZ4RawCodec::new().compress(input_buf, output_buf)?;
+            LZ4RawCodec::new().compress(input_buf_columndata, output_buf)?;
 
             // Prepend decompressed size and compressed size in big endian to be compatible
             // with LZ4_HADOOP.
@@ -656,13 +749,129 @@ mod lz4_hadoop_codec {
 #[cfg(any(feature = "lz4", test))]
 pub use lz4_hadoop_codec::*;
 
+#[cfg(any(feature = "q_compress", test))]
+mod qcom_codec {
+    use crate::compression::Codec;
+    use crate::errors::Result;
+
+    use q_compress::{auto_compress, auto_decompress, DEFAULT_COMPRESSION_LEVEL};
+    
+    // enum for columnar data
+    use crate::data_type::ColumnData;
+
+    /// Codec for LZ4 Raw compression algorithm.
+    pub struct QComCodec {}
+
+    impl QComCodec {
+        /// Creates new LZ4 Raw compression codec.
+        pub(crate) fn new() -> Self {
+            Self {}
+        }
+    }
+
+    impl Codec for QComCodec {
+        fn decompress(
+            &mut self,
+            input_buf: &[u8],
+            output_buf_columndata: &mut ColumnData,
+            uncompress_size: Option<usize>,
+        ) -> Result<usize> {
+
+            match output_buf_columndata {
+                ColumnData::VecU8(_) | ColumnData::VecI8(_) => {
+                    panic!("Error: QCOM does not handle u8/i8 data");
+                },
+                ColumnData::VecU16(x) => {
+                    x.append( &mut auto_decompress::<u16>(input_buf).expect("failed to decompress") );
+                    Ok(x.len())
+                },
+                ColumnData::VecU32(x) => {
+                    x.append( &mut auto_decompress::<u32>(input_buf).expect("failed to decompress") );
+                    Ok(x.len())
+                },
+                ColumnData::VecU64(x) => {
+                    x.append( &mut auto_decompress::<u64>(input_buf).expect("failed to decompress") );
+                    Ok(x.len())
+                },
+                ColumnData::VecI16(x) => {
+                    x.append( &mut auto_decompress::<i16>(input_buf).expect("failed to decompress") );
+                    Ok(x.len())
+                },
+                ColumnData::VecI32(x) => {
+                    x.append( &mut auto_decompress::<i32>(input_buf).expect("failed to decompress") );
+                    Ok(x.len())
+                },
+                ColumnData::VecI64(x) => {
+                    x.append( &mut auto_decompress::<i64>(input_buf).expect("failed to decompress") );
+                    Ok(x.len())
+                },
+                ColumnData::VecF32(x) => {
+                    x.append( &mut auto_decompress::<f32>(input_buf).expect("failed to decompress") );
+                    Ok(x.len())
+                },
+                ColumnData::VecF64(x) => {
+                    x.append( &mut auto_decompress::<f64>(input_buf).expect("failed to decompress") );
+                    Ok(x.len())
+                },
+                _ => {
+                    panic!("Error: unknown ColumnData x = {:?}", output_buf_columndata);
+                }
+            }
+        }
+
+        fn compress(
+            &mut self, 
+            input_buf_columndata: &ColumnData, 
+            output_buf: &mut Vec<u8>,
+        ) -> Result<()> {
+
+            match input_buf_columndata {
+                ColumnData::VecU8(_) | ColumnData::VecI8(_) => {
+                    panic!("Error: QCOM does not handle u8/i8 data");
+                },
+                ColumnData::VecU16(x) => {
+                    output_buf.append( &mut auto_compress::<u16>(x, DEFAULT_COMPRESSION_LEVEL) );
+                },
+                ColumnData::VecU32(x) => {
+                    output_buf.append( &mut auto_compress::<u32>(x, DEFAULT_COMPRESSION_LEVEL) );
+                },
+                ColumnData::VecU64(x) => {
+                    output_buf.append( &mut auto_compress::<u64>(x, DEFAULT_COMPRESSION_LEVEL) );
+                },
+                ColumnData::VecI16(x) => {
+                    output_buf.append( &mut auto_compress::<i16>(x, DEFAULT_COMPRESSION_LEVEL) );
+                },
+                ColumnData::VecI32(x) => {
+                    output_buf.append( &mut auto_compress::<i32>(x, DEFAULT_COMPRESSION_LEVEL) );
+                },
+                ColumnData::VecI64(x) => {
+                    output_buf.append( &mut auto_compress::<i64>(x, DEFAULT_COMPRESSION_LEVEL) );
+                },
+                ColumnData::VecF32(x) => {
+                    output_buf.append( &mut auto_compress::<f32>(x, DEFAULT_COMPRESSION_LEVEL) );
+                },
+                ColumnData::VecF64(x) => {
+                    output_buf.append( &mut auto_compress::<f64>(x, DEFAULT_COMPRESSION_LEVEL) );
+                },
+                _ => {
+                    panic!("Error: unknown ColumnData x = {:?}", input_buf_columndata);
+                }
+            }
+            Ok(())
+        }
+
+    }
+}
+#[cfg(any(feature = "q_compress", test))]
+pub use qcom_codec::*;
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use crate::util::test_common::rand_gen::random_bytes;
 
-    fn test_roundtrip(c: CodecType, data: &[u8], uncompress_size: Option<usize>) {
+    fn test_roundtrip(c: CodecType, data: &ColumnData, uncompress_size: Option<usize>) {
         let codec_options = CodecOptionsBuilder::default()
             .set_backward_compatible_lz4(false)
             .build();
@@ -671,7 +880,10 @@ mod tests {
 
         // Compress with c1
         let mut compressed = Vec::new();
-        let mut decompressed = Vec::new();
+
+        let mut decompressed = data;
+        decompressed.clear();
+
         c1.compress(data, &mut compressed)
             .expect("Error when compressing");
 
@@ -680,7 +892,7 @@ mod tests {
             .decompress(compressed.as_slice(), &mut decompressed, uncompress_size)
             .expect("Error when decompressing");
         assert_eq!(data.len(), decompressed_size);
-        assert_eq!(data, decompressed.as_slice());
+        assert_eq!(data, decompressed);
 
         decompressed.clear();
         compressed.clear();
@@ -694,35 +906,19 @@ mod tests {
             .decompress(compressed.as_slice(), &mut decompressed, uncompress_size)
             .expect("Error when decompressing");
         assert_eq!(data.len(), decompressed_size);
-        assert_eq!(data, decompressed.as_slice());
+        assert_eq!(data, decompressed);
 
         decompressed.clear();
         compressed.clear();
 
-        // Test does not trample existing data in output buffers
-        let prefix = &[0xDE, 0xAD, 0xBE, 0xEF];
-        decompressed.extend_from_slice(prefix);
-        compressed.extend_from_slice(prefix);
-
-        c2.compress(data, &mut compressed)
-            .expect("Error when compressing");
-
-        assert_eq!(&compressed[..4], prefix);
-
-        let decompressed_size = c2
-            .decompress(&compressed[4..], &mut decompressed, uncompress_size)
-            .expect("Error when decompressing");
-
-        assert_eq!(data.len(), decompressed_size);
-        assert_eq!(data, &decompressed[4..]);
-        assert_eq!(&decompressed[..4], prefix);
     }
 
     fn test_codec_with_size(c: CodecType) {
         let sizes = vec![100, 10000, 100000];
         for size in sizes {
             let data = random_bytes(size);
-            test_roundtrip(c, &data, Some(data.len()));
+            let data_columndata = ColumnData::VecU8(data);
+            test_roundtrip(c, &data_columndata, Some(data.len()));
         }
     }
 
@@ -730,7 +926,8 @@ mod tests {
         let sizes = vec![100, 10000, 100000];
         for size in sizes {
             let data = random_bytes(size);
-            test_roundtrip(c, &data, None);
+            let data_columndata = ColumnData::VecU8(data);
+            test_roundtrip(c, &data_columndata, None);
         }
     }
 
