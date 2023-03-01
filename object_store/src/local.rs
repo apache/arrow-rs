@@ -546,7 +546,7 @@ impl ObjectStore for LocalFileSystem {
 /// Generates a unique file path `{base}#{suffix}`, returning the opened `File` and `suffix`
 ///
 /// Creates any directories if necessary
-fn new_staged_upload(base: &PathBuf) -> Result<(File, String)> {
+fn new_staged_upload(base: &std::path::Path) -> Result<(File, String)> {
     let mut multipart_id = 1;
     loop {
         let suffix = multipart_id.to_string();
@@ -573,7 +573,7 @@ fn new_staged_upload(base: &PathBuf) -> Result<(File, String)> {
 }
 
 /// Returns the unique upload for the given path and suffix
-fn staged_upload_path(dest: &PathBuf, suffix: &str) -> PathBuf {
+fn staged_upload_path(dest: &std::path::Path, suffix: &str) -> PathBuf {
     let mut staging_path = dest.as_os_str().to_owned();
     staging_path.push("#");
     staging_path.push(suffix);
