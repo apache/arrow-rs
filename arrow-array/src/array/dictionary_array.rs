@@ -1017,16 +1017,12 @@ mod tests {
             DictionaryArray::<Int8Type>::from(boxed.data().clone());
         let err = col.into_primitive_dict_builder::<Int32Type>();
 
-        match err {
-            Ok(_) => panic!("Should not get builder from cloned array"),
-            Err(returned) => {
-                let values = Int32Array::from_iter_values([10_i32, 12, 15]);
-                let keys = Int8Array::from_iter_values([1_i8, 0, 2, 0]);
+        let returned = err.unwrap_err();
 
-                let expected =
-                    DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
-                assert_eq!(expected, returned)
-            }
-        }
+        let values = Int32Array::from_iter_values([10_i32, 12, 15]);
+        let keys = Int8Array::from_iter_values([1_i8, 0, 2, 0]);
+
+        let expected = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        assert_eq!(expected, returned);
     }
 }
