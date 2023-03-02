@@ -580,12 +580,14 @@ mod tests {
             let key = std::fs::read_to_string("examples/data/client1.key").unwrap();
             let server_ca = std::fs::read_to_string("examples/data/ca.pem").unwrap();
 
-            let mut client = FlightSqlServiceClient::new_with_endpoint(
-                Identity::from_pem(cert, key),
-                Certificate::from_pem(&server_ca),
-                "localhost",
+            let tls_config = ClientTlsConfig::new()
+                .domain_name("localhost")
+                .ca_certificate(Certificate::from_pem(&server_ca))
+                .identity(Identity::from_pem(cert, key));
+            let mut client = FlightSqlServiceClient::new_with_tls_endpoint(
                 "127.0.0.1",
                 50051,
+                tls_config,
             )
             .await
             .unwrap();
