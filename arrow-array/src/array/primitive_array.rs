@@ -1234,7 +1234,7 @@ mod tests {
     fn test_primitive_array_from_vec() {
         let buf = Buffer::from_slice_ref([0, 1, 2, 3, 4]);
         let arr = Int32Array::from(vec![0, 1, 2, 3, 4]);
-        assert_eq!(buf, arr.data.buffers()[0]);
+        assert_eq!(buf, *arr.data.buffers()[0]);
         assert_eq!(5, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
@@ -1740,7 +1740,7 @@ mod tests {
             .build()
             .unwrap();
         let arr = Int32Array::from(data);
-        assert_eq!(buf2, arr.data.buffers()[0]);
+        assert_eq!(buf2, *arr.data.buffers()[0]);
         assert_eq!(5, arr.len());
         assert_eq!(0, arr.null_count());
         for i in 0..3 {

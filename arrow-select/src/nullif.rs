@@ -56,7 +56,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     let (right, r_offset) = match right_data.nulls() {
         Some(nulls) => (
             buffer_bin_and(
-                &right_data.buffers()[0],
+                right_data.buffers()[0],
                 right_data.offset(),
                 nulls.buffer(),
                 nulls.offset(),

@@ -409,7 +409,7 @@ mod tests {
 
         // Check type ids
         assert_eq!(
-            union.data().buffers()[0],
+            *union.data().buffers()[0],
             Buffer::from_slice_ref(&expected_type_ids)
         );
         for (i, id) in expected_type_ids.iter().enumerate() {
@@ -418,7 +418,7 @@ mod tests {
 
         // Check offsets
         assert_eq!(
-            union.data().buffers()[1],
+            *union.data().buffers()[1],
             Buffer::from_slice_ref(&expected_value_offsets)
         );
         for (i, id) in expected_value_offsets.iter().enumerate() {
@@ -427,15 +427,15 @@ mod tests {
 
         // Check data
         assert_eq!(
-            union.data().child_data()[0].buffers()[0],
+            *union.data().child_data()[0].buffers()[0],
             Buffer::from_slice_ref([1_i32, 4, 6])
         );
         assert_eq!(
-            union.data().child_data()[1].buffers()[0],
+            *union.data().child_data()[1].buffers()[0],
             Buffer::from_slice_ref([2_i32, 7])
         );
         assert_eq!(
-            union.data().child_data()[2].buffers()[0],
+            *union.data().child_data()[2].buffers()[0],
             Buffer::from_slice_ref([3_i32, 5]),
         );
 
@@ -467,7 +467,7 @@ mod tests {
 
         // Check type ids
         assert_eq!(
-            union.data().buffers()[0],
+            *union.data().buffers()[0],
             Buffer::from_slice_ref(&expected_type_ids)
         );
         for (i, id) in expected_type_ids.iter().enumerate() {
@@ -476,7 +476,7 @@ mod tests {
 
         // Check offsets
         assert_eq!(
-            union.data().buffers()[1],
+            *union.data().buffers()[1],
             Buffer::from_slice_ref(&expected_value_offsets)
         );
         for (i, id) in expected_value_offsets.iter().enumerate() {
@@ -660,7 +660,7 @@ mod tests {
         .unwrap();
 
         // Check type ids
-        assert_eq!(Buffer::from_slice_ref(type_ids), array.data().buffers()[0]);
+        assert_eq!(Buffer::from_slice_ref(type_ids), *array.data().buffers()[0]);
         for (i, id) in type_ids.iter().enumerate() {
             assert_eq!(id, &array.type_id(i));
         }
@@ -668,7 +668,7 @@ mod tests {
         // Check offsets
         assert_eq!(
             Buffer::from_slice_ref(value_offsets),
-            array.data().buffers()[1]
+            *array.data().buffers()[1]
         );
         for (i, id) in value_offsets.iter().enumerate() {
             assert_eq!(id, &array.value_offset(i));
@@ -736,7 +736,7 @@ mod tests {
         // Check type ids
         assert_eq!(
             Buffer::from_slice_ref(&expected_type_ids),
-            union.data().buffers()[0]
+            *union.data().buffers()[0]
         );
         for (i, id) in expected_type_ids.iter().enumerate() {
             assert_eq!(id, &union.type_id(i));
@@ -747,16 +747,16 @@ mod tests {
 
         // Check data
         assert_eq!(
-            union.data().child_data()[0].buffers()[0],
+            *union.data().child_data()[0].buffers()[0],
             Buffer::from_slice_ref([1_i32, 0, 0, 4, 0, 6, 0]),
         );
         assert_eq!(
             Buffer::from_slice_ref([0_i32, 2_i32, 0, 0, 0, 0, 7]),
-            union.data().child_data()[1].buffers()[0]
+            *union.data().child_data()[1].buffers()[0]
         );
         assert_eq!(
             Buffer::from_slice_ref([0_i32, 0, 3_i32, 0, 5, 0, 0]),
-            union.data().child_data()[2].buffers()[0]
+            *union.data().child_data()[2].buffers()[0]
         );
 
         assert_eq!(expected_array_values.len(), union.len());
@@ -785,7 +785,7 @@ mod tests {
         // Check type ids
         assert_eq!(
             Buffer::from_slice_ref(&expected_type_ids),
-            union.data().buffers()[0]
+            *union.data().buffers()[0]
         );
         for (i, id) in expected_type_ids.iter().enumerate() {
             assert_eq!(id, &union.type_id(i));
@@ -847,7 +847,7 @@ mod tests {
         // Check type ids
         assert_eq!(
             Buffer::from_slice_ref(&expected_type_ids),
-            union.data().buffers()[0]
+            *union.data().buffers()[0]
         );
         for (i, id) in expected_type_ids.iter().enumerate() {
             assert_eq!(id, &union.type_id(i));

@@ -353,7 +353,7 @@ pub fn not(left: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     let data = left.data_ref();
     let null_bit_buffer = data.nulls().map(|b| b.inner().sliced());
 
-    let values = buffer_unary_not(&data.buffers()[0], left_offset, len);
+    let values = buffer_unary_not(data.buffers()[0], left_offset, len);
 
     let data = unsafe {
         ArrayData::new_unchecked(

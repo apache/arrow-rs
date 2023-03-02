@@ -30,6 +30,9 @@ use std::sync::Arc;
 
 use crate::equal;
 
+mod buffers;
+pub use buffers::*;
+
 #[allow(unused)] // Private until ready (#1176)
 mod bytes;
 #[allow(unused)] // Private until ready (#1176)
@@ -371,9 +374,10 @@ impl ArrayData {
         &self.data_type
     }
 
-    /// Returns a slice of the [`Buffer`]s that hold the data.
-    pub fn buffers(&self) -> &[Buffer] {
-        &self.buffers[..]
+    /// Returns the [`Buffers`] storing data for this [`ArrayData`]
+    pub fn buffers(&self) -> Buffers<'_> {
+        // In future ArrayData won't store data contiguously as `Vec<Buffer>` (#1799)
+        Buffers::from_slice(&self.buffers)
     }
 
     /// Returns a slice of children [`ArrayData`]. This will be non
