@@ -166,11 +166,12 @@ impl FixedSizeBinaryArray {
                         )));
                     }
                 } else {
-                    size = Some(slice.len());
+                    let len = slice.len();
+                    size = Some(len);
                     // Now that we know how large each element is we can reserve
                     // sufficient capacity in the underlying mutable buffer for
                     // the data.
-                    buffer.reserve(iter_size_hint * size);
+                    buffer.reserve(iter_size_hint * len);
                     buffer.extend_zeros(slice.len() * prepend);
                 }
                 bit_util::set_bit(null_buf.as_slice_mut(), len);
@@ -327,8 +328,9 @@ impl FixedSizeBinaryArray {
                     )));
                 }
             } else {
-                size = Some(slice.len());
-                buffer.reserve(iter_size_hint * size);
+                let len = slice.len();
+                size = Some(len);
+                buffer.reserve(iter_size_hint * len);
             }
 
             buffer.extend_from_slice(slice);
