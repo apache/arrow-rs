@@ -46,15 +46,9 @@ use std::{fs::File, path::Path};
 struct Args {
     #[clap(help("Path to the parquet file"))]
     file_name: String,
-    #[clap(
-        short,
-        long,
-        help("Check the bloom filter indexes for the given column")
-    )]
+    #[clap(help("Check the bloom filter indexes for the given column"))]
     column: String,
     #[clap(
-        short,
-        long,
         help("Check if the given values match bloom filter, the values will be evaluated as strings"),
         required = true
     )]

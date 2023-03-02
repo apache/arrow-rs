@@ -48,7 +48,7 @@ struct Args {
     #[clap(help("Path to a parquet file"))]
     file: String,
 
-    #[clap(short, long, help("Column name to print"))]
+    #[clap(help("Column name to print"))]
     column: String,
 }
 
