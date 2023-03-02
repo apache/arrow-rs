@@ -46,7 +46,7 @@ use std::{fs::File, path::Path};
 #[derive(Debug, Parser)]
 #[clap(author, version, about("Binary file to print the schema and metadata of a Parquet file"), long_about = None)]
 struct Args {
-    #[clap(short, long)]
+    #[clap(help("Path to the parquet file"))]
     file_path: String,
     #[clap(short, long, help("Enable printing full file metadata"))]
     verbose: bool,

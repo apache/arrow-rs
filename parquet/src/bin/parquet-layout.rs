@@ -212,7 +212,7 @@ fn encoding(encoding: parquet::format::Encoding) -> &'static str {
 #[derive(Debug, Parser)]
 #[clap(author, version, about("Prints the physical layout of a parquet file"), long_about = None)]
 struct Args {
-    #[clap(short, long, help("Path to a parquet file"))]
+    #[clap(help("Path to a parquet file"))]
     file: String,
 }
 

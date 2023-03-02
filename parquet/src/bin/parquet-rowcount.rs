@@ -44,8 +44,6 @@ use std::{fs::File, path::Path};
 #[clap(author, version, about("Binary file to return the number of rows found from Parquet file(s)"), long_about = None)]
 struct Args {
     #[clap(
-        short,
-        long,
         number_of_values(1),
         help("List of Parquet files to read from separated by space")
     )]

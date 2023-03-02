@@ -45,7 +45,7 @@ use std::fs::File;
 #[derive(Debug, Parser)]
 #[clap(author, version, about("Prints the page index of a parquet file"), long_about = None)]
 struct Args {
-    #[clap(short, long, help("Path to a parquet file"))]
+    #[clap(help("Path to a parquet file"))]
     file: String,
 
     #[clap(short, long, help("Column name to print"))]
