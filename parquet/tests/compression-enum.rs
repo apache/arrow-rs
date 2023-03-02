@@ -90,6 +90,8 @@ fn test_codec_qcom_generic<T: DataTypeConstraint + 'static + Copy>(c: CodecType)
     let mut decompressed = data.clone();
     decompressed.clear();
 
+
+
     c1.compress(&data,  &mut compressed).expect("Error when qcom compressing");
     c1.decompress(&compressed,  &mut decompressed, None).expect("Error when qcom decompressing");
     
@@ -200,70 +202,89 @@ fn test_codec_with_size<T: DataTypeConstraint + 'static + Copy>(c: CodecType) wh
         
     }
 }
-
-// #[test]
-fn test_codec_snappy() {
+#[test]
+fn test_codec_snappy_u8() {
     test_codec_with_size::<u8>(CodecType::SNAPPY);
+}
+#[test]
+fn test_codec_snappy_u64() {
     test_codec_with_size::<u64>(CodecType::SNAPPY);
 }
 
-// #[test]
-fn test_codec_gzip() {
+#[test]
+fn test_codec_gzip_u8() {
     test_codec_with_size::<u8>(CodecType::GZIP);
+}
+#[test]
+fn test_codec_gzip_u64() {
     test_codec_with_size::<u64>(CodecType::GZIP);
 }
 
-// #[test]
-fn test_codec_brotli() {
+#[test]
+fn test_codec_brotli_u8() {
     test_codec_with_size::<u8>(CodecType::BROTLI);
+}
+#[test]
+fn test_codec_brotli_u64() {
     test_codec_with_size::<u64>(CodecType::BROTLI);
 }
 
-// #[test]
-fn test_codec_lz4() {
+#[test]
+fn test_codec_lz4_u8() {
     test_codec_with_size::<u8>(CodecType::LZ4);
+}
+#[test]
+fn test_codec_lz4_u64() {
     test_codec_with_size::<u64>(CodecType::LZ4);
 }
 
-// #[test]
-fn test_codec_zstd() {
+#[test]
+fn test_codec_zstd_u8() {
     test_codec_with_size::<u8>(CodecType::ZSTD);
+}
+#[test]
+fn test_codec_zstd_u64() {
     test_codec_with_size::<u64>(CodecType::ZSTD);
 }
 
-// #[test]
-fn test_codec_lz4_raw() {
+#[test]
+fn test_codec_lz4_raw_u8() {
     test_codec_with_size::<u8>(CodecType::LZ4_RAW);
+}
+#[test]
+fn test_codec_lz4_raw_64() {
     test_codec_with_size::<u64>(CodecType::LZ4_RAW);
 }
 
-fn test_codec_qcom() {
-
+#[test]
+fn test_codec_qcom_u16() {
     test_codec_qcom_generic::<u16>(CodecType::QCOM);
-    test_codec_qcom_generic::<u32>(CodecType::QCOM);
-    test_codec_qcom_generic::<u64>(CodecType::QCOM);
-    test_codec_qcom_generic::<i16>(CodecType::QCOM);
-    test_codec_qcom_generic::<i32>(CodecType::QCOM);
-    test_codec_qcom_generic::<i64>(CodecType::QCOM);
-    test_codec_qcom_generic::<f32>(CodecType::QCOM);
-    test_codec_qcom_generic::<f64>(CodecType::QCOM);
 }
-
-fn main() {
-
-    println!("\nTo enable debug output, add 'RUST_LOG=debug' before cargo run.\n");
-
-    env_logger::init();
-
-    test_codec_snappy();
-    test_codec_gzip();
-    test_codec_brotli();
-    test_codec_lz4();
-    test_codec_lz4_raw();
-    test_codec_zstd();
-
-
-    test_codec_qcom();
-
-    println!("All examples succeed.");
+#[test]
+fn test_codec_qcom_u32() {
+    test_codec_qcom_generic::<u32>(CodecType::QCOM);
+}
+#[test]
+fn test_codec_qcom_u64() {
+    test_codec_qcom_generic::<u64>(CodecType::QCOM);
+}
+#[test]
+fn test_codec_qcom_i16() {
+    test_codec_qcom_generic::<i16>(CodecType::QCOM);
+}
+#[test]
+fn test_codec_qcom_i32() {
+    test_codec_qcom_generic::<i32>(CodecType::QCOM);
+}
+#[test]
+fn test_codec_qcom_i64() {
+    test_codec_qcom_generic::<i64>(CodecType::QCOM);
+}
+#[test]
+fn test_codec_qcom_f32() {
+    test_codec_qcom_generic::<f32>(CodecType::QCOM);
+}
+#[test]
+fn test_codec_qcom_f64() {
+    test_codec_qcom_generic::<f64>(CodecType::QCOM);
 }
