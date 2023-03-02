@@ -70,8 +70,10 @@ paste = { version = "1.0" }
 
 # compression extension
 byteorder = { version = "1" }
-q_compress = { version = "0.11.4" }
+q_compress = { version = "0.11.4", default_features = false, optional = true }
 criterion = { version = "0.4" }
+log = { version = "0.4.17" }
+env_logger = { version = "0.10.0" }
 
 [dev-dependencies]
 base64 = { version = "0.21", default-features = false, features = ["std"] }
@@ -106,13 +108,16 @@ num-format = "0.4.0"
 
 # compression extension
 byteorder = { version = "1" }
-q_compress = { version = "0.11.4" }
+q_compress = { version = "0.11.4", default_features = false }
+
+log = { version = "0.4.17" }
+env_logger = { version = "0.10.0" }
 
 [package.metadata.docs.rs]
 all-features = true
 
 [features]
-default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
+default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64", "q_compress"]
 # Enable arrow reader/writer APIs
 arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-cast", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
 # Enable CLI tools
@@ -139,9 +144,9 @@ required-features = ["arrow", "async"]
 path = "./examples/async_read_parquet.rs"
 
 [[example]]
-name = "compression"
+name = "compression-enum"
 required-features = ["arrow", "experimental"]
-path = "./examples/compression.rs"
+path = "./examples/compression-enum.rs"
 
 [[test]]
 name = "arrow_writer_layout"

@@ -146,7 +146,7 @@ pub fn create_codec(
         CodecType::ZSTD => Ok(Some(Box::new(ZSTDCodec::new()))),
         #[cfg(any(feature = "lz4", test))]
         CodecType::LZ4_RAW => Ok(Some(Box::new(LZ4RawCodec::new()))),
-        #[cfg(any(feature = "qcom", test))]
+        #[cfg(any(feature = "q_compress", test))]
         CodecType::QCOM => Ok(Some(Box::new(QComCodec::new()))),
         CodecType::UNCOMPRESSED => Ok(None),
         _ => Err(nyi_err!("The codec type {} is not supported yet", codec)),
@@ -774,7 +774,7 @@ mod qcom_codec {
             &mut self,
             input_buf: &[u8],
             output_buf_columndata: &mut ColumnData,
-            uncompress_size: Option<usize>,
+            _uncompress_size: Option<usize>,
         ) -> Result<usize> {
 
             match output_buf_columndata {
@@ -813,9 +813,6 @@ mod qcom_codec {
                     x.append( &mut auto_decompress::<f64>(input_buf).expect("failed to decompress") );
                     Ok(x.len())
                 },
-                _ => {
-                    panic!("Error: unknown ColumnData x = {:?}", output_buf_columndata);
-                }
             }
         }
 
@@ -853,9 +850,6 @@ mod qcom_codec {
                 ColumnData::VecF64(x) => {
                     output_buf.append( &mut auto_compress::<f64>(x, DEFAULT_COMPRESSION_LEVEL) );
                 },
-                _ => {
-                    panic!("Error: unknown ColumnData x = {:?}", input_buf_columndata);
-                }
             }
             Ok(())
         }

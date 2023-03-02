@@ -32,6 +32,9 @@ use crate::util::{bit_util::FromBytes, memory::ByteBufferPtr};
 // convert byte array
 use byteorder::{ByteOrder, BigEndian};
 
+// downcast datatypeconstraint to concrete types
+use std::any::Any;
+
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
 /// The type only takes 12 bytes, without extra padding.
 #[derive(Clone, Copy, Debug, PartialOrd, Default, PartialEq, Eq)]
@@ -1236,6 +1239,67 @@ macro_rules! ensure_phys_ty {
     }
 }
 
+/**
+ * data type generic for constraining the data types that 
+ * Codec's compresss/decompress can accept 
+ * 
+ * Currently Codec can accept all integers, floats, doubles.
+ */
+pub trait DataTypeConstraint: 
+    std::fmt::Debug
+    + std::fmt::Display
+    + Default
+    + Copy
+    + PartialOrd
+    + PartialEq
+    + Send
+    + 'static 
+{
+    fn typename(&self) -> &'static str { "unknown" }
+    fn as_any(&self) -> &dyn Any;
+}
+
+impl DataTypeConstraint for u8 {
+    fn typename(&self) -> &'static str { "u8" }
+    fn as_any(&self) -> &dyn Any { self }
+}
+impl DataTypeConstraint for u16 {
+    fn typename(&self) -> &'static str { "u16" }
+    fn as_any(&self) -> &dyn Any { self }
+}
+impl DataTypeConstraint for u32 {
+    fn typename(&self) -> &'static str { "u32" }
+    fn as_any(&self) -> &dyn Any { self }
+}
+impl DataTypeConstraint for u64 {
+    fn typename(&self) -> &'static str { "u64" }
+    fn as_any(&self) -> &dyn Any { self }
+}
+impl DataTypeConstraint for i8 {
+    fn typename(&self) -> &'static str { "i8" }
+    fn as_any(&self) -> &dyn Any { self }
+}
+impl DataTypeConstraint for i16 {
+    fn typename(&self) -> &'static str { "i16" }
+    fn as_any(&self) -> &dyn Any { self }
+}
+impl DataTypeConstraint for i32 {
+    fn typename(&self) -> &'static str { "i32" }
+    fn as_any(&self) -> &dyn Any { self }
+}
+impl DataTypeConstraint for i64 {
+    fn typename(&self) -> &'static str { "i64" }
+    fn as_any(&self) -> &dyn Any { self }
+}
+impl DataTypeConstraint for f32 {
+    fn typename(&self) -> &'static str { "f32" }
+    fn as_any(&self) -> &dyn Any { self }
+}
+impl DataTypeConstraint for f64 {
+    fn typename(&self) -> &'static str { "f64" }
+    fn as_any(&self) -> &dyn Any { self }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ColumnData {
     VecU8 (Vec<u8>),
@@ -1251,6 +1315,22 @@ pub enum ColumnData {
 }
 
 impl ColumnData {
+    pub fn new<T: DataTypeConstraint>(input: &Vec<T>) -> ColumnData {
+        match std::any::type_name::<T>() {
+            "u8" => ColumnData::VecU8(input.iter().map(|x| *x.as_any().downcast_ref::<u8>().expect("not u8 found")).collect::<Vec<_>>()),
+            "u16" => ColumnData::VecU16(input.iter().map(|x| *x.as_any().downcast_ref::<u16>().expect("not u16 found")).collect::<Vec<_>>()),
+            "u32" => ColumnData::VecU32(input.iter().map(|x| *x.as_any().downcast_ref::<u32>().expect("not u32 found")).collect::<Vec<_>>()),
+            "u64" => ColumnData::VecU64(input.iter().map(|x| *x.as_any().downcast_ref::<u64>().expect("not u64 found")).collect::<Vec<_>>()),
+            "i8" => ColumnData::VecI8(input.iter().map(|x| *x.as_any().downcast_ref::<i8>().expect("not i8 found")).collect::<Vec<_>>()),
+            "i16" => ColumnData::VecI16(input.iter().map(|x| *x.as_any().downcast_ref::<i16>().expect("not i16 found")).collect::<Vec<_>>()),
+            "i32" => ColumnData::VecI32(input.iter().map(|x| *x.as_any().downcast_ref::<i32>().expect("not i32 found")).collect::<Vec<_>>()),
+            "i64" => ColumnData::VecI64(input.iter().map(|x| *x.as_any().downcast_ref::<i64>().expect("not i64 found")).collect::<Vec<_>>()),
+            "f32" => ColumnData::VecF32(input.iter().map(|x| *x.as_any().downcast_ref::<f32>().expect("not f32 found")).collect::<Vec<_>>()),
+            "f64" => ColumnData::VecF64(input.iter().map(|x| *x.as_any().downcast_ref::<f64>().expect("not f64 found")).collect::<Vec<_>>()),
+            _ => panic!("Error: ColumnData::new with type {:?} is not acceptable.", std::any::type_name::<T>()),
+        }
+    }
+
     pub fn convert_from_u8(&mut self, input: &Vec<u8>) {
         match self {
             ColumnData::VecU8(x) => {
