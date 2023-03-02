@@ -278,7 +278,11 @@ pub type MultipartId = String;
 /// Universal API to multiple object store services.
 #[async_trait]
 pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
-    /// Save the provided bytes to the specified location.
+    /// Save the provided bytes to the specified location
+    ///
+    /// The operation is guaranteed to be atomic, it will either successfully
+    /// write the entirety of `bytes` to `location`, or fail. No clients
+    /// should be able to observe a partially written object
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()>;
 
     /// Get a multi-part upload that allows writing data in chunks
@@ -286,7 +290,9 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Most cloud-based uploads will buffer and upload parts in parallel.
     ///
     /// To complete the upload, [AsyncWrite::poll_shutdown] must be called
-    /// to completion.
+    /// to completion. This operation is guaranteed to be atomic, it will either
+    /// make all the written data available at `location`, or fail. No clients
+    /// should be able to observe a partially written object
     ///
     /// For some object stores (S3, GCS, and local in particular), if the
     /// writer fails or panics, you must call [ObjectStore::abort_multipart]
@@ -305,6 +311,33 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         location: &Path,
         multipart_id: &MultipartId,
     ) -> Result<()>;
+
+    /// Returns an [`AsyncWrite`] that can be used to append to the object at `location`
+    ///
+    /// A new object will be created if it doesn't already exist, otherwise it will be
+    /// opened, with subsequent writes appended to the end.
+    ///
+    /// This operation cannot be supported by all stores, most use-cases should prefer
+    /// [`ObjectStore::put`] and [`ObjectStore::put_multipart`] for better portability
+    /// and stronger guarantees
+    ///
+    /// This API is not guaranteed to be atomic, in particular
+    ///
+    /// * On error, `location` may contain partial data
+    /// * Concurrent calls to [`ObjectStore::list`] may return partially written objects
+    /// * Concurrent calls to [`ObjectStore::get`] may return partially written data
+    /// * Concurrent calls to [`ObjectStore::put`] may result in data loss / corruption
+    /// * Concurrent calls to [`ObjectStore::append`] may result in data loss / corruption
+    ///
+    /// Additionally some stores, such as Azure, may only support appending to objects created
+    /// with [`ObjectStore::append`], and not with [`ObjectStore::put`], [`ObjectStore::copy`], or
+    /// [`ObjectStore::put_multipart`]
+    async fn append(
+        &self,
+        _location: &Path,
+    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+        Err(Error::NotImplemented)
+    }
 
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> Result<GetResult>;
