@@ -425,7 +425,7 @@ mod tests {
         builder.append_value("parquet");
         let arr = builder.finish();
         // array should not have null buffer because there is not `null` value.
-        assert_eq!(None, arr.data().null_buffer());
+        assert!(arr.data().nulls().is_none());
         assert_eq!(GenericStringArray::<O>::from(vec!["arrow", "parquet"]), arr,)
     }
 
@@ -454,7 +454,7 @@ mod tests {
         builder.append_value("parquet");
         arr = builder.finish();
 
-        assert!(arr.data().null_buffer().is_some());
+        assert!(arr.data().nulls().is_some());
         assert_eq!(&[O::zero()], builder.offsets_slice());
         assert_eq!(5, arr.len());
     }

@@ -249,23 +249,15 @@ impl<K: ArrowPrimitiveType> DictionaryArray<K> {
 
         // Note: This use the ArrayDataBuilder::build_unchecked and afterwards
         // call the new function which only validates that the keys are in bounds.
-        let mut data = ArrayData::builder(dict_data_type)
-            .len(keys.len())
-            .add_buffer(keys.data().buffers()[0].clone())
+        let data = keys.data().clone();
+        let builder = data
+            .into_builder()
+            .data_type(dict_data_type)
             .add_child_data(values.data().clone());
-
-        match keys.data().null_buffer() {
-            Some(buffer) if keys.data().null_count() > 0 => {
-                data = data
-                    .null_bit_buffer(Some(buffer.clone()))
-                    .null_count(keys.data().null_count());
-            }
-            _ => data = data.null_count(0),
-        }
 
         // Safety: `validate` ensures key type is correct, and
         //  `validate_values` ensures all offsets are within range
-        let array = unsafe { data.build_unchecked() };
+        let array = unsafe { builder.build_unchecked() };
 
         array.validate()?;
         array.validate_values()?;
@@ -430,16 +422,13 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for DictionaryArray<T> {
             // create a zero-copy of the keys' data
             // SAFETY:
             // ArrayData is valid and verified type above
+
             let keys = PrimitiveArray::<T>::from(unsafe {
-                ArrayData::new_unchecked(
-                    T::DATA_TYPE,
-                    data.len(),
-                    Some(data.null_count()),
-                    data.null_buffer().cloned(),
-                    data.offset(),
-                    data.buffers().to_vec(),
-                    vec![],
-                )
+                data.clone()
+                    .into_builder()
+                    .data_type(T::DATA_TYPE)
+                    .child_data(vec![])
+                    .build_unchecked()
             });
             let values = make_array(data.child_data()[0].clone());
             Self {

@@ -17,8 +17,10 @@
 
 //! Contains declarations to bind to the [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).
 
+use crate::bit_mask::set_bits;
 use crate::{layout, ArrayData};
-use arrow_buffer::Buffer;
+use arrow_buffer::buffer::NullBuffer;
+use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_schema::DataType;
 use std::ffi::c_void;
 
@@ -83,6 +85,29 @@ unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) {
     array.release = None;
 }
 
+/// Aligns the provided `nulls` to the provided `data_offset`
+///
+/// This is a temporary measure until offset is removed from ArrayData (#1799)
+fn align_nulls(data_offset: usize, nulls: Option<&NullBuffer>) -> Option<Buffer> {
+    let nulls = nulls?;
+    if data_offset == nulls.offset() {
+        // Underlying buffer is already aligned
+        return Some(nulls.buffer().clone());
+    }
+    if data_offset == 0 {
+        return Some(nulls.inner().sliced());
+    }
+    let mut builder = MutableBuffer::new_null(data_offset + nulls.len());
+    set_bits(
+        builder.as_slice_mut(),
+        nulls.validity(),
+        data_offset,
+        nulls.offset(),
+        nulls.len(),
+    );
+    Some(builder.into())
+}
+
 struct ArrayPrivateData {
     #[allow(dead_code)]
     buffers: Vec<Option<Buffer>>,
@@ -102,7 +127,7 @@ impl FFI_ArrowArray {
         let buffers = if data_layout.can_contain_null_mask {
             // * insert the null buffer at the start
             // * make all others `Option<Buffer>`.
-            std::iter::once(data.null_buffer().cloned())
+            std::iter::once(align_nulls(data.offset(), data.nulls()))
                 .chain(data.buffers().iter().map(|b| Some(b.clone())))
                 .collect::<Vec<_>>()
         } else {

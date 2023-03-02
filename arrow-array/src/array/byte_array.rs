@@ -137,10 +137,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// offset and data buffers are not shared by others.
     pub fn into_builder(self) -> Result<GenericByteBuilder<T>, Self> {
         let len = self.len();
-        let null_bit_buffer = self
-            .data
-            .null_buffer()
-            .map(|b| b.bit_slice(self.data.offset(), len));
+        let null_bit_buffer = self.data.nulls().map(|b| b.inner().sliced());
 
         let element_len = std::mem::size_of::<T::Offset>();
         let offset_buffer = self.data.buffers()[0]

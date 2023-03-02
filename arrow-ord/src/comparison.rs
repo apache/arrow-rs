@@ -104,10 +104,7 @@ pub fn eq_utf8<OffsetSize: OffsetSizeTrait>(
 fn utf8_empty<OffsetSize: OffsetSizeTrait, const EQ: bool>(
     left: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray, ArrowError> {
-    let null_bit_buffer = left
-        .data()
-        .null_buffer()
-        .map(|b| b.bit_slice(left.offset(), left.len()));
+    let null_bit_buffer = left.data().nulls().map(|b| b.inner().sliced());
 
     let buffer = unsafe {
         MutableBuffer::from_trusted_len_iter_bool(left.value_offsets().windows(2).map(
@@ -213,10 +210,7 @@ pub fn eq_bool_scalar(
             DataType::Boolean,
             len,
             None,
-            left.data_ref()
-                .null_bitmap()
-                .as_ref()
-                .map(|b| b.buffer().bit_slice(left_offset, len)),
+            left.data().nulls().map(|b| b.inner().sliced()),
             0,
             vec![values],
             vec![],
@@ -1439,10 +1433,7 @@ where
         result_remainder.copy_from_slice(remainder_mask_as_bytes);
     }
 
-    let null_bit_buffer = left
-        .data_ref()
-        .null_buffer()
-        .map(|b| b.bit_slice(left.offset(), left.len()));
+    let null_bit_buffer = left.data().nulls().map(|b| b.inner().sliced());
 
     // null count is the same as in the input since the right side of the scalar comparison cannot be null
     let null_count = left.null_count();

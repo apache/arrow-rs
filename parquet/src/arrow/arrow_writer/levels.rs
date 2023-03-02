@@ -270,12 +270,12 @@ impl LevelInfoBuilder {
             })
         };
 
-        match list_data.null_bitmap() {
+        match list_data.nulls() {
             Some(nulls) => {
-                let null_offset = list_data.offset() + range.start;
+                let null_offset = range.start;
                 // TODO: Faster bitmask iteration (#1757)
                 for (idx, w) in offsets.windows(2).enumerate() {
-                    let is_valid = nulls.is_set(idx + null_offset);
+                    let is_valid = nulls.is_valid(idx + null_offset);
                     let start_idx = w[0].as_usize();
                     let end_idx = w[1].as_usize();
                     if !is_valid {
@@ -329,15 +329,14 @@ impl LevelInfoBuilder {
             }
         };
 
-        match array.data().null_bitmap() {
+        match array.data().nulls() {
             Some(validity) => {
-                let null_offset = array.data().offset();
                 let mut last_non_null_idx = None;
                 let mut last_null_idx = None;
 
                 // TODO: Faster bitmask iteration (#1757)
                 for i in range.clone() {
-                    match validity.is_set(i + null_offset) {
+                    match validity.is_valid(i) {
                         true => {
                             if let Some(last_idx) = last_null_idx.take() {
                                 write_null(children, last_idx..i)
@@ -379,12 +378,11 @@ impl LevelInfoBuilder {
                 def_levels.reserve(len);
                 info.non_null_indices.reserve(len);
 
-                match array.data().null_bitmap() {
+                match array.data().nulls() {
                     Some(nulls) => {
-                        let nulls_offset = array.data().offset();
                         // TODO: Faster bitmask iteration (#1757)
                         for i in range {
-                            match nulls.is_set(i + nulls_offset) {
+                            match nulls.is_valid(i) {
                                 true => {
                                     def_levels.push(info.max_def_level);
                                     info.non_null_indices.push(i)

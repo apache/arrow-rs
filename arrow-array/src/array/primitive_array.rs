@@ -443,7 +443,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         let len = self.len();
         let null_count = self.null_count();
 
-        let null_buffer = data.null_buffer().map(|b| b.bit_slice(data.offset(), len));
+        let null_buffer = data.nulls().map(|b| b.inner().sliced());
         let values = self.values().iter().map(|v| op(*v));
         // JUSTIFICATION
         //  Benefit
@@ -500,7 +500,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         let len = self.len();
         let null_count = self.null_count();
 
-        let null_buffer = data.null_buffer().map(|b| b.bit_slice(data.offset(), len));
+        let null_buffer = data.nulls().map(|b| b.inner().sliced());
         let mut buffer = BufferBuilder::<O::Native>::new(len);
         buffer.append_n_zeroed(len);
         let slice = buffer.as_slice_mut();
@@ -567,9 +567,10 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     {
         let data = self.data();
         let len = data.len();
-        let offset = data.offset();
-        let null_count = data.null_count();
-        let nulls = data.null_buffer().map(|x| x.as_slice());
+        let (nulls, null_count, offset) = match data.nulls() {
+            Some(n) => (Some(n.validity()), n.null_count(), n.offset()),
+            None => (None, 0, 0),
+        };
 
         let mut null_builder = BooleanBufferBuilder::new(len);
         match nulls {
@@ -608,10 +609,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// data buffer is not shared by others.
     pub fn into_builder(self) -> Result<PrimitiveBuilder<T>, Self> {
         let len = self.len();
-        let null_bit_buffer = self
-            .data
-            .null_buffer()
-            .map(|b| b.bit_slice(self.data.offset(), len));
+        let null_bit_buffer = self.data.nulls().map(|b| b.inner().sliced());
 
         let element_len = std::mem::size_of::<T::Native>();
         let buffer = self.data.buffers()[0]
@@ -1791,7 +1789,7 @@ mod tests {
         let primitive_array = PrimitiveArray::<Int32Type>::from_iter(iter);
         assert_eq!(primitive_array.len(), 10);
         assert_eq!(primitive_array.null_count(), 0);
-        assert_eq!(primitive_array.data().null_buffer(), None);
+        assert!(primitive_array.data().nulls().is_none());
         assert_eq!(primitive_array.values(), &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
     }
 

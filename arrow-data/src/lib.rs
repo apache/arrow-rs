@@ -17,8 +17,6 @@
 
 //! Array data abstractions for [Apache Arrow](https://docs.rs/arrow)
 
-mod bitmap;
-pub use bitmap::Bitmap;
 mod data;
 pub use data::*;
 
