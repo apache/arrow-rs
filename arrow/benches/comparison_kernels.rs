@@ -26,6 +26,8 @@ use arrow::datatypes::{ArrowNativeTypeOp, ArrowNumericType, IntervalMonthDayNano
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type, datatypes::Int32Type};
 
+const SIZE: usize = 65536;
+
 fn bench_eq<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
 where
     T: ArrowNumericType,
@@ -102,29 +104,37 @@ fn bench_regexp_is_match_utf8_scalar(arr_a: &StringArray, value_b: &str) {
     .unwrap();
 }
 
-fn bench_dict_eq<T>(arr_a: &DictionaryArray<T>, arr_b: &DictionaryArray<T>)
-where
-    T: ArrowNumericType,
-{
-    cmp_dict_utf8::<T, i32, _>(
-        criterion::black_box(arr_a),
-        criterion::black_box(arr_b),
-        |a, b| a == b,
-    )
-    .unwrap();
+#[cfg(not(feature = "dyn_cmp_dict"))]
+fn dyn_cmp_dict_benchmarks(_c: &mut Criterion) {}
+
+#[cfg(feature = "dyn_cmp_dict")]
+fn dyn_cmp_dict_benchmarks(c: &mut Criterion) {
+    let strings = create_string_array::<i32>(20, 0.);
+    let dict_arr_a = create_dict_from_values::<Int32Type>(SIZE, 0., &strings);
+    let dict_arr_b = create_dict_from_values::<Int32Type>(SIZE, 0., &strings);
+
+    c.bench_function("eq dictionary[10] string[4])", |b| {
+        b.iter(|| {
+            cmp_dict_utf8::<_, i32, _>(
+                criterion::black_box(&dict_arr_a),
+                criterion::black_box(&dict_arr_b),
+                |a, b| a == b,
+            )
+            .unwrap()
+        })
+    });
 }
 
 fn add_benchmark(c: &mut Criterion) {
-    let size = 65536;
-    let arr_a = create_primitive_array_with_seed::<Float32Type>(size, 0.0, 42);
-    let arr_b = create_primitive_array_with_seed::<Float32Type>(size, 0.0, 43);
+    let arr_a = create_primitive_array_with_seed::<Float32Type>(SIZE, 0.0, 42);
+    let arr_b = create_primitive_array_with_seed::<Float32Type>(SIZE, 0.0, 43);
 
     let arr_month_day_nano_a =
-        create_primitive_array_with_seed::<IntervalMonthDayNanoType>(size, 0.0, 43);
+        create_primitive_array_with_seed::<IntervalMonthDayNanoType>(SIZE, 0.0, 43);
     let arr_month_day_nano_b =
-        create_primitive_array_with_seed::<IntervalMonthDayNanoType>(size, 0.0, 43);
+        create_primitive_array_with_seed::<IntervalMonthDayNanoType>(SIZE, 0.0, 43);
 
-    let arr_string = create_string_array::<i32>(size, 0.0);
+    let arr_string = create_string_array::<i32>(SIZE, 0.0);
 
     c.bench_function("eq Float32", |b| b.iter(|| bench_eq(&arr_a, &arr_b)));
     c.bench_function("eq scalar Float32", |b| {
@@ -168,8 +178,8 @@ fn add_benchmark(c: &mut Criterion) {
         })
     });
 
-    let arr_a = create_primitive_array_with_seed::<Int32Type>(size, 0.0, 42);
-    let arr_b = create_primitive_array_with_seed::<Int32Type>(size, 0.0, 43);
+    let arr_a = create_primitive_array_with_seed::<Int32Type>(SIZE, 0.0, 42);
+    let arr_b = create_primitive_array_with_seed::<Int32Type>(SIZE, 0.0, 43);
 
     c.bench_function("eq Int32", |b| b.iter(|| bench_eq(&arr_a, &arr_b)));
     c.bench_function("eq scalar Int32", |b| {
@@ -315,12 +325,7 @@ fn add_benchmark(c: &mut Criterion) {
     });
 
     let strings = create_string_array::<i32>(20, 0.);
-    let dict_arr_a = create_dict_from_values::<Int32Type>(size, 0., &strings);
-    let dict_arr_b = create_dict_from_values::<Int32Type>(size, 0., &strings);
-
-    c.bench_function("eq dictionary[10] string[4])", |b| {
-        b.iter(|| bench_dict_eq(&dict_arr_a, &dict_arr_b))
-    });
+    let dict_arr_a = create_dict_from_values::<Int32Type>(SIZE, 0., &strings);
 
     c.bench_function("eq_dyn_utf8_scalar dictionary[10] string[4])", |b| {
         b.iter(|| eq_dyn_utf8_scalar(&dict_arr_a, "test"))
@@ -338,6 +343,8 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("ilike_utf8_scalar_dyn dictionary[10] string[4])", |b| {
         b.iter(|| ilike_utf8_scalar_dyn(&dict_arr_a, "test"))
     });
+
+    dyn_cmp_dict_benchmarks(c);
 }
 
 criterion_group!(benches, add_benchmark);

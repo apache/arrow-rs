@@ -193,7 +193,21 @@ impl RecordDecoder {
 
         // Need to truncate data t1o the actual amount of data read
         let data = std::str::from_utf8(&self.data[..self.data_len]).map_err(|e| {
-            ArrowError::CsvError(format!("Encountered invalid UTF-8 data: {e}"))
+            let valid_up_to = e.valid_up_to();
+
+            // We can't use binary search because of empty fields
+            let idx = self.offsets[..self.offsets_len]
+                .iter()
+                .rposition(|x| *x <= valid_up_to)
+                .unwrap();
+
+            let field = idx % self.num_columns + 1;
+            let line_offset = self.line_number - self.num_rows;
+            let line = line_offset + idx / self.num_columns;
+
+            ArrowError::CsvError(format!(
+                "Encountered invalid UTF-8 data for line {line} and field {field}"
+            ))
         })?;
 
         let offsets = &self.offsets[..self.offsets_len];

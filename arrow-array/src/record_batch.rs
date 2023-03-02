@@ -24,6 +24,8 @@ use std::ops::Index;
 use std::sync::Arc;
 
 /// Trait for types that can read `RecordBatch`'s.
+///
+/// To create from an iterator, see [RecordBatchIterator].
 pub trait RecordBatchReader: Iterator<Item = Result<RecordBatch, ArrowError>> {
     /// Returns the schema of this `RecordBatchReader`.
     ///
@@ -491,6 +493,78 @@ impl Index<&str> for RecordBatch {
     }
 }
 
+/// Generic implementation of [RecordBatchReader] that wraps an iterator.
+///
+/// # Example
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray, RecordBatchIterator, RecordBatchReader};
+/// #
+/// let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+/// let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+///
+/// let record_batch = RecordBatch::try_from_iter(vec![
+///   ("a", a),
+///   ("b", b),
+/// ]).unwrap();
+///
+/// let batches: Vec<RecordBatch> = vec![record_batch.clone(), record_batch.clone()];
+///
+/// let mut reader = RecordBatchIterator::new(batches.into_iter().map(Ok), record_batch.schema());
+///
+/// assert_eq!(reader.schema(), record_batch.schema());
+/// assert_eq!(reader.next().unwrap().unwrap(), record_batch);
+/// # assert_eq!(reader.next().unwrap().unwrap(), record_batch);
+/// # assert!(reader.next().is_none());
+/// ```
+pub struct RecordBatchIterator<I>
+where
+    I: IntoIterator<Item = Result<RecordBatch, ArrowError>>,
+{
+    inner: I::IntoIter,
+    inner_schema: SchemaRef,
+}
+
+impl<I> RecordBatchIterator<I>
+where
+    I: IntoIterator<Item = Result<RecordBatch, ArrowError>>,
+{
+    /// Create a new [RecordBatchIterator].
+    ///
+    /// If `iter` is an infallible iterator, use `.map(Ok)`.
+    pub fn new(iter: I, schema: SchemaRef) -> Self {
+        Self {
+            inner: iter.into_iter(),
+            inner_schema: schema,
+        }
+    }
+}
+
+impl<I> Iterator for RecordBatchIterator<I>
+where
+    I: IntoIterator<Item = Result<RecordBatch, ArrowError>>,
+{
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<I> RecordBatchReader for RecordBatchIterator<I>
+where
+    I: IntoIterator<Item = Result<RecordBatch, ArrowError>>,
+{
+    fn schema(&self) -> SchemaRef {
+        self.inner_schema.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,7 +603,7 @@ mod tests {
         let record_batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
                 .unwrap();
-        assert_eq!(record_batch.get_array_memory_size(), 592);
+        assert_eq!(record_batch.get_array_memory_size(), 672);
     }
 
     fn check_batch(record_batch: RecordBatch, num_rows: usize) {

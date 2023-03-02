@@ -284,7 +284,6 @@ impl StructBuilder {
 mod tests {
     use super::*;
     use arrow_buffer::Buffer;
-    use arrow_data::Bitmap;
 
     use crate::array::Array;
 
@@ -329,10 +328,7 @@ mod tests {
         let struct_data = arr.data();
         assert_eq!(4, struct_data.len());
         assert_eq!(1, struct_data.null_count());
-        assert_eq!(
-            Some(&Bitmap::from(Buffer::from(&[11_u8]))),
-            struct_data.null_bitmap()
-        );
+        assert_eq!(&[11_u8], struct_data.nulls().unwrap().validity());
 
         let expected_string_data = ArrayData::builder(DataType::Utf8)
             .len(4)

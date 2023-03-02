@@ -141,18 +141,18 @@
 //!
 //! For example, the type [`Int16Array`] represents an array of 16-bit integers and consists of:
 //!
-//! * An optional [`Bitmap`] identifying any null values
+//! * An optional [`NullBuffer`] identifying any null values
 //! * A contiguous [`Buffer`] of 16-bit integers
 //!
 //! Similarly, the type [`StringArray`] represents an array of UTF-8 strings and consists of:
 //!
-//! * An optional [`Bitmap`] identifying any null values
+//! * An optional [`NullBuffer`] identifying any null values
 //! * An offsets [`Buffer`] of 32-bit integers identifying valid UTF-8 sequences within the values buffer
 //! * A values [`Buffer`] of UTF-8 encoded string data
 //!
 //! [Arrow specification]: https://arrow.apache.org/docs/format/Columnar.html
 //! [`&dyn Array`]: Array
-//! [`Bitmap`]: arrow_data::Bitmap
+//! [`NullBuffer`]: arrow_buffer::buffer::NullBuffer
 //! [`Buffer`]: arrow_buffer::Buffer
 //! [`compute`]: https://docs.rs/arrow/latest/arrow/compute/index.html
 //! [`json`]: https://docs.rs/arrow/latest/arrow/json/index.html
@@ -165,7 +165,9 @@ pub mod array;
 pub use array::*;
 
 mod record_batch;
-pub use record_batch::{RecordBatch, RecordBatchOptions, RecordBatchReader};
+pub use record_batch::{
+    RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader,
+};
 
 mod arithmetic;
 pub use arithmetic::ArrowNativeTypeOp;
@@ -177,7 +179,7 @@ pub mod builder;
 pub mod cast;
 mod delta;
 pub mod iterator;
-mod raw_pointer;
+pub mod run_iterator;
 pub mod temporal_conversions;
 pub mod timezone;
 mod trusted_len;

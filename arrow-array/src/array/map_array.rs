@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::raw_pointer::RawPtrBox;
-use crate::{make_array, print_long_array, Array, ArrayRef, StringArray, StructArray};
+use crate::array::{get_offsets, print_long_array};
+use crate::{make_array, Array, ArrayRef, StringArray, StructArray};
+use arrow_buffer::buffer::OffsetBuffer;
 use arrow_buffer::{ArrowNativeType, Buffer, ToByteSlice};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
@@ -27,64 +28,66 @@ use std::sync::Arc;
 /// Keys should always be non-null, but values can be null.
 ///
 /// [MapArray] is physically a [crate::array::ListArray] that has a
-/// [crate::array::StructArray] with 2 child fields.
+/// [StructArray] with 2 child fields.
 #[derive(Clone)]
 pub struct MapArray {
     data: ArrayData,
+    /// The [`StructArray`] that is the direct child of this array
+    entries: ArrayRef,
+    /// The first child of `entries`, the "keys" of this MapArray
+    keys: ArrayRef,
+    /// The second child of `entries`, the "values" of this MapArray
     values: ArrayRef,
-    value_offsets: RawPtrBox<i32>,
+    /// The start and end offsets of each entry
+    value_offsets: OffsetBuffer<i32>,
 }
 
 impl MapArray {
     /// Returns a reference to the keys of this map.
-    pub fn keys(&self) -> ArrayRef {
-        make_array(self.values.data().child_data()[0].clone())
+    pub fn keys(&self) -> &ArrayRef {
+        &self.keys
     }
 
     /// Returns a reference to the values of this map.
-    pub fn values(&self) -> ArrayRef {
-        make_array(self.values.data().child_data()[1].clone())
+    pub fn values(&self) -> &ArrayRef {
+        &self.values
     }
 
     /// Returns the data type of the map's keys.
-    pub fn key_type(&self) -> DataType {
-        self.values.data().child_data()[0].data_type().clone()
+    pub fn key_type(&self) -> &DataType {
+        self.keys.data_type()
     }
 
     /// Returns the data type of the map's values.
-    pub fn value_type(&self) -> DataType {
-        self.values.data().child_data()[1].data_type().clone()
+    pub fn value_type(&self) -> &DataType {
+        self.values.data_type()
     }
 
     /// Returns ith value of this map array.
+    ///
+    /// This is a [`StructArray`] containing two fields
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
     pub unsafe fn value_unchecked(&self, i: usize) -> ArrayRef {
         let end = *self.value_offsets().get_unchecked(i + 1);
         let start = *self.value_offsets().get_unchecked(i);
-        self.values
+        self.entries
             .slice(start.to_usize().unwrap(), (end - start).to_usize().unwrap())
     }
 
     /// Returns ith value of this map array.
+    ///
+    /// This is a [`StructArray`] containing two fields
     pub fn value(&self, i: usize) -> ArrayRef {
         let end = self.value_offsets()[i + 1] as usize;
         let start = self.value_offsets()[i] as usize;
-        self.values.slice(start, end - start)
+        self.entries.slice(start, end - start)
     }
 
     /// Returns the offset values in the offsets buffer
     #[inline]
     pub fn value_offsets(&self) -> &[i32] {
-        // Soundness
-        //     pointer alignment & location is ensured by RawPtrBox
-        //     buffer bounds/offset is ensured by the ArrayData instance.
-        unsafe {
-            std::slice::from_raw_parts(
-                self.value_offsets.as_ptr().add(self.data.offset()),
-                self.len() + 1,
-            )
-        }
+        &self.value_offsets
     }
 
     /// Returns the length for value at index `i`.
@@ -146,21 +149,18 @@ impl MapArray {
             )));
         }
 
-        let values = make_array(entries);
-        let value_offsets = data.buffers()[0].as_ptr();
+        let keys = make_array(entries.child_data()[0].clone());
+        let values = make_array(entries.child_data()[1].clone());
+        let entries = make_array(entries);
 
         // SAFETY:
         // ArrayData is valid, and verified type above
-        let value_offsets = unsafe { RawPtrBox::<i32>::new(value_offsets) };
-        unsafe {
-            if (*value_offsets.as_ptr().offset(0)) != 0 {
-                return Err(ArrowError::InvalidArgumentError(String::from(
-                    "offsets do not start at zero",
-                )));
-            }
-        }
+        let value_offsets = unsafe { get_offsets(&data) };
+
         Ok(Self {
             data,
+            entries,
+            keys,
             values,
             value_offsets,
         })
@@ -241,6 +241,8 @@ impl std::fmt::Debug for MapArray {
 
 #[cfg(test)]
 mod tests {
+    use crate::cast::as_primitive_array;
+    use crate::types::UInt32Type;
     use crate::{Int32Array, UInt32Array};
     use std::sync::Arc;
 
@@ -335,9 +337,8 @@ mod tests {
             .unwrap();
         let map_array = MapArray::from(map_data);
 
-        let values = map_array.values();
-        assert_eq!(&value_data, values.data());
-        assert_eq!(DataType::UInt32, map_array.value_type());
+        assert_eq!(&value_data, map_array.values().data());
+        assert_eq!(&DataType::UInt32, map_array.value_type());
         assert_eq!(3, map_array.len());
         assert_eq!(0, map_array.null_count());
         assert_eq!(6, map_array.value_offsets()[2]);
@@ -376,9 +377,8 @@ mod tests {
             .unwrap();
         let map_array = MapArray::from(map_data);
 
-        let values = map_array.values();
-        assert_eq!(&value_data, values.data());
-        assert_eq!(DataType::UInt32, map_array.value_type());
+        assert_eq!(&value_data, map_array.values().data());
+        assert_eq!(&DataType::UInt32, map_array.value_type());
         assert_eq!(2, map_array.len());
         assert_eq!(0, map_array.null_count());
         assert_eq!(6, map_array.value_offsets()[1]);
@@ -508,12 +508,11 @@ mod tests {
         )
         .unwrap();
 
-        let values = map_array.values();
         assert_eq!(
             &values_data,
-            values.as_any().downcast_ref::<UInt32Array>().unwrap()
+            as_primitive_array::<UInt32Type>(map_array.values())
         );
-        assert_eq!(DataType::UInt32, map_array.value_type());
+        assert_eq!(&DataType::UInt32, map_array.value_type());
         assert_eq!(3, map_array.len());
         assert_eq!(0, map_array.null_count());
         assert_eq!(6, map_array.value_offsets()[2]);

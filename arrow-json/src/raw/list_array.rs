@@ -19,6 +19,7 @@ use crate::raw::tape::{Tape, TapeElement};
 use crate::raw::{make_decoder, tape_error, ArrayDecoder};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_array::OffsetSizeTrait;
+use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::marker::PhantomData;
@@ -31,13 +32,21 @@ pub struct ListArrayDecoder<O> {
 }
 
 impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
-    pub fn new(data_type: DataType, is_nullable: bool) -> Result<Self, ArrowError> {
+    pub fn new(
+        data_type: DataType,
+        coerce_primitive: bool,
+        is_nullable: bool,
+    ) -> Result<Self, ArrowError> {
         let field = match &data_type {
             DataType::List(f) if !O::IS_LARGE => f,
             DataType::LargeList(f) if O::IS_LARGE => f,
             _ => unreachable!(),
         };
-        let decoder = make_decoder(field.data_type().clone(), field.is_nullable())?;
+        let decoder = make_decoder(
+            field.data_type().clone(),
+            coerce_primitive,
+            field.is_nullable(),
+        )?;
 
         Ok(Self {
             data_type,
@@ -54,7 +63,6 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
         let mut offsets = BufferBuilder::<O>::new(pos.len() + 1);
         offsets.append(O::from_usize(0).unwrap());
 
-        let mut null_count = 0;
         let mut nulls = self
             .is_nullable
             .then(|| BooleanBufferBuilder::new(pos.len()));
@@ -68,7 +76,6 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
                 }
                 (TapeElement::Null, Some(nulls)) => {
                     nulls.append(false);
-                    null_count += 1;
                     *p + 1
                 }
                 (d, _) => return Err(tape_error(d, "[")),
@@ -79,16 +86,9 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
                 child_pos.push(cur_idx);
 
                 // Advance to next field
-                cur_idx = match tape.get(cur_idx) {
-                    TapeElement::String(_)
-                    | TapeElement::Number(_)
-                    | TapeElement::True
-                    | TapeElement::False
-                    | TapeElement::Null => cur_idx + 1,
-                    TapeElement::StartList(end_idx) => end_idx + 1,
-                    TapeElement::StartObject(end_idx) => end_idx + 1,
-                    d => return Err(tape_error(d, "list value")),
-                }
+                cur_idx = tape
+                    .next(cur_idx)
+                    .map_err(|d| tape_error(d, "list value"))?;
             }
 
             let offset = O::from_usize(child_pos.len()).ok_or_else(|| {
@@ -100,12 +100,14 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
             offsets.append(offset)
         }
 
-        let child_data = self.decoder.decode(tape, &child_pos).unwrap();
+        let child_data = self.decoder.decode(tape, &child_pos)?;
+        let nulls = nulls
+            .as_mut()
+            .map(|x| NullBuffer::new(BooleanBuffer::new(x.finish(), 0, pos.len())));
 
         let data = ArrayDataBuilder::new(self.data_type.clone())
             .len(pos.len())
-            .null_bit_buffer(nulls.as_mut().map(|x| x.finish()))
-            .null_count(null_count)
+            .nulls(nulls)
             .add_buffer(offsets.finish())
             .child_data(vec![child_data]);
 

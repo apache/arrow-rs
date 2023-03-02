@@ -18,12 +18,17 @@
 //! This module contains two main structs: [Buffer] and [MutableBuffer]. A buffer represents
 //! a contiguous memory region that can be shared via `offsets`.
 
+mod offset;
+pub use offset::*;
 mod immutable;
 pub use immutable::*;
 mod mutable;
 pub use mutable::*;
 mod ops;
+pub use ops::*;
 mod scalar;
 pub use scalar::*;
-
-pub use ops::*;
+mod boolean;
+pub use boolean::*;
+mod null;
+pub use null::*;

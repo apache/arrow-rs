@@ -105,7 +105,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_schema::*;
 
-use arrow_cast::display::array_value_to_string;
+use arrow_cast::display::{ArrayFormatter, FormatOptions};
 
 fn primitive_array_to_json<T>(array: &ArrayRef) -> Result<Vec<Value>, ArrowError>
 where
@@ -216,23 +216,6 @@ macro_rules! set_column_by_array_type {
     };
 }
 
-macro_rules! set_temporal_column_by_array_type {
-    ($array_type:ident, $col_name:ident, $rows:ident, $array:ident, $row_count:ident, $cast_fn:ident) => {
-        $rows
-            .iter_mut()
-            .enumerate()
-            .take($row_count)
-            .for_each(|(i, row)| {
-                if !$array.is_null(i) {
-                    row.insert(
-                        $col_name.to_string(),
-                        array_value_to_string($array, i).unwrap().to_string().into(),
-                    );
-                }
-            });
-    };
-}
-
 fn set_column_by_primitive_type<T>(
     rows: &mut [JsonMap<String, Value>],
     row_count: usize,
@@ -310,145 +293,23 @@ fn set_column_for_json_rows(
                 row_count
             );
         }
-        DataType::Date32 => {
-            set_temporal_column_by_array_type!(
-                Date32Array,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_date
-            );
-        }
-        DataType::Date64 => {
-            set_temporal_column_by_array_type!(
-                Date64Array,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_date
-            );
-        }
-        DataType::Timestamp(TimeUnit::Second, _) => {
-            set_temporal_column_by_array_type!(
-                TimestampSecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_datetime
-            );
-        }
-        DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            set_temporal_column_by_array_type!(
-                TimestampMillisecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_datetime
-            );
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            set_temporal_column_by_array_type!(
-                TimestampMicrosecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_datetime
-            );
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            set_temporal_column_by_array_type!(
-                TimestampNanosecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_datetime
-            );
-        }
-        DataType::Time32(TimeUnit::Second) => {
-            set_temporal_column_by_array_type!(
-                Time32SecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_time
-            );
-        }
-        DataType::Time32(TimeUnit::Millisecond) => {
-            set_temporal_column_by_array_type!(
-                Time32MillisecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_time
-            );
-        }
-        DataType::Time64(TimeUnit::Microsecond) => {
-            set_temporal_column_by_array_type!(
-                Time64MicrosecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_time
-            );
-        }
-        DataType::Time64(TimeUnit::Nanosecond) => {
-            set_temporal_column_by_array_type!(
-                Time64NanosecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_time
-            );
-        }
-        DataType::Duration(TimeUnit::Second) => {
-            set_temporal_column_by_array_type!(
-                DurationSecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_duration
-            );
-        }
-        DataType::Duration(TimeUnit::Millisecond) => {
-            set_temporal_column_by_array_type!(
-                DurationMillisecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_duration
-            );
-        }
-        DataType::Duration(TimeUnit::Microsecond) => {
-            set_temporal_column_by_array_type!(
-                DurationMicrosecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_duration
-            );
-        }
-        DataType::Duration(TimeUnit::Nanosecond) => {
-            set_temporal_column_by_array_type!(
-                DurationNanosecondArray,
-                col_name,
-                rows,
-                array,
-                row_count,
-                value_as_duration
-            );
+        DataType::Date32
+        | DataType::Date64
+        | DataType::Timestamp(_, _)
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Duration(_) => {
+            let options = FormatOptions::default();
+            let formatter = ArrayFormatter::try_new(array.as_ref(), &options)?;
+            let data = array.data();
+            rows.iter_mut().enumerate().for_each(|(idx, row)| {
+                if data.is_valid(idx) {
+                    row.insert(
+                        col_name.to_string(),
+                        formatter.value(idx).to_string().into(),
+                    );
+                }
+            });
         }
         DataType::Struct(_) => {
             let inner_objs =
@@ -508,8 +369,8 @@ fn set_column_for_json_rows(
                 )));
             }
 
-            let keys = as_string_array(&keys);
-            let values = array_to_json_array(&values)?;
+            let keys = as_string_array(keys);
+            let values = array_to_json_array(values)?;
 
             let mut kv = keys.iter().zip(values.into_iter());
 
@@ -1030,7 +891,7 @@ mod tests {
 
         assert_json_eq(
             &buf,
-            r#"{"date32":"2018-11-13","date64":"2018-11-13","name":"a"}
+            r#"{"date32":"2018-11-13","date64":"2018-11-13T17:11:10.011","name":"a"}
 {"name":"b"}
 "#,
         );
@@ -1357,6 +1218,7 @@ mod tests {
         );
     }
 
+    #[allow(deprecated)]
     fn test_write_for_file(test_file: &str) {
         let builder = ReaderBuilder::new()
             .infer_schema(None)
@@ -1434,6 +1296,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn json_list_roundtrip() {
         let json_content = r#"
         {"list": [{"ints": 1}]}
@@ -1545,6 +1408,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_write_single_batch() {
         let test_file = "test/data/basic.json";
         let builder = ReaderBuilder::new()

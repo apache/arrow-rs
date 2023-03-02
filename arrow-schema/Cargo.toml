@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-schema"
-version = "32.0.0"
+version = "34.0.0"
 description = "Defines the logical types for arrow arrays"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -39,9 +39,14 @@ bench = false
 
 [dependencies]
 serde = { version = "1.0", default-features = false, features = ["derive", "std"], optional = true }
+bitflags = { version = "1.2.1", default-features = false, optional = true }
 
 [features]
-default = []
+# Enable ffi support
+ffi = ["bitflags"]
+
+[package.metadata.docs.rs]
+features = ["ffi"]
 
 [dev-dependencies]
 serde_json = "1.0"

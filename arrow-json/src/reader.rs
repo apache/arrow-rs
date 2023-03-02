@@ -46,6 +46,7 @@
 //! let batch = json.next().unwrap().unwrap();
 //! ```
 
+use std::borrow::Borrow;
 use std::io::{BufRead, BufReader, Read, Seek};
 use std::sync::Arc;
 
@@ -526,16 +527,17 @@ fn collect_field_types_from_object(
 /// The reason we diverge here is because we don't have utilities to deal with JSON data once it's
 /// interpreted as Strings. We should match Spark's behavior once we added more JSON parsing
 /// kernels in the future.
-pub fn infer_json_schema_from_iterator<I>(value_iter: I) -> Result<Schema, ArrowError>
+pub fn infer_json_schema_from_iterator<I, V>(value_iter: I) -> Result<Schema, ArrowError>
 where
-    I: Iterator<Item = Result<Value, ArrowError>>,
+    I: Iterator<Item = Result<V, ArrowError>>,
+    V: Borrow<Value>,
 {
     let mut field_types: HashMap<String, InferredType> = HashMap::new();
 
     for record in value_iter {
-        match record? {
+        match record?.borrow() {
             Value::Object(map) => {
-                collect_field_types_from_object(&mut field_types, &map)?;
+                collect_field_types_from_object(&mut field_types, map)?;
             }
             value => {
                 return Err(ArrowError::JsonError(format!(
@@ -582,6 +584,7 @@ where
 /// [`RawDecoder`]: crate::raw::RawDecoder
 /// [#3610]: https://github.com/apache/arrow-rs/issues/3610
 #[derive(Debug)]
+#[deprecated(note = "Use RawDecoder instead")]
 pub struct Decoder {
     /// Explicit schema for the JSON file
     schema: SchemaRef,
@@ -638,6 +641,7 @@ impl DecoderOptions {
     }
 }
 
+#[allow(deprecated)]
 impl Decoder {
     /// Create a new JSON decoder from some value that implements an
     /// iterator over [`serde_json::Value`]s (aka implements the
@@ -1604,12 +1608,15 @@ fn flatten_json_string_values(values: &[Value]) -> Vec<Option<String>> {
 /// [`RawReader`]: crate::raw::RawReader
 /// [#3610]: https://github.com/apache/arrow-rs/issues/3610
 #[derive(Debug)]
+#[deprecated(note = "Use RawReader instead")]
+#[allow(deprecated)]
 pub struct Reader<R: Read> {
     reader: BufReader<R>,
     /// JSON value decoder
     decoder: Decoder,
 }
 
+#[allow(deprecated)]
 impl<R: Read> Reader<R> {
     /// Create a new JSON Reader from any value that implements the `Read` trait.
     ///
@@ -1656,6 +1663,7 @@ impl<R: Read> Reader<R> {
 /// [#3610]: https://github.com/apache/arrow-rs/issues/3610
 ///
 #[derive(Debug, Default)]
+#[deprecated(note = "Use RawReaderBuilder instead")]
 pub struct ReaderBuilder {
     /// Optional schema for the JSON file
     ///
@@ -1670,6 +1678,7 @@ pub struct ReaderBuilder {
     options: DecoderOptions,
 }
 
+#[allow(deprecated)]
 impl ReaderBuilder {
     /// Create a new builder for configuring JSON parsing options.
     ///
@@ -1750,6 +1759,7 @@ impl ReaderBuilder {
     }
 }
 
+#[allow(deprecated)]
 impl<R: Read> Iterator for Reader<R> {
     type Item = Result<RecordBatch, ArrowError>;
 
@@ -1759,6 +1769,7 @@ impl<R: Read> Iterator for Reader<R> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use arrow_array::cast::{
@@ -2199,7 +2210,7 @@ mod tests {
                 .unwrap();
             // test that the list offsets are correct
             assert_eq!(
-                cc.data().buffers()[0],
+                *cc.data().buffers()[0],
                 Buffer::from_slice_ref([0i32, 2, 2, 4, 5])
             );
             let cc = as_boolean_array(cc.values());
@@ -2219,7 +2230,7 @@ mod tests {
                 .unwrap();
             // test that the list offsets are correct
             assert_eq!(
-                dd.data().buffers()[0],
+                *dd.data().buffers()[0],
                 Buffer::from_slice_ref([0i32, 1, 1, 2, 6])
             );
 
@@ -2363,11 +2374,11 @@ mod tests {
         let read: &ListArray = read.as_any().downcast_ref::<ListArray>().unwrap();
         let expected = expected.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(
-            read.data().buffers()[0],
+            *read.data().buffers()[0],
             Buffer::from_slice_ref([0i32, 2, 3, 6, 6, 6, 7])
         );
         // compare list null buffers
-        assert_eq!(read.data().null_buffer(), expected.data().null_buffer());
+        assert_eq!(read.data().nulls(), expected.data().nulls());
         // build struct from list
         let struct_array = as_struct_array(read.values());
         let expected_struct_array = as_struct_array(expected.values());
@@ -2378,8 +2389,8 @@ mod tests {
         assert_eq!(1, expected_struct_array.null_count());
         // test struct's nulls
         assert_eq!(
-            struct_array.data().null_buffer(),
-            expected_struct_array.data().null_buffer()
+            struct_array.data().nulls(),
+            expected_struct_array.data().nulls()
         );
         // test struct's fields
         let read_b = struct_array.column(0);

@@ -20,6 +20,7 @@
 use arrow_array::builder::BufferBuilder;
 use arrow_array::iterator::ArrayIter;
 use arrow_array::*;
+use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::bit_mask::combine_option_bitmap;
@@ -276,10 +277,7 @@ where
     let len = a.len();
 
     let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len);
-    let null_count = null_buffer
-        .as_ref()
-        .map(|x| len - x.count_set_bits_offset(0, len))
-        .unwrap_or_default();
+    let nulls = null_buffer.map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, len)));
 
     let mut builder = a.into_builder()?;
 
@@ -289,13 +287,7 @@ where
         .zip(b.values())
         .for_each(|(l, r)| *l = op(*l, *r));
 
-    let array_builder = builder
-        .finish()
-        .data()
-        .clone()
-        .into_builder()
-        .null_bit_buffer(null_buffer)
-        .null_count(null_count);
+    let array_builder = builder.finish().into_data().into_builder().nulls(nulls);
 
     let array_data = unsafe { array_builder.build_unchecked() };
     Ok(Ok(PrimitiveArray::<T>::from(array_data)))

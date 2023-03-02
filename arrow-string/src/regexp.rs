@@ -122,7 +122,7 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     regex: &str,
     flag: Option<&str>,
 ) -> Result<BooleanArray, ArrowError> {
-    let null_bit_buffer = array.data().null_buffer().cloned();
+    let null_bit_buffer = array.data().nulls().map(|x| x.inner().sliced());
     let mut result = BooleanBufferBuilder::new(array.len());
 
     let pattern = match flag {

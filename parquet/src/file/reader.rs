@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains file reader API and provides methods to access file metadata, row group
-//! readers to read individual column chunks, or access record iterator.
+//! File reader API and methods to access file metadata, row group
+//! readers to read individual column chunks, or access record
+//! iterator.
 
 use bytes::Bytes;
 use std::{boxed::Box, io::Read, sync::Arc};

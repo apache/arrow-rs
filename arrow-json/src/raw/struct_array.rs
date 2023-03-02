@@ -18,6 +18,7 @@
 use crate::raw::tape::{Tape, TapeElement};
 use crate::raw::{make_decoder, tape_error, ArrayDecoder};
 use arrow_array::builder::BooleanBufferBuilder;
+use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
@@ -28,10 +29,16 @@ pub struct StructArrayDecoder {
 }
 
 impl StructArrayDecoder {
-    pub fn new(data_type: DataType, is_nullable: bool) -> Result<Self, ArrowError> {
+    pub fn new(
+        data_type: DataType,
+        coerce_primitive: bool,
+        is_nullable: bool,
+    ) -> Result<Self, ArrowError> {
         let decoders = struct_fields(&data_type)
             .iter()
-            .map(|f| make_decoder(f.data_type().clone(), f.is_nullable()))
+            .map(|f| {
+                make_decoder(f.data_type().clone(), coerce_primitive, f.is_nullable())
+            })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
         Ok(Self {
@@ -48,7 +55,6 @@ impl ArrayDecoder for StructArrayDecoder {
         let mut child_pos: Vec<_> =
             (0..fields.len()).map(|_| vec![0; pos.len()]).collect();
 
-        let mut null_count = 0;
         let mut nulls = self
             .is_nullable
             .then(|| BooleanBufferBuilder::new(pos.len()));
@@ -62,7 +68,6 @@ impl ArrayDecoder for StructArrayDecoder {
                 }
                 (TapeElement::Null, Some(nulls)) => {
                     nulls.append(false);
-                    null_count += 1;
                     continue;
                 }
                 (d, _) => return Err(tape_error(d, "{")),
@@ -84,16 +89,9 @@ impl ArrayDecoder for StructArrayDecoder {
                 }
 
                 // Advance to next field
-                cur_idx = match tape.get(cur_idx + 1) {
-                    TapeElement::String(_)
-                    | TapeElement::Number(_)
-                    | TapeElement::True
-                    | TapeElement::False
-                    | TapeElement::Null => cur_idx + 2,
-                    TapeElement::StartList(end_idx) => end_idx + 1,
-                    TapeElement::StartObject(end_idx) => end_idx + 1,
-                    d => return Err(tape_error(d, "field value")),
-                }
+                cur_idx = tape
+                    .next(cur_idx + 1)
+                    .map_err(|d| tape_error(d, "field value"))?;
             }
         }
 
@@ -109,10 +107,13 @@ impl ArrayDecoder for StructArrayDecoder {
             .iter()
             .for_each(|x| assert_eq!(x.len(), pos.len()));
 
+        let nulls = nulls
+            .as_mut()
+            .map(|x| NullBuffer::new(BooleanBuffer::new(x.finish(), 0, pos.len())));
+
         let data = ArrayDataBuilder::new(self.data_type.clone())
             .len(pos.len())
-            .null_count(null_count)
-            .null_bit_buffer(nulls.as_mut().map(|x| x.finish()))
+            .nulls(nulls)
             .child_data(child_data);
 
         // Safety

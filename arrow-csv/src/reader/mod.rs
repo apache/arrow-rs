@@ -42,65 +42,87 @@
 
 mod records;
 
+use arrow_array::builder::PrimitiveBuilder;
+use arrow_array::types::*;
+use arrow_array::ArrowNativeTypeOp;
+use arrow_array::*;
+use arrow_buffer::ArrowNativeType;
+use arrow_cast::parse::Parser;
+use arrow_schema::*;
 use lazy_static::lazy_static;
 use regex::{Regex, RegexSet};
-use std::collections::HashSet;
 use std::fmt;
 use std::fs::File;
 use std::io::{BufRead, BufReader as StdBufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
-use arrow_array::builder::Decimal128Builder;
-use arrow_array::types::*;
-use arrow_array::*;
-use arrow_cast::parse::Parser;
-use arrow_schema::*;
-
 use crate::map_csv_error;
 use crate::reader::records::{RecordDecoder, StringRecords};
-use arrow_data::decimal::validate_decimal_precision;
 use csv::StringRecord;
-use std::ops::Neg;
 
 lazy_static! {
+    /// Order should match [`InferredDataType`]
     static ref REGEX_SET: RegexSet = RegexSet::new([
         r"(?i)^(true)$|^(false)$(?-i)", //BOOLEAN
-        r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$", //DECIMAL
         r"^-?(\d+)$", //INTEGER
+        r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$", //DECIMAL
         r"^\d{4}-\d\d-\d\d$", //DATE32
-        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d$", //DATE64
+        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d$", //Timestamp(Second)
+        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d.\d{1,3}$", //Timestamp(Millisecond)
+        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d.\d{1,6}$", //Timestamp(Microsecond)
+        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d.\d{1,9}$", //Timestamp(Nanosecond)
     ]).unwrap();
-    //The order should match with REGEX_SET
-    static ref MATCH_DATA_TYPE: Vec<DataType> = vec![
-        DataType::Boolean,
-        DataType::Float64,
-        DataType::Int64,
-        DataType::Date32,
-        DataType::Date64,
-    ];
     static ref PARSE_DECIMAL_RE: Regex =
         Regex::new(r"^-?(\d+\.?\d*|\d*\.?\d+)$").unwrap();
-    static ref DATETIME_RE: Regex =
-        Regex::new(r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,9}$").unwrap();
 }
 
-/// Infer the data type of a record
-fn infer_field_schema(string: &str, datetime_re: Option<Regex>) -> DataType {
-    // when quoting is enabled in the reader, these quotes aren't escaped, we default to
-    // Utf8 for them
-    if string.starts_with('"') {
-        return DataType::Utf8;
+#[derive(Default, Copy, Clone)]
+struct InferredDataType {
+    /// Packed booleans indicating type
+    ///
+    /// 0 - Boolean
+    /// 1 - Integer
+    /// 2 - Float64
+    /// 3 - Date32
+    /// 4 - Timestamp(Second)
+    /// 5 - Timestamp(Millisecond)
+    /// 6 - Timestamp(Microsecond)
+    /// 7 - Timestamp(Nanosecond)
+    /// 8 - Utf8
+    packed: u16,
+}
+
+impl InferredDataType {
+    /// Returns the inferred data type
+    fn get(&self) -> DataType {
+        match self.packed {
+            1 => DataType::Boolean,
+            2 => DataType::Int64,
+            4 | 6 => DataType::Float64, // Promote Int64 to Float64
+            b if b != 0 && (b & !0b11111000) == 0 => match b.leading_zeros() {
+                // Promote to highest precision temporal type
+                8 => DataType::Timestamp(TimeUnit::Nanosecond, None),
+                9 => DataType::Timestamp(TimeUnit::Microsecond, None),
+                10 => DataType::Timestamp(TimeUnit::Millisecond, None),
+                11 => DataType::Timestamp(TimeUnit::Second, None),
+                12 => DataType::Date32,
+                _ => unreachable!(),
+            },
+            _ => DataType::Utf8,
+        }
     }
-    let matches = REGEX_SET.matches(string).into_iter().next();
-    // match regex in a particular order
-    match matches {
-        Some(ix) => MATCH_DATA_TYPE[ix].clone(),
-        None => {
-            let datetime_re = datetime_re.unwrap_or_else(|| DATETIME_RE.clone());
-            if datetime_re.is_match(string) {
-                DataType::Timestamp(TimeUnit::Nanosecond, None)
-            } else {
-                DataType::Utf8
+
+    /// Updates the [`InferredDataType`] with the given string
+    fn update(&mut self, string: &str, datetime_re: Option<&Regex>) {
+        self.packed |= if string.starts_with('"') {
+            1 << 8 // Utf8
+        } else if let Some(m) = REGEX_SET.matches(string).into_iter().next() {
+            1 << m
+        } else {
+            match datetime_re {
+                // Timestamp(Nanosecond)
+                Some(d) if d.is_match(string) => 1 << 7,
+                _ => 1 << 8, // Utf8
             }
         }
     }
@@ -231,10 +253,9 @@ fn infer_reader_schema_with_csv_options<R: Read>(
 
     let header_length = headers.len();
     // keep track of inferred field types
-    let mut column_types: Vec<HashSet<DataType>> = vec![HashSet::new(); header_length];
+    let mut column_types: Vec<InferredDataType> = vec![Default::default(); header_length];
 
     let mut records_count = 0;
-    let mut fields = vec![];
 
     let mut record = StringRecord::new();
     let max_records = roptions.max_read_records.unwrap_or(usize::MAX);
@@ -249,40 +270,18 @@ fn infer_reader_schema_with_csv_options<R: Read>(
         for (i, column_type) in column_types.iter_mut().enumerate().take(header_length) {
             if let Some(string) = record.get(i) {
                 if !string.is_empty() {
-                    column_type
-                        .insert(infer_field_schema(string, roptions.datetime_re.clone()));
+                    column_type.update(string, roptions.datetime_re.as_ref())
                 }
             }
         }
     }
 
     // build schema from inference results
-    for i in 0..header_length {
-        let possibilities = &column_types[i];
-        let field_name = &headers[i];
-
-        // determine data type based on possible types
-        // if there are incompatible types, use DataType::Utf8
-        match possibilities.len() {
-            1 => {
-                for dtype in possibilities.iter() {
-                    fields.push(Field::new(field_name, dtype.clone(), true));
-                }
-            }
-            2 => {
-                if possibilities.contains(&DataType::Int64)
-                    && possibilities.contains(&DataType::Float64)
-                {
-                    // we have an integer and double, fall down to double
-                    fields.push(Field::new(field_name, DataType::Float64, true));
-                } else {
-                    // default to Utf8 for conflicting datatypes (e.g bool and int)
-                    fields.push(Field::new(field_name, DataType::Utf8, true));
-                }
-            }
-            _ => fields.push(Field::new(field_name, DataType::Utf8, true)),
-        }
-    }
+    let fields = column_types
+        .iter()
+        .zip(&headers)
+        .map(|(inferred, field_name)| Field::new(field_name, inferred.get(), true))
+        .collect();
 
     Ok((Schema::new(fields), records_count))
 }
@@ -438,10 +437,15 @@ impl<R: BufRead> BufReader<R> {
         loop {
             let buf = self.reader.fill_buf()?;
             let decoded = self.decoder.decode(buf)?;
-            if decoded == 0 {
+            self.reader.consume(decoded);
+            // Yield if decoded no bytes or the decoder is full
+            //
+            // The capacity check avoids looping around and potentially
+            // blocking reading data in fill_buf that isn't needed
+            // to flush the next batch
+            if decoded == 0 || self.decoder.capacity() == 0 {
                 break;
             }
-            self.reader.consume(decoded);
         }
 
         self.decoder.flush()
@@ -574,6 +578,11 @@ impl Decoder {
         self.line_number += rows.len();
         Ok(Some(batch))
     }
+
+    /// Returns the number of records that can be read before requiring a call to [`Self::flush`]
+    pub fn capacity(&self) -> usize {
+        self.batch_size - self.record_decoder.len()
+    }
 }
 
 /// Parses a slice of [`StringRecords`] into a [RecordBatch]
@@ -598,7 +607,22 @@ fn parse(
             match field.data_type() {
                 DataType::Boolean => build_boolean_array(line_number, rows, i),
                 DataType::Decimal128(precision, scale) => {
-                    build_decimal_array(line_number, rows, i, *precision, *scale)
+                    build_decimal_array::<Decimal128Type>(
+                        line_number,
+                        rows,
+                        i,
+                        *precision,
+                        *scale,
+                    )
+                }
+                DataType::Decimal256(precision, scale) => {
+                    build_decimal_array::<Decimal256Type>(
+                        line_number,
+                        rows,
+                        i,
+                        *precision,
+                        *scale,
+                    )
                 }
                 DataType::Int8 => {
                     build_primitive_array::<Int8Type>(line_number, rows, i, None)
@@ -657,6 +681,19 @@ fn parse(
                 >(
                     line_number, rows, i, None
                 ),
+                DataType::Timestamp(TimeUnit::Second, _) => build_primitive_array::<
+                    TimestampSecondType,
+                >(
+                    line_number, rows, i, None
+                ),
+                DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                    build_primitive_array::<TimestampMillisecondType>(
+                        line_number,
+                        rows,
+                        i,
+                        None,
+                    )
+                }
                 DataType::Timestamp(TimeUnit::Microsecond, _) => {
                     build_primitive_array::<TimestampMicrosecondType>(
                         line_number,
@@ -771,22 +808,22 @@ fn parse_bool(string: &str) -> Option<bool> {
 }
 
 // parse the column string to an Arrow Array
-fn build_decimal_array(
+fn build_decimal_array<T: DecimalType>(
     _line_number: usize,
     rows: &StringRecords<'_>,
     col_idx: usize,
     precision: u8,
     scale: i8,
 ) -> Result<ArrayRef, ArrowError> {
-    let mut decimal_builder = Decimal128Builder::with_capacity(rows.len());
+    let mut decimal_builder = PrimitiveBuilder::<T>::with_capacity(rows.len());
     for row in rows.iter() {
         let s = row.get(col_idx);
         if s.is_empty() {
             // append null
             decimal_builder.append_null();
         } else {
-            let decimal_value: Result<i128, _> =
-                parse_decimal_with_parameter(s, precision, scale);
+            let decimal_value: Result<T::Native, _> =
+                parse_decimal_with_parameter::<T>(s, precision, scale);
             match decimal_value {
                 Ok(v) => {
                     decimal_builder.append_value(v);
@@ -804,17 +841,17 @@ fn build_decimal_array(
     ))
 }
 
-// Parse the string format decimal value to i128 format and checking the precision and scale.
-// The result i128 value can't be out of bounds.
-fn parse_decimal_with_parameter(
+// Parse the string format decimal value to i128/i256 format and checking the precision and scale.
+// The result value can't be out of bounds.
+fn parse_decimal_with_parameter<T: DecimalType>(
     s: &str,
     precision: u8,
     scale: i8,
-) -> Result<i128, ArrowError> {
+) -> Result<T::Native, ArrowError> {
     if PARSE_DECIMAL_RE.is_match(s) {
         let mut offset = s.len();
         let len = s.len();
-        let mut base = 1;
+        let mut base = T::Native::usize_as(1);
         let scale_usize = usize::from(scale as u8);
 
         // handle the value after the '.' and meet the scale
@@ -822,7 +859,7 @@ fn parse_decimal_with_parameter(
         match delimiter_position {
             None => {
                 // there is no '.'
-                base = 10_i128.pow(scale as u32);
+                base = T::Native::usize_as(10).pow_checked(scale as u32)?;
             }
             Some(mid) => {
                 // there is the '.'
@@ -831,7 +868,8 @@ fn parse_decimal_with_parameter(
                     offset -= len - mid - 1 - scale_usize;
                 } else {
                     // If the string value is "123.12" and the scale is 4, we should append '00' to the tail.
-                    base = 10_i128.pow((scale_usize + 1 + mid - len) as u32);
+                    base = T::Native::usize_as(10)
+                        .pow_checked((scale_usize + 1 + mid - len) as u32)?;
                 }
             }
         };
@@ -839,25 +877,33 @@ fn parse_decimal_with_parameter(
         // each byte is digit、'-' or '.'
         let bytes = s.as_bytes();
         let mut negative = false;
-        let mut result: i128 = 0;
+        let mut result = T::Native::usize_as(0);
 
-        bytes[0..offset].iter().rev().for_each(|&byte| match byte {
-            b'-' => {
-                negative = true;
-            }
-            b'0'..=b'9' => {
-                result += i128::from(byte - b'0') * base;
-                base *= 10;
-            }
-            // because of the PARSE_DECIMAL_RE, bytes just contains digit、'-' and '.'.
-            _ => {}
-        });
+        bytes[0..offset]
+            .iter()
+            .rev()
+            .try_for_each::<_, Result<(), ArrowError>>(|&byte| {
+                match byte {
+                    b'-' => {
+                        negative = true;
+                    }
+                    b'0'..=b'9' => {
+                        let add = T::Native::usize_as((byte - b'0') as usize)
+                            .mul_checked(base)?;
+                        result = result.add_checked(add)?;
+                        base = base.mul_checked(T::Native::usize_as(10))?;
+                    }
+                    // because of the PARSE_DECIMAL_RE, bytes just contains digit、'-' and '.'.
+                    _ => (),
+                }
+                Ok(())
+            })?;
 
         if negative {
-            result = result.neg();
+            result = result.neg_checked()?;
         }
 
-        match validate_decimal_precision(result, precision) {
+        match T::validate_decimal_precision(result, precision) {
             Ok(_) => Ok(result),
             Err(e) => Err(ArrowError::ParseError(format!(
                 "parse decimal overflow: {e}"
@@ -874,6 +920,8 @@ fn parse_decimal_with_parameter(
 // Like "125.12" to 12512_i128.
 #[cfg(test)]
 fn parse_decimal(s: &str) -> Result<i128, ArrowError> {
+    use std::ops::Neg;
+
     if PARSE_DECIMAL_RE.is_match(s) {
         let mut offset = s.len();
         // each byte is digit、'-' or '.'
@@ -1220,6 +1268,7 @@ impl ReaderBuilder {
 mod tests {
     use super::*;
 
+    use arrow_buffer::i256;
     use std::io::{Cursor, Write};
     use tempfile::NamedTempFile;
 
@@ -1308,7 +1357,7 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new("city", DataType::Utf8, false),
             Field::new("lat", DataType::Decimal128(38, 6), false),
-            Field::new("lng", DataType::Decimal128(38, 6), false),
+            Field::new("lng", DataType::Decimal256(76, 6), false),
         ]);
 
         let file = File::open("test/data/decimal_test.csv").unwrap();
@@ -1333,6 +1382,23 @@ mod tests {
         assert_eq!("123.000000", lat.value_as_string(7));
         assert_eq!("123.000000", lat.value_as_string(8));
         assert_eq!("-50.760000", lat.value_as_string(9));
+
+        let lng = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Decimal256Array>()
+            .unwrap();
+
+        assert_eq!("-3.335724", lng.value_as_string(0));
+        assert_eq!("-2.179404", lng.value_as_string(1));
+        assert_eq!("-1.778197", lng.value_as_string(2));
+        assert_eq!("-3.179090", lng.value_as_string(3));
+        assert_eq!("-3.179090", lng.value_as_string(4));
+        assert_eq!("0.290472", lng.value_as_string(5));
+        assert_eq!("0.290472", lng.value_as_string(6));
+        assert_eq!("0.290472", lng.value_as_string(7));
+        assert_eq!("0.290472", lng.value_as_string(8));
+        assert_eq!("0.290472", lng.value_as_string(9));
     }
 
     #[test]
@@ -1584,7 +1650,10 @@ mod tests {
         assert_eq!(&DataType::Float64, schema.field(2).data_type());
         assert_eq!(&DataType::Boolean, schema.field(3).data_type());
         assert_eq!(&DataType::Date32, schema.field(4).data_type());
-        assert_eq!(&DataType::Date64, schema.field(5).data_type());
+        assert_eq!(
+            &DataType::Timestamp(TimeUnit::Second, None),
+            schema.field(5).data_type()
+        );
 
         let names: Vec<&str> =
             schema.fields().iter().map(|x| x.name().as_str()).collect();
@@ -1645,6 +1714,13 @@ mod tests {
         }
     }
 
+    /// Infer the data type of a record
+    fn infer_field_schema(string: &str, datetime_re: Option<Regex>) -> DataType {
+        let mut v = InferredDataType::default();
+        v.update(string, datetime_re.as_ref());
+        v.get()
+    }
+
     #[test]
     fn test_infer_field_schema() {
         assert_eq!(infer_field_schema("A", None), DataType::Utf8);
@@ -1659,22 +1735,22 @@ mod tests {
         assert_eq!(infer_field_schema("2020-11-08", None), DataType::Date32);
         assert_eq!(
             infer_field_schema("2020-11-08T14:20:01", None),
-            DataType::Date64
+            DataType::Timestamp(TimeUnit::Second, None)
         );
         assert_eq!(
             infer_field_schema("2020-11-08 14:20:01", None),
-            DataType::Date64
+            DataType::Timestamp(TimeUnit::Second, None)
         );
         let reg = Regex::new(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$").ok();
         assert_eq!(
             infer_field_schema("2020-11-08 14:20:01", reg),
-            DataType::Date64
+            DataType::Timestamp(TimeUnit::Second, None)
         );
         assert_eq!(infer_field_schema("-5.13", None), DataType::Float64);
         assert_eq!(infer_field_schema("0.1300", None), DataType::Float64);
         assert_eq!(
             infer_field_schema("2021-12-19 13:12:30.921", None),
-            DataType::Timestamp(TimeUnit::Nanosecond, None)
+            DataType::Timestamp(TimeUnit::Millisecond, None)
         );
         assert_eq!(
             infer_field_schema("2021-12-19T13:12:30.123456789", None),
@@ -1778,26 +1854,42 @@ mod tests {
             ("-123.", -123000i128),
         ];
         for (s, i) in tests {
-            let result = parse_decimal_with_parameter(s, 20, 3);
-            assert_eq!(i, result.unwrap())
+            let result_128 = parse_decimal_with_parameter::<Decimal128Type>(s, 20, 3);
+            assert_eq!(i, result_128.unwrap());
+            let result_256 = parse_decimal_with_parameter::<Decimal256Type>(s, 20, 3);
+            assert_eq!(i256::from_i128(i), result_256.unwrap());
         }
         let can_not_parse_tests = ["123,123", ".", "123.123.123"];
         for s in can_not_parse_tests {
-            let result = parse_decimal_with_parameter(s, 20, 3);
+            let result_128 = parse_decimal_with_parameter::<Decimal128Type>(s, 20, 3);
             assert_eq!(
                 format!("Parser error: can't parse the string value {s} to decimal"),
-                result.unwrap_err().to_string()
+                result_128.unwrap_err().to_string()
+            );
+            let result_256 = parse_decimal_with_parameter::<Decimal256Type>(s, 20, 3);
+            assert_eq!(
+                format!("Parser error: can't parse the string value {s} to decimal"),
+                result_256.unwrap_err().to_string()
             );
         }
         let overflow_parse_tests = ["12345678", "12345678.9", "99999999.99"];
         for s in overflow_parse_tests {
-            let result = parse_decimal_with_parameter(s, 10, 3);
-            let expected = "Parser error: parse decimal overflow";
-            let actual = result.unwrap_err().to_string();
+            let result_128 = parse_decimal_with_parameter::<Decimal128Type>(s, 10, 3);
+            let expected_128 = "Parser error: parse decimal overflow";
+            let actual_128 = result_128.unwrap_err().to_string();
 
             assert!(
-                actual.contains(expected),
-                "actual: '{actual}', expected: '{expected}'"
+                actual_128.contains(expected_128),
+                "actual: '{actual_128}', expected: '{expected_128}'"
+            );
+
+            let result_256 = parse_decimal_with_parameter::<Decimal256Type>(s, 10, 3);
+            let expected_256 = "Parser error: parse decimal overflow";
+            let actual_256 = result_256.unwrap_err().to_string();
+
+            assert!(
+                actual_256.contains(expected_256),
+                "actual: '{actual_256}', expected: '{expected_256}'"
             );
         }
     }
@@ -2229,6 +2321,168 @@ mod tests {
                     assert_eq!(expected, actual)
                 }
             }
+        }
+    }
+
+    fn err_test(csv: &[u8], expected: &str) {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("text1", DataType::Utf8, false),
+            Field::new("text2", DataType::Utf8, false),
+        ]));
+        let buffer = std::io::BufReader::with_capacity(2, Cursor::new(csv));
+        let b = ReaderBuilder::new()
+            .with_schema(schema)
+            .with_batch_size(2)
+            .build_buffered(buffer)
+            .unwrap();
+        let err = b.collect::<Result<Vec<_>, _>>().unwrap_err().to_string();
+        assert_eq!(err, expected)
+    }
+
+    #[test]
+    fn test_invalid_utf8() {
+        err_test(
+            b"sdf,dsfg\ndfd,hgh\xFFue\n,sds\nFalhghse,",
+            "Csv error: Encountered invalid UTF-8 data for line 2 and field 2",
+        );
+
+        err_test(
+            b"sdf,dsfg\ndksdk,jf\nd\xFFfd,hghue\n,sds\nFalhghse,",
+            "Csv error: Encountered invalid UTF-8 data for line 3 and field 1",
+        );
+
+        err_test(
+            b"sdf,dsfg\ndksdk,jf\ndsdsfd,hghue\n,sds\nFalhghse,\xFF",
+            "Csv error: Encountered invalid UTF-8 data for line 5 and field 2",
+        );
+
+        err_test(
+            b"\xFFsdf,dsfg\ndksdk,jf\ndsdsfd,hghue\n,sds\nFalhghse,\xFF",
+            "Csv error: Encountered invalid UTF-8 data for line 1 and field 1",
+        );
+    }
+
+    struct InstrumentedRead<R> {
+        r: R,
+        fill_count: usize,
+        fill_sizes: Vec<usize>,
+    }
+
+    impl<R> InstrumentedRead<R> {
+        fn new(r: R) -> Self {
+            Self {
+                r,
+                fill_count: 0,
+                fill_sizes: vec![],
+            }
+        }
+    }
+
+    impl<R: Seek> Seek for InstrumentedRead<R> {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.r.seek(pos)
+        }
+    }
+
+    impl<R: BufRead> Read for InstrumentedRead<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.r.read(buf)
+        }
+    }
+
+    impl<R: BufRead> BufRead for InstrumentedRead<R> {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            self.fill_count += 1;
+            let buf = self.r.fill_buf()?;
+            self.fill_sizes.push(buf.len());
+            Ok(buf)
+        }
+
+        fn consume(&mut self, amt: usize) {
+            self.r.consume(amt)
+        }
+    }
+
+    #[test]
+    fn test_io() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
+        let csv = "foo,bar\nbaz,foo\na,b\nc,d";
+        let mut read = InstrumentedRead::new(Cursor::new(csv.as_bytes()));
+        let reader = ReaderBuilder::new()
+            .with_schema(schema)
+            .with_batch_size(3)
+            .build_buffered(&mut read)
+            .unwrap();
+
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), 3);
+        assert_eq!(batches[1].num_rows(), 1);
+
+        // Expect 4 calls to fill_buf
+        // 1. Read first 3 rows
+        // 2. Read final row
+        // 3. Delimit and flush final row
+        // 4. Iterator finished
+        assert_eq!(&read.fill_sizes, &[23, 3, 0, 0]);
+        assert_eq!(read.fill_count, 4);
+    }
+
+    #[test]
+    fn test_inference() {
+        let cases: &[(&[&str], DataType)] = &[
+            (&[], DataType::Utf8),
+            (&["false", "12"], DataType::Utf8),
+            (&["12", "cupcakes"], DataType::Utf8),
+            (&["12", "12.4"], DataType::Float64),
+            (&["14050", "24332"], DataType::Int64),
+            (&["14050.0", "true"], DataType::Utf8),
+            (&["14050", "2020-03-19 00:00:00"], DataType::Utf8),
+            (&["14050", "2340.0", "2020-03-19 00:00:00"], DataType::Utf8),
+            (
+                &["2020-03-19 02:00:00", "2020-03-19 00:00:00"],
+                DataType::Timestamp(TimeUnit::Second, None),
+            ),
+            (&["2020-03-19", "2020-03-20"], DataType::Date32),
+            (
+                &["2020-03-19", "2020-03-19 02:00:00", "2020-03-19 00:00:00"],
+                DataType::Timestamp(TimeUnit::Second, None),
+            ),
+            (
+                &[
+                    "2020-03-19",
+                    "2020-03-19 02:00:00",
+                    "2020-03-19 00:00:00.000",
+                ],
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+            ),
+            (
+                &[
+                    "2020-03-19",
+                    "2020-03-19 02:00:00",
+                    "2020-03-19 00:00:00.000000",
+                ],
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+            ),
+            (
+                &[
+                    "2020-03-19",
+                    "2020-03-19 02:00:00.000000000",
+                    "2020-03-19 00:00:00.000000",
+                ],
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ),
+        ];
+
+        for (values, expected) in cases {
+            let mut t = InferredDataType::default();
+            for v in *values {
+                t.update(v, None)
+            }
+            assert_eq!(&t.get(), expected, "{values:?}")
         }
     }
 }

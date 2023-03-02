@@ -50,7 +50,25 @@ use crate::schema::types::{
     Type as SchemaType,
 };
 
+/// [`Index`] for each row group of each column.
+///
+/// `column_index[row_group_number][column_number]` holds the
+/// [`Index`] corresponding to column `column_number` of row group
+/// `row_group_number`.
+///
+/// For example `column_index[2][3]` holds the [`Index`] for the forth
+/// column in the third row group of the parquet file.
 pub type ParquetColumnIndex = Vec<Vec<Index>>;
+
+/// [`PageLocation`] for each datapage of each row group of each column.
+///
+/// `offset_index[row_group_number][column_number][page_number]` holds
+/// the [`PageLocation`] corresponding to page `page_number` of column
+/// `column_number`of row group `row_group_number`.
+///
+/// For example `offset_index[2][3][4]` holds the [`PageLocation`] for
+/// the fifth page of the forth column in the third row group of the
+/// parquet file.
 pub type ParquetOffsetIndex = Vec<Vec<Vec<PageLocation>>>;
 
 /// Global Parquet metadata.
@@ -65,8 +83,8 @@ pub struct ParquetMetaData {
 }
 
 impl ParquetMetaData {
-    /// Creates Parquet metadata from file metadata and a list of row group metadata `Arc`s
-    /// for each available row group.
+    /// Creates Parquet metadata from file metadata and a list of row
+    /// group metadata
     pub fn new(file_metadata: FileMetaData, row_groups: Vec<RowGroupMetaData>) -> Self {
         ParquetMetaData {
             file_metadata,
@@ -76,6 +94,8 @@ impl ParquetMetaData {
         }
     }
 
+    /// Creates Parquet metadata from file metadata, a list of row
+    /// group metadata, and the column index structures.
     pub fn new_with_page_index(
         file_metadata: FileMetaData,
         row_groups: Vec<RowGroupMetaData>,
@@ -232,6 +252,7 @@ pub struct RowGroupMetaData {
     sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
+    /// `page_offset_index[column_number][page_number]`
     page_offset_index: Option<Vec<Vec<PageLocation>>>,
 }
 
@@ -277,6 +298,8 @@ impl RowGroupMetaData {
     }
 
     /// Returns reference of page offset index of all column in this row group.
+    ///
+    /// The returned vector contains `page_offset[column_number][page_number]`
     pub fn page_offset_index(&self) -> Option<&Vec<Vec<PageLocation>>> {
         self.page_offset_index.as_ref()
     }
@@ -292,6 +315,8 @@ impl RowGroupMetaData {
     }
 
     /// Sets page offset index for this row group.
+    ///
+    /// The vector represents `page_offset[column_number][page_number]`
     pub fn set_page_offset(&mut self, page_offset: Vec<Vec<PageLocation>>) {
         self.page_offset_index = Some(page_offset);
     }

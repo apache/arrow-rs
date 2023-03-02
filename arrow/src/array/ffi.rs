@@ -47,6 +47,8 @@ impl TryFrom<ArrayData> for ffi::ArrowArray {
 /// # Safety
 /// Assumes that these pointers represent valid C Data Interfaces, both in memory
 /// representation and lifetime via the `release` mechanism.
+#[deprecated(note = "Use ArrowArray::new")]
+#[allow(deprecated)]
 pub unsafe fn make_array_from_raw(
     array: *const ffi::FFI_ArrowArray,
     schema: *const ffi::FFI_ArrowSchema,
@@ -91,30 +93,22 @@ mod tests {
             StructArray, UInt32Array, UInt64Array,
         },
         datatypes::{DataType, Field},
-        ffi::ArrowArray,
+        ffi::{ArrowArray, FFI_ArrowArray, FFI_ArrowSchema},
     };
     use std::convert::TryFrom;
     use std::sync::Arc;
 
     fn test_round_trip(expected: &ArrayData) -> Result<()> {
-        // create a `ArrowArray` from the data.
-        let d1 = ArrowArray::try_from(expected.clone())?;
-
-        // here we export the array as 2 pointers. We would have no control over ownership if it was not for
-        // the release mechanism.
-        let (array, schema) = ArrowArray::into_raw(d1);
+        // here we export the array
+        let array = FFI_ArrowArray::new(expected);
+        let schema = FFI_ArrowSchema::try_from(expected.data_type())?;
 
         // simulate an external consumer by being the consumer
-        let d1 = unsafe { ArrowArray::try_from_raw(array, schema) }?;
+        let d1 = ArrowArray::new(array, schema);
 
         let result = &ArrayData::try_from(d1)?;
 
         assert_eq!(result, expected);
-
-        unsafe {
-            Arc::from_raw(array);
-            Arc::from_raw(schema);
-        }
         Ok(())
     }
 

@@ -62,3 +62,48 @@ fn test_export_csv_timestamps() {
     let right = String::from_utf8(sw).unwrap();
     assert_eq!(left, right);
 }
+
+#[test]
+fn test_export_csv_timestamps_using_rfc3339() {
+    let schema = Schema::new(vec![
+        Field::new(
+            "c1",
+            DataType::Timestamp(
+                TimeUnit::Millisecond,
+                Some("Australia/Sydney".to_string()),
+            ),
+            true,
+        ),
+        Field::new("c2", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+    ]);
+
+    let c1 = TimestampMillisecondArray::from(
+        // 1555584887 converts to 2019-04-18, 20:54:47 in time zone Australia/Sydney (AEST).
+        // The offset (difference to UTC) is +10:00.
+        // 1635577147 converts to 2021-10-30 17:59:07 in time zone Australia/Sydney (AEDT)
+        // The offset (difference to UTC) is +11:00. Note that daylight savings is in effect on 2021-10-30.
+        //
+        vec![Some(1555584887378), Some(1635577147000)],
+    )
+    .with_timezone("Australia/Sydney".to_string());
+    let c2 =
+        TimestampMillisecondArray::from(vec![Some(1555584887378), Some(1635577147000)]);
+    let batch =
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
+
+    let mut sw = Vec::new();
+    let mut writer = arrow_csv::WriterBuilder::new()
+        .with_rfc3339()
+        .build(&mut sw);
+    let batches = vec![&batch];
+    for batch in batches {
+        writer.write(batch).unwrap();
+    }
+    drop(writer);
+
+    let left = "c1,c2
+2019-04-18T20:54:47.378+10:00,2019-04-18T10:54:47.378
+2021-10-30T17:59:07+11:00,2021-10-30T06:59:07\n";
+    let right = String::from_utf8(sw).unwrap();
+    assert_eq!(left, right);
+}

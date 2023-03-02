@@ -186,7 +186,7 @@
 //! where
 //!     I: IntoIterator<Item=&'a str>,
 //! {
-//!     let array = Arc::new(StringArray::from_iter(iter.into_iter().map(Some))) as _;
+//!     let array = StringArray::from_iter(iter.into_iter().map(Some));
 //!     arrow::compute::cast(&array, to_data_type)
 //! }
 //!
@@ -305,10 +305,6 @@
 pub use arrow_array::{downcast_dictionary_array, downcast_primitive_array};
 
 pub use arrow_buffer::{alloc, buffer};
-
-pub mod bitmap {
-    pub use arrow_data::Bitmap;
-}
 
 pub mod array;
 pub mod compute;

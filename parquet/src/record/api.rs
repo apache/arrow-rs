@@ -525,7 +525,7 @@ pub enum Field {
     Date(i32),
     /// Milliseconds from the Unix epoch, 1 January 1970.
     TimestampMillis(i64),
-    /// Microseconds from the Unix epoch, 1 Janiary 1970.
+    /// Microseconds from the Unix epoch, 1 January 1970.
     TimestampMicros(i64),
 
     // ----------------------------------------------------------------------

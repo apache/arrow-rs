@@ -68,6 +68,14 @@ use chrono::prelude::*;
 /// the system timezone is set to Americas/New_York (UTC-5) the
 /// timestamp will be interpreted as though it were
 /// `1997-01-31T09:26:56.123-05:00`
+///
+/// Some formats that supported by PostgresSql <https://www.postgresql.org/docs/current/datatype-datetime.html#DATATYPE-DATETIME-TIME-TABLE>
+/// still not supported by chrono, like
+///     "2023-01-01 040506 America/Los_Angeles",
+///     "2023-01-01 04:05:06.789 +07:30:00",
+///     "2023-01-01 040506 +07:30:00",
+///     "2023-01-01 04:05:06.789 PST",
+///     "2023-01-01 04:05:06.789 -08",
 #[inline]
 pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     // Fast path:  RFC3339 timestamp (with a T)
@@ -81,10 +89,15 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     // separating the date and time with a space ' ' rather than 'T' to be
     // (more) compatible with Apache Spark SQL
 
-    // timezone offset, using ' ' as a separator
-    // Example: 2020-09-08 13:42:29.190855-05:00
-    if let Ok(ts) = DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f%:z") {
-        return to_timestamp_nanos(ts.naive_utc());
+    let supported_formats = vec![
+        "%Y-%m-%d %H:%M:%S%.f%:z", // Example: 2020-09-08 13:42:29.190855-05:00
+        "%Y-%m-%d %H%M%S%.3f%:z",  // Example: "2023-01-01 040506 +07:30"
+    ];
+
+    for f in supported_formats.iter() {
+        if let Ok(ts) = DateTime::parse_from_str(s, f) {
+            return to_timestamp_nanos(ts.naive_utc());
+        }
     }
 
     // with an explicit Z, using ' ' as a separator

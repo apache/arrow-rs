@@ -333,8 +333,8 @@ fn write_leaves<W: Write>(
                     .as_any()
                     .downcast_ref::<arrow_array::MapArray>()
                     .expect("Unable to get map array");
-                keys.push(map_array.keys());
-                values.push(map_array.values());
+                keys.push(map_array.keys().clone());
+                values.push(map_array.values().clone());
             }
 
             write_leaves(row_group_writer, &keys, levels)?;
@@ -1026,9 +1026,7 @@ mod tests {
             true,
         );
         let schema = Arc::new(Schema::new(vec![stocks_field]));
-        let builder = arrow::json::ReaderBuilder::new()
-            .with_schema(schema)
-            .with_batch_size(64);
+        let builder = arrow::json::RawReaderBuilder::new(schema).with_batch_size(64);
         let mut reader = builder.build(std::io::Cursor::new(json_content)).unwrap();
 
         let batch = reader.next().unwrap().unwrap();
@@ -2314,17 +2312,17 @@ mod tests {
         // Verify data is as expected
 
         let expected = r#"
-            +-------------------------------------------------------------------------------------------------------------------------------------+
-            | struct_b                                                                                                                            |
-            +-------------------------------------------------------------------------------------------------------------------------------------+
-            | {"list": [{"leaf_a": 1, "leaf_b": 1}]}                                                                                              |
-            | {"list": null}                                                                                                                      |
-            | {"list": [{"leaf_a": 2, "leaf_b": null}, {"leaf_a": 3, "leaf_b": 2}]}                                                               |
-            | {"list": null}                                                                                                                      |
-            | {"list": [{"leaf_a": 4, "leaf_b": null}, {"leaf_a": 5, "leaf_b": null}]}                                                            |
-            | {"list": [{"leaf_a": 6, "leaf_b": null}, {"leaf_a": 7, "leaf_b": null}, {"leaf_a": 8, "leaf_b": null}, {"leaf_a": 9, "leaf_b": 1}]} |
-            | {"list": [{"leaf_a": 10, "leaf_b": null}]}                                                                                          |
-            +-------------------------------------------------------------------------------------------------------------------------------------+
+            +-------------------------------------------------------------------------------------------------------+
+            | struct_b                                                                                              |
+            +-------------------------------------------------------------------------------------------------------+
+            | {list: [{leaf_a: 1, leaf_b: 1}]}                                                                      |
+            | {list: }                                                                                              |
+            | {list: [{leaf_a: 2, leaf_b: }, {leaf_a: 3, leaf_b: 2}]}                                               |
+            | {list: }                                                                                              |
+            | {list: [{leaf_a: 4, leaf_b: }, {leaf_a: 5, leaf_b: }]}                                                |
+            | {list: [{leaf_a: 6, leaf_b: }, {leaf_a: 7, leaf_b: }, {leaf_a: 8, leaf_b: }, {leaf_a: 9, leaf_b: 1}]} |
+            | {list: [{leaf_a: 10, leaf_b: }]}                                                                      |
+            +-------------------------------------------------------------------------------------------------------+
         "#.trim().split('\n').map(|x| x.trim()).collect::<Vec<_>>().join("\n");
 
         let actual = pretty_format_batches(batches).unwrap().to_string();

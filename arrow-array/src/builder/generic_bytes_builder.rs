@@ -22,6 +22,7 @@ use crate::{ArrayRef, GenericByteArray, OffsetSizeTrait};
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
 use std::any::Any;
+use std::fmt::Write;
 use std::sync::Arc;
 
 ///  Array builder for [`GenericByteArray`]
@@ -232,8 +233,42 @@ impl<T: ByteArrayType, V: AsRef<T::Native>> Extend<Option<V>> for GenericByteBui
     }
 }
 
-///  Array builder for [`GenericStringArray`][crate::GenericStringArray]
+/// Array builder for [`GenericStringArray`][crate::GenericStringArray]
+///
+/// Values can be appended using [`GenericByteBuilder::append_value`], and nulls with
+/// [`GenericByteBuilder::append_null`] as normal.
+///
+/// Additionally implements [`std::fmt::Write`] with any written data included in the next
+/// appended value. This allows use with [`std::fmt::Display`] without intermediate allocations
+///
+/// ```
+/// # use std::fmt::Write;
+/// # use arrow_array::builder::GenericStringBuilder;
+/// let mut builder = GenericStringBuilder::<i32>::new();
+///
+/// // Write data
+/// write!(builder, "foo").unwrap();
+/// write!(builder, "bar").unwrap();
+///
+/// // Finish value
+/// builder.append_value("baz");
+///
+/// // Write second value
+/// write!(builder, "v2").unwrap();
+/// builder.append_value("");
+///
+/// let array = builder.finish();
+/// assert_eq!(array.value(0), "foobarbaz");
+/// assert_eq!(array.value(1), "v2");
+/// ```
 pub type GenericStringBuilder<O> = GenericByteBuilder<GenericStringType<O>>;
+
+impl<O: OffsetSizeTrait> Write for GenericStringBuilder<O> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.value_builder.append_slice(s.as_bytes());
+        Ok(())
+    }
+}
 
 ///  Array builder for [`GenericBinaryArray`][crate::GenericBinaryArray]
 pub type GenericBinaryBuilder<O> = GenericByteBuilder<GenericBinaryType<O>>;
@@ -390,7 +425,7 @@ mod tests {
         builder.append_value("parquet");
         let arr = builder.finish();
         // array should not have null buffer because there is not `null` value.
-        assert_eq!(None, arr.data().null_buffer());
+        assert!(arr.data().nulls().is_none());
         assert_eq!(GenericStringArray::<O>::from(vec!["arrow", "parquet"]), arr,)
     }
 
@@ -419,7 +454,7 @@ mod tests {
         builder.append_value("parquet");
         arr = builder.finish();
 
-        assert!(arr.data().null_buffer().is_some());
+        assert!(arr.data().nulls().is_some());
         assert_eq!(&[O::zero()], builder.offsets_slice());
         assert_eq!(5, arr.len());
     }
@@ -442,5 +477,20 @@ mod tests {
         let array = builder.finish();
         assert_eq!(array.value_offsets(), &[0, 1, 2, 3, 3, 4, 5, 6, 7, 15, 20]);
         assert_eq!(array.value_data(), b"abcabcdcupcakeshello");
+    }
+
+    #[test]
+    fn test_write() {
+        let mut builder = GenericStringBuilder::<i32>::new();
+        write!(builder, "foo").unwrap();
+        builder.append_value("");
+        writeln!(builder, "bar").unwrap();
+        builder.append_value("");
+        write!(builder, "fiz").unwrap();
+        write!(builder, "buz").unwrap();
+        builder.append_value("");
+        let a = builder.finish();
+        let r: Vec<_> = a.iter().map(|x| x.unwrap()).collect();
+        assert_eq!(r, &["foo", "bar\n", "fizbuz"])
     }
 }

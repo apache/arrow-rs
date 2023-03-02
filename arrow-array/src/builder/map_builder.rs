@@ -49,8 +49,8 @@ use std::sync::Arc;
 ///
 /// let array = builder.finish();
 /// assert_eq!(array.value_offsets(), &[0, 1, 3, 3, 3]);
-/// assert_eq!(*array.values(), Int32Array::from(vec![1, 2, 4]));
-/// assert_eq!(*array.keys(), StringArray::from(vec!["joe", "blogs", "foo"]));
+/// assert_eq!(array.values().as_ref(), &Int32Array::from(vec![1, 2, 4]));
+/// assert_eq!(array.keys().as_ref(), &StringArray::from(vec!["joe", "blogs", "foo"]));
 ///
 /// ```
 #[derive(Debug)]

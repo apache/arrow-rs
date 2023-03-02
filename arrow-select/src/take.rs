@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use arrow_array::builder::BufferBuilder;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
@@ -126,20 +127,6 @@ where
             let values = values.as_any().downcast_ref::<BooleanArray>().unwrap();
             Ok(Arc::new(take_boolean(values, indices)?))
         }
-        DataType::Decimal128(p, s) => {
-            let decimal_values = values.as_any().downcast_ref::<Decimal128Array>().unwrap();
-            let array = take_primitive(decimal_values, indices)?
-                .with_precision_and_scale(*p, *s)
-                .unwrap();
-            Ok(Arc::new(array))
-        }
-        DataType::Decimal256(p, s) => {
-            let decimal_values = values.as_any().downcast_ref::<Decimal256Array>().unwrap();
-            let array = take_primitive(decimal_values, indices)?
-                .with_precision_and_scale(*p, *s)
-                .unwrap();
-            Ok(Arc::new(array))
-        }
         DataType::Utf8 => {
             Ok(Arc::new(take_bytes(as_string_array(values), indices)?))
         }
@@ -200,6 +187,10 @@ where
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
             values => Ok(Arc::new(take_dict(values, indices)?)),
             t => unimplemented!("Take not supported for dictionary type {:?}", t)
+        }
+        DataType::RunEndEncoded(_, _) => downcast_run_array! {
+            values => Ok(Arc::new(take_run(values, indices)?)),
+            t => unimplemented!("Take not supported for run type {:?}", t)
         }
         DataType::Binary => {
             Ok(Arc::new(take_bytes(as_generic_binary_array::<i32>(values), indices)?))
@@ -349,12 +340,7 @@ where
     // Soundness: `slice.map` is `TrustedLen`.
     let buffer = unsafe { Buffer::try_from_trusted_len_iter(values)? };
 
-    Ok((
-        buffer,
-        indices_data
-            .null_buffer()
-            .map(|b| b.bit_slice(indices_data.offset(), indices.len())),
-    ))
+    Ok((buffer, indices_data.nulls().map(|b| b.inner().sliced())))
 }
 
 // take implementation when both values and indices contain nulls
@@ -539,14 +525,11 @@ where
     IndexType::Native: ToPrimitive,
 {
     let val_buf = take_bits(values.values(), values.offset(), indices)?;
-    let null_buf = match values.data().null_buffer() {
-        Some(buf) if values.null_count() > 0 => {
-            Some(take_bits(buf, values.offset(), indices)?)
+    let null_buf = match values.data().nulls() {
+        Some(nulls) if nulls.null_count() > 0 => {
+            Some(take_bits(nulls.buffer(), nulls.offset(), indices)?)
         }
-        _ => indices
-            .data()
-            .null_buffer()
-            .map(|b| b.bit_slice(indices.offset(), indices.len())),
+        _ => indices.data().nulls().map(|b| b.inner().sliced()),
     };
 
     let data = unsafe {
@@ -635,7 +618,7 @@ where
             }
             *offset = length_so_far;
         }
-        nulls = indices.data_ref().null_buffer().cloned();
+        nulls = indices.data().nulls().map(|b| b.inner().sliced());
     } else {
         let num_bytes = bit_util::ceil(data_len, 8);
 
@@ -800,7 +783,7 @@ where
             values.data_type().clone(),
             new_keys.len(),
             Some(new_keys_data.null_count()),
-            new_keys_data.null_buffer().cloned(),
+            new_keys_data.nulls().map(|b| b.inner().sliced()),
             0,
             new_keys_data.buffers().to_vec(),
             values.data().child_data().to_vec(),
@@ -808,6 +791,80 @@ where
     };
 
     Ok(DictionaryArray::<T>::from(data))
+}
+
+/// `take` implementation for run arrays
+///
+/// Finds physical indices for the given logical indices and builds output run array
+/// by taking values in the input run_array.values at the physical indices.
+/// The output run array will be run encoded on the physical indices and not on output values.
+/// For e.g. an input `RunArray{ run_ends = [2,4,6,8], values=[1,2,1,2] }` and `logical_indices=[2,3,6,7]`
+/// would be converted to `physical_indices=[1,1,3,3]` which will be used to build
+/// output `RunArray{ run_ends=[2,4], values=[2,2] }`.
+fn take_run<T, I>(
+    run_array: &RunArray<T>,
+    logical_indices: &PrimitiveArray<I>,
+) -> Result<RunArray<T>, ArrowError>
+where
+    T: RunEndIndexType,
+    T::Native: num::Num,
+    I: ArrowPrimitiveType,
+    I::Native: ToPrimitive,
+{
+    // get physical indices for the input logical indices
+    let physical_indices = run_array.get_physical_indices(logical_indices.values())?;
+
+    // Run encode the physical indices into new_run_ends_builder
+    // Keep track of the physical indices to take in take_value_indices
+    // `unwrap` is used in this function because the unwrapped values are bounded by the corresponding `::Native`.
+    let mut new_run_ends_builder = BufferBuilder::<T::Native>::new(1);
+    let mut take_value_indices = BufferBuilder::<I::Native>::new(1);
+    let mut new_physical_len = 1;
+    for ix in 1..physical_indices.len() {
+        if physical_indices[ix] != physical_indices[ix - 1] {
+            take_value_indices
+                .append(I::Native::from_usize(physical_indices[ix - 1]).unwrap());
+            new_run_ends_builder.append(T::Native::from_usize(ix).unwrap());
+            new_physical_len += 1;
+        }
+    }
+    take_value_indices.append(
+        I::Native::from_usize(physical_indices[physical_indices.len() - 1]).unwrap(),
+    );
+    new_run_ends_builder.append(T::Native::from_usize(physical_indices.len()).unwrap());
+    let new_run_ends = unsafe {
+        // Safety:
+        // The function builds a valid run_ends array and hence need not be validated.
+        ArrayDataBuilder::new(T::DATA_TYPE)
+            .len(new_physical_len)
+            .null_count(0)
+            .add_buffer(new_run_ends_builder.finish())
+            .build_unchecked()
+    };
+
+    let take_value_indices: PrimitiveArray<I> = unsafe {
+        // Safety:
+        // The function builds a valid take_value_indices array and hence need not be validated.
+        ArrayDataBuilder::new(I::DATA_TYPE)
+            .len(new_physical_len)
+            .null_count(0)
+            .add_buffer(take_value_indices.finish())
+            .build_unchecked()
+            .into()
+    };
+
+    let new_values = take(run_array.values(), &take_value_indices, None)?;
+
+    let builder = ArrayDataBuilder::new(run_array.data_type().clone())
+        .len(physical_indices.len())
+        .add_child_data(new_run_ends)
+        .add_child_data(new_values.into_data());
+    let array_data = unsafe {
+        // Safety:
+        //  This function builds a valid run array and hence can skip validation.
+        builder.build_unchecked()
+    };
+    Ok(array_data.into())
 }
 
 /// Takes/filters a list array's inner data using the offsets of the list array.
@@ -912,7 +969,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::builder::*;
+    use arrow_array::{builder::*, cast::as_primitive_array};
     use arrow_schema::TimeUnit;
 
     fn test_take_decimal_arrays(
@@ -1574,7 +1631,7 @@ mod tests {
             let expected_list_data = ArrayData::builder(list_data_type)
                 .len(5)
                 // null buffer remains the same as only the indices have nulls
-                .null_bit_buffer(index.data().null_buffer().cloned())
+                .nulls(index.data().nulls().cloned())
                 .add_buffer(expected_offsets)
                 .add_child_data(expected_data)
                 .build()
@@ -1648,7 +1705,7 @@ mod tests {
             let expected_list_data = ArrayData::builder(list_data_type)
                 .len(5)
                 // null buffer remains the same as only the indices have nulls
-                .null_bit_buffer(index.data().null_buffer().cloned())
+                .nulls(index.data().nulls().cloned())
                 .add_buffer(expected_offsets)
                 .add_child_data(expected_data)
                 .build()
@@ -2084,6 +2141,28 @@ mod tests {
         assert_eq!(indexed, Int64Array::from(vec![5, 6, 7, 8, 9, 0, 1]));
         assert_eq!(offsets, vec![0, 5, 7]);
         assert_eq!(null_buf.as_slice(), &[0b11111111]);
+    }
+
+    #[test]
+    fn test_take_runs() {
+        let logical_array: Vec<i32> = vec![1_i32, 1, 2, 2, 1, 1, 1, 2, 2, 1, 1, 2, 2];
+
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend(logical_array.into_iter().map(Some));
+        let run_array = builder.finish();
+
+        let take_indices: PrimitiveArray<Int32Type> =
+            vec![7, 2, 3, 7, 11, 4, 6].into_iter().collect();
+
+        let take_out = take_run(&run_array, &take_indices).unwrap();
+
+        assert_eq!(take_out.len(), 7);
+
+        assert_eq!(take_out.run_ends().len(), 5);
+        assert_eq!(take_out.run_ends().values(), &[1_i32, 3, 4, 5, 7]);
+
+        let take_out_values = as_primitive_array::<Int32Type>(take_out.values());
+        assert_eq!(take_out_values.values(), &[2, 2, 2, 2, 1]);
     }
 
     #[test]

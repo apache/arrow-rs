@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::print_long_array;
 use crate::iterator::FixedSizeBinaryIter;
-use crate::raw_pointer::RawPtrBox;
-use crate::{print_long_array, Array, ArrayAccessor, FixedSizeListArray};
+use crate::{Array, ArrayAccessor, FixedSizeListArray};
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
@@ -42,7 +42,7 @@ use std::any::Any;
 /// ```
 ///    use arrow_array::{Array, FixedSizeBinaryArray};
 ///    let input_arg = vec![ None, Some(vec![7, 8]), Some(vec![9, 10]), None, Some(vec![13, 14]) ];
-///    let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
+///    let arr = FixedSizeBinaryArray::try_from_sparse_iter_with_size(input_arg.into_iter(), 2).unwrap();
 ///    assert_eq!(5, arr.len())
 ///
 /// ```
@@ -50,7 +50,7 @@ use std::any::Any;
 #[derive(Clone)]
 pub struct FixedSizeBinaryArray {
     data: ArrayData,
-    value_data: RawPtrBox<u8>,
+    value_data: Buffer,
     length: i32,
 }
 
@@ -370,14 +370,14 @@ impl From<ArrayData> for FixedSizeBinaryArray {
             1,
             "FixedSizeBinaryArray data should contain 1 buffer only (values)"
         );
-        let value_data = data.buffers()[0].as_ptr();
+        let value_data = data.buffers()[0].clone();
         let length = match data.data_type() {
             DataType::FixedSizeBinary(len) => *len,
             _ => panic!("Expected data type to be FixedSizeBinary"),
         };
         Self {
             data,
-            value_data: unsafe { RawPtrBox::new(value_data) },
+            value_data,
             length,
         }
     }
@@ -421,7 +421,7 @@ impl From<FixedSizeListArray> for FixedSizeBinaryArray {
             .len(v.len())
             .offset(v.offset())
             .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
-            .null_bit_buffer(v.data_ref().null_buffer().cloned());
+            .nulls(v.data_ref().nulls().cloned());
 
         let data = unsafe { builder.build_unchecked() };
         Self::from(data)

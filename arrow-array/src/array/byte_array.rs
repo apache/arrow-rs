@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{empty_offsets, print_long_array};
+use crate::array::{get_offsets, print_long_array};
 use crate::builder::GenericByteBuilder;
 use crate::iterator::ArrayIter;
-use crate::raw_pointer::RawPtrBox;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::ByteArrayType;
 use crate::{Array, ArrayAccessor, OffsetSizeTrait};
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::buffer::OffsetBuffer;
+use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 use std::any::Any;
@@ -39,16 +39,16 @@ use std::any::Any;
 /// [`LargeBinaryArray`]: crate::LargeBinaryArray
 pub struct GenericByteArray<T: ByteArrayType> {
     data: ArrayData,
-    value_offsets: RawPtrBox<T::Offset>,
-    value_data: RawPtrBox<u8>,
+    value_offsets: OffsetBuffer<T::Offset>,
+    value_data: Buffer,
 }
 
 impl<T: ByteArrayType> Clone for GenericByteArray<T> {
     fn clone(&self) -> Self {
         Self {
             data: self.data.clone(),
-            value_offsets: self.value_offsets,
-            value_data: self.value_data,
+            value_offsets: self.value_offsets.clone(),
+            value_data: self.value_data.clone(),
         }
     }
 }
@@ -68,7 +68,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
 
     /// Returns the raw value data
     pub fn value_data(&self) -> &[u8] {
-        self.data.buffers()[1].as_slice()
+        self.value_data.as_slice()
     }
 
     /// Returns true if all data within this array is ASCII
@@ -82,15 +82,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// Returns the offset values in the offsets buffer
     #[inline]
     pub fn value_offsets(&self) -> &[T::Offset] {
-        // Soundness
-        //     pointer alignment & location is ensured by RawPtrBox
-        //     buffer bounds/offset is ensured by the ArrayData instance.
-        unsafe {
-            std::slice::from_raw_parts(
-                self.value_offsets.as_ptr().add(self.data.offset()),
-                self.len() + 1,
-            )
-        }
+        &self.value_offsets
     }
 
     /// Returns the element at index `i`
@@ -145,10 +137,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// offset and data buffers are not shared by others.
     pub fn into_builder(self) -> Result<GenericByteBuilder<T>, Self> {
         let len = self.len();
-        let null_bit_buffer = self
-            .data
-            .null_buffer()
-            .map(|b| b.bit_slice(self.data.offset(), len));
+        let null_bit_buffer = self.data.nulls().map(|b| b.inner().sliced());
 
         let element_len = std::mem::size_of::<T::Offset>();
         let offset_buffer = self.data.buffers()[0]
@@ -161,6 +150,8 @@ impl<T: ByteArrayType> GenericByteArray<T> {
             .slice_with_length(self.data.offset() * element_len, value_len * element_len);
 
         drop(self.data);
+        drop(self.value_data);
+        drop(self.value_offsets);
 
         let try_mutable_null_buffer = match null_bit_buffer {
             None => Ok(None),
@@ -280,18 +271,16 @@ impl<T: ByteArrayType> From<ArrayData> for GenericByteArray<T> {
             T::Offset::PREFIX,
             T::PREFIX,
         );
-        // Handle case of empty offsets
-        let offsets = match data.is_empty() && data.buffers()[0].is_empty() {
-            true => empty_offsets::<T::Offset>().as_ptr() as *const _,
-            false => data.buffers()[0].as_ptr(),
-        };
-        let values = data.buffers()[1].as_ptr();
+        // SAFETY:
+        // ArrayData is valid, and verified type above
+        let value_offsets = unsafe { get_offsets(&data) };
+        let value_data = data.buffers()[1].clone();
         Self {
             data,
             // SAFETY:
             // ArrayData must be valid, and validated data type above
-            value_offsets: unsafe { RawPtrBox::new(offsets) },
-            value_data: unsafe { RawPtrBox::new(values) },
+            value_offsets,
+            value_data,
         }
     }
 }

@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::print_long_array;
 use crate::builder::{FixedSizeListBuilder, PrimitiveBuilder};
-use crate::{
-    make_array, print_long_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType,
-};
+use crate::{make_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 use std::any::Any;
@@ -69,8 +68,8 @@ pub struct FixedSizeListArray {
 
 impl FixedSizeListArray {
     /// Returns a reference to the values of this list.
-    pub fn values(&self) -> ArrayRef {
-        self.values.clone()
+    pub fn values(&self) -> &ArrayRef {
+        &self.values
     }
 
     /// Returns a clone of the value type of this list.
@@ -261,8 +260,7 @@ mod tests {
             .unwrap();
         let list_array = FixedSizeListArray::from(list_data);
 
-        let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(&value_data, list_array.values().data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(3, list_array.len());
         assert_eq!(0, list_array.null_count());
@@ -291,8 +289,7 @@ mod tests {
             .unwrap();
         let list_array = FixedSizeListArray::from(list_data);
 
-        let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(&value_data, list_array.values().data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(3, list_array.len());
         assert_eq!(0, list_array.null_count());
@@ -368,8 +365,7 @@ mod tests {
             .unwrap();
         let list_array = FixedSizeListArray::from(list_data);
 
-        let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(&value_data, list_array.values().data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(5, list_array.len());
         assert_eq!(2, list_array.null_count());
