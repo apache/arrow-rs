@@ -143,8 +143,8 @@ impl FixedSizeBinaryArray {
         let mut byte = 0;
 
         let iter_size_hint = iter.size_hint().0;
-        let mut null_buf = MutableBuffer::from_len_zeroed((iter_size_hint + 7) / 8);
-        let mut buffer = MutableBuffer::from_len_zeroed(0);
+        let mut null_buf = MutableBuffer::new(bit_util::ceil(iter_size_hint, 8));
+        let mut buffer = MutableBuffer::new(0);
 
         let mut prepend = 0;
         iter.try_for_each(|item| -> Result<(), ArrowError> {
@@ -244,8 +244,8 @@ impl FixedSizeBinaryArray {
         let mut byte = 0;
 
         let iter_size_hint = iter.size_hint().0;
-        let mut null_buf = MutableBuffer::from_len_zeroed((iter_size_hint + 7) / 8);
-        let mut buffer = MutableBuffer::from_len_zeroed(iter_size_hint * (size as usize));
+        let mut null_buf = MutableBuffer::new(bit_util::ceil(iter_size_hint, 8));
+        let mut buffer = MutableBuffer::new(iter_size_hint * (size as usize));
 
         iter.try_for_each(|item| -> Result<(), ArrowError> {
             // extend null bitmask by one byte per each 8 items
@@ -315,7 +315,7 @@ impl FixedSizeBinaryArray {
         let mut len = 0;
         let mut size = None;
         let iter_size_hint = iter.size_hint().0;
-        let mut buffer = MutableBuffer::from_len_zeroed(0);
+        let mut buffer = MutableBuffer::new(0);
 
         iter.try_for_each(|item| -> Result<(), ArrowError> {
             let slice = item.as_ref();
