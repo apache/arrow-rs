@@ -86,7 +86,7 @@ impl NullBuffer {
         !self.is_valid(idx)
     }
 
-    /// Returns the packed validity of this [`BooleanBuffer`] not including any offset
+    /// Returns the packed validity of this [`NullBuffer`] not including any offset
     #[inline]
     pub fn validity(&self) -> &[u8] {
         self.buffer.values()
