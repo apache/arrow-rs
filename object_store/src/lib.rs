@@ -840,6 +840,12 @@ mod tests {
             crate::Error::NotFound { .. }
         ));
 
+        let files = flatten_list_stream(storage, None).await.unwrap();
+        assert_eq!(&files, &[]);
+
+        let result = storage.list_with_delimiter(None).await.unwrap();
+        assert_eq!(&result.objects, &[]);
+
         writer.shutdown().await.unwrap();
         let bytes_written = storage.get(&location).await.unwrap().bytes().await.unwrap();
         assert_eq!(bytes_expected, bytes_written);
