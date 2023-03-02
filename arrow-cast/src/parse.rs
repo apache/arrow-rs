@@ -18,7 +18,7 @@
 use arrow_array::types::*;
 use arrow_array::ArrowPrimitiveType;
 use arrow_schema::ArrowError;
-use chrono::prelude::*;
+use chrono::{prelude::*, LocalResult};
 
 /// Accepts a string in RFC3339 / ISO8601 standard format and some
 /// variants and converts it to a nanosecond precision timestamp.
@@ -78,32 +78,14 @@ use chrono::prelude::*;
 ///     "2023-01-01 04:05:06.789 -08",
 #[inline]
 pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
-    // Fast path:  RFC3339 timestamp (with a T)
-    // Example: 2020-09-08T13:42:29.190855Z
-    if let Ok(ts) = DateTime::parse_from_rfc3339(s) {
-        return Ok(ts.timestamp_nanos());
-    }
-
-    // Implement quasi-RFC3339 support by trying to parse the
-    // timestamp with various other format specifiers to to support
-    // separating the date and time with a space ' ' rather than 'T' to be
-    // (more) compatible with Apache Spark SQL
-
-    let supported_formats = vec![
-        "%Y-%m-%d %H:%M:%S%.f%:z", // Example: 2020-09-08 13:42:29.190855-05:00
-        "%Y-%m-%d %H%M%S%.3f%:z",  // Example: "2023-01-01 040506 +07:30"
-    ];
-
-    for f in supported_formats.iter() {
-        if let Ok(ts) = DateTime::parse_from_str(s, f) {
-            return to_timestamp_nanos(ts.naive_utc());
-        }
-    }
-
-    // with an explicit Z, using ' ' as a separator
-    // Example: 2020-09-08 13:42:29Z
-    if let Ok(ts) = Utc.datetime_from_str(s, "%Y-%m-%d %H:%M:%S%.fZ") {
-        return to_timestamp_nanos(ts.naive_utc());
+    // Support timestamps with an explicit timezone offset
+    // Examples:
+    //  2020-09-08T13:42:29.190855Z,
+    //  2020-09-08 13:42:29.190855-05:00,
+    //  2023-01-01 040506 +07:30,
+    //  2020-09-08 13:42:29Z
+    if let OK(ts) = string_to_timestamp_nanos_with_zone(s) {
+        return Ok(ts);
     }
 
     // Support timestamps without an explicit timezone offset, again
@@ -151,6 +133,134 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     Err(ArrowError::CastError(format!(
         "Error parsing '{s}' as timestamp"
     )))
+}
+
+/// This function interprets strings without an explicit time zone as
+/// timestamps with offsets of the local time on the machine
+///
+/// For example,`1997-01-31T09:26:56.123` is interpreted as a local timestamp in
+/// the timezone of the machine. For example, if
+/// the system timezone is set to Americas/New_York (UTC-5) the
+/// timestamp will be interpreted as though it were
+/// `1997-01-31T09:26:56.123-05:00`
+#[inline]
+pub fn string_to_local_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
+    // Support timestamps with an explicit timezone offset
+    // Examples:
+    //  2020-09-08T13:42:29.190855Z,
+    //  2020-09-08 13:42:29.190855-05:00,
+    //  2023-01-01 040506 +07:30,
+    //  2020-09-08 13:42:29Z
+    if let OK(ts) = string_to_timestamp_nanos_with_zone(s) {
+        return Ok(ts);
+    }
+
+    // Support timestamps without an explicit timezone offset, again
+    // to be compatible with what Apache Spark SQL does.
+
+    // without a timezone specifier as a local time, using T as a separator
+    // Example: 2020-09-08T13:42:29.190855
+    if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
+        return naive_datetime_to_timestamp(s, ts);
+    }
+
+    // without a timezone specifier as a local time, using T as a
+    // separator, no fractional seconds
+    // Example: 2020-09-08T13:42:29
+    if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+        return naive_datetime_to_timestamp(s, ts);
+    }
+
+    // without a timezone specifier as a local time, using ' ' as a separator
+    // Example: 2020-09-08 13:42:29.190855
+    if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f") {
+        return naive_datetime_to_timestamp(s, ts);
+    }
+
+    // without a timezone specifier as a local time, using ' ' as a
+    // separator, no fractional seconds
+    // Example: 2020-09-08 13:42:29
+    if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+        return naive_datetime_to_timestamp(s, ts);
+    }
+
+    // without a timezone specifier as a local time, only date
+    // Example: 2020-09-08
+    if let Ok(dt) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        if let Some(ts) = dt.and_hms_opt(0, 0, 0) {
+            return naive_datetime_to_timestamp(s, ts);
+        }
+    }
+
+    // Note we don't pass along the error message from the underlying
+    // chrono parsing because we tried several different format
+    // strings and we don't know which the user was trying to
+    // match. Ths any of the specific error messages is likely to be
+    // be more confusing than helpful
+    Err(ArrowError::CastError(format!(
+        "Error parsing '{s}' as timestamp"
+    )))
+}
+
+fn string_to_timestamp_nanos_with_zone(s: &str) -> Result<i64, ArrowError> {
+    // Fast path:  RFC3339 timestamp (with a T)
+    // Example: 2020-09-08T13:42:29.190855Z
+    if let Ok(ts) = DateTime::parse_from_rfc3339(s) {
+        return Ok(ts.timestamp_nanos());
+    }
+
+    // Implement quasi-RFC3339 support by trying to parse the
+    // timestamp with various other format specifiers to to support
+    // separating the date and time with a space ' ' rather than 'T' to be
+    // (more) compatible with Apache Spark SQL
+
+    let supported_formats = vec![
+        "%Y-%m-%d %H:%M:%S%.f%:z", // Example: 2020-09-08 13:42:29.190855-05:00
+        "%Y-%m-%d %H%M%S%.3f%:z",  // Example: "2023-01-01 040506 +07:30"
+    ];
+
+    for f in supported_formats.iter() {
+        if let Ok(ts) = DateTime::parse_from_str(s, f) {
+            return to_timestamp_nanos(ts.naive_utc());
+        }
+    }
+
+    // with an explicit Z, using ' ' as a separator
+    // Example: 2020-09-08 13:42:29Z
+    if let Ok(ts) = Utc.datetime_from_str(s, "%Y-%m-%d %H:%M:%S%.fZ") {
+        return to_timestamp_nanos(ts.naive_utc());
+    }
+
+    Err(ArrowError::ParseError(format!(
+        "Error parsing '{s}' as timestamp"
+    )))
+}
+
+/// Converts the naive datetime (which has no specific timezone) to a
+/// nanosecond epoch timestamp relative to UTC.
+fn naive_datetime_to_timestamp(
+    s: &str,
+    datetime: NaiveDateTime,
+) -> Result<i64, ArrowError> {
+    let l = Local {};
+
+    match l.from_local_datetime(&datetime) {
+        LocalResult::None => Err(ArrowError::CastError(format!(
+            "Error parsing '{}' as timestamp: local time representation is invalid",
+            s
+        ))),
+        LocalResult::Single(local_datetime) => {
+            Ok(local_datetime.with_timezone(&Utc).timestamp_nanos())
+        }
+        // Ambiguous times can happen if the timestamp is exactly when
+        // a daylight savings time transition occurs, for example, and
+        // so the datetime could validly be said to be in two
+        // potential offsets. However, since we are about to convert
+        // to UTC anyways, we can pick one arbitrarily
+        LocalResult::Ambiguous(local_datetime, _) => {
+            Ok(local_datetime.with_timezone(&Utc).timestamp_nanos())
+        }
+    }
 }
 
 /// Defensive check to prevent chrono-rs panics when nanosecond conversion happens on non-supported dates
