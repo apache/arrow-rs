@@ -25,7 +25,7 @@
 //! ```
 //! After this `parquet-show-bloom-filter` should be available:
 //! ```
-//! parquet-show-bloom-filter --file-name XYZ.parquet --column id --values a
+//! parquet-show-bloom-filter XYZ.parquet id a
 //! ```
 //!
 //! The binary can also be built from the source code and run as follows:

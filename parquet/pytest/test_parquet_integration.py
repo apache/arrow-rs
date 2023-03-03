@@ -72,9 +72,9 @@ def get_show_filter_cli_output(output_dir, data, col_name="id"):
         col_name,
     ]
     for v in data:
-        args.extend(["--values", v[0]])
+        args.extend([v[0]])
     for v in data:
-        args.extend(["--values", v[1]])
+        args.extend([v[1]])
     return subprocess.check_output(args)
 
 
