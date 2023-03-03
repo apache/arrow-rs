@@ -4785,7 +4785,7 @@ mod tests {
                 let err = cast_with_options(array, &to_type, &options).unwrap_err();
                 assert_eq!(
                     err.to_string(),
-                    "Cast error: Error parsing 'Not a valid date' as timestamp"
+                    "Parser error: Error parsing timestamp from 'Not a valid date': error parsing date"
                 );
             }
         }
@@ -7601,8 +7601,12 @@ mod tests {
             ]);
 
             let array = Arc::new(valid) as ArrayRef;
-            let b = cast(&array, &DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)))
-                .unwrap();
+            let b = cast_with_options(
+                &array,
+                &DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)),
+                &CastOptions { safe: false },
+            )
+            .unwrap();
 
             let c = b
                 .as_any()
