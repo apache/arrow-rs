@@ -25,7 +25,7 @@
 //! ```
 //! After this `parquet-show-bloom-filter` should be available:
 //! ```
-//! parquet-show-bloom-filter --file-name XYZ.parquet --column id --values a
+//! parquet-show-bloom-filter XYZ.parquet id a
 //! ```
 //!
 //! The binary can also be built from the source code and run as follows:
@@ -44,17 +44,11 @@ use std::{fs::File, path::Path};
 #[derive(Debug, Parser)]
 #[clap(author, version, about("Binary file to read bloom filter data from a Parquet file"), long_about = None)]
 struct Args {
-    #[clap(short, long, help("Path to the parquet file"))]
+    #[clap(help("Path to the parquet file"))]
     file_name: String,
-    #[clap(
-        short,
-        long,
-        help("Check the bloom filter indexes for the given column")
-    )]
+    #[clap(help("Check the bloom filter indexes for the given column"))]
     column: String,
     #[clap(
-        short,
-        long,
         help("Check if the given values match bloom filter, the values will be evaluated as strings"),
         required = true
     )]

@@ -45,7 +45,7 @@ use std::{fs::File, path::Path};
 #[derive(Debug, Parser)]
 #[clap(author, version, about("Binary file to read data from a Parquet file"), long_about = None)]
 struct Args {
-    #[clap(short, long, help("Path to a parquet file, or - for stdin"))]
+    #[clap(help("Path to a parquet file, or - for stdin"))]
     file_name: String,
     #[clap(
         short,
