@@ -241,7 +241,9 @@ impl ObjectStore for InMemory {
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
         let data = self.entry(from).await?;
-        self.storage.write().insert(to.clone(), data);
+        self.storage
+            .write()
+            .insert(to.clone(), (data.0, Utc::now()));
         Ok(())
     }
 
@@ -254,7 +256,7 @@ impl ObjectStore for InMemory {
             }
             .into());
         }
-        storage.insert(to.clone(), data);
+        storage.insert(to.clone(), (data.0, Utc::now()));
         Ok(())
     }
 }
