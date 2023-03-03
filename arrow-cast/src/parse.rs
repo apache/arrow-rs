@@ -642,6 +642,21 @@ mod tests {
         assert_eq!(utc, "2020-09-08 13:42:29");
         let local = date.naive_local().to_string();
         assert_eq!(local, "2020-09-08 15:42:29");
+
+        let dt =
+            NaiveDateTime::parse_from_str("2020-09-08T13:42:29Z", "%Y-%m-%dT%H:%M:%SZ")
+                .unwrap();
+        let local: Tz = "+08:00".parse().unwrap();
+
+        // Parsed as offset from UTC
+        let date = string_to_datetime(&local, "2020-09-08T13:42:29Z").unwrap();
+        assert_eq!(dt, date.naive_utc());
+        assert_ne!(dt, date.naive_local());
+
+        // Parsed as offset from local
+        let date = string_to_datetime(&local, "2020-09-08 13:42:29").unwrap();
+        assert_eq!(dt, date.naive_local());
+        assert_ne!(dt, date.naive_utc());
     }
 
     #[test]
