@@ -20,7 +20,6 @@ use base64::Engine;
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::time::Duration;
 use tonic::metadata::AsciiMetadataKey;
 
 use crate::flight_service_client::FlightServiceClient;
@@ -46,9 +45,7 @@ use arrow_ipc::{root_as_message, MessageHeader};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
 use futures::{stream, TryStreamExt};
 use prost::Message;
-#[cfg(feature = "tls")]
-use tonic::transport::ClientTlsConfig;
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::Channel;
 use tonic::{IntoRequest, Streaming};
 
 /// A FlightSQLServiceClient is an endpoint for retrieving or storing Arrow data
@@ -64,49 +61,6 @@ pub struct FlightSqlServiceClient {
 /// This client is in the "experimental" stage. It is not guaranteed to follow the spec in all instances.
 /// Github issues are welcomed.
 impl FlightSqlServiceClient {
-    /// Creates a new FlightSql Client that connects via TCP to a server
-    pub async fn new_with_endpoint(host: &str, port: u16) -> Result<Self, ArrowError> {
-        let endpoint = Self::endpoint(host, port)?;
-        let channel = endpoint.connect().await.map_err(|e| {
-            ArrowError::IoError(format!("Cannot connect to endpoint: {}", e))
-        })?;
-        Ok(Self::new(channel))
-    }
-
-    /// Creates a new HTTPs FlightSql Client that connects via TCP to a server
-    #[cfg(feature = "tls")]
-    pub async fn new_with_tls_endpoint(
-        host: &str,
-        port: u16,
-        tls_config: ClientTlsConfig,
-    ) -> Result<Self, ArrowError> {
-        let endpoint = Self::endpoint(host, port)?;
-        let endpoint = endpoint
-            .tls_config(tls_config)
-            .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?;
-
-        let channel = endpoint.connect().await.map_err(|e| {
-            ArrowError::IoError(format!("Cannot connect to endpoint: {e}"))
-        })?;
-        Ok(Self::new(channel))
-    }
-
-    fn endpoint(host: &str, port: u16) -> Result<Endpoint, ArrowError> {
-        let addr = format!("https://{host}:{port}");
-
-        let endpoint = Endpoint::new(addr)
-            .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
-            .connect_timeout(Duration::from_secs(20))
-            .timeout(Duration::from_secs(20))
-            .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait
-            .tcp_keepalive(Option::Some(Duration::from_secs(3600)))
-            .http2_keep_alive_interval(Duration::from_secs(300))
-            .keep_alive_timeout(Duration::from_secs(20))
-            .keep_alive_while_idle(true);
-
-        Ok(endpoint)
-    }
-
     /// Creates a new FlightSql client that connects to a server over an arbitrary tonic `Channel`
     pub fn new(channel: Channel) -> Self {
         let flight_client = FlightServiceClient::new(channel);

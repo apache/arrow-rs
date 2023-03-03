@@ -31,7 +31,6 @@ use prost::Message;
 use std::pin::Pin;
 use std::sync::Arc;
 use tonic::transport::Server;
-#[cfg(feature = "tls")]
 use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
 
@@ -451,7 +450,6 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
 /// This example shows how to run a FlightSql server
 #[tokio::main]
-#[cfg(not(feature = "tls"))]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "0.0.0.0:50051".parse()?;
 
@@ -459,34 +457,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Listening on {:?}", addr);
 
-    Server::builder().add_service(svc).serve(addr).await?;
+    if std::env::var("USE_TLS").ok().is_some() {
+        let cert = std::fs::read_to_string("arrow-flight/examples/data/server.pem")?;
+        let key = std::fs::read_to_string("arrow-flight/examples/data/server.key")?;
+        let client_ca =
+            std::fs::read_to_string("arrow-flight/examples/data/client_ca.pem")?;
 
-    Ok(())
-}
+        let tls_config = ServerTlsConfig::new()
+            .identity(Identity::from_pem(&cert, &key))
+            .client_ca_root(Certificate::from_pem(&client_ca));
 
-/// This example shows how to run a HTTPs FlightSql server
-#[tokio::main]
-#[cfg(feature = "tls")]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let addr = "0.0.0.0:50051".parse()?;
-
-    let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
-
-    println!("Listening on {addr:?}");
-
-    let cert = std::fs::read_to_string("arrow-flight/examples/data/server.pem")?;
-    let key = std::fs::read_to_string("arrow-flight/examples/data/server.key")?;
-    let client_ca = std::fs::read_to_string("arrow-flight/examples/data/client_ca.pem")?;
-
-    let tls_config = ServerTlsConfig::new()
-        .identity(Identity::from_pem(&cert, &key))
-        .client_ca_root(Certificate::from_pem(&client_ca));
-
-    Server::builder()
-        .tls_config(tls_config)?
-        .add_service(svc)
-        .serve(addr)
-        .await?;
+        Server::builder()
+            .tls_config(tls_config)?
+            .add_service(svc)
+            .serve(addr)
+            .await?;
+    } else {
+        Server::builder().add_service(svc).serve(addr).await?;
+    }
 
     Ok(())
 }
@@ -523,8 +511,6 @@ mod tests {
     use tokio_stream::wrappers::UnixListenerStream;
     use tonic::body::BoxBody;
     use tonic::codegen::{http, Body, Service};
-
-    #[cfg(feature = "tls")]
     use tonic::transport::ClientTlsConfig;
 
     use arrow::util::pretty::pretty_format_batches;
@@ -533,10 +519,9 @@ mod tests {
     use tonic::transport::{Certificate, Channel, Endpoint};
     use tower::{service_fn, ServiceExt};
 
-    #[cfg(not(feature = "tls"))]
     async fn client_with_uds(path: String) -> FlightSqlServiceClient {
         let connector = service_fn(move |_| UnixStream::connect(path.clone()));
-        let channel = Endpoint::try_from("https://example.com")
+        let channel = Endpoint::try_from("http://example.com")
             .unwrap()
             .connect_with_connector(connector)
             .await
@@ -544,7 +529,6 @@ mod tests {
         FlightSqlServiceClient::new(channel)
     }
 
-    #[cfg(feature = "tls")]
     async fn create_https_server() -> Result<(), tonic::transport::Error> {
         let cert = std::fs::read_to_string("examples/data/server.pem").unwrap();
         let key = std::fs::read_to_string("examples/data/server.key").unwrap();
@@ -567,7 +551,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "tls")]
     async fn test_select_https() {
         tokio::spawn(async {
             create_https_server().await.unwrap();
@@ -584,13 +567,12 @@ mod tests {
                 .domain_name("localhost")
                 .ca_certificate(Certificate::from_pem(&server_ca))
                 .identity(Identity::from_pem(cert, key));
-            let mut client = FlightSqlServiceClient::new_with_tls_endpoint(
-                "127.0.0.1",
-                50051,
-                tls_config,
-            )
-            .await
-            .unwrap();
+            let endpoint = endpoint(String::from("https://127.0.0.1:50051"))
+                .unwrap()
+                .tls_config(tls_config)
+                .unwrap();
+            let channel = endpoint.connect().await.unwrap();
+            let mut client = FlightSqlServiceClient::new(channel);
             let token = client.handshake("admin", "password").await.unwrap();
             println!("Auth succeeded with token: {:?}", token);
             let mut stmt = client.prepare("select 1;".to_string()).await.unwrap();
@@ -617,7 +599,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(not(feature = "tls"))]
     async fn test_select_1() {
         let file = NamedTempFile::new().unwrap();
         let path = file.into_temp_path().to_str().unwrap().to_string();
@@ -658,5 +639,19 @@ mod tests {
             _ = serve_future => panic!("server returned first"),
             _ = request_future => println!("Client finished!"),
         }
+    }
+
+    fn endpoint(addr: String) -> Result<Endpoint, ArrowError> {
+        let endpoint = Endpoint::new(addr)
+            .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
+            .connect_timeout(Duration::from_secs(20))
+            .timeout(Duration::from_secs(20))
+            .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait
+            .tcp_keepalive(Option::Some(Duration::from_secs(3600)))
+            .http2_keep_alive_interval(Duration::from_secs(300))
+            .keep_alive_timeout(Duration::from_secs(20))
+            .keep_alive_while_idle(true);
+
+        Ok(endpoint)
     }
 }
