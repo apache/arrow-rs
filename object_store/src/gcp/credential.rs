@@ -403,7 +403,7 @@ impl TokenProvider for InstanceCredentialProvider {
 /// <https://google.aip.dev/auth/4110>
 #[derive(Debug)]
 pub enum ApplicationDefaultCredentials {
-    /// https://google.aip.dev/auth/4113
+    /// <https://google.aip.dev/auth/4113>
     AuthorizedUser {
         client_id: String,
         client_secret: String,
