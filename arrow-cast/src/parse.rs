@@ -156,7 +156,7 @@ pub fn string_to_datetime<T: TimeZone>(
 ///
 /// Numerical values of timestamps are stored compared to offset UTC.
 ///
-/// This function interprets string without an explicit time zone timestamps
+/// This function interprets string without an explicit time zone as timestamps
 /// relative to UTC, see [`string_to_datetime`] for alternative semantics
 ///
 /// For example, both `1997-01-31 09:26:56.123Z`, `1997-01-31T09:26:56.123`,
