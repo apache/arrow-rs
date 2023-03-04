@@ -18,29 +18,18 @@
 use std::sync::Arc;
 
 use arrow_array::builder::BufferBuilder;
+use arrow_array::types::ByteArrayType;
 use arrow_array::*;
+use arrow_buffer::ArrowNativeType;
 use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType};
 
-/// Returns the elementwise concatenation of a [`StringArray`].
-///
-/// An index of the resulting [`StringArray`] is null if any of
-/// `StringArray` are null at that location.
-///
-/// ```text
-/// e.g:
-///
-///   ["Hello"] + ["World"] = ["HelloWorld"]
-///
-///   ["a", "b"] + [None, "c"] = [None, "bc"]
-/// ```
-///
-/// An error will be returned if `left` and `right` have different lengths
-pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
-    left: &GenericStringArray<Offset>,
-    right: &GenericStringArray<Offset>,
-) -> Result<GenericStringArray<Offset>, ArrowError> {
+/// Returns the elementwise concatenation of a [`GenericByteArray`].
+pub fn concat_elements_bytes<T: ByteArrayType>(
+    left: &GenericByteArray<T>,
+    right: &GenericByteArray<T>,
+) -> Result<GenericByteArray<T>, ArrowError> {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(format!(
             "Arrays must have the same length: {} != {}",
@@ -63,18 +52,18 @@ pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
             - right_offsets[0].as_usize(),
     );
 
-    let mut output_offsets = BufferBuilder::<Offset>::new(left_offsets.len());
-    output_offsets.append(Offset::zero());
+    let mut output_offsets = BufferBuilder::<T::Offset>::new(left_offsets.len());
+    output_offsets.append(T::Offset::usize_as(0));
     for (left_idx, right_idx) in left_offsets.windows(2).zip(right_offsets.windows(2)) {
         output_values
             .append_slice(&left_values[left_idx[0].as_usize()..left_idx[1].as_usize()]);
         output_values.append_slice(
             &right_values[right_idx[0].as_usize()..right_idx[1].as_usize()],
         );
-        output_offsets.append(Offset::from_usize(output_values.len()).unwrap());
+        output_offsets.append(T::Offset::from_usize(output_values.len()).unwrap());
     }
 
-    let builder = ArrayDataBuilder::new(GenericStringArray::<Offset>::DATA_TYPE)
+    let builder = ArrayDataBuilder::new(T::DATA_TYPE)
         .len(left.len())
         .add_buffer(output_offsets.finish())
         .add_buffer(output_values.finish())
@@ -82,6 +71,35 @@ pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
 
     // SAFETY - offsets valid by construction
     Ok(unsafe { builder.build_unchecked() }.into())
+}
+
+/// Returns the elementwise concatenation of a [`GenericStringArray`].
+///
+/// An index of the resulting [`GenericStringArray`] is null if any of
+/// `StringArray` are null at that location.
+///
+/// ```text
+/// e.g:
+///
+///   ["Hello"] + ["World"] = ["HelloWorld"]
+///
+///   ["a", "b"] + [None, "c"] = [None, "bc"]
+/// ```
+///
+/// An error will be returned if `left` and `right` have different lengths
+pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
+    left: &GenericStringArray<Offset>,
+    right: &GenericStringArray<Offset>,
+) -> Result<GenericStringArray<Offset>, ArrowError> {
+    concat_elements_bytes(left, right)
+}
+
+/// Returns the elementwise concatenation of a [`GenericBinaryArray`].
+pub fn concat_element_binary<Offset: OffsetSizeTrait>(
+    left: &GenericBinaryArray<Offset>,
+    right: &GenericBinaryArray<Offset>,
+) -> Result<GenericBinaryArray<Offset>, ArrowError> {
+    concat_elements_bytes(left, right)
 }
 
 /// Returns the elementwise concatenation of [`StringArray`].
@@ -150,53 +168,6 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
 
     let builder = ArrayDataBuilder::new(GenericStringArray::<Offset>::DATA_TYPE)
         .len(size)
-        .add_buffer(output_offsets.finish())
-        .add_buffer(output_values.finish())
-        .null_bit_buffer(output_bitmap);
-
-    // SAFETY - offsets valid by construction
-    Ok(unsafe { builder.build_unchecked() }.into())
-}
-
-pub fn concat_element_binary<Offset: OffsetSizeTrait>(
-    left: &GenericBinaryArray<Offset>,
-    right: &GenericBinaryArray<Offset>,
-) -> Result<GenericBinaryArray<Offset>, ArrowError> {
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(format!(
-            "Arrays must have the same length: {} != {}",
-            left.len(),
-            right.len()
-        )));
-    }
-
-    let output_bitmap = combine_option_bitmap(&[left.data(), right.data()], left.len());
-
-    let left_offsets = left.value_offsets();
-    let right_offsets = right.value_offsets();
-
-    let left_values = left.value_data();
-    let right_values = right.value_data();
-
-    let mut output_values = BufferBuilder::<u8>::new(
-        left_values.len() + right_values.len()
-            - left_offsets[0].as_usize()
-            - right_offsets[0].as_usize(),
-    );
-
-    let mut output_offsets = BufferBuilder::<Offset>::new(left_offsets.len());
-    output_offsets.append(Offset::zero());
-    for (left_idx, right_idx) in left_offsets.windows(2).zip(right_offsets.windows(2)) {
-        output_values
-            .append_slice(&left_values[left_idx[0].as_usize()..left_idx[1].as_usize()]);
-        output_values.append_slice(
-            &right_values[right_idx[0].as_usize()..right_idx[1].as_usize()],
-        );
-        output_offsets.append(Offset::from_usize(output_values.len()).unwrap());
-    }
-
-    let builder = ArrayDataBuilder::new(GenericBinaryArray::<Offset>::DATA_TYPE)
-        .len(left.len())
         .add_buffer(output_offsets.finish())
         .add_buffer(output_values.finish())
         .null_bit_buffer(output_bitmap);
