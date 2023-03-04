@@ -452,7 +452,7 @@ pub(crate) fn parse_interval_year_month(
     let (result_months, result_days, result_nanos) = parse_interval("years", value)?;
     if result_days != 0 || result_nanos != 0 {
         return Err(ArrowError::CastError(format!(
-            "Cannot cast ${value} to IntervalYearMonth because the value isn't multiple of months"
+            "Cannot cast {value} to IntervalYearMonth because the value isn't multiple of months"
         )));
     }
     Ok(IntervalYearMonthType::make_value(0, result_months))
@@ -464,7 +464,7 @@ pub(crate) fn parse_interval_day_time(
     let (result_months, mut result_days, result_nanos) = parse_interval("days", value)?;
     if result_nanos % 1_000_000 != 0 {
         return Err(ArrowError::CastError(format!(
-            "Cannot cast ${value} to IntervalDayTime because the nanos part isn't multiple of milliseconds"
+            "Cannot cast {value} to IntervalDayTime because the nanos part isn't multiple of milliseconds"
         )));
     }
     result_days += result_months * 30;
@@ -488,10 +488,9 @@ pub(crate) fn parse_interval_month_day_nano(
 const SECONDS_PER_HOUR: f64 = 3_600_f64;
 const NANOS_PER_MILLIS: f64 = 1_000_000_f64;
 const NANOS_PER_SECOND: f64 = 1_000_f64 * NANOS_PER_MILLIS;
-#[cfg(test)]
 const NANOS_PER_MINUTE: f64 = 60_f64 * NANOS_PER_SECOND;
-#[cfg(test)]
 const NANOS_PER_HOUR: f64 = 60_f64 * NANOS_PER_MINUTE;
+const NANOS_PER_DAY: f64 = 24_f64 * NANOS_PER_HOUR;
 
 #[derive(Clone, Copy)]
 #[repr(u16)]
@@ -554,7 +553,7 @@ pub fn parse_interval(
         };
 
         if interval_period > (i64::MAX as f64) {
-            return Err(ArrowError::InvalidArgumentError(format!(
+            return Err(ArrowError::ParseError(format!(
                 "Interval field value out of range: {value:?}"
             )));
         }
@@ -620,7 +619,7 @@ pub fn parse_interval(
         result_month += diff_month;
 
         if result_month > (i32::MAX as i64) {
-            return Err(ArrowError::NotYetImplemented(format!(
+            return Err(ArrowError::ParseError(format!(
                 "Interval field value out of range: {value:?}"
             )));
         }
@@ -628,7 +627,7 @@ pub fn parse_interval(
         result_days += diff_days;
 
         if result_days > (i32::MAX as i64) {
-            return Err(ArrowError::NotYetImplemented(format!(
+            return Err(ArrowError::ParseError(format!(
                 "Interval field value out of range: {value:?}"
             )));
         }
@@ -636,7 +635,7 @@ pub fn parse_interval(
         result_nanos += diff_nanos as i128;
 
         if result_nanos > (i64::MAX as i128) {
-            return Err(ArrowError::NotYetImplemented(format!(
+            return Err(ArrowError::ParseError(format!(
                 "Interval field value out of range: {value:?}"
             )));
         }
@@ -648,8 +647,9 @@ pub fn parse_interval(
 /// We are storing parts as integers, it's why we need to align parts fractional
 /// INTERVAL '0.5 MONTH' = 15 days, INTERVAL '1.5 MONTH' = 1 month 15 days
 /// INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
+/// INTERVAL '30 DAYS' = 1 month
 fn align_interval_parts(
-    month_part: f64,
+    mut month_part: f64,
     mut day_part: f64,
     mut nanos_part: f64,
 ) -> (i64, i64, f64) {
@@ -662,13 +662,18 @@ fn align_interval_parts(
         * SECONDS_PER_HOUR
         * NANOS_PER_SECOND;
 
+    // Convert to higher units as much as possible
+    day_part += nanos_part / NANOS_PER_DAY;
+    month_part += day_part / 30_f64;
+    nanos_part = nanos_part % NANOS_PER_DAY;
+    day_part = day_part % 30_f64;
+
     (month_part as i64, day_part as i64, nanos_part)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assert_contains;
 
     #[test]
     fn string_to_timestamp_timezone() {
@@ -1104,11 +1109,11 @@ mod tests {
             parse_interval("months", "2 month").unwrap(),
         );
 
-        assert_contains!(
+        assert_eq!(
             parse_interval("months", "1 centurys 1 month")
                 .unwrap_err()
                 .to_string(),
-            r#"Invalid input syntax for type interval: "1 centurys 1 month""#
+            r#"Parser error: Invalid input syntax for type interval: "1 centurys 1 month""#
         );
 
         assert_eq!(

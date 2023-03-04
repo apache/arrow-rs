@@ -2659,12 +2659,22 @@ fn cast_string_to_year_month_interval<Offset: OffsetSizeTrait>(
         let iter = string_array
             .iter()
             .map(|v| v.and_then(|v| parse_interval_year_month(v).ok()));
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { IntervalYearMonthArray::from_trusted_len_iter(iter) }
     } else {
         let vec = string_array
             .iter()
             .map(|v| v.map(parse_interval_year_month).transpose())
             .collect::<Result<Vec<_>, ArrowError>>()?;
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { IntervalYearMonthArray::from_trusted_len_iter(vec) }
     };
     Ok(Arc::new(interval_array) as ArrayRef)
@@ -2682,12 +2692,22 @@ fn cast_string_to_day_time_interval<Offset: OffsetSizeTrait>(
         let iter = string_array
             .iter()
             .map(|v| v.and_then(|v| parse_interval_day_time(v).ok()));
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { IntervalDayTimeArray::from_trusted_len_iter(iter) }
     } else {
         let vec = string_array
             .iter()
             .map(|v| v.map(parse_interval_day_time).transpose())
             .collect::<Result<Vec<_>, ArrowError>>()?;
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { IntervalDayTimeArray::from_trusted_len_iter(vec) }
     };
     Ok(Arc::new(interval_array) as ArrayRef)
@@ -2705,12 +2725,22 @@ fn cast_string_to_month_day_nano_interval<Offset: OffsetSizeTrait>(
         let iter = string_array
             .iter()
             .map(|v| v.and_then(|v| parse_interval_month_day_nano(v).ok()));
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { IntervalMonthDayNanoArray::from_trusted_len_iter(iter) }
     } else {
         let vec = string_array
             .iter()
             .map(|v| v.map(parse_interval_month_day_nano).transpose())
             .collect::<Result<Vec<_>, ArrowError>>()?;
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { IntervalMonthDayNanoArray::from_trusted_len_iter(vec) }
     };
     Ok(Arc::new(interval_array) as ArrayRef)
@@ -5067,54 +5097,173 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_cast_string_to_interval() {
-        let interval_string_values = vec![
-            Some("1 year 1 month 1 day"),
-            None,
-            Some("1.5 years 13 month 35 days 1.4 milliseconds"),
-            Some("3 days"),
-            Some("8 seconds"),
-            None,
-            Some("1 day 29800 milliseconds"),
-            Some("3 months 1 second"),
-            Some("6 minutes 120 second"),
-            Some("2 years 39 months 9 days 19 hours 1 minute 83 seconds 399222 milliseconds"),
-        ];
-        let string_array =
-            Arc::new(StringArray::from(interval_string_values.clone())) as ArrayRef;
-        let options = CastOptions { safe: false };
-        let array_ref = cast_with_options(
-            &string_array.clone(),
-            &DataType::Interval(IntervalUnit::MonthDayNano),
-            &options,
-        )
-        .unwrap();
-        let interval_array = array_ref
-            .as_any()
-            .downcast_ref::<IntervalMonthDayNanoArray>()
+    macro_rules! test_safe_string_to_interval {
+        ($data_vec:expr, $interval_unit:expr, $array_ty:ty, $expect_vec:expr) => {
+            let source_string_array =
+                Arc::new(StringArray::from($data_vec.clone())) as ArrayRef;
+
+            let options = CastOptions { safe: true };
+
+            let target_interval_array = cast_with_options(
+                &source_string_array.clone(),
+                &DataType::Interval($interval_unit),
+                &options,
+            )
             .unwrap()
-            .clone() as IntervalMonthDayNanoArray;
-        let interval_string_array =
-            cast_with_options(&interval_array, &DataType::Utf8, &options)
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap()
-                .clone();
-        let expect_string_array = StringArray::from(vec![
-            Some("0 years 13 mons 1 days 0 hours 0 mins 0.000000000 secs"),
-            None,
-            Some("0 years 31 mons 35 days 0 hours 0 mins 0.001400000 secs"),
-            Some("0 years 0 mons 3 days 0 hours 0 mins 0.000000000 secs"),
-            Some("0 years 0 mons 0 days 0 hours 0 mins 8.000000000 secs"),
-            None,
-            Some("0 years 0 mons 1 days 0 hours 0 mins 29.800000000 secs"),
-            Some("0 years 3 mons 0 days 0 hours 0 mins 1.000000000 secs"),
-            Some("0 years 0 mons 0 days 0 hours 8 mins 0.000000000 secs"),
-            Some("0 years 63 mons 9 days 19 hours 9 mins 2.222000000 secs"),
-        ]);
-        assert_eq!(expect_string_array, interval_string_array);
+            .as_any()
+            .downcast_ref::<$array_ty>()
+            .unwrap()
+            .clone() as $array_ty;
+
+            let target_string_array =
+                cast_with_options(&target_interval_array, &DataType::Utf8, &options)
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap()
+                    .clone();
+
+            let expect_string_array = StringArray::from($expect_vec);
+
+            assert_eq!(target_string_array, expect_string_array);
+
+            let target_large_string_array =
+                cast_with_options(&target_interval_array, &DataType::LargeUtf8, &options)
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<LargeStringArray>()
+                    .unwrap()
+                    .clone();
+
+            let expect_large_string_array = LargeStringArray::from($expect_vec);
+
+            assert_eq!(target_large_string_array, expect_large_string_array);
+        };
+    }
+
+    #[test]
+    fn test_cast_string_to_interval_year_month() {
+        test_safe_string_to_interval!(
+            vec![
+                Some("1 year 1 month"),
+                Some("1.5 years 13 month"),
+                Some("30 days"),
+                Some("31 days"),
+                Some("2 months 31 days"),
+                Some("2 months 31 days 1 second"),
+                Some("foobar"),
+            ],
+            IntervalUnit::YearMonth,
+            IntervalYearMonthArray,
+            vec![
+                Some("1 years 1 mons 0 days 0 hours 0 mins 0.00 secs"),
+                Some("2 years 7 mons 0 days 0 hours 0 mins 0.00 secs"),
+                Some("0 years 1 mons 0 days 0 hours 0 mins 0.00 secs"),
+                None,
+                None,
+                None,
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cast_string_to_interval_day_time() {
+        test_safe_string_to_interval!(
+            vec![
+                Some("1 year 1 month"),
+                Some("1.5 years 13 month"),
+                Some("30 days"),
+                Some("1 day 2 second 3.5 milliseconds"),
+                Some("foobar"),
+            ],
+            IntervalUnit::DayTime,
+            IntervalDayTimeArray,
+            vec![
+                Some("0 years 0 mons 390 days 0 hours 0 mins 0.000 secs"),
+                Some("0 years 0 mons 930 days 0 hours 0 mins 0.000 secs"),
+                Some("0 years 0 mons 30 days 0 hours 0 mins 0.000 secs"),
+                None,
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cast_string_to_interval_month_day_nano() {
+        test_safe_string_to_interval!(
+            vec![
+                Some("1 year 1 month 1 day"),
+                None,
+                Some("1.5 years 13 month 35 days 1.4 milliseconds"),
+                Some("3 days"),
+                Some("8 seconds"),
+                None,
+                Some("1 day 29800 milliseconds"),
+                Some("3 months 1 second"),
+                Some("6 minutes 120 second"),
+                Some("2 years 39 months 9 days 19 hours 1 minute 83 seconds 399222 milliseconds"),
+                Some("foobar"),
+            ],
+            IntervalUnit::MonthDayNano,
+            IntervalMonthDayNanoArray,
+            vec![
+                Some("0 years 13 mons 1 days 0 hours 0 mins 0.000000000 secs"),
+                None,
+                Some("0 years 32 mons 5 days 0 hours 0 mins 0.001400000 secs"),
+                Some("0 years 0 mons 3 days 0 hours 0 mins 0.000000000 secs"),
+                Some("0 years 0 mons 0 days 0 hours 0 mins 8.000000000 secs"),
+                None,
+                Some("0 years 0 mons 1 days 0 hours 0 mins 29.800000000 secs"),
+                Some("0 years 3 mons 0 days 0 hours 0 mins 1.000000000 secs"),
+                Some("0 years 0 mons 0 days 0 hours 8 mins 0.000000000 secs"),
+                Some("0 years 63 mons 9 days 19 hours 9 mins 2.222000000 secs"),
+                None,
+            ]
+        );
+    }
+
+    macro_rules! test_unsafe_string_to_interval_err {
+        ($data_vec:expr, $interval_unit:expr, $error_msg:expr) => {
+            let string_array = Arc::new(StringArray::from($data_vec.clone())) as ArrayRef;
+            let options = CastOptions { safe: false };
+            let arrow_err = cast_with_options(
+                &string_array.clone(),
+                &DataType::Interval(IntervalUnit::YearMonth),
+                &options,
+            )
+            .unwrap_err();
+            assert_eq!(arrow_err.to_string(), $error_msg);
+        };
+    }
+
+    #[test]
+    fn test_cast_string_to_interval_err() {
+        test_unsafe_string_to_interval_err!(
+            vec![Some("foobar")],
+            IntervalUnit::YearMonth,
+            r#"Not yet implemented: Unsupported Interval Expression with value "foobar""#
+        );
+        test_unsafe_string_to_interval_err!(
+            vec![Some("foobar")],
+            IntervalUnit::DayTime,
+            r#"Not yet implemented: Unsupported Interval Expression with value "foobar""#
+        );
+        test_unsafe_string_to_interval_err!(
+            vec![Some("foobar")],
+            IntervalUnit::MonthDayNano,
+            r#"Not yet implemented: Unsupported Interval Expression with value "foobar""#
+        );
+        test_unsafe_string_to_interval_err!(
+            vec![Some("2 months 31 days 1 second")],
+            IntervalUnit::YearMonth,
+            r#"Cast error: Cannot cast 2 months 31 days 1 second to IntervalYearMonth because the value isn't multiple of months"#
+        );
+        test_unsafe_string_to_interval_err!(
+            vec![Some("1 day 1.5 milliseconds")],
+            IntervalUnit::DayTime,
+            r#"Cast error: Cannot cast 1 day 1.5 milliseconds to IntervalDayTime because the nanos part isn't multiple of milliseconds"#
+        );
     }
 
     #[test]
