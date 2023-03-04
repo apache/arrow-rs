@@ -5229,11 +5229,11 @@ mod tests {
             let options = CastOptions { safe: false };
             let arrow_err = cast_with_options(
                 &string_array.clone(),
-                &DataType::Interval(IntervalUnit::YearMonth),
+                &DataType::Interval($interval_unit),
                 &options,
             )
             .unwrap_err();
-            assert_eq!(arrow_err.to_string(), $error_msg);
+            assert_eq!($error_msg, arrow_err.to_string());
         };
     }
 
