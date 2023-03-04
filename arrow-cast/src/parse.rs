@@ -665,8 +665,8 @@ fn align_interval_parts(
     // Convert to higher units as much as possible
     day_part += nanos_part / NANOS_PER_DAY;
     month_part += day_part / 30_f64;
-    nanos_part = nanos_part % NANOS_PER_DAY;
-    day_part = day_part % 30_f64;
+    nanos_part %= NANOS_PER_DAY;
+    day_part %= 30_f64;
 
     (month_part as i64, day_part as i64, nanos_part)
 }
