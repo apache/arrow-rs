@@ -68,12 +68,12 @@ impl AwsCredential {
     }
 }
 
-struct RequestSigner<'a> {
-    date: DateTime<Utc>,
-    credential: &'a AwsCredential,
-    service: &'a str,
-    region: &'a str,
-    sign_payload: bool,
+pub(crate) struct RequestSigner<'a> {
+    pub(crate) date: DateTime<Utc>,
+    pub(crate) credential: &'a AwsCredential,
+    pub(crate) service: &'a str,
+    pub(crate) region: &'a str,
+    pub(crate) sign_payload: bool,
 }
 
 const DATE_HEADER: &str = "x-amz-date";
@@ -84,7 +84,7 @@ const AUTH_HEADER: &str = "authorization";
 const ALL_HEADERS: &[&str; 4] = &[DATE_HEADER, HASH_HEADER, TOKEN_HEADER, AUTH_HEADER];
 
 impl<'a> RequestSigner<'a> {
-    fn sign(&self, request: &mut Request) {
+    pub(crate) fn sign(&self, request: &mut Request, include_payload_hash: bool) {
         if let Some(ref token) = self.credential.token {
             let token_val = HeaderValue::from_str(token).unwrap();
             request.headers_mut().insert(TOKEN_HEADER, token_val);
@@ -105,12 +105,15 @@ impl<'a> RequestSigner<'a> {
                 None => EMPTY_SHA256_HASH.to_string(),
                 Some(body) => hex_digest(body.as_bytes().unwrap()),
             }
+        } else if !include_payload_hash {
+            EMPTY_SHA256_HASH.to_string()
         } else {
             UNSIGNED_PAYLOAD_LITERAL.to_string()
         };
-
-        let header_digest = HeaderValue::from_str(&digest).unwrap();
-        request.headers_mut().insert(HASH_HEADER, header_digest);
+        if include_payload_hash {
+            let header_digest = HeaderValue::from_str(&digest).unwrap();
+            request.headers_mut().insert(HASH_HEADER, header_digest);
+        }
 
         let (signed_headers, canonical_headers) = canonicalize_headers(request.headers());
         let canonical_query = canonicalize_query(request.url());
@@ -193,7 +196,7 @@ impl CredentialExt for RequestBuilder {
             sign_payload,
         };
 
-        signer.sign(&mut request);
+        signer.sign(&mut request, true);
 
         for header in ALL_HEADERS {
             if let Some(val) = request.headers_mut().remove(*header) {
@@ -627,7 +630,7 @@ mod tests {
             sign_payload: true,
         };
 
-        signer.sign(&mut request);
+        signer.sign(&mut request, true);
         assert_eq!(request.headers().get(AUTH_HEADER).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=a3c787a7ed37f7fdfbfd2d7056a3d7c9d85e6d52a2bfbec73793c0be6e7862d4")
     }
 
@@ -665,7 +668,7 @@ mod tests {
             sign_payload: false,
         };
 
-        signer.sign(&mut request);
+        signer.sign(&mut request, true);
         assert_eq!(request.headers().get(AUTH_HEADER).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=653c3d8ea261fd826207df58bc2bb69fbb5003e9eb3c0ef06e4a51f2a81d8699")
     }
 
@@ -702,7 +705,7 @@ mod tests {
             sign_payload: true,
         };
 
-        signer.sign(&mut request);
+        signer.sign(&mut request, true);
         assert_eq!(request.headers().get(AUTH_HEADER).unwrap(), "AWS4-HMAC-SHA256 Credential=H20ABqCkLZID4rLe/20220809/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=9ebf2f92872066c99ac94e573b4e1b80f4dbb8a32b1e8e23178318746e7d1b4d")
     }
 

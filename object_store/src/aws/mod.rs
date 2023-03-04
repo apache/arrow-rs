@@ -60,7 +60,7 @@ use crate::{
 };
 
 mod client;
-mod credential;
+pub(crate) mod credential;
 
 // http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
 //

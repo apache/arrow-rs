@@ -25,6 +25,7 @@ use base64::Engine;
 use futures::TryFutureExt;
 use reqwest::{Client, Method};
 use ring::signature::RsaKeyPair;
+use serde_json::json;
 use snafu::{ResultExt, Snafu};
 use std::env;
 use std::fs::File;
@@ -64,6 +65,12 @@ pub enum Error {
 
     #[snafu(display("Unsupported ApplicationCredentials type: {}", type_))]
     UnsupportedCredentialsType { type_: String },
+
+    #[snafu(display("Missing AWS Credentials for Workload Identity Federation"))]
+    ExternalAccountMissingAwsCredentials,
+
+    #[snafu(display("Error encoding STS Caller Identity Token: {}", source))]
+    ExternalAccountEncodeCallerIdentityToken { source: serde_json::Error },
 
     #[snafu(display("Error creating client: {}", source))]
     Client { source: crate::Error },
@@ -399,58 +406,59 @@ impl TokenProvider for InstanceCredentialProvider {
     }
 }
 
-/// ApplicationDefaultCredentials
+#[derive(serde::Deserialize, Debug)]
+pub struct AuthorizedUserCredentials {
+    client_id: String,
+    client_secret: String,
+    refresh_token: String,
+}
+
+#[derive(serde::Deserialize, Debug)]
+pub struct AwsExternalAccountCredentials {
+    audience: String,
+    credential_source: AwsCredentialSource,
+    service_account_impersonation: Option<ServiceAccountImpersonation>,
+    service_account_impersonation_url: String,
+    subject_token_type: String,
+    token_url: String,
+}
+#[derive(serde::Deserialize, Debug)]
+struct AwsCredentialSource {
+    #[allow(dead_code)]
+    environment_id: String,
+    regional_cred_verification_url: String,
+}
+#[derive(serde::Deserialize, Debug)]
+struct ServiceAccountImpersonation {
+    token_lifetime_seconds: u64,
+}
+
+#[derive(serde::Deserialize, Debug)]
+#[serde(untagged)]
+pub enum ExternalAccountCredentials {
+    Aws(AwsExternalAccountCredentials),
+}
+
+/// Application Default Credential files include several types including User Credentials (containing actual credentials)
+/// and External Account credential files describing how to exchange credentials from AWS or Azure.
 /// <https://google.aip.dev/auth/4110>
-#[derive(Debug)]
+#[derive(serde::Deserialize, Debug)]
+#[serde(tag = "type")]
 pub enum ApplicationDefaultCredentials {
-    /// <https://google.aip.dev/auth/4113>
-    AuthorizedUser {
-        client_id: String,
-        client_secret: String,
-        refresh_token: String,
-    },
+    #[serde(rename = "authorized_user")]
+    AuthorizedUser(AuthorizedUserCredentials),
+    #[serde(rename = "external_account")]
+    ExternalAccount(ExternalAccountCredentials),
 }
 
 impl ApplicationDefaultCredentials {
-    pub fn new(path: Option<&str>) -> Result<Option<Self>, Error> {
-        let file = match ApplicationDefaultCredentialsFile::read(path)? {
-            Some(f) => f,
-            None => return Ok(None),
-        };
-
-        Ok(Some(match file.type_.as_str() {
-            "authorized_user" => Self::AuthorizedUser {
-                client_id: file.client_id,
-                client_secret: file.client_secret,
-                refresh_token: file.refresh_token,
-            },
-            type_ => return UnsupportedCredentialsTypeSnafu { type_ }.fail(),
-        }))
-    }
-}
-
-/// A deserialized `application_default_credentials.json`-file.
-/// <https://cloud.google.com/docs/authentication/application-default-credentials#personal>
-#[derive(serde::Deserialize)]
-struct ApplicationDefaultCredentialsFile {
-    #[serde(default)]
-    client_id: String,
-    #[serde(default)]
-    client_secret: String,
-    #[serde(default)]
-    refresh_token: String,
-    #[serde(rename = "type")]
-    type_: String,
-}
-
-impl ApplicationDefaultCredentialsFile {
     const CREDENTIALS_PATH: &'static str =
         ".config/gcloud/application_default_credentials.json";
 
     // Create a new application default credential in the following situations:
     //  1. a file is passed in and the type matches.
     //  2. without argument if the well-known configuration file is present.
-    fn read(path: Option<&str>) -> Result<Option<Self>, Error> {
+    pub fn new(path: Option<&str>) -> Result<Option<Self>, Error> {
         if let Some(path) = path {
             return read_credentials_file::<Self>(path).map(Some);
         }
@@ -466,8 +474,6 @@ impl ApplicationDefaultCredentialsFile {
     }
 }
 
-const DEFAULT_TOKEN_GCP_URI: &str = "https://accounts.google.com/o/oauth2/token";
-
 #[async_trait]
 impl TokenProvider for ApplicationDefaultCredentials {
     async fn fetch_token(
@@ -475,24 +481,209 @@ impl TokenProvider for ApplicationDefaultCredentials {
         client: &Client,
         retry: &RetryConfig,
     ) -> Result<TemporaryToken<String>, Error> {
-        let builder = client.request(Method::POST, DEFAULT_TOKEN_GCP_URI);
-        let builder = match self {
-            Self::AuthorizedUser {
-                client_id,
-                client_secret,
-                refresh_token,
-            } => {
-                let body = [
-                    ("grant_type", "refresh_token"),
-                    ("client_id", client_id),
-                    ("client_secret", client_secret),
-                    ("refresh_token", refresh_token),
-                ];
-                builder.form(&body)
+        match self {
+            Self::AuthorizedUser(credentials) => {
+                credentials.fetch_token(client, retry).await
             }
+            Self::ExternalAccount(credentials) => match credentials {
+                ExternalAccountCredentials::Aws(credentials) => {
+                    credentials.fetch_token(client, retry).await
+                }
+            },
+        }
+    }
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct GcpStsTokenResponse {
+    access_token: String,
+}
+
+#[derive(serde::Serialize, Debug)]
+struct GetCallerIdentityToken {
+    url: String,
+    method: String,
+    headers: Vec<GetCallerIdentityTokenHeader>,
+}
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
+struct GetCallerIdentityTokenHeader {
+    key: String,
+    value: String,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct GcpGenerateAccessTokenResponse {
+    #[serde(rename = "accessToken")]
+    access_token: String,
+    #[serde(rename = "expireTime")]
+    expire_time: String,
+}
+
+const EXTERNAL_ACCOUNT_AWS_HEADERS: [&str; 5] = [
+    "authorization",
+    "host",
+    "x-amz-date",
+    "x-goog-cloud-target-resource",
+    "x-amz-security-token",
+];
+
+#[async_trait]
+impl TokenProvider for AwsExternalAccountCredentials {
+    async fn fetch_token(
+        &self,
+        client: &Client,
+        retry: &RetryConfig,
+    ) -> Result<TemporaryToken<String>, Error> {
+        // Steps documented in https://cloud.google.com/iam/docs/workload-identity-federation-with-other-clouds#aws
+        let region_opt = std::env::var("AWS_REGION").ok();
+        let cred_url = if self
+            .credential_source
+            .regional_cred_verification_url
+            .contains("{region}")
+        {
+            match &region_opt {
+                Some(region) => self.credential_source.regional_cred_verification_url.replace("{region}", region),
+                // Use global endpoint if region is not available
+                None => "https://sts.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15".to_string(),
+            }
+        } else {
+            self.credential_source
+                .regional_cred_verification_url
+                .clone()
+        };
+        let region = region_opt.as_deref().unwrap_or("us-east-1");
+
+        let req = client
+            .post(&cred_url)
+            .header("x-goog-cloud-target-resource", &self.audience);
+
+        // TODO: other credential sources (share?)?
+        let key_id = std::env::var("AWS_ACCESS_KEY_ID")
+            .map_err(|_| Error::ExternalAccountMissingAwsCredentials)?;
+        let secret_key = std::env::var("AWS_SECRET_ACCESS_KEY")
+            .map_err(|_| Error::ExternalAccountMissingAwsCredentials)?;
+        let credential = crate::aws::credential::AwsCredential {
+            key_id,
+            secret_key,
+            token: std::env::var("AWS_SESSION_TOKEN").ok(),
         };
 
-        let response = builder
+        let signer = crate::aws::credential::RequestSigner {
+            credential: &credential,
+            date: chrono::Utc::now(),
+            region,
+            service: "sts",
+            sign_payload: false,
+        };
+        let mut req = req.build().context(TokenResponseBodySnafu)?;
+        signer.sign(&mut req, false);
+
+        let headers = req
+            .headers()
+            .iter()
+            // must include only these headers
+            .filter(|(key, _)| {
+                EXTERNAL_ACCOUNT_AWS_HEADERS
+                    .iter()
+                    .any(|&x| x == key.as_str().to_lowercase())
+            })
+            .map(|(key, value)| GetCallerIdentityTokenHeader {
+                key: key.as_str().to_string(),
+                value: value.to_str().unwrap().to_string(),
+            })
+            .collect::<Vec<_>>();
+
+        let get_caller_identity_token = GetCallerIdentityToken {
+            url: cred_url.to_string(),
+            method: "POST".to_string(),
+            headers,
+        };
+
+        let get_caller_identity_token = serde_json::to_string(&get_caller_identity_token)
+            .context(ExternalAccountEncodeCallerIdentityTokenSnafu)?;
+        let get_caller_identity_token = urlencoding::encode(&get_caller_identity_token);
+
+        let form_data = [
+            ("audience", self.audience.as_str()),
+            (
+                "grant_type",
+                "urn:ietf:params:oauth:grant-type:token-exchange",
+            ),
+            (
+                "requested_token_type",
+                "urn:ietf:params:oauth:token-type:access_token",
+            ),
+            ("scope", "https://www.googleapis.com/auth/cloud-platform"),
+            ("subject_token_type", self.subject_token_type.as_str()),
+            ("subject_token", &get_caller_identity_token),
+        ];
+
+        let sts_token = client
+            .post(&self.token_url)
+            .form(&form_data)
+            .send_retry(retry)
+            .await
+            .context(TokenRequestSnafu)?
+            .json::<GcpStsTokenResponse>()
+            .await
+            .context(TokenResponseBodySnafu)?
+            .access_token;
+
+        // https://cloud.google.com/iam/docs/reference/credentials/rest/v1/projects.serviceAccounts/generateAccessToken
+        let mut generate_access_token_body = json!({
+            "scope": [ "https://www.googleapis.com/auth/cloud-platform" ]
+        });
+        if let Some(impersonation) = &self.service_account_impersonation {
+            let exp = json!(format!("{}s", impersonation.token_lifetime_seconds));
+            generate_access_token_body["lifetime"] = exp;
+        }
+
+        let resp = client
+            .post(&self.service_account_impersonation_url)
+            .header("Content-Type", "text/json")
+            .bearer_auth(sts_token)
+            .json(&generate_access_token_body)
+            .send_retry(retry)
+            .await
+            .context(TokenRequestSnafu)?
+            .json::<GcpGenerateAccessTokenResponse>()
+            .await
+            .context(TokenResponseBodySnafu)?;
+
+        let expiry = chrono::DateTime::parse_from_rfc3339(&resp.expire_time)
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let now_instant = Instant::now();
+        let now = chrono::Utc::now();
+        let duration = (expiry - now).to_std().unwrap();
+
+        let token = TemporaryToken {
+            token: resp.access_token,
+            expiry: Some(now_instant + duration),
+        };
+
+        Ok(token)
+    }
+}
+
+const DEFAULT_TOKEN_GCP_URI: &str = "https://accounts.google.com/o/oauth2/token";
+#[async_trait]
+impl TokenProvider for AuthorizedUserCredentials {
+    async fn fetch_token(
+        &self,
+        client: &Client,
+        retry: &RetryConfig,
+    ) -> Result<TemporaryToken<String>, Error> {
+        let body = [
+            ("grant_type", "refresh_token"),
+            ("client_id", &self.client_id),
+            ("client_secret", &self.client_secret),
+            ("refresh_token", &self.refresh_token),
+        ];
+
+        let response = client
+            .request(Method::POST, DEFAULT_TOKEN_GCP_URI)
+            .form(&body)
             .send_retry(retry)
             .await
             .context(TokenRequestSnafu)?
