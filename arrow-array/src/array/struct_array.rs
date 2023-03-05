@@ -154,22 +154,20 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
             fields.push(Field::new(
                 field_name,
                 array.data_type().clone(),
-                child_datum.null_buffer().is_some(),
+                child_datum.nulls().is_some(),
             ));
 
-            if let Some(child_null_buffer) = child_datum.null_buffer() {
-                let child_datum_offset = child_datum.offset();
-
+            if let Some(child_nulls) = child_datum.nulls() {
                 null = Some(if let Some(null_buffer) = &null {
                     buffer_bin_or(
                         null_buffer,
                         0,
-                        child_null_buffer,
-                        child_datum_offset,
+                        child_nulls.buffer(),
+                        child_nulls.offset(),
                         child_datum_len,
                     )
                 } else {
-                    child_null_buffer.bit_slice(child_datum_offset, child_datum_len)
+                    child_nulls.inner().sliced()
                 });
             } else if null.is_some() {
                 // when one of the fields has no nulls, then there is no null in the array
@@ -321,7 +319,6 @@ mod tests {
         BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
     };
     use arrow_buffer::ToByteSlice;
-    use arrow_data::Bitmap;
     use std::sync::Arc;
 
     #[test]
@@ -410,8 +407,8 @@ mod tests {
         assert_eq!(1, struct_data.null_count());
         assert_eq!(
             // 00001011
-            Some(&Bitmap::from(Buffer::from(&[11_u8]))),
-            struct_data.null_bitmap()
+            &[11_u8],
+            struct_data.nulls().unwrap().validity()
         );
 
         let expected_string_data = ArrayData::builder(DataType::Utf8)

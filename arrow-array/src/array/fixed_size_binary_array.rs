@@ -141,8 +141,11 @@ impl FixedSizeBinaryArray {
         let mut len = 0;
         let mut size = None;
         let mut byte = 0;
-        let mut null_buf = MutableBuffer::from_len_zeroed(0);
-        let mut buffer = MutableBuffer::from_len_zeroed(0);
+
+        let iter_size_hint = iter.size_hint().0;
+        let mut null_buf = MutableBuffer::new(bit_util::ceil(iter_size_hint, 8));
+        let mut buffer = MutableBuffer::new(0);
+
         let mut prepend = 0;
         iter.try_for_each(|item| -> Result<(), ArrowError> {
             // extend null bitmask by one byte per each 8 items
@@ -163,7 +166,12 @@ impl FixedSizeBinaryArray {
                         )));
                     }
                 } else {
-                    size = Some(slice.len());
+                    let len = slice.len();
+                    size = Some(len);
+                    // Now that we know how large each element is we can reserve
+                    // sufficient capacity in the underlying mutable buffer for
+                    // the data.
+                    buffer.reserve(iter_size_hint * len);
                     buffer.extend_zeros(slice.len() * prepend);
                 }
                 bit_util::set_bit(null_buf.as_slice_mut(), len);
@@ -234,8 +242,10 @@ impl FixedSizeBinaryArray {
     {
         let mut len = 0;
         let mut byte = 0;
-        let mut null_buf = MutableBuffer::from_len_zeroed(0);
-        let mut buffer = MutableBuffer::from_len_zeroed(0);
+
+        let iter_size_hint = iter.size_hint().0;
+        let mut null_buf = MutableBuffer::new(bit_util::ceil(iter_size_hint, 8));
+        let mut buffer = MutableBuffer::new(iter_size_hint * (size as usize));
 
         iter.try_for_each(|item| -> Result<(), ArrowError> {
             // extend null bitmask by one byte per each 8 items
@@ -304,7 +314,9 @@ impl FixedSizeBinaryArray {
     {
         let mut len = 0;
         let mut size = None;
-        let mut buffer = MutableBuffer::from_len_zeroed(0);
+        let iter_size_hint = iter.size_hint().0;
+        let mut buffer = MutableBuffer::new(0);
+
         iter.try_for_each(|item| -> Result<(), ArrowError> {
             let slice = item.as_ref();
             if let Some(size) = size {
@@ -316,8 +328,11 @@ impl FixedSizeBinaryArray {
                     )));
                 }
             } else {
-                size = Some(slice.len());
+                let len = slice.len();
+                size = Some(len);
+                buffer.reserve(iter_size_hint * len);
             }
+
             buffer.extend_from_slice(slice);
 
             len += 1;
@@ -408,7 +423,7 @@ impl From<FixedSizeListArray> for FixedSizeBinaryArray {
             .len(v.len())
             .offset(v.offset())
             .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
-            .null_bit_buffer(v.data_ref().null_buffer().cloned());
+            .nulls(v.data_ref().nulls().cloned());
 
         let data = unsafe { builder.build_unchecked() };
         Self::from(data)

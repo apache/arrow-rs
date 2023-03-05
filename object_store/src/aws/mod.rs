@@ -385,6 +385,7 @@ pub struct AmazonS3Builder {
     retry_config: RetryConfig,
     imdsv1_fallback: bool,
     virtual_hosted_style_request: bool,
+    unsigned_payload: bool,
     metadata_endpoint: Option<String>,
     profile: Option<String>,
     client_options: ClientOptions,
@@ -504,6 +505,15 @@ pub enum AmazonS3ConfigKey {
     /// - `virtual_hosted_style_request`
     VirtualHostedStyleRequest,
 
+    /// Avoid computing payload checksum when calculating signature.
+    ///
+    /// See [`AmazonS3Builder::with_unsigned_payload`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_unsigned_payload`
+    /// - `unsigned_payload`
+    UnsignedPayload,
+
     /// Set the instance metadata endpoint
     ///
     /// See [`AmazonS3Builder::with_metadata_endpoint`] for details.
@@ -535,6 +545,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::DefaultRegion => "aws_default_region",
             Self::MetadataEndpoint => "aws_metadata_endpoint",
             Self::Profile => "aws_profile",
+            Self::UnsignedPayload => "aws_unsigned_payload",
         }
     }
 }
@@ -563,6 +574,7 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_profile" | "profile" => Ok(Self::Profile),
             "aws_imdsv1_fallback" | "imdsv1_fallback" => Ok(Self::ImdsV1Fallback),
             "aws_metadata_endpoint" | "metadata_endpoint" => Ok(Self::MetadataEndpoint),
+            "aws_unsigned_payload" | "unsigned_payload" => Ok(Self::UnsignedPayload),
             _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
         }
     }
@@ -679,6 +691,9 @@ impl AmazonS3Builder {
                 self.metadata_endpoint = Some(value.into())
             }
             AmazonS3ConfigKey::Profile => self.profile = Some(value.into()),
+            AmazonS3ConfigKey::UnsignedPayload => {
+                self.unsigned_payload = str_is_truthy(&value.into())
+            }
         };
         Ok(self)
     }
@@ -819,6 +834,15 @@ impl AmazonS3Builder {
     ///
     pub fn with_imdsv1_fallback(mut self) -> Self {
         self.imdsv1_fallback = true;
+        self
+    }
+
+    /// Sets if unsigned payload option has to be used.
+    /// See [unsigned payload option](https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html)
+    /// * false (default): Signed payload option is used, where the checksum for the request body is computed and included when constructing a canonical request.
+    /// * true: Unsigned payload option is used. `UNSIGNED-PAYLOAD` literal is included when constructing a canonical request,
+    pub fn with_unsigned_payload(mut self, unsigned_payload: bool) -> Self {
+        self.unsigned_payload = unsigned_payload;
         self
     }
 
@@ -967,6 +991,7 @@ impl AmazonS3Builder {
             credentials,
             retry_config: self.retry_config,
             client_options: self.client_options,
+            sign_payload: !self.unsigned_payload,
         };
 
         let client = Arc::new(S3Client::new(config)?);
@@ -1125,6 +1150,7 @@ mod tests {
             "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
             &container_creds_relative_uri,
         );
+        env::set_var("AWS_UNSIGNED_PAYLOAD", "true");
 
         let builder = AmazonS3Builder::from_env();
         assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
@@ -1136,9 +1162,9 @@ mod tests {
 
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
-
         let metadata_uri = format!("{METADATA_ENDPOINT}{container_creds_relative_uri}");
         assert_eq!(builder.metadata_endpoint.unwrap(), metadata_uri);
+        assert!(builder.unsigned_payload);
     }
 
     #[test]
@@ -1154,6 +1180,7 @@ mod tests {
             ("aws_default_region", aws_default_region.clone()),
             ("aws_endpoint", aws_endpoint.clone()),
             ("aws_session_token", aws_session_token.clone()),
+            ("aws_unsigned_payload", "true".to_string()),
         ]);
 
         let builder = AmazonS3Builder::new()
@@ -1166,6 +1193,7 @@ mod tests {
         assert_eq!(builder.region.unwrap(), aws_default_region);
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
+        assert!(builder.unsigned_payload);
     }
 
     #[test]
@@ -1181,6 +1209,7 @@ mod tests {
             (AmazonS3ConfigKey::DefaultRegion, aws_default_region.clone()),
             (AmazonS3ConfigKey::Endpoint, aws_endpoint.clone()),
             (AmazonS3ConfigKey::Token, aws_session_token.clone()),
+            (AmazonS3ConfigKey::UnsignedPayload, "true".to_string()),
         ]);
 
         let builder = AmazonS3Builder::new()
@@ -1193,6 +1222,7 @@ mod tests {
         assert_eq!(builder.region.unwrap(), aws_default_region);
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
+        assert!(builder.unsigned_payload);
     }
 
     #[test]
@@ -1220,6 +1250,12 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
+
+        // run integration test with unsigned payload enabled
+        let config = maybe_skip_integration!().with_unsigned_payload(true);
+        let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
+        let integration = config.build().unwrap();
+        put_get_delete_list_opts(&integration, is_local).await;
     }
 
     #[tokio::test]

@@ -29,8 +29,8 @@
 
 set -e
 
-SINCE_TAG="object_store_0.5.3"
-FUTURE_RELEASE="object_store_0.5.4"
+SINCE_TAG="object_store_0.5.4"
+FUTURE_RELEASE="object_store_0.5.5"
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"

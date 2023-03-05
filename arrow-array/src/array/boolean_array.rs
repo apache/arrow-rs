@@ -105,9 +105,9 @@ impl BooleanArray {
 
     /// Returns the number of non null, true values within this array
     pub fn true_count(&self) -> usize {
-        match self.data.null_buffer() {
+        match self.data.nulls() {
             Some(nulls) => {
-                let null_chunks = nulls.bit_chunks(self.offset(), self.len());
+                let null_chunks = nulls.inner().bit_chunks();
                 let value_chunks = self.values().bit_chunks(self.offset(), self.len());
                 null_chunks
                     .iter()
@@ -187,11 +187,7 @@ impl BooleanArray {
     where
         F: FnMut(T::Item) -> bool,
     {
-        let null_bit_buffer = left
-            .data()
-            .null_buffer()
-            .map(|b| b.bit_slice(left.offset(), left.len()));
-
+        let null_bit_buffer = left.data().nulls().map(|x| x.inner().sliced());
         let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
             // SAFETY: i in range 0..len
             op(left.value_unchecked(i))
@@ -459,7 +455,7 @@ mod tests {
         assert_eq!(4, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
-        assert!(arr.data().null_buffer().is_none());
+        assert!(arr.data().nulls().is_none());
         for i in 0..3 {
             assert!(!arr.is_null(i));
             assert!(arr.is_valid(i));
@@ -474,7 +470,7 @@ mod tests {
         assert_eq!(4, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(2, arr.null_count());
-        assert!(arr.data().null_buffer().is_some());
+        assert!(arr.data().nulls().is_some());
 
         assert!(arr.is_valid(0));
         assert!(arr.is_null(1));

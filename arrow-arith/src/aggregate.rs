@@ -117,8 +117,8 @@ where
             .map(|i| unsafe { array.value_unchecked(i) })
             .reduce(|acc, item| if cmp(&acc, &item) { item } else { acc })
     } else {
-        let null_buffer = array.data_ref().null_buffer().unwrap();
-        let iter = BitIndexIterator::new(null_buffer, array.offset(), array.len());
+        let nulls = array.data().nulls().unwrap();
+        let iter = BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len());
         unsafe {
             let idx = iter.reduce(|acc_idx, idx| {
                 let acc = array.value_unchecked(acc_idx);
@@ -288,7 +288,7 @@ where
 
     let data: &[T::Native] = array.values();
 
-    match array.data().null_buffer() {
+    match array.data().nulls() {
         None => {
             let sum = data.iter().fold(T::default_value(), |accumulator, value| {
                 accumulator.add_wrapping(*value)
@@ -296,12 +296,12 @@ where
 
             Some(sum)
         }
-        Some(buffer) => {
+        Some(nulls) => {
             let mut sum = T::default_value();
             let data_chunks = data.chunks_exact(64);
             let remainder = data_chunks.remainder();
 
-            let bit_chunks = buffer.bit_chunks(array.offset(), array.len());
+            let bit_chunks = nulls.inner().bit_chunks();
             data_chunks
                 .zip(bit_chunks.iter())
                 .for_each(|(chunk, mask)| {
@@ -347,7 +347,7 @@ where
 
     let data: &[T::Native] = array.values();
 
-    match array.data().null_buffer() {
+    match array.data().nulls() {
         None => {
             let sum = data
                 .iter()
@@ -357,14 +357,14 @@ where
 
             Ok(Some(sum))
         }
-        Some(buffer) => {
+        Some(nulls) => {
             let mut sum = T::default_value();
 
             try_for_each_valid_idx(
-                array.len(),
-                array.offset(),
-                null_count,
-                Some(buffer.as_slice()),
+                nulls.len(),
+                nulls.offset(),
+                nulls.null_count(),
+                Some(nulls.validity()),
                 |idx| {
                     unsafe { sum = sum.add_checked(array.value_unchecked(idx))? };
                     Ok::<_, ArrowError>(())
@@ -665,7 +665,7 @@ mod simd {
         let mut chunk_acc = A::init_accumulator_chunk();
         let mut rem_acc = A::init_accumulator_scalar();
 
-        match array.data().null_buffer() {
+        match array.data().nulls() {
             None => {
                 let data_chunks = data.chunks_exact(64);
                 let remainder = data_chunks.remainder();
@@ -681,12 +681,12 @@ mod simd {
                     A::accumulate_scalar(&mut rem_acc, *value);
                 });
             }
-            Some(buffer) => {
+            Some(nulls) => {
                 // process data in chunks of 64 elements since we also get 64 bits of validity information at a time
                 let data_chunks = data.chunks_exact(64);
                 let remainder = data_chunks.remainder();
 
-                let bit_chunks = buffer.bit_chunks(array.offset(), array.len());
+                let bit_chunks = nulls.inner().bit_chunks();
                 let remainder_bits = bit_chunks.remainder_bits();
 
                 data_chunks.zip(bit_chunks).for_each(|(chunk, mut mask)| {

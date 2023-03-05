@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::StringDictionaryBuilder;
+use crate::builder::{PrimitiveDictionaryBuilder, StringDictionaryBuilder};
+use crate::cast::as_primitive_array;
 use crate::iterator::ArrayIter;
 use crate::types::*;
 use crate::{
@@ -249,23 +250,15 @@ impl<K: ArrowPrimitiveType> DictionaryArray<K> {
 
         // Note: This use the ArrayDataBuilder::build_unchecked and afterwards
         // call the new function which only validates that the keys are in bounds.
-        let mut data = ArrayData::builder(dict_data_type)
-            .len(keys.len())
-            .add_buffer(keys.data().buffers()[0].clone())
+        let data = keys.data().clone();
+        let builder = data
+            .into_builder()
+            .data_type(dict_data_type)
             .add_child_data(values.data().clone());
-
-        match keys.data().null_buffer() {
-            Some(buffer) if keys.data().null_count() > 0 => {
-                data = data
-                    .null_bit_buffer(Some(buffer.clone()))
-                    .null_count(keys.data().null_count());
-            }
-            _ => data = data.null_count(0),
-        }
 
         // Safety: `validate` ensures key type is correct, and
         //  `validate_values` ensures all offsets are within range
-        let array = unsafe { data.build_unchecked() };
+        let array = unsafe { builder.build_unchecked() };
 
         array.validate()?;
         array.validate_values()?;
@@ -402,6 +395,44 @@ impl<K: ArrowPrimitiveType> DictionaryArray<K> {
         // Offsets were valid before and verified length is greater than or equal
         Self::from(unsafe { builder.build_unchecked() })
     }
+
+    /// Returns `PrimitiveDictionaryBuilder` of this dictionary array for mutating
+    /// its keys and values if the underlying data buffer is not shared by others.
+    pub fn into_primitive_dict_builder<V>(
+        self,
+    ) -> Result<PrimitiveDictionaryBuilder<K, V>, Self>
+    where
+        V: ArrowPrimitiveType,
+    {
+        if !self.value_type().is_primitive() {
+            return Err(self);
+        }
+
+        let key_array = as_primitive_array::<K>(self.keys()).clone();
+        let value_array = as_primitive_array::<V>(self.values()).clone();
+
+        drop(self.data);
+        drop(self.keys);
+        drop(self.values);
+
+        let key_builder = key_array.into_builder();
+        let value_builder = value_array.into_builder();
+
+        match (key_builder, value_builder) {
+            (Ok(key_builder), Ok(value_builder)) => Ok(unsafe {
+                PrimitiveDictionaryBuilder::new_from_builders(key_builder, value_builder)
+            }),
+            (Err(key_array), Ok(mut value_builder)) => {
+                Err(Self::try_new(&key_array, &value_builder.finish()).unwrap())
+            }
+            (Ok(mut key_builder), Err(value_array)) => {
+                Err(Self::try_new(&key_builder.finish(), &value_array).unwrap())
+            }
+            (Err(key_array), Err(value_array)) => {
+                Err(Self::try_new(&key_array, &value_array).unwrap())
+            }
+        }
+    }
 }
 
 /// Constructs a `DictionaryArray` from an array data reference.
@@ -430,16 +461,13 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for DictionaryArray<T> {
             // create a zero-copy of the keys' data
             // SAFETY:
             // ArrayData is valid and verified type above
+
             let keys = PrimitiveArray::<T>::from(unsafe {
-                ArrayData::new_unchecked(
-                    T::DATA_TYPE,
-                    data.len(),
-                    Some(data.null_count()),
-                    data.null_buffer().cloned(),
-                    data.offset(),
-                    data.buffers().to_vec(),
-                    vec![],
-                )
+                data.clone()
+                    .into_builder()
+                    .data_type(T::DATA_TYPE)
+                    .child_data(vec![])
+                    .build_unchecked()
             });
             let values = make_array(data.child_data()[0].clone());
             Self {
@@ -655,11 +683,13 @@ where
 mod tests {
     use super::*;
     use crate::builder::PrimitiveDictionaryBuilder;
+    use crate::cast::as_dictionary_array;
     use crate::types::{
         Float32Type, Int16Type, Int32Type, Int8Type, UInt32Type, UInt8Type,
     };
     use crate::{Float32Array, Int16Array, Int32Array, Int8Array};
     use arrow_buffer::{Buffer, ToByteSlice};
+    use std::sync::Arc;
 
     #[test]
     fn test_dictionary_array() {
@@ -940,5 +970,59 @@ mod tests {
     fn test_from_array_data_validation() {
         let a = DictionaryArray::<Int32Type>::from_iter(["32"]);
         let _ = DictionaryArray::<Int64Type>::from(a.into_data());
+    }
+
+    #[test]
+    fn test_into_primitive_dict_builder() {
+        let values = Int32Array::from_iter_values([10_i32, 12, 15]);
+        let keys = Int8Array::from_iter_values([1_i8, 0, 2, 0]);
+
+        let dict_array = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let boxed: ArrayRef = Arc::new(dict_array);
+        let col: DictionaryArray<Int8Type> = as_dictionary_array(&boxed).clone();
+
+        drop(boxed);
+        drop(keys);
+        drop(values);
+
+        let mut builder = col.into_primitive_dict_builder::<Int32Type>().unwrap();
+
+        let slice = builder.values_slice_mut();
+        assert_eq!(slice, &[10, 12, 15]);
+
+        slice[0] = 4;
+        slice[1] = 2;
+        slice[2] = 1;
+
+        let values = Int32Array::from_iter_values([4_i32, 2, 1]);
+        let keys = Int8Array::from_iter_values([1_i8, 0, 2, 0]);
+
+        let expected = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let new_array = builder.finish();
+        assert_eq!(expected, new_array);
+    }
+
+    #[test]
+    fn test_into_primitive_dict_builder_cloned_array() {
+        let values = Int32Array::from_iter_values([10_i32, 12, 15]);
+        let keys = Int8Array::from_iter_values([1_i8, 0, 2, 0]);
+
+        let dict_array = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let boxed: ArrayRef = Arc::new(dict_array);
+
+        let col: DictionaryArray<Int8Type> =
+            DictionaryArray::<Int8Type>::from(boxed.data().clone());
+        let err = col.into_primitive_dict_builder::<Int32Type>();
+
+        let returned = err.unwrap_err();
+
+        let values = Int32Array::from_iter_values([10_i32, 12, 15]);
+        let keys = Int8Array::from_iter_values([1_i8, 0, 2, 0]);
+
+        let expected = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        assert_eq!(expected, returned);
     }
 }

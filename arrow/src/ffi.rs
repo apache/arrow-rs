@@ -1158,7 +1158,7 @@ mod tests {
         // Check type ids
         assert_eq!(
             Buffer::from_slice_ref(&expected_type_ids),
-            array.data().buffers()[0]
+            *array.data().buffers()[0]
         );
         for (i, id) in expected_type_ids.iter().enumerate() {
             assert_eq!(id, &array.type_id(i));
@@ -1222,7 +1222,7 @@ mod tests {
         // Check type ids
         assert_eq!(
             Buffer::from_slice_ref(&expected_type_ids),
-            array.data().buffers()[0]
+            *array.data().buffers()[0]
         );
         for (i, id) in expected_type_ids.iter().enumerate() {
             assert_eq!(id, &array.type_id(i));

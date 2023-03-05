@@ -2281,7 +2281,7 @@ mod tests {
                 .unwrap();
             // test that the list offsets are correct
             assert_eq!(
-                cc.data().buffers()[0],
+                *cc.data().buffers()[0],
                 Buffer::from_slice_ref([0i32, 2, 2, 4, 5])
             );
             let cc = as_boolean_array(cc.values());
@@ -2301,7 +2301,7 @@ mod tests {
                 .unwrap();
             // test that the list offsets are correct
             assert_eq!(
-                dd.data().buffers()[0],
+                *dd.data().buffers()[0],
                 Buffer::from_slice_ref([0i32, 1, 1, 2, 6])
             );
 
@@ -2445,11 +2445,11 @@ mod tests {
         let read: &ListArray = read.as_any().downcast_ref::<ListArray>().unwrap();
         let expected = expected.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(
-            read.data().buffers()[0],
+            *read.data().buffers()[0],
             Buffer::from_slice_ref([0i32, 2, 3, 6, 6, 6, 7])
         );
         // compare list null buffers
-        assert_eq!(read.data().null_buffer(), expected.data().null_buffer());
+        assert_eq!(read.data().nulls(), expected.data().nulls());
         // build struct from list
         let struct_array = as_struct_array(read.values());
         let expected_struct_array = as_struct_array(expected.values());
@@ -2460,8 +2460,8 @@ mod tests {
         assert_eq!(1, expected_struct_array.null_count());
         // test struct's nulls
         assert_eq!(
-            struct_array.data().null_buffer(),
-            expected_struct_array.data().null_buffer()
+            struct_array.data().nulls(),
+            expected_struct_array.data().nulls()
         );
         // test struct's fields
         let read_b = struct_array.column(0);

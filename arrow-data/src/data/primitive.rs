@@ -43,13 +43,13 @@ mod private {
 }
 
 pub trait Primitive: private::PrimitiveSealed + ArrowNativeType {
-    const VARIANT: PrimitiveType;
+    const TYPE: PrimitiveType;
 }
 
 macro_rules! primitive {
     ($t:ty,$v:ident) => {
         impl Primitive for $t {
-            const VARIANT: PrimitiveType = PrimitiveType::$v;
+            const TYPE: PrimitiveType = PrimitiveType::$v;
         }
         impl private::PrimitiveSealed for $t {
             fn downcast_ref(
@@ -118,18 +118,18 @@ impl ArrayDataPrimitive {
     }
 }
 
-/// ArrayData for arrays of [`Primitive`]
+impl<P: Primitive> From<PrimitiveArrayData<P>> for ArrayDataPrimitive {
+    fn from(value: PrimitiveArrayData<P>) -> Self {
+        P::upcast(value)
+    }
+}
+
+/// ArrayData for [fixed size arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout) of [`Primitive`]
 #[derive(Debug, Clone)]
 pub struct PrimitiveArrayData<T: Primitive> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
     values: ScalarBuffer<T>,
-}
-
-impl<P: Primitive> From<PrimitiveArrayData<P>> for ArrayDataPrimitive {
-    fn from(value: PrimitiveArrayData<P>) -> Self {
-        P::upcast(value)
-    }
 }
 
 impl<T: Primitive> PrimitiveArrayData<T> {
@@ -147,10 +147,10 @@ impl<T: Primitive> PrimitiveArrayData<T> {
     ) -> Self {
         let physical = PhysicalType::from(&data_type);
         assert!(
-            matches!(physical, PhysicalType::Primitive(p) if p == T::VARIANT),
+            matches!(physical, PhysicalType::Primitive(p) if p == T::TYPE),
             "Illegal physical type for PrimitiveArrayData of datatype {:?}, expected {:?} got {:?}",
             data_type,
-            T::VARIANT,
+            T::TYPE,
             physical
         );
 

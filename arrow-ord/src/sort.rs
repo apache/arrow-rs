@@ -675,7 +675,6 @@ fn sort_run_downcasted<R: RunEndIndexType>(
         // The function builds a valid run_ends array and hence need not be validated.
         ArrayDataBuilder::new(run_array.run_ends().data_type().clone())
             .len(new_physical_len)
-            .null_count(0)
             .add_buffer(new_run_ends_builder.finish())
             .build_unchecked()
     };

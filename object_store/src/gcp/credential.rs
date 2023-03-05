@@ -62,8 +62,8 @@ pub enum Error {
     #[snafu(display("Error getting token response body: {}", source))]
     TokenResponseBody { source: reqwest::Error },
 
-    #[snafu(display("A configuration file was passed in but was not used."))]
-    UnusedConfigurationFile,
+    #[snafu(display("Unsupported ApplicationCredentials type: {}", type_))]
+    UnsupportedCredentialsType { type_: String },
 
     #[snafu(display("Error creating client: {}", source))]
     Client { source: crate::Error },
@@ -399,36 +399,60 @@ impl TokenProvider for InstanceCredentialProvider {
     }
 }
 
+/// ApplicationDefaultCredentials
+/// <https://google.aip.dev/auth/4110>
+#[derive(Debug)]
+pub enum ApplicationDefaultCredentials {
+    /// <https://google.aip.dev/auth/4113>
+    AuthorizedUser {
+        client_id: String,
+        client_secret: String,
+        refresh_token: String,
+    },
+}
+
+impl ApplicationDefaultCredentials {
+    pub fn new(path: Option<&str>) -> Result<Option<Self>, Error> {
+        let file = match ApplicationDefaultCredentialsFile::read(path)? {
+            Some(f) => f,
+            None => return Ok(None),
+        };
+
+        Ok(Some(match file.type_.as_str() {
+            "authorized_user" => Self::AuthorizedUser {
+                client_id: file.client_id,
+                client_secret: file.client_secret,
+                refresh_token: file.refresh_token,
+            },
+            type_ => return UnsupportedCredentialsTypeSnafu { type_ }.fail(),
+        }))
+    }
+}
+
 /// A deserialized `application_default_credentials.json`-file.
 /// <https://cloud.google.com/docs/authentication/application-default-credentials#personal>
-#[derive(serde::Deserialize, Debug)]
-pub struct ApplicationDefaultCredentials {
+#[derive(serde::Deserialize)]
+struct ApplicationDefaultCredentialsFile {
+    #[serde(default)]
     client_id: String,
+    #[serde(default)]
     client_secret: String,
+    #[serde(default)]
     refresh_token: String,
     #[serde(rename = "type")]
     type_: String,
 }
 
-impl ApplicationDefaultCredentials {
-    const DEFAULT_TOKEN_GCP_URI: &'static str =
-        "https://accounts.google.com/o/oauth2/token";
+impl ApplicationDefaultCredentialsFile {
     const CREDENTIALS_PATH: &'static str =
         ".config/gcloud/application_default_credentials.json";
-    const EXPECTED_TYPE: &str = "authorized_user";
 
     // Create a new application default credential in the following situations:
     //  1. a file is passed in and the type matches.
     //  2. without argument if the well-known configuration file is present.
-    pub fn new(path: Option<&str>) -> Result<Option<Self>, Error> {
+    fn read(path: Option<&str>) -> Result<Option<Self>, Error> {
         if let Some(path) = path {
-            if let Ok(credentials) = read_credentials_file::<Self>(path) {
-                if credentials.type_ == Self::EXPECTED_TYPE {
-                    return Ok(Some(credentials));
-                }
-            }
-            // Return an error if the path has not been used.
-            return Err(Error::UnusedConfigurationFile);
+            return read_credentials_file::<Self>(path).map(Some);
         }
         if let Some(home) = env::var_os("HOME") {
             let path = Path::new(&home).join(Self::CREDENTIALS_PATH);
@@ -442,6 +466,8 @@ impl ApplicationDefaultCredentials {
     }
 }
 
+const DEFAULT_TOKEN_GCP_URI: &str = "https://accounts.google.com/o/oauth2/token";
+
 #[async_trait]
 impl TokenProvider for ApplicationDefaultCredentials {
     async fn fetch_token(
@@ -449,16 +475,24 @@ impl TokenProvider for ApplicationDefaultCredentials {
         client: &Client,
         retry: &RetryConfig,
     ) -> Result<TemporaryToken<String>, Error> {
-        let body = [
-            ("grant_type", "refresh_token"),
-            ("client_id", &self.client_id),
-            ("client_secret", &self.client_secret),
-            ("refresh_token", &self.refresh_token),
-        ];
+        let builder = client.request(Method::POST, DEFAULT_TOKEN_GCP_URI);
+        let builder = match self {
+            Self::AuthorizedUser {
+                client_id,
+                client_secret,
+                refresh_token,
+            } => {
+                let body = [
+                    ("grant_type", "refresh_token"),
+                    ("client_id", client_id),
+                    ("client_secret", client_secret),
+                    ("refresh_token", refresh_token),
+                ];
+                builder.form(&body)
+            }
+        };
 
-        let response = client
-            .request(Method::POST, Self::DEFAULT_TOKEN_GCP_URI)
-            .form(&body)
+        let response = builder
             .send_retry(retry)
             .await
             .context(TokenRequestSnafu)?

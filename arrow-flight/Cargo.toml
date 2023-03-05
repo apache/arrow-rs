@@ -64,4 +64,4 @@ tonic-build = { version = "=0.8.4", default-features = false, features = ["trans
 
 [[example]]
 name = "flight_sql_server"
-required-features = ["flight-sql-experimental"]
+required-features = ["flight-sql-experimental", "tls"]

@@ -39,6 +39,7 @@ type StdError = Box<dyn std::error::Error + Send + Sync>;
 /// SHA256 hash of empty string
 static EMPTY_SHA256_HASH: &str =
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+static UNSIGNED_PAYLOAD_LITERAL: &str = "UNSIGNED-PAYLOAD";
 
 #[derive(Debug)]
 pub struct AwsCredential {
@@ -72,6 +73,7 @@ struct RequestSigner<'a> {
     credential: &'a AwsCredential,
     service: &'a str,
     region: &'a str,
+    sign_payload: bool,
 }
 
 const DATE_HEADER: &str = "x-amz-date";
@@ -98,9 +100,13 @@ impl<'a> RequestSigner<'a> {
         let date_val = HeaderValue::from_str(&date_str).unwrap();
         request.headers_mut().insert(DATE_HEADER, date_val);
 
-        let digest = match request.body() {
-            None => EMPTY_SHA256_HASH.to_string(),
-            Some(body) => hex_digest(body.as_bytes().unwrap()),
+        let digest = if self.sign_payload {
+            match request.body() {
+                None => EMPTY_SHA256_HASH.to_string(),
+                Some(body) => hex_digest(body.as_bytes().unwrap()),
+            }
+        } else {
+            UNSIGNED_PAYLOAD_LITERAL.to_string()
         };
 
         let header_digest = HeaderValue::from_str(&digest).unwrap();
@@ -158,6 +164,7 @@ pub trait CredentialExt {
         credential: &AwsCredential,
         region: &str,
         service: &str,
+        sign_payload: bool,
     ) -> Self;
 }
 
@@ -167,6 +174,7 @@ impl CredentialExt for RequestBuilder {
         credential: &AwsCredential,
         region: &str,
         service: &str,
+        sign_payload: bool,
     ) -> Self {
         // Hack around lack of access to underlying request
         // https://github.com/seanmonstar/reqwest/issues/1212
@@ -182,6 +190,7 @@ impl CredentialExt for RequestBuilder {
             credential,
             service,
             region,
+            sign_payload,
         };
 
         signer.sign(&mut request);
@@ -585,7 +594,7 @@ mod tests {
 
     // Test generated using https://docs.aws.amazon.com/general/latest/gr/sigv4-signed-request-examples.html
     #[test]
-    fn test_sign() {
+    fn test_sign_with_signed_payload() {
         let client = Client::new();
 
         // Test credentials from https://docs.aws.amazon.com/AmazonS3/latest/userguide/RESTAuthentication.html
@@ -615,10 +624,49 @@ mod tests {
             credential: &credential,
             service: "ec2",
             region: "us-east-1",
+            sign_payload: true,
         };
 
         signer.sign(&mut request);
         assert_eq!(request.headers().get(AUTH_HEADER).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=a3c787a7ed37f7fdfbfd2d7056a3d7c9d85e6d52a2bfbec73793c0be6e7862d4")
+    }
+
+    #[test]
+    fn test_sign_with_unsigned_payload() {
+        let client = Client::new();
+
+        // Test credentials from https://docs.aws.amazon.com/AmazonS3/latest/userguide/RESTAuthentication.html
+        let credential = AwsCredential {
+            key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
+            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
+            token: None,
+        };
+
+        // method = 'GET'
+        // service = 'ec2'
+        // host = 'ec2.amazonaws.com'
+        // region = 'us-east-1'
+        // endpoint = 'https://ec2.amazonaws.com'
+        // request_parameters = ''
+        let date = DateTime::parse_from_rfc3339("2022-08-06T18:01:34Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let mut request = client
+            .request(Method::GET, "https://ec2.amazon.com/")
+            .build()
+            .unwrap();
+
+        let signer = RequestSigner {
+            date,
+            credential: &credential,
+            service: "ec2",
+            region: "us-east-1",
+            sign_payload: false,
+        };
+
+        signer.sign(&mut request);
+        assert_eq!(request.headers().get(AUTH_HEADER).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=653c3d8ea261fd826207df58bc2bb69fbb5003e9eb3c0ef06e4a51f2a81d8699")
     }
 
     #[test]
@@ -651,6 +699,7 @@ mod tests {
             credential: &credential,
             service: "s3",
             region: "us-east-1",
+            sign_payload: true,
         };
 
         signer.sign(&mut request);

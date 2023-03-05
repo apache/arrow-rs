@@ -53,13 +53,13 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     //              OR left null bitmap & !(right_values & right_bitmap)
 
     // Compute right_values & right_bitmap
-    let (right, r_offset) = match right_data.null_buffer() {
-        Some(buffer) => (
+    let (right, r_offset) = match right_data.nulls() {
+        Some(nulls) => (
             buffer_bin_and(
-                &right_data.buffers()[0],
+                right_data.buffers()[0],
                 right_data.offset(),
-                buffer,
-                right_data.offset(),
+                nulls.buffer(),
+                nulls.offset(),
                 len,
             ),
             0,
@@ -69,15 +69,21 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
 
     // Compute left null bitmap & !right
 
-    let (combined, null_count) = match left_data.null_buffer() {
+    let (combined, null_count) = match left_data.nulls() {
         Some(left) => {
             let mut valid_count = 0;
-            let b =
-                bitwise_bin_op_helper(left, l_offset, &right, r_offset, len, |l, r| {
+            let b = bitwise_bin_op_helper(
+                left.buffer(),
+                left.offset(),
+                &right,
+                r_offset,
+                len,
+                |l, r| {
                     let t = l & !r;
                     valid_count += t.count_ones() as usize;
                     t
-                });
+                },
+            );
             (b, len - valid_count)
         }
         None => {

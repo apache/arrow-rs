@@ -20,11 +20,7 @@ use arrow_array::ArrowPrimitiveType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;
 
-/// Accepts a string in RFC3339 / ISO8601 standard format and some
-/// variants and converts it to a nanosecond precision timestamp.
-///
-/// Implements the `to_timestamp` function to convert a string to a
-/// timestamp, following the model of spark SQL’s to_`timestamp`.
+/// Accepts a string and parses it relative to the provided `timezone`
 ///
 /// In addition to RFC3339 / ISO8601 standard timestamps, it also
 /// accepts strings that use a space ` ` to separate the date and time
@@ -38,36 +34,6 @@ use chrono::prelude::*;
 /// * `1997-01-31 09:26:56.123`         # close to RCF3339 but uses a space and no timezone offset
 /// * `1997-01-31 09:26:56`             # close to RCF3339, no fractional seconds
 /// * `1997-01-31`                      # close to RCF3339, only date no time
-//
-/// Internally, this function uses the `chrono` library for the
-/// datetime parsing
-///
-/// We hope to extend this function in the future with a second
-/// parameter to specifying the format string.
-///
-/// ## Timestamp Precision
-///
-/// Function uses the maximum precision timestamps supported by
-/// Arrow (nanoseconds stored as a 64-bit integer) timestamps. This
-/// means the range of dates that timestamps can represent is ~1677 AD
-/// to 2262 AM
-///
-///
-/// ## Timezone / Offset Handling
-///
-/// Numerical values of timestamps are stored compared to offset UTC.
-///
-/// This function interprets strings without an explicit time zone as
-/// timestamps with offsets of the local time on the machine
-///
-/// For example, `1997-01-31 09:26:56.123Z` is interpreted as UTC, as
-/// it has an explicit timezone specifier (“Z” for Zulu/UTC)
-///
-/// `1997-01-31T09:26:56.123` is interpreted as a local timestamp in
-/// the timezone of the machine. For example, if
-/// the system timezone is set to Americas/New_York (UTC-5) the
-/// timestamp will be interpreted as though it were
-/// `1997-01-31T09:26:56.123-05:00`
 ///
 /// Some formats that supported by PostgresSql <https://www.postgresql.org/docs/current/datatype-datetime.html#DATATYPE-DATETIME-TIME-TABLE>
 /// still not supported by chrono, like
@@ -76,12 +42,14 @@ use chrono::prelude::*;
 ///     "2023-01-01 040506 +07:30:00",
 ///     "2023-01-01 04:05:06.789 PST",
 ///     "2023-01-01 04:05:06.789 -08",
-#[inline]
-pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
+pub fn string_to_datetime<T: TimeZone>(
+    timezone: &T,
+    s: &str,
+) -> Result<DateTime<T>, ArrowError> {
     // Fast path:  RFC3339 timestamp (with a T)
     // Example: 2020-09-08T13:42:29.190855Z
     if let Ok(ts) = DateTime::parse_from_rfc3339(s) {
-        return Ok(ts.timestamp_nanos());
+        return Ok(ts.with_timezone(timezone));
     }
 
     // Implement quasi-RFC3339 support by trying to parse the
@@ -96,14 +64,14 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
 
     for f in supported_formats.iter() {
         if let Ok(ts) = DateTime::parse_from_str(s, f) {
-            return to_timestamp_nanos(ts.naive_utc());
+            return Ok(ts.with_timezone(timezone));
         }
     }
 
     // with an explicit Z, using ' ' as a separator
     // Example: 2020-09-08 13:42:29Z
     if let Ok(ts) = Utc.datetime_from_str(s, "%Y-%m-%d %H:%M:%S%.fZ") {
-        return to_timestamp_nanos(ts.naive_utc());
+        return Ok(ts.with_timezone(timezone));
     }
 
     // Support timestamps without an explicit timezone offset, again
@@ -112,34 +80,44 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     // without a timezone specifier as a local time, using T as a separator
     // Example: 2020-09-08T13:42:29.190855
     if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
-        return to_timestamp_nanos(ts);
+        if let Some(offset) = timezone.offset_from_local_datetime(&ts).single() {
+            return Ok(DateTime::from_local(ts, offset));
+        }
     }
 
     // without a timezone specifier as a local time, using T as a
     // separator, no fractional seconds
     // Example: 2020-09-08T13:42:29
     if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-        return Ok(ts.timestamp_nanos());
+        if let Some(offset) = timezone.offset_from_local_datetime(&ts).single() {
+            return Ok(DateTime::from_local(ts, offset));
+        }
     }
 
     // without a timezone specifier as a local time, using ' ' as a separator
     // Example: 2020-09-08 13:42:29.190855
     if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f") {
-        return to_timestamp_nanos(ts);
+        if let Some(offset) = timezone.offset_from_local_datetime(&ts).single() {
+            return Ok(DateTime::from_local(ts, offset));
+        }
     }
 
     // without a timezone specifier as a local time, using ' ' as a
     // separator, no fractional seconds
     // Example: 2020-09-08 13:42:29
     if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-        return Ok(ts.timestamp_nanos());
+        if let Some(offset) = timezone.offset_from_local_datetime(&ts).single() {
+            return Ok(DateTime::from_local(ts, offset));
+        }
     }
 
     // without a timezone specifier as a local time, only date
     // Example: 2020-09-08
     if let Ok(dt) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
         if let Some(ts) = dt.and_hms_opt(0, 0, 0) {
-            return Ok(ts.timestamp_nanos());
+            if let Some(offset) = timezone.offset_from_local_datetime(&ts).single() {
+                return Ok(DateTime::from_local(ts, offset));
+            }
         }
     }
 
@@ -151,6 +129,42 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     Err(ArrowError::CastError(format!(
         "Error parsing '{s}' as timestamp"
     )))
+}
+
+/// Accepts a string in RFC3339 / ISO8601 standard format and some
+/// variants and converts it to a nanosecond precision timestamp.
+///
+/// See [`string_to_datetime`] for the full set of supported formats
+///
+/// Implements the `to_timestamp` function to convert a string to a
+/// timestamp, following the model of spark SQL’s to_`timestamp`.
+///
+/// Internally, this function uses the `chrono` library for the
+/// datetime parsing
+///
+/// We hope to extend this function in the future with a second
+/// parameter to specifying the format string.
+///
+/// ## Timestamp Precision
+///
+/// Function uses the maximum precision timestamps supported by
+/// Arrow (nanoseconds stored as a 64-bit integer) timestamps. This
+/// means the range of dates that timestamps can represent is ~1677 AD
+/// to 2262 AM
+///
+/// ## Timezone / Offset Handling
+///
+/// Numerical values of timestamps are stored compared to offset UTC.
+///
+/// This function interprets string without an explicit time zone as timestamps
+/// relative to UTC, see [`string_to_datetime`] for alternative semantics
+///
+/// For example, both `1997-01-31 09:26:56.123Z`, `1997-01-31T09:26:56.123`,
+/// and `1997-01-31T14:26:56.123-05:00` will be parsed as the same value
+///
+#[inline]
+pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
+    to_timestamp_nanos(string_to_datetime(&Utc, s)?.naive_utc())
 }
 
 /// Defensive check to prevent chrono-rs panics when nanosecond conversion happens on non-supported dates
@@ -448,6 +462,7 @@ impl Parser for Date64Type {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::timezone::Tz;
 
     #[test]
     fn string_to_timestamp_timezone() {
@@ -614,6 +629,34 @@ mod tests {
             naive_datetime.timestamp_nanos(),
             parse_timestamp("2020-09-08 13:42:29").unwrap()
         );
+
+        let tz: Tz = "+02:00".parse().unwrap();
+        let date = string_to_datetime(&tz, "2020-09-08 13:42:29").unwrap();
+        let utc = date.naive_utc().to_string();
+        assert_eq!(utc, "2020-09-08 11:42:29");
+        let local = date.naive_local().to_string();
+        assert_eq!(local, "2020-09-08 13:42:29");
+
+        let date = string_to_datetime(&tz, "2020-09-08 13:42:29Z").unwrap();
+        let utc = date.naive_utc().to_string();
+        assert_eq!(utc, "2020-09-08 13:42:29");
+        let local = date.naive_local().to_string();
+        assert_eq!(local, "2020-09-08 15:42:29");
+
+        let dt =
+            NaiveDateTime::parse_from_str("2020-09-08T13:42:29Z", "%Y-%m-%dT%H:%M:%SZ")
+                .unwrap();
+        let local: Tz = "+08:00".parse().unwrap();
+
+        // Parsed as offset from UTC
+        let date = string_to_datetime(&local, "2020-09-08T13:42:29Z").unwrap();
+        assert_eq!(dt, date.naive_utc());
+        assert_ne!(dt, date.naive_local());
+
+        // Parsed as offset from local
+        let date = string_to_datetime(&local, "2020-09-08 13:42:29").unwrap();
+        assert_eq!(dt, date.naive_local());
+        assert_ne!(dt, date.naive_utc());
     }
 
     #[test]

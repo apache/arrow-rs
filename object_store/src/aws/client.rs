@@ -204,6 +204,7 @@ pub struct S3Config {
     pub credentials: Box<dyn CredentialProvider>,
     pub retry_config: RetryConfig,
     pub client_options: ClientOptions,
+    pub sign_payload: bool,
 }
 
 impl S3Config {
@@ -256,7 +257,12 @@ impl S3Client {
         }
 
         let response = builder
-            .with_aws_sigv4(credential.as_ref(), &self.config.region, "s3")
+            .with_aws_sigv4(
+                credential.as_ref(),
+                &self.config.region,
+                "s3",
+                self.config.sign_payload,
+            )
             .send_retry(&self.config.retry_config)
             .await
             .context(GetRequestSnafu {
@@ -287,7 +293,12 @@ impl S3Client {
 
         let response = builder
             .query(query)
-            .with_aws_sigv4(credential.as_ref(), &self.config.region, "s3")
+            .with_aws_sigv4(
+                credential.as_ref(),
+                &self.config.region,
+                "s3",
+                self.config.sign_payload,
+            )
             .send_retry(&self.config.retry_config)
             .await
             .context(PutRequestSnafu {
@@ -309,7 +320,12 @@ impl S3Client {
         self.client
             .request(Method::DELETE, url)
             .query(query)
-            .with_aws_sigv4(credential.as_ref(), &self.config.region, "s3")
+            .with_aws_sigv4(
+                credential.as_ref(),
+                &self.config.region,
+                "s3",
+                self.config.sign_payload,
+            )
             .send_retry(&self.config.retry_config)
             .await
             .context(DeleteRequestSnafu {
@@ -328,7 +344,12 @@ impl S3Client {
         self.client
             .request(Method::PUT, url)
             .header("x-amz-copy-source", source)
-            .with_aws_sigv4(credential.as_ref(), &self.config.region, "s3")
+            .with_aws_sigv4(
+                credential.as_ref(),
+                &self.config.region,
+                "s3",
+                self.config.sign_payload,
+            )
             .send_retry(&self.config.retry_config)
             .await
             .context(CopyRequestSnafu {
@@ -369,7 +390,12 @@ impl S3Client {
             .client
             .request(Method::GET, &url)
             .query(&query)
-            .with_aws_sigv4(credential.as_ref(), &self.config.region, "s3")
+            .with_aws_sigv4(
+                credential.as_ref(),
+                &self.config.region,
+                "s3",
+                self.config.sign_payload,
+            )
             .send_retry(&self.config.retry_config)
             .await
             .context(ListRequestSnafu)?
@@ -407,7 +433,12 @@ impl S3Client {
         let response = self
             .client
             .request(Method::POST, url)
-            .with_aws_sigv4(credential.as_ref(), &self.config.region, "s3")
+            .with_aws_sigv4(
+                credential.as_ref(),
+                &self.config.region,
+                "s3",
+                self.config.sign_payload,
+            )
             .send_retry(&self.config.retry_config)
             .await
             .context(CreateMultipartRequestSnafu)?
@@ -446,7 +477,12 @@ impl S3Client {
             .request(Method::POST, url)
             .query(&[("uploadId", upload_id)])
             .body(body)
-            .with_aws_sigv4(credential.as_ref(), &self.config.region, "s3")
+            .with_aws_sigv4(
+                credential.as_ref(),
+                &self.config.region,
+                "s3",
+                self.config.sign_payload,
+            )
             .send_retry(&self.config.retry_config)
             .await
             .context(CompleteMultipartRequestSnafu)?;
