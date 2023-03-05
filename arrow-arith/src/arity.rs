@@ -60,7 +60,7 @@ where
 pub fn unary_mut<I, F>(
     array: PrimitiveArray<I>,
     op: F,
-) -> std::result::Result<PrimitiveArray<I>, PrimitiveArray<I>>
+) -> Result<PrimitiveArray<I>, PrimitiveArray<I>>
 where
     I: ArrowPrimitiveType,
     F: Fn(I::Native) -> I::Native,
@@ -103,6 +103,20 @@ where
     let dict_values = array.values().as_any().downcast_ref().unwrap();
     let values = unary::<T, F, T>(dict_values, op);
     Ok(Arc::new(array.with_values(&values)))
+}
+
+/// See [`DictionaryArray::unary_mut`]
+#[allow(dead_code)]
+fn unary_dict_mut<K, F, T>(
+    array: DictionaryArray<K>,
+    op: F,
+) -> Result<DictionaryArray<K>, DictionaryArray<K>>
+where
+    K: ArrowNumericType,
+    T: ArrowPrimitiveType,
+    F: Fn(T::Native) -> T::Native,
+{
+    array.unary_mut::<F, T>(op)
 }
 
 /// A helper function that applies a fallible unary function to a dictionary array with primitive value type.
@@ -645,5 +659,24 @@ mod tests {
         })
         .unwrap()
         .expect_err("should got error");
+    }
+
+    #[test]
+    fn test_unary_dict_mut() {
+        let values = Int32Array::from(vec![Some(10), Some(20), None]);
+        let keys = Int8Array::from_iter_values([0, 0, 1, 2]);
+        let dictionary = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        drop(keys);
+        drop(values);
+
+        let updated = unary_dict_mut::<_, _, Int32Type>(dictionary, |x| x + 1).unwrap();
+        let typed = updated.downcast_dict::<Int32Array>().unwrap();
+        assert_eq!(typed.value(0), 11);
+        assert_eq!(typed.value(1), 11);
+        assert_eq!(typed.value(2), 21);
+
+        let values = updated.values();
+        assert!(values.is_null(2));
     }
 }

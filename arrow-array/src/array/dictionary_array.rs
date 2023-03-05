@@ -433,6 +433,44 @@ impl<K: ArrowPrimitiveType> DictionaryArray<K> {
             }
         }
     }
+
+    /// Applies an unary and infallible function to a mutable dictionary array.
+    /// Mutable dictionary array means that the buffers are not shared with other arrays.
+    /// As a result, this mutates the buffers directly without allocating new buffers.
+    ///
+    /// # Implementation
+    ///
+    /// This will apply the function for all dictionary values, including those on null slots.
+    /// This implies that the operation must be infallible for any value of the corresponding type
+    /// or this function may panic.
+    /// # Example
+    /// ```
+    /// use arrow_array::{Array, ArrayAccessor, DictionaryArray, StringArray, types::{Int8Type, Int32Type}};
+    /// use arrow_array::{Int8Array, Int32Array};
+    /// let values = Int32Array::from(vec![Some(10), Some(20), None]);
+    /// let keys = Int8Array::from_iter_values([0, 0, 1, 2]);
+    /// let dictionary = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+    /// drop(keys);
+    /// drop(values);
+    /// let c = dictionary.unary_mut::<_, Int32Type>(|x| x + 1).unwrap();
+    /// let typed = c.downcast_dict::<Int32Array>().unwrap();
+    /// assert_eq!(typed.value(0), 11);
+    /// assert_eq!(typed.value(1), 11);
+    /// assert_eq!(typed.value(2), 21);
+    /// ```
+    pub fn unary_mut<F, V>(self, op: F) -> Result<DictionaryArray<K>, DictionaryArray<K>>
+    where
+        V: ArrowPrimitiveType,
+        F: Fn(V::Native) -> V::Native,
+    {
+        let mut builder: PrimitiveDictionaryBuilder<K, V> =
+            self.into_primitive_dict_builder()?;
+        builder
+            .values_slice_mut()
+            .iter_mut()
+            .for_each(|v| *v = op(*v));
+        Ok(builder.finish())
+    }
 }
 
 /// Constructs a `DictionaryArray` from an array data reference.
