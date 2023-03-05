@@ -609,7 +609,6 @@ pub fn cast_with_options(
 ) -> Result<ArrayRef, ArrowError> {
     use DataType::*;
     let from_type = array.data_type();
-
     // clone array if types are the same
     if from_type == to_type {
         return Ok(make_array(array.data().clone()));
@@ -1147,17 +1146,17 @@ pub fn cast_with_options(
             Time64(TimeUnit::Nanosecond) => {
                 cast_string_to_time64nanosecond::<i32>(array, cast_options)
             }
-            Timestamp(TimeUnit::Second, _) => {
-                cast_string_to_timestamp::<i32, TimestampSecondType>(array, cast_options)
+            Timestamp(TimeUnit::Second, to_tz) => {
+                cast_string_to_timestamp::<i32, TimestampSecondType>(array, to_tz,cast_options)
             }
-            Timestamp(TimeUnit::Millisecond, _) => {
-                cast_string_to_timestamp::<i32, TimestampMillisecondType>(array, cast_options)
+            Timestamp(TimeUnit::Millisecond, to_tz) => {
+                cast_string_to_timestamp::<i32, TimestampMillisecondType>(array, to_tz, cast_options)
             }
-            Timestamp(TimeUnit::Microsecond, _) => {
-                cast_string_to_timestamp::<i32, TimestampMicrosecondType>(array, cast_options)
+            Timestamp(TimeUnit::Microsecond, to_tz) => {
+                cast_string_to_timestamp::<i32, TimestampMicrosecondType>(array, to_tz,cast_options)
             }
-            Timestamp(TimeUnit::Nanosecond, _) => {
-                cast_string_to_timestamp::<i32, TimestampNanosecondType>(array, cast_options)
+            Timestamp(TimeUnit::Nanosecond, to_tz) => {
+                cast_string_to_timestamp::<i32, TimestampNanosecondType>(array, to_tz,cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
@@ -1197,17 +1196,17 @@ pub fn cast_with_options(
             Time64(TimeUnit::Nanosecond) => {
                 cast_string_to_time64nanosecond::<i64>(array, cast_options)
             }
-            Timestamp(TimeUnit::Second, _) => {
-                cast_string_to_timestamp::<i64, TimestampSecondType>(array, cast_options)
+            Timestamp(TimeUnit::Second, to_tz) => {
+                cast_string_to_timestamp::<i64, TimestampSecondType>(array, to_tz,cast_options)
             }
-            Timestamp(TimeUnit::Millisecond, _) => {
-                cast_string_to_timestamp::<i64, TimestampMillisecondType>(array, cast_options)
+            Timestamp(TimeUnit::Millisecond, to_tz) => {
+                cast_string_to_timestamp::<i64, TimestampMillisecondType>(array, to_tz,cast_options)
             }
-            Timestamp(TimeUnit::Microsecond, _) => {
-                cast_string_to_timestamp::<i64, TimestampMicrosecondType>(array, cast_options)
+            Timestamp(TimeUnit::Microsecond, to_tz) => {
+                cast_string_to_timestamp::<i64, TimestampMicrosecondType>(array, to_tz,cast_options)
             }
-            Timestamp(TimeUnit::Nanosecond, _) => {
-                cast_string_to_timestamp::<i64, TimestampNanosecondType>(array, cast_options)
+            Timestamp(TimeUnit::Nanosecond, to_tz) => {
+                cast_string_to_timestamp::<i64, TimestampNanosecondType>(array, to_tz,cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
@@ -2582,6 +2581,7 @@ fn cast_string_to_timestamp<
     TimestampType: ArrowTimestampType<Native = i64>,
 >(
     array: &dyn Array,
+    to_tz: &Option<String>,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let string_array = array
@@ -2604,7 +2604,11 @@ fn cast_string_to_timestamp<
         //     20% performance improvement
         // Soundness:
         //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { PrimitiveArray::<TimestampType>::from_trusted_len_iter(iter) }
+
+        unsafe {
+            PrimitiveArray::<TimestampType>::from_trusted_len_iter(iter)
+                .with_timezone_opt(to_tz.clone())
+        }
     } else {
         let vec = string_array
             .iter()
@@ -2618,7 +2622,10 @@ fn cast_string_to_timestamp<
         //     20% performance improvement
         // Soundness:
         //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { PrimitiveArray::<TimestampType>::from_trusted_len_iter(vec.iter()) }
+        unsafe {
+            PrimitiveArray::<TimestampType>::from_trusted_len_iter(vec.iter())
+                .with_timezone_opt(to_tz.clone())
+        }
     };
 
     Ok(Arc::new(array) as ArrayRef)
@@ -7654,5 +7661,26 @@ mod tests {
         assert!(a.is_null(0));
         assert_eq!(a.value(0), "");
         assert_eq!(a.value(1), "\x00 Foo");
+    }
+
+    #[test]
+    fn test_cast_utf8_to_timestamptz() {
+        let valid = StringArray::from(vec!["2023-01-01"]);
+
+        let array = Arc::new(valid) as ArrayRef;
+        let b = cast(
+            &array,
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_owned())),
+        )
+        .unwrap();
+
+        let expect = DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_owned()));
+
+        assert_eq!(b.data_type(), &expect);
+        let c = b
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .unwrap();
+        assert_eq!(1672531200000000000, c.value(0));
     }
 }
