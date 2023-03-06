@@ -534,7 +534,7 @@ pub fn parse_decimal<T: DecimalType>(
     }
 }
 
-pub fn is_valid_decimal(s: &str) -> bool {
+fn is_valid_decimal(s: &str) -> bool {
     let mut seen_dot = false;
     let mut seen_digit = false;
     let mut seen_sign = false;
