@@ -1840,10 +1840,9 @@ mod tests {
         as_boolean_array, as_dictionary_array, as_primitive_array, as_string_array,
         as_struct_array,
     };
-    use arrow_buffer::ToByteSlice;
+    use arrow_buffer::{ArrowNativeType, ToByteSlice};
     use arrow_schema::DataType::{Dictionary, List};
     use flate2::read::GzDecoder;
-    use num::traits::AsPrimitive;
     use std::fs::File;
     use std::io::Cursor;
 
@@ -3418,11 +3417,7 @@ mod tests {
         assert_eq!(options, cloned);
     }
 
-    pub fn decimal_json_tests<T>(data_type: DataType)
-    where
-        T: ArrowPrimitiveType + std::fmt::Debug + 'static,
-        i64: AsPrimitive<<T as arrow_array::ArrowPrimitiveType>::Native>,
-    {
+    pub fn decimal_json_tests<T: DecimalType>(data_type: DataType) {
         let schema = Schema::new(vec![
             Field::new("a", data_type.clone(), true),
             Field::new("b", data_type.clone(), true),
@@ -3456,65 +3451,30 @@ mod tests {
             .as_any()
             .downcast_ref::<PrimitiveArray<T>>()
             .unwrap();
-        assert_eq!(
-            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(1i64),
-            aa.value(0)
-        );
-        assert_eq!(
-            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(1i64),
-            aa.value(3)
-        );
-        assert_eq!(
-            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(5i64),
-            aa.value(7)
-        );
+        assert_eq!(T::Native::usize_as(1), aa.value(0));
+        assert_eq!(T::Native::usize_as(1), aa.value(3));
+        assert_eq!(T::Native::usize_as(5), aa.value(7));
 
         let bb = batch
             .column(b.0)
             .as_any()
             .downcast_ref::<PrimitiveArray<T>>()
             .unwrap();
-        assert_eq!(
-            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(200i64),
-            bb.value(0)
-        );
-        assert_eq!(
-            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(-350i64),
-            bb.value(1)
-        );
-        assert_eq!(
-            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(60i64),
-            bb.value(8)
-        );
+        assert_eq!(T::Native::usize_as(200), bb.value(0));
+        assert_eq!(T::Native::usize_as(350).neg_wrapping(), bb.value(1));
+        assert_eq!(T::Native::usize_as(60), bb.value(8));
 
         let ff = batch
             .column(f.0)
             .as_any()
             .downcast_ref::<PrimitiveArray<T>>()
             .unwrap();
-        assert_eq!(
-            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(102i64),
-            ff.value(0)
-        );
-        assert_eq!(
-            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(-30i64),
-            ff.value(1)
-        );
-        assert_eq!(
-            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(137722i64),
-            ff.value(2)
-        );
+        assert_eq!(T::Native::usize_as(102), ff.value(0));
+        assert_eq!(T::Native::usize_as(30).neg_wrapping(), ff.value(1));
+        assert_eq!(T::Native::usize_as(137722), ff.value(2));
 
-        assert_eq!(
-            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(133700i64),
-            ff.value(3)
-        );
-        assert_eq!(
-            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(
-                9999999999i64
-            ),
-            ff.value(7)
-        );
+        assert_eq!(T::Native::usize_as(133700), ff.value(3));
+        assert_eq!(T::Native::usize_as(9999999999), ff.value(7));
     }
 
     #[test]
