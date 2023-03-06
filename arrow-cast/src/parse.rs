@@ -668,13 +668,7 @@ fn align_interval_parts(
     nanos_part %= NANOS_PER_DAY;
     day_part %= 30_f64;
 
-    if month_part > i32::MAX as f64
-        || month_part < i32::MIN as f64
-        || day_part > i32::MAX as f64
-        || day_part < i32::MIN as f64
-        || nanos_part > i64::MAX as f64
-        || nanos_part < i64::MIN as f64
-    {
+    if month_part > i32::MAX as f64 || month_part < i32::MIN as f64 {
         return Err(ArrowError::ParseError(format!(
             "Parsed interval field value out of range: {month_part} months {day_part} days {nanos_part} nanos"
         )));
