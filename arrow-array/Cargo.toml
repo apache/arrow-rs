@@ -54,8 +54,6 @@ num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 hashbrown = { version = "0.13", default-features = false }
 packed_simd = { version = "0.3", default-features = false, optional = true, package = "packed_simd_2" }
-lazy_static = "1.4.0"
-regex = "1.7.1"
 
 [features]
 simd = ["packed_simd"]

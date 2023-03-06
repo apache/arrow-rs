@@ -59,7 +59,7 @@ use arrow_array::builder::*;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{bit_util, i256, Buffer, MutableBuffer};
-use arrow_cast::parse::Parser;
+use arrow_cast::parse::{parse_decimal, Parser};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::*;
 
@@ -1037,10 +1037,7 @@ impl Decoder {
                             value.as_u64().and_then(num::cast::cast)
                         } else if value.is_string() {
                             value.as_str().and_then(|s| {
-                                parse_decimal_with_parameter::<Decimal128Type>(
-                                    s, precision, scale,
-                                )
-                                .ok()
+                                parse_decimal::<Decimal128Type>(s, precision, scale).ok()
                             })
                         } else {
                             value.as_f64().map(|f| (f * mul).round() as i128)
@@ -1070,10 +1067,7 @@ impl Decoder {
                             value.as_u64().map(|i| i256::from_i128(i as _))
                         } else if value.is_string() {
                             value.as_str().and_then(|s| {
-                                parse_decimal_with_parameter::<Decimal256Type>(
-                                    s, precision, scale,
-                                )
-                                .ok()
+                                parse_decimal::<Decimal256Type>(s, precision, scale).ok()
                             })
                         } else {
                             value.as_f64().and_then(|f| i256::from_f64(f * mul.round()))

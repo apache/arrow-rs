@@ -45,7 +45,7 @@ mod records;
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_cast::parse::Parser;
+use arrow_cast::parse::{parse_decimal, Parser};
 use arrow_schema::*;
 use lazy_static::lazy_static;
 use regex::{Regex, RegexSet};
@@ -819,7 +819,7 @@ fn build_decimal_array<T: DecimalType>(
             decimal_builder.append_null();
         } else {
             let decimal_value: Result<T::Native, _> =
-                parse_decimal_with_parameter::<T>(s, precision, scale);
+                parse_decimal::<T>(s, precision, scale);
             match decimal_value {
                 Ok(v) => {
                     decimal_builder.append_value(v);

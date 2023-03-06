@@ -16,7 +16,8 @@
 // under the License.
 
 use arrow_array::types::*;
-use arrow_array::ArrowPrimitiveType;
+use arrow_array::{ArrowNativeTypeOp, ArrowPrimitiveType};
+use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;
 
@@ -459,10 +460,114 @@ impl Parser for Date64Type {
     }
 }
 
+/// Parse the string format decimal value to i128/i256 format and checking the precision and scale.
+/// The result value can't be out of bounds.
+pub fn parse_decimal<T: DecimalType>(
+    s: &str,
+    precision: u8,
+    scale: i8,
+) -> Result<T::Native, ArrowError> {
+    if !is_valid_decimal(s) {
+        return Err(ArrowError::ParseError(format!(
+            "can't parse the string value {s} to decimal"
+        )));
+    }
+    let mut offset = s.len();
+    let len = s.len();
+    let mut base = T::Native::usize_as(1);
+    let scale_usize = usize::from(scale as u8);
+
+    // handle the value after the '.' and meet the scale
+    let delimiter_position = s.find('.');
+    match delimiter_position {
+        None => {
+            // there is no '.'
+            base = T::Native::usize_as(10).pow_checked(scale as u32)?;
+        }
+        Some(mid) => {
+            // there is the '.'
+            if len - mid >= scale_usize + 1 {
+                // If the string value is "123.12345" and the scale is 2, we should just remain '.12' and drop the '345' value.
+                offset -= len - mid - 1 - scale_usize;
+            } else {
+                // If the string value is "123.12" and the scale is 4, we should append '00' to the tail.
+                base = T::Native::usize_as(10)
+                    .pow_checked((scale_usize + 1 + mid - len) as u32)?;
+            }
+        }
+    };
+
+    // each byte is digit、'-' or '.'
+    let bytes = s.as_bytes();
+    let mut negative = false;
+    let mut result = T::Native::usize_as(0);
+
+    bytes[0..offset]
+        .iter()
+        .rev()
+        .try_for_each::<_, Result<(), ArrowError>>(|&byte| {
+            match byte {
+                b'-' => {
+                    negative = true;
+                }
+                b'0'..=b'9' => {
+                    let add =
+                        T::Native::usize_as((byte - b'0') as usize).mul_checked(base)?;
+                    result = result.add_checked(add)?;
+                    base = base.mul_checked(T::Native::usize_as(10))?;
+                }
+                // because we have checked the string value
+                _ => (),
+            }
+            Ok(())
+        })?;
+
+    if negative {
+        result = result.neg_checked()?;
+    }
+
+    match T::validate_decimal_precision(result, precision) {
+        Ok(_) => Ok(result),
+        Err(e) => Err(ArrowError::ParseError(format!(
+            "parse decimal overflow: {e}"
+        ))),
+    }
+}
+
+pub fn is_valid_decimal(s: &str) -> bool {
+    let mut seen_dot = false;
+    let mut seen_digit = false;
+    let mut seen_sign = false;
+
+    for c in s.chars() {
+        match c {
+            '-' | '+' => {
+                if seen_digit || seen_dot || seen_sign {
+                    return false;
+                }
+                seen_sign = true;
+            }
+            '.' => {
+                if seen_dot {
+                    return false;
+                }
+                seen_dot = true;
+            }
+            '0'..='9' => {
+                seen_digit = true;
+            }
+            _ => return false,
+        }
+    }
+
+    seen_digit
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow_array::timezone::Tz;
+    use arrow_buffer::i256;
 
     #[test]
     fn string_to_timestamp_timezone() {
@@ -919,5 +1024,71 @@ mod tests {
         parse_timestamp("1677-06-14T07:29:01.256")
             .map_err(|e| assert!(e.to_string().ends_with(ERR_NANOSECONDS_NOT_SUPPORTED)))
             .unwrap_err();
+    }
+
+    #[test]
+    fn test_parse_decimal_with_parameter() {
+        let tests = [
+            ("123.123", 123123i128),
+            ("123.1234", 123123i128),
+            ("123.1", 123100i128),
+            ("123", 123000i128),
+            ("-123.123", -123123i128),
+            ("-123.1234", -123123i128),
+            ("-123.1", -123100i128),
+            ("-123", -123000i128),
+            ("0.0000123", 0i128),
+            ("12.", 12000i128),
+            ("-12.", -12000i128),
+            ("00.1", 100i128),
+            ("-00.1", -100i128),
+            ("12345678912345678.1234", 12345678912345678123i128),
+            ("-12345678912345678.1234", -12345678912345678123i128),
+            ("99999999999999999.999", 99999999999999999999i128),
+            ("-99999999999999999.999", -99999999999999999999i128),
+            (".123", 123i128),
+            ("-.123", -123i128),
+            ("123.", 123000i128),
+            ("-123.", -123000i128),
+        ];
+        for (s, i) in tests {
+            let result_128 = parse_decimal::<Decimal128Type>(s, 20, 3);
+            assert_eq!(i, result_128.unwrap());
+            let result_256 = parse_decimal::<Decimal256Type>(s, 20, 3);
+            assert_eq!(i256::from_i128(i), result_256.unwrap());
+        }
+        let can_not_parse_tests = ["123,123", ".", "123.123.123"];
+        for s in can_not_parse_tests {
+            let result_128 = parse_decimal::<Decimal128Type>(s, 20, 3);
+            assert_eq!(
+                format!("Parser error: can't parse the string value {s} to decimal"),
+                result_128.unwrap_err().to_string()
+            );
+            let result_256 = parse_decimal::<Decimal256Type>(s, 20, 3);
+            assert_eq!(
+                format!("Parser error: can't parse the string value {s} to decimal"),
+                result_256.unwrap_err().to_string()
+            );
+        }
+        let overflow_parse_tests = ["12345678", "12345678.9", "99999999.99"];
+        for s in overflow_parse_tests {
+            let result_128 = parse_decimal::<Decimal128Type>(s, 10, 3);
+            let expected_128 = "Parser error: parse decimal overflow";
+            let actual_128 = result_128.unwrap_err().to_string();
+
+            assert!(
+                actual_128.contains(expected_128),
+                "actual: '{actual_128}', expected: '{expected_128}'"
+            );
+
+            let result_256 = parse_decimal::<Decimal256Type>(s, 10, 3);
+            let expected_256 = "Parser error: parse decimal overflow";
+            let actual_256 = result_256.unwrap_err().to_string();
+
+            assert!(
+                actual_256.contains(expected_256),
+                "actual: '{actual_256}', expected: '{expected_256}'"
+            );
+        }
     }
 }
