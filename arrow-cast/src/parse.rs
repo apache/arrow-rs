@@ -641,7 +641,7 @@ fn parse_interval(leading_field: &str, value: &str) -> Result<MonthDayNano, Arro
                 )))?;
     }
 
-    Ok((result_month as i32, result_days as i32, result_nanos as i64))
+    Ok((result_month, result_days, result_nanos))
 }
 
 /// We are storing parts as integers, it's why we need to align parts fractional
