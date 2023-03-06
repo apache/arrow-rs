@@ -539,21 +539,21 @@ pub fn is_valid_decimal(s: &str) -> bool {
     let mut seen_digit = false;
     let mut seen_sign = false;
 
-    for c in s.chars() {
+    for c in s.as_bytes() {
         match c {
-            '-' | '+' => {
+            b'-' | b'+' => {
                 if seen_digit || seen_dot || seen_sign {
                     return false;
                 }
                 seen_sign = true;
             }
-            '.' => {
+            b'.' => {
                 if seen_dot {
                     return false;
                 }
                 seen_dot = true;
             }
-            '0'..='9' => {
+            b'0'..=b'9' => {
                 seen_digit = true;
             }
             _ => return false,
