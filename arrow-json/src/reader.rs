@@ -1026,20 +1026,28 @@ impl Decoder {
         precision: u8,
         scale: i8,
     ) -> Result<ArrayRef, ArrowError> {
-        let mul = 10_f64.powi(scale as i32);
         Ok(Arc::new(
             rows.iter()
                 .map(|row| {
                     row.get(col_name).and_then(|value| {
                         if value.is_i64() {
-                            value.as_i64().and_then(num::cast::cast)
+                            let mul = 10i128.pow(scale as _);
+                            value
+                                .as_i64()
+                                .and_then(num::cast::cast)
+                                .map(|v: i128| v * mul)
                         } else if value.is_u64() {
-                            value.as_u64().and_then(num::cast::cast)
+                            let mul = 10i128.pow(scale as _);
+                            value
+                                .as_u64()
+                                .and_then(num::cast::cast)
+                                .map(|v: i128| v * mul)
                         } else if value.is_string() {
                             value.as_str().and_then(|s| {
                                 parse_decimal::<Decimal128Type>(s, precision, scale).ok()
                             })
                         } else {
+                            let mul = 10_f64.powi(scale as i32);
                             value.as_f64().map(|f| (f * mul).round() as i128)
                         }
                     })
@@ -1062,9 +1070,11 @@ impl Decoder {
                 .map(|row| {
                     row.get(col_name).and_then(|value| {
                         if value.is_i64() {
-                            value.as_i64().map(|i| i256::from_i128(i as _))
+                            let mul = i256::from_i128(10).pow_wrapping(scale as _);
+                            value.as_i64().map(|i| i256::from_i128(i as _) * mul)
                         } else if value.is_u64() {
-                            value.as_u64().map(|i| i256::from_i128(i as _))
+                            let mul = i256::from_i128(10).pow_wrapping(scale as _);
+                            value.as_u64().map(|i| i256::from_i128(i as _) * mul)
                         } else if value.is_string() {
                             value.as_str().and_then(|s| {
                                 parse_decimal::<Decimal256Type>(s, precision, scale).ok()
@@ -3451,9 +3461,9 @@ mod tests {
             .as_any()
             .downcast_ref::<PrimitiveArray<T>>()
             .unwrap();
-        assert_eq!(T::Native::usize_as(1), aa.value(0));
-        assert_eq!(T::Native::usize_as(1), aa.value(3));
-        assert_eq!(T::Native::usize_as(5), aa.value(7));
+        assert_eq!(T::Native::usize_as(100), aa.value(0));
+        assert_eq!(T::Native::usize_as(100), aa.value(3));
+        assert_eq!(T::Native::usize_as(500), aa.value(7));
 
         let bb = batch
             .column(b.0)
