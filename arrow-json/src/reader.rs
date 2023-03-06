@@ -3418,71 +3418,108 @@ mod tests {
         assert_eq!(options, cloned);
     }
 
-    macro_rules! decimal_json_tests {
-        ($data_type:expr, $array_type:ty, $assert_type:ty) => {
-            let schema = Schema::new(vec![
-                Field::new("a", $data_type.clone(), true),
-                Field::new("b", $data_type.clone(), true),
-                Field::new("f", $data_type.clone(), true),
-            ]);
+    pub fn decimal_json_tests<T>(data_type: DataType)
+    where
+        T: ArrowPrimitiveType + std::fmt::Debug + 'static,
+        i64: AsPrimitive<<T as arrow_array::ArrowPrimitiveType>::Native>,
+    {
+        let schema = Schema::new(vec![
+            Field::new("a", data_type.clone(), true),
+            Field::new("b", data_type.clone(), true),
+            Field::new("f", data_type.clone(), true),
+        ]);
 
-            let builder = ReaderBuilder::new()
-                .with_schema(Arc::new(schema))
-                .with_batch_size(64);
-            let mut reader: Reader<File> = builder
-                .build::<File>(File::open("test/data/basic.json").unwrap())
-                .unwrap();
-            let batch = reader.next().unwrap().unwrap();
+        let builder = ReaderBuilder::new()
+            .with_schema(Arc::new(schema))
+            .with_batch_size(64);
+        let mut reader: Reader<File> = builder
+            .build::<File>(File::open("test/data/basic.json").unwrap())
+            .unwrap();
+        let batch = reader.next().unwrap().unwrap();
 
-            assert_eq!(3, batch.num_columns());
-            assert_eq!(12, batch.num_rows());
+        assert_eq!(3, batch.num_columns());
+        assert_eq!(12, batch.num_rows());
 
-            let schema = reader.schema();
-            let batch_schema = batch.schema();
-            assert_eq!(schema, batch_schema);
+        let schema = reader.schema();
+        let batch_schema = batch.schema();
+        assert_eq!(schema, batch_schema);
 
-            let a = schema.column_with_name("a").unwrap();
-            let b = schema.column_with_name("b").unwrap();
-            let f = schema.column_with_name("f").unwrap();
-            assert_eq!(&$data_type, a.1.data_type());
-            assert_eq!(&$data_type, b.1.data_type());
-            assert_eq!(&$data_type, f.1.data_type());
+        let a = schema.column_with_name("a").unwrap();
+        let b = schema.column_with_name("b").unwrap();
+        let f = schema.column_with_name("f").unwrap();
+        assert_eq!(&data_type, a.1.data_type());
+        assert_eq!(&data_type, b.1.data_type());
+        assert_eq!(&data_type, f.1.data_type());
 
-            let aa = batch
-                .column(a.0)
-                .as_any()
-                .downcast_ref::<$array_type>()
-                .unwrap();
-            assert_eq!(AsPrimitive::<$assert_type>::as_(1), aa.value(0));
-            assert_eq!(AsPrimitive::<$assert_type>::as_(1), aa.value(3));
-            assert_eq!(AsPrimitive::<$assert_type>::as_(5), aa.value(7));
+        let aa = batch
+            .column(a.0)
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap();
+        assert_eq!(
+            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(1i64),
+            aa.value(0)
+        );
+        assert_eq!(
+            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(1i64),
+            aa.value(3)
+        );
+        assert_eq!(
+            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(5i64),
+            aa.value(7)
+        );
 
-            let bb = batch
-                .column(b.0)
-                .as_any()
-                .downcast_ref::<$array_type>()
-                .unwrap();
-            assert_eq!(AsPrimitive::<$assert_type>::as_(200), bb.value(0));
-            assert_eq!(AsPrimitive::<$assert_type>::as_(-350), bb.value(1));
-            assert_eq!(AsPrimitive::<$assert_type>::as_(60), bb.value(8));
+        let bb = batch
+            .column(b.0)
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap();
+        assert_eq!(
+            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(200i64),
+            bb.value(0)
+        );
+        assert_eq!(
+            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(-350i64),
+            bb.value(1)
+        );
+        assert_eq!(
+            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(60i64),
+            bb.value(8)
+        );
 
-            let ff = batch
-                .column(f.0)
-                .as_any()
-                .downcast_ref::<$array_type>()
-                .unwrap();
-            assert_eq!(AsPrimitive::<$assert_type>::as_(102), ff.value(0));
-            assert_eq!(AsPrimitive::<$assert_type>::as_(-30), ff.value(1));
-            assert_eq!(AsPrimitive::<$assert_type>::as_(137722), ff.value(2));
+        let ff = batch
+            .column(f.0)
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap();
+        assert_eq!(
+            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(102i64),
+            ff.value(0)
+        );
+        assert_eq!(
+            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(-30i64),
+            ff.value(1)
+        );
+        assert_eq!(
+            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(137722i64),
+            ff.value(2)
+        );
 
-            assert_eq!(AsPrimitive::<$assert_type>::as_(133700), ff.value(3));
-            assert_eq!(AsPrimitive::<$assert_type>::as_(9999999999i64), ff.value(7));
-        };
+        assert_eq!(
+            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(133700i64),
+            ff.value(3)
+        );
+        assert_eq!(
+            AsPrimitive::<<T as arrow_array::ArrowPrimitiveType>::Native>::as_(
+                9999999999i64
+            ),
+            ff.value(7)
+        );
     }
 
     #[test]
     fn test_decimal_from_json() {
-        decimal_json_tests!(DataType::Decimal128(10, 2), Decimal128Array, i128);
-        decimal_json_tests!(DataType::Decimal256(10, 2), Decimal256Array, i256);
+        decimal_json_tests::<Decimal128Type>(DataType::Decimal128(10, 2));
+        decimal_json_tests::<Decimal256Type>(DataType::Decimal256(10, 2));
     }
 }
