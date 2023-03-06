@@ -58,8 +58,8 @@ use serde_json::{map::Map as JsonMap, Value};
 use arrow_array::builder::*;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{bit_util, Buffer, MutableBuffer};
-use arrow_cast::parse::Parser;
+use arrow_buffer::{bit_util, i256, Buffer, MutableBuffer};
+use arrow_cast::parse::{parse_decimal, Parser};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::*;
 
@@ -1019,6 +1019,76 @@ impl Decoder {
         ))
     }
 
+    fn build_decimal128_array(
+        &self,
+        rows: &[Value],
+        col_name: &str,
+        precision: u8,
+        scale: i8,
+    ) -> Result<ArrayRef, ArrowError> {
+        Ok(Arc::new(
+            rows.iter()
+                .map(|row| {
+                    row.get(col_name).and_then(|value| {
+                        if value.is_i64() {
+                            let mul = 10i128.pow(scale as _);
+                            value
+                                .as_i64()
+                                .and_then(num::cast::cast)
+                                .map(|v: i128| v * mul)
+                        } else if value.is_u64() {
+                            let mul = 10i128.pow(scale as _);
+                            value
+                                .as_u64()
+                                .and_then(num::cast::cast)
+                                .map(|v: i128| v * mul)
+                        } else if value.is_string() {
+                            value.as_str().and_then(|s| {
+                                parse_decimal::<Decimal128Type>(s, precision, scale).ok()
+                            })
+                        } else {
+                            let mul = 10_f64.powi(scale as i32);
+                            value.as_f64().map(|f| (f * mul).round() as i128)
+                        }
+                    })
+                })
+                .collect::<Decimal128Array>()
+                .with_precision_and_scale(precision, scale)?,
+        ))
+    }
+
+    fn build_decimal256_array(
+        &self,
+        rows: &[Value],
+        col_name: &str,
+        precision: u8,
+        scale: i8,
+    ) -> Result<ArrayRef, ArrowError> {
+        let mul = 10_f64.powi(scale as i32);
+        Ok(Arc::new(
+            rows.iter()
+                .map(|row| {
+                    row.get(col_name).and_then(|value| {
+                        if value.is_i64() {
+                            let mul = i256::from_i128(10).pow_wrapping(scale as _);
+                            value.as_i64().map(|i| i256::from_i128(i as _) * mul)
+                        } else if value.is_u64() {
+                            let mul = i256::from_i128(10).pow_wrapping(scale as _);
+                            value.as_u64().map(|i| i256::from_i128(i as _) * mul)
+                        } else if value.is_string() {
+                            value.as_str().and_then(|s| {
+                                parse_decimal::<Decimal256Type>(s, precision, scale).ok()
+                            })
+                        } else {
+                            value.as_f64().and_then(|f| i256::from_f64(f * mul.round()))
+                        }
+                    })
+                })
+                .collect::<Decimal256Array>()
+                .with_precision_and_scale(precision, scale)?,
+        ))
+    }
+
     /// Build a nested GenericListArray from a list of unnested `Value`s
     fn build_nested_list_array<OffsetSize: OffsetSizeTrait>(
         &self,
@@ -1379,6 +1449,10 @@ impl Decoder {
                         field.data_type(),
                         map_field,
                     ),
+                    DataType::Decimal128(precision, scale) => self
+                        .build_decimal128_array(rows, field.name(), *precision, *scale),
+                    DataType::Decimal256(precision, scale) => self
+                        .build_decimal256_array(rows, field.name(), *precision, *scale),
                     _ => Err(ArrowError::JsonError(format!(
                         "{:?} type is not supported",
                         field.data_type()
@@ -1776,7 +1850,7 @@ mod tests {
         as_boolean_array, as_dictionary_array, as_primitive_array, as_string_array,
         as_struct_array,
     };
-    use arrow_buffer::ToByteSlice;
+    use arrow_buffer::{ArrowNativeType, ToByteSlice};
     use arrow_schema::DataType::{Dictionary, List};
     use flate2::read::GzDecoder;
     use std::fs::File;
@@ -1790,7 +1864,7 @@ mod tests {
             .unwrap();
         let batch = reader.next().unwrap().unwrap();
 
-        assert_eq!(5, batch.num_columns());
+        assert_eq!(6, batch.num_columns());
         assert_eq!(12, batch.num_rows());
 
         let schema = reader.schema();
@@ -3328,7 +3402,7 @@ mod tests {
         let mut sum_a = 0;
         for batch in reader {
             let batch = batch.unwrap();
-            assert_eq!(5, batch.num_columns());
+            assert_eq!(6, batch.num_columns());
             sum_num_rows += batch.num_rows();
             num_batches += 1;
             let batch_schema = batch.schema();
@@ -3351,5 +3425,71 @@ mod tests {
         let options = DecoderOptions::new().with_batch_size(64);
         let cloned = options.clone();
         assert_eq!(options, cloned);
+    }
+
+    pub fn decimal_json_tests<T: DecimalType>(data_type: DataType) {
+        let schema = Schema::new(vec![
+            Field::new("a", data_type.clone(), true),
+            Field::new("b", data_type.clone(), true),
+            Field::new("f", data_type.clone(), true),
+        ]);
+
+        let builder = ReaderBuilder::new()
+            .with_schema(Arc::new(schema))
+            .with_batch_size(64);
+        let mut reader: Reader<File> = builder
+            .build::<File>(File::open("test/data/basic.json").unwrap())
+            .unwrap();
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(3, batch.num_columns());
+        assert_eq!(12, batch.num_rows());
+
+        let schema = reader.schema();
+        let batch_schema = batch.schema();
+        assert_eq!(schema, batch_schema);
+
+        let a = schema.column_with_name("a").unwrap();
+        let b = schema.column_with_name("b").unwrap();
+        let f = schema.column_with_name("f").unwrap();
+        assert_eq!(&data_type, a.1.data_type());
+        assert_eq!(&data_type, b.1.data_type());
+        assert_eq!(&data_type, f.1.data_type());
+
+        let aa = batch
+            .column(a.0)
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap();
+        assert_eq!(T::Native::usize_as(100), aa.value(0));
+        assert_eq!(T::Native::usize_as(100), aa.value(3));
+        assert_eq!(T::Native::usize_as(500), aa.value(7));
+
+        let bb = batch
+            .column(b.0)
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap();
+        assert_eq!(T::Native::usize_as(200), bb.value(0));
+        assert_eq!(T::Native::usize_as(350).neg_wrapping(), bb.value(1));
+        assert_eq!(T::Native::usize_as(60), bb.value(8));
+
+        let ff = batch
+            .column(f.0)
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap();
+        assert_eq!(T::Native::usize_as(102), ff.value(0));
+        assert_eq!(T::Native::usize_as(30).neg_wrapping(), ff.value(1));
+        assert_eq!(T::Native::usize_as(137722), ff.value(2));
+
+        assert_eq!(T::Native::usize_as(133700), ff.value(3));
+        assert_eq!(T::Native::usize_as(9999999999), ff.value(7));
+    }
+
+    #[test]
+    fn test_decimal_from_json() {
+        decimal_json_tests::<Decimal128Type>(DataType::Decimal128(10, 2));
+        decimal_json_tests::<Decimal256Type>(DataType::Decimal256(10, 2));
     }
 }

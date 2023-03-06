@@ -44,10 +44,8 @@ mod records;
 
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::types::*;
-use arrow_array::ArrowNativeTypeOp;
 use arrow_array::*;
-use arrow_buffer::ArrowNativeType;
-use arrow_cast::parse::Parser;
+use arrow_cast::parse::{parse_decimal, Parser};
 use arrow_schema::*;
 use lazy_static::lazy_static;
 use regex::{Regex, RegexSet};
@@ -72,8 +70,6 @@ lazy_static! {
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d.\d{1,6}$", //Timestamp(Microsecond)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d.\d{1,9}$", //Timestamp(Nanosecond)
     ]).unwrap();
-    static ref PARSE_DECIMAL_RE: Regex =
-        Regex::new(r"^-?(\d+\.?\d*|\d*\.?\d+)$").unwrap();
 }
 
 #[derive(Default, Copy, Clone)]
@@ -823,7 +819,7 @@ fn build_decimal_array<T: DecimalType>(
             decimal_builder.append_null();
         } else {
             let decimal_value: Result<T::Native, _> =
-                parse_decimal_with_parameter::<T>(s, precision, scale);
+                parse_decimal::<T>(s, precision, scale);
             match decimal_value {
                 Ok(v) => {
                     decimal_builder.append_value(v);
@@ -839,127 +835,6 @@ fn build_decimal_array<T: DecimalType>(
             .finish()
             .with_precision_and_scale(precision, scale)?,
     ))
-}
-
-// Parse the string format decimal value to i128/i256 format and checking the precision and scale.
-// The result value can't be out of bounds.
-fn parse_decimal_with_parameter<T: DecimalType>(
-    s: &str,
-    precision: u8,
-    scale: i8,
-) -> Result<T::Native, ArrowError> {
-    if PARSE_DECIMAL_RE.is_match(s) {
-        let mut offset = s.len();
-        let len = s.len();
-        let mut base = T::Native::usize_as(1);
-        let scale_usize = usize::from(scale as u8);
-
-        // handle the value after the '.' and meet the scale
-        let delimiter_position = s.find('.');
-        match delimiter_position {
-            None => {
-                // there is no '.'
-                base = T::Native::usize_as(10).pow_checked(scale as u32)?;
-            }
-            Some(mid) => {
-                // there is the '.'
-                if len - mid >= scale_usize + 1 {
-                    // If the string value is "123.12345" and the scale is 2, we should just remain '.12' and drop the '345' value.
-                    offset -= len - mid - 1 - scale_usize;
-                } else {
-                    // If the string value is "123.12" and the scale is 4, we should append '00' to the tail.
-                    base = T::Native::usize_as(10)
-                        .pow_checked((scale_usize + 1 + mid - len) as u32)?;
-                }
-            }
-        };
-
-        // each byte is digit、'-' or '.'
-        let bytes = s.as_bytes();
-        let mut negative = false;
-        let mut result = T::Native::usize_as(0);
-
-        bytes[0..offset]
-            .iter()
-            .rev()
-            .try_for_each::<_, Result<(), ArrowError>>(|&byte| {
-                match byte {
-                    b'-' => {
-                        negative = true;
-                    }
-                    b'0'..=b'9' => {
-                        let add = T::Native::usize_as((byte - b'0') as usize)
-                            .mul_checked(base)?;
-                        result = result.add_checked(add)?;
-                        base = base.mul_checked(T::Native::usize_as(10))?;
-                    }
-                    // because of the PARSE_DECIMAL_RE, bytes just contains digit、'-' and '.'.
-                    _ => (),
-                }
-                Ok(())
-            })?;
-
-        if negative {
-            result = result.neg_checked()?;
-        }
-
-        match T::validate_decimal_precision(result, precision) {
-            Ok(_) => Ok(result),
-            Err(e) => Err(ArrowError::ParseError(format!(
-                "parse decimal overflow: {e}"
-            ))),
-        }
-    } else {
-        Err(ArrowError::ParseError(format!(
-            "can't parse the string value {s} to decimal"
-        )))
-    }
-}
-
-// Parse the string format decimal value to i128 format without checking the precision and scale.
-// Like "125.12" to 12512_i128.
-#[cfg(test)]
-fn parse_decimal(s: &str) -> Result<i128, ArrowError> {
-    use std::ops::Neg;
-
-    if PARSE_DECIMAL_RE.is_match(s) {
-        let mut offset = s.len();
-        // each byte is digit、'-' or '.'
-        let bytes = s.as_bytes();
-        let mut negative = false;
-        let mut result: i128 = 0;
-        let mut base = 1;
-        while offset > 0 {
-            match bytes[offset - 1] {
-                b'-' => {
-                    negative = true;
-                }
-                b'.' => {
-                    // do nothing
-                }
-                b'0'..=b'9' => {
-                    result += i128::from(bytes[offset - 1] - b'0') * base;
-                    base *= 10;
-                }
-                _ => {
-                    return Err(ArrowError::ParseError(format!(
-                        "can't match byte {}",
-                        bytes[offset - 1]
-                    )));
-                }
-            }
-            offset -= 1;
-        }
-        if negative {
-            Ok(result.neg())
-        } else {
-            Ok(result)
-        }
-    } else {
-        Err(ArrowError::ParseError(format!(
-            "can't parse the string value {s} to decimal"
-        )))
-    }
 }
 
 // parses a specific column (col_idx) into an Arrow Array.
@@ -1268,7 +1143,6 @@ impl ReaderBuilder {
 mod tests {
     use super::*;
 
-    use arrow_buffer::i256;
     use std::io::{Cursor, Write};
     use tempfile::NamedTempFile;
 
@@ -1810,88 +1684,6 @@ mod tests {
             .unwrap(),
             -2203932304000 - (30 * 60 * 1000)
         );
-    }
-
-    #[test]
-    fn test_parse_decimal() {
-        let tests = [
-            ("123.00", 12300i128),
-            ("123.123", 123123i128),
-            ("0.0123", 123i128),
-            ("0.12300", 12300i128),
-            ("-5.123", -5123i128),
-            ("-45.432432", -45432432i128),
-        ];
-        for (s, i) in tests {
-            let result = parse_decimal(s);
-            assert_eq!(i, result.unwrap());
-        }
-    }
-
-    #[test]
-    fn test_parse_decimal_with_parameter() {
-        let tests = [
-            ("123.123", 123123i128),
-            ("123.1234", 123123i128),
-            ("123.1", 123100i128),
-            ("123", 123000i128),
-            ("-123.123", -123123i128),
-            ("-123.1234", -123123i128),
-            ("-123.1", -123100i128),
-            ("-123", -123000i128),
-            ("0.0000123", 0i128),
-            ("12.", 12000i128),
-            ("-12.", -12000i128),
-            ("00.1", 100i128),
-            ("-00.1", -100i128),
-            ("12345678912345678.1234", 12345678912345678123i128),
-            ("-12345678912345678.1234", -12345678912345678123i128),
-            ("99999999999999999.999", 99999999999999999999i128),
-            ("-99999999999999999.999", -99999999999999999999i128),
-            (".123", 123i128),
-            ("-.123", -123i128),
-            ("123.", 123000i128),
-            ("-123.", -123000i128),
-        ];
-        for (s, i) in tests {
-            let result_128 = parse_decimal_with_parameter::<Decimal128Type>(s, 20, 3);
-            assert_eq!(i, result_128.unwrap());
-            let result_256 = parse_decimal_with_parameter::<Decimal256Type>(s, 20, 3);
-            assert_eq!(i256::from_i128(i), result_256.unwrap());
-        }
-        let can_not_parse_tests = ["123,123", ".", "123.123.123"];
-        for s in can_not_parse_tests {
-            let result_128 = parse_decimal_with_parameter::<Decimal128Type>(s, 20, 3);
-            assert_eq!(
-                format!("Parser error: can't parse the string value {s} to decimal"),
-                result_128.unwrap_err().to_string()
-            );
-            let result_256 = parse_decimal_with_parameter::<Decimal256Type>(s, 20, 3);
-            assert_eq!(
-                format!("Parser error: can't parse the string value {s} to decimal"),
-                result_256.unwrap_err().to_string()
-            );
-        }
-        let overflow_parse_tests = ["12345678", "12345678.9", "99999999.99"];
-        for s in overflow_parse_tests {
-            let result_128 = parse_decimal_with_parameter::<Decimal128Type>(s, 10, 3);
-            let expected_128 = "Parser error: parse decimal overflow";
-            let actual_128 = result_128.unwrap_err().to_string();
-
-            assert!(
-                actual_128.contains(expected_128),
-                "actual: '{actual_128}', expected: '{expected_128}'"
-            );
-
-            let result_256 = parse_decimal_with_parameter::<Decimal256Type>(s, 10, 3);
-            let expected_256 = "Parser error: parse decimal overflow";
-            let actual_256 = result_256.unwrap_err().to_string();
-
-            assert!(
-                actual_256.contains(expected_256),
-                "actual: '{actual_256}', expected: '{expected_256}'"
-            );
-        }
     }
 
     #[test]
