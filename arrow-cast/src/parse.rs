@@ -605,11 +605,7 @@ pub fn parse_interval(
 
     let mut parts = value.split_whitespace();
 
-    loop {
-        let interval_period_str = parts.next();
-        if interval_period_str.is_none() {
-            break;
-        }
+    while let Some(interval_period_str) = parts.next() {
 
         let unit = parts.next().unwrap_or(leading_field);
 
