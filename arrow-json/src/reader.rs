@@ -46,7 +46,6 @@
 //! let batch = json.next().unwrap().unwrap();
 //! ```
 
-use num::traits::AsPrimitive;
 use std::borrow::Borrow;
 use std::io::{BufRead, BufReader, Read, Seek};
 use std::sync::Arc;
@@ -1850,6 +1849,7 @@ mod tests {
     use arrow_buffer::ToByteSlice;
     use arrow_schema::DataType::{Dictionary, List};
     use flate2::read::GzDecoder;
+    use num::traits::AsPrimitive;
     use std::fs::File;
     use std::io::Cursor;
 
