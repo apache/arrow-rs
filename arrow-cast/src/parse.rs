@@ -446,7 +446,7 @@ impl Parser for Date64Type {
     }
 }
 
-pub(crate) fn parse_interval_year_month(
+pub fn parse_interval_year_month(
     value: &str,
 ) -> Result<<IntervalYearMonthType as ArrowPrimitiveType>::Native, ArrowError> {
     let (result_months, result_days, result_nanos) = parse_interval("years", value)?;
@@ -458,7 +458,7 @@ pub(crate) fn parse_interval_year_month(
     Ok(IntervalYearMonthType::make_value(0, result_months))
 }
 
-pub(crate) fn parse_interval_day_time(
+pub fn parse_interval_day_time(
     value: &str,
 ) -> Result<<IntervalDayTimeType as ArrowPrimitiveType>::Native, ArrowError> {
     let (result_months, mut result_days, result_nanos) = parse_interval("days", value)?;
@@ -474,7 +474,7 @@ pub(crate) fn parse_interval_day_time(
     ))
 }
 
-pub(crate) fn parse_interval_month_day_nano(
+pub fn parse_interval_month_day_nano(
     value: &str,
 ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError> {
     let (result_months, result_days, result_nanos) = parse_interval("months", value)?;
@@ -531,16 +531,20 @@ impl FromStr for IntervalType {
 
 pub type MonthDayNano = (i32, i32, i64);
 
-/// parse string value to a triple of aligned months, days, nanos
-pub fn parse_interval(
-    leading_field: &str,
-    value: &str,
-) -> Result<MonthDayNano, ArrowError> {
+/// parse string value to a triple of aligned months, days, nanos.
+/// Fractional units must be spilled to smaller units.
+/// Fractional parts of units greater than months are rounded to be an integer number of months,
+/// e.g. '1.5 years' becomes '12 mons + 6 mons', returns (18, 0, 0)
+/// Fractional parts of months, weeks, days, hours, minutes, seconds and milliseconds are computed
+/// to be an integer number of days and nanoseconds, assuming 30 days per month and 24 hours per day,
+/// e.g., '1.75 months' becomes '1 mon + 22 days + 12 hours', returns (1, 22, 12 * `NANOS_PER_HOUR`)
+/// leading field is the default unit. e.g. leading field is `second`, `1` = `1 second`
+fn parse_interval(leading_field: &str, value: &str) -> Result<MonthDayNano, ArrowError> {
     let mut used_interval_types = 0;
 
     let mut calculate_from_part = |interval_period_str: &str,
                                    interval_type: &str|
-     -> Result<(i64, i64, f64), ArrowError> {
+     -> Result<(i32, i32, i64), ArrowError> {
         // @todo It's better to use Decimal in order to protect rounding errors
         // Wait https://github.com/apache/arrow/pull/9232
         let interval_period = match f64::from_str(interval_period_str) {
@@ -575,66 +579,66 @@ pub fn parse_interval(
 
         match it {
             IntervalType::Century => {
-                Ok(align_interval_parts(interval_period * 1200_f64, 0.0, 0.0))
+                align_interval_parts(interval_period * 1200_f64, 0.0, 0.0)
             }
             IntervalType::Decade => {
-                Ok(align_interval_parts(interval_period * 120_f64, 0.0, 0.0))
+                align_interval_parts(interval_period * 120_f64, 0.0, 0.0)
             }
             IntervalType::Year => {
-                Ok(align_interval_parts(interval_period * 12_f64, 0.0, 0.0))
+                align_interval_parts(interval_period * 12_f64, 0.0, 0.0)
             }
-            IntervalType::Month => Ok(align_interval_parts(interval_period, 0.0, 0.0)),
-            IntervalType::Week => {
-                Ok(align_interval_parts(0.0, interval_period * 7_f64, 0.0))
-            }
-            IntervalType::Day => Ok(align_interval_parts(0.0, interval_period, 0.0)),
-            IntervalType::Hour => {
-                Ok((0, 0, interval_period * SECONDS_PER_HOUR * NANOS_PER_SECOND))
-            }
+            IntervalType::Month => align_interval_parts(interval_period, 0.0, 0.0),
+            IntervalType::Week => align_interval_parts(0.0, interval_period * 7_f64, 0.0),
+            IntervalType::Day => align_interval_parts(0.0, interval_period, 0.0),
+            IntervalType::Hour => Ok((
+                0,
+                0,
+                (interval_period * SECONDS_PER_HOUR * NANOS_PER_SECOND) as i64,
+            )),
             IntervalType::Minute => {
-                Ok((0, 0, interval_period * 60_f64 * NANOS_PER_SECOND))
+                Ok((0, 0, (interval_period * 60_f64 * NANOS_PER_SECOND) as i64))
             }
-            IntervalType::Second => Ok((0, 0, interval_period * NANOS_PER_SECOND)),
-            IntervalType::Millisecond => Ok((0, 0, interval_period * 1_000_000f64)),
+            IntervalType::Second => {
+                Ok((0, 0, (interval_period * NANOS_PER_SECOND) as i64))
+            }
+            IntervalType::Millisecond => {
+                Ok((0, 0, (interval_period * 1_000_000f64) as i64))
+            }
         }
     };
 
-    let mut result_month: i64 = 0;
-    let mut result_days: i64 = 0;
-    let mut result_nanos: i128 = 0;
+    let mut result_month: i32 = 0;
+    let mut result_days: i32 = 0;
+    let mut result_nanos: i64 = 0;
 
     let mut parts = value.split_whitespace();
 
     while let Some(interval_period_str) = parts.next() {
-
         let unit = parts.next().unwrap_or(leading_field);
 
         let (diff_month, diff_days, diff_nanos) =
-            calculate_from_part(interval_period_str.unwrap(), unit)?;
+            calculate_from_part(interval_period_str, unit)?;
 
-        result_month += diff_month;
+        result_month =
+            result_month
+                .checked_add(diff_month)
+                .ok_or(ArrowError::ParseError(format!(
+                    "Interval field value out of range: {value:?}"
+                )))?;
 
-        if result_month > (i32::MAX as i64) {
-            return Err(ArrowError::ParseError(format!(
-                "Interval field value out of range: {value:?}"
-            )));
-        }
+        result_days =
+            result_days
+                .checked_add(diff_days)
+                .ok_or(ArrowError::ParseError(format!(
+                    "Interval field value out of range: {value:?}"
+                )))?;
 
-        result_days += diff_days;
-
-        if result_days > (i32::MAX as i64) {
-            return Err(ArrowError::ParseError(format!(
-                "Interval field value out of range: {value:?}"
-            )));
-        }
-
-        result_nanos += diff_nanos as i128;
-
-        if result_nanos > (i64::MAX as i128) {
-            return Err(ArrowError::ParseError(format!(
-                "Interval field value out of range: {value:?}"
-            )));
-        }
+        result_nanos =
+            result_nanos
+                .checked_add(diff_nanos)
+                .ok_or(ArrowError::ParseError(format!(
+                    "Interval field value out of range: {value:?}"
+                )))?;
     }
 
     Ok((result_month as i32, result_days as i32, result_nanos as i64))
@@ -643,12 +647,12 @@ pub fn parse_interval(
 /// We are storing parts as integers, it's why we need to align parts fractional
 /// INTERVAL '0.5 MONTH' = 15 days, INTERVAL '1.5 MONTH' = 1 month 15 days
 /// INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
-/// INTERVAL '30 DAYS' = 1 month
+/// INTERVAL '30 DAYS' = 1 MONTH
 fn align_interval_parts(
     mut month_part: f64,
     mut day_part: f64,
     mut nanos_part: f64,
-) -> (i64, i64, f64) {
+) -> Result<(i32, i32, i64), ArrowError> {
     // Convert fractional month to days, It's not supported by Arrow types, but anyway
     day_part += (month_part - (month_part as i64) as f64) * 30_f64;
 
@@ -659,12 +663,24 @@ fn align_interval_parts(
         * NANOS_PER_SECOND;
 
     // Convert to higher units as much as possible
-    day_part += nanos_part / NANOS_PER_DAY;
-    month_part += day_part / 30_f64;
+    day_part += ((nanos_part as i64) / (NANOS_PER_DAY as i64)) as f64;
+    month_part += ((day_part as i64) / 30_i64) as f64;
     nanos_part %= NANOS_PER_DAY;
     day_part %= 30_f64;
 
-    (month_part as i64, day_part as i64, nanos_part)
+    if month_part > i32::MAX as f64
+        || month_part < i32::MIN as f64
+        || day_part > i32::MAX as f64
+        || day_part < i32::MIN as f64
+        || nanos_part > i64::MAX as f64
+        || nanos_part < i64::MIN as f64
+    {
+        return Err(ArrowError::ParseError(format!(
+            "Parsed interval field value out of range: {month_part} months {day_part} days {nanos_part} nanos"
+        )));
+    }
+
+    Ok((month_part as i32, day_part as i32, nanos_part as i64))
 }
 
 #[cfg(test)]
@@ -1103,6 +1119,16 @@ mod tests {
         assert_eq!(
             (2i32, 0i32, 0i64),
             parse_interval("months", "2 month").unwrap(),
+        );
+
+        assert_eq!(
+            (-1i32, -18i32, (-0.2 * NANOS_PER_DAY) as i64),
+            parse_interval("months", "-1.5 months -3.2 days").unwrap(),
+        );
+
+        assert_eq!(
+            (2i32, 10i32, (9.0 * NANOS_PER_HOUR) as i64),
+            parse_interval("months", "2.1 months 7.25 days 3 hours").unwrap(),
         );
 
         assert_eq!(
