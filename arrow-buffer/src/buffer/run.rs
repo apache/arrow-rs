@@ -41,7 +41,7 @@ where
     /// Create a new [`RunEndBuffer`] from a [`ScalarBuffer`], an `offset` and `len`
     pub fn new(run_ends: ScalarBuffer<E>, offset: usize, len: usize) -> Self {
         assert!(
-            run_ends.windows(2).all(|w| { w[0] <= w[1] }),
+            run_ends.windows(2).all(|w| w[0] <= w[1]),
             "run-ends not monotonic"
         );
 
