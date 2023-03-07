@@ -5158,7 +5158,7 @@ mod tests {
             vec![
                 Some("1 years 1 mons 0 days 0 hours 0 mins 0.00 secs"),
                 Some("2 years 7 mons 0 days 0 hours 0 mins 0.00 secs"),
-                Some("0 years 1 mons 0 days 0 hours 0 mins 0.00 secs"),
+                None,
                 None,
                 None,
                 None,
@@ -5210,7 +5210,7 @@ mod tests {
             vec![
                 Some("0 years 13 mons 1 days 0 hours 0 mins 0.000000000 secs"),
                 None,
-                Some("0 years 32 mons 5 days 0 hours 0 mins 0.001400000 secs"),
+                Some("0 years 31 mons 35 days 0 hours 0 mins 0.001400000 secs"),
                 Some("0 years 0 mons 3 days 0 hours 0 mins 0.000000000 secs"),
                 Some("0 years 0 mons 0 days 0 hours 0 mins 8.000000000 secs"),
                 None,
@@ -5257,7 +5257,7 @@ mod tests {
         test_unsafe_string_to_interval_err!(
             vec![Some("2 months 31 days 1 second")],
             IntervalUnit::YearMonth,
-            r#"Cast error: Cannot cast 2 months 31 days 1 second to IntervalYearMonth because the value isn't multiple of months"#
+            r#"Cast error: Cannot cast 2 months 31 days 1 second to IntervalYearMonth. Only year and month fields are allowed."#
         );
         test_unsafe_string_to_interval_err!(
             vec![Some("1 day 1.5 milliseconds")],

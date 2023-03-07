@@ -452,7 +452,7 @@ pub fn parse_interval_year_month(
     let (result_months, result_days, result_nanos) = parse_interval("years", value)?;
     if result_days != 0 || result_nanos != 0 {
         return Err(ArrowError::CastError(format!(
-            "Cannot cast {value} to IntervalYearMonth because the value isn't multiple of months"
+            "Cannot cast {value} to IntervalYearMonth. Only year and month fields are allowed."
         )));
     }
     Ok(IntervalYearMonthType::make_value(0, result_months))
@@ -488,8 +488,11 @@ pub fn parse_interval_month_day_nano(
 const SECONDS_PER_HOUR: f64 = 3_600_f64;
 const NANOS_PER_MILLIS: f64 = 1_000_000_f64;
 const NANOS_PER_SECOND: f64 = 1_000_f64 * NANOS_PER_MILLIS;
+#[cfg(test)]
 const NANOS_PER_MINUTE: f64 = 60_f64 * NANOS_PER_SECOND;
+#[cfg(test)]
 const NANOS_PER_HOUR: f64 = 60_f64 * NANOS_PER_MINUTE;
+#[cfg(test)]
 const NANOS_PER_DAY: f64 = 24_f64 * NANOS_PER_HOUR;
 
 #[derive(Clone, Copy)]
@@ -532,21 +535,14 @@ impl FromStr for IntervalType {
 pub type MonthDayNano = (i32, i32, i64);
 
 /// parse string value to a triple of aligned months, days, nanos.
-/// Fractional units must be spilled to smaller units.
-/// Fractional parts of units greater than months are rounded to be an integer number of months,
-/// e.g. '1.5 years' becomes '12 mons + 6 mons', returns (18, 0, 0)
-/// Fractional parts of months, weeks, days, hours, minutes, seconds and milliseconds are computed
-/// to be an integer number of days and nanoseconds, assuming 30 days per month and 24 hours per day,
-/// e.g., '1.75 months' becomes '1 mon + 22 days + 12 hours', returns (1, 22, 12 * `NANOS_PER_HOUR`)
-/// leading field is the default unit. e.g. leading field is `second`, `1` = `1 second`
+/// leading field is the default unit. e.g. `INTERVAL 1` represents `INTERVAL 1 SECOND` when leading_filed = 'second'
 fn parse_interval(leading_field: &str, value: &str) -> Result<MonthDayNano, ArrowError> {
     let mut used_interval_types = 0;
 
     let mut calculate_from_part = |interval_period_str: &str,
                                    interval_type: &str|
      -> Result<(i32, i32, i64), ArrowError> {
-        // @todo It's better to use Decimal in order to protect rounding errors
-        // Wait https://github.com/apache/arrow/pull/9232
+        // TODO: Use fixed-point arithmetic to avoid truncation and rounding errors (#3809)
         let interval_period = match f64::from_str(interval_period_str) {
             Ok(n) => n,
             Err(_) => {
@@ -644,12 +640,12 @@ fn parse_interval(leading_field: &str, value: &str) -> Result<MonthDayNano, Arro
     Ok((result_month, result_days, result_nanos))
 }
 
-/// We are storing parts as integers, it's why we need to align parts fractional
+/// The fractional units must be spilled to smaller units.
+/// [reference Postgresql doc](https://www.postgresql.org/docs/15/datatype-datetime.html#DATATYPE-INTERVAL-INPUT:~:text=Field%20values%20can,fractional%20on%20output.)
 /// INTERVAL '0.5 MONTH' = 15 days, INTERVAL '1.5 MONTH' = 1 month 15 days
 /// INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
-/// INTERVAL '30 DAYS' = 1 MONTH
 fn align_interval_parts(
-    mut month_part: f64,
+    month_part: f64,
     mut day_part: f64,
     mut nanos_part: f64,
 ) -> Result<(i32, i32, i64), ArrowError> {
@@ -662,13 +658,13 @@ fn align_interval_parts(
         * SECONDS_PER_HOUR
         * NANOS_PER_SECOND;
 
-    // Convert to higher units as much as possible
-    day_part += ((nanos_part as i64) / (NANOS_PER_DAY as i64)) as f64;
-    month_part += ((day_part as i64) / 30_i64) as f64;
-    nanos_part %= NANOS_PER_DAY;
-    day_part %= 30_f64;
-
-    if month_part > i32::MAX as f64 || month_part < i32::MIN as f64 {
+    if month_part > i32::MAX as f64
+        || month_part < i32::MIN as f64
+        || day_part > i32::MAX as f64
+        || day_part < i32::MIN as f64
+        || nanos_part > i64::MAX as f64
+        || nanos_part < i64::MIN as f64
+    {
         return Err(ArrowError::ParseError(format!(
             "Parsed interval field value out of range: {month_part} months {day_part} days {nanos_part} nanos"
         )));
