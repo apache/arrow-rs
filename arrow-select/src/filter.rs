@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::{as_generic_binary_array, as_largestring_array, as_string_array};
-use arrow_array::types::ByteArrayType;
+use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
 use arrow_array::*;
 use arrow_buffer::bit_util;
 use arrow_buffer::{buffer::buffer_bin_and, Buffer, MutableBuffer};
@@ -671,7 +671,7 @@ fn filter_dict<T>(
     predicate: &FilterPredicate,
 ) -> DictionaryArray<T>
 where
-    T: ArrowPrimitiveType,
+    T: ArrowDictionaryKeyType,
     T::Native: num::Num,
 {
     let builder = filter_primitive::<T>(array.keys(), predicate)

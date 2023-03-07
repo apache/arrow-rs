@@ -201,7 +201,7 @@ macro_rules! dict_function {
 ///
 /// See the documentation on [`like_utf8`] for more details.
 #[cfg(feature = "dyn_cmp_dict")]
-fn $fn_name<K: ArrowPrimitiveType>(
+fn $fn_name<K: arrow_array::types::ArrowDictionaryKeyType>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
 ) -> Result<BooleanArray, ArrowError> {

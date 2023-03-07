@@ -770,7 +770,7 @@ fn take_dict<T, I>(
     indices: &PrimitiveArray<I>,
 ) -> Result<DictionaryArray<T>, ArrowError>
 where
-    T: ArrowPrimitiveType,
+    T: ArrowDictionaryKeyType,
     T::Native: num::Num,
     I: ArrowPrimitiveType,
     I::Native: ToPrimitive,

@@ -1253,7 +1253,7 @@ fn unpack_dict_comparison<K>(
     dict_comparison: BooleanArray,
 ) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowPrimitiveType,
+    K: ArrowDictionaryKeyType,
     K::Native: num::ToPrimitive,
 {
     // TODO: Use take_boolean (#2967)
@@ -2035,7 +2035,7 @@ fn cmp_dict_primitive<K, T, F>(
     op: F,
 ) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowPrimitiveType,
+    K: ArrowDictionaryKeyType,
     T: ArrowPrimitiveType + Sync + Send,
     F: Fn(T::Native, T::Native) -> bool,
 {
@@ -2055,7 +2055,7 @@ fn cmp_dict_string_array<K, OffsetSize: OffsetSizeTrait, F>(
     op: F,
 ) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowPrimitiveType,
+    K: ArrowDictionaryKeyType,
     F: Fn(&str, &str) -> bool,
 {
     compare_op(
@@ -2078,7 +2078,7 @@ fn cmp_dict_boolean_array<K, F>(
     op: F,
 ) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowPrimitiveType,
+    K: ArrowDictionaryKeyType,
     F: Fn(bool, bool) -> bool,
 {
     compare_op(
@@ -2097,7 +2097,7 @@ fn cmp_dict_binary_array<K, OffsetSize: OffsetSizeTrait, F>(
     op: F,
 ) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowPrimitiveType,
+    K: ArrowDictionaryKeyType,
     F: Fn(&[u8], &[u8]) -> bool,
 {
     compare_op(
@@ -2121,7 +2121,7 @@ pub fn cmp_dict<K, T, F>(
     op: F,
 ) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowPrimitiveType,
+    K: ArrowDictionaryKeyType,
     T: ArrowPrimitiveType + Sync + Send,
     F: Fn(T::Native, T::Native) -> bool,
 {
@@ -2141,7 +2141,7 @@ pub fn cmp_dict_bool<K, F>(
     op: F,
 ) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowPrimitiveType,
+    K: ArrowDictionaryKeyType,
     F: Fn(bool, bool) -> bool,
 {
     compare_op(
@@ -2160,7 +2160,7 @@ pub fn cmp_dict_utf8<K, OffsetSize: OffsetSizeTrait, F>(
     op: F,
 ) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowPrimitiveType,
+    K: ArrowDictionaryKeyType,
     F: Fn(&str, &str) -> bool,
 {
     compare_op(
@@ -2182,7 +2182,7 @@ pub fn cmp_dict_binary<K, OffsetSize: OffsetSizeTrait, F>(
     op: F,
 ) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowPrimitiveType,
+    K: ArrowDictionaryKeyType,
     F: Fn(&[u8], &[u8]) -> bool,
 {
     compare_op(

@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::builder::{ArrayBuilder, PrimitiveBuilder};
+use crate::types::ArrowDictionaryKeyType;
 use crate::{Array, ArrayRef, ArrowPrimitiveType, DictionaryArray};
 use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use arrow_schema::{ArrowError, DataType};
@@ -172,7 +173,7 @@ where
 
 impl<K, V> ArrayBuilder for PrimitiveDictionaryBuilder<K, V>
 where
-    K: ArrowPrimitiveType,
+    K: ArrowDictionaryKeyType,
     V: ArrowPrimitiveType,
 {
     /// Returns the builder as an non-mutable `Any` reference.
@@ -213,7 +214,7 @@ where
 
 impl<K, V> PrimitiveDictionaryBuilder<K, V>
 where
-    K: ArrowPrimitiveType,
+    K: ArrowDictionaryKeyType,
     V: ArrowPrimitiveType,
 {
     /// Append a primitive value to the array. Return an existing index
@@ -312,7 +313,7 @@ where
     }
 }
 
-impl<K: ArrowPrimitiveType, P: ArrowPrimitiveType> Extend<Option<P::Native>>
+impl<K: ArrowDictionaryKeyType, P: ArrowPrimitiveType> Extend<Option<P::Native>>
     for PrimitiveDictionaryBuilder<K, P>
 {
     #[inline]

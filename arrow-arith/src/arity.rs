@@ -19,6 +19,7 @@
 
 use arrow_array::builder::BufferBuilder;
 use arrow_array::iterator::ArrayIter;
+use arrow_array::types::ArrowDictionaryKeyType;
 use arrow_array::*;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{Buffer, MutableBuffer};
@@ -96,7 +97,7 @@ where
 /// A helper function that applies an infallible unary function to a dictionary array with primitive value type.
 fn unary_dict<K, F, T>(array: &DictionaryArray<K>, op: F) -> Result<ArrayRef, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowDictionaryKeyType + ArrowNumericType,
     T: ArrowPrimitiveType,
     F: Fn(T::Native) -> T::Native,
 {
@@ -111,7 +112,7 @@ fn try_unary_dict<K, F, T>(
     op: F,
 ) -> Result<ArrayRef, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowDictionaryKeyType + ArrowNumericType,
     T: ArrowPrimitiveType,
     F: Fn(T::Native) -> Result<T::Native, ArrowError>,
 {

@@ -424,7 +424,7 @@ impl<T: ArrowPrimitiveType> PartialEq for PrimitiveArray<T> {
     }
 }
 
-impl<K: ArrowPrimitiveType> PartialEq for DictionaryArray<K> {
+impl<K: ArrowDictionaryKeyType> PartialEq for DictionaryArray<K> {
     fn eq(&self, other: &Self) -> bool {
         self.data().eq(other.data())
     }
