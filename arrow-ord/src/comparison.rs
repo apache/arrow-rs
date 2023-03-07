@@ -1253,7 +1253,7 @@ fn unpack_dict_comparison<K>(
     dict_comparison: BooleanArray,
 ) -> Result<BooleanArray, ArrowError>
 where
-    K: ArrowPrimitiveType,
+    K: ArrowDictionaryKeyType,
     K::Native: num::ToPrimitive,
 {
     // TODO: Use take_boolean (#2967)

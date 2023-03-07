@@ -205,7 +205,7 @@ pub type UInt64DictionaryArray = DictionaryArray<UInt64Type>;
 ///    .collect();
 /// assert_eq!(&array, &expected);
 /// ```
-pub struct DictionaryArray<K: ArrowPrimitiveType> {
+pub struct DictionaryArray<K: ArrowDictionaryKeyType> {
     /// Data of this dictionary. Note that this is _not_ compatible with the C Data interface,
     /// as, in the current implementation, `values` below are the first child of this struct.
     data: ArrayData,
@@ -223,7 +223,7 @@ pub struct DictionaryArray<K: ArrowPrimitiveType> {
     is_ordered: bool,
 }
 
-impl<K: ArrowPrimitiveType> Clone for DictionaryArray<K> {
+impl<K: ArrowDictionaryKeyType> Clone for DictionaryArray<K> {
     fn clone(&self) -> Self {
         Self {
             data: self.data.clone(),
@@ -234,7 +234,7 @@ impl<K: ArrowPrimitiveType> Clone for DictionaryArray<K> {
     }
 }
 
-impl<K: ArrowPrimitiveType> DictionaryArray<K> {
+impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     /// Attempt to create a new DictionaryArray with a specified keys
     /// (indexes into the dictionary) and values (dictionary)
     /// array. Returns an error if there are any keys that are outside
@@ -436,7 +436,7 @@ impl<K: ArrowPrimitiveType> DictionaryArray<K> {
 }
 
 /// Constructs a `DictionaryArray` from an array data reference.
-impl<T: ArrowPrimitiveType> From<ArrayData> for DictionaryArray<T> {
+impl<T: ArrowDictionaryKeyType> From<ArrayData> for DictionaryArray<T> {
     fn from(data: ArrayData) -> Self {
         assert_eq!(
             data.buffers().len(),
@@ -482,7 +482,7 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for DictionaryArray<T> {
     }
 }
 
-impl<T: ArrowPrimitiveType> From<DictionaryArray<T>> for ArrayData {
+impl<T: ArrowDictionaryKeyType> From<DictionaryArray<T>> for ArrayData {
     fn from(array: DictionaryArray<T>) -> Self {
         array.data
     }
@@ -543,7 +543,7 @@ impl<'a, T: ArrowDictionaryKeyType> FromIterator<&'a str> for DictionaryArray<T>
     }
 }
 
-impl<T: ArrowPrimitiveType> Array for DictionaryArray<T> {
+impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -557,7 +557,7 @@ impl<T: ArrowPrimitiveType> Array for DictionaryArray<T> {
     }
 }
 
-impl<T: ArrowPrimitiveType> std::fmt::Debug for DictionaryArray<T> {
+impl<T: ArrowDictionaryKeyType> std::fmt::Debug for DictionaryArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         writeln!(
             f,
@@ -583,7 +583,7 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for DictionaryArray<T> {
 ///     assert_eq!(maybe_val.unwrap(), orig)
 /// }
 /// ```
-pub struct TypedDictionaryArray<'a, K: ArrowPrimitiveType, V> {
+pub struct TypedDictionaryArray<'a, K: ArrowDictionaryKeyType, V> {
     /// The dictionary array
     dictionary: &'a DictionaryArray<K>,
     /// The values of the dictionary
@@ -591,7 +591,7 @@ pub struct TypedDictionaryArray<'a, K: ArrowPrimitiveType, V> {
 }
 
 // Manually implement `Clone` to avoid `V: Clone` type constraint
-impl<'a, K: ArrowPrimitiveType, V> Clone for TypedDictionaryArray<'a, K, V> {
+impl<'a, K: ArrowDictionaryKeyType, V> Clone for TypedDictionaryArray<'a, K, V> {
     fn clone(&self) -> Self {
         Self {
             dictionary: self.dictionary,
@@ -600,15 +600,17 @@ impl<'a, K: ArrowPrimitiveType, V> Clone for TypedDictionaryArray<'a, K, V> {
     }
 }
 
-impl<'a, K: ArrowPrimitiveType, V> Copy for TypedDictionaryArray<'a, K, V> {}
+impl<'a, K: ArrowDictionaryKeyType, V> Copy for TypedDictionaryArray<'a, K, V> {}
 
-impl<'a, K: ArrowPrimitiveType, V> std::fmt::Debug for TypedDictionaryArray<'a, K, V> {
+impl<'a, K: ArrowDictionaryKeyType, V> std::fmt::Debug
+    for TypedDictionaryArray<'a, K, V>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         writeln!(f, "TypedDictionaryArray({:?})", self.dictionary)
     }
 }
 
-impl<'a, K: ArrowPrimitiveType, V> TypedDictionaryArray<'a, K, V> {
+impl<'a, K: ArrowDictionaryKeyType, V> TypedDictionaryArray<'a, K, V> {
     /// Returns the keys of this [`TypedDictionaryArray`]
     pub fn keys(&self) -> &'a PrimitiveArray<K> {
         self.dictionary.keys()
@@ -620,7 +622,7 @@ impl<'a, K: ArrowPrimitiveType, V> TypedDictionaryArray<'a, K, V> {
     }
 }
 
-impl<'a, K: ArrowPrimitiveType, V: Sync> Array for TypedDictionaryArray<'a, K, V> {
+impl<'a, K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'a, K, V> {
     fn as_any(&self) -> &dyn Any {
         self.dictionary
     }
@@ -636,7 +638,7 @@ impl<'a, K: ArrowPrimitiveType, V: Sync> Array for TypedDictionaryArray<'a, K, V
 
 impl<'a, K, V> IntoIterator for TypedDictionaryArray<'a, K, V>
 where
-    K: ArrowPrimitiveType,
+    K: ArrowDictionaryKeyType,
     Self: ArrayAccessor,
 {
     type Item = Option<<Self as ArrayAccessor>::Item>;
@@ -649,7 +651,7 @@ where
 
 impl<'a, K, V> ArrayAccessor for TypedDictionaryArray<'a, K, V>
 where
-    K: ArrowPrimitiveType,
+    K: ArrowDictionaryKeyType,
     V: Sync + Send,
     &'a V: ArrayAccessor,
     <&'a V as ArrayAccessor>::Item: Default,
@@ -684,10 +686,8 @@ mod tests {
     use super::*;
     use crate::builder::PrimitiveDictionaryBuilder;
     use crate::cast::as_dictionary_array;
-    use crate::types::{
-        Float32Type, Int16Type, Int32Type, Int8Type, UInt32Type, UInt8Type,
-    };
-    use crate::{Float32Array, Int16Array, Int32Array, Int8Array};
+    use crate::types::{Int16Type, Int32Type, Int8Type, UInt32Type, UInt8Type};
+    use crate::{Int16Array, Int32Array, Int8Array};
     use arrow_buffer::{Buffer, ToByteSlice};
     use std::sync::Arc;
 
@@ -953,14 +953,6 @@ mod tests {
         let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
         let keys: Int32Array = [Some(-100)].into_iter().collect();
         DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
-    }
-
-    #[test]
-    #[should_panic(expected = "Dictionary key type must be integer, but was Float32")]
-    fn test_try_wrong_dictionary_key_type() {
-        let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
-        let keys: Float32Array = [Some(0_f32), None, Some(3_f32)].into_iter().collect();
-        DictionaryArray::<Float32Type>::try_new(&keys, &values).unwrap();
     }
 
     #[test]
