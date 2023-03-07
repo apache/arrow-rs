@@ -20,6 +20,7 @@ use arrow_array::{ArrowNativeTypeOp, ArrowPrimitiveType};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;
+use std::str::FromStr;
 
 /// Accepts a string and parses it relative to the provided `timezone`
 ///
@@ -563,6 +564,233 @@ fn is_valid_decimal(s: &str) -> bool {
     seen_digit
 }
 
+pub fn parse_interval_year_month(
+    value: &str,
+) -> Result<<IntervalYearMonthType as ArrowPrimitiveType>::Native, ArrowError> {
+    let (result_months, result_days, result_nanos) = parse_interval("years", value)?;
+    if result_days != 0 || result_nanos != 0 {
+        return Err(ArrowError::CastError(format!(
+            "Cannot cast {value} to IntervalYearMonth. Only year and month fields are allowed."
+        )));
+    }
+    Ok(IntervalYearMonthType::make_value(0, result_months))
+}
+
+pub fn parse_interval_day_time(
+    value: &str,
+) -> Result<<IntervalDayTimeType as ArrowPrimitiveType>::Native, ArrowError> {
+    let (result_months, mut result_days, result_nanos) = parse_interval("days", value)?;
+    if result_nanos % 1_000_000 != 0 {
+        return Err(ArrowError::CastError(format!(
+            "Cannot cast {value} to IntervalDayTime because the nanos part isn't multiple of milliseconds"
+        )));
+    }
+    result_days += result_months * 30;
+    Ok(IntervalDayTimeType::make_value(
+        result_days,
+        (result_nanos / 1_000_000) as i32,
+    ))
+}
+
+pub fn parse_interval_month_day_nano(
+    value: &str,
+) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError> {
+    let (result_months, result_days, result_nanos) = parse_interval("months", value)?;
+    Ok(IntervalMonthDayNanoType::make_value(
+        result_months,
+        result_days,
+        result_nanos,
+    ))
+}
+
+const SECONDS_PER_HOUR: f64 = 3_600_f64;
+const NANOS_PER_MILLIS: f64 = 1_000_000_f64;
+const NANOS_PER_SECOND: f64 = 1_000_f64 * NANOS_PER_MILLIS;
+#[cfg(test)]
+const NANOS_PER_MINUTE: f64 = 60_f64 * NANOS_PER_SECOND;
+#[cfg(test)]
+const NANOS_PER_HOUR: f64 = 60_f64 * NANOS_PER_MINUTE;
+#[cfg(test)]
+const NANOS_PER_DAY: f64 = 24_f64 * NANOS_PER_HOUR;
+
+#[derive(Clone, Copy)]
+#[repr(u16)]
+enum IntervalType {
+    Century = 0b_00_0000_0001,
+    Decade = 0b_00_0000_0010,
+    Year = 0b_00_0000_0100,
+    Month = 0b_00_0000_1000,
+    Week = 0b_00_0001_0000,
+    Day = 0b_00_0010_0000,
+    Hour = 0b_00_0100_0000,
+    Minute = 0b_00_1000_0000,
+    Second = 0b_01_0000_0000,
+    Millisecond = 0b_10_0000_0000,
+}
+
+impl FromStr for IntervalType {
+    type Err = ArrowError;
+
+    fn from_str(s: &str) -> Result<Self, ArrowError> {
+        match s.to_lowercase().as_str() {
+            "century" | "centuries" => Ok(Self::Century),
+            "decade" | "decades" => Ok(Self::Decade),
+            "year" | "years" => Ok(Self::Year),
+            "month" | "months" => Ok(Self::Month),
+            "week" | "weeks" => Ok(Self::Week),
+            "day" | "days" => Ok(Self::Day),
+            "hour" | "hours" => Ok(Self::Hour),
+            "minute" | "minutes" => Ok(Self::Minute),
+            "second" | "seconds" => Ok(Self::Second),
+            "millisecond" | "milliseconds" => Ok(Self::Millisecond),
+            _ => Err(ArrowError::NotYetImplemented(format!(
+                "Unknown interval type: {s}"
+            ))),
+        }
+    }
+}
+
+pub type MonthDayNano = (i32, i32, i64);
+
+/// parse string value to a triple of aligned months, days, nanos.
+/// leading field is the default unit. e.g. `INTERVAL 1` represents `INTERVAL 1 SECOND` when leading_filed = 'second'
+fn parse_interval(leading_field: &str, value: &str) -> Result<MonthDayNano, ArrowError> {
+    let mut used_interval_types = 0;
+
+    let mut calculate_from_part = |interval_period_str: &str,
+                                   interval_type: &str|
+     -> Result<(i32, i32, i64), ArrowError> {
+        // TODO: Use fixed-point arithmetic to avoid truncation and rounding errors (#3809)
+        let interval_period = match f64::from_str(interval_period_str) {
+            Ok(n) => n,
+            Err(_) => {
+                return Err(ArrowError::NotYetImplemented(format!(
+                    "Unsupported Interval Expression with value {value:?}"
+                )));
+            }
+        };
+
+        if interval_period > (i64::MAX as f64) {
+            return Err(ArrowError::ParseError(format!(
+                "Interval field value out of range: {value:?}"
+            )));
+        }
+
+        let it = IntervalType::from_str(interval_type).map_err(|_| {
+            ArrowError::ParseError(format!(
+                "Invalid input syntax for type interval: {value:?}"
+            ))
+        })?;
+
+        // Disallow duplicate interval types
+        if used_interval_types & (it as u16) != 0 {
+            return Err(ArrowError::ParseError(format!(
+                "Invalid input syntax for type interval: {value:?}. Repeated type '{interval_type}'"
+            )));
+        } else {
+            used_interval_types |= it as u16;
+        }
+
+        match it {
+            IntervalType::Century => {
+                align_interval_parts(interval_period * 1200_f64, 0.0, 0.0)
+            }
+            IntervalType::Decade => {
+                align_interval_parts(interval_period * 120_f64, 0.0, 0.0)
+            }
+            IntervalType::Year => {
+                align_interval_parts(interval_period * 12_f64, 0.0, 0.0)
+            }
+            IntervalType::Month => align_interval_parts(interval_period, 0.0, 0.0),
+            IntervalType::Week => align_interval_parts(0.0, interval_period * 7_f64, 0.0),
+            IntervalType::Day => align_interval_parts(0.0, interval_period, 0.0),
+            IntervalType::Hour => Ok((
+                0,
+                0,
+                (interval_period * SECONDS_PER_HOUR * NANOS_PER_SECOND) as i64,
+            )),
+            IntervalType::Minute => {
+                Ok((0, 0, (interval_period * 60_f64 * NANOS_PER_SECOND) as i64))
+            }
+            IntervalType::Second => {
+                Ok((0, 0, (interval_period * NANOS_PER_SECOND) as i64))
+            }
+            IntervalType::Millisecond => {
+                Ok((0, 0, (interval_period * 1_000_000f64) as i64))
+            }
+        }
+    };
+
+    let mut result_month: i32 = 0;
+    let mut result_days: i32 = 0;
+    let mut result_nanos: i64 = 0;
+
+    let mut parts = value.split_whitespace();
+
+    while let Some(interval_period_str) = parts.next() {
+        let unit = parts.next().unwrap_or(leading_field);
+
+        let (diff_month, diff_days, diff_nanos) =
+            calculate_from_part(interval_period_str, unit)?;
+
+        result_month =
+            result_month
+                .checked_add(diff_month)
+                .ok_or(ArrowError::ParseError(format!(
+                    "Interval field value out of range: {value:?}"
+                )))?;
+
+        result_days =
+            result_days
+                .checked_add(diff_days)
+                .ok_or(ArrowError::ParseError(format!(
+                    "Interval field value out of range: {value:?}"
+                )))?;
+
+        result_nanos =
+            result_nanos
+                .checked_add(diff_nanos)
+                .ok_or(ArrowError::ParseError(format!(
+                    "Interval field value out of range: {value:?}"
+                )))?;
+    }
+
+    Ok((result_month, result_days, result_nanos))
+}
+
+/// The fractional units must be spilled to smaller units.
+/// [reference Postgresql doc](https://www.postgresql.org/docs/15/datatype-datetime.html#DATATYPE-INTERVAL-INPUT:~:text=Field%20values%20can,fractional%20on%20output.)
+/// INTERVAL '0.5 MONTH' = 15 days, INTERVAL '1.5 MONTH' = 1 month 15 days
+/// INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
+fn align_interval_parts(
+    month_part: f64,
+    mut day_part: f64,
+    mut nanos_part: f64,
+) -> Result<(i32, i32, i64), ArrowError> {
+    // Convert fractional month to days, It's not supported by Arrow types, but anyway
+    day_part += (month_part - (month_part as i64) as f64) * 30_f64;
+
+    // Convert fractional days to hours
+    nanos_part += (day_part - ((day_part as i64) as f64))
+        * 24_f64
+        * SECONDS_PER_HOUR
+        * NANOS_PER_SECOND;
+
+    if month_part > i32::MAX as f64
+        || month_part < i32::MIN as f64
+        || day_part > i32::MAX as f64
+        || day_part < i32::MIN as f64
+        || nanos_part > i64::MAX as f64
+        || nanos_part < i64::MIN as f64
+    {
+        return Err(ArrowError::ParseError(format!(
+            "Parsed interval field value out of range: {month_part} months {day_part} days {nanos_part} nanos"
+        )));
+    }
+
+    Ok((month_part as i32, day_part as i32, nanos_part as i64))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1016,6 +1244,127 @@ mod tests {
         assert_eq!(
             Time32SecondType::parse_formatted("02 - 10 - 01", "%H - %M - %S"),
             Some(7_801)
+        );
+    }
+
+    #[test]
+    fn test_parse_interval() {
+        assert_eq!(
+            (1i32, 0i32, 0i64),
+            parse_interval("months", "1 month").unwrap(),
+        );
+
+        assert_eq!(
+            (2i32, 0i32, 0i64),
+            parse_interval("months", "2 month").unwrap(),
+        );
+
+        assert_eq!(
+            (-1i32, -18i32, (-0.2 * NANOS_PER_DAY) as i64),
+            parse_interval("months", "-1.5 months -3.2 days").unwrap(),
+        );
+
+        assert_eq!(
+            (2i32, 10i32, (9.0 * NANOS_PER_HOUR) as i64),
+            parse_interval("months", "2.1 months 7.25 days 3 hours").unwrap(),
+        );
+
+        assert_eq!(
+            parse_interval("months", "1 centurys 1 month")
+                .unwrap_err()
+                .to_string(),
+            r#"Parser error: Invalid input syntax for type interval: "1 centurys 1 month""#
+        );
+
+        assert_eq!(
+            (37i32, 0i32, 0i64),
+            parse_interval("months", "3 year 1 month").unwrap(),
+        );
+
+        assert_eq!(
+            (35i32, 0i32, 0i64),
+            parse_interval("months", "3 year -1 month").unwrap(),
+        );
+
+        assert_eq!(
+            (-37i32, 0i32, 0i64),
+            parse_interval("months", "-3 year -1 month").unwrap(),
+        );
+
+        assert_eq!(
+            (-35i32, 0i32, 0i64),
+            parse_interval("months", "-3 year 1 month").unwrap(),
+        );
+
+        assert_eq!(
+            (0i32, 5i32, 0i64),
+            parse_interval("months", "5 days").unwrap(),
+        );
+
+        assert_eq!(
+            (0i32, 7i32, (3f64 * NANOS_PER_HOUR) as i64),
+            parse_interval("months", "7 days 3 hours").unwrap(),
+        );
+
+        assert_eq!(
+            (0i32, 7i32, (5f64 * NANOS_PER_MINUTE) as i64),
+            parse_interval("months", "7 days 5 minutes").unwrap(),
+        );
+
+        assert_eq!(
+            (0i32, 7i32, (-5f64 * NANOS_PER_MINUTE) as i64),
+            parse_interval("months", "7 days -5 minutes").unwrap(),
+        );
+
+        assert_eq!(
+            (0i32, -7i32, (5f64 * NANOS_PER_HOUR) as i64),
+            parse_interval("months", "-7 days 5 hours").unwrap(),
+        );
+
+        assert_eq!(
+            (
+                0i32,
+                -7i32,
+                (-5f64 * NANOS_PER_HOUR
+                    - 5f64 * NANOS_PER_MINUTE
+                    - 5f64 * NANOS_PER_SECOND) as i64
+            ),
+            parse_interval("months", "-7 days -5 hours -5 minutes -5 seconds").unwrap(),
+        );
+
+        assert_eq!(
+            (12i32, 0i32, (25f64 * NANOS_PER_MILLIS) as i64),
+            parse_interval("months", "1 year 25 millisecond").unwrap(),
+        );
+
+        assert_eq!(
+            (12i32, 1i32, (0.000000001 * NANOS_PER_SECOND) as i64),
+            parse_interval("months", "1 year 1 day 0.000000001 seconds").unwrap(),
+        );
+
+        assert_eq!(
+            (12i32, 1i32, (0.1 * NANOS_PER_MILLIS) as i64),
+            parse_interval("months", "1 year 1 day 0.1 milliseconds").unwrap(),
+        );
+
+        assert_eq!(
+            (1i32, 0i32, (-NANOS_PER_SECOND) as i64),
+            parse_interval("months", "1 month -1 second").unwrap(),
+        );
+
+        assert_eq!(
+            (-13i32, -8i32, (- NANOS_PER_HOUR - NANOS_PER_MINUTE - NANOS_PER_SECOND - 1.11 * NANOS_PER_MILLIS) as i64),
+            parse_interval("months", "-1 year -1 month -1 week -1 day -1 hour -1 minute -1 second -1.11 millisecond").unwrap(),
+        );
+    }
+
+    #[test]
+    fn test_duplicate_interval_type() {
+        let err = parse_interval("months", "1 month 1 second 1 second")
+            .expect_err("parsing interval should have failed");
+        assert_eq!(
+            r#"ParseError("Invalid input syntax for type interval: \"1 month 1 second 1 second\". Repeated type 'second'")"#,
+            format!("{err:?}")
         );
     }
 
