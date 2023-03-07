@@ -41,8 +41,8 @@ where
     /// Create a new [`RunEndBuffer`] from a [`ScalarBuffer`], an `offset` and `len`
     pub fn new(run_ends: ScalarBuffer<E>, offset: usize, len: usize) -> Self {
         assert!(
-            run_ends.windows(2).all(|w| w[0] <= w[1]),
-            "run-ends not monotonic"
+            run_ends.windows(2).all(|w| w[0] < w[1]),
+            "run-ends not strictly increasing"
         );
 
         if len != 0 {
@@ -69,7 +69,7 @@ where
     ///
     /// # Safety
     ///
-    /// - `buffer` must contain monotonically increasing values greater than zero
+    /// - `buffer` must contain strictly increasing values greater than zero
     /// - The last value of `buffer` must be greater than or equal to `offset + len`
     pub unsafe fn new_unchecked(
         run_ends: ScalarBuffer<E>,
@@ -95,6 +95,12 @@ where
         self.len
     }
 
+    /// Returns true if this buffer is empty
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     /// Returns the values of this [`RunEndBuffer`] not including any offset
     #[inline]
     pub fn values(&self) -> &[E] {
@@ -103,7 +109,7 @@ where
 
     /// Returns the maximum run-end encoded in the underlying buffer
     #[inline]
-    pub fn logical_len(&self) -> usize {
+    pub fn max_value(&self) -> usize {
         self.values().last().copied().unwrap_or_default().as_usize()
     }
 
@@ -132,7 +138,7 @@ where
 
     /// Returns the physical index at which the array slice ends
     pub fn get_end_physical_index(&self) -> usize {
-        if self.logical_len() == self.offset + self.len {
+        if self.max_value() == self.offset + self.len {
             return self.values().len() - 1;
         }
         // Fallback to binary search

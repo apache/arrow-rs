@@ -581,7 +581,7 @@ fn into_zero_offset_run_array<R: RunEndIndexType>(
     run_array: RunArray<R>,
 ) -> Result<RunArray<R>, ArrowError> {
     let run_ends = run_array.run_ends();
-    if run_ends.offset() == 0 && run_ends.logical_len() == run_ends.len() {
+    if run_ends.offset() == 0 && run_ends.max_value() == run_ends.len() {
         return Ok(run_array);
     }
 
