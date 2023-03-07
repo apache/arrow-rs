@@ -182,6 +182,7 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
                 .map(|pattern| pattern.map(|pattern| pattern.to_string())),
         ),
     };
+
     array
         .iter()
         .zip(complete_pattern)
@@ -209,9 +210,14 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
                     };
                     match re.captures(value) {
                         Some(caps) => {
-                            for m in caps.iter().skip(1).flatten() {
+                            let mut iter = caps.iter();
+                            if caps.len() > 1 {
+                                iter.next();
+                            }
+                            for m in iter.flatten() {
                                 list_builder.values().append_value(m.as_str());
                             }
+
                             list_builder.append(true);
                         }
                         None => list_builder.append(false),
@@ -279,6 +285,20 @@ mod tests {
         expected_builder.append(false);
         let expected = expected_builder.finish();
         let result = actual.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(&expected, result);
+    }
+
+    #[test]
+    fn test_single_group_not_skip_match() {
+        let array = StringArray::from(vec![Some("foo"), Some("bar")]);
+        let pattern = GenericStringArray::<i32>::from(vec![r"foo"]);
+        let actual = regexp_match(&array, &pattern, None).unwrap();
+        let result = actual.as_any().downcast_ref::<ListArray>().unwrap();
+        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new();
+        let mut expected_builder = ListBuilder::new(elem_builder);
+        expected_builder.values().append_value("foo");
+        expected_builder.append(true);
+        let expected = expected_builder.finish();
         assert_eq!(&expected, result);
     }
 
