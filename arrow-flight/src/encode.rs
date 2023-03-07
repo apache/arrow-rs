@@ -453,7 +453,6 @@ fn hydrate_dictionary(array: &ArrayRef) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use arrow::{
         array::{UInt32Array, UInt8Array},
         compute::concat_batches,
@@ -462,6 +461,7 @@ mod tests {
     use arrow_array::{
         DictionaryArray, Int16Array, Int32Array, Int64Array, StringArray, UInt64Array,
     };
+    use std::collections::HashMap;
 
     use super::*;
 
@@ -505,9 +505,10 @@ mod tests {
 
     #[test]
     fn test_schema_metadata_encoded() {
-        let schema = Schema::new(vec![
-            Field::new("data", DataType::Int32, false),
-        ]).with_metadata(HashMap::from([("some_key".to_owned(), "some_value".to_owned())]));
+        let schema =
+            Schema::new(vec![Field::new("data", DataType::Int32, false)]).with_metadata(
+                HashMap::from([("some_key".to_owned(), "some_value".to_owned())]),
+            );
 
         let got = prepare_schema_for_flight(&schema);
         assert!(got.metadata().contains_key("some_key"));
