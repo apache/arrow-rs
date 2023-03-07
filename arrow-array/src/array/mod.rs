@@ -880,6 +880,7 @@ mod tests {
                     assert_eq!(array.null_count(), 0);
                     assert_eq!(array.values().len(), 1);
                     assert_eq!(array.values().null_count(), 1);
+                    assert_eq!(array.run_ends().len(), 4);
                     assert_eq!(array.run_ends().values(), &[4]);
 
                     let idx = array.get_physical_indices(&[0, 1, 2, 3]).unwrap();

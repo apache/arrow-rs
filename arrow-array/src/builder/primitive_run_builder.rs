@@ -44,10 +44,7 @@ use arrow_buffer::ArrowNativeType;
 /// builder.append_value(5678);
 /// let array = builder.finish();
 ///
-/// assert_eq!(
-///     array.run_ends(),
-///     &Int16Array::from(vec![Some(3), Some(4), Some(6)])
-/// );
+/// assert_eq!(array.run_ends().values(), &[3, 4, 6]);
 ///
 /// let av = array.values();
 ///
@@ -270,7 +267,7 @@ mod tests {
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::as_primitive_array;
     use crate::types::{Int16Type, UInt32Type};
-    use crate::{Array, Int16Array, UInt32Array};
+    use crate::{Array, UInt32Array};
 
     #[test]
     fn test_primitive_ree_array_builder() {
@@ -287,10 +284,7 @@ mod tests {
         assert_eq!(array.null_count(), 0);
         assert_eq!(array.len(), 6);
 
-        assert_eq!(
-            array.run_ends(),
-            &Int16Array::from(vec![Some(3), Some(4), Some(6)])
-        );
+        assert_eq!(array.run_ends().values(), &[3, 4, 6]);
 
         let av = array.values();
 
@@ -313,10 +307,7 @@ mod tests {
 
         assert_eq!(array.len(), 11);
         assert_eq!(array.null_count(), 0);
-        assert_eq!(
-            as_primitive_array::<Int16Type>(array.run_ends()).values(),
-            &[1, 3, 5, 9, 10, 11]
-        );
+        assert_eq!(array.run_ends().values(), &[1, 3, 5, 9, 10, 11]);
         assert_eq!(
             as_primitive_array::<Int16Type>(array.values().as_ref()).values(),
             &[1, 2, 5, 4, 6, 2]
