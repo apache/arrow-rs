@@ -157,6 +157,26 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 }
 
 /// Extract all groups matched by a regular expression for a given String array.
+///
+/// Modelled after the Postgres [regexp_match].
+///
+/// Returns a ListArray of [`GenericStringArray`] with each element containing the leftmost-first
+/// match of the corresponding index in `regex_array` to string in `array`
+///
+/// If there is no match, the list element is NULL.
+///
+/// If a match is found, and the pattern contains no capturing parenthesized subexpressions,
+/// then the list element is a single-element [`GenericStringArray`] containing the substring
+/// matching the whole pattern.
+///
+/// If a match is found, and the pattern contains capturing parenthesized subexpressions, then the
+/// list element is a [`GenericStringArray`] whose n'th element is the substring matching
+/// the n'th capturing parenthesized subexpression of the pattern.
+///
+/// The flags parameter is an optional text string containing zero or more single-letter flags
+/// that change the function's behavior.
+///
+/// [regexp_match]: https://www.postgresql.org/docs/current/functions-matching.html#FUNCTIONS-POSIX-REGEXP
 pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     regex_array: &GenericStringArray<OffsetSize>,
