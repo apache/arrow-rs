@@ -168,8 +168,7 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
 
     let builder = ArrayDataBuilder::new(field.data_type.clone())
         .len(rows.len())
-        .null_count(canonical.null_count())
-        .null_bit_buffer(canonical.data().null_buffer().cloned())
+        .nulls(canonical.data().nulls().cloned())
         .add_buffer(offsets.finish())
         .add_child_data(child_data);
 

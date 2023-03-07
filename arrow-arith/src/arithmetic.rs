@@ -1572,6 +1572,7 @@ mod tests {
     use arrow_array::builder::{
         BooleanBufferBuilder, BufferBuilder, PrimitiveDictionaryBuilder,
     };
+    use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
     use arrow_buffer::i256;
     use arrow_data::ArrayDataBuilder;
     use chrono::NaiveDate;
@@ -3057,15 +3058,19 @@ mod tests {
         // `count_set_bits_offset` takes len in bits as parameter.
         assert_eq!(null_buffer.count_set_bits_offset(0, 13), 0);
 
+        let nulls = BooleanBuffer::new(null_buffer, 0, 13);
+        assert_eq!(nulls.count_set_bits(), 0);
+        let nulls = NullBuffer::new(nulls);
+        assert_eq!(nulls.null_count(), 13);
+
         let mut data_buffer_builder = BufferBuilder::<i32>::new(13);
         data_buffer_builder.append_slice(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
         let data_buffer = data_buffer_builder.finish();
 
         let arg1: Int32Array = ArrayDataBuilder::new(DataType::Int32)
             .len(13)
-            .null_count(13)
+            .nulls(Some(nulls))
             .buffers(vec![data_buffer])
-            .null_bit_buffer(Some(null_buffer))
             .build()
             .unwrap()
             .into();
@@ -3078,9 +3083,7 @@ mod tests {
 
         let arg2: Int32Array = ArrayDataBuilder::new(DataType::Int32)
             .len(13)
-            .null_count(0)
             .buffers(vec![data_buffer])
-            .null_bit_buffer(None)
             .build()
             .unwrap()
             .into();

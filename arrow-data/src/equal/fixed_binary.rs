@@ -19,7 +19,6 @@ use crate::bit_iterator::BitSliceIterator;
 use crate::contains_nulls;
 use crate::data::ArrayData;
 use crate::equal::primitive::NULL_SLICES_SELECTIVITY_THRESHOLD;
-use arrow_buffer::bit_util::get_bit;
 use arrow_schema::DataType;
 
 use super::utils::equal_len;
@@ -41,7 +40,7 @@ pub(super) fn fixed_binary_equal(
 
     // Only checking one null mask here because by the time the control flow reaches
     // this point, the equality of the two masks would have already been verified.
-    if !contains_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len) {
+    if !contains_nulls(lhs.nulls(), lhs_start, len) {
         equal_len(
             lhs_values,
             rhs_values,
@@ -54,15 +53,15 @@ pub(super) fn fixed_binary_equal(
 
         if selectivity_frac >= NULL_SLICES_SELECTIVITY_THRESHOLD {
             // get a ref of the null buffer bytes, to use in testing for nullness
-            let lhs_null_bytes = lhs.null_buffer().as_ref().unwrap().as_slice();
-            let rhs_null_bytes = rhs.null_buffer().as_ref().unwrap().as_slice();
+            let lhs_nulls = lhs.nulls().unwrap();
+            let rhs_nulls = rhs.nulls().unwrap();
             // with nulls, we need to compare item by item whenever it is not null
             (0..len).all(|i| {
                 let lhs_pos = lhs_start + i;
                 let rhs_pos = rhs_start + i;
 
-                let lhs_is_null = !get_bit(lhs_null_bytes, lhs_pos + lhs.offset());
-                let rhs_is_null = !get_bit(rhs_null_bytes, rhs_pos + rhs.offset());
+                let lhs_is_null = lhs_nulls.is_null(lhs_pos);
+                let rhs_is_null = rhs_nulls.is_null(rhs_pos);
 
                 lhs_is_null
                     || (lhs_is_null == rhs_is_null)
@@ -75,14 +74,16 @@ pub(super) fn fixed_binary_equal(
                         )
             })
         } else {
+            let lhs_nulls = lhs.nulls().unwrap();
             let lhs_slices_iter = BitSliceIterator::new(
-                lhs.null_buffer().as_ref().unwrap(),
-                lhs_start + lhs.offset(),
+                lhs_nulls.validity(),
+                lhs_start + lhs_nulls.offset(),
                 len,
             );
+            let rhs_nulls = lhs.nulls().unwrap();
             let rhs_slices_iter = BitSliceIterator::new(
-                rhs.null_buffer().as_ref().unwrap(),
-                rhs_start + rhs.offset(),
+                rhs_nulls.validity(),
+                rhs_start + rhs_nulls.offset(),
                 len,
             );
 

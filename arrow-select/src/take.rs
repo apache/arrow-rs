@@ -340,12 +340,7 @@ where
     // Soundness: `slice.map` is `TrustedLen`.
     let buffer = unsafe { Buffer::try_from_trusted_len_iter(values)? };
 
-    Ok((
-        buffer,
-        indices_data
-            .null_buffer()
-            .map(|b| b.bit_slice(indices_data.offset(), indices.len())),
-    ))
+    Ok((buffer, indices_data.nulls().map(|b| b.inner().sliced())))
 }
 
 // take implementation when both values and indices contain nulls
@@ -530,14 +525,11 @@ where
     IndexType::Native: ToPrimitive,
 {
     let val_buf = take_bits(values.values(), values.offset(), indices)?;
-    let null_buf = match values.data().null_buffer() {
-        Some(buf) if values.null_count() > 0 => {
-            Some(take_bits(buf, values.offset(), indices)?)
+    let null_buf = match values.data().nulls() {
+        Some(nulls) if nulls.null_count() > 0 => {
+            Some(take_bits(nulls.buffer(), nulls.offset(), indices)?)
         }
-        _ => indices
-            .data()
-            .null_buffer()
-            .map(|b| b.bit_slice(indices.offset(), indices.len())),
+        _ => indices.data().nulls().map(|b| b.inner().sliced()),
     };
 
     let data = unsafe {
@@ -626,7 +618,7 @@ where
             }
             *offset = length_so_far;
         }
-        nulls = indices.data_ref().null_buffer().cloned();
+        nulls = indices.data().nulls().map(|b| b.inner().sliced());
     } else {
         let num_bytes = bit_util::ceil(data_len, 8);
 
@@ -791,7 +783,7 @@ where
             values.data_type().clone(),
             new_keys.len(),
             Some(new_keys_data.null_count()),
-            new_keys_data.null_buffer().cloned(),
+            new_keys_data.nulls().map(|b| b.inner().sliced()),
             0,
             new_keys_data.buffers().to_vec(),
             values.data().child_data().to_vec(),
@@ -1639,7 +1631,7 @@ mod tests {
             let expected_list_data = ArrayData::builder(list_data_type)
                 .len(5)
                 // null buffer remains the same as only the indices have nulls
-                .null_bit_buffer(index.data().null_buffer().cloned())
+                .nulls(index.data().nulls().cloned())
                 .add_buffer(expected_offsets)
                 .add_child_data(expected_data)
                 .build()
@@ -1713,7 +1705,7 @@ mod tests {
             let expected_list_data = ArrayData::builder(list_data_type)
                 .len(5)
                 // null buffer remains the same as only the indices have nulls
-                .null_bit_buffer(index.data().null_buffer().cloned())
+                .nulls(index.data().nulls().cloned())
                 .add_buffer(expected_offsets)
                 .add_child_data(expected_data)
                 .build()

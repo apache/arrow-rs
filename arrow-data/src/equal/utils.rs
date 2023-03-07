@@ -49,15 +49,16 @@ pub(super) fn equal_nulls(
     rhs_start: usize,
     len: usize,
 ) -> bool {
-    let lhs_offset = lhs_start + lhs.offset();
-    let rhs_offset = rhs_start + rhs.offset();
-
-    match (lhs.null_buffer(), rhs.null_buffer()) {
-        (Some(lhs), Some(rhs)) => {
-            equal_bits(lhs.as_slice(), rhs.as_slice(), lhs_offset, rhs_offset, len)
-        }
-        (Some(lhs), None) => !contains_nulls(Some(lhs), lhs_offset, len),
-        (None, Some(rhs)) => !contains_nulls(Some(rhs), rhs_offset, len),
+    match (lhs.nulls(), rhs.nulls()) {
+        (Some(lhs), Some(rhs)) => equal_bits(
+            lhs.validity(),
+            rhs.validity(),
+            lhs.offset() + lhs_start,
+            rhs.offset() + rhs_start,
+            len,
+        ),
+        (Some(lhs), None) => !contains_nulls(Some(lhs), lhs_start, len),
+        (None, Some(rhs)) => !contains_nulls(Some(rhs), rhs_start, len),
         (None, None) => true,
     }
 }

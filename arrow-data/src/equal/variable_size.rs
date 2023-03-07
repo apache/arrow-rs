@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::data::{count_nulls, ArrayData};
-use arrow_buffer::bit_util::get_bit;
 use arrow_buffer::ArrowNativeType;
 use num::Integer;
 
@@ -60,8 +59,8 @@ pub(super) fn variable_sized_equal<T: ArrowNativeType + Integer>(
     let lhs_values = lhs.buffers()[1].as_slice();
     let rhs_values = rhs.buffers()[1].as_slice();
 
-    let lhs_null_count = count_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
-    let rhs_null_count = count_nulls(rhs.null_buffer(), rhs_start + rhs.offset(), len);
+    let lhs_null_count = count_nulls(lhs.nulls(), lhs_start, len);
+    let rhs_null_count = count_nulls(rhs.nulls(), rhs_start, len);
 
     if lhs_null_count == 0
         && rhs_null_count == 0
@@ -83,15 +82,8 @@ pub(super) fn variable_sized_equal<T: ArrowNativeType + Integer>(
             let rhs_pos = rhs_start + i;
 
             // the null bits can still be `None`, indicating that the value is valid.
-            let lhs_is_null = !lhs
-                .null_buffer()
-                .map(|v| get_bit(v.as_slice(), lhs.offset() + lhs_pos))
-                .unwrap_or(true);
-
-            let rhs_is_null = !rhs
-                .null_buffer()
-                .map(|v| get_bit(v.as_slice(), rhs.offset() + rhs_pos))
-                .unwrap_or(true);
+            let lhs_is_null = lhs.nulls().map(|v| v.is_null(lhs_pos)).unwrap_or_default();
+            let rhs_is_null = rhs.nulls().map(|v| v.is_null(rhs_pos)).unwrap_or_default();
 
             lhs_is_null
                 || (lhs_is_null == rhs_is_null)

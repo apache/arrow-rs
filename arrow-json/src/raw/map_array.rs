@@ -18,6 +18,7 @@
 use crate::raw::tape::{Tape, TapeElement};
 use crate::raw::{make_decoder, tape_error, ArrayDecoder};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
+use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::ArrowNativeType;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
@@ -88,7 +89,6 @@ impl ArrayDecoder for MapArrayDecoder {
         let mut key_pos = Vec::with_capacity(pos.len());
         let mut value_pos = Vec::with_capacity(pos.len());
 
-        let mut null_count = 0;
         let mut nulls = self
             .is_nullable
             .then(|| BooleanBufferBuilder::new(pos.len()));
@@ -102,7 +102,6 @@ impl ArrayDecoder for MapArrayDecoder {
                 }
                 (TapeElement::Null, Some(nulls)) => {
                     nulls.append(false);
-                    null_count += 1;
                     p + 1
                 }
                 (d, _) => return Err(tape_error(d, "{")),
@@ -140,11 +139,14 @@ impl ArrayDecoder for MapArrayDecoder {
         // Valid by construction
         let struct_data = unsafe { struct_data.build_unchecked() };
 
+        let nulls = nulls
+            .as_mut()
+            .map(|x| NullBuffer::new(BooleanBuffer::new(x.finish(), 0, pos.len())));
+
         let builder = ArrayDataBuilder::new(self.data_type.clone())
             .len(pos.len())
             .buffers(vec![offsets.finish()])
-            .null_count(null_count)
-            .null_bit_buffer(nulls.as_mut().map(|x| x.finish()))
+            .nulls(nulls)
             .child_data(vec![struct_data]);
 
         // Safety:

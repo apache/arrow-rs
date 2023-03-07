@@ -20,6 +20,7 @@ use super::{
     ArrayData, ArrayDataBuilder,
 };
 use crate::bit_mask::set_bits;
+use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{bit_util, i256, ArrowNativeType, MutableBuffer};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
 use half::f16;
@@ -76,26 +77,30 @@ impl<'a> _MutableArrayData<'a> {
             }
         };
 
+        let nulls = (self.null_count > 0).then(|| {
+            let bools = BooleanBuffer::new(self.null_buffer.into(), 0, self.len);
+            unsafe { NullBuffer::new_unchecked(bools, self.null_count) }
+        });
+
         ArrayDataBuilder::new(self.data_type)
             .offset(0)
             .len(self.len)
-            .null_count(self.null_count)
+            .nulls(nulls)
             .buffers(buffers)
             .child_data(child_data)
-            .null_bit_buffer((self.null_count > 0).then(|| self.null_buffer.into()))
     }
 }
 
 fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits {
-    if let Some(bitmap) = array.null_bitmap() {
-        let bytes = bitmap.buffer().as_slice();
+    if let Some(nulls) = array.nulls() {
+        let bytes = nulls.validity();
         Box::new(move |mutable, start, len| {
             utils::resize_for_bits(&mut mutable.null_buffer, mutable.len + len);
             mutable.null_count += set_bits(
                 mutable.null_buffer.as_slice_mut(),
                 bytes,
                 mutable.len,
-                array.offset() + start,
+                nulls.offset() + start,
                 len,
             );
         })

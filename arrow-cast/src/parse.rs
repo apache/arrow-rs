@@ -16,16 +16,13 @@
 // under the License.
 
 use arrow_array::types::*;
-use arrow_array::ArrowPrimitiveType;
+use arrow_array::{ArrowNativeTypeOp, ArrowPrimitiveType};
+use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;
 use std::str::FromStr;
 
-/// Accepts a string in RFC3339 / ISO8601 standard format and some
-/// variants and converts it to a nanosecond precision timestamp.
-///
-/// Implements the `to_timestamp` function to convert a string to a
-/// timestamp, following the model of spark SQL’s to_`timestamp`.
+/// Accepts a string and parses it relative to the provided `timezone`
 ///
 /// In addition to RFC3339 / ISO8601 standard timestamps, it also
 /// accepts strings that use a space ` ` to separate the date and time
@@ -39,36 +36,6 @@ use std::str::FromStr;
 /// * `1997-01-31 09:26:56.123`         # close to RCF3339 but uses a space and no timezone offset
 /// * `1997-01-31 09:26:56`             # close to RCF3339, no fractional seconds
 /// * `1997-01-31`                      # close to RCF3339, only date no time
-//
-/// Internally, this function uses the `chrono` library for the
-/// datetime parsing
-///
-/// We hope to extend this function in the future with a second
-/// parameter to specifying the format string.
-///
-/// ## Timestamp Precision
-///
-/// Function uses the maximum precision timestamps supported by
-/// Arrow (nanoseconds stored as a 64-bit integer) timestamps. This
-/// means the range of dates that timestamps can represent is ~1677 AD
-/// to 2262 AM
-///
-///
-/// ## Timezone / Offset Handling
-///
-/// Numerical values of timestamps are stored compared to offset UTC.
-///
-/// This function interprets strings without an explicit time zone as
-/// timestamps with offsets of the local time on the machine
-///
-/// For example, `1997-01-31 09:26:56.123Z` is interpreted as UTC, as
-/// it has an explicit timezone specifier (“Z” for Zulu/UTC)
-///
-/// `1997-01-31T09:26:56.123` is interpreted as a local timestamp in
-/// the timezone of the machine. For example, if
-/// the system timezone is set to Americas/New_York (UTC-5) the
-/// timestamp will be interpreted as though it were
-/// `1997-01-31T09:26:56.123-05:00`
 ///
 /// Some formats that supported by PostgresSql <https://www.postgresql.org/docs/current/datatype-datetime.html#DATATYPE-DATETIME-TIME-TABLE>
 /// still not supported by chrono, like
@@ -77,12 +44,14 @@ use std::str::FromStr;
 ///     "2023-01-01 040506 +07:30:00",
 ///     "2023-01-01 04:05:06.789 PST",
 ///     "2023-01-01 04:05:06.789 -08",
-#[inline]
-pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
+pub fn string_to_datetime<T: TimeZone>(
+    timezone: &T,
+    s: &str,
+) -> Result<DateTime<T>, ArrowError> {
     // Fast path:  RFC3339 timestamp (with a T)
     // Example: 2020-09-08T13:42:29.190855Z
     if let Ok(ts) = DateTime::parse_from_rfc3339(s) {
-        return Ok(ts.timestamp_nanos());
+        return Ok(ts.with_timezone(timezone));
     }
 
     // Implement quasi-RFC3339 support by trying to parse the
@@ -97,14 +66,14 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
 
     for f in supported_formats.iter() {
         if let Ok(ts) = DateTime::parse_from_str(s, f) {
-            return to_timestamp_nanos(ts.naive_utc());
+            return Ok(ts.with_timezone(timezone));
         }
     }
 
     // with an explicit Z, using ' ' as a separator
     // Example: 2020-09-08 13:42:29Z
     if let Ok(ts) = Utc.datetime_from_str(s, "%Y-%m-%d %H:%M:%S%.fZ") {
-        return to_timestamp_nanos(ts.naive_utc());
+        return Ok(ts.with_timezone(timezone));
     }
 
     // Support timestamps without an explicit timezone offset, again
@@ -113,34 +82,44 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     // without a timezone specifier as a local time, using T as a separator
     // Example: 2020-09-08T13:42:29.190855
     if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
-        return to_timestamp_nanos(ts);
+        if let Some(offset) = timezone.offset_from_local_datetime(&ts).single() {
+            return Ok(DateTime::from_local(ts, offset));
+        }
     }
 
     // without a timezone specifier as a local time, using T as a
     // separator, no fractional seconds
     // Example: 2020-09-08T13:42:29
     if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-        return Ok(ts.timestamp_nanos());
+        if let Some(offset) = timezone.offset_from_local_datetime(&ts).single() {
+            return Ok(DateTime::from_local(ts, offset));
+        }
     }
 
     // without a timezone specifier as a local time, using ' ' as a separator
     // Example: 2020-09-08 13:42:29.190855
     if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f") {
-        return to_timestamp_nanos(ts);
+        if let Some(offset) = timezone.offset_from_local_datetime(&ts).single() {
+            return Ok(DateTime::from_local(ts, offset));
+        }
     }
 
     // without a timezone specifier as a local time, using ' ' as a
     // separator, no fractional seconds
     // Example: 2020-09-08 13:42:29
     if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-        return Ok(ts.timestamp_nanos());
+        if let Some(offset) = timezone.offset_from_local_datetime(&ts).single() {
+            return Ok(DateTime::from_local(ts, offset));
+        }
     }
 
     // without a timezone specifier as a local time, only date
     // Example: 2020-09-08
     if let Ok(dt) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
         if let Some(ts) = dt.and_hms_opt(0, 0, 0) {
-            return Ok(ts.timestamp_nanos());
+            if let Some(offset) = timezone.offset_from_local_datetime(&ts).single() {
+                return Ok(DateTime::from_local(ts, offset));
+            }
         }
     }
 
@@ -152,6 +131,42 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     Err(ArrowError::CastError(format!(
         "Error parsing '{s}' as timestamp"
     )))
+}
+
+/// Accepts a string in RFC3339 / ISO8601 standard format and some
+/// variants and converts it to a nanosecond precision timestamp.
+///
+/// See [`string_to_datetime`] for the full set of supported formats
+///
+/// Implements the `to_timestamp` function to convert a string to a
+/// timestamp, following the model of spark SQL’s to_`timestamp`.
+///
+/// Internally, this function uses the `chrono` library for the
+/// datetime parsing
+///
+/// We hope to extend this function in the future with a second
+/// parameter to specifying the format string.
+///
+/// ## Timestamp Precision
+///
+/// Function uses the maximum precision timestamps supported by
+/// Arrow (nanoseconds stored as a 64-bit integer) timestamps. This
+/// means the range of dates that timestamps can represent is ~1677 AD
+/// to 2262 AM
+///
+/// ## Timezone / Offset Handling
+///
+/// Numerical values of timestamps are stored compared to offset UTC.
+///
+/// This function interprets string without an explicit time zone as timestamps
+/// relative to UTC, see [`string_to_datetime`] for alternative semantics
+///
+/// For example, both `1997-01-31 09:26:56.123Z`, `1997-01-31T09:26:56.123`,
+/// and `1997-01-31T14:26:56.123-05:00` will be parsed as the same value
+///
+#[inline]
+pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
+    to_timestamp_nanos(string_to_datetime(&Utc, s)?.naive_utc())
 }
 
 /// Defensive check to prevent chrono-rs panics when nanosecond conversion happens on non-supported dates
@@ -446,6 +461,109 @@ impl Parser for Date64Type {
     }
 }
 
+/// Parse the string format decimal value to i128/i256 format and checking the precision and scale.
+/// The result value can't be out of bounds.
+pub fn parse_decimal<T: DecimalType>(
+    s: &str,
+    precision: u8,
+    scale: i8,
+) -> Result<T::Native, ArrowError> {
+    if !is_valid_decimal(s) {
+        return Err(ArrowError::ParseError(format!(
+            "can't parse the string value {s} to decimal"
+        )));
+    }
+    let mut offset = s.len();
+    let len = s.len();
+    let mut base = T::Native::usize_as(1);
+    let scale_usize = usize::from(scale as u8);
+
+    // handle the value after the '.' and meet the scale
+    let delimiter_position = s.find('.');
+    match delimiter_position {
+        None => {
+            // there is no '.'
+            base = T::Native::usize_as(10).pow_checked(scale as u32)?;
+        }
+        Some(mid) => {
+            // there is the '.'
+            if len - mid >= scale_usize + 1 {
+                // If the string value is "123.12345" and the scale is 2, we should just remain '.12' and drop the '345' value.
+                offset -= len - mid - 1 - scale_usize;
+            } else {
+                // If the string value is "123.12" and the scale is 4, we should append '00' to the tail.
+                base = T::Native::usize_as(10)
+                    .pow_checked((scale_usize + 1 + mid - len) as u32)?;
+            }
+        }
+    };
+
+    // each byte is digit、'-' or '.'
+    let bytes = s.as_bytes();
+    let mut negative = false;
+    let mut result = T::Native::usize_as(0);
+
+    bytes[0..offset]
+        .iter()
+        .rev()
+        .try_for_each::<_, Result<(), ArrowError>>(|&byte| {
+            match byte {
+                b'-' => {
+                    negative = true;
+                }
+                b'0'..=b'9' => {
+                    let add =
+                        T::Native::usize_as((byte - b'0') as usize).mul_checked(base)?;
+                    result = result.add_checked(add)?;
+                    base = base.mul_checked(T::Native::usize_as(10))?;
+                }
+                // because we have checked the string value
+                _ => (),
+            }
+            Ok(())
+        })?;
+
+    if negative {
+        result = result.neg_checked()?;
+    }
+
+    match T::validate_decimal_precision(result, precision) {
+        Ok(_) => Ok(result),
+        Err(e) => Err(ArrowError::ParseError(format!(
+            "parse decimal overflow: {e}"
+        ))),
+    }
+}
+
+fn is_valid_decimal(s: &str) -> bool {
+    let mut seen_dot = false;
+    let mut seen_digit = false;
+    let mut seen_sign = false;
+
+    for c in s.as_bytes() {
+        match c {
+            b'-' | b'+' => {
+                if seen_digit || seen_dot || seen_sign {
+                    return false;
+                }
+                seen_sign = true;
+            }
+            b'.' => {
+                if seen_dot {
+                    return false;
+                }
+                seen_dot = true;
+            }
+            b'0'..=b'9' => {
+                seen_digit = true;
+            }
+            _ => return false,
+        }
+    }
+
+    seen_digit
+}
+
 pub fn parse_interval_year_month(
     value: &str,
 ) -> Result<<IntervalYearMonthType as ArrowPrimitiveType>::Native, ArrowError> {
@@ -676,6 +794,8 @@ fn align_interval_parts(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::timezone::Tz;
+    use arrow_buffer::i256;
 
     #[test]
     fn string_to_timestamp_timezone() {
@@ -842,6 +962,34 @@ mod tests {
             naive_datetime.timestamp_nanos(),
             parse_timestamp("2020-09-08 13:42:29").unwrap()
         );
+
+        let tz: Tz = "+02:00".parse().unwrap();
+        let date = string_to_datetime(&tz, "2020-09-08 13:42:29").unwrap();
+        let utc = date.naive_utc().to_string();
+        assert_eq!(utc, "2020-09-08 11:42:29");
+        let local = date.naive_local().to_string();
+        assert_eq!(local, "2020-09-08 13:42:29");
+
+        let date = string_to_datetime(&tz, "2020-09-08 13:42:29Z").unwrap();
+        let utc = date.naive_utc().to_string();
+        assert_eq!(utc, "2020-09-08 13:42:29");
+        let local = date.naive_local().to_string();
+        assert_eq!(local, "2020-09-08 15:42:29");
+
+        let dt =
+            NaiveDateTime::parse_from_str("2020-09-08T13:42:29Z", "%Y-%m-%dT%H:%M:%SZ")
+                .unwrap();
+        let local: Tz = "+08:00".parse().unwrap();
+
+        // Parsed as offset from UTC
+        let date = string_to_datetime(&local, "2020-09-08T13:42:29Z").unwrap();
+        assert_eq!(dt, date.naive_utc());
+        assert_ne!(dt, date.naive_local());
+
+        // Parsed as offset from local
+        let date = string_to_datetime(&local, "2020-09-08 13:42:29").unwrap();
+        assert_eq!(dt, date.naive_local());
+        assert_ne!(dt, date.naive_utc());
     }
 
     #[test]
@@ -1225,5 +1373,71 @@ mod tests {
         parse_timestamp("1677-06-14T07:29:01.256")
             .map_err(|e| assert!(e.to_string().ends_with(ERR_NANOSECONDS_NOT_SUPPORTED)))
             .unwrap_err();
+    }
+
+    #[test]
+    fn test_parse_decimal_with_parameter() {
+        let tests = [
+            ("123.123", 123123i128),
+            ("123.1234", 123123i128),
+            ("123.1", 123100i128),
+            ("123", 123000i128),
+            ("-123.123", -123123i128),
+            ("-123.1234", -123123i128),
+            ("-123.1", -123100i128),
+            ("-123", -123000i128),
+            ("0.0000123", 0i128),
+            ("12.", 12000i128),
+            ("-12.", -12000i128),
+            ("00.1", 100i128),
+            ("-00.1", -100i128),
+            ("12345678912345678.1234", 12345678912345678123i128),
+            ("-12345678912345678.1234", -12345678912345678123i128),
+            ("99999999999999999.999", 99999999999999999999i128),
+            ("-99999999999999999.999", -99999999999999999999i128),
+            (".123", 123i128),
+            ("-.123", -123i128),
+            ("123.", 123000i128),
+            ("-123.", -123000i128),
+        ];
+        for (s, i) in tests {
+            let result_128 = parse_decimal::<Decimal128Type>(s, 20, 3);
+            assert_eq!(i, result_128.unwrap());
+            let result_256 = parse_decimal::<Decimal256Type>(s, 20, 3);
+            assert_eq!(i256::from_i128(i), result_256.unwrap());
+        }
+        let can_not_parse_tests = ["123,123", ".", "123.123.123"];
+        for s in can_not_parse_tests {
+            let result_128 = parse_decimal::<Decimal128Type>(s, 20, 3);
+            assert_eq!(
+                format!("Parser error: can't parse the string value {s} to decimal"),
+                result_128.unwrap_err().to_string()
+            );
+            let result_256 = parse_decimal::<Decimal256Type>(s, 20, 3);
+            assert_eq!(
+                format!("Parser error: can't parse the string value {s} to decimal"),
+                result_256.unwrap_err().to_string()
+            );
+        }
+        let overflow_parse_tests = ["12345678", "12345678.9", "99999999.99"];
+        for s in overflow_parse_tests {
+            let result_128 = parse_decimal::<Decimal128Type>(s, 10, 3);
+            let expected_128 = "Parser error: parse decimal overflow";
+            let actual_128 = result_128.unwrap_err().to_string();
+
+            assert!(
+                actual_128.contains(expected_128),
+                "actual: '{actual_128}', expected: '{expected_128}'"
+            );
+
+            let result_256 = parse_decimal::<Decimal256Type>(s, 10, 3);
+            let expected_256 = "Parser error: parse decimal overflow";
+            let actual_256 = result_256.unwrap_err().to_string();
+
+            assert!(
+                actual_256.contains(expected_256),
+                "actual: '{actual_256}', expected: '{expected_256}'"
+            );
+        }
     }
 }

@@ -99,7 +99,7 @@ impl From<ArrayData> for NullArray {
             "NullArray data should contain 0 buffers"
         );
         assert!(
-            data.null_buffer().is_none(),
+            data.nulls().is_none(),
             "NullArray data should not contain a null buffer, as no buffers are required"
         );
         Self { data }

@@ -15,30 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use arrow_array::builder::BufferBuilder;
+use arrow_array::types::ByteArrayType;
 use arrow_array::*;
+use arrow_buffer::ArrowNativeType;
 use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayDataBuilder;
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, DataType};
 
-/// Returns the elementwise concatenation of a [`StringArray`].
-///
-/// An index of the resulting [`StringArray`] is null if any of
-/// `StringArray` are null at that location.
-///
-/// ```text
-/// e.g:
-///
-///   ["Hello"] + ["World"] = ["HelloWorld"]
-///
-///   ["a", "b"] + [None, "c"] = [None, "bc"]
-/// ```
-///
-/// An error will be returned if `left` and `right` have different lengths
-pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
-    left: &GenericStringArray<Offset>,
-    right: &GenericStringArray<Offset>,
-) -> Result<GenericStringArray<Offset>, ArrowError> {
+/// Returns the elementwise concatenation of a [`GenericByteArray`].
+pub fn concat_elements_bytes<T: ByteArrayType>(
+    left: &GenericByteArray<T>,
+    right: &GenericByteArray<T>,
+) -> Result<GenericByteArray<T>, ArrowError> {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(format!(
             "Arrays must have the same length: {} != {}",
@@ -61,18 +52,18 @@ pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
             - right_offsets[0].as_usize(),
     );
 
-    let mut output_offsets = BufferBuilder::<Offset>::new(left_offsets.len());
-    output_offsets.append(Offset::zero());
+    let mut output_offsets = BufferBuilder::<T::Offset>::new(left_offsets.len());
+    output_offsets.append(T::Offset::usize_as(0));
     for (left_idx, right_idx) in left_offsets.windows(2).zip(right_offsets.windows(2)) {
         output_values
             .append_slice(&left_values[left_idx[0].as_usize()..left_idx[1].as_usize()]);
         output_values.append_slice(
             &right_values[right_idx[0].as_usize()..right_idx[1].as_usize()],
         );
-        output_offsets.append(Offset::from_usize(output_values.len()).unwrap());
+        output_offsets.append(T::Offset::from_usize(output_values.len()).unwrap());
     }
 
-    let builder = ArrayDataBuilder::new(GenericStringArray::<Offset>::DATA_TYPE)
+    let builder = ArrayDataBuilder::new(T::DATA_TYPE)
         .len(left.len())
         .add_buffer(output_offsets.finish())
         .add_buffer(output_values.finish())
@@ -80,6 +71,35 @@ pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
 
     // SAFETY - offsets valid by construction
     Ok(unsafe { builder.build_unchecked() }.into())
+}
+
+/// Returns the elementwise concatenation of a [`GenericStringArray`].
+///
+/// An index of the resulting [`GenericStringArray`] is null if any of
+/// `StringArray` are null at that location.
+///
+/// ```text
+/// e.g:
+///
+///   ["Hello"] + ["World"] = ["HelloWorld"]
+///
+///   ["a", "b"] + [None, "c"] = [None, "bc"]
+/// ```
+///
+/// An error will be returned if `left` and `right` have different lengths
+pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
+    left: &GenericStringArray<Offset>,
+    right: &GenericStringArray<Offset>,
+) -> Result<GenericStringArray<Offset>, ArrowError> {
+    concat_elements_bytes(left, right)
+}
+
+/// Returns the elementwise concatenation of a [`GenericBinaryArray`].
+pub fn concat_element_binary<Offset: OffsetSizeTrait>(
+    left: &GenericBinaryArray<Offset>,
+    right: &GenericBinaryArray<Offset>,
+) -> Result<GenericBinaryArray<Offset>, ArrowError> {
+    concat_elements_bytes(left, right)
 }
 
 /// Returns the elementwise concatenation of [`StringArray`].
@@ -154,6 +174,46 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
 
     // SAFETY - offsets valid by construction
     Ok(unsafe { builder.build_unchecked() }.into())
+}
+
+pub fn concat_elements_dyn(
+    left: &dyn Array,
+    right: &dyn Array,
+) -> Result<ArrayRef, ArrowError> {
+    if left.data_type() != right.data_type() {
+        return Err(ArrowError::ComputeError(format!(
+            "Cannot concat arrays of different types: {} != {}",
+            left.data_type(),
+            right.data_type()
+        )));
+    }
+    match (left.data_type(), right.data_type()) {
+        (DataType::Utf8, DataType::Utf8) => {
+            let left = left.as_any().downcast_ref::<StringArray>().unwrap();
+            let right = right.as_any().downcast_ref::<StringArray>().unwrap();
+            Ok(Arc::new(concat_elements_utf8(left, right).unwrap()))
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = left.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            let right = right.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            Ok(Arc::new(concat_elements_utf8(left, right).unwrap()))
+        }
+        (DataType::Binary, DataType::Binary) => {
+            let left = left.as_any().downcast_ref::<BinaryArray>().unwrap();
+            let right = right.as_any().downcast_ref::<BinaryArray>().unwrap();
+            Ok(Arc::new(concat_element_binary(left, right).unwrap()))
+        }
+        (DataType::LargeBinary, DataType::LargeBinary) => {
+            let left = left.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
+            let right = right.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
+            Ok(Arc::new(concat_element_binary(left, right).unwrap()))
+        }
+        // unimplemented
+        _ => Err(ArrowError::NotYetImplemented(format!(
+            "concat not supported for {}",
+            left.data_type()
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -300,5 +360,64 @@ mod tests {
             .collect::<StringArray>();
 
         assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_concat_dyn_same_type() {
+        // test for StringArray
+        let left = StringArray::from(vec![Some("foo"), Some("bar"), None]);
+        let right = StringArray::from(vec![None, Some("yyy"), Some("zzz")]);
+
+        let output: StringArray = concat_elements_dyn(&left, &right)
+            .unwrap()
+            .into_data()
+            .into();
+        let expected = StringArray::from(vec![None, Some("baryyy"), None]);
+        assert_eq!(output, expected);
+
+        // test for LargeStringArray
+        let left = LargeStringArray::from(vec![Some("foo"), Some("bar"), None]);
+        let right = LargeStringArray::from(vec![None, Some("yyy"), Some("zzz")]);
+
+        let output: LargeStringArray = concat_elements_dyn(&left, &right)
+            .unwrap()
+            .into_data()
+            .into();
+        let expected = LargeStringArray::from(vec![None, Some("baryyy"), None]);
+        assert_eq!(output, expected);
+
+        // test for BinaryArray
+        let left = BinaryArray::from_opt_vec(vec![Some(b"foo"), Some(b"bar"), None]);
+        let right = BinaryArray::from_opt_vec(vec![None, Some(b"yyy"), Some(b"zzz")]);
+        let output: BinaryArray = concat_elements_dyn(&left, &right)
+            .unwrap()
+            .into_data()
+            .into();
+        let expected = BinaryArray::from_opt_vec(vec![None, Some(b"baryyy"), None]);
+        assert_eq!(output, expected);
+
+        // test for LargeBinaryArray
+        let left = LargeBinaryArray::from_opt_vec(vec![Some(b"foo"), Some(b"bar"), None]);
+        let right =
+            LargeBinaryArray::from_opt_vec(vec![None, Some(b"yyy"), Some(b"zzz")]);
+        let output: LargeBinaryArray = concat_elements_dyn(&left, &right)
+            .unwrap()
+            .into_data()
+            .into();
+        let expected = LargeBinaryArray::from_opt_vec(vec![None, Some(b"baryyy"), None]);
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_concat_dyn_different_type() {
+        let left = StringArray::from(vec![Some("foo"), Some("bar"), None]);
+        let right = LargeStringArray::from(vec![None, Some("1"), Some("2")]);
+
+        let output = concat_elements_dyn(&left, &right);
+        assert_eq!(
+            output.unwrap_err().to_string(),
+            "Compute error: Cannot concat arrays of different types: Utf8 != LargeUtf8"
+                .to_string()
+        );
     }
 }

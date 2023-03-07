@@ -617,7 +617,6 @@ fn into_zero_offset_run_array<R: RunEndIndexType>(
         // The function builds a valid run_ends array and hence need not be validated.
         ArrayDataBuilder::new(run_array.run_ends().data_type().clone())
             .len(physical_length)
-            .null_count(0)
             .add_buffer(builder.finish())
             .build_unchecked()
     };
@@ -1220,7 +1219,7 @@ fn write_array_data(
     }
     if has_validity_bitmap(array_data.data_type(), write_options) {
         // write null buffer if exists
-        let null_buffer = match array_data.null_buffer() {
+        let null_buffer = match array_data.nulls() {
             None => {
                 // create a buffer and fill it with valid bits
                 let num_bytes = bit_util::ceil(num_rows, 8);
@@ -1228,7 +1227,7 @@ fn write_array_data(
                 let buffer = buffer.with_bitset(num_bytes, true);
                 buffer.into()
             }
-            Some(buffer) => buffer.bit_slice(array_data.offset(), array_data.len()),
+            Some(buffer) => buffer.inner().sliced(),
         };
 
         offset = write_buffer(

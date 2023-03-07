@@ -74,7 +74,10 @@ pub fn combine_option_bitmap(
 ) -> Option<Buffer> {
     let (buffer, offset) = arrays
         .iter()
-        .map(|array| (array.null_buffer().cloned(), array.offset()))
+        .map(|array| match array.nulls() {
+            Some(n) => (Some(n.buffer().clone()), n.offset()),
+            None => (None, 0),
+        })
         .reduce(|acc, buffer_and_offset| match (acc, buffer_and_offset) {
             ((None, _), (None, _)) => (None, 0),
             ((Some(buffer), offset), (None, _)) | ((None, _), (Some(buffer), offset)) => {

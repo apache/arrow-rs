@@ -481,9 +481,10 @@ mod tests {
         assert_eq!(batches.len(), 1);
 
         let list = as_list_array(batches[0].column(0).as_ref());
+        assert_eq!(list.len(), 3);
         assert_eq!(list.value_offsets(), &[0, 0, 2, 2]);
         assert_eq!(list.null_count(), 1);
-        assert!(list.is_null(4));
+        assert!(list.is_null(2));
         let list_values = as_primitive_array::<Int32Type>(list.values().as_ref());
         assert_eq!(list_values.values(), &[5, 6]);
 
@@ -501,10 +502,15 @@ mod tests {
         assert!(b.is_null(2));
 
         let nested_list = as_struct_array(batches[0].column(2).as_ref());
+        assert_eq!(nested_list.len(), 3);
+        assert_eq!(nested_list.null_count(), 1);
+        assert!(nested_list.is_null(2));
+
         let list2 = as_list_array(nested_list.column(0).as_ref());
+        assert_eq!(list2.len(), 3);
         assert_eq!(list2.null_count(), 1);
         assert_eq!(list2.value_offsets(), &[0, 2, 2, 2]);
-        assert!(list2.is_null(3));
+        assert!(list2.is_null(2));
 
         let list2_values = as_struct_array(list2.values().as_ref());
 
