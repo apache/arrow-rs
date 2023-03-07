@@ -159,7 +159,7 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// This function adjusts the input logical index based on `ArrayData::offset`
     /// Performs a binary search on the run_ends array for the input index.
     #[inline]
-    pub fn lookup(&self, logical_index: usize) -> Option<usize> {
+    pub fn get_physical_index(&self, logical_index: usize) -> Option<usize> {
         self.run_ends.get_physical_index(logical_index)
     }
 
@@ -499,7 +499,7 @@ where
     }
 
     unsafe fn value_unchecked(&self, logical_index: usize) -> Self::Item {
-        let physical_index = self.run_array.lookup(logical_index).unwrap();
+        let physical_index = self.run_array.get_physical_index(logical_index).unwrap();
         self.values().value_unchecked(physical_index)
     }
 }
@@ -833,7 +833,7 @@ mod tests {
                 let actual = typed.value(i);
                 assert_eq!(*val, actual)
             } else {
-                let physical_ix = run_array.lookup(i).unwrap();
+                let physical_ix = run_array.get_physical_index(i).unwrap();
                 assert!(typed.values().is_null(physical_ix));
             };
         }
