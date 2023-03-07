@@ -525,7 +525,7 @@ fn math_op_dict<K, T, F>(
     op: F,
 ) -> Result<PrimitiveArray<T>, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowDictionaryKeyType + ArrowNumericType,
     T: ArrowNumericType,
     F: Fn(T::Native, T::Native) -> T::Native,
 {
@@ -580,7 +580,7 @@ fn math_checked_op_dict<K, T, F>(
     op: F,
 ) -> Result<PrimitiveArray<T>, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowDictionaryKeyType + ArrowNumericType,
     T: ArrowNumericType,
     F: Fn(T::Native, T::Native) -> Result<T::Native, ArrowError>,
 {
@@ -613,7 +613,7 @@ fn math_divide_checked_op_dict<K, T, F>(
     op: F,
 ) -> Result<PrimitiveArray<T>, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowDictionaryKeyType + ArrowNumericType,
     T: ArrowNumericType,
     F: Fn(T::Native, T::Native) -> Result<T::Native, ArrowError>,
 {
@@ -666,7 +666,7 @@ fn math_divide_safe_op_dict<K, T, F>(
     op: F,
 ) -> Result<ArrayRef, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowDictionaryKeyType + ArrowNumericType,
     T: ArrowNumericType,
     F: Fn(T::Native, T::Native) -> Option<T::Native>,
 {
