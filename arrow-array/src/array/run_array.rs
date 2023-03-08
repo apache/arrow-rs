@@ -159,8 +159,7 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// This function adjusts the input logical index based on `ArrayData::offset`
     /// Performs a binary search on the run_ends array for the input index.
     ///
-    /// The result is arbitrary if `logical_index > self.len()`
-    #[inline]
+    /// The result is arbitrary if `logical_index >= self.len()`
     pub fn get_physical_index(&self, logical_index: usize) -> usize {
         self.run_ends.get_physical_index(logical_index)
     }
