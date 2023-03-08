@@ -17,7 +17,7 @@
 
 //! Tests for round trip encoding / decoding
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use arrow::{compute::concat_batches, datatypes::Int32Type};
 use arrow_array::{ArrayRef, DictionaryArray, Float64Array, RecordBatch, UInt8Array};
@@ -60,6 +60,18 @@ async fn test_error() {
 #[tokio::test]
 async fn test_primative_one() {
     roundtrip(vec![make_primative_batch(5)]).await;
+}
+
+#[tokio::test]
+async fn test_schema_metadata() {
+    let batch = make_primative_batch(5);
+    let metadata = HashMap::from([("some_key".to_owned(), "some_value".to_owned())]);
+
+    // create a batch that has schema level metadata
+    let schema = Arc::new(batch.schema().as_ref().clone().with_metadata(metadata));
+    let batch = RecordBatch::try_new(schema, batch.columns().to_vec()).unwrap();
+
+    roundtrip(vec![batch]).await;
 }
 
 #[tokio::test]
