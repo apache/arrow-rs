@@ -20,6 +20,7 @@
 //! [`Reader`]: crate::reader::Reader
 
 use crate::raw::boolean_array::BooleanArrayDecoder;
+use crate::raw::decimal_array::DecimalArrayDecoder;
 use crate::raw::list_array::ListArrayDecoder;
 use crate::raw::map_array::MapArrayDecoder;
 use crate::raw::primitive_array::PrimitiveArrayDecoder;
@@ -33,6 +34,7 @@ use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::io::BufRead;
 
 mod boolean_array;
+mod decimal_array;
 mod list_array;
 mod map_array;
 mod primitive_array;
@@ -291,6 +293,8 @@ fn make_decoder(
         data_type => (primitive_decoder, data_type),
         DataType::Float32 => primitive_decoder!(Float32Type, data_type),
         DataType::Float64 => primitive_decoder!(Float64Type, data_type),
+        DataType::Decimal128(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal128Type>::new(p, s))),
+        DataType::Decimal256(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal256Type>::new(p, s))),
         DataType::Boolean => Ok(Box::<BooleanArrayDecoder>::default()),
         DataType::Utf8 => Ok(Box::new(StringArrayDecoder::<i32>::new(coerce_primitive))),
         DataType::LargeUtf8 => Ok(Box::new(StringArrayDecoder::<i64>::new(coerce_primitive))),
@@ -321,6 +325,7 @@ mod tests {
     };
     use arrow_array::types::Int32Type;
     use arrow_array::Array;
+    use arrow_buffer::ArrowNativeType;
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_schema::{DataType, Field, Schema};
     use std::fs::File;
@@ -720,5 +725,61 @@ mod tests {
         assert!(col3.is_null(3));
         assert!(col3.is_null(4));
         assert!(col3.is_null(5));
+    }
+
+    fn test_decimal<T: DecimalType>(data_type: DataType) {
+        let buf = r#"
+        {"a": 1, "b": 2, "c": 38.30}
+        {"a": 2, "b": 4, "c": 123.456}
+
+        {"b": 1337, "a": "2.0452"}
+        {"b": "5", "a": "11034.2"}
+        {"b": 40}
+        {"b": 1234, "a": null}
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", data_type.clone(), true),
+            Field::new("b", data_type.clone(), true),
+            Field::new("c", data_type, true),
+        ]));
+
+        let batches = do_read(buf, 1024, true, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col1 = as_primitive_array::<T>(batches[0].column(0));
+        assert_eq!(col1.null_count(), 2);
+        assert!(col1.is_null(4));
+        assert!(col1.is_null(5));
+        assert_eq!(
+            col1.values(),
+            &[100, 200, 204, 1103420, 0, 0].map(T::Native::usize_as)
+        );
+
+        let col2 = as_primitive_array::<T>(batches[0].column(1));
+        assert_eq!(col2.null_count(), 0);
+        assert_eq!(
+            col2.values(),
+            &[200, 400, 133700, 500, 4000, 123400].map(T::Native::usize_as)
+        );
+
+        let col3 = as_primitive_array::<T>(batches[0].column(2));
+        assert_eq!(col3.null_count(), 4);
+        assert!(!col3.is_null(0));
+        assert!(!col3.is_null(1));
+        assert!(col3.is_null(2));
+        assert!(col3.is_null(3));
+        assert!(col3.is_null(4));
+        assert!(col3.is_null(5));
+        assert_eq!(
+            col3.values(),
+            &[3830, 12345, 0, 0, 0, 0].map(T::Native::usize_as)
+        );
+    }
+
+    #[test]
+    fn test_decimals() {
+        test_decimal::<Decimal128Type>(DataType::Decimal128(10, 2));
+        test_decimal::<Decimal256Type>(DataType::Decimal256(10, 2));
     }
 }
