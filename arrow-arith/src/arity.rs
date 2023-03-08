@@ -105,20 +105,6 @@ where
     Ok(Arc::new(array.with_values(&values)))
 }
 
-/// See [`DictionaryArray::unary_mut`]
-#[allow(dead_code)]
-fn unary_dict_mut<K, F, T>(
-    array: DictionaryArray<K>,
-    op: F,
-) -> Result<DictionaryArray<K>, DictionaryArray<K>>
-where
-    K: ArrowNumericType,
-    T: ArrowPrimitiveType,
-    F: Fn(T::Native) -> T::Native,
-{
-    array.unary_mut::<F, T>(op)
-}
-
 /// A helper function that applies a fallible unary function to a dictionary array with primitive value type.
 fn try_unary_dict<K, F, T>(
     array: &DictionaryArray<K>,
@@ -670,7 +656,7 @@ mod tests {
         drop(keys);
         drop(values);
 
-        let updated = unary_dict_mut::<_, _, Int32Type>(dictionary, |x| x + 1).unwrap();
+        let updated = dictionary.unary_mut::<_, Int32Type>(|x| x + 1).unwrap();
         let typed = updated.downcast_dict::<Int32Array>().unwrap();
         assert_eq!(typed.value(0), 11);
         assert_eq!(typed.value(1), 11);
