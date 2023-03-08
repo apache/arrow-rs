@@ -835,7 +835,7 @@ mod tests {
                 let actual = typed.value(i);
                 assert_eq!(*val, actual)
             } else {
-                let physical_ix = run_array.get_physical_index(i).unwrap();
+                let physical_ix = run_array.get_physical_index(i);
                 assert!(typed.values().is_null(physical_ix));
             };
         }

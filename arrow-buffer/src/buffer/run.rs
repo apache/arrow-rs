@@ -115,7 +115,7 @@ where
 
     /// Performs a binary search to find the physical index for the given logical index
     ///
-    /// The result is arbitrary if `logical_index > self.len()`
+    /// The result is arbitrary if `logical_index >= self.len()`
     pub fn get_physical_index(&self, logical_index: usize) -> usize {
         let logical_index = E::usize_as(self.offset + logical_index);
         let cmp = |p: &E| p.partial_cmp(&logical_index).unwrap();
