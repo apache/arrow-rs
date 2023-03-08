@@ -52,7 +52,7 @@ impl UnionArrayData {
         }
     }
 
-    /// Creates a new [`StructArrayData`] from raw buffers
+    /// Creates a new [`UnionArrayData`] from raw buffers
     ///
     /// # Safety
     ///

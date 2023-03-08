@@ -148,7 +148,7 @@ impl ArrayDataDictionary {
     ///
     /// # Safety
     ///
-    /// See [`Self::new_unchecked`]
+    /// See [`DictionaryArrayData::new_unchecked`]
     pub(crate) unsafe fn from_raw(
         builder: ArrayDataBuilder,
         key: DictionaryKeyType,

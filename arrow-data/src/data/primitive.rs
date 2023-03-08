@@ -225,11 +225,29 @@ impl<T: Primitive> PrimitiveArrayData<T> {
         }
     }
 
+    /// Create a new [`PrimitiveArrayData`]
+    ///
+    /// # Safety
+    ///
+    /// - `nulls` and `values` must be the same length
+    /// - `data_type` must be compatible with `T`
+    pub unsafe fn new_unchecked(
+        data_type: DataType,
+        values: ScalarBuffer<T>,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        Self {
+            data_type,
+            values,
+            nulls,
+        }
+    }
+
     /// Creates a new [`PrimitiveArrayData`] from an [`ArrayDataBuilder`]
     ///
     /// # Safety
     ///
-    /// See [`Self::new_unchecked`]
+    /// See [`PrimitiveArrayData::new_unchecked`]
     pub(crate) unsafe fn from_raw(builder: ArrayDataBuilder) -> Self {
         let values = builder.buffers.into_iter().next().unwrap();
         let values = ScalarBuffer::new(values, builder.offset, builder.len);
