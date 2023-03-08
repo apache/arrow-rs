@@ -114,16 +114,15 @@ where
     }
 
     /// Performs a binary search to find the physical index for the given logical index
-    pub fn get_physical_index(&self, logical_index: usize) -> Option<usize> {
-        if logical_index > self.len {
-            return None;
-        }
+    ///
+    /// The result is arbitrary if `logical_index > self.len()`
+    pub fn get_physical_index(&self, logical_index: usize) -> usize {
         let logical_index = E::usize_as(self.offset + logical_index);
         let cmp = |p: &E| p.partial_cmp(&logical_index).unwrap();
 
         match self.run_ends.binary_search_by(cmp) {
-            Ok(idx) => Some(idx + 1),
-            Err(idx) => Some(idx),
+            Ok(idx) => idx + 1,
+            Err(idx) => idx,
         }
     }
 
@@ -133,7 +132,7 @@ where
             return 0;
         }
         // Fallback to binary search
-        self.get_physical_index(0).unwrap_or_default()
+        self.get_physical_index(0)
     }
 
     /// Returns the physical index at which the array slice ends
@@ -142,7 +141,7 @@ where
             return self.values().len() - 1;
         }
         // Fallback to binary search
-        self.get_physical_index(self.len - 1).unwrap_or_default()
+        self.get_physical_index(self.len - 1)
     }
 
     /// Slices this [`RunEndBuffer`] by the provided `offset` and `length`
