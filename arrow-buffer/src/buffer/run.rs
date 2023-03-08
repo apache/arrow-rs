@@ -20,13 +20,49 @@ use crate::ArrowNativeType;
 
 /// A slice-able buffer of monotonically increasing, positive integers used to store run-ends
 ///
+/// # Logical vs Physical
+///
+/// A [`RunEndBuffer`] is used to encode runs of the same value, the index of each run is
+/// called the physical index. The logical index is then the corresponding index in the logical
+/// run-encoded array, i.e. a single run of length `3`, would have the logical indices `0..3`.
+///
+/// Each value in [`RunEndBuffer::values`] is the cumulative length of all runs in the
+/// logical array, up to that physical index.
+///
+/// Consider a [`RunEndBuffer`] containing `[3, 4, 6]`. The maximum physical index is `2`,
+/// as there are `3` values, and the maximum logical index is `6`, as the maximum run end
+/// is `6`. The physical indices are therefore `[0, 0, 0, 1, 1, 2, 2]`
+///
+/// ```text
+///     ┌─────────┐        ┌─────────┐           ┌─────────┐
+///     │    3    │        │    0    │ ─┬──────▶ │    0    │
+///     ├─────────┤        ├─────────┤  │        ├─────────┤
+///     │    4    │        │    1    │ ─┤ ┌────▶ │    1    │
+///     ├─────────┤        ├─────────┤  │ │      ├─────────┤
+///     │    6    │        │    2    │ ─┘ │ ┌──▶ │    2    │
+///     └─────────┘        ├─────────┤    │ │    └─────────┘
+///      run ends          │    3    │ ───┤ │  physical indices
+///                        ├─────────┤    │ │
+///                        │    4    │ ───┘ │
+///                        ├─────────┤      │
+///                        │    5    │ ─────┤
+///                        ├─────────┤      │
+///                        │    6    │ ─────┘
+///                        └─────────┘
+///                      logical indices
+/// ```
+///
+/// # Slicing
+///
 /// In order to provide zero-copy slicing, this container stores a separate offset and length
 ///
-/// For example, a [RunEndBuffer] containing values `[3, 6, 8]` with offset and length `4` would
-/// describe the value indices `1, 1, 2, 2` for a RunArray
+/// For example, a [`RunEndBuffer`] containing values `[3, 6, 8]` with offset and length `4` would
+/// describe the physical indices `1, 1, 2, 2`
 ///
-/// For example, a [RunEndBuffer] containing values `[6, 8, 9]` with offset `2` and length `5`
-/// would describe the value indices `0, 0, 0, 0, 1` for a RunArray
+/// For example, a [`RunEndBuffer`] containing values `[6, 8, 9]` with offset `2` and length `5`
+/// would describe the physical indices `0, 0, 0, 0, 1`
+///
+/// [Run-End encoded layout]: https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout
 #[derive(Debug, Clone)]
 pub struct RunEndBuffer<E: ArrowNativeType> {
     run_ends: ScalarBuffer<E>,
@@ -39,6 +75,11 @@ where
     E: ArrowNativeType,
 {
     /// Create a new [`RunEndBuffer`] from a [`ScalarBuffer`], an `offset` and `len`
+    ///
+    /// # Panics
+    ///
+    /// - `buffer` does not contain strictly increasing values greater than zero
+    /// - the last value of `buffer` is less than `offset + len`
     pub fn new(run_ends: ScalarBuffer<E>, offset: usize, len: usize) -> Self {
         assert!(
             run_ends.windows(2).all(|w| w[0] < w[1]),
@@ -126,7 +167,7 @@ where
         }
     }
 
-    /// Returns the physical index at which the array slice starts
+    /// Returns the physical index at which the logical array starts
     pub fn get_start_physical_index(&self) -> usize {
         if self.offset == 0 {
             return 0;
@@ -135,7 +176,7 @@ where
         self.get_physical_index(0)
     }
 
-    /// Returns the physical index at which the array slice ends
+    /// Returns the physical index at which the logical array ends
     pub fn get_end_physical_index(&self) -> usize {
         if self.max_value() == self.offset + self.len {
             return self.values().len() - 1;
