@@ -139,4 +139,9 @@ impl BooleanBuffer {
     pub fn inner(&self) -> &Buffer {
         &self.buffer
     }
+
+    /// Returns the inner [`Buffer`]
+    pub fn into_inner(self) -> Buffer {
+        self.buffer
+    }
 }

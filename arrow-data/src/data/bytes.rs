@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::data::types::{BytesType, OffsetType};
-use arrow_buffer::buffer::{NullBuffer, ScalarBuffer};
+use crate::data::ArrayDataLayout;
+use crate::{ArrayDataBuilder, Buffers};
+use arrow_buffer::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_schema::DataType;
 use std::marker::PhantomData;
@@ -194,6 +196,23 @@ impl private::BytesOffsetSealed for i64 {
     }
 }
 
+/// Applies op to each variant of [`ArrayDataBytes`]
+#[macro_export]
+macro_rules! bytes_op {
+    ($array:ident, $op:block) => {
+        match $array {
+            ArrayDataBytes::Binary($array) => match $array {
+                ArrayDataBytesOffset::Small($array) => $op
+                ArrayDataBytesOffset::Large($array) => $op
+            }
+            ArrayDataBytes::Utf8($array) => match $array {
+                ArrayDataBytesOffset::Small($array) => $op
+                ArrayDataBytesOffset::Large($array) => $op
+            }
+        }
+    };
+}
+
 /// An enumeration of the types of [`ArrayDataBytesOffset`]
 #[derive(Debug, Clone)]
 pub enum ArrayDataBytes {
@@ -214,6 +233,48 @@ impl ArrayDataBytes {
         self,
     ) -> Option<BytesArrayData<O, B>> {
         O::downcast(B::downcast(self)?)
+    }
+
+    /// Returns a zero-copy slice of this array
+    pub fn slice(&self, offset: usize, len: usize) -> Self {
+        let s = self;
+        bytes_op!(s, { s.slice(offset, len).into() })
+    }
+
+    /// Returns an [`ArrayDataLayout`] representation of this
+    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
+        let s = self;
+        bytes_op!(s, { s.layout() })
+    }
+
+    /// Creates a new [`ArrayDataBytes`] from raw buffers
+    ///
+    /// # Safety
+    ///
+    /// See [`BytesArrayData::new_unchecked`]
+    pub(crate) unsafe fn from_raw(
+        builder: ArrayDataBuilder,
+        offset: OffsetType,
+        bytes: BytesType,
+    ) -> Self {
+        match bytes {
+            BytesType::Binary => Self::Binary(match offset {
+                OffsetType::Int32 => {
+                    ArrayDataBytesOffset::Small(BytesArrayData::from_raw(builder))
+                }
+                OffsetType::Int64 => {
+                    ArrayDataBytesOffset::Large(BytesArrayData::from_raw(builder))
+                }
+            }),
+            BytesType::Utf8 => Self::Utf8(match offset {
+                OffsetType::Int32 => {
+                    ArrayDataBytesOffset::Small(BytesArrayData::from_raw(builder))
+                }
+                OffsetType::Int64 => {
+                    ArrayDataBytesOffset::Large(BytesArrayData::from_raw(builder))
+                }
+            }),
+        }
     }
 }
 
@@ -243,9 +304,9 @@ impl<O: BytesOffset, B: Bytes + ?Sized> From<BytesArrayData<O, B>> for ArrayData
 #[derive(Debug)]
 pub struct BytesArrayData<O: BytesOffset, B: Bytes + ?Sized> {
     data_type: DataType,
-    nulls: Option<NullBuffer>,
-    offsets: ScalarBuffer<O>,
+    offsets: OffsetBuffer<O>,
     values: Buffer,
+    nulls: Option<NullBuffer>,
     phantom: PhantomData<B>,
 }
 
@@ -271,7 +332,7 @@ impl<O: BytesOffset, B: Bytes + ?Sized> BytesArrayData<O, B> {
     /// - `data_type` must be valid for this layout
     pub unsafe fn new_unchecked(
         data_type: DataType,
-        offsets: ScalarBuffer<O>,
+        offsets: OffsetBuffer<O>,
         values: Buffer,
         nulls: Option<NullBuffer>,
     ) -> Self {
@@ -284,6 +345,46 @@ impl<O: BytesOffset, B: Bytes + ?Sized> BytesArrayData<O, B> {
         }
     }
 
+    /// Creates a new [`BytesArrayData`] from an [`ArrayDataBuilder`]
+    ///
+    /// # Safety
+    ///
+    /// See [`Self::new_unchecked`]
+    pub(crate) unsafe fn from_raw(builder: ArrayDataBuilder) -> Self {
+        let mut iter = builder.buffers.into_iter();
+        let offsets = iter.next().unwrap();
+        let values = iter.next().unwrap();
+
+        let offsets = match builder.len {
+            0 => OffsetBuffer::new_empty(),
+            _ => OffsetBuffer::new_unchecked(ScalarBuffer::new(
+                offsets,
+                builder.offset,
+                builder.len + 1,
+            )),
+        };
+
+        Self {
+            values,
+            offsets,
+            data_type: builder.data_type,
+            nulls: builder.nulls,
+            phantom: Default::default(),
+        }
+    }
+
+    /// Returns the length
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.offsets.len().wrapping_sub(1)
+    }
+
+    /// Returns true if this array is empty
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.offsets.len() <= 1
+    }
+
     /// Returns the raw byte data
     #[inline]
     pub fn values(&self) -> &B {
@@ -294,13 +395,13 @@ impl<O: BytesOffset, B: Bytes + ?Sized> BytesArrayData<O, B> {
 
     /// Returns the offsets
     #[inline]
-    pub fn offsets(&self) -> &[O] {
+    pub fn offsets(&self) -> &OffsetBuffer<O> {
         &self.offsets
     }
 
     /// Returns the null buffer if any
     #[inline]
-    pub fn null_buffer(&self) -> Option<&NullBuffer> {
+    pub fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
     }
 
@@ -309,14 +410,44 @@ impl<O: BytesOffset, B: Bytes + ?Sized> BytesArrayData<O, B> {
     pub fn data_type(&self) -> &DataType {
         &self.data_type
     }
+
+    /// Returns the underlying parts of this [`BytesArrayData`]
+    pub fn into_parts(self) -> (DataType, OffsetBuffer<O>, Buffer, Option<NullBuffer>) {
+        (self.data_type, self.offsets, self.values, self.nulls)
+    }
+
+    /// Returns a zero-copy slice of this array
+    pub fn slice(&self, offset: usize, len: usize) -> Self {
+        Self {
+            values: self.values.clone(),
+            offsets: self.offsets.slice(offset, len),
+            data_type: self.data_type.clone(),
+            nulls: self.nulls().as_ref().map(|x| x.slice(offset, len)),
+            phantom: Default::default(),
+        }
+    }
+
+    /// Returns an [`ArrayDataLayout`] representation of this
+    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
+        ArrayDataLayout {
+            data_type: &self.data_type,
+            len: self.offsets.len().wrapping_sub(1),
+            offset: 0,
+            nulls: self.nulls.as_ref(),
+            buffers: Buffers::two(self.offsets.inner().inner(), &self.values),
+            child_data: &[],
+        }
+    }
 }
 
 /// ArrayData for [fixed-size arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout) of bytes
 #[derive(Debug, Clone)]
 pub struct FixedSizeBinaryArrayData {
     data_type: DataType,
-    nulls: Option<NullBuffer>,
+    len: usize,
+    element_size: usize,
     values: Buffer,
+    nulls: Option<NullBuffer>,
 }
 
 impl FixedSizeBinaryArrayData {
@@ -325,9 +456,11 @@ impl FixedSizeBinaryArrayData {
     /// # Safety
     ///
     /// - `data_type` must be valid for this layout
-    /// - `nulls.len() == values.len() / element_size`
+    /// - `nulls.len() == values.len() / element_size == len`
     pub unsafe fn new_unchecked(
         data_type: DataType,
+        len: usize,
+        element_size: usize,
         values: Buffer,
         nulls: Option<NullBuffer>,
     ) -> Self {
@@ -335,7 +468,44 @@ impl FixedSizeBinaryArrayData {
             data_type,
             nulls,
             values,
+            len,
+            element_size,
         }
+    }
+
+    /// Creates a new [`FixedSizeBinaryArrayData`] from raw buffers
+    ///
+    /// # Safety
+    ///
+    /// See [`FixedSizeBinaryArrayData::new_unchecked`]
+    pub(crate) unsafe fn from_raw(builder: ArrayDataBuilder, size: usize) -> Self {
+        let values = builder.buffers[0]
+            .slice_with_length(builder.offset * size, builder.len * size);
+        Self {
+            values,
+            data_type: builder.data_type,
+            len: builder.len,
+            element_size: size,
+            nulls: builder.nulls,
+        }
+    }
+
+    /// Returns the length
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns true if this array is empty
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Returns the size of each element
+    #[inline]
+    pub fn element_size(&self) -> usize {
+        self.element_size
     }
 
     /// Returns the raw byte data
@@ -346,7 +516,7 @@ impl FixedSizeBinaryArrayData {
 
     /// Returns the null buffer if any
     #[inline]
-    pub fn null_buffer(&self) -> Option<&NullBuffer> {
+    pub fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
     }
 
@@ -354,5 +524,37 @@ impl FixedSizeBinaryArrayData {
     #[inline]
     pub fn data_type(&self) -> &DataType {
         &self.data_type
+    }
+
+    /// Returns the underlying parts of this [`FixedSizeBinaryArrayData`]
+    pub fn into_parts(self) -> (DataType, Buffer, Option<NullBuffer>) {
+        (self.data_type, self.values, self.nulls)
+    }
+
+    /// Returns a zero-copy slice of this array
+    pub fn slice(&self, offset: usize, len: usize) -> Self {
+        let offset_element = offset.checked_mul(self.element_size).expect("overflow");
+        let len_element = len.checked_mul(self.element_size).expect("overflow");
+        let values = self.values.slice_with_length(offset_element, len_element);
+
+        Self {
+            len,
+            values,
+            data_type: self.data_type.clone(),
+            element_size: self.element_size,
+            nulls: self.nulls().as_ref().map(|x| x.slice(offset, len)),
+        }
+    }
+
+    /// Returns an [`ArrayDataLayout`] representation of this
+    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
+        ArrayDataLayout {
+            data_type: &self.data_type,
+            len: self.len,
+            offset: 0,
+            nulls: self.nulls.as_ref(),
+            buffers: Buffers::one(&self.values),
+            child_data: &[],
+        }
     }
 }

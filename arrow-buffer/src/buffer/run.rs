@@ -197,4 +197,14 @@ where
             len,
         }
     }
+
+    /// Returns the inner [`ScalarBuffer`]
+    pub fn inner(&self) -> &ScalarBuffer<E> {
+        &self.run_ends
+    }
+
+    /// Returns the inner [`ScalarBuffer`]
+    pub fn into_inner(self) -> ScalarBuffer<E> {
+        self.run_ends
+    }
 }

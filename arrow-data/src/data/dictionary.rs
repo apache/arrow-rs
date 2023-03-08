@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::data::types::DictionaryKeyType;
-use crate::ArrayData;
+use crate::data::ArrayDataLayout;
+use crate::{ArrayData, ArrayDataBuilder, Buffers};
 use arrow_buffer::buffer::{NullBuffer, ScalarBuffer};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::DataType;
@@ -85,6 +86,23 @@ dictionary!(u16, UInt16);
 dictionary!(u32, UInt32);
 dictionary!(u64, UInt64);
 
+/// Applies op to each variant of [`ArrayDataDictionary`]
+#[macro_export]
+macro_rules! dictionary_op {
+    ($array:ident, $op:block) => {
+        match $array {
+            ArrayDataDictionary::Int8($array) => $op
+            ArrayDataDictionary::Int16($array) => $op
+            ArrayDataDictionary::Int32($array) => $op
+            ArrayDataDictionary::Int64($array) => $op
+            ArrayDataDictionary::UInt8($array) => $op
+            ArrayDataDictionary::UInt16($array) => $op
+            ArrayDataDictionary::UInt32($array) => $op
+            ArrayDataDictionary::UInt64($array) => $op
+        }
+    };
+}
+
 /// An enumeration of the types of [`DictionaryArrayData`]
 #[derive(Debug, Clone)]
 pub enum ArrayDataDictionary {
@@ -108,6 +126,46 @@ impl ArrayDataDictionary {
     pub fn downcast<K: DictionaryKey>(self) -> Option<DictionaryArrayData<K>> {
         K::downcast(self)
     }
+
+    /// Returns the values of this dictionary
+    pub fn values(&self) -> &ArrayData {
+        let s = self;
+        dictionary_op!(s, { s.values() })
+    }
+
+    /// Returns a zero-copy slice of this array
+    pub fn slice(&self, offset: usize, len: usize) -> Self {
+        let s = self;
+        dictionary_op!(s, { s.slice(offset, len).into() })
+    }
+
+    /// Returns an [`ArrayDataLayout`] representation of this
+    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
+        let s = self;
+        dictionary_op!(s, { s.layout() })
+    }
+
+    /// Creates a new [`ArrayDataDictionary`] from raw buffers
+    ///
+    /// # Safety
+    ///
+    /// See [`Self::new_unchecked`]
+    pub(crate) unsafe fn from_raw(
+        builder: ArrayDataBuilder,
+        key: DictionaryKeyType,
+    ) -> Self {
+        use DictionaryKeyType::*;
+        match key {
+            Int8 => Self::Int8(DictionaryArrayData::from_raw(builder)),
+            Int16 => Self::Int16(DictionaryArrayData::from_raw(builder)),
+            Int32 => Self::Int32(DictionaryArrayData::from_raw(builder)),
+            Int64 => Self::Int64(DictionaryArrayData::from_raw(builder)),
+            UInt8 => Self::UInt8(DictionaryArrayData::from_raw(builder)),
+            UInt16 => Self::UInt16(DictionaryArrayData::from_raw(builder)),
+            UInt32 => Self::UInt32(DictionaryArrayData::from_raw(builder)),
+            UInt64 => Self::UInt64(DictionaryArrayData::from_raw(builder)),
+        }
+    }
 }
 
 impl<K: DictionaryKey> From<DictionaryArrayData<K>> for ArrayDataDictionary {
@@ -122,7 +180,7 @@ pub struct DictionaryArrayData<K: DictionaryKey> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
     keys: ScalarBuffer<K>,
-    child: Box<ArrayData>,
+    values: Box<ArrayData>,
 }
 
 impl<K: DictionaryKey> DictionaryArrayData<K> {
@@ -144,8 +202,37 @@ impl<K: DictionaryKey> DictionaryArrayData<K> {
             data_type,
             nulls,
             keys,
-            child: Box::new(child),
+            values: Box::new(child),
         }
+    }
+
+    /// Creates a new [`DictionaryArrayData`] from raw buffers
+    ///
+    /// # Safety
+    ///
+    /// See [`Self::new_unchecked`]
+    pub(crate) unsafe fn from_raw(builder: ArrayDataBuilder) -> Self {
+        let keys = builder.buffers.into_iter().next().unwrap();
+        let keys = ScalarBuffer::new(keys, builder.offset, builder.len);
+        let values = builder.child_data.into_iter().next().unwrap();
+        Self {
+            keys,
+            data_type: builder.data_type,
+            nulls: builder.nulls,
+            values: Box::new(values),
+        }
+    }
+
+    /// Returns the length
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    /// Returns true if this array is empty
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
     }
 
     /// Returns the null buffer if any
@@ -160,15 +247,44 @@ impl<K: DictionaryKey> DictionaryArrayData<K> {
         &self.keys
     }
 
-    /// Returns the child data
+    /// Returns the values data
     #[inline]
-    pub fn child(&self) -> &ArrayData {
-        self.child.as_ref()
+    pub fn values(&self) -> &ArrayData {
+        self.values.as_ref()
     }
 
     /// Returns the data type of this array
     #[inline]
     pub fn data_type(&self) -> &DataType {
         &self.data_type
+    }
+
+    /// Returns the underlying parts of this [`DictionaryArrayData`]
+    pub fn into_parts(
+        self,
+    ) -> (DataType, ScalarBuffer<K>, Option<NullBuffer>, ArrayData) {
+        (self.data_type, self.keys, self.nulls, *self.values)
+    }
+
+    /// Returns a zero-copy slice of this array
+    pub fn slice(&self, offset: usize, len: usize) -> Self {
+        Self {
+            keys: self.keys.slice(offset, len),
+            data_type: self.data_type.clone(),
+            nulls: self.nulls.as_ref().map(|x| x.slice(offset, len)),
+            values: self.values.clone(),
+        }
+    }
+
+    /// Returns an [`ArrayDataLayout`] representation of this
+    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
+        ArrayDataLayout {
+            data_type: &self.data_type,
+            len: self.keys.len(),
+            offset: 0,
+            nulls: self.nulls.as_ref(),
+            buffers: Buffers::one(self.keys.inner()),
+            child_data: std::slice::from_ref(self.values.as_ref()),
+        }
     }
 }

@@ -50,6 +50,21 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
         let byte_len = len.checked_mul(size).expect("length overflow");
         buffer.slice_with_length(byte_offset, byte_len).into()
     }
+
+    /// Returns a zero-copy slice of this buffer with length `len` and starting at `offset`
+    pub fn slice(&self, offset: usize, len: usize) -> Self {
+        Self::new(self.buffer.clone(), offset, len)
+    }
+
+    /// Returns the inner [`Buffer`]
+    pub fn inner(&self) -> &Buffer {
+        &self.buffer
+    }
+
+    /// Returns the inner [`Buffer`]
+    pub fn into_inner(self) -> Buffer {
+        self.buffer
+    }
 }
 
 impl<T: ArrowNativeType> Deref for ScalarBuffer<T> {
