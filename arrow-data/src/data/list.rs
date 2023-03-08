@@ -115,7 +115,6 @@ impl private::ListOffsetSealed for i64 {
 }
 
 /// Applies op to each variant of [`ListArrayData`]
-#[macro_export]
 macro_rules! list_op {
     ($array:ident, $op:block) => {
         match $array {

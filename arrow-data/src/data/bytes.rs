@@ -197,7 +197,6 @@ impl private::BytesOffsetSealed for i64 {
 }
 
 /// Applies op to each variant of [`ArrayDataBytes`]
-#[macro_export]
 macro_rules! bytes_op {
     ($array:ident, $op:block) => {
         match $array {

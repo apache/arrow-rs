@@ -49,7 +49,6 @@ pub trait Primitive: private::PrimitiveSealed + ArrowNativeType {
 }
 
 /// Applies op to each variant of [`ArrayDataPrimitive`]
-#[macro_export]
 macro_rules! primitive_op {
     ($array:ident, $op:block) => {
         match $array {

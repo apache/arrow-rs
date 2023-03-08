@@ -87,7 +87,6 @@ dictionary!(u32, UInt32);
 dictionary!(u64, UInt64);
 
 /// Applies op to each variant of [`ArrayDataDictionary`]
-#[macro_export]
 macro_rules! dictionary_op {
     ($array:ident, $op:block) => {
         match $array {

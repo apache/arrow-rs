@@ -84,7 +84,6 @@ run_end!(i32, Int32);
 run_end!(i64, Int64);
 
 /// Applies op to each variant of [`ArrayDataRun`]
-#[macro_export]
 macro_rules! run_op {
     ($array:ident, $op:block) => {
         match $array {
