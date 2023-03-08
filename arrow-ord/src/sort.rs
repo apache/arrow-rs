@@ -673,7 +673,7 @@ fn sort_run_downcasted<R: RunEndIndexType>(
     let new_run_ends = unsafe {
         // Safety:
         // The function builds a valid run_ends array and hence need not be validated.
-        ArrayDataBuilder::new(run_array.run_ends().data_type().clone())
+        ArrayDataBuilder::new(R::DATA_TYPE)
             .len(new_physical_len)
             .add_buffer(new_run_ends_builder.finish())
             .build_unchecked()
@@ -746,7 +746,7 @@ where
 
     let mut remaining_len = output_len;
 
-    let run_ends = run_array.run_ends();
+    let run_ends = run_array.run_ends().values();
 
     assert_eq!(
         0,
@@ -770,22 +770,20 @@ where
             // and len, both of which are within bounds of run_array
             if physical_index == start_physical_index {
                 (
-                    run_ends.value_unchecked(physical_index).as_usize()
+                    run_ends.get_unchecked(physical_index).as_usize()
                         - run_array.offset(),
                     0,
                 )
             } else if physical_index == end_physical_index {
-                let prev_run_end =
-                    run_ends.value_unchecked(physical_index - 1).as_usize();
+                let prev_run_end = run_ends.get_unchecked(physical_index - 1).as_usize();
                 (
                     run_array.offset() + run_array.len() - prev_run_end,
                     prev_run_end - run_array.offset(),
                 )
             } else {
-                let prev_run_end =
-                    run_ends.value_unchecked(physical_index - 1).as_usize();
+                let prev_run_end = run_ends.get_unchecked(physical_index - 1).as_usize();
                 (
-                    run_ends.value_unchecked(physical_index).as_usize() - prev_run_end,
+                    run_ends.get_unchecked(physical_index).as_usize() - prev_run_end,
                     prev_run_end - run_array.offset(),
                 )
             }

@@ -49,10 +49,7 @@ use arrow_buffer::ArrowNativeType;
 /// builder.append_null();
 /// let array = builder.finish();
 ///
-/// assert_eq!(
-///     array.run_ends(),
-///     &Int16Array::from(vec![Some(2), Some(3), Some(5), Some(6)])
-/// );
+/// assert_eq!(array.run_ends().values(), &[2, 3, 5, 6]);
 ///
 /// let av = array.values();
 ///
@@ -331,10 +328,7 @@ where
 /// builder.extend([Some("def"), Some("def"), Some("abc")]);
 /// let array = builder.finish();
 ///
-/// assert_eq!(
-///   array.run_ends(),
-///   &Int16Array::from(vec![Some(1), Some(2), Some(4), Some(5)])
-/// );
+/// assert_eq!(array.run_ends().values(), &[1, 2, 4, 5]);
 ///
 /// // Values are polymorphic and so require a downcast.
 /// let av = array.values();
@@ -370,10 +364,7 @@ pub type LargeStringRunBuilder<K> = GenericByteRunBuilder<K, LargeUtf8Type>;
 /// builder.extend([Some(b"def"), Some(b"def"), Some(b"abc")]);
 /// let array = builder.finish();
 ///
-/// assert_eq!(
-///   array.run_ends(),
-///   &Int16Array::from(vec![Some(1), Some(2), Some(4), Some(5)])
-/// );
+/// assert_eq!(array.run_ends().values(), &[1, 2, 4, 5]);
 ///
 /// // Values are polymorphic and so require a downcast.
 /// let av = array.values();
@@ -396,11 +387,9 @@ mod tests {
     use super::*;
 
     use crate::array::Array;
-    use crate::cast::as_primitive_array;
     use crate::cast::as_string_array;
     use crate::types::{Int16Type, Int32Type};
     use crate::GenericByteArray;
-    use crate::Int16Array;
     use crate::Int16RunArray;
 
     fn test_bytes_run_buider<T>(values: Vec<&T::Native>)
@@ -426,10 +415,7 @@ mod tests {
         assert_eq!(array.len(), 11);
         assert_eq!(array.null_count(), 0);
 
-        assert_eq!(
-            array.run_ends(),
-            &Int16Array::from(vec![Some(3), Some(5), Some(7), Some(11)])
-        );
+        assert_eq!(array.run_ends().values(), &[3, 5, 7, 11]);
 
         // Values are polymorphic and so require a downcast.
         let av = array.values();
@@ -475,10 +461,7 @@ mod tests {
         assert_eq!(array.len(), 5);
         assert_eq!(array.null_count(), 0);
 
-        assert_eq!(
-            array.run_ends(),
-            &Int16Array::from(vec![Some(1), Some(2), Some(4), Some(5)])
-        );
+        assert_eq!(array.run_ends().values(), &[1, 2, 4, 5]);
 
         // Values are polymorphic and so require a downcast.
         let av = array.values();
@@ -500,10 +483,7 @@ mod tests {
         assert_eq!(array.len(), 8);
         assert_eq!(array.null_count(), 0);
 
-        assert_eq!(
-            array.run_ends(),
-            &Int16Array::from(vec![Some(1), Some(2), Some(4), Some(7), Some(8),])
-        );
+        assert_eq!(array.run_ends().values(), &[1, 2, 4, 7, 8]);
 
         // Values are polymorphic and so require a downcast.
         let av2 = array.values();
@@ -536,10 +516,7 @@ mod tests {
         let array = builder.finish();
 
         assert_eq!(array.len(), 10);
-        assert_eq!(
-            as_primitive_array::<Int32Type>(array.run_ends()).values(),
-            &[3, 5, 8, 10]
-        );
+        assert_eq!(array.run_ends().values(), &[3, 5, 8, 10]);
 
         let str_array = as_string_array(array.values().as_ref());
         assert_eq!(str_array.value(0), "a");

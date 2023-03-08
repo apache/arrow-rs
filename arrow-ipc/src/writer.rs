@@ -580,42 +580,30 @@ pub(crate) fn unslice_run_array(arr: ArrayData) -> Result<ArrayData, ArrowError>
 fn into_zero_offset_run_array<R: RunEndIndexType>(
     run_array: RunArray<R>,
 ) -> Result<RunArray<R>, ArrowError> {
-    if run_array.offset() == 0
-        && run_array.len() == RunArray::<R>::logical_len(run_array.run_ends())
-    {
+    let run_ends = run_array.run_ends();
+    if run_ends.offset() == 0 && run_ends.max_value() == run_ends.len() {
         return Ok(run_array);
     }
-    // The physical index of original run_ends array from which the `ArrayData`is sliced.
-    let start_physical_index = run_array
-        .get_zero_offset_physical_index(run_array.offset())
-        .unwrap();
 
-    // The logical length of original run_ends array until which the `ArrayData` is sliced.
-    let end_logical_index = run_array.offset() + run_array.len() - 1;
+    // The physical index of original run_ends array from which the `ArrayData`is sliced.
+    let start_physical_index = run_ends.get_start_physical_index();
+
     // The physical index of original run_ends array until which the `ArrayData`is sliced.
-    let end_physical_index = run_array
-        .get_zero_offset_physical_index(end_logical_index)
-        .unwrap();
+    let end_physical_index = run_ends.get_end_physical_index();
 
     let physical_length = end_physical_index - start_physical_index + 1;
 
-    // build new run_ends array by subtrating offset from run ends.
+    // build new run_ends array by subtracting offset from run ends.
+    let offset = R::Native::usize_as(run_ends.offset());
     let mut builder = BufferBuilder::<R::Native>::new(physical_length);
-    for ix in start_physical_index..end_physical_index {
-        let run_end_value = unsafe {
-            // Safety:
-            // start_physical_index and end_physical_index are within
-            // run_ends array bounds.
-            run_array.run_ends().value_unchecked(ix).as_usize()
-        };
-        let run_end_value = run_end_value - run_array.offset();
-        builder.append(R::Native::from_usize(run_end_value).unwrap());
+    for run_end_value in &run_ends.values()[start_physical_index..end_physical_index] {
+        builder.append(run_end_value.sub_wrapping(offset));
     }
     builder.append(R::Native::from_usize(run_array.len()).unwrap());
     let new_run_ends = unsafe {
         // Safety:
         // The function builds a valid run_ends array and hence need not be validated.
-        ArrayDataBuilder::new(run_array.run_ends().data_type().clone())
+        ArrayDataBuilder::new(R::DATA_TYPE)
             .len(physical_length)
             .add_buffer(builder.finish())
             .build_unchecked()

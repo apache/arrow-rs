@@ -2157,8 +2157,7 @@ mod tests {
         let take_out = take_run(&run_array, &take_indices).unwrap();
 
         assert_eq!(take_out.len(), 7);
-
-        assert_eq!(take_out.run_ends().len(), 5);
+        assert_eq!(take_out.run_ends().len(), 7);
         assert_eq!(take_out.run_ends().values(), &[1_i32, 3, 4, 5, 7]);
 
         let take_out_values = as_primitive_array::<Int32Type>(take_out.values());

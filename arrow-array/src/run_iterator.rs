@@ -17,9 +17,8 @@
 
 //! Idiomatic iterator for [`RunArray`](crate::Array)
 
-use arrow_buffer::ArrowNativeType;
-
 use crate::{array::ArrayAccessor, types::RunEndIndexType, Array, TypedRunArray};
+use arrow_buffer::ArrowNativeType;
 
 /// The [`RunArrayIter`] provides an idiomatic way to iterate over the run array.
 /// It returns Some(T) if there is a value or None if the value is null.
@@ -83,14 +82,11 @@ where
         if self.current_front_logical == self.current_back_logical {
             return None;
         }
+
         // If current logical index is greater than current run end index then increment
         // the physical index.
-        if self.current_front_logical
-            >= self
-                .array
-                .run_ends()
-                .value(self.current_front_physical)
-                .as_usize()
+        let run_ends = self.array.run_ends().values();
+        if self.current_front_logical >= run_ends[self.current_front_physical].as_usize()
         {
             // As the run_ends is expected to be strictly increasing, there
             // should be at least one logical entry in one physical entry. Because of this
@@ -138,13 +134,10 @@ where
 
         self.current_back_logical -= 1;
 
+        let run_ends = self.array.run_ends().values();
         if self.current_back_physical > 0
             && self.current_back_logical
-                < self
-                    .array
-                    .run_ends()
-                    .value(self.current_back_physical - 1)
-                    .as_usize()
+                < run_ends[self.current_back_physical - 1].as_usize()
         {
             // As the run_ends is expected to be strictly increasing, there
             // should be at least one logical entry in one physical entry. Because of this
