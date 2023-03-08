@@ -595,7 +595,7 @@ impl ArrayData {
     /// * the buffer is not byte-aligned with type T, or
     /// * the datatype is `Boolean` (it corresponds to a bit-packed buffer where the offset is not applicable)
     pub fn buffer<T: ArrowNativeType>(&self, buffer: usize) -> &[T] {
-        self.buffers()[buffer].typed_data()
+        &self.buffers()[buffer].typed_data()[self.offset..]
     }
 
     /// Returns a new [`ArrayData`] valid for `data_type` containing `len` null values
