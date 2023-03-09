@@ -169,7 +169,7 @@ impl<W: Write> Writer<W> {
                 buffer.clear();
                 converter.value(row_idx).write(&mut buffer).map_err(|e| {
                     ArrowError::CsvError(format!(
-                        "Error formatting row {} and column {}: {e}",
+                        "Error processing row {}, col {}: {e}",
                         row_idx + 1,
                         col_idx + 1
                     ))
@@ -614,7 +614,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
 
         for batch in batches {
             let err = writer.write(batch).unwrap_err().to_string();
-            assert_eq!(err, "Csv error: Error formatting row 2 and column 2: Cast error: Failed to convert 1926632005177685347 to temporal for Date64")
+            assert_eq!(err, "Csv error: Error processing row 2, col 2: Cast error: Failed to convert 1926632005177685347 to temporal for Date64")
         }
         drop(writer);
     }
