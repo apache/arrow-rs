@@ -293,3 +293,7 @@ required-features = ["pyarrow"]
 [[test]]
 name = "array_cast"
 required-features = ["chrono-tz", "prettyprint"]
+
+[[test]]
+name = "timezone"
+required-features = ["chrono-tz"]

@@ -15,12 +15,123 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::{ArrowNativeTypeOp, ArrowPrimitiveType};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;
 use std::str::FromStr;
+
+/// Helper for parsing timestamps
+struct TimestampParser {
+    /// The timestamp bytes to parse minus `b'0'`
+    ///
+    /// This makes interpretation as an integer inexpensive
+    digits: [u8; 32],
+    /// A mask containing a `1` bit where the corresponding byte is a valid ASCII digit
+    mask: u32,
+}
+
+impl TimestampParser {
+    fn new(bytes: &[u8]) -> Self {
+        let mut digits = [0; 32];
+        let mut mask = 0;
+
+        // Treating all bytes the same way, helps LLVM vectorise this correctly
+        for (idx, (o, i)) in digits.iter_mut().zip(bytes).enumerate() {
+            *o = i.wrapping_sub(b'0');
+            mask |= ((*o < 10) as u32) << idx
+        }
+
+        Self { digits, mask }
+    }
+
+    /// Returns true if the byte at `idx` in the original string equals `b`
+    fn test(&self, idx: usize, b: u8) -> bool {
+        self.digits[idx] == b.wrapping_sub(b'0')
+    }
+
+    /// Parses a date of the form `1997-01-31`
+    fn date(&self) -> Option<NaiveDate> {
+        if self.mask & 0b1111111111 != 0b1101101111
+            || !self.test(4, b'-')
+            || !self.test(7, b'-')
+        {
+            return None;
+        }
+
+        let year = self.digits[0] as u16 * 1000
+            + self.digits[1] as u16 * 100
+            + self.digits[2] as u16 * 10
+            + self.digits[3] as u16;
+
+        let month = self.digits[5] * 10 + self.digits[6];
+        let day = self.digits[8] * 10 + self.digits[9];
+
+        NaiveDate::from_ymd_opt(year as _, month as _, day as _)
+    }
+
+    /// Parses a time of any of forms
+    /// - `09:26:56`
+    /// - `09:26:56.123`
+    /// - `09:26:56.123456`
+    /// - `09:26:56.123456789`
+    /// - `092656`
+    ///
+    /// Returning the end byte offset
+    fn time(&self) -> Option<(NaiveTime, usize)> {
+        match (self.mask >> 11) & 0b11111111 {
+            // 09:26:56
+            0b11011011 if self.test(13, b':') && self.test(16, b':') => {
+                let hour = self.digits[11] * 10 + self.digits[12];
+                let minute = self.digits[14] * 10 + self.digits[15];
+                let second = self.digits[17] * 10 + self.digits[18];
+                let time = NaiveTime::from_hms_opt(hour as _, minute as _, second as _)?;
+
+                let millis = || {
+                    self.digits[20] as u32 * 100_000_000
+                        + self.digits[21] as u32 * 10_000_000
+                        + self.digits[22] as u32 * 1_000_000
+                };
+
+                let micros = || {
+                    self.digits[23] as u32 * 100_000
+                        + self.digits[24] as u32 * 10_000
+                        + self.digits[25] as u32 * 1_000
+                };
+
+                let nanos = || {
+                    self.digits[26] as u32 * 100
+                        + self.digits[27] as u32 * 10
+                        + self.digits[28] as u32
+                };
+
+                match self.test(19, b'.') {
+                    true => match (self.mask >> 20).trailing_ones() {
+                        3 => Some((time.with_nanosecond(millis())?, 23)),
+                        6 => Some((time.with_nanosecond(millis() + micros())?, 26)),
+                        9 => Some((
+                            time.with_nanosecond(millis() + micros() + nanos())?,
+                            29,
+                        )),
+                        _ => None,
+                    },
+                    false => Some((time, 19)),
+                }
+            }
+            // 092656
+            0b111111 => {
+                let hour = self.digits[11] * 10 + self.digits[12];
+                let minute = self.digits[13] * 10 + self.digits[14];
+                let second = self.digits[15] * 10 + self.digits[16];
+                let time = NaiveTime::from_hms_opt(hour as _, minute as _, second as _)?;
+                Some((time, 17))
+            }
+            _ => None,
+        }
+    }
+}
 
 /// Accepts a string and parses it relative to the provided `timezone`
 ///
@@ -32,105 +143,83 @@ use std::str::FromStr;
 /// * `1997-01-31T09:26:56.123Z`        # RCF3339
 /// * `1997-01-31T09:26:56.123-05:00`   # RCF3339
 /// * `1997-01-31 09:26:56.123-05:00`   # close to RCF3339 but with a space rather than T
+/// * `2023-01-01 04:05:06.789 -08`     # close to RCF3339, no fractional seconds or time separator
 /// * `1997-01-31T09:26:56.123`         # close to RCF3339 but no timezone offset specified
 /// * `1997-01-31 09:26:56.123`         # close to RCF3339 but uses a space and no timezone offset
 /// * `1997-01-31 09:26:56`             # close to RCF3339, no fractional seconds
+/// * `1997-01-31 092656`               # close to RCF3339, no fractional seconds
+/// * `1997-01-31 092656+04:00`         # close to RCF3339, no fractional seconds or time separator
 /// * `1997-01-31`                      # close to RCF3339, only date no time
 ///
-/// Some formats that supported by PostgresSql <https://www.postgresql.org/docs/current/datatype-datetime.html#DATATYPE-DATETIME-TIME-TABLE>
-/// still not supported by chrono, like
-///     "2023-01-01 040506 America/Los_Angeles",
-///     "2023-01-01 04:05:06.789 +07:30:00",
-///     "2023-01-01 040506 +07:30:00",
-///     "2023-01-01 04:05:06.789 PST",
-///     "2023-01-01 04:05:06.789 -08",
+/// [IANA timezones] are only supported if the `arrow-array/chrono-tz` feature is enabled
+///
+/// * `2023-01-01 040506 America/Los_Angeles`
+///
+/// If a timestamp is ambiguous, for example as a result of daylight-savings time, an error
+/// will be returned
+///
+/// Some formats supported by PostgresSql <https://www.postgresql.org/docs/current/datatype-datetime.html#DATATYPE-DATETIME-TIME-TABLE>
+/// are not supported, like
+///
+/// * "2023-01-01 04:05:06.789 +07:30:00",
+/// * "2023-01-01 040506 +07:30:00",
+/// * "2023-01-01 04:05:06.789 PST",
+///
+/// [IANA timezones]: https://www.iana.org/time-zones
 pub fn string_to_datetime<T: TimeZone>(
     timezone: &T,
     s: &str,
 ) -> Result<DateTime<T>, ArrowError> {
-    // Fast path:  RFC3339 timestamp (with a T)
-    // Example: 2020-09-08T13:42:29.190855Z
-    if let Ok(ts) = DateTime::parse_from_rfc3339(s) {
-        return Ok(ts.with_timezone(timezone));
+    let err = |ctx: &str| {
+        ArrowError::ParseError(format!("Error parsing timestamp from '{s}': {ctx}"))
+    };
+
+    let bytes = s.as_bytes();
+    if bytes.len() < 10 {
+        return Err(err("timestamp must contain at least 10 characters"));
     }
 
-    // Implement quasi-RFC3339 support by trying to parse the
-    // timestamp with various other format specifiers to to support
-    // separating the date and time with a space ' ' rather than 'T' to be
-    // (more) compatible with Apache Spark SQL
+    let parser = TimestampParser::new(bytes);
+    let date = parser.date().ok_or_else(|| err("error parsing date"))?;
+    if bytes.len() == 10 {
+        let offset = timezone.offset_from_local_date(&date);
+        let offset = offset
+            .single()
+            .ok_or_else(|| err("error computing timezone offset"))?;
 
-    let supported_formats = vec![
-        "%Y-%m-%d %H:%M:%S%.f%:z", // Example: 2020-09-08 13:42:29.190855-05:00
-        "%Y-%m-%d %H%M%S%.3f%:z",  // Example: "2023-01-01 040506 +07:30"
-    ];
-
-    for f in supported_formats.iter() {
-        if let Ok(ts) = DateTime::parse_from_str(s, f) {
-            return Ok(ts.with_timezone(timezone));
-        }
+        let time = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+        return Ok(DateTime::from_local(date.and_time(time), offset));
     }
 
-    // with an explicit Z, using ' ' as a separator
-    // Example: 2020-09-08 13:42:29Z
-    if let Ok(ts) = Utc.datetime_from_str(s, "%Y-%m-%d %H:%M:%S%.fZ") {
-        return Ok(ts.with_timezone(timezone));
+    if !parser.test(10, b'T') && !parser.test(10, b' ') {
+        return Err(err("invalid timestamp separator"));
     }
 
-    // Support timestamps without an explicit timezone offset, again
-    // to be compatible with what Apache Spark SQL does.
-
-    // without a timezone specifier as a local time, using T as a separator
-    // Example: 2020-09-08T13:42:29.190855
-    if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
-        if let Some(offset) = timezone.offset_from_local_datetime(&ts).single() {
-            return Ok(DateTime::from_local(ts, offset));
-        }
+    let (time, tz_offset) = parser.time().ok_or_else(|| err("error parsing time"))?;
+    let datetime = date.and_time(time);
+    if bytes.len() <= tz_offset {
+        let offset = timezone.offset_from_local_datetime(&datetime);
+        let offset = offset
+            .single()
+            .ok_or_else(|| err("error computing timezone offset"))?;
+        return Ok(DateTime::from_local(datetime, offset));
     }
 
-    // without a timezone specifier as a local time, using T as a
-    // separator, no fractional seconds
-    // Example: 2020-09-08T13:42:29
-    if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-        if let Some(offset) = timezone.offset_from_local_datetime(&ts).single() {
-            return Ok(DateTime::from_local(ts, offset));
-        }
+    if bytes[tz_offset] == b'z' || bytes[tz_offset] == b'Z' {
+        let offset = timezone.offset_from_local_datetime(&datetime);
+        let offset = offset
+            .single()
+            .ok_or_else(|| err("error computing timezone offset"))?;
+        return Ok(DateTime::from_utc(datetime, offset));
     }
 
-    // without a timezone specifier as a local time, using ' ' as a separator
-    // Example: 2020-09-08 13:42:29.190855
-    if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f") {
-        if let Some(offset) = timezone.offset_from_local_datetime(&ts).single() {
-            return Ok(DateTime::from_local(ts, offset));
-        }
-    }
-
-    // without a timezone specifier as a local time, using ' ' as a
-    // separator, no fractional seconds
-    // Example: 2020-09-08 13:42:29
-    if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-        if let Some(offset) = timezone.offset_from_local_datetime(&ts).single() {
-            return Ok(DateTime::from_local(ts, offset));
-        }
-    }
-
-    // without a timezone specifier as a local time, only date
-    // Example: 2020-09-08
-    if let Ok(dt) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        if let Some(ts) = dt.and_hms_opt(0, 0, 0) {
-            if let Some(offset) = timezone.offset_from_local_datetime(&ts).single() {
-                return Ok(DateTime::from_local(ts, offset));
-            }
-        }
-    }
-
-    // Note we don't pass along the error message from the underlying
-    // chrono parsing because we tried several different format
-    // strings and we don't know which the user was trying to
-    // match. Ths any of the specific error messages is likely to be
-    // be more confusing than helpful
-    Err(ArrowError::CastError(format!(
-        "Error parsing '{s}' as timestamp"
-    )))
+    // Parse remainder of string as timezone
+    let parsed_tz: Tz = s[tz_offset..].trim_start().parse()?;
+    let offset = parsed_tz.offset_from_local_datetime(&datetime);
+    let offset = offset
+        .single()
+        .ok_or_else(|| err("error computing timezone offset"))?;
+    Ok(DateTime::<Tz>::from_local(datetime, offset).with_timezone(timezone))
 }
 
 /// Accepts a string in RFC3339 / ISO8601 standard format and some
@@ -418,19 +507,20 @@ const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented a
 
 impl Parser for Date32Type {
     fn parse(string: &str) -> Option<i32> {
-        let date = string.parse::<chrono::NaiveDate>().ok()?;
+        let parser = TimestampParser::new(string.as_bytes());
+        let date = parser.date()?;
         Some(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
     }
 
     fn parse_formatted(string: &str, format: &str) -> Option<i32> {
-        let date = chrono::NaiveDate::parse_from_str(string, format).ok()?;
+        let date = NaiveDate::parse_from_str(string, format).ok()?;
         Some(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
     }
 }
 
 impl Parser for Date64Type {
     fn parse(string: &str) -> Option<i64> {
-        let date_time = string.parse::<NaiveDateTime>().ok()?;
+        let date_time = string_to_datetime(&Utc, string).ok()?;
         Some(date_time.timestamp_millis())
     }
 
@@ -896,14 +986,35 @@ mod tests {
     #[test]
     fn string_to_timestamp_invalid() {
         // Test parsing invalid formats
+        let cases = [
+            ("", "timestamp must contain at least 10 characters"),
+            ("SS", "timestamp must contain at least 10 characters"),
+            ("Wed, 18 Feb 2015 23:16:09 GMT", "error parsing date"),
+            ("1997-01-31H09:26:56.123Z", "invalid timestamp separator"),
+            ("1997-01-31  09:26:56.123Z", "error parsing time"),
+            ("1997:01:31T09:26:56.123Z", "error parsing date"),
+            ("1997:1:31T09:26:56.123Z", "error parsing date"),
+            ("1997-01-32T09:26:56.123Z", "error parsing date"),
+            ("1997-13-32T09:26:56.123Z", "error parsing date"),
+            ("1997-02-29T09:26:56.123Z", "error parsing date"),
+            ("2015-02-30T17:35:20-08:00", "error parsing date"),
+            ("1997-01-10T9:26:56.123Z", "error parsing time"),
+            ("2015-01-20T25:35:20-08:00", "error parsing time"),
+            ("1997-01-10T09:61:56.123Z", "error parsing time"),
+            ("1997-01-10T09:61:90.123Z", "error parsing time"),
+            ("1997-01-10T12:00:56.12Z", "error parsing time"),
+            ("1997-01-10T12:00:56.1234Z", "error parsing time"),
+            ("1997-01-10T12:00:56.12345Z", "error parsing time"),
+            ("1997-01-10T12:00:6.123Z", "error parsing time"),
+            ("1997-01-31T092656.123Z", "error parsing time"),
+        ];
 
-        // It would be nice to make these messages better
-        expect_timestamp_parse_error("", "Error parsing '' as timestamp");
-        expect_timestamp_parse_error("SS", "Error parsing 'SS' as timestamp");
-        expect_timestamp_parse_error(
-            "Wed, 18 Feb 2015 23:16:09 GMT",
-            "Error parsing 'Wed, 18 Feb 2015 23:16:09 GMT' as timestamp",
-        );
+        for (s, ctx) in cases {
+            let expected =
+                format!("Parser error: Error parsing timestamp from '{s}': {ctx}");
+            let actual = string_to_datetime(&Utc, s).unwrap_err().to_string();
+            assert_eq!(actual, expected)
+        }
     }
 
     // Parse a timestamp to timestamp int with a useful human readable error message
@@ -913,18 +1024,6 @@ mod tests {
             eprintln!("Error parsing timestamp '{s}': {e:?}");
         }
         result
-    }
-
-    fn expect_timestamp_parse_error(s: &str, expected_err: &str) {
-        match string_to_timestamp_nanos(s) {
-            Ok(v) => panic!(
-                "Expected error '{expected_err}' while parsing '{s}', but parsed {v} instead"
-            ),
-            Err(e) => {
-                assert!(e.to_string().contains(expected_err),
-                        "Can not find expected error '{expected_err}' while parsing '{s}'. Actual error '{e}'");
-            }
-        }
     }
 
     #[test]
