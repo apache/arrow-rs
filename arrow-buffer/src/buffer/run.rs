@@ -167,7 +167,7 @@ where
 
     /// Returns the physical index at which the logical array starts
     pub fn get_start_physical_index(&self) -> usize {
-        if self.offset == 0 {
+        if self.offset == 0 || self.len == 0 {
             return 0;
         }
         // Fallback to binary search
@@ -176,6 +176,9 @@ where
 
     /// Returns the physical index at which the logical array ends
     pub fn get_end_physical_index(&self) -> usize {
+        if self.len == 0 {
+            return 0;
+        }
         if self.max_value() == self.offset + self.len {
             return self.values().len() - 1;
         }
@@ -194,5 +197,25 @@ where
             offset: self.offset + offset,
             len,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::buffer::RunEndBuffer;
+
+    #[test]
+    fn test_zero_length_slice() {
+        let buffer = RunEndBuffer::new(vec![1_i32, 4_i32].into(), 0, 4);
+        assert_eq!(buffer.get_start_physical_index(), 0);
+        assert_eq!(buffer.get_end_physical_index(), 1);
+
+        let sliced = buffer.slice(2, 0);
+        assert_eq!(sliced.get_start_physical_index(), 0);
+        assert_eq!(sliced.get_end_physical_index(), 0);
+
+        let sliced = buffer.slice(4, 0);
+        assert_eq!(sliced.get_start_physical_index(), 0);
+        assert_eq!(sliced.get_end_physical_index(), 0);
     }
 }
