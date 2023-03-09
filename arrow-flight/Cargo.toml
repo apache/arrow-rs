@@ -60,6 +60,7 @@ cli = ["arrow/prettyprint", "clap", "tracing-log", "tracing-subscriber", "tonic/
 
 [dev-dependencies]
 arrow = { version = "34.0.0", path = "../arrow", features = ["prettyprint"] }
+assert_cmd = "2.0.8"
 tempfile = "3.3"
 tokio-stream = { version = "0.1", features = ["net"] }
 tower = "0.4.13"
@@ -77,4 +78,9 @@ required-features = ["flight-sql-experimental", "tls"]
 
 [[bin]]
 name = "flight_sql_client"
+required-features = ["cli", "flight-sql-experimental", "tls"]
+
+[[test]]
+name = "flight_sql_client_cli"
+path = "tests/flight_sql_client_cli.rs"
 required-features = ["cli", "flight-sql-experimental", "tls"]
