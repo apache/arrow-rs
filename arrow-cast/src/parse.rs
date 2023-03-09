@@ -673,7 +673,7 @@ mod tests {
             ("1997-01-10T12:00:56.1234Z", "error parsing time"),
             ("1997-01-10T12:00:56.12345Z", "error parsing time"),
             ("1997-01-10T12:00:6.123Z", "error parsing time"),
-            ("1997-01-31T092656.123Z", "error parsing time")
+            ("1997-01-31T092656.123Z", "error parsing time"),
         ];
 
         for (s, ctx) in cases {
