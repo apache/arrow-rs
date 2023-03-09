@@ -622,7 +622,6 @@ impl<'a> InMemoryRowGroup<'a> {
                 .iter()
                 .zip(self.metadata.columns())
                 .enumerate()
-                .into_iter()
                 .filter_map(|(idx, (chunk, chunk_meta))| {
                     (chunk.is_none() && projection.leaf_included(idx)).then(|| {
                         // If the first page does not start at the beginning of the column,
@@ -671,7 +670,6 @@ impl<'a> InMemoryRowGroup<'a> {
                 .column_chunks
                 .iter()
                 .enumerate()
-                .into_iter()
                 .filter_map(|(idx, chunk)| {
                     (chunk.is_none() && projection.leaf_included(idx)).then(|| {
                         let column = self.metadata.column(idx);

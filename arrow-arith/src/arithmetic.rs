@@ -2571,9 +2571,9 @@ mod tests {
 
     #[test]
     fn test_primitive_array_negate() {
-        let a: Int64Array = (0..100).into_iter().map(Some).collect();
+        let a: Int64Array = (0..100).map(Some).collect();
         let actual = negate(&a).unwrap();
-        let expected: Int64Array = (0..100).into_iter().map(|i| Some(-i)).collect();
+        let expected: Int64Array = (0..100).map(|i| Some(-i)).collect();
         assert_eq!(expected, actual);
     }
 
@@ -2590,20 +2590,18 @@ mod tests {
 
     #[test]
     fn test_arithmetic_kernel_should_not_rely_on_padding() {
-        let a: UInt8Array = (0..128_u8).into_iter().map(Some).collect();
+        let a: UInt8Array = (0..128_u8).map(Some).collect();
         let a = a.slice(63, 65);
         let a = a.as_any().downcast_ref::<UInt8Array>().unwrap();
 
-        let b: UInt8Array = (0..128_u8).into_iter().map(Some).collect();
+        let b: UInt8Array = (0..128_u8).map(Some).collect();
         let b = b.slice(63, 65);
         let b = b.as_any().downcast_ref::<UInt8Array>().unwrap();
 
         let actual = add(a, b).unwrap();
         let actual: Vec<Option<u8>> = actual.iter().collect();
-        let expected: Vec<Option<u8>> = (63..63_u8 + 65_u8)
-            .into_iter()
-            .map(|i| Some(i + i))
-            .collect();
+        let expected: Vec<Option<u8>> =
+            (63..63_u8 + 65_u8).map(|i| Some(i + i)).collect();
         assert_eq!(expected, actual);
     }
 

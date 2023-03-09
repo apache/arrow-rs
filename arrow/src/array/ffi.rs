@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_list() -> Result<()> {
-        let v: Vec<i64> = (0..9).into_iter().collect();
+        let v: Vec<i64> = (0..9).collect();
         let value_data = ArrayData::builder(DataType::Int64)
             .len(9)
             .add_buffer(Buffer::from_slice_ref(v))
@@ -240,7 +240,7 @@ mod tests {
         bit_util::set_bit(&mut validity_bits, 2);
         bit_util::set_bit(&mut validity_bits, 6);
 
-        let v: Vec<i16> = (0..16).into_iter().collect();
+        let v: Vec<i16> = (0..16).collect();
         let value_data = ArrayData::builder(DataType::Int16)
             .len(16)
             .add_buffer(Buffer::from_slice_ref(v))
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_list_nested() -> Result<()> {
-        let v: Vec<i32> = (0..16).into_iter().collect();
+        let v: Vec<i32> = (0..16).collect();
         let value_data = ArrayData::builder(DataType::Int32)
             .len(16)
             .add_buffer(Buffer::from_slice_ref(v))
