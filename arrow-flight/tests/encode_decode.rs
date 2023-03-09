@@ -243,6 +243,10 @@ async fn test_max_message_size_fuzz() {
         let decode_stream = FlightRecordBatchStream::new_from_flight_data(encode_stream);
         let output: Vec<_> = decode_stream.try_collect().await.expect("encode / decode");
 
+        for b in &output {
+            assert_eq!(b.schema(), input[0].schema());
+        }
+
         let a = pretty_format_batches(&input).unwrap().to_string();
         let b = pretty_format_batches(&output).unwrap().to_string();
         assert_eq!(a, b);
