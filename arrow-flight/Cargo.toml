@@ -42,7 +42,6 @@ tokio = { version = "1.0", default-features = false, features = ["macros", "rt",
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
 
 # CLI-related dependencies
-arrow = { version = "34.0.0", path = "../arrow", optional = true }
 clap = { version = "4.1", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
 tracing-log = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3.1", default-features = false, features = ["ansi", "fmt"], optional = true }
@@ -56,10 +55,10 @@ flight-sql-experimental = []
 tls = ["tonic/tls"]
 
 # Enable CLI tools
-cli = ["arrow/prettyprint", "clap", "tracing-log", "tracing-subscriber", "tonic/tls-webpki-roots"]
+cli = ["arrow-cast/prettyprint", "clap", "tracing-log", "tracing-subscriber", "tonic/tls-webpki-roots"]
 
 [dev-dependencies]
-arrow = { version = "34.0.0", path = "../arrow", features = ["prettyprint"] }
+arrow-cast = { version = "34.0.0", path = "../arrow-cast", features = ["prettyprint"] }
 tempfile = "3.3"
 tokio-stream = { version = "0.1", features = ["net"] }
 tower = "0.4.13"

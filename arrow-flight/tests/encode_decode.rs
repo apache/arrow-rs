@@ -19,8 +19,9 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use arrow::{compute::concat_batches, datatypes::Int32Type};
+use arrow_array::types::Int32Type;
 use arrow_array::{ArrayRef, DictionaryArray, Float64Array, RecordBatch, UInt8Array};
+use arrow_cast::pretty::pretty_format_batches;
 use arrow_flight::{
     decode::{DecodedPayload, FlightDataDecoder, FlightRecordBatchStream},
     encode::FlightDataEncoderBuilder,
@@ -242,9 +243,9 @@ async fn test_max_message_size_fuzz() {
         let decode_stream = FlightRecordBatchStream::new_from_flight_data(encode_stream);
         let output: Vec<_> = decode_stream.try_collect().await.expect("encode / decode");
 
-        let input_batch = concat_batches(&input[0].schema(), &input).unwrap();
-        let output_batch = concat_batches(&output[0].schema(), &output).unwrap();
-        assert_eq!(input_batch, output_batch);
+        let a = pretty_format_batches(&input).unwrap().to_string();
+        let b = pretty_format_batches(&output).unwrap().to_string();
+        assert_eq!(a, b);
     }
 }
 

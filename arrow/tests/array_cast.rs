@@ -37,6 +37,7 @@ use arrow_array::{
     UInt64Array, UInt8Array, UnionArray,
 };
 use arrow_buffer::{i256, Buffer};
+use arrow_cast::pretty::pretty_format_columns;
 use arrow_cast::{can_cast_types, cast};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field, IntervalUnit, TimeUnit, UnionMode};
@@ -466,5 +467,61 @@ fn test_timestamp_cast_utf8() {
     assert_eq!(
         out.as_any().downcast_ref::<StringArray>().unwrap(),
         &expected
+    );
+}
+
+fn format_timezone(tz: &str) -> Result<String, ArrowError> {
+    let array = Arc::new(
+        TimestampSecondArray::from(vec![Some(11111111), None]).with_timezone(tz),
+    );
+    Ok(pretty_format_columns("f", &[array])?.to_string())
+}
+
+#[test]
+fn test_pretty_format_timestamp_second_with_utc_timezone() {
+    let table = format_timezone("UTC").unwrap();
+    let expected = vec![
+        "+----------------------+",
+        "| f                    |",
+        "+----------------------+",
+        "| 1970-05-09T14:25:11Z |",
+        "|                      |",
+        "+----------------------+",
+    ];
+    let actual: Vec<&str> = table.lines().collect();
+    assert_eq!(expected, actual, "Actual result:\n\n{actual:#?}\n\n");
+}
+
+#[test]
+fn test_pretty_format_timestamp_second_with_non_utc_timezone() {
+    let table = format_timezone("Asia/Taipei").unwrap();
+
+    let expected = vec![
+        "+---------------------------+",
+        "| f                         |",
+        "+---------------------------+",
+        "| 1970-05-09T22:25:11+08:00 |",
+        "|                           |",
+        "+---------------------------+",
+    ];
+    let actual: Vec<&str> = table.lines().collect();
+    assert_eq!(expected, actual, "Actual result:\n\n{actual:#?}\n\n");
+}
+
+#[test]
+fn test_pretty_format_timestamp_second_with_incorrect_fixed_offset_timezone() {
+    let err = format_timezone("08:00").unwrap_err().to_string();
+    assert_eq!(
+        err,
+        "Parser error: Invalid timezone \"08:00\": '08:00' is not a valid timezone"
+    );
+}
+
+#[test]
+fn test_pretty_format_timestamp_second_with_unknown_timezone() {
+    let err = format_timezone("unknown").unwrap_err().to_string();
+    assert_eq!(
+        err,
+        "Parser error: Invalid timezone \"unknown\": 'unknown' is not a valid timezone"
     );
 }
