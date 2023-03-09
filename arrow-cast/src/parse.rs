@@ -23,7 +23,11 @@ use chrono::prelude::*;
 
 /// Helper for parsing timestamps
 struct TimestampParser {
+    /// The timestamp bytes to parse minus `b'0'`
+    ///
+    /// This makes interpretation as an integer inexpensive
     digits: [u8; 32],
+    /// A mask containing a `1` bit where the corresponding byte is a valid ASCII digit
     mask: u32,
 }
 
@@ -32,6 +36,7 @@ impl TimestampParser {
         let mut digits = [0; 32];
         let mut mask = 0;
 
+        // Treating all bytes the same way, helps LLVM vectorise this correctly
         for (idx, (o, i)) in digits.iter_mut().zip(bytes).enumerate() {
             *o = i.wrapping_sub(b'0');
             mask |= ((*o < 10) as u32) << idx
@@ -40,7 +45,7 @@ impl TimestampParser {
         Self { digits, mask }
     }
 
-    /// Returns true if the byte at `idx` equals `b`
+    /// Returns true if the byte at `idx` in the original string equals `b`
     fn test(&self, idx: usize, b: u8) -> bool {
         self.digits[idx] == b.wrapping_sub(b'0')
     }
