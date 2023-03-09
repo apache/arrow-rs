@@ -18,29 +18,34 @@
 //! Timezone for timestamp arrays
 
 use arrow_schema::ArrowError;
-use chrono::format::{parse, Parsed, StrftimeItems};
 use chrono::FixedOffset;
 pub use private::{Tz, TzOffset};
 
-/// Parses a fixed offset of the form "+09:00"
-fn parse_fixed_offset(tz: &str) -> Result<FixedOffset, ArrowError> {
-    let mut parsed = Parsed::new();
+/// Parses a fixed offset of the form "+09:00", "-09" or "+0930"
+fn parse_fixed_offset(tz: &str) -> Option<FixedOffset> {
+    let bytes = tz.as_bytes();
 
-    if let Ok(fixed_offset) = parse(&mut parsed, tz, StrftimeItems::new("%:z"))
-        .and_then(|_| parsed.to_fixed_offset())
-    {
-        return Ok(fixed_offset);
+    let mut values = match bytes.len() {
+        // [+-]XX:XX
+        6 if bytes[3] == b':' => [bytes[1], bytes[2], bytes[4], bytes[5]],
+        // [+-]XXXX
+        5 => [bytes[1], bytes[2], bytes[3], bytes[4]],
+        // [+-]XX
+        3 => [bytes[1], bytes[2], b'0', b'0'],
+        _ => return None,
+    };
+    values.iter_mut().for_each(|x| *x = x.wrapping_sub(b'0'));
+    if values.iter().any(|x| *x > 9) {
+        return None;
     }
+    let secs = (values[0] * 10 + values[1]) as i32 * 60 * 60
+        + (values[2] * 10 + values[3]) as i32 * 60;
 
-    if let Ok(fixed_offset) = parse(&mut parsed, tz, StrftimeItems::new("%#z"))
-        .and_then(|_| parsed.to_fixed_offset())
-    {
-        return Ok(fixed_offset);
+    match bytes[0] {
+        b'+' => FixedOffset::east_opt(secs),
+        b'-' => FixedOffset::west_opt(secs),
+        _ => None,
     }
-
-    Err(ArrowError::ParseError(format!(
-        "Invalid timezone \"{tz}\": Expected format [+-]XX:XX, [+-]XX, or [+-]XXXX"
-    )))
 }
 
 #[cfg(feature = "chrono-tz")]
@@ -83,12 +88,11 @@ mod private {
         type Err = ArrowError;
 
         fn from_str(tz: &str) -> Result<Self, Self::Err> {
-            if tz.starts_with('+') || tz.starts_with('-') {
-                Ok(Self(TzInner::Offset(parse_fixed_offset(tz)?)))
-            } else {
-                Ok(Self(TzInner::Timezone(tz.parse().map_err(|e| {
+            match parse_fixed_offset(tz) {
+                Some(offset) => Ok(Self(TzInner::Offset(offset))),
+                None => Ok(Self(TzInner::Timezone(tz.parse().map_err(|e| {
                     ArrowError::ParseError(format!("Invalid timezone \"{tz}\": {e}"))
-                })?)))
+                })?))),
             }
         }
     }
@@ -261,13 +265,12 @@ mod private {
         type Err = ArrowError;
 
         fn from_str(tz: &str) -> Result<Self, Self::Err> {
-            if tz.starts_with('+') || tz.starts_with('-') {
-                Ok(Self(parse_fixed_offset(tz)?))
-            } else {
-                Err(ArrowError::ParseError(format!(
+            let offset = parse_fixed_offset(tz).ok_or_else(|| {
+                ArrowError::ParseError(format!(
                     "Invalid timezone \"{tz}\": only offset based timezones supported without chrono-tz feature"
-                )))
-            }
+                ))
+            })?;
+            Ok(Self(offset))
         }
     }
 
