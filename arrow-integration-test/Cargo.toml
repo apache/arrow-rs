@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-integration-test"
-version = "34.0.0"
+version = "35.0.0"
 description = "Support for the Apache Arrow JSON test data format"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -38,8 +38,8 @@ path = "src/lib.rs"
 bench = false
 
 [dependencies]
-arrow = { version = "34.0.0", path = "../arrow", default-features = false }
-arrow-buffer = { version = "34.0.0", path = "../arrow-buffer" }
+arrow = { version = "35.0.0", path = "../arrow", default-features = false }
+arrow-buffer = { version = "35.0.0", path = "../arrow-buffer" }
 hex = { version = "0.4", default-features = false, features = ["std"] }
 serde = { version = "1.0", default-features = false, features = ["rc", "derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
