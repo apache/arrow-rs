@@ -316,6 +316,7 @@ impl ObjectStore for LocalFileSystem {
         &self,
         location: &Path,
     ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+        #[cfg(not(target_arch = "wasm32"))]
         // Get the path to the file from the configuration.
         let path = self.config.path_to_filesystem(location)?;
         loop {
@@ -324,8 +325,8 @@ impl ObjectStore for LocalFileSystem {
 
             // Attempt to open the file with the given options.
             match options
-                .write(true)
                 .truncate(false)
+                .append(true)
                 .create(true)
                 .open(&path)
                 .await
@@ -354,6 +355,8 @@ impl ObjectStore for LocalFileSystem {
                 }
             }
         }
+        #[cfg(target_arch = "wasm32")]
+        Err(super::Error::NotImplemented)
     }
 
     async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -1003,53 +1006,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn creates_dir_if_not_present_append() {
-        let root = TempDir::new().unwrap();
-        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-
-        let location = Path::from("nested/file/test_file");
-
-        let data = Bytes::from("arbitrary data");
-        let expected_data = data.clone();
-
-        let mut writer = integration.append(&location).await.unwrap();
-
-        writer.write_all(data.as_ref()).await.unwrap();
-
-        let read_data = integration
-            .get(&location)
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        assert_eq!(&*read_data, expected_data);
-    }
-
-    #[tokio::test]
-    async fn unknown_length_append() {
-        let root = TempDir::new().unwrap();
-        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-
-        let location = Path::from("some_file");
-
-        let data = Bytes::from("arbitrary data");
-        let expected_data = data.clone();
-        let mut writer = integration.append(&location).await.unwrap();
-
-        writer.write_all(data.as_ref()).await.unwrap();
-
-        let read_data = integration
-            .get(&location)
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        assert_eq!(&*read_data, expected_data);
-    }
-
-    #[tokio::test]
     async fn unknown_length() {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
@@ -1060,34 +1016,6 @@ mod tests {
         let expected_data = data.clone();
 
         integration.put(&location, data).await.unwrap();
-
-        let read_data = integration
-            .get(&location)
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        assert_eq!(&*read_data, expected_data);
-    }
-
-    #[tokio::test]
-    async fn multiple_append() {
-        let root = TempDir::new().unwrap();
-        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-
-        let location = Path::from("some_file");
-
-        let data = vec![
-            Bytes::from("arbitrary"),
-            Bytes::from("data"),
-            Bytes::from("gnz"),
-        ];
-        let expected_data = Bytes::from("arbitrarydatagnz");
-        let mut writer = integration.append(&location).await.unwrap();
-        for d in data {
-            writer.write_all(d.as_ref()).await.unwrap();
-        }
 
         let read_data = integration
             .get(&location)
@@ -1421,5 +1349,96 @@ mod tests {
         let integration = LocalFileSystem::new();
         let path = Path::from_filesystem_path(".").unwrap();
         integration.list_with_delimiter(Some(&path)).await.unwrap();
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(test)]
+mod not_wasm_tests {
+    use crate::local::LocalFileSystem;
+    use crate::{ObjectStore, Path};
+    use bytes::Bytes;
+    use tempfile::TempDir;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn creates_dir_if_not_present_append() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let location = Path::from("nested/file/test_file");
+
+        let data = Bytes::from("arbitrary data");
+        let expected_data = data.clone();
+
+        let mut writer = integration.append(&location).await.unwrap();
+
+        writer.write_all(data.as_ref()).await.unwrap();
+
+        let read_data = integration
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(&*read_data, expected_data);
+    }
+
+    #[tokio::test]
+    async fn unknown_length_append() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let location = Path::from("some_file");
+
+        let data = Bytes::from("arbitrary data");
+        let expected_data = data.clone();
+        let mut writer = integration.append(&location).await.unwrap();
+
+        writer.write_all(data.as_ref()).await.unwrap();
+
+        let read_data = integration
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(&*read_data, expected_data);
+    }
+
+    #[tokio::test]
+    async fn multiple_append() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let location = Path::from("some_file");
+
+        let data = vec![
+            Bytes::from("arbitrary"),
+            Bytes::from("data"),
+            Bytes::from("gnz"),
+        ];
+
+        let mut writer = integration.append(&location).await.unwrap();
+        for d in &data {
+            writer.write_all(d).await.unwrap();
+        }
+
+        let mut writer = integration.append(&location).await.unwrap();
+        for d in &data {
+            writer.write_all(d).await.unwrap();
+        }
+
+        let read_data = integration
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let expected_data = Bytes::from("arbitrarydatagnzarbitrarydatagnz");
+        assert_eq!(&*read_data, expected_data);
     }
 }
