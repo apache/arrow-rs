@@ -158,9 +158,11 @@ impl<E: RunEnd> From<RunArrayData<E>> for ArrayDataRun {
 pub struct RunArrayData<E: RunEnd> {
     data_type: DataType,
     run_ends: RunEndBuffer<E>,
-    /// The children of this RunArrayData
+    /// The children of this RunArrayData:
     /// 1: the run ends
     /// 2: the values
+    ///
+    /// We store an array so that a slice can be returned in [`RunArrayData::layout`]
     children: Box<[ArrayData; 2]>,
 }
 
@@ -171,7 +173,7 @@ impl<E: RunEnd> RunArrayData<E> {
     ///
     /// - `PhysicalType::from(&data_type) == PhysicalType::Run(E::TYPE)`
     /// - `run_ends` must contain monotonically increasing, positive values `<= len`
-    /// - `run_ends.len() == child.len()`
+    /// - `run_ends.get_end_physical_index() < values.len()`
     pub unsafe fn new_unchecked(
         data_type: DataType,
         run_ends: RunEndBuffer<E>,
