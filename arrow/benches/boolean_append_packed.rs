@@ -30,7 +30,6 @@ fn boolean_append_packed(c: &mut Criterion) {
     let mut rng = thread_rng();
     let source = rand_bytes(1024);
     let ranges: Vec<_> = (0..100)
-        .into_iter()
         .map(|_| {
             let start: usize = rng.gen_range(0..1024 * 8);
             let end: usize = rng.gen_range(start..1024 * 8);

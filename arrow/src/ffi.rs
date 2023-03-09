@@ -957,7 +957,7 @@ mod tests {
         let mut validity_bits: [u8; 1] = [0; 1];
         bit_util::set_bit(&mut validity_bits, 2);
 
-        let v: Vec<i32> = (0..9).into_iter().collect();
+        let v: Vec<i32> = (0..9).collect();
         let value_data = ArrayData::builder(DataType::Int32)
             .len(9)
             .add_buffer(Buffer::from_slice_ref(&v))
