@@ -136,6 +136,7 @@ impl TimestampParser {
 /// * `1997-01-31T09:26:56.123Z`        # RCF3339
 /// * `1997-01-31T09:26:56.123-05:00`   # RCF3339
 /// * `1997-01-31 09:26:56.123-05:00`   # close to RCF3339 but with a space rather than T
+/// * `2023-01-01 04:05:06.789 -08`     # close to RCF3339, no fractional seconds or time separator
 /// * `1997-01-31T09:26:56.123`         # close to RCF3339 but no timezone offset specified
 /// * `1997-01-31 09:26:56.123`         # close to RCF3339 but uses a space and no timezone offset
 /// * `1997-01-31 09:26:56`             # close to RCF3339, no fractional seconds
@@ -143,13 +144,21 @@ impl TimestampParser {
 /// * `1997-01-31 092656+04:00`         # close to RCF3339, no fractional seconds or time separator
 /// * `1997-01-31`                      # close to RCF3339, only date no time
 ///
-/// Some formats that supported by PostgresSql <https://www.postgresql.org/docs/current/datatype-datetime.html#DATATYPE-DATETIME-TIME-TABLE>
-/// still not supported by chrono, like
-///     "2023-01-01 040506 America/Los_Angeles",
-///     "2023-01-01 04:05:06.789 +07:30:00",
-///     "2023-01-01 040506 +07:30:00",
-///     "2023-01-01 04:05:06.789 PST",
-///     "2023-01-01 04:05:06.789 -08",
+/// [IANA timezones] are only supported if the `arrow-array/chrono-tz` feature is enabled
+///
+/// * `2023-01-01 040506 America/Los_Angeles`
+///
+/// If a timestamp is ambiguous, for example as a result of daylight-savings time, an error
+/// will be returned
+///
+/// Some formats supported by PostgresSql <https://www.postgresql.org/docs/current/datatype-datetime.html#DATATYPE-DATETIME-TIME-TABLE>
+/// are not supported, like
+///
+/// * "2023-01-01 04:05:06.789 +07:30:00",
+/// * "2023-01-01 040506 +07:30:00",
+/// * "2023-01-01 04:05:06.789 PST",
+///
+/// [IANA timezones]: https://www.iana.org/time-zones
 pub fn string_to_datetime<T: TimeZone>(
     timezone: &T,
     s: &str,
@@ -169,10 +178,14 @@ pub fn string_to_datetime<T: TimeZone>(
         let offset = timezone.offset_from_local_date(&date);
         let offset = offset
             .single()
-            .ok_or_else(|| err("error computing offset"))?;
+            .ok_or_else(|| err("error computing timezone offset"))?;
 
         let time = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
         return Ok(DateTime::from_local(date.and_time(time), offset));
+    }
+
+    if !parser.test(10, b'T') && !parser.test(10, b' ') {
+        return Err(err("invalid timestamp separator"));
     }
 
     let (time, tz_offset) = parser.time().ok_or_else(|| err("error parsing time"))?;
@@ -181,7 +194,7 @@ pub fn string_to_datetime<T: TimeZone>(
         let offset = timezone.offset_from_local_datetime(&datetime);
         let offset = offset
             .single()
-            .ok_or_else(|| err("error computing offset"))?;
+            .ok_or_else(|| err("error computing timezone offset"))?;
         return Ok(DateTime::from_local(datetime, offset));
     }
 
@@ -189,7 +202,7 @@ pub fn string_to_datetime<T: TimeZone>(
         let offset = timezone.offset_from_local_datetime(&datetime);
         let offset = offset
             .single()
-            .ok_or_else(|| err("error computing offset"))?;
+            .ok_or_else(|| err("error computing timezone offset"))?;
         return Ok(DateTime::from_utc(datetime, offset));
     }
 
@@ -198,7 +211,7 @@ pub fn string_to_datetime<T: TimeZone>(
     let offset = parsed_tz.offset_from_local_datetime(&datetime);
     let offset = offset
         .single()
-        .ok_or_else(|| err("error computing offset"))?;
+        .ok_or_else(|| err("error computing timezone offset"))?;
     Ok(DateTime::<Tz>::from_local(datetime, offset).with_timezone(timezone))
 }
 
@@ -635,14 +648,34 @@ mod tests {
     #[test]
     fn string_to_timestamp_invalid() {
         // Test parsing invalid formats
+        let cases = [
+            ("", "timestamp must contain at least 10 characters"),
+            ("SS", "timestamp must contain at least 10 characters"),
+            ("Wed, 18 Feb 2015 23:16:09 GMT", "error parsing date"),
+            ("1997-01-31H09:26:56.123Z", "invalid timestamp separator"),
+            ("1997-01-31  09:26:56.123Z", "error parsing time"),
+            ("1997:01:31T09:26:56.123Z", "error parsing date"),
+            ("1997:1:31T09:26:56.123Z", "error parsing date"),
+            ("1997-01-32T09:26:56.123Z", "error parsing date"),
+            ("1997-13-32T09:26:56.123Z", "error parsing date"),
+            ("1997-02-29T09:26:56.123Z", "error parsing date"),
+            ("2015-02-30T17:35:20-08:00", "error parsing date"),
+            ("1997-01-10T9:26:56.123Z", "error parsing time"),
+            ("2015-01-20T25:35:20-08:00", "error parsing time"),
+            ("1997-01-10T09:61:56.123Z", "error parsing time"),
+            ("1997-01-10T09:61:90.123Z", "error parsing time"),
+            ("1997-01-10T12:00:56.12Z", "error parsing time"),
+            ("1997-01-10T12:00:56.1234Z", "error parsing time"),
+            ("1997-01-10T12:00:56.12345Z", "error parsing time"),
+            ("1997-01-10T12:00:6.123Z", "error parsing time"),
+        ];
 
-        // It would be nice to make these messages better
-        expect_timestamp_parse_error("", "Error parsing timestamp from '': timestamp must contain at least 10 characters");
-        expect_timestamp_parse_error("SS", "Error parsing timestamp from 'SS': timestamp must contain at least 10 characters");
-        expect_timestamp_parse_error(
-            "Wed, 18 Feb 2015 23:16:09 GMT",
-            "Parser error: Error parsing timestamp from 'Wed, 18 Feb 2015 23:16:09 GMT': error parsing date",
-        );
+        for (s, ctx) in cases {
+            let expected =
+                format!("Parser error: Error parsing timestamp from '{s}': {ctx}");
+            let actual = string_to_datetime(&Utc, s).unwrap_err().to_string();
+            assert_eq!(actual, expected)
+        }
     }
 
     // Parse a timestamp to timestamp int with a useful human readable error message
@@ -652,18 +685,6 @@ mod tests {
             eprintln!("Error parsing timestamp '{s}': {e:?}");
         }
         result
-    }
-
-    fn expect_timestamp_parse_error(s: &str, expected_err: &str) {
-        match string_to_timestamp_nanos(s) {
-            Ok(v) => panic!(
-                "Expected error '{expected_err}' while parsing '{s}', but parsed {v} instead"
-            ),
-            Err(e) => {
-                assert!(e.to_string().contains(expected_err),
-                        "Can not find expected error '{expected_err}' while parsing '{s}'. Actual error '{e}'");
-            }
-        }
     }
 
     #[test]
