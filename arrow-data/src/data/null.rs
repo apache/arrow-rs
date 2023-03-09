@@ -32,7 +32,7 @@ impl NullArrayData {
     ///
     /// # Panic
     ///
-    /// - `data_type` is not compatible with `T`
+    /// - `PhysicalType::from(&data_type) != PhysicalType::Null`
     pub fn new(data_type: DataType, len: usize) -> Self {
         assert_eq!(
             PhysicalType::from(&data_type),
@@ -83,7 +83,7 @@ impl NullArrayData {
     /// Returns a zero-copy slice of this array
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         let new_len = offset.saturating_add(len);
-        assert!(new_len <= self.len,);
+        assert!(new_len <= self.len);
         Self {
             data_type: self.data_type.clone(),
             len,

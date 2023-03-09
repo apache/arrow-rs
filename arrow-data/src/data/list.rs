@@ -193,9 +193,9 @@ impl<O: ListOffset> ListArrayData<O> {
     ///
     /// # Safety
     ///
+    /// - `PhysicalType::from(&data_type) == PhysicalType::List(O::TYPE)`
     /// - Each consecutive window of `offsets` must identify a valid slice of `child`
     /// - `nulls.len() == offsets.len() - 1`
-    /// - `data_type` must be valid for this layout
     pub unsafe fn new_unchecked(
         data_type: DataType,
         offsets: OffsetBuffer<O>,
@@ -317,7 +317,7 @@ impl FixedSizeListArrayData {
     ///
     /// # Safety
     ///
-    /// - `data_type` must be valid for this layout
+    /// - `PhysicalType::from(&data_type) == PhysicalType::FixedSizeList(element_size)`
     /// - `nulls.len() == values.len() / element_size == len`
     pub unsafe fn new_unchecked(
         data_type: DataType,

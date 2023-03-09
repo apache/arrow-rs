@@ -45,7 +45,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         &self.0
     }
 
-    /// Returns the inner [`ScalarBuffer`]
+    /// Returns the inner [`ScalarBuffer`], consuming self
     pub fn into_inner(self) -> ScalarBuffer<O> {
         self.0
     }

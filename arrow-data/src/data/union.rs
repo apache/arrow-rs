@@ -34,7 +34,8 @@ impl UnionArrayData {
     ///
     /// # Safety
     ///
-    /// - `data_type` must be valid for this layout
+    /// - `PhysicalType::from(&data_type) == PhysicalType::Union(mode)`
+    /// - `offsets` is `Some` iff the above `mode == UnionMode::Sparse`
     /// - `type_ids` must only contain values corresponding to a field in `data_type`
     /// - `children` must match the field definitions in `data_type`
     /// - For each value id in type_ids, the corresponding offset, must be in bounds for the child

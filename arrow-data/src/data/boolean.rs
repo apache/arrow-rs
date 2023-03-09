@@ -35,7 +35,7 @@ impl BooleanArrayData {
     ///
     /// Panics if
     /// - `nulls` and `values` are different lengths
-    /// - `data_type` is not compatible with `T`
+    /// - `PhysicalType::from(&data_type) != PhysicalType::Boolean`
     pub fn new(
         data_type: DataType,
         values: BooleanBuffer,

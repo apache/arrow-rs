@@ -201,8 +201,8 @@ impl<T: Primitive> PrimitiveArrayData<T> {
     /// # Panics
     ///
     /// Panics if
+    /// - `PhysicalType::from(&data_type) != PhysicalType::Primitive(T::TYPE)`
     /// - `nulls` and `values` are different lengths
-    /// - `data_type` is not compatible with `T`
     pub fn new(
         data_type: DataType,
         values: ScalarBuffer<T>,
@@ -229,8 +229,8 @@ impl<T: Primitive> PrimitiveArrayData<T> {
     ///
     /// # Safety
     ///
+    /// - `PhysicalType::from(&data_type) == PhysicalType::Primitive(T::TYPE)`
     /// - `nulls` and `values` must be the same length
-    /// - `data_type` must be compatible with `T`
     pub unsafe fn new_unchecked(
         data_type: DataType,
         values: ScalarBuffer<T>,

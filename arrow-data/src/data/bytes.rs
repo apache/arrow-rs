@@ -328,7 +328,7 @@ impl<O: BytesOffset, B: Bytes + ?Sized> BytesArrayData<O, B> {
     ///
     /// - Each consecutive window of `offsets` must identify a valid slice of `values`
     /// - `nulls.len() == offsets.len() - 1`
-    /// - `data_type` must be valid for this layout
+    /// - `PhysicalType::from(&data_type) == PhysicalType::Bytes(O::TYPE, B::TYPE)`
     pub unsafe fn new_unchecked(
         data_type: DataType,
         offsets: OffsetBuffer<O>,
@@ -454,7 +454,7 @@ impl FixedSizeBinaryArrayData {
     ///
     /// # Safety
     ///
-    /// - `data_type` must be valid for this layout
+    /// - `PhysicalType::from(&data_type) == PhysicalType::FixedSizeBinary(element_size)`
     /// - `nulls.len() == values.len() / element_size == len`
     pub unsafe fn new_unchecked(
         data_type: DataType,

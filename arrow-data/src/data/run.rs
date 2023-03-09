@@ -169,7 +169,7 @@ impl<E: RunEnd> RunArrayData<E> {
     ///
     /// # Safety
     ///
-    /// - `data_type` must be valid for this layout
+    /// - `PhysicalType::from(&data_type) == PhysicalType::Run(E::TYPE)`
     /// - `run_ends` must contain monotonically increasing, positive values `<= len`
     /// - `run_ends.len() == child.len()`
     pub unsafe fn new_unchecked(

@@ -203,7 +203,7 @@ where
         &self.run_ends
     }
 
-    /// Returns the inner [`ScalarBuffer`]
+    /// Returns the inner [`ScalarBuffer`], consuming self
     pub fn into_inner(self) -> ScalarBuffer<E> {
         self.run_ends
     }

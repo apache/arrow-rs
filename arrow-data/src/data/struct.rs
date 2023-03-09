@@ -34,7 +34,7 @@ impl StructArrayData {
     ///
     /// # Safety
     ///
-    /// - data_type must be a StructArray with fields matching `child_data`
+    /// - `PhysicalType::from(&data_type) == PhysicalType::Struct`
     /// - all child data and nulls must have length matching `len`
     pub unsafe fn new_unchecked(
         data_type: DataType,

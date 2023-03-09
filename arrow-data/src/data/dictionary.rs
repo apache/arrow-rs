@@ -187,7 +187,7 @@ impl<K: DictionaryKey> DictionaryArrayData<K> {
     ///
     /// # Safety
     ///
-    /// - `data_type` must be valid for this layout
+    /// - `PhysicalType::from(&data_type) == PhysicalType::Dictionary(K::TYPE)`
     /// - child must have a type matching `data_type`
     /// - all values in `keys` must be `0 < v < child.len()` or be a null according to `nulls`
     /// - `nulls` must have the same length as `child`
