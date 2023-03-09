@@ -17,9 +17,8 @@
 
 use std::{sync::Arc, time::Duration};
 
-use arrow::error::Result;
-use arrow::util::pretty::pretty_format_batches;
 use arrow_array::RecordBatch;
+use arrow_cast::pretty::pretty_format_batches;
 use arrow_flight::{
     sql::client::FlightSqlServiceClient, utils::flight_data_to_batches, FlightData,
 };
@@ -141,7 +140,7 @@ fn setup_logging() {
     tracing_subscriber::fmt::init();
 }
 
-async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient> {
+async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient, ArrowError> {
     let port = args.port.unwrap_or(if args.tls { 443 } else { 80 });
 
     let protocol = if args.tls { "https" } else { "http" };

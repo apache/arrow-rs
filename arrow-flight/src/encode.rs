@@ -453,14 +453,9 @@ fn hydrate_dictionary(array: &ArrayRef) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod tests {
-    use arrow::{
-        array::{UInt32Array, UInt8Array},
-        compute::concat_batches,
-        datatypes::Int32Type,
-    };
-    use arrow_array::{
-        DictionaryArray, Int16Array, Int32Array, Int64Array, StringArray, UInt64Array,
-    };
+    use arrow_array::types::*;
+    use arrow_array::*;
+    use arrow_cast::pretty::pretty_format_batches;
     use std::collections::HashMap;
 
     use super::*;
@@ -469,7 +464,7 @@ mod tests {
     /// ensure only the batch's used data (not the allocated data) is sent
     /// <https://github.com/apache/arrow-rs/issues/208>
     fn test_encode_flight_data() {
-        let options = arrow::ipc::writer::IpcWriteOptions::default();
+        let options = IpcWriteOptions::default();
         let c1 = UInt32Array::from(vec![1, 2, 3, 4, 5, 6]);
 
         let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(c1) as ArrayRef)])
@@ -569,7 +564,9 @@ mod tests {
             split.iter().map(|batch| batch.num_rows()).sum::<usize>(),
             n_rows
         );
-        assert_eq!(concat_batches(&batch.schema(), &split).unwrap(), batch);
+        let a = pretty_format_batches(&split).unwrap().to_string();
+        let b = pretty_format_batches(&[batch]).unwrap().to_string();
+        assert_eq!(a, b);
     }
 
     #[test]

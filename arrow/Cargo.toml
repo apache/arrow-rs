@@ -60,7 +60,6 @@ arrow-select = { version = "34.0.0", path = "../arrow-select" }
 arrow-string = { version = "34.0.0", path = "../arrow-string" }
 
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
-comfy-table = { version = "6.0", optional = true, default-features = false }
 pyo3 = { version = "0.18", default-features = false, optional = true }
 
 [package.metadata.docs.rs]
@@ -73,7 +72,7 @@ csv = ["arrow-csv"]
 ipc = ["arrow-ipc"]
 json = ["arrow-json"]
 simd = ["arrow-array/simd", "arrow-ord/simd", "arrow-arith/simd"]
-prettyprint = ["comfy-table"]
+prettyprint = ["arrow-cast/prettyprint"]
 # The test utils feature enables code used in benchmarks and tests but
 # not the core arrow code itself. Be aware that `rand` must be kept as
 # an optional dependency for supporting compile to wasm32-unknown-unknown
@@ -97,11 +96,9 @@ chrono-tz = ["arrow-array/chrono-tz"]
 [dev-dependencies]
 chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
 criterion = { version = "0.4", default-features = false }
-half = { version = "2.1", default-features = false, features = ["num-traits"] }
+half = { version = "2.1", default-features = false }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 tempfile = { version = "3", default-features = false }
-
-
 
 [build-dependencies]
 
@@ -295,7 +292,7 @@ required-features = ["pyarrow"]
 
 [[test]]
 name = "array_cast"
-required-features = ["chrono-tz"]
+required-features = ["chrono-tz", "prettyprint"]
 
 [[test]]
 name = "timezone"
