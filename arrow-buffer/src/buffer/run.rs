@@ -30,8 +30,8 @@ use crate::ArrowNativeType;
 /// logical array, up to that physical index.
 ///
 /// Consider a [`RunEndBuffer`] containing `[3, 4, 6]`. The maximum physical index is `2`,
-/// as there are `3` values, and the maximum logical index is `6`, as the maximum run end
-/// is `6`. The physical indices are therefore `[0, 0, 0, 1, 1, 2, 2]`
+/// as there are `3` values, and the maximum logical index is `5`, as the maximum run end
+/// is `6`. The physical indices are therefore `[0, 0, 0, 1, 2, 2]`
 ///
 /// ```text
 ///     ┌─────────┐        ┌─────────┐           ┌─────────┐
@@ -41,13 +41,11 @@ use crate::ArrowNativeType;
 ///     ├─────────┤        ├─────────┤  │ │      ├─────────┤
 ///     │    6    │        │    2    │ ─┘ │ ┌──▶ │    2    │
 ///     └─────────┘        ├─────────┤    │ │    └─────────┘
-///      run ends          │    3    │ ───┤ │  physical indices
-///                        ├─────────┤    │ │
-///                        │    4    │ ───┘ │
+///      run ends          │    3    │ ───┘ │  physical indices
 ///                        ├─────────┤      │
-///                        │    5    │ ─────┤
+///                        │    4    │ ─────┤
 ///                        ├─────────┤      │
-///                        │    6    │ ─────┘
+///                        │    5    │ ─────┘
 ///                        └─────────┘
 ///                      logical indices
 /// ```
@@ -90,7 +88,7 @@ where
             assert!(!run_ends.is_empty(), "non-empty slice but empty run-ends");
             let end = E::from_usize(offset.saturating_add(len)).unwrap();
             assert!(
-                *run_ends.first().unwrap() >= E::usize_as(0),
+                *run_ends.first().unwrap() > E::usize_as(0),
                 "run-ends not greater than 0"
             );
             assert!(
