@@ -17,7 +17,7 @@
 
 use crate::fixed::{FixedLengthEncoding, FromSlice};
 use crate::interner::{Interned, OrderPreservingInterner};
-use crate::{null_sentinel, Rows};
+use crate::{null_sentinel, Row, Rows};
 use arrow_array::builder::*;
 use arrow_array::cast::*;
 use arrow_array::types::*;
@@ -53,6 +53,24 @@ pub fn compute_dictionary_mapping(
             interner.intern(iter)
         }
         _ => unreachable!(),
+    }
+}
+
+/// Encode dictionary values not preserving the dictionary encoding
+pub fn encode_dictionary_values<K: ArrowDictionaryKeyType>(
+    out: &mut Rows,
+    column: &DictionaryArray<K>,
+    values: &Rows,
+    null: &Row<'_>,
+) {
+    for (offset, k) in out.offsets.iter_mut().skip(1).zip(column.keys()) {
+        let row = match k {
+            Some(k) => values.row(k.as_usize()).data,
+            None => null.data,
+        };
+        let end_offset = *offset + row.len();
+        out.buffer[*offset..end_offset].copy_from_slice(row);
+        *offset = end_offset;
     }
 }
 
