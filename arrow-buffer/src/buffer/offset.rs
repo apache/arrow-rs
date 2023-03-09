@@ -39,6 +39,21 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         let buffer = MutableBuffer::from_len_zeroed(std::mem::size_of::<O>());
         Self(buffer.into_buffer().into())
     }
+
+    /// Returns the inner [`ScalarBuffer`]
+    pub fn inner(&self) -> &ScalarBuffer<O> {
+        &self.0
+    }
+
+    /// Returns the inner [`ScalarBuffer`], consuming self
+    pub fn into_inner(self) -> ScalarBuffer<O> {
+        self.0
+    }
+
+    /// Returns a zero-copy slice of this buffer with length `len` and starting at `offset`
+    pub fn slice(&self, offset: usize, len: usize) -> Self {
+        Self(self.0.slice(offset, len.saturating_add(1)))
+    }
 }
 
 impl<T: ArrowNativeType> Deref for OffsetBuffer<T> {

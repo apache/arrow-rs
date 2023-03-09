@@ -25,13 +25,22 @@ pub struct Buffers<'a>([Option<&'a Buffer>; 2]);
 
 impl<'a> Buffers<'a> {
     /// Temporary will be removed once ArrayData does not store `Vec<Buffer>` directly (#3769)
-    #[inline]
     pub(crate) fn from_slice(a: &'a [Buffer]) -> Self {
         match a.len() {
             0 => Self([None, None]),
             1 => Self([Some(&a[0]), None]),
             _ => Self([Some(&a[0]), Some(&a[1])]),
         }
+    }
+
+    #[inline]
+    pub(crate) fn one(b: &'a Buffer) -> Self {
+        Self([Some(b), None])
+    }
+
+    #[inline]
+    pub(crate) fn two(a: &'a Buffer, b: &'a Buffer) -> Self {
+        Self([Some(a), Some(b)])
     }
 
     /// Returns the number of [`Buffer`] in this collection

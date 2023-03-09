@@ -15,71 +15,82 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::data::types::PhysicalType;
 use crate::data::ArrayDataLayout;
-use crate::{ArrayData, ArrayDataBuilder, Buffers};
-use arrow_buffer::buffer::NullBuffer;
+use crate::{ArrayDataBuilder, Buffers};
+use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_schema::DataType;
 
-/// ArrayData for [struct arrays](https://arrow.apache.org/docs/format/Columnar.html#struct-layout)
 #[derive(Debug, Clone)]
-pub struct StructArrayData {
+pub struct BooleanArrayData {
     data_type: DataType,
-    len: usize,
+    values: BooleanBuffer,
     nulls: Option<NullBuffer>,
-    children: Vec<ArrayData>,
 }
 
-impl StructArrayData {
-    /// Create a new [`StructArrayData`]
+impl BooleanArrayData {
+    /// Create a new [`BooleanArrayData`]
+    ///
+    /// # Panics
+    ///
+    /// Panics if
+    /// - `nulls` and `values` are different lengths
+    /// - `PhysicalType::from(&data_type) != PhysicalType::Boolean`
+    pub fn new(
+        data_type: DataType,
+        values: BooleanBuffer,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        let physical = PhysicalType::from(&data_type);
+        assert_eq!(
+            physical, PhysicalType::Boolean,
+            "Illegal physical type for BooleanArrayData of datatype {:?}, expected {:?} got {:?}",
+            data_type,
+            PhysicalType::Boolean,
+            physical
+        );
+
+        if let Some(n) = nulls.as_ref() {
+            assert_eq!(values.len(), n.len())
+        }
+        Self {
+            data_type,
+            values,
+            nulls,
+        }
+    }
+
+    /// Create a new [`BooleanArrayData`]
     ///
     /// # Safety
     ///
-    /// - `PhysicalType::from(&data_type) == PhysicalType::Struct`
-    /// - all child data and nulls must have length matching `len`
+    /// - `nulls` and `values` are the same lengths
+    /// - `PhysicalType::from(&data_type) == PhysicalType::Boolean`
     pub unsafe fn new_unchecked(
         data_type: DataType,
-        len: usize,
+        values: BooleanBuffer,
         nulls: Option<NullBuffer>,
-        children: Vec<ArrayData>,
     ) -> Self {
         Self {
             data_type,
-            len,
+            values,
             nulls,
-            children,
         }
     }
 
-    /// Creates a new [`StructArrayData`] from raw buffers
+    /// Creates a new [`BooleanArrayData`] from raw buffers
     ///
     /// # Safety
     ///
-    /// See [`StructArrayData::new_unchecked`]
+    /// See [`BooleanArrayData::new_unchecked`]
     pub(crate) unsafe fn from_raw(builder: ArrayDataBuilder) -> Self {
-        let children = builder
-            .child_data
-            .into_iter()
-            .map(|x| x.slice(builder.offset, builder.len))
-            .collect();
-
+        let values = builder.buffers.into_iter().next().unwrap();
+        let values = BooleanBuffer::new(values, builder.offset, builder.len);
         Self {
+            values,
             data_type: builder.data_type,
-            len: builder.len,
             nulls: builder.nulls,
-            children,
         }
-    }
-
-    /// Returns the length of this [`StructArrayData`]
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    /// Returns `true` if this [`StructArrayData`] has zero length
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
     }
 
     /// Returns the null buffer if any
@@ -88,10 +99,10 @@ impl StructArrayData {
         self.nulls.as_ref()
     }
 
-    /// Returns the primitive values
+    /// Returns the boolean values
     #[inline]
-    pub fn children(&self) -> &[ArrayData] {
-        &self.children
+    pub fn values(&self) -> &BooleanBuffer {
+        &self.values
     }
 
     /// Returns the data type of this array
@@ -100,18 +111,17 @@ impl StructArrayData {
         &self.data_type
     }
 
-    /// Returns the underlying parts of this [`StructArrayData`]
-    pub fn into_parts(self) -> (DataType, Option<NullBuffer>, Vec<ArrayData>) {
-        (self.data_type, self.nulls, self.children)
+    /// Returns the underlying parts of this [`BooleanArrayData`]
+    pub fn into_parts(self) -> (DataType, BooleanBuffer, Option<NullBuffer>) {
+        (self.data_type, self.values, self.nulls)
     }
 
     /// Returns a zero-copy slice of this array
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         Self {
-            len,
             data_type: self.data_type.clone(),
+            values: self.values.slice(offset, len),
             nulls: self.nulls.as_ref().map(|x| x.slice(offset, len)),
-            children: self.children.iter().map(|c| c.slice(offset, len)).collect(),
         }
     }
 
@@ -119,11 +129,11 @@ impl StructArrayData {
     pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
         ArrayDataLayout {
             data_type: &self.data_type,
-            len: self.len,
-            offset: 0,
+            len: self.values.len(),
+            offset: self.values.offset(),
             nulls: self.nulls.as_ref(),
-            buffers: Buffers::default(),
-            child_data: &self.children,
+            buffers: Buffers::one(self.values().inner()),
+            child_data: &[],
         }
     }
 }
