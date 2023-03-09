@@ -61,7 +61,7 @@ where
 pub fn unary_mut<I, F>(
     array: PrimitiveArray<I>,
     op: F,
-) -> std::result::Result<PrimitiveArray<I>, PrimitiveArray<I>>
+) -> Result<PrimitiveArray<I>, PrimitiveArray<I>>
 where
     I: ArrowPrimitiveType,
     F: Fn(I::Native) -> I::Native,
@@ -646,5 +646,24 @@ mod tests {
         })
         .unwrap()
         .expect_err("should got error");
+    }
+
+    #[test]
+    fn test_unary_dict_mut() {
+        let values = Int32Array::from(vec![Some(10), Some(20), None]);
+        let keys = Int8Array::from_iter_values([0, 0, 1, 2]);
+        let dictionary = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        drop(keys);
+        drop(values);
+
+        let updated = dictionary.unary_mut::<_, Int32Type>(|x| x + 1).unwrap();
+        let typed = updated.downcast_dict::<Int32Array>().unwrap();
+        assert_eq!(typed.value(0), 11);
+        assert_eq!(typed.value(1), 11);
+        assert_eq!(typed.value(2), 21);
+
+        let values = updated.values();
+        assert!(values.is_null(2));
     }
 }
