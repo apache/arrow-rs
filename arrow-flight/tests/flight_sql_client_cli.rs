@@ -17,8 +17,7 @@
 
 use std::{net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 
-use arrow::array::{Int64Builder, StringBuilder};
-use arrow_array::{ArrayRef, RecordBatch};
+use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow_flight::{
     flight_service_server::{FlightService, FlightServiceServer},
     sql::{
@@ -85,6 +84,7 @@ async fn test_simple() {
     );
 }
 
+/// All tests must complete within this many seconds or else the test server is shutdown
 const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 
 #[derive(Clone)]
@@ -104,19 +104,12 @@ impl FlightSqlServiceImpl {
             Field::new("field_int", DataType::Int64, true),
         ]);
 
-        let mut string_builder = StringBuilder::new();
-        string_builder.append_value("Hello");
-        string_builder.append_value("lovely");
-        string_builder.append_value("FlightSQL!");
-
-        let mut int_builder = Int64Builder::new();
-        int_builder.append_value(42);
-        int_builder.append_null();
-        int_builder.append_value(1337);
+        let string_array = StringArray::from(vec!["Hello", "lovely", "FlightSQL!"]);
+        let int_array = Int64Array::from(vec![Some(42), None, Some(1337)]);
 
         let cols = vec![
-            Arc::new(string_builder.finish()) as ArrayRef,
-            Arc::new(int_builder.finish()) as ArrayRef,
+            Arc::new(string_array) as ArrayRef,
+            Arc::new(int_array) as ArrayRef,
         ];
         RecordBatch::try_new(Arc::new(schema), cols)
     }
