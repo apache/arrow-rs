@@ -143,7 +143,9 @@ fn setup_logging() {
 async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient, ArrowError> {
     let port = args.port.unwrap_or(if args.tls { 443 } else { 80 });
 
-    let mut endpoint = Endpoint::new(format!("https://{}:{}", args.host, port))
+    let protocol = if args.tls { "https" } else { "http" };
+
+    let mut endpoint = Endpoint::new(format!("{}://{}:{}", protocol, args.host, port))
         .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(20))
