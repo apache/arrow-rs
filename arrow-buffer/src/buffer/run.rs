@@ -209,13 +209,16 @@ mod tests {
         let buffer = RunEndBuffer::new(vec![1_i32, 4_i32].into(), 0, 4);
         assert_eq!(buffer.get_start_physical_index(), 0);
         assert_eq!(buffer.get_end_physical_index(), 1);
+        assert_eq!(buffer.get_physical_index(3), 1);
 
-        let sliced = buffer.slice(2, 0);
-        assert_eq!(sliced.get_start_physical_index(), 0);
-        assert_eq!(sliced.get_end_physical_index(), 0);
+        for offset in 0..4 {
+            let sliced = buffer.slice(offset, 0);
+            assert_eq!(sliced.get_start_physical_index(), 0);
+            assert_eq!(sliced.get_end_physical_index(), 0);
+        }
 
-        let sliced = buffer.slice(4, 0);
-        assert_eq!(sliced.get_start_physical_index(), 0);
-        assert_eq!(sliced.get_end_physical_index(), 0);
+        let buffer = RunEndBuffer::new(Vec::<i32>::new().into(), 0, 0);
+        assert_eq!(buffer.get_start_physical_index(), 0);
+        assert_eq!(buffer.get_end_physical_index(), 0);
     }
 }
