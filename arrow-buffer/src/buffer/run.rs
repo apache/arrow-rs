@@ -30,8 +30,8 @@ use crate::ArrowNativeType;
 /// logical array, up to that physical index.
 ///
 /// Consider a [`RunEndBuffer`] containing `[3, 4, 6]`. The maximum physical index is `2`,
-/// as there are `3` values, and the maximum logical index is `6`, as the maximum run end
-/// is `6`. The physical indices are therefore `[0, 0, 0, 1, 1, 2, 2]`
+/// as there are `3` values, and the maximum logical index is `5`, as the maximum run end
+/// is `6`. The physical indices are therefore `[0, 0, 0, 1, 2, 2]`
 ///
 /// ```text
 ///     ┌─────────┐        ┌─────────┐           ┌─────────┐
@@ -41,13 +41,11 @@ use crate::ArrowNativeType;
 ///     ├─────────┤        ├─────────┤  │ │      ├─────────┤
 ///     │    6    │        │    2    │ ─┘ │ ┌──▶ │    2    │
 ///     └─────────┘        ├─────────┤    │ │    └─────────┘
-///      run ends          │    3    │ ───┤ │  physical indices
-///                        ├─────────┤    │ │
-///                        │    4    │ ───┘ │
+///      run ends          │    3    │ ───┘ │  physical indices
 ///                        ├─────────┤      │
-///                        │    5    │ ─────┤
+///                        │    4    │ ─────┤
 ///                        ├─────────┤      │
-///                        │    6    │ ─────┘
+///                        │    5    │ ─────┘
 ///                        └─────────┘
 ///                      logical indices
 /// ```
@@ -90,7 +88,7 @@ where
             assert!(!run_ends.is_empty(), "non-empty slice but empty run-ends");
             let end = E::from_usize(offset.saturating_add(len)).unwrap();
             assert!(
-                *run_ends.first().unwrap() >= E::usize_as(0),
+                *run_ends.first().unwrap() > E::usize_as(0),
                 "run-ends not greater than 0"
             );
             assert!(
@@ -169,7 +167,7 @@ where
 
     /// Returns the physical index at which the logical array starts
     pub fn get_start_physical_index(&self) -> usize {
-        if self.offset == 0 {
+        if self.offset == 0 || self.len == 0 {
             return 0;
         }
         // Fallback to binary search
@@ -178,6 +176,9 @@ where
 
     /// Returns the physical index at which the logical array ends
     pub fn get_end_physical_index(&self) -> usize {
+        if self.len == 0 {
+            return 0;
+        }
         if self.max_value() == self.offset + self.len {
             return self.values().len() - 1;
         }
@@ -196,5 +197,28 @@ where
             offset: self.offset + offset,
             len,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::buffer::RunEndBuffer;
+
+    #[test]
+    fn test_zero_length_slice() {
+        let buffer = RunEndBuffer::new(vec![1_i32, 4_i32].into(), 0, 4);
+        assert_eq!(buffer.get_start_physical_index(), 0);
+        assert_eq!(buffer.get_end_physical_index(), 1);
+        assert_eq!(buffer.get_physical_index(3), 1);
+
+        for offset in 0..4 {
+            let sliced = buffer.slice(offset, 0);
+            assert_eq!(sliced.get_start_physical_index(), 0);
+            assert_eq!(sliced.get_end_physical_index(), 0);
+        }
+
+        let buffer = RunEndBuffer::new(Vec::<i32>::new().into(), 0, 0);
+        assert_eq!(buffer.get_start_physical_index(), 0);
+        assert_eq!(buffer.get_end_physical_index(), 0);
     }
 }
