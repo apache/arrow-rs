@@ -17,8 +17,8 @@
 
 use std::{sync::Arc, time::Duration};
 
-use arrow_cast::pretty::pretty_format_batches;
 use arrow_array::RecordBatch;
+use arrow_cast::pretty::pretty_format_batches;
 use arrow_flight::{
     sql::client::FlightSqlServiceClient, utils::flight_data_to_batches, FlightData,
 };
