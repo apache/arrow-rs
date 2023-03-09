@@ -428,7 +428,6 @@ fn get_all_types() -> Vec<DataType> {
                 Dictionary(Box::new(key_type), Box::new(Decimal256(76, 0))),
             ]
         })
-        .into_iter()
         .collect::<Vec<_>>();
 
     types.append(&mut dictionary_types);
