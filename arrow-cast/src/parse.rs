@@ -113,7 +113,7 @@ impl TimestampParser {
                     false => Some((time, 19)),
                 }
             }
-            // 09:26:56
+            // 092656
             0b111111 => {
                 let hour = self.digits[11] * 10 + self.digits[12];
                 let minute = self.digits[13] * 10 + self.digits[14];
