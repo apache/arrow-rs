@@ -499,7 +499,6 @@ impl ProstMessageExt for FetchResults {
 }
 
 #[cfg(test)]
-#[allow(unused_imports)]
 mod tests {
     use super::*;
     use futures::TryStreamExt;
@@ -509,15 +508,13 @@ mod tests {
     use tokio::net::{UnixListener, UnixStream};
     use tokio::time::sleep;
     use tokio_stream::wrappers::UnixListenerStream;
-    use tonic::body::BoxBody;
-    use tonic::codegen::{http, Body, Service};
     use tonic::transport::ClientTlsConfig;
 
-    use arrow::util::pretty::pretty_format_batches;
+    use arrow_cast::pretty::pretty_format_batches;
     use arrow_flight::sql::client::FlightSqlServiceClient;
     use arrow_flight::utils::flight_data_to_batches;
-    use tonic::transport::{Certificate, Channel, Endpoint};
-    use tower::{service_fn, ServiceExt};
+    use tonic::transport::{Certificate, Endpoint};
+    use tower::service_fn;
 
     async fn client_with_uds(path: String) -> FlightSqlServiceClient {
         let connector = service_fn(move |_| UnixStream::connect(path.clone()));
