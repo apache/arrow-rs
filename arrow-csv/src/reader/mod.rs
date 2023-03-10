@@ -682,7 +682,7 @@ fn parse(
                 >(
                     line_number, rows, i, None
                 ),
-                DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                DataType::Timestamp(TimeUnit::Millisecond, None) => {
                     build_primitive_array::<TimestampMillisecondType>(
                         line_number,
                         rows,
@@ -690,7 +690,7 @@ fn parse(
                         None,
                     )
                 }
-                DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                DataType::Timestamp(TimeUnit::Microsecond, None) => {
                     build_primitive_array::<TimestampMicrosecondType>(
                         line_number,
                         rows,
@@ -698,7 +698,7 @@ fn parse(
                         None,
                     )
                 }
-                DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                DataType::Timestamp(TimeUnit::Nanosecond, None) => {
                     build_primitive_array::<TimestampNanosecondType>(
                         line_number,
                         rows,
