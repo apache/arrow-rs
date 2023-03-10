@@ -1682,7 +1682,11 @@ pub fn cast_with_options(
                 Ordering::Equal => time_array.clone(),
                 Ordering::Less => {
                     let mul = to_size / from_size;
-                    time_array.unary::<_, Int64Type>(|o| o * mul)
+                    time_array.try_unary::<_, Int64Type, _>(|o| {
+                        o.checked_mul(mul).ok_or(ArrowError::ComputeError(
+                            "overflow in cast from timestamp to timestamp".to_string(),
+                        ))
+                    })?
                 }
             };
             Ok(make_timestamp_array(
@@ -1709,8 +1713,13 @@ pub fn cast_with_options(
             Ok(Arc::new(b.finish()) as ArrayRef)
         }
         (Timestamp(TimeUnit::Second, _), Date64) => Ok(Arc::new(
-            as_primitive_array::<TimestampSecondType>(array)
-                .unary::<_, Date64Type>(|x| x * MILLISECONDS),
+            as_primitive_array::<TimestampSecondType>(array).try_unary::<_, Date64Type, _>(
+                |x| {
+                    x.checked_mul(MILLISECONDS).ok_or(ArrowError::ComputeError(
+                        "overflow in cast from timestamp to date64".to_string(),
+                    ))
+                },
+            )?,
         )),
         (Timestamp(TimeUnit::Millisecond, _), Date64) => {
             cast_reinterpret_arrays::<TimestampMillisecondType, Date64Type>(array)
