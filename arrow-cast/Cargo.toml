@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-cast"
-version = "34.0.0"
+version = "35.0.0"
 description = "Cast kernel and utilities for Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -44,11 +44,11 @@ features = ["prettyprint"]
 prettyprint = ["comfy-table"]
 
 [dependencies]
-arrow-array = { version = "34.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "34.0.0", path = "../arrow-buffer" }
-arrow-data = { version = "34.0.0", path = "../arrow-data" }
-arrow-schema = { version = "34.0.0", path = "../arrow-schema" }
-arrow-select = { version = "34.0.0", path = "../arrow-select" }
+arrow-array = { version = "35.0.0", path = "../arrow-array" }
+arrow-buffer = { version = "35.0.0", path = "../arrow-buffer" }
+arrow-data = { version = "35.0.0", path = "../arrow-data" }
+arrow-schema = { version = "35.0.0", path = "../arrow-schema" }
+arrow-select = { version = "35.0.0", path = "../arrow-select" }
 chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
 num = { version = "0.4", default-features = false, features = ["std"] }
 lexical-core = { version = "^0.8", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }

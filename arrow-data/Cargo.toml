@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow-data"
-version = "34.0.0"
+version = "35.0.0"
 description = "Array data abstractions for Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -50,8 +50,8 @@ features = ["ffi"]
 
 [dependencies]
 
-arrow-buffer = { version = "34.0.0", path = "../arrow-buffer" }
-arrow-schema = { version = "34.0.0", path = "../arrow-schema" }
+arrow-buffer = { version = "35.0.0", path = "../arrow-buffer" }
+arrow-schema = { version = "35.0.0", path = "../arrow-schema" }
 
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false }
