@@ -39,6 +39,7 @@ use futures::TryStreamExt;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
+use std::any::Any;
 use std::collections::BTreeSet;
 use std::ops::Range;
 use std::str::FromStr;
@@ -169,6 +170,10 @@ impl std::fmt::Display for AmazonS3 {
 
 #[async_trait]
 impl ObjectStore for AmazonS3 {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
         self.client.put_request(location, Some(bytes), &()).await?;
         Ok(())

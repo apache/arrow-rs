@@ -24,6 +24,7 @@ use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt};
 use parking_lot::RwLock;
 use snafu::{ensure, OptionExt, Snafu};
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::io;
@@ -87,6 +88,10 @@ impl std::fmt::Display for InMemory {
 
 #[async_trait]
 impl ObjectStore for InMemory {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
         self.storage
             .write()

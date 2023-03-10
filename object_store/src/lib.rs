@@ -260,6 +260,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt};
 use snafu::Snafu;
+use std::any::Any;
 use std::fmt::{Debug, Formatter};
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::{Read, Seek, SeekFrom};
@@ -278,6 +279,10 @@ pub type MultipartId = String;
 /// Universal API to multiple object store services.
 #[async_trait]
 pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
+    /// Returns the object store as [`Any`](std::any::Any) so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any;
+
     /// Save the provided bytes to the specified location
     ///
     /// The operation is guaranteed to be atomic, it will either successfully

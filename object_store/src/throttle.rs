@@ -25,6 +25,7 @@ use crate::{path::Path, GetResult, ListResult, ObjectMeta, ObjectStore, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt};
+use std::any::Any;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
 
@@ -145,6 +146,10 @@ impl<T: ObjectStore> std::fmt::Display for ThrottledStore<T> {
 
 #[async_trait]
 impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
         sleep(self.config().wait_put_per_call).await;
 

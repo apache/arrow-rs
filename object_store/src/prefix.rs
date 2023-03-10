@@ -18,6 +18,7 @@
 //! An object store wrapper handling a constant path prefix
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
+use std::any::Any;
 use std::ops::Range;
 use tokio::io::AsyncWrite;
 
@@ -62,6 +63,10 @@ impl<T: ObjectStore> PrefixObjectStore<T> {
 
 #[async_trait::async_trait]
 impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     /// Save the provided bytes to the specified location.
     async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<()> {
         let full_path = self.full_path(location);

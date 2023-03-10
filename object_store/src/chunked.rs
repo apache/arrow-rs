@@ -17,6 +17,7 @@
 
 //! A [`ChunkedStore`] that can be used to test streaming behaviour
 
+use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::{BufReader, Read};
 use std::ops::Range;
@@ -62,6 +63,10 @@ impl Display for ChunkedStore {
 
 #[async_trait]
 impl ObjectStore for ChunkedStore {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
         self.inner.put(location, bytes).await
     }

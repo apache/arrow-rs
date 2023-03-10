@@ -27,6 +27,7 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::{stream::BoxStream, StreamExt};
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
+use std::any::Any;
 use std::fs::{metadata, symlink_metadata, File, OpenOptions};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
@@ -267,6 +268,10 @@ impl Config {
 
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
         let path = self.config.path_to_filesystem(location)?;
 

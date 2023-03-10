@@ -43,6 +43,7 @@ use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
+use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::io;
 use std::ops::Range;
@@ -176,6 +177,10 @@ impl std::fmt::Display for MicrosoftAzure {
 
 #[async_trait]
 impl ObjectStore for MicrosoftAzure {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
         self.client
             .put_request(location, Some(bytes), false, &())
