@@ -1682,11 +1682,11 @@ pub fn cast_with_options(
                 Ordering::Equal => time_array.clone(),
                 Ordering::Less => {
                     let mul = to_size / from_size;
-                    time_array.try_unary::<_, Int64Type, _>(|o| {
-                        o.checked_mul(mul).ok_or(ArrowError::ComputeError(
-                            "overflow in cast from timestamp to timestamp".to_string(),
-                        ))
-                    })?
+                    if cast_options.safe {
+                        time_array.unary_opt::<_, Int64Type>(|o| o.checked_mul(mul))
+                    } else {
+                        time_array.try_unary::<_, Int64Type, _>(|o| o.mul_checked(mul))?
+                    }
                 }
             };
             Ok(make_timestamp_array(
@@ -1713,13 +1713,22 @@ pub fn cast_with_options(
             Ok(Arc::new(b.finish()) as ArrayRef)
         }
         (Timestamp(TimeUnit::Second, _), Date64) => Ok(Arc::new(
-            as_primitive_array::<TimestampSecondType>(array).try_unary::<_, Date64Type, _>(
-                |x| {
-                    x.checked_mul(MILLISECONDS).ok_or(ArrowError::ComputeError(
-                        "overflow in cast from timestamp to date64".to_string(),
-                    ))
-                },
-            )?,
+            match cast_options.safe {
+                true => {
+                    // change error to None
+                    as_primitive_array::<TimestampSecondType>(array)
+                        .unary_opt::<_, Date64Type>(|x| {
+                            x.checked_mul(MILLISECONDS)
+                        })
+                }
+                false => {
+                            as_primitive_array::<TimestampSecondType>(array).try_unary::<_, Date64Type, _>(
+                                |x| {
+                                    x.mul_checked(MILLISECONDS)
+                                },
+                            )?
+                        }
+            },
         )),
         (Timestamp(TimeUnit::Millisecond, _), Date64) => {
             cast_reinterpret_arrays::<TimestampMillisecondType, Date64Type>(array)
@@ -5347,9 +5356,14 @@ mod tests {
         assert_eq!(864000000005000, c.value(0));
         assert_eq!(1545696000001000, c.value(1));
 
-        // test overflow
+        // test overflow, safe cast
         let array = TimestampSecondArray::from(vec![Some(i64::MAX)]);
-        let b = cast(&array, &DataType::Date64);
+        let b = cast(&array, &DataType::Date64).unwrap();
+        assert!(b.is_null(0));
+        // test overflow, unsafe cast
+        let array = TimestampSecondArray::from(vec![Some(i64::MAX)]);
+        let options = CastOptions { safe: false };
+        let b = cast_with_options(&array, &DataType::Date64, &options);
         assert!(b.is_err());
     }
 
