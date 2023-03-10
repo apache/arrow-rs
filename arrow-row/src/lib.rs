@@ -613,10 +613,12 @@ impl SortField {
     /// By default dictionaries are preserved as described on [`RowConverter`]
     ///
     /// However, this process requires maintaining and incrementally updating
-    /// an order-preserving mapping of dictionary values which is relatively expensive
+    /// an order-preserving mapping of dictionary values. This is relatively expensive
+    /// computationally but reduces the size of the encoded rows, minimising memory
+    /// usage and potentially yielding faster comparisons.
     ///
     /// Some applications may wish to instead trade-off space efficiency, for improved
-    /// performance, by instead encoding dictionary values directly
+    /// encoding performance, by instead encoding dictionary values directly
     ///
     /// When `preserve_dictionaries` is true, fields will instead be encoded as their
     /// underlying value, reversing any dictionary encoding
@@ -1657,11 +1659,11 @@ mod tests {
 
     #[test]
     fn test_string_dictionary() {
-        test_string_dictionary_preserve(false);
-        test_string_dictionary_preserve(true);
+        test_string_dictionary_impl(false);
+        test_string_dictionary_impl(true);
     }
 
-    fn test_string_dictionary_preserve(preserve: bool) {
+    fn test_string_dictionary_impl(preserve: bool) {
         let a = Arc::new(DictionaryArray::<Int32Type>::from_iter([
             Some("foo"),
             Some("hello"),
@@ -2083,6 +2085,35 @@ mod tests {
     fn test_large_list() {
         test_single_list::<i64>();
         test_nested_list::<i64>();
+    }
+
+    #[test]
+    fn test_dictionary_preserving() {
+        let mut dict = StringDictionaryBuilder::<Int32Type>::new();
+        dict.append_value("foo");
+        dict.append_value("foo");
+        dict.append_value("bar");
+        dict.append_value("bar");
+        dict.append_value("bar");
+        dict.append_value("bar");
+
+        let array = Arc::new(dict.finish()) as ArrayRef;
+        let preserve = SortField::new(array.data_type().clone());
+        let non_preserve = preserve.clone().preserve_dictionaries(false);
+
+        let mut c1 = RowConverter::new(vec![preserve]).unwrap();
+        let r1 = c1.convert_columns(&[array.clone()]).unwrap();
+
+        let mut c2 = RowConverter::new(vec![non_preserve]).unwrap();
+        let r2 = c2.convert_columns(&[array.clone()]).unwrap();
+
+        for r in r1.iter() {
+            assert_eq!(r.data.len(), 3);
+        }
+
+        for r in r2.iter() {
+            assert_eq!(r.data.len(), 34);
+        }
     }
 
     fn generate_primitive_array<K>(len: usize, valid_percent: f64) -> PrimitiveArray<K>

@@ -97,12 +97,14 @@ fn row_bench(c: &mut Criterion) {
     let cols =
         vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 100)) as ArrayRef];
     do_bench(c, "4096 string_dictionary(100, 0)", cols.clone(), true);
-    do_bench(c, "4096 string_dictionary_hydrate(100, 0)", cols, false);
+    let name = "4096 string_dictionary_non_preserving(100, 0)";
+    do_bench(c, name, cols, false);
 
     let cols =
         vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0.5, 100)) as ArrayRef];
     do_bench(c, "4096 string_dictionary(100, 0.5)", cols.clone(), true);
-    do_bench(c, "4096 string_dictionary_hydrate(100, 0.5)", cols, false);
+    let name = "4096 string_dictionary_non_preserving(100, 0.5)";
+    do_bench(c, name, cols, false);
 
     let cols = vec![
         Arc::new(create_string_array_with_len::<i32>(4096, 0.5, 20)) as ArrayRef,
