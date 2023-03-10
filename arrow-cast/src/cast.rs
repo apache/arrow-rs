@@ -5339,6 +5339,18 @@ mod tests {
         assert_eq!(864000000005, c.value(0));
         assert_eq!(1545696000001, c.value(1));
         assert!(c.is_null(2));
+
+        let array =
+            TimestampSecondArray::from(vec![Some(864000000005), Some(1545696000001)]);
+        let b = cast(&array, &DataType::Date64).unwrap();
+        let c = b.as_any().downcast_ref::<Date64Array>().unwrap();
+        assert_eq!(864000000005000, c.value(0));
+        assert_eq!(1545696000001000, c.value(1));
+
+        // test overflow
+        let array = TimestampSecondArray::from(vec![Some(i64::MAX)]);
+        let b = cast(&array, &DataType::Date64);
+        assert!(b.is_err());
     }
 
     #[test]
@@ -5414,6 +5426,8 @@ mod tests {
         let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond));
         assert!(b.is_err());
         let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond));
+        assert!(b.is_err());
+        let b = cast(&array, &DataType::Time64(TimeUnit::Millisecond));
         assert!(b.is_err());
     }
 
