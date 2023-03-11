@@ -2630,7 +2630,7 @@ fn cast_string_to_timestamp<
         .downcast_ref::<GenericStringArray<Offset>>()
         .unwrap();
 
-    let scale_factor = match TimestampType::get_time_unit() {
+    let scale_factor = match TimestampType::UNIT {
         TimeUnit::Second => 1_000_000_000,
         TimeUnit::Millisecond => 1_000_000,
         TimeUnit::Microsecond => 1_000,

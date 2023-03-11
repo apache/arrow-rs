@@ -1049,7 +1049,7 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
             self.data
                 .clone()
                 .into_builder()
-                .data_type(DataType::Timestamp(T::get_time_unit(), timezone))
+                .data_type(DataType::Timestamp(T::UNIT, timezone))
                 .build_unchecked()
         };
         PrimitiveArray::from(array_data)
