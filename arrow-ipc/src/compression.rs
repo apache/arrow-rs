@@ -25,6 +25,12 @@ const LENGTH_OF_PREFIX_DATA: i64 = 8;
 /// Represents compressing a ipc stream using a particular compression algorithm
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionCodec {
+    Uncompressed,
+    Snappy,
+    Gzip,
+    Lzo,
+    Brotli,
+    Lz4Raw,
     Lz4Frame,
     Zstd,
 }
@@ -36,6 +42,12 @@ impl TryFrom<CompressionType> for CompressionCodec {
         match compression_type {
             CompressionType::ZSTD => Ok(CompressionCodec::Zstd),
             CompressionType::LZ4_FRAME => Ok(CompressionCodec::Lz4Frame),
+            CompressionType::LZ4_RAW => Ok(CompressionCodec::Lz4Raw),
+            CompressionType::BROTLI => Ok(CompressionCodec::Brotli),
+            CompressionType::LZO => Ok(CompressionCodec::Lzo),
+            CompressionType::GZIP => Ok(CompressionCodec::Gzip),
+            CompressionType::SNAPPY => Ok(CompressionCodec::Snappy),
+            CompressionType::UNCOMPRESSED => Ok(CompressionCodec::Uncompressed),
             other_type => Err(ArrowError::NotYetImplemented(format!(
                 "compression type {other_type:?} not supported "
             ))),
@@ -120,6 +132,10 @@ impl CompressionCodec {
         match self {
             CompressionCodec::Lz4Frame => compress_lz4(input, output),
             CompressionCodec::Zstd => compress_zstd(input, output),
+            _ => Err(ArrowError::NotYetImplemented(format!(
+                "compression type {:?} not supported ",
+                self
+            ))),
         }
     }
 
@@ -133,6 +149,10 @@ impl CompressionCodec {
         match self {
             CompressionCodec::Lz4Frame => decompress_lz4(input, output),
             CompressionCodec::Zstd => decompress_zstd(input, output),
+            _ => Err(ArrowError::NotYetImplemented(format!(
+                "compression type {:?} not supported ",
+                self
+            ))),
         }
     }
 }

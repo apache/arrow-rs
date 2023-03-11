@@ -50,6 +50,12 @@ pub struct CompressionType(pub i8);
 impl CompressionType {
     pub const LZ4_FRAME: Self = Self(0);
     pub const ZSTD: Self = Self(1);
+    pub const LZ4_RAW: Self = Self(2);
+    pub const BROTLI: Self = Self(3);
+    pub const LZO: Self = Self(4);
+    pub const GZIP: Self = Self(5);
+    pub const SNAPPY: Self = Self(6);
+    pub const UNCOMPRESSED: Self = Self(7);
 
     pub const ENUM_MIN: i8 = 0;
     pub const ENUM_MAX: i8 = 1;
@@ -59,6 +65,12 @@ impl CompressionType {
         match self {
             Self::LZ4_FRAME => Some("LZ4_FRAME"),
             Self::ZSTD => Some("ZSTD"),
+            Self::LZ4_RAW => Some("LZ4_RAW"),
+            Self::BROTLI => Some("BROTLI"),
+            Self::LZO => Some("LZO"),
+            Self::GZIP => Some("GZIP"),
+            Self::SNAPPY => Some("SNAPPY"),
+            Self::UNCOMPRESSED => Some("UNCOMPRESSED"),
             _ => None,
         }
     }
