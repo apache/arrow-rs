@@ -20,6 +20,7 @@
 
 use std::{fmt, str};
 
+use crate::compression::ZstdLevel;
 use crate::format as parquet;
 
 use crate::errors::{ParquetError, Result};
@@ -290,7 +291,7 @@ pub enum Compression {
     LZO,
     BROTLI,
     LZ4,
-    ZSTD,
+    ZSTD(ZstdLevel),
     LZ4_RAW,
 }
 
@@ -834,7 +835,7 @@ impl TryFrom<parquet::CompressionCodec> for Compression {
             parquet::CompressionCodec::LZO => Compression::LZO,
             parquet::CompressionCodec::BROTLI => Compression::BROTLI,
             parquet::CompressionCodec::LZ4 => Compression::LZ4,
-            parquet::CompressionCodec::ZSTD => Compression::ZSTD,
+            parquet::CompressionCodec::ZSTD => Compression::ZSTD(Default::default()),
             parquet::CompressionCodec::LZ4_RAW => Compression::LZ4_RAW,
             _ => {
                 return Err(general_err!(
@@ -855,7 +856,7 @@ impl From<Compression> for parquet::CompressionCodec {
             Compression::LZO => parquet::CompressionCodec::LZO,
             Compression::BROTLI => parquet::CompressionCodec::BROTLI,
             Compression::LZ4 => parquet::CompressionCodec::LZ4,
-            Compression::ZSTD => parquet::CompressionCodec::ZSTD,
+            Compression::ZSTD(_) => parquet::CompressionCodec::ZSTD,
             Compression::LZ4_RAW => parquet::CompressionCodec::LZ4_RAW,
         }
     }
@@ -1787,7 +1788,7 @@ mod tests {
         assert_eq!(Compression::LZO.to_string(), "LZO");
         assert_eq!(Compression::BROTLI.to_string(), "BROTLI");
         assert_eq!(Compression::LZ4.to_string(), "LZ4");
-        assert_eq!(Compression::ZSTD.to_string(), "ZSTD");
+        assert_eq!(Compression::ZSTD(Default::default()).to_string(), "ZSTD");
     }
 
     #[test]
@@ -1818,7 +1819,7 @@ mod tests {
         );
         assert_eq!(
             Compression::try_from(parquet::CompressionCodec::ZSTD).unwrap(),
-            Compression::ZSTD
+            Compression::ZSTD(Default::default())
         );
     }
 
@@ -1839,7 +1840,10 @@ mod tests {
             Compression::BROTLI.into()
         );
         assert_eq!(parquet::CompressionCodec::LZ4, Compression::LZ4.into());
-        assert_eq!(parquet::CompressionCodec::ZSTD, Compression::ZSTD.into());
+        assert_eq!(
+            parquet::CompressionCodec::ZSTD,
+            Compression::ZSTD(Default::default()).into()
+        );
     }
 
     #[test]
