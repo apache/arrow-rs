@@ -937,7 +937,7 @@ mod tests {
             )]))
             // global column settings
             .set_encoding(Encoding::DELTA_BINARY_PACKED)
-            .set_compression(Compression::GZIP)
+            .set_compression(Compression::GZIP(Default::default()))
             .set_dictionary_enabled(false)
             .set_statistics_enabled(EnabledStatistics::None)
             .set_max_statistics_size(50)
@@ -972,7 +972,10 @@ mod tests {
             props.encoding(&ColumnPath::from("a")),
             Some(Encoding::DELTA_BINARY_PACKED)
         );
-        assert_eq!(props.compression(&ColumnPath::from("a")), Compression::GZIP);
+        assert_eq!(
+            props.compression(&ColumnPath::from("a")),
+            Compression::GZIP(Default::default())
+        );
         assert!(!props.dictionary_enabled(&ColumnPath::from("a")));
         assert_eq!(
             props.statistics_enabled(&ColumnPath::from("a")),
@@ -1004,7 +1007,7 @@ mod tests {
     fn test_writer_properties_builder_partial_defaults() {
         let props = WriterProperties::builder()
             .set_encoding(Encoding::DELTA_BINARY_PACKED)
-            .set_compression(Compression::GZIP)
+            .set_compression(Compression::GZIP(Default::default()))
             .set_bloom_filter_enabled(true)
             .set_column_encoding(ColumnPath::from("col"), Encoding::RLE)
             .build();
@@ -1015,7 +1018,7 @@ mod tests {
         );
         assert_eq!(
             props.compression(&ColumnPath::from("col")),
-            Compression::GZIP
+            Compression::GZIP(Default::default())
         );
         assert_eq!(
             props.dictionary_enabled(&ColumnPath::from("col")),

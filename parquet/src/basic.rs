@@ -1784,11 +1784,17 @@ mod tests {
     fn test_display_compression() {
         assert_eq!(Compression::UNCOMPRESSED.to_string(), "UNCOMPRESSED");
         assert_eq!(Compression::SNAPPY.to_string(), "SNAPPY");
-        assert_eq!(Compression::GZIP(Default::default()).to_string(), "GZIP");
+        assert_eq!(
+            Compression::GZIP(Default::default()).to_string(),
+            "GZIP(GzipLevel(6))"
+        );
         assert_eq!(Compression::LZO.to_string(), "LZO");
         assert_eq!(Compression::BROTLI.to_string(), "BROTLI");
         assert_eq!(Compression::LZ4.to_string(), "LZ4");
-        assert_eq!(Compression::ZSTD(Default::default()).to_string(), "ZSTD");
+        assert_eq!(
+            Compression::ZSTD(Default::default()).to_string(),
+            "ZSTD(ZstdLevel(1))"
+        );
     }
 
     #[test]
@@ -1833,7 +1839,10 @@ mod tests {
             parquet::CompressionCodec::SNAPPY,
             Compression::SNAPPY.into()
         );
-        assert_eq!(parquet::CompressionCodec::GZIP, Compression::GZIP.into());
+        assert_eq!(
+            parquet::CompressionCodec::GZIP,
+            Compression::GZIP(Default::default()).into()
+        );
         assert_eq!(parquet::CompressionCodec::LZO, Compression::LZO.into());
         assert_eq!(
             parquet::CompressionCodec::BROTLI,

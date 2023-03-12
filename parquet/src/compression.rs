@@ -829,8 +829,8 @@ mod tests {
 
     #[test]
     fn test_codec_gzip() {
-        test_codec_with_size(CodecType::GZIP);
-        test_codec_without_size(CodecType::GZIP);
+        test_codec_with_size(CodecType::GZIP(Default::default()));
+        test_codec_without_size(CodecType::GZIP(Default::default()));
     }
 
     #[test]
