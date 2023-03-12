@@ -184,11 +184,11 @@ fn compression(compression: Compression) -> Option<&'static str> {
     match compression {
         Compression::UNCOMPRESSED => None,
         Compression::SNAPPY => Some("snappy"),
-        Compression::GZIP => Some("gzip"),
+        Compression::GZIP(_) => Some("gzip"),
         Compression::LZO => Some("lzo"),
-        Compression::BROTLI => Some("brotli"),
+        Compression::BROTLI(_) => Some("brotli"),
         Compression::LZ4 => Some("lz4"),
-        Compression::ZSTD => Some("zstd"),
+        Compression::ZSTD(_) => Some("zstd"),
         Compression::LZ4_RAW => Some("lz4_raw"),
     }
 }

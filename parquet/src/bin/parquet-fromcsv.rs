@@ -213,11 +213,11 @@ fn compression_from_str(cmp: &str) -> Result<Compression, String> {
     match cmp.to_uppercase().as_str() {
         "UNCOMPRESSED" => Ok(Compression::UNCOMPRESSED),
         "SNAPPY" => Ok(Compression::SNAPPY),
-        "GZIP" => Ok(Compression::GZIP),
+        "GZIP" => Ok(Compression::GZIP(Default::default())),
         "LZO" => Ok(Compression::LZO),
-        "BROTLI" => Ok(Compression::BROTLI),
+        "BROTLI" => Ok(Compression::BROTLI(Default::default())),
         "LZ4" => Ok(Compression::LZ4),
-        "ZSTD" => Ok(Compression::ZSTD),
+        "ZSTD" => Ok(Compression::ZSTD(Default::default())),
         v => Err(
             format!("Unknown compression {v} : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help")
         )
@@ -507,15 +507,24 @@ mod tests {
         let args = parse_args(vec!["--parquet-compression", "snappy"]).unwrap();
         assert_eq!(args.parquet_compression, Compression::SNAPPY);
         let args = parse_args(vec!["--parquet-compression", "gzip"]).unwrap();
-        assert_eq!(args.parquet_compression, Compression::GZIP);
+        assert_eq!(
+            args.parquet_compression,
+            Compression::GZIP(Default::default())
+        );
         let args = parse_args(vec!["--parquet-compression", "lzo"]).unwrap();
         assert_eq!(args.parquet_compression, Compression::LZO);
         let args = parse_args(vec!["--parquet-compression", "lz4"]).unwrap();
         assert_eq!(args.parquet_compression, Compression::LZ4);
         let args = parse_args(vec!["--parquet-compression", "brotli"]).unwrap();
-        assert_eq!(args.parquet_compression, Compression::BROTLI);
+        assert_eq!(
+            args.parquet_compression,
+            Compression::BROTLI(Default::default())
+        );
         let args = parse_args(vec!["--parquet-compression", "zstd"]).unwrap();
-        assert_eq!(args.parquet_compression, Compression::ZSTD);
+        assert_eq!(
+            args.parquet_compression,
+            Compression::ZSTD(Default::default())
+        );
     }
 
     #[test]
