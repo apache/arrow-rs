@@ -861,14 +861,20 @@ mod tests {
 
     #[test]
     fn test_codec_gzip() {
-        test_codec_with_size(CodecType::GZIP(Default::default()));
-        test_codec_without_size(CodecType::GZIP(Default::default()));
+        for level in GzipLevel::MINIMUM_LEVEL..=GzipLevel::MAXIMUM_LEVEL {
+            let level = GzipLevel::try_new(level).unwrap();
+            test_codec_with_size(CodecType::GZIP(level));
+            test_codec_without_size(CodecType::GZIP(level));
+        }
     }
 
     #[test]
     fn test_codec_brotli() {
-        test_codec_with_size(CodecType::BROTLI(Default::default()));
-        test_codec_without_size(CodecType::BROTLI(Default::default()));
+        for level in BrotliLevel::MINIMUM_LEVEL..=BrotliLevel::MAXIMUM_LEVEL {
+            let level = BrotliLevel::try_new(level).unwrap();
+            test_codec_with_size(CodecType::BROTLI(level));
+            test_codec_without_size(CodecType::BROTLI(level));
+        }
     }
 
     #[test]
@@ -878,8 +884,11 @@ mod tests {
 
     #[test]
     fn test_codec_zstd() {
-        test_codec_with_size(CodecType::ZSTD(Default::default()));
-        test_codec_without_size(CodecType::ZSTD(Default::default()));
+        for level in ZstdLevel::MINIMUM_LEVEL..=ZstdLevel::MAXIMUM_LEVEL {
+            let level = ZstdLevel::try_new(level).unwrap();
+            test_codec_with_size(CodecType::ZSTD(level));
+            test_codec_without_size(CodecType::ZSTD(level));
+        }
     }
 
     #[test]
