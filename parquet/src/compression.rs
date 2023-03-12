@@ -152,7 +152,7 @@ pub fn create_codec(
         #[cfg(any(feature = "brotli", test))]
         CodecType::BROTLI => Ok(Some(Box::new(BrotliCodec::new()))),
         #[cfg(any(feature = "flate2", test))]
-        CodecType::GZIP => Ok(Some(Box::new(GZipCodec::new()))),
+        CodecType::GZIP(level) => Ok(Some(Box::new(GZipCodec::new(level)))),
         #[cfg(any(feature = "snap", test))]
         CodecType::SNAPPY => Ok(Some(Box::new(SnappyCodec::new()))),
         #[cfg(any(feature = "lz4", test))]
@@ -234,13 +234,17 @@ mod gzip_codec {
     use crate::compression::Codec;
     use crate::errors::Result;
 
+    use super::GzipLevel;
+
     /// Codec for GZIP compression algorithm.
-    pub struct GZipCodec {}
+    pub struct GZipCodec {
+        level: GzipLevel,
+    }
 
     impl GZipCodec {
         /// Creates new GZIP compression codec.
-        pub(crate) fn new() -> Self {
-            Self {}
+        pub(crate) fn new(level: GzipLevel) -> Self {
+            Self { level }
         }
     }
 
@@ -256,7 +260,8 @@ mod gzip_codec {
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
-            let mut encoder = write::GzEncoder::new(output_buf, Compression::default());
+            let mut encoder =
+                write::GzEncoder::new(output_buf, Compression::new(self.level.0));
             encoder.write_all(input_buf)?;
             encoder.try_finish().map_err(|e| e.into())
         }
@@ -264,6 +269,37 @@ mod gzip_codec {
 }
 #[cfg(any(feature = "flate2", test))]
 pub use gzip_codec::*;
+
+/// Represents a valid gzip compression level.
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
+pub struct GzipLevel(u32);
+
+impl Default for GzipLevel {
+    fn default() -> Self {
+        // The default as of miniz_oxide 0.5.1 is 6 for compression level
+        // (miniz_oxide::deflate::CompressionLevel::DefaultLevel)
+        Self(6)
+    }
+}
+
+impl CompressionLevel<u32> for GzipLevel {
+    const MINIMUM_LEVEL: u32 = 0;
+    const MAXIMUM_LEVEL: u32 = 10;
+}
+
+impl GzipLevel {
+    /// Attempts to create a gzip compression level.
+    ///
+    /// Compression levels must be valid (i.e. be acceptable for [`flate2::Compression`]).
+    pub fn try_new(level: u32) -> Result<Self> {
+        Self::is_valid_level(level).map(|_| Self(level))
+    }
+
+    /// Returns the compression level.
+    pub fn compression_level(&self) -> u32 {
+        self.0
+    }
+}
 
 #[cfg(any(feature = "brotli", test))]
 mod brotli_codec {

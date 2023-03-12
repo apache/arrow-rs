@@ -20,7 +20,7 @@
 
 use std::{fmt, str};
 
-use crate::compression::ZstdLevel;
+use crate::compression::{GzipLevel, ZstdLevel};
 use crate::format as parquet;
 
 use crate::errors::{ParquetError, Result};
@@ -287,7 +287,7 @@ pub enum Encoding {
 pub enum Compression {
     UNCOMPRESSED,
     SNAPPY,
-    GZIP,
+    GZIP(GzipLevel),
     LZO,
     BROTLI,
     LZ4,
@@ -831,7 +831,7 @@ impl TryFrom<parquet::CompressionCodec> for Compression {
         Ok(match value {
             parquet::CompressionCodec::UNCOMPRESSED => Compression::UNCOMPRESSED,
             parquet::CompressionCodec::SNAPPY => Compression::SNAPPY,
-            parquet::CompressionCodec::GZIP => Compression::GZIP,
+            parquet::CompressionCodec::GZIP => Compression::GZIP(Default::default()),
             parquet::CompressionCodec::LZO => Compression::LZO,
             parquet::CompressionCodec::BROTLI => Compression::BROTLI,
             parquet::CompressionCodec::LZ4 => Compression::LZ4,
@@ -852,7 +852,7 @@ impl From<Compression> for parquet::CompressionCodec {
         match value {
             Compression::UNCOMPRESSED => parquet::CompressionCodec::UNCOMPRESSED,
             Compression::SNAPPY => parquet::CompressionCodec::SNAPPY,
-            Compression::GZIP => parquet::CompressionCodec::GZIP,
+            Compression::GZIP(_) => parquet::CompressionCodec::GZIP,
             Compression::LZO => parquet::CompressionCodec::LZO,
             Compression::BROTLI => parquet::CompressionCodec::BROTLI,
             Compression::LZ4 => parquet::CompressionCodec::LZ4,
@@ -1784,7 +1784,7 @@ mod tests {
     fn test_display_compression() {
         assert_eq!(Compression::UNCOMPRESSED.to_string(), "UNCOMPRESSED");
         assert_eq!(Compression::SNAPPY.to_string(), "SNAPPY");
-        assert_eq!(Compression::GZIP.to_string(), "GZIP");
+        assert_eq!(Compression::GZIP(Default::default()).to_string(), "GZIP");
         assert_eq!(Compression::LZO.to_string(), "LZO");
         assert_eq!(Compression::BROTLI.to_string(), "BROTLI");
         assert_eq!(Compression::LZ4.to_string(), "LZ4");
@@ -1803,7 +1803,7 @@ mod tests {
         );
         assert_eq!(
             Compression::try_from(parquet::CompressionCodec::GZIP).unwrap(),
-            Compression::GZIP
+            Compression::GZIP(Default::default())
         );
         assert_eq!(
             Compression::try_from(parquet::CompressionCodec::LZO).unwrap(),
