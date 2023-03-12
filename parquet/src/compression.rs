@@ -150,7 +150,7 @@ pub fn create_codec(
 ) -> Result<Option<Box<dyn Codec>>> {
     match codec {
         #[cfg(any(feature = "brotli", test))]
-        CodecType::BROTLI => Ok(Some(Box::new(BrotliCodec::new()))),
+        CodecType::BROTLI(level) => Ok(Some(Box::new(BrotliCodec::new(level)))),
         #[cfg(any(feature = "flate2", test))]
         CodecType::GZIP(level) => Ok(Some(Box::new(GZipCodec::new(level)))),
         #[cfg(any(feature = "snap", test))]
@@ -309,17 +309,20 @@ mod brotli_codec {
     use crate::compression::Codec;
     use crate::errors::Result;
 
+    use super::BrotliLevel;
+
     const BROTLI_DEFAULT_BUFFER_SIZE: usize = 4096;
-    const BROTLI_DEFAULT_COMPRESSION_QUALITY: u32 = 1; // supported levels 0-9
     const BROTLI_DEFAULT_LG_WINDOW_SIZE: u32 = 22; // recommended between 20-22
 
     /// Codec for Brotli compression algorithm.
-    pub struct BrotliCodec {}
+    pub struct BrotliCodec {
+        level: BrotliLevel,
+    }
 
     impl BrotliCodec {
         /// Creates new Brotli compression codec.
-        pub(crate) fn new() -> Self {
-            Self {}
+        pub(crate) fn new(level: BrotliLevel) -> Self {
+            Self { level }
         }
     }
 
@@ -340,7 +343,7 @@ mod brotli_codec {
             let mut encoder = brotli::CompressorWriter::new(
                 output_buf,
                 BROTLI_DEFAULT_BUFFER_SIZE,
-                BROTLI_DEFAULT_COMPRESSION_QUALITY,
+                self.level.0,
                 BROTLI_DEFAULT_LG_WINDOW_SIZE,
             );
             encoder.write_all(input_buf)?;
@@ -350,6 +353,35 @@ mod brotli_codec {
 }
 #[cfg(any(feature = "brotli", test))]
 pub use brotli_codec::*;
+
+/// Represents a valid brotli compression level.
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
+pub struct BrotliLevel(u32);
+
+impl Default for BrotliLevel {
+    fn default() -> Self {
+        Self(1)
+    }
+}
+
+impl CompressionLevel<u32> for BrotliLevel {
+    const MINIMUM_LEVEL: u32 = 0;
+    const MAXIMUM_LEVEL: u32 = 11;
+}
+
+impl BrotliLevel {
+    /// Attempts to create a brotli compression level.
+    ///
+    /// Compression levels must be valid.
+    pub fn try_new(level: u32) -> Result<Self> {
+        Self::is_valid_level(level).map(|_| Self(level))
+    }
+
+    /// Returns the compression level.
+    pub fn compression_level(&self) -> u32 {
+        self.0
+    }
+}
 
 #[cfg(any(feature = "lz4", test))]
 mod lz4_codec {
@@ -835,8 +867,8 @@ mod tests {
 
     #[test]
     fn test_codec_brotli() {
-        test_codec_with_size(CodecType::BROTLI);
-        test_codec_without_size(CodecType::BROTLI);
+        test_codec_with_size(CodecType::BROTLI(Default::default()));
+        test_codec_without_size(CodecType::BROTLI(Default::default()));
     }
 
     #[test]
