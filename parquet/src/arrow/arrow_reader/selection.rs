@@ -19,7 +19,6 @@ use arrow_array::{Array, BooleanArray};
 use arrow_select::filter::SlicesIterator;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
-use std::mem;
 use std::ops::Range;
 
 /// [`RowSelection`] is a collection of [`RowSelector`] used to skip rows when
@@ -236,13 +235,13 @@ impl RowSelection {
         let mut total_count = 0;
 
         // Find the index where the selector exceeds the row count
-        let find = self.selectors.iter().enumerate().find(|(_, selector)| {
+        let find = self.selectors.iter().position(|selector| {
             total_count += selector.row_count;
             total_count > row_count
         });
 
         let split_idx = match find {
-            Some((idx, _)) => idx,
+            Some(idx) => idx,
             None => {
                 let selectors = std::mem::take(&mut self.selectors);
                 return Self { selectors };
@@ -372,29 +371,63 @@ impl RowSelection {
         self
     }
 
+    /// Applies an offset to this [`RowSelection`], skipping the first `offset` selected rows
+    pub(crate) fn offset(mut self, offset: usize) -> Self {
+        if offset == 0 {
+            return self;
+        }
+
+        let mut selected_count = 0;
+        let mut skipped_count = 0;
+
+        // Find the index where the selector exceeds the row count
+        let find = self
+            .selectors
+            .iter()
+            .position(|selector| match selector.skip {
+                true => {
+                    skipped_count += selector.row_count;
+                    false
+                }
+                false => {
+                    selected_count += selector.row_count;
+                    selected_count > offset
+                }
+            });
+
+        let split_idx = match find {
+            Some(idx) => idx,
+            None => {
+                self.selectors.clear();
+                return self;
+            }
+        };
+
+        let mut selectors = Vec::with_capacity(self.selectors.len() - split_idx + 1);
+        selectors.push(RowSelector::skip(skipped_count + offset));
+        selectors.push(RowSelector::select(selected_count - offset));
+        selectors.extend_from_slice(&self.selectors[split_idx + 1..]);
+
+        Self { selectors }
+    }
+
     /// Limit this [`RowSelection`] to only select `limit` rows
     pub(crate) fn limit(mut self, mut limit: usize) -> Self {
-        let mut new_selectors = Vec::with_capacity(self.selectors.len());
-        for mut selection in mem::take(&mut self.selectors) {
-            if limit == 0 {
-                break;
-            }
+        if limit == 0 {
+            self.selectors.clear();
+        }
 
+        for (idx, selection) in self.selectors.iter_mut().enumerate() {
             if !selection.skip {
                 if selection.row_count >= limit {
                     selection.row_count = limit;
-                    new_selectors.push(selection);
+                    self.selectors.truncate(idx + 1);
                     break;
                 } else {
                     limit -= selection.row_count;
-                    new_selectors.push(selection);
                 }
-            } else {
-                new_selectors.push(selection);
             }
         }
-
-        self.selectors = new_selectors;
         self
     }
 
@@ -402,6 +435,11 @@ impl RowSelection {
     /// [`RowSelection`].
     pub fn iter(&self) -> impl Iterator<Item = &RowSelector> {
         self.selectors.iter()
+    }
+
+    /// Returns the number of selected rows
+    pub fn row_count(&self) -> usize {
+        self.iter().filter(|s| !s.skip).map(|s| s.row_count).sum()
     }
 }
 
@@ -591,6 +629,64 @@ mod tests {
             vec![RowSelector::skip(2), RowSelector::select(35)]
         );
         assert!(selection.selectors.is_empty());
+    }
+
+    #[test]
+    fn test_offset() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(5),
+            RowSelector::skip(23),
+            RowSelector::select(7),
+            RowSelector::skip(33),
+            RowSelector::select(6),
+        ]);
+
+        let selection = selection.offset(2);
+        assert_eq!(
+            selection.selectors,
+            vec![
+                RowSelector::skip(2),
+                RowSelector::select(3),
+                RowSelector::skip(23),
+                RowSelector::select(7),
+                RowSelector::skip(33),
+                RowSelector::select(6),
+            ]
+        );
+
+        let selection = selection.offset(5);
+        assert_eq!(
+            selection.selectors,
+            vec![
+                RowSelector::skip(30),
+                RowSelector::select(5),
+                RowSelector::skip(33),
+                RowSelector::select(6),
+            ]
+        );
+
+        let selection = selection.offset(3);
+        assert_eq!(
+            selection.selectors,
+            vec![
+                RowSelector::skip(33),
+                RowSelector::select(2),
+                RowSelector::skip(33),
+                RowSelector::select(6),
+            ]
+        );
+
+        let selection = selection.offset(2);
+        assert_eq!(
+            selection.selectors,
+            vec![RowSelector::skip(68), RowSelector::select(6),]
+        );
+
+        let selection = selection.offset(3);
+        assert_eq!(
+            selection.selectors,
+            vec![RowSelector::skip(71), RowSelector::select(3),]
+        );
     }
 
     #[test]
