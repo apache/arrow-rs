@@ -51,7 +51,6 @@ arrow-data = { version = "35.0.0", path = "../arrow-data" }
 chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
 chrono-tz = { version = "0.8", optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
-half = { version = "2.1", default-features = false, features = ["num-traits"] }
 hashbrown = { version = "0.13", default-features = false }
 packed_simd = { version = "0.3", default-features = false, optional = true, package = "packed_simd_2" }
 
@@ -60,5 +59,6 @@ simd = ["packed_simd"]
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+half = { version = "2.1", default-features = false, features = ["num-traits"] }
 
 [build-dependencies]

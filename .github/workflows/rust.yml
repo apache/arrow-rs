@@ -88,7 +88,7 @@ jobs:
 
   # Run cargo fmt for all crates
   lint:
-    name: Lint (cargo fmt)
+    name: Lint (cargo fmt and minimal-versions test)
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -96,7 +96,12 @@ jobs:
       - uses: actions/checkout@v3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
+        with:
+          rust-version: nightly
       - name: Setup rustfmt
         run: rustup component add rustfmt
-      - name: Run
+      - name: Run fmt check
         run: cargo fmt --all -- --check
+      - uses: taiki-e/install-action@cargo-hack
+      - uses: taiki-e/install-action@cargo-minimal-versions
+      - run: cargo minimal-versions test
