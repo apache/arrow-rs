@@ -63,3 +63,7 @@ half = { version = "2.1", default-features = false }
 [[bench]]
 name = "parse_timestamp"
 harness = false
+
+[[bench]]
+name = "parse_decimal"
+harness = false

@@ -558,100 +558,93 @@ pub fn parse_decimal<T: DecimalType>(
     precision: u8,
     scale: i8,
 ) -> Result<T::Native, ArrowError> {
-    if !is_valid_decimal(s) {
+    let mut seen_dot = false;
+    let mut seen_sign = false;
+    let mut negative = false;
+
+    let mut result = T::Native::usize_as(0);
+    let mut fractionals = 0;
+    let mut digits = 0;
+    let base = T::Native::usize_as(10);
+    let mut bs = s.as_bytes().iter();
+    while let Some(b) = bs.next() {
+        match b {
+            b'0'..=b'9' => {
+                if seen_dot {
+                    if fractionals == scale {
+                        // We have processed and validated the whole part of our decimal (including sign and dot).
+                        // All that is left is to validate the fractional part.
+                        if bs.any(|b| !b.is_ascii_digit()) {
+                            return Err(ArrowError::ParseError(format!(
+                                "can't parse the string value {s} to decimal"
+                            )));
+                        }
+                        break;
+                    }
+                    fractionals += 1;
+                }
+                digits += 1;
+                if digits > precision {
+                    return Err(ArrowError::ParseError(
+                        "parse decimal overflow".to_string(),
+                    ));
+                }
+                result = result.mul_checked(base)?;
+                result = result.add_checked(T::Native::usize_as((b - b'0') as usize))?;
+            }
+            b'.' => {
+                if seen_dot {
+                    return Err(ArrowError::ParseError(format!(
+                        "can't parse the string value {s} to decimal"
+                    )));
+                }
+                seen_dot = true;
+            }
+            b'-' => {
+                if seen_sign || digits > 0 || seen_dot {
+                    return Err(ArrowError::ParseError(format!(
+                        "can't parse the string value {s} to decimal"
+                    )));
+                }
+                seen_sign = true;
+                negative = true;
+            }
+            b'+' => {
+                if seen_sign || digits > 0 || seen_dot {
+                    return Err(ArrowError::ParseError(format!(
+                        "can't parse the string value {s} to decimal"
+                    )));
+                }
+                seen_sign = true;
+            }
+            _ => {
+                return Err(ArrowError::ParseError(format!(
+                    "can't parse the string value {s} to decimal"
+                )));
+            }
+        }
+    }
+    // Fail on "."
+    if digits == 0 {
         return Err(ArrowError::ParseError(format!(
             "can't parse the string value {s} to decimal"
         )));
     }
-    let mut offset = s.len();
-    let len = s.len();
-    let mut base = T::Native::usize_as(1);
-    let scale_usize = usize::from(scale as u8);
 
-    // handle the value after the '.' and meet the scale
-    let delimiter_position = s.find('.');
-    match delimiter_position {
-        None => {
-            // there is no '.'
-            base = T::Native::usize_as(10).pow_checked(scale as u32)?;
+    if fractionals < scale {
+        let exp = scale - fractionals;
+        if exp as u8 + digits > precision {
+            return Err(ArrowError::ParseError("parse decimal overflow".to_string()));
         }
-        Some(mid) => {
-            // there is the '.'
-            if len - mid >= scale_usize + 1 {
-                // If the string value is "123.12345" and the scale is 2, we should just remain '.12' and drop the '345' value.
-                offset -= len - mid - 1 - scale_usize;
-            } else {
-                // If the string value is "123.12" and the scale is 4, we should append '00' to the tail.
-                base = T::Native::usize_as(10)
-                    .pow_checked((scale_usize + 1 + mid - len) as u32)?;
-            }
-        }
-    };
-
-    // each byte is digit、'-' or '.'
-    let bytes = s.as_bytes();
-    let mut negative = false;
-    let mut result = T::Native::usize_as(0);
-
-    bytes[0..offset]
-        .iter()
-        .rev()
-        .try_for_each::<_, Result<(), ArrowError>>(|&byte| {
-            match byte {
-                b'-' => {
-                    negative = true;
-                }
-                b'0'..=b'9' => {
-                    let add =
-                        T::Native::usize_as((byte - b'0') as usize).mul_checked(base)?;
-                    result = result.add_checked(add)?;
-                    base = base.mul_checked(T::Native::usize_as(10))?;
-                }
-                // because we have checked the string value
-                _ => (),
-            }
-            Ok(())
-        })?;
-
-    if negative {
-        result = result.neg_checked()?;
+        let mul = base.pow_checked(exp as _)?;
+        result = result.mul_checked(mul)?;
     }
 
-    match T::validate_decimal_precision(result, precision) {
-        Ok(_) => Ok(result),
-        Err(e) => Err(ArrowError::ParseError(format!(
-            "parse decimal overflow: {e}"
-        ))),
-    }
-}
-
-fn is_valid_decimal(s: &str) -> bool {
-    let mut seen_dot = false;
-    let mut seen_digit = false;
-    let mut seen_sign = false;
-
-    for c in s.as_bytes() {
-        match c {
-            b'-' | b'+' => {
-                if seen_digit || seen_dot || seen_sign {
-                    return false;
-                }
-                seen_sign = true;
-            }
-            b'.' => {
-                if seen_dot {
-                    return false;
-                }
-                seen_dot = true;
-            }
-            b'0'..=b'9' => {
-                seen_digit = true;
-            }
-            _ => return false,
-        }
-    }
-
-    seen_digit
+    Ok(if negative {
+        result.neg_checked()?
+    } else {
+        result
+    })
 }
 
 pub fn parse_interval_year_month(
