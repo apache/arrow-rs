@@ -29,6 +29,7 @@
 //! to abort the upload and drop those unneeded parts. In addition, you may wish to
 //! consider implementing automatic clean up of unused parts that are older than one
 //! week.
+use std::any::Any;
 use std::collections::BTreeSet;
 use std::io;
 use std::ops::Range;
@@ -628,6 +629,10 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
 
 #[async_trait]
 impl ObjectStore for GoogleCloudStorage {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
         self.client.put_request(location, bytes).await
     }

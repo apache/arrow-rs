@@ -31,14 +31,14 @@
 //! [rfc2518]: https://datatracker.ietf.org/doc/html/rfc2518
 //! [WebDAV]: https://en.wikipedia.org/wiki/WebDAV
 
-use std::ops::Range;
-
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use snafu::{OptionExt, ResultExt, Snafu};
+use std::any::Any;
+use std::ops::Range;
 use tokio::io::AsyncWrite;
 use url::Url;
 
@@ -100,6 +100,10 @@ impl std::fmt::Display for HttpStore {
 
 #[async_trait]
 impl ObjectStore for HttpStore {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
         self.client.put(location, bytes).await
     }
