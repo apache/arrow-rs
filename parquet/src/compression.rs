@@ -121,6 +121,26 @@ impl CodecOptionsBuilder {
     }
 }
 
+/// Defines valid compression levels.
+pub(crate) trait CompressionLevel<T: std::fmt::Display + std::cmp::PartialOrd> {
+    const MINIMUM_LEVEL: T;
+    const MAXIMUM_LEVEL: T;
+
+    /// Tests if the provided compression level is valid.
+    fn is_valid_level(level: T) -> Result<()> {
+        let compression_range = Self::MINIMUM_LEVEL..=Self::MAXIMUM_LEVEL;
+        if compression_range.contains(&level) {
+            Ok(())
+        } else {
+            Err(ParquetError::General(format!(
+                "valid compression range {}..={} exceeded.",
+                compression_range.start(),
+                compression_range.end()
+            )))
+        }
+    }
+}
+
 /// Given the compression type `codec`, returns a codec used to compress and decompress
 /// bytes for the compression type.
 /// This returns `None` if the codec type is `UNCOMPRESSED`.
@@ -130,9 +150,9 @@ pub fn create_codec(
 ) -> Result<Option<Box<dyn Codec>>> {
     match codec {
         #[cfg(any(feature = "brotli", test))]
-        CodecType::BROTLI => Ok(Some(Box::new(BrotliCodec::new()))),
+        CodecType::BROTLI(level) => Ok(Some(Box::new(BrotliCodec::new(level)))),
         #[cfg(any(feature = "flate2", test))]
-        CodecType::GZIP => Ok(Some(Box::new(GZipCodec::new()))),
+        CodecType::GZIP(level) => Ok(Some(Box::new(GZipCodec::new(level)))),
         #[cfg(any(feature = "snap", test))]
         CodecType::SNAPPY => Ok(Some(Box::new(SnappyCodec::new()))),
         #[cfg(any(feature = "lz4", test))]
@@ -140,7 +160,7 @@ pub fn create_codec(
             _options.backward_compatible_lz4,
         )))),
         #[cfg(any(feature = "zstd", test))]
-        CodecType::ZSTD => Ok(Some(Box::new(ZSTDCodec::new()))),
+        CodecType::ZSTD(level) => Ok(Some(Box::new(ZSTDCodec::new(level)))),
         #[cfg(any(feature = "lz4", test))]
         CodecType::LZ4_RAW => Ok(Some(Box::new(LZ4RawCodec::new()))),
         CodecType::UNCOMPRESSED => Ok(None),
@@ -214,13 +234,17 @@ mod gzip_codec {
     use crate::compression::Codec;
     use crate::errors::Result;
 
+    use super::GzipLevel;
+
     /// Codec for GZIP compression algorithm.
-    pub struct GZipCodec {}
+    pub struct GZipCodec {
+        level: GzipLevel,
+    }
 
     impl GZipCodec {
         /// Creates new GZIP compression codec.
-        pub(crate) fn new() -> Self {
-            Self {}
+        pub(crate) fn new(level: GzipLevel) -> Self {
+            Self { level }
         }
     }
 
@@ -236,7 +260,8 @@ mod gzip_codec {
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
-            let mut encoder = write::GzEncoder::new(output_buf, Compression::default());
+            let mut encoder =
+                write::GzEncoder::new(output_buf, Compression::new(self.level.0));
             encoder.write_all(input_buf)?;
             encoder.try_finish().map_err(|e| e.into())
         }
@@ -244,6 +269,37 @@ mod gzip_codec {
 }
 #[cfg(any(feature = "flate2", test))]
 pub use gzip_codec::*;
+
+/// Represents a valid gzip compression level.
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
+pub struct GzipLevel(u32);
+
+impl Default for GzipLevel {
+    fn default() -> Self {
+        // The default as of miniz_oxide 0.5.1 is 6 for compression level
+        // (miniz_oxide::deflate::CompressionLevel::DefaultLevel)
+        Self(6)
+    }
+}
+
+impl CompressionLevel<u32> for GzipLevel {
+    const MINIMUM_LEVEL: u32 = 0;
+    const MAXIMUM_LEVEL: u32 = 10;
+}
+
+impl GzipLevel {
+    /// Attempts to create a gzip compression level.
+    ///
+    /// Compression levels must be valid (i.e. be acceptable for [`flate2::Compression`]).
+    pub fn try_new(level: u32) -> Result<Self> {
+        Self::is_valid_level(level).map(|_| Self(level))
+    }
+
+    /// Returns the compression level.
+    pub fn compression_level(&self) -> u32 {
+        self.0
+    }
+}
 
 #[cfg(any(feature = "brotli", test))]
 mod brotli_codec {
@@ -253,17 +309,20 @@ mod brotli_codec {
     use crate::compression::Codec;
     use crate::errors::Result;
 
+    use super::BrotliLevel;
+
     const BROTLI_DEFAULT_BUFFER_SIZE: usize = 4096;
-    const BROTLI_DEFAULT_COMPRESSION_QUALITY: u32 = 1; // supported levels 0-9
     const BROTLI_DEFAULT_LG_WINDOW_SIZE: u32 = 22; // recommended between 20-22
 
     /// Codec for Brotli compression algorithm.
-    pub struct BrotliCodec {}
+    pub struct BrotliCodec {
+        level: BrotliLevel,
+    }
 
     impl BrotliCodec {
         /// Creates new Brotli compression codec.
-        pub(crate) fn new() -> Self {
-            Self {}
+        pub(crate) fn new(level: BrotliLevel) -> Self {
+            Self { level }
         }
     }
 
@@ -284,7 +343,7 @@ mod brotli_codec {
             let mut encoder = brotli::CompressorWriter::new(
                 output_buf,
                 BROTLI_DEFAULT_BUFFER_SIZE,
-                BROTLI_DEFAULT_COMPRESSION_QUALITY,
+                self.level.0,
                 BROTLI_DEFAULT_LG_WINDOW_SIZE,
             );
             encoder.write_all(input_buf)?;
@@ -294,6 +353,35 @@ mod brotli_codec {
 }
 #[cfg(any(feature = "brotli", test))]
 pub use brotli_codec::*;
+
+/// Represents a valid brotli compression level.
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
+pub struct BrotliLevel(u32);
+
+impl Default for BrotliLevel {
+    fn default() -> Self {
+        Self(1)
+    }
+}
+
+impl CompressionLevel<u32> for BrotliLevel {
+    const MINIMUM_LEVEL: u32 = 0;
+    const MAXIMUM_LEVEL: u32 = 11;
+}
+
+impl BrotliLevel {
+    /// Attempts to create a brotli compression level.
+    ///
+    /// Compression levels must be valid.
+    pub fn try_new(level: u32) -> Result<Self> {
+        Self::is_valid_level(level).map(|_| Self(level))
+    }
+
+    /// Returns the compression level.
+    pub fn compression_level(&self) -> u32 {
+        self.0
+    }
+}
 
 #[cfg(any(feature = "lz4", test))]
 mod lz4_codec {
@@ -357,21 +445,20 @@ pub use lz4_codec::*;
 mod zstd_codec {
     use std::io::{self, Write};
 
-    use crate::compression::Codec;
+    use crate::compression::{Codec, ZstdLevel};
     use crate::errors::Result;
 
     /// Codec for Zstandard compression algorithm.
-    pub struct ZSTDCodec {}
+    pub struct ZSTDCodec {
+        level: ZstdLevel,
+    }
 
     impl ZSTDCodec {
         /// Creates new Zstandard compression codec.
-        pub(crate) fn new() -> Self {
-            Self {}
+        pub(crate) fn new(level: ZstdLevel) -> Self {
+            Self { level }
         }
     }
-
-    /// Compression level (1-21) for ZSTD. Choose 1 here for better compression speed.
-    const ZSTD_COMPRESSION_LEVEL: i32 = 1;
 
     impl Codec for ZSTDCodec {
         fn decompress(
@@ -388,7 +475,7 @@ mod zstd_codec {
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
-            let mut encoder = zstd::Encoder::new(output_buf, ZSTD_COMPRESSION_LEVEL)?;
+            let mut encoder = zstd::Encoder::new(output_buf, self.level.0)?;
             encoder.write_all(input_buf)?;
             match encoder.finish() {
                 Ok(_) => Ok(()),
@@ -399,6 +486,37 @@ mod zstd_codec {
 }
 #[cfg(any(feature = "zstd", test))]
 pub use zstd_codec::*;
+
+/// Represents a valid zstd compression level.
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
+pub struct ZstdLevel(i32);
+
+impl CompressionLevel<i32> for ZstdLevel {
+    // zstd binds to C, and hence zstd::compression_level_range() is not const as this calls the
+    // underlying C library.
+    const MINIMUM_LEVEL: i32 = 1;
+    const MAXIMUM_LEVEL: i32 = 22;
+}
+
+impl ZstdLevel {
+    /// Attempts to create a zstd compression level from a given compression level.
+    ///
+    /// Compression levels must be valid (i.e. be acceptable for [`zstd::compression_level_range`]).
+    pub fn try_new(level: i32) -> Result<Self> {
+        Self::is_valid_level(level).map(|_| Self(level))
+    }
+
+    /// Returns the compression level.
+    pub fn compression_level(&self) -> i32 {
+        self.0
+    }
+}
+
+impl Default for ZstdLevel {
+    fn default() -> Self {
+        Self(1)
+    }
+}
 
 #[cfg(any(feature = "lz4", test))]
 mod lz4_raw_codec {
@@ -647,7 +765,8 @@ mod lz4_hadoop_codec {
             let compressed_size = compressed_size as u32;
             let uncompressed_size = input_buf.len() as u32;
             output_buf[..SIZE_U32].copy_from_slice(&uncompressed_size.to_be_bytes());
-            output_buf[SIZE_U32..PREFIX_LEN].copy_from_slice(&compressed_size.to_be_bytes());
+            output_buf[SIZE_U32..PREFIX_LEN]
+                .copy_from_slice(&compressed_size.to_be_bytes());
 
             Ok(())
         }
@@ -742,14 +861,20 @@ mod tests {
 
     #[test]
     fn test_codec_gzip() {
-        test_codec_with_size(CodecType::GZIP);
-        test_codec_without_size(CodecType::GZIP);
+        for level in GzipLevel::MINIMUM_LEVEL..=GzipLevel::MAXIMUM_LEVEL {
+            let level = GzipLevel::try_new(level).unwrap();
+            test_codec_with_size(CodecType::GZIP(level));
+            test_codec_without_size(CodecType::GZIP(level));
+        }
     }
 
     #[test]
     fn test_codec_brotli() {
-        test_codec_with_size(CodecType::BROTLI);
-        test_codec_without_size(CodecType::BROTLI);
+        for level in BrotliLevel::MINIMUM_LEVEL..=BrotliLevel::MAXIMUM_LEVEL {
+            let level = BrotliLevel::try_new(level).unwrap();
+            test_codec_with_size(CodecType::BROTLI(level));
+            test_codec_without_size(CodecType::BROTLI(level));
+        }
     }
 
     #[test]
@@ -759,8 +884,11 @@ mod tests {
 
     #[test]
     fn test_codec_zstd() {
-        test_codec_with_size(CodecType::ZSTD);
-        test_codec_without_size(CodecType::ZSTD);
+        for level in ZstdLevel::MINIMUM_LEVEL..=ZstdLevel::MAXIMUM_LEVEL {
+            let level = ZstdLevel::try_new(level).unwrap();
+            test_codec_with_size(CodecType::ZSTD(level));
+            test_codec_without_size(CodecType::ZSTD(level));
+        }
     }
 
     #[test]
