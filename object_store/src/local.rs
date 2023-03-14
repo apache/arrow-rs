@@ -400,22 +400,19 @@ impl ObjectStore for LocalFileSystem {
         let location = location.clone();
 
         maybe_spawn_blocking(move || {
-            // let file = open_file(&path)?;
-            let metadata = match metadata(&path){
-                Err(e) => {
-                    Err(if e.kind() == ErrorKind::NotFound {
-                        Error::NotFound {
-                            path: path.clone(),
-                            source: e,
-                        }
-                    } else {
-                        Error::UnableToAccessMetadata {
-                            source: e.into(),
-                            path: location.to_string(),
-                        }
-                    })
-                },
-                Ok(m) => Ok(m)
+            let metadata = match metadata(&path) {
+                Err(e) => Err(if e.kind() == ErrorKind::NotFound {
+                    Error::NotFound {
+                        path: path.clone(),
+                        source: e,
+                    }
+                } else {
+                    Error::UnableToAccessMetadata {
+                        source: e.into(),
+                        path: location.to_string(),
+                    }
+                }),
+                Ok(m) => Ok(m),
             }?;
             convert_metadata(metadata, location)
         })
@@ -1456,31 +1453,25 @@ mod not_wasm_tests {
 #[cfg(not(target_os = "windows"))]
 #[cfg(test)]
 mod unix_test {
-    use std::path::PathBuf;
+    use crate::local::LocalFileSystem;
+    use crate::{ObjectStore, Path};
     use nix::sys::stat;
     use nix::unistd;
+    use std::time::Duration;
     use tempfile::TempDir;
-    use crate::{Error, ObjectStore, Path, Result};
-    use crate::local::LocalFileSystem;
-
-    fn create_fifo_file(tmp_dir: &TempDir, file_name: String) -> PathBuf {
-        let file_path = tmp_dir.path().join(file_name);
-        // Simulate an infinite environment via a FIFO file
-        unistd::mkfifo(&file_path, stat::Mode::S_IRWXU).unwrap();
-
-        file_path
-    }
+    use tokio::time::timeout;
 
     #[tokio::test]
-    async fn head_fifo(){
+    async fn test_head_fifo() {
+        let filename = "some_file";
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-        let location = Path::from("some_file");
-        let fifo_path = create_fifo_file(&root, location.to_string());
-        let metadata = integration.head(&location).await.unwrap();
-        println!("metadata {:?}", metadata);
+        unistd::mkfifo(&root.path().join(filename), stat::Mode::S_IRWXU).unwrap();
+        let location = Path::from(filename);
+        if let Err(_) =
+            timeout(Duration::from_millis(10), integration.head(&location)).await
+        {
+            panic!("Did not receive value within 10 ms");
+        }
     }
 }
-
-
-
