@@ -400,13 +400,23 @@ impl ObjectStore for LocalFileSystem {
         let location = location.clone();
 
         maybe_spawn_blocking(move || {
-            let file = open_file(&path)?;
-            let metadata =
-                file.metadata().map_err(|e| Error::UnableToAccessMetadata {
-                    source: e.into(),
-                    path: location.to_string(),
-                })?;
-
+            // let file = open_file(&path)?;
+            let metadata = match metadata(&path){
+                Err(e) => {
+                    Err(if e.kind() == ErrorKind::NotFound {
+                        Error::NotFound {
+                            path: path.clone(),
+                            source: e,
+                        }
+                    } else {
+                        Error::UnableToAccessMetadata {
+                            source: e.into(),
+                            path: location.to_string(),
+                        }
+                    })
+                },
+                Ok(m) => Ok(m)
+            }?;
             convert_metadata(metadata, location)
         })
         .await
@@ -1442,3 +1452,35 @@ mod not_wasm_tests {
         assert_eq!(&*read_data, expected_data);
     }
 }
+
+#[cfg(not(target_os = "windows"))]
+#[cfg(test)]
+mod unix_test {
+    use std::path::PathBuf;
+    use nix::sys::stat;
+    use nix::unistd;
+    use tempfile::TempDir;
+    use crate::{Error, ObjectStore, Path, Result};
+    use crate::local::LocalFileSystem;
+
+    fn create_fifo_file(tmp_dir: &TempDir, file_name: String) -> PathBuf {
+        let file_path = tmp_dir.path().join(file_name);
+        // Simulate an infinite environment via a FIFO file
+        unistd::mkfifo(&file_path, stat::Mode::S_IRWXU).unwrap();
+
+        file_path
+    }
+
+    #[tokio::test]
+    async fn head_fifo(){
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let location = Path::from("some_file");
+        let fifo_path = create_fifo_file(&root, location.to_string());
+        let metadata = integration.head(&location).await.unwrap();
+        println!("metadata {:?}", metadata);
+    }
+}
+
+
+
