@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_cast::parse::{string_to_time_nanoseconds, string_to_timestamp_nanos};
+use arrow_cast::parse::string_to_time_nanoseconds;
 use criterion::*;
 
 fn criterion_benchmark(c: &mut Criterion) {
