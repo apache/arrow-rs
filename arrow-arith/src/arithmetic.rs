@@ -1177,7 +1177,7 @@ pub fn multiply_dyn_checked(
 /// It is implemented for compatibility with precision loss `multiply` function provided by
 /// other data processing engines. For multiplication with precision loss detection, use
 /// `multiply` or `multiply_checked` instead.
-pub fn mul_fixed_point(
+pub fn mul_fixed_point_checked(
     left: &PrimitiveArray<Decimal128Type>,
     right: &PrimitiveArray<Decimal128Type>,
     required_scale: i8,
@@ -3322,7 +3322,7 @@ mod tests {
         ));
 
         // Allow precision loss.
-        let result = mul_fixed_point(&a, &b, 28).unwrap();
+        let result = mul_fixed_point_checked(&a, &b, 28).unwrap();
         let result = as_primitive_array::<Decimal128Type>(&result).clone();
         let expected =
             Decimal128Array::from(vec![12345678900000000000000000000000000000])
@@ -3348,7 +3348,7 @@ mod tests {
             .with_precision_and_scale(38, 18)
             .unwrap();
 
-        let result = mul_fixed_point(&a, &b, 28).unwrap();
+        let result = mul_fixed_point_checked(&a, &b, 28).unwrap();
         let result = as_primitive_array::<Decimal128Type>(&result).clone();
         let expected = Decimal128Array::from(vec![
             15555555556,
