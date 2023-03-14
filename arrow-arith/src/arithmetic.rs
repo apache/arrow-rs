@@ -1171,44 +1171,31 @@ pub fn multiply_dyn_checked(
 /// null then the result is also null.
 ///
 /// This performs decimal multiplication which allows precision loss if an exact representation
-/// is not possible for the result. In the case, the result will be rounded.
+/// is not possible for the result, according to the required scale. In the case, the result
+/// will be rounded to the required scale.
 ///
-/// Note that this kernel is not optimized for performance yet. It is implemented for compatibility
-/// with precision loss `multiply` function provided by other data processing engines.
-pub fn multiply_decimal(
+/// It is implemented for compatibility with precision loss `multiply` function provided by
+/// other data processing engines. For multiplication with precision loss detection, use
+/// `multiply` or `multiply_checked` instead.
+pub fn mul_fixed_point(
     left: &PrimitiveArray<Decimal128Type>,
     right: &PrimitiveArray<Decimal128Type>,
+    required_scale: i8,
 ) -> Result<ArrayRef, ArrowError> {
     let precision = left.precision();
     let product_scale = left.scale() + right.scale();
-    let mut min_product_scale = product_scale;
-    let mut scales = vec![0; left.len()];
 
-    try_binary::<_, _, _, Decimal256Type>(left, right, |a, b| {
+    try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
         let a = i256::from_i128(a);
         let b = i256::from_i128(b);
 
         a.checked_mul(b)
             .map(|mut a| {
-                let mut scale = product_scale;
-
-                // Round the value if an exact representation is not possible.
-                // ref: java.math.BigDecimal#doRound
-                let mut digits = a.to_string().len() as i8;
-                let mut diff = digits - (Decimal128Type::MAX_PRECISION as i8);
-
-                while diff > 0 {
-                    let divisor = i256::from_i128(10).pow_wrapping(diff as u32);
+                if required_scale < product_scale {
+                    let divisor = i256::from_i128(10)
+                        .pow_wrapping((product_scale - required_scale) as u32);
                     a = divide_and_round::<Decimal256Type>(a, divisor);
-                    scale -= diff;
-
-                    digits = a.to_string().len() as i8;
-                    diff = digits - (Decimal128Type::MAX_PRECISION as i8);
                 }
-                if scale < min_product_scale {
-                    min_product_scale = scale;
-                }
-                scales.push(scale);
                 a
             })
             .ok_or_else(|| {
@@ -1219,27 +1206,15 @@ pub fn multiply_decimal(
                     a.checked_mul(b)
                 ))
             })
+            .and_then(|a| {
+                a.to_i128().ok_or_else(|| {
+                    ArrowError::ComputeError(format!("Overflow happened on: {:?}", a))
+                })
+            })
     })
     .and_then(|a| {
-        try_unary::<Decimal256Type, _, Decimal128Type>(&a, |a| {
-            let scale = scales.pop().unwrap();
-
-            let scaled = if scale > min_product_scale {
-                let divisor =
-                    i256::from_i128(10).pow_wrapping((scale - min_product_scale) as u32);
-                divide_and_round::<Decimal256Type>(a, divisor)
-            } else {
-                a
-            };
-
-            scaled.to_i128().ok_or_else(|| {
-                ArrowError::ComputeError(format!("Overflow happened on: {:?}", a))
-            })
-        })
-        .and_then(|a| {
-            a.with_precision_and_scale(precision, min_product_scale)
-                .map(|a| Arc::new(a) as ArrayRef)
-        })
+        a.with_precision_and_scale(precision, required_scale)
+            .map(|a| Arc::new(a) as ArrayRef)
     })
 }
 
@@ -3347,7 +3322,7 @@ mod tests {
         ));
 
         // Allow precision loss.
-        let result = multiply_decimal(&a, &b).unwrap();
+        let result = mul_fixed_point(&a, &b, 28).unwrap();
         let result = as_primitive_array::<Decimal128Type>(&result).clone();
         let expected =
             Decimal128Array::from(vec![12345678900000000000000000000000000000])
@@ -3373,7 +3348,7 @@ mod tests {
             .with_precision_and_scale(38, 18)
             .unwrap();
 
-        let result = multiply_decimal(&a, &b).unwrap();
+        let result = mul_fixed_point(&a, &b, 28).unwrap();
         let result = as_primitive_array::<Decimal128Type>(&result).clone();
         let expected = Decimal128Array::from(vec![
             15555555556,
