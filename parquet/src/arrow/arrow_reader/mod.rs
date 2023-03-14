@@ -71,6 +71,8 @@ pub struct ArrowReaderBuilder<T> {
     pub(crate) selection: Option<RowSelection>,
 
     pub(crate) limit: Option<usize>,
+
+    pub(crate) offset: Option<usize>,
 }
 
 impl<T> ArrowReaderBuilder<T> {
@@ -101,6 +103,7 @@ impl<T> ArrowReaderBuilder<T> {
             filter: None,
             selection: None,
             limit: None,
+            offset: None,
         })
     }
 
@@ -178,6 +181,17 @@ impl<T> ArrowReaderBuilder<T> {
     pub fn with_limit(self, limit: usize) -> Self {
         Self {
             limit: Some(limit),
+            ..self
+        }
+    }
+
+    /// Provide an offset to skip over the given number of rows
+    ///
+    /// The offset will be applied after any [`Self::with_row_selection`] and [`Self::with_row_filter`]
+    /// allowing it to skip rows after any pushed down predicates
+    pub fn with_offset(self, offset: usize) -> Self {
+        Self {
+            offset: Some(offset),
             ..self
         }
     }
@@ -467,23 +481,10 @@ impl<T: ChunkReader + 'static> ArrowReaderBuilder<SyncReader<T>> {
             selection = Some(RowSelection::from(vec![]));
         }
 
-        // If a limit is defined, apply it to the final `RowSelection`
-        if let Some(limit) = self.limit {
-            selection = Some(
-                selection
-                    .map(|selection| selection.limit(limit))
-                    .unwrap_or_else(|| {
-                        RowSelection::from(vec![RowSelector::select(
-                            limit.min(reader.num_rows()),
-                        )])
-                    }),
-            );
-        }
-
         Ok(ParquetRecordBatchReader::new(
             batch_size,
             array_reader,
-            selection,
+            apply_range(selection, reader.num_rows(), self.offset, self.limit),
         ))
     }
 }
@@ -618,6 +619,41 @@ impl ParquetRecordBatchReader {
 /// Returns `true` if `selection` is `None` or selects some rows
 pub(crate) fn selects_any(selection: Option<&RowSelection>) -> bool {
     selection.map(|x| x.selects_any()).unwrap_or(true)
+}
+
+/// Applies an optional offset and limit to an optional [`RowSelection`]
+pub(crate) fn apply_range(
+    mut selection: Option<RowSelection>,
+    row_count: usize,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Option<RowSelection> {
+    // If an offset is defined, apply it to the `selection`
+    if let Some(offset) = offset {
+        selection = Some(match row_count.checked_sub(offset) {
+            None => RowSelection::from(vec![]),
+            Some(remaining) => selection
+                .map(|selection| selection.offset(offset))
+                .unwrap_or_else(|| {
+                    RowSelection::from(vec![
+                        RowSelector::skip(offset),
+                        RowSelector::select(remaining),
+                    ])
+                }),
+        });
+    }
+
+    // If a limit is defined, apply it to the final `selection`
+    if let Some(limit) = limit {
+        selection = Some(
+            selection
+                .map(|selection| selection.limit(limit))
+                .unwrap_or_else(|| {
+                    RowSelection::from(vec![RowSelector::select(limit.min(row_count))])
+                }),
+        );
+    }
+    selection
 }
 
 /// Evaluates an [`ArrowPredicate`] returning the [`RowSelection`]
@@ -1244,6 +1280,8 @@ mod tests {
         row_filter: Option<Vec<bool>>,
         /// limit
         limit: Option<usize>,
+        /// offset
+        offset: Option<usize>,
     }
 
     /// Manually implement this to avoid printing entire contents of row_selections and row_filter
@@ -1263,6 +1301,7 @@ mod tests {
                 .field("row_selections", &self.row_selections.is_some())
                 .field("row_filter", &self.row_filter.is_some())
                 .field("limit", &self.limit)
+                .field("offset", &self.offset)
                 .finish()
         }
     }
@@ -1283,6 +1322,7 @@ mod tests {
                 row_selections: None,
                 row_filter: None,
                 limit: None,
+                offset: None,
             }
         }
     }
@@ -1361,6 +1401,13 @@ mod tests {
             }
         }
 
+        fn with_offset(self, offset: usize) -> Self {
+            Self {
+                offset: Some(offset),
+                ..self
+            }
+        }
+
         fn writer_props(&self) -> WriterProperties {
             let builder = WriterProperties::builder()
                 .set_data_pagesize_limit(self.max_data_page_size)
@@ -1427,6 +1474,12 @@ mod tests {
             TestOptions::new(4, 100, 25).with_limit(10),
             // Test with limit larger than number of rows
             TestOptions::new(4, 100, 25).with_limit(101),
+            // Test with limit + offset equal to number of rows
+            TestOptions::new(4, 100, 25).with_offset(30).with_limit(20),
+            // Test with limit + offset equal to number of rows
+            TestOptions::new(4, 100, 25).with_offset(20).with_limit(80),
+            // Test with limit + offset larger than number of rows
+            TestOptions::new(4, 100, 25).with_offset(20).with_limit(81),
             // Test with no page-level statistics
             TestOptions::new(2, 256, 91)
                 .with_null_percent(25)
@@ -1473,6 +1526,12 @@ mod tests {
             TestOptions::new(2, 256, 93)
                 .with_null_percent(25)
                 .with_row_selections()
+                .with_limit(10),
+            // Test optional with nulls
+            TestOptions::new(2, 256, 93)
+                .with_null_percent(25)
+                .with_row_selections()
+                .with_offset(20)
                 .with_limit(10),
             // Test filter
 
@@ -1672,6 +1731,11 @@ mod tests {
             }
             None => expected_data,
         };
+
+        if let Some(offset) = opts.offset {
+            builder = builder.with_offset(offset);
+            expected_data = expected_data.into_iter().skip(offset).collect();
+        }
 
         if let Some(limit) = opts.limit {
             builder = builder.with_limit(limit);
