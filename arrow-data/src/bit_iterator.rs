@@ -16,7 +16,66 @@
 // under the License.
 
 use arrow_buffer::bit_chunk_iterator::{UnalignedBitChunk, UnalignedBitChunkIterator};
+use arrow_buffer::bit_util::{ceil, get_bit_raw};
 use std::result::Result;
+
+/// Iterator over the bits within a packed bitmask
+///
+/// To efficiently iterate over just the set bits see [`BitIndexIterator`] and [`BitSliceIterator`]
+pub struct BitIterator<'a> {
+    buffer: &'a [u8],
+    current_offset: usize,
+    end_offset: usize,
+}
+
+impl<'a> BitIterator<'a> {
+    /// Create a new [`BitSliceIterator`] from the provide `buffer`,
+    /// and `offset` and `len` in bits
+    ///
+    /// # Panic
+    ///
+    /// Panics if `buffer` is too short for the provided offset and length
+    pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
+        let end_offset = offset.checked_add(len).unwrap();
+        let required_len = ceil(end_offset, 8);
+        assert!(buffer.len() >= required_len);
+        Self {
+            buffer,
+            current_offset: offset,
+            end_offset,
+        }
+    }
+}
+
+impl<'a> Iterator for BitIterator<'a> {
+    type Item = bool;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_offset == self.end_offset {
+            return None;
+        }
+        // Safety:
+        // offsets in bounds
+        let v = unsafe { get_bit_raw(self.buffer.as_ptr(), self.current_offset) };
+        self.current_offset += 1;
+        Some(v)
+    }
+}
+
+impl<'a> ExactSizeIterator for BitIterator<'a> {}
+
+impl<'a> DoubleEndedIterator for BitIterator<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.current_offset == self.end_offset {
+            return None;
+        }
+        self.end_offset -= 1;
+        // Safety:
+        // offsets in bounds
+        let v = unsafe { get_bit_raw(self.buffer.as_ptr(), self.end_offset) };
+        Some(v)
+    }
+}
 
 /// Iterator of contiguous ranges of set bits within a provided packed bitmask
 ///
@@ -192,4 +251,28 @@ pub fn try_for_each_valid_idx<E, F: FnMut(usize) -> Result<(), E>>(
     }
 }
 
-// Note: tests located in filter module
+// Note: further tests located in arrow_select::filter module
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fuzz() {
+        let mask = &[0b00010010, 0b00100011, 0b00000101, 0b00010001, 0b10010011];
+        let actual: Vec<_> = BitIterator::new(mask, 0, 5).collect();
+        assert_eq!(actual, &[false, true, false, false, true]);
+
+        let actual: Vec<_> = BitIterator::new(mask, 4, 5).collect();
+        assert_eq!(actual, &[true, false, false, false, true]);
+
+        let actual: Vec<_> = BitIterator::new(mask, 12, 14).collect();
+        assert_eq!(
+            actual,
+            &[
+                false, true, false, false, true, false, true, false, false, false, false,
+                false, true, false
+            ]
+        );
+    }
+}
