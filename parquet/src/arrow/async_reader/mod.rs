@@ -98,8 +98,8 @@ use arrow_schema::SchemaRef;
 
 use crate::arrow::array_reader::{build_array_reader, RowGroupCollection};
 use crate::arrow::arrow_reader::{
-    evaluate_predicate, selects_any, ArrowReaderBuilder, ArrowReaderOptions,
-    ParquetRecordBatchReader, RowFilter, RowSelection, RowSelector,
+    apply_range, evaluate_predicate, selects_any, ArrowReaderBuilder, ArrowReaderOptions,
+    ParquetRecordBatchReader, RowFilter, RowSelection,
 };
 use crate::arrow::schema::ParquetField;
 use crate::arrow::ProjectionMask;
@@ -347,12 +347,13 @@ impl<T: AsyncFileReader + Send + 'static> ArrowReaderBuilder<AsyncReader<T>> {
             filter: self.filter,
             metadata: self.metadata.clone(),
             fields: self.fields,
+            limit: self.limit,
+            offset: self.offset,
         };
 
         Ok(ParquetRecordBatchStream {
             metadata: self.metadata,
             batch_size,
-            limit: self.limit,
             row_groups,
             projection: self.projection,
             selection: self.selection,
@@ -375,6 +376,10 @@ struct ReaderFactory<T> {
     input: T,
 
     filter: Option<RowFilter>,
+
+    limit: Option<usize>,
+
+    offset: Option<usize>,
 }
 
 impl<T> ReaderFactory<T>
@@ -390,7 +395,6 @@ where
         mut selection: Option<RowSelection>,
         projection: ProjectionMask,
         batch_size: usize,
-        limit: Option<usize>,
     ) -> ReadResult<T> {
         // TODO: calling build_array multiple times is wasteful
 
@@ -428,19 +432,37 @@ where
             }
         }
 
-        if !selects_any(selection.as_ref()) {
+        // Compute the number of rows in the selection before applying limit and offset
+        let rows_before = selection
+            .as_ref()
+            .map(|s| s.row_count())
+            .unwrap_or(row_group.row_count);
+
+        if rows_before == 0 {
             return Ok((self, None));
         }
 
-        // If a limit is defined, apply it to the final `RowSelection`
-        if let Some(limit) = limit {
-            selection = Some(
-                selection
-                    .map(|selection| selection.limit(limit))
-                    .unwrap_or_else(|| {
-                        RowSelection::from(vec![RowSelector::select(limit)])
-                    }),
-            );
+        selection = apply_range(selection, row_group.row_count, self.offset, self.limit);
+
+        // Compute the number of rows in the selection after applying limit and offset
+        let rows_after = selection
+            .as_ref()
+            .map(|s| s.row_count())
+            .unwrap_or(row_group.row_count);
+
+        // Update offset if necessary
+        if let Some(offset) = &mut self.offset {
+            // Reduction is either because of offset or limit, as limit is applied
+            // after offset has been "exhausted" can just use saturating sub here
+            *offset = offset.saturating_sub(rows_before - rows_after)
+        }
+
+        if rows_after == 0 {
+            return Ok((self, None));
+        }
+
+        if let Some(limit) = &mut self.limit {
+            *limit -= rows_after;
         }
 
         row_group
@@ -492,8 +514,6 @@ pub struct ParquetRecordBatchStream<T> {
 
     batch_size: usize,
 
-    limit: Option<usize>,
-
     selection: Option<RowSelection>,
 
     /// This is an option so it can be moved into a future
@@ -535,9 +555,6 @@ where
             match &mut self.state {
                 StreamState::Decoding(batch_reader) => match batch_reader.next() {
                     Some(Ok(batch)) => {
-                        if let Some(limit) = self.limit.as_mut() {
-                            *limit -= batch.num_rows();
-                        }
                         return Poll::Ready(Some(Ok(batch)));
                     }
                     Some(Err(e)) => {
@@ -568,7 +585,6 @@ where
                             selection,
                             self.projection.clone(),
                             self.batch_size,
-                            self.limit,
                         )
                         .boxed();
 
@@ -824,11 +840,14 @@ mod tests {
     use crate::file::page_index::index_reader;
     use crate::file::properties::WriterProperties;
     use arrow::error::Result as ArrowResult;
+    use arrow_array::cast::as_primitive_array;
+    use arrow_array::types::Int32Type;
     use arrow_array::{Array, ArrayRef, Int32Array, StringArray};
     use futures::TryStreamExt;
     use rand::{thread_rng, Rng};
     use std::sync::Mutex;
 
+    #[derive(Clone)]
     struct TestReader {
         data: Bytes,
         metadata: Arc<ParquetMetaData>,
@@ -1320,7 +1339,7 @@ mod tests {
             requests: Default::default(),
         };
 
-        let stream = ParquetRecordBatchStreamBuilder::new(test)
+        let stream = ParquetRecordBatchStreamBuilder::new(test.clone())
             .await
             .unwrap()
             .with_batch_size(1024)
@@ -1336,11 +1355,60 @@ mod tests {
         // First batch should contain all rows
         assert_eq!(batch.num_rows(), 3);
         assert_eq!(batch.num_columns(), 3);
+        let col2 = as_primitive_array::<Int32Type>(batch.column(2));
+        assert_eq!(col2.values(), &[0, 1, 2]);
 
         let batch = &batches[1];
         // Second batch should trigger the limit and only have one row
         assert_eq!(batch.num_rows(), 1);
         assert_eq!(batch.num_columns(), 3);
+        let col2 = as_primitive_array::<Int32Type>(batch.column(2));
+        assert_eq!(col2.values(), &[3]);
+
+        let stream = ParquetRecordBatchStreamBuilder::new(test.clone())
+            .await
+            .unwrap()
+            .with_offset(2)
+            .with_limit(3)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
+        // Expect one batch for each row group
+        assert_eq!(batches.len(), 2);
+
+        let batch = &batches[0];
+        // First batch should contain one row
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(batch.num_columns(), 3);
+        let col2 = as_primitive_array::<Int32Type>(batch.column(2));
+        assert_eq!(col2.values(), &[2]);
+
+        let batch = &batches[1];
+        // Second batch should contain two rows
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 3);
+        let col2 = as_primitive_array::<Int32Type>(batch.column(2));
+        assert_eq!(col2.values(), &[3, 4]);
+
+        let stream = ParquetRecordBatchStreamBuilder::new(test.clone())
+            .await
+            .unwrap()
+            .with_offset(4)
+            .with_limit(20)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
+        // Should skip first row group
+        assert_eq!(batches.len(), 1);
+
+        let batch = &batches[0];
+        // First batch should contain two rows
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 3);
+        let col2 = as_primitive_array::<Int32Type>(batch.column(2));
+        assert_eq!(col2.values(), &[4, 5]);
     }
 
     #[tokio::test]
@@ -1440,6 +1508,8 @@ mod tests {
             fields,
             input: async_reader,
             filter: None,
+            limit: None,
+            offset: None,
         };
 
         let mut skip = true;
@@ -1469,7 +1539,7 @@ mod tests {
         let selection = RowSelection::from(selectors);
 
         let (_factory, _reader) = reader_factory
-            .read_row_group(0, Some(selection), projection.clone(), 48, None)
+            .read_row_group(0, Some(selection), projection.clone(), 48)
             .await
             .expect("reading row group");
 
