@@ -1417,6 +1417,38 @@ mod tests {
     }
 
     #[test]
+    fn test_string_to_time_invalid() {
+        let cases = [
+            "25:00",
+            "9:00:",
+            "009:00",
+            "09:0:00",
+            "25:00:00",
+            "13:00 AM",
+            "13:00 PM",
+            "12:00. AM",
+        ];
+        for case in cases {
+            assert!(string_to_time(case).is_none(), "{case}");
+        }
+    }
+
+    #[test]
+    fn test_string_to_time_chrono() {
+        let cases = [
+            ("09:0:00", "%H:%M:%S%.f"),
+            ("09:01:0", "%H:%M:%S%.f"),
+            ("9:1:0", "%H:%M:%S%.f"),
+            ("09:01:1", "%H:%M:%S%.f")
+        ];
+        for (s, format) in cases {
+            let chrono = NaiveTime::parse_from_str(s, format).ok();
+            let custom = string_to_time(s);
+            assert_eq!(chrono, custom);
+        }
+    }
+
+    #[test]
     fn test_parse_interval() {
         assert_eq!(
             (1i32, 0i32, 0i64),
