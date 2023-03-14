@@ -24,10 +24,10 @@ use chrono::prelude::*;
 use std::str::FromStr;
 
 #[inline]
-fn parse_nanos<const N: usize>(digits: &[u8]) -> u32 {
+fn parse_nanos<const N: usize, const O: u8>(digits: &[u8]) -> u32 {
     digits[..N]
         .iter()
-        .fold(0_u32, |acc, v| acc * 10 + *v as u32)
+        .fold(0_u32, |acc, v| acc * 10 + v.wrapping_sub(O) as u32)
         * 10_u32.pow((9 - N) as _)
 }
 
@@ -102,15 +102,15 @@ impl TimestampParser {
                         let digits = (self.mask >> 20).trailing_ones();
                         let nanos = match digits {
                             0 => return None,
-                            1 => parse_nanos::<1>(&self.digits[20..21]),
-                            2 => parse_nanos::<2>(&self.digits[20..22]),
-                            3 => parse_nanos::<3>(&self.digits[20..23]),
-                            4 => parse_nanos::<4>(&self.digits[20..24]),
-                            5 => parse_nanos::<5>(&self.digits[20..25]),
-                            6 => parse_nanos::<6>(&self.digits[20..26]),
-                            7 => parse_nanos::<7>(&self.digits[20..27]),
-                            8 => parse_nanos::<8>(&self.digits[20..28]),
-                            _ => parse_nanos::<9>(&self.digits[20..29]),
+                            1 => parse_nanos::<1, 0>(&self.digits[20..21]),
+                            2 => parse_nanos::<2, 0>(&self.digits[20..22]),
+                            3 => parse_nanos::<3, 0>(&self.digits[20..23]),
+                            4 => parse_nanos::<4, 0>(&self.digits[20..24]),
+                            5 => parse_nanos::<5, 0>(&self.digits[20..25]),
+                            6 => parse_nanos::<6, 0>(&self.digits[20..26]),
+                            7 => parse_nanos::<7, 0>(&self.digits[20..27]),
+                            8 => parse_nanos::<8, 0>(&self.digits[20..28]),
+                            _ => parse_nanos::<9, 0>(&self.digits[20..29]),
                         };
                         Some((time.with_nanosecond(nanos)?, 20 + digits as usize))
                     }
@@ -291,79 +291,113 @@ fn to_timestamp_nanos(dt: NaiveDateTime) -> Result<i64, ArrowError> {
 /// This function does not support parsing strings with a timezone
 /// or offset specified, as it considers only time since midnight.
 pub fn string_to_time_nanoseconds(s: &str) -> Result<i64, ArrowError> {
-    // colon count, presence of decimal, presence of whitespace
-    fn preprocess_time_string(string: &str) -> (usize, bool, bool) {
-        string
-            .as_bytes()
-            .iter()
-            .fold((0, false, false), |tup, char| match char {
-                b':' => (tup.0 + 1, tup.1, tup.2),
-                b'.' => (tup.0, true, tup.2),
-                b' ' => (tup.0, tup.1, true),
-                _ => tup,
-            })
+    let nt = string_to_time(s).ok_or_else(|| {
+        ArrowError::ParseError(format!("Failed to parse \'{s}\' as time"))
+    })?;
+    Ok(nt.num_seconds_from_midnight() as i64 * 1_000_000_000 + nt.nanosecond() as i64)
+}
+
+fn string_to_time(s: &str) -> Option<NaiveTime> {
+    let bytes = s.as_bytes();
+    if bytes.len() < 4 {
+        return None;
     }
 
-    // Do a preprocess pass of the string to prune which formats to attempt parsing for
-    let formats: &[&str] = match preprocess_time_string(s.trim()) {
-        // 24-hour clock, with hour, minutes, seconds and fractions of a second specified
-        // Examples:
-        // * 09:50:12.123456789
-        // *  9:50:12.123456789
-        (2, true, false) => &["%H:%M:%S%.f", "%k:%M:%S%.f"],
-
-        // 12-hour clock, with hour, minutes, seconds and fractions of a second specified
-        // Examples:
-        // * 09:50:12.123456789 PM
-        // * 09:50:12.123456789 pm
-        // *  9:50:12.123456789 AM
-        // *  9:50:12.123456789 am
-        (2, true, true) => &[
-            "%I:%M:%S%.f %P",
-            "%I:%M:%S%.f %p",
-            "%l:%M:%S%.f %P",
-            "%l:%M:%S%.f %p",
-        ],
-
-        // 24-hour clock, with hour, minutes and seconds specified
-        // Examples:
-        // * 09:50:12
-        // *  9:50:12
-        (2, false, false) => &["%H:%M:%S", "%k:%M:%S"],
-
-        // 12-hour clock, with hour, minutes and seconds specified
-        // Examples:
-        // * 09:50:12 PM
-        // * 09:50:12 pm
-        // *  9:50:12 AM
-        // *  9:50:12 am
-        (2, false, true) => &["%I:%M:%S %P", "%I:%M:%S %p", "%l:%M:%S %P", "%l:%M:%S %p"],
-
-        // 24-hour clock, with hour and minutes specified
-        // Examples:
-        // * 09:50
-        // *  9:50
-        (1, false, false) => &["%H:%M", "%k:%M"],
-
-        // 12-hour clock, with hour and minutes specified
-        // Examples:
-        // * 09:50 PM
-        // * 09:50 pm
-        // *  9:50 AM
-        // *  9:50 am
-        (1, false, true) => &["%I:%M %P", "%I:%M %p", "%l:%M %P", "%l:%M %p"],
-
-        _ => &[],
+    let (am, bytes) = match bytes.get(bytes.len() - 3..) {
+        Some(b" AM") => (Some(true), &bytes[..bytes.len() - 3]),
+        Some(b" am") => (Some(true), &bytes[..bytes.len() - 3]),
+        Some(b" PM") => (Some(false), &bytes[..bytes.len() - 3]),
+        Some(b" pm") => (Some(false), &bytes[..bytes.len() - 3]),
+        _ => (None, bytes),
     };
 
-    formats
-        .iter()
-        .find_map(|f| NaiveTime::parse_from_str(s, f).ok())
-        .map(|nt| {
-            nt.num_seconds_from_midnight() as i64 * 1_000_000_000 + nt.nanosecond() as i64
-        })
-        // Return generic error if failed to parse as unknown which format user intended for the string
-        .ok_or_else(|| ArrowError::CastError(format!("Error parsing '{s}' as time")))
+    if bytes.len() < 4 {
+        return None;
+    }
+
+    let mut digits = [b'0'; 6];
+
+    // Extract hour
+    let bytes = match (bytes[1], bytes[2]) {
+        (b':', _) => {
+            digits[1] = bytes[0];
+            &bytes[2..]
+        }
+        (_, b':') => {
+            digits[0] = bytes[0];
+            digits[1] = bytes[1];
+            &bytes[3..]
+        }
+        _ => return None,
+    };
+
+    if bytes.len() < 2 {
+        return None; // Minutes required
+    }
+
+    // Extract minutes
+    digits[2] = bytes[0];
+    digits[3] = bytes[1];
+    let bytes = &bytes[2..];
+
+    // Extract optional seconds
+    let bytes = match bytes.len() > 2 && bytes[0] == b':' {
+        true => {
+            digits[4] = bytes[1];
+            digits[5] = bytes[2];
+            &bytes[3..]
+        }
+        false => bytes,
+    };
+
+    digits.iter_mut().for_each(|x| *x = x.wrapping_sub(b'0'));
+    if digits.iter().any(|x| *x > 9) {
+        return None;
+    }
+
+    // Strip decimal if any
+    let nanoseconds = match bytes.get(0) {
+        Some(b'.') => {
+            let decimal = &bytes[1..];
+            if decimal.iter().any(|x| !x.is_ascii_digit()) {
+                return None;
+            }
+            match decimal.len() {
+                0 => return None,
+                1 => parse_nanos::<1, b'0'>(decimal),
+                2 => parse_nanos::<2, b'0'>(decimal),
+                3 => parse_nanos::<3, b'0'>(decimal),
+                4 => parse_nanos::<4, b'0'>(decimal),
+                5 => parse_nanos::<5, b'0'>(decimal),
+                6 => parse_nanos::<6, b'0'>(decimal),
+                7 => parse_nanos::<7, b'0'>(decimal),
+                8 => parse_nanos::<8, b'0'>(decimal),
+                _ => parse_nanos::<9, b'0'>(decimal),
+            }
+        }
+        Some(_) => return None,
+        None => 0,
+    };
+
+    let hour = match (digits[0] * 10 + digits[1], am) {
+        (12, Some(true)) => 0,      // 12:00 AM -> 00:00
+        (12, Some(false)) => 12,    // 12:00 PM -> 12:00
+        (h, Some(false)) => h + 12, // 1:00 PM -> 13:00
+        (h, _) => h,
+    };
+
+    // Handle leap second
+    let (second, nanoseconds) = match digits[4] * 10 + digits[5] {
+        60 => (59, nanoseconds + 1_000_000_000),
+        s => (s, nanoseconds),
+    };
+
+    NaiveTime::from_hms_nano_opt(
+        hour as _,
+        (digits[2] * 10 + digits[3]) as _,
+        second as _,
+        nanoseconds,
+    )
 }
 
 /// Specialized parsing implementations
