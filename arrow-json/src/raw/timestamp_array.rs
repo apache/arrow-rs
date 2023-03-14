@@ -29,7 +29,7 @@ use arrow_schema::{ArrowError, DataType, TimeUnit};
 use crate::raw::tape::{Tape, TapeElement};
 use crate::raw::{tape_error, ArrayDecoder};
 
-/// A specialized [`PrimitiveArrayDecoder`] for
+/// A specialized [`ArrayDecoder`] for timestamps
 pub struct TimestampArrayDecoder<P: ArrowTimestampType, Tz: TimeZone> {
     data_type: DataType,
     timezone: Tz,
