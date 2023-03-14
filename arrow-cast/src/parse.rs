@@ -196,7 +196,7 @@ pub fn string_to_datetime<T: TimeZone>(
         return Ok(DateTime::from_local(date.and_time(time), offset));
     }
 
-    if !parser.test(10, b'T') && !parser.test(10, b' ') {
+    if !parser.test(10, b'T') && !parser.test(10, b't') && !parser.test(10, b' ') {
         return Err(err("invalid timestamp separator"));
     }
 
@@ -1022,6 +1022,9 @@ mod tests {
             "2020-09-08T12:00:60.123456+02:00",
             "2020-09-08T12:00:60.1234567891234567+02:00",
             "2020-09-08T12:00:60.999999999+02:00",
+            "2020-09-08t12:00:12.12345678+00:00",
+            "2020-09-08t12:00:12+00:00",
+            "2020-09-08t12:00:12Z",
         ];
 
         for case in cases {
