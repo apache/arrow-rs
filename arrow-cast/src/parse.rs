@@ -23,6 +23,14 @@ use arrow_schema::ArrowError;
 use chrono::prelude::*;
 use std::str::FromStr;
 
+#[inline]
+fn parse_nanos<const N: usize>(digits: &[u8]) -> u32 {
+    digits[..N]
+        .iter()
+        .fold(0_u32, |acc, v| acc * 10 + *v as u32)
+        * 10_u32.pow((9 - N) as _)
+}
+
 /// Helper for parsing timestamps
 struct TimestampParser {
     /// The timestamp bytes to parse minus `b'0'`
@@ -89,34 +97,23 @@ impl TimestampParser {
                 let second = self.digits[17] * 10 + self.digits[18];
                 let time = NaiveTime::from_hms_opt(hour as _, minute as _, second as _)?;
 
-                let millis = || {
-                    self.digits[20] as u32 * 100_000_000
-                        + self.digits[21] as u32 * 10_000_000
-                        + self.digits[22] as u32 * 1_000_000
-                };
-
-                let micros = || {
-                    self.digits[23] as u32 * 100_000
-                        + self.digits[24] as u32 * 10_000
-                        + self.digits[25] as u32 * 1_000
-                };
-
-                let nanos = || {
-                    self.digits[26] as u32 * 100
-                        + self.digits[27] as u32 * 10
-                        + self.digits[28] as u32
-                };
-
                 match self.test(19, b'.') {
-                    true => match (self.mask >> 20).trailing_ones() {
-                        3 => Some((time.with_nanosecond(millis())?, 23)),
-                        6 => Some((time.with_nanosecond(millis() + micros())?, 26)),
-                        9 => Some((
-                            time.with_nanosecond(millis() + micros() + nanos())?,
-                            29,
-                        )),
-                        _ => None,
-                    },
+                    true => {
+                        let digits = (self.mask >> 20).trailing_ones();
+                        let nanos = match digits {
+                            0 => return None,
+                            1 => parse_nanos::<1>(&self.digits[20..21]),
+                            2 => parse_nanos::<2>(&self.digits[20..22]),
+                            3 => parse_nanos::<3>(&self.digits[20..23]),
+                            4 => parse_nanos::<4>(&self.digits[20..24]),
+                            5 => parse_nanos::<5>(&self.digits[20..25]),
+                            6 => parse_nanos::<6>(&self.digits[20..26]),
+                            7 => parse_nanos::<7>(&self.digits[20..27]),
+                            8 => parse_nanos::<8>(&self.digits[20..28]),
+                            _ => parse_nanos::<9>(&self.digits[20..29]),
+                        };
+                        Some((time.with_nanosecond(nanos)?, 20 + digits as usize))
+                    }
                     false => Some((time, 19)),
                 }
             }
@@ -195,8 +192,16 @@ pub fn string_to_datetime<T: TimeZone>(
         return Err(err("invalid timestamp separator"));
     }
 
-    let (time, tz_offset) = parser.time().ok_or_else(|| err("error parsing time"))?;
+    let (time, mut tz_offset) = parser.time().ok_or_else(|| err("error parsing time"))?;
     let datetime = date.and_time(time);
+
+    if tz_offset == 32 {
+        // Decimal overrun
+        while bytes[tz_offset].is_ascii_digit() && tz_offset < bytes.len() {
+            tz_offset += 1;
+        }
+    }
+
     if bytes.len() <= tz_offset {
         let offset = timezone.offset_from_local_datetime(&datetime);
         let offset = offset
@@ -984,6 +989,38 @@ mod tests {
     }
 
     #[test]
+    fn string_to_timestamp_chrono() {
+        let cases = [
+            "2020-09-08T13:42:29Z",
+            "1969-01-01T00:00:00.1Z",
+            "2020-09-08T12:00:12.12345678+00:00",
+            "2020-09-08T12:00:12+00:00",
+            "2020-09-08T12:00:12.1+00:00",
+            "2020-09-08T12:00:12.12+00:00",
+            "2020-09-08T12:00:12.123+00:00",
+            "2020-09-08T12:00:12.1234+00:00",
+            "2020-09-08T12:00:12.12345+00:00",
+            "2020-09-08T12:00:12.123456+00:00",
+            "2020-09-08T12:00:12.1234567+00:00",
+            "2020-09-08T12:00:12.12345678+00:00",
+            "2020-09-08T12:00:12.123456789+00:00",
+            "2020-09-08T12:00:12.12345678912z",
+            "2020-09-08T12:00:12.123456789123Z",
+            "2020-09-08T12:00:12.123456789123+02:00",
+            "2020-09-08T12:00:12.12345678912345Z",
+            "2020-09-08T12:00:12.1234567891234567+02:00",
+        ];
+
+        for case in cases {
+            let chrono = DateTime::parse_from_rfc3339(case).unwrap();
+            let chrono_utc = chrono.with_timezone(&Utc);
+
+            let custom = string_to_datetime(&Utc, case).unwrap();
+            assert_eq!(chrono_utc, custom)
+        }
+    }
+
+    #[test]
     fn string_to_timestamp_invalid() {
         // Test parsing invalid formats
         let cases = [
@@ -1002,11 +1039,10 @@ mod tests {
             ("2015-01-20T25:35:20-08:00", "error parsing time"),
             ("1997-01-10T09:61:56.123Z", "error parsing time"),
             ("1997-01-10T09:61:90.123Z", "error parsing time"),
-            ("1997-01-10T12:00:56.12Z", "error parsing time"),
-            ("1997-01-10T12:00:56.1234Z", "error parsing time"),
-            ("1997-01-10T12:00:56.12345Z", "error parsing time"),
             ("1997-01-10T12:00:6.123Z", "error parsing time"),
             ("1997-01-31T092656.123Z", "error parsing time"),
+            ("1997-01-10T12:00:06.", "error parsing time"),
+            ("1997-01-10T12:00:06. ", "error parsing time"),
         ];
 
         for (s, ctx) in cases {
