@@ -356,7 +356,7 @@ fn string_to_time(s: &str) -> Option<NaiveTime> {
     }
 
     // Strip decimal if any
-    let nanoseconds = match bytes.get(0) {
+    let nanoseconds = match bytes.first() {
         Some(b'.') => {
             let decimal = &bytes[1..];
             if decimal.iter().any(|x| !x.is_ascii_digit()) {
