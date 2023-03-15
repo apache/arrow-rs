@@ -3308,6 +3308,7 @@ mod tests {
     #[test]
     fn test_decimal_multiply_allow_precision_loss() {
         // Overflow happening as i128 cannot hold multiplying result.
+        // [123456789]
         let a = Decimal128Array::from(vec![123456789000000000000000000])
             .with_precision_and_scale(38, 18)
             .unwrap();
