@@ -66,20 +66,24 @@ impl<T: ObjectStore> PrefixStore<T> {
 
 #[async_trait::async_trait]
 impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
-    /// Save the provided bytes to the specified location.
     async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<()> {
         let full_path = self.full_path(location);
         self.inner.put(&full_path, bytes).await
     }
 
-    /// Return the bytes that are stored at the specified location.
+    async fn append(
+        &self,
+        location: &Path,
+    ) -> ObjectStoreResult<Box<dyn AsyncWrite + Unpin + Send>> {
+        let full_path = self.full_path(location);
+        self.inner.append(&full_path).await
+    }
+
     async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
         let full_path = self.full_path(location);
         self.inner.get(&full_path).await
     }
 
-    /// Return the bytes that are stored at the specified location
-    /// in the given byte range
     async fn get_range(
         &self,
         location: &Path,
@@ -89,7 +93,15 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.get_range(&full_path, range).await
     }
 
-    /// Return the metadata for the specified location
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<usize>],
+    ) -> ObjectStoreResult<Vec<Bytes>> {
+        let full_path = self.full_path(location);
+        self.inner.get_ranges(&full_path, ranges).await
+    }
+
     async fn head(&self, location: &Path) -> ObjectStoreResult<ObjectMeta> {
         let full_path = self.full_path(location);
         self.inner.head(&full_path).await.map(|meta| ObjectMeta {
@@ -99,16 +111,11 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         })
     }
 
-    /// Delete the object at the specified location.
     async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
         let full_path = self.full_path(location);
         self.inner.delete(&full_path).await
     }
 
-    /// List all the objects with the given prefix.
-    ///
-    /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
-    /// `foo/bar_baz/x`.
     async fn list(
         &self,
         prefix: Option<&Path>,
@@ -125,12 +132,6 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
             .boxed())
     }
 
-    /// List objects with the given prefix and an implementation specific
-    /// delimiter. Returns common prefixes (directories) in addition to object
-    /// metadata.
-    ///
-    /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
-    /// `foo/bar_baz/x`.
     async fn list_with_delimiter(
         &self,
         prefix: Option<&Path>,
@@ -160,27 +161,24 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
             })
     }
 
-    /// Copy an object from one path to another in the same object store.
-    ///
-    /// If there exists an object at the destination, it will be overwritten.
     async fn copy(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
         let full_from = self.full_path(from);
         let full_to = self.full_path(to);
         self.inner.copy(&full_from, &full_to).await
     }
 
-    /// Copy an object from one path to another, only if destination is empty.
-    ///
-    /// Will return an error if the destination already has an object.
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
         let full_from = self.full_path(from);
         let full_to = self.full_path(to);
         self.inner.copy_if_not_exists(&full_from, &full_to).await
     }
 
-    /// Move an object from one path to another in the same object store.
-    ///
-    /// Will return an error if the destination already has an object.
+    async fn rename(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
+        let full_from = self.full_path(from);
+        let full_to = self.full_path(to);
+        self.inner.rename(&full_from, &full_to).await
+    }
+
     async fn rename_if_not_exists(
         &self,
         from: &Path,

@@ -166,6 +166,13 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         Err(super::Error::NotImplemented)
     }
 
+    async fn append(
+        &self,
+        _location: &Path,
+    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+        Err(super::Error::NotImplemented)
+    }
+
     async fn get(&self, location: &Path) -> Result<GetResult> {
         sleep(self.config().wait_get_per_call).await;
 
