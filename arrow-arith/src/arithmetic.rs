@@ -3393,6 +3393,8 @@ mod tests {
             .with_precision_and_scale(9, 4)
             .unwrap();
         assert_eq!(&expected, &result);
+        assert_eq(result.precision(), 9);
+        assert_eq(result.scale(), 4);
 
         // Required scale cannot be larger than the product of the input scales.
         let result = mul_fixed_point_checked(&a, &b, 5).unwrap_err();
