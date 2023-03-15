@@ -30,6 +30,7 @@ use arrow_buffer::i256;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
 use num::traits::Pow;
+use std::cmp::min;
 use std::sync::Arc;
 
 /// Helper function to perform math lambda function on values from two arrays. If either
@@ -63,7 +64,7 @@ fn math_checked_op<LT, RT, F>(
 where
     LT: ArrowNumericType,
     RT: ArrowNumericType,
-    F: FnMut(LT::Native, RT::Native) -> Result<LT::Native, ArrowError>,
+    F: Fn(LT::Native, RT::Native) -> Result<LT::Native, ArrowError>,
 {
     try_binary(left, right, op)
 }
@@ -1182,35 +1183,25 @@ pub fn mul_fixed_point_checked(
     right: &PrimitiveArray<Decimal128Type>,
     required_scale: i8,
 ) -> Result<ArrayRef, ArrowError> {
-    let precision = left.precision();
+    let precision = min(
+        left.precision() + right.precision() + 1,
+        DECIMAL128_MAX_PRECISION,
+    );
     let product_scale = left.scale() + right.scale();
+    let divisor =
+        i256::from_i128(10).pow_wrapping((product_scale - required_scale) as u32);
 
     try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
         let a = i256::from_i128(a);
         let b = i256::from_i128(b);
 
-        a.checked_mul(b)
-            .map(|mut a| {
-                if required_scale < product_scale {
-                    let divisor = i256::from_i128(10)
-                        .pow_wrapping((product_scale - required_scale) as u32);
-                    a = divide_and_round::<Decimal256Type>(a, divisor);
-                }
-                a
-            })
-            .ok_or_else(|| {
-                ArrowError::ComputeError(format!(
-                    "Overflow happened on: {:?} * {:?}, {:?}",
-                    a,
-                    b,
-                    a.checked_mul(b)
-                ))
-            })
-            .and_then(|a| {
-                a.to_i128().ok_or_else(|| {
-                    ArrowError::ComputeError(format!("Overflow happened on: {:?}", a))
-                })
-            })
+        let mut mul = a.wrapping_mul(b);
+        if required_scale < product_scale {
+            mul = divide_and_round::<Decimal256Type>(mul, divisor);
+        }
+        mul.to_i128().ok_or_else(|| {
+            ArrowError::ComputeError(format!("Overflow happened on: {:?} * {:?}", a, b))
+        })
     })
     .and_then(|a| {
         a.with_precision_and_scale(precision, required_scale)

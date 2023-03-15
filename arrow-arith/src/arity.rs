@@ -77,7 +77,7 @@ pub fn try_unary<I, F, O>(
 where
     I: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
-    F: FnMut(I::Native) -> Result<O::Native, ArrowError>,
+    F: Fn(I::Native) -> Result<O::Native, ArrowError>,
 {
     array.try_unary(op)
 }
@@ -307,11 +307,11 @@ where
 pub fn try_binary<A: ArrayAccessor, B: ArrayAccessor, F, O>(
     a: A,
     b: B,
-    mut op: F,
+    op: F,
 ) -> Result<PrimitiveArray<O>, ArrowError>
 where
     O: ArrowPrimitiveType,
-    F: FnMut(A::Item, B::Item) -> Result<O::Native, ArrowError>,
+    F: Fn(A::Item, B::Item) -> Result<O::Native, ArrowError>,
 {
     if a.len() != b.len() {
         return Err(ArrowError::ComputeError(
@@ -431,11 +431,11 @@ fn try_binary_no_nulls<A: ArrayAccessor, B: ArrayAccessor, F, O>(
     len: usize,
     a: A,
     b: B,
-    mut op: F,
+    op: F,
 ) -> Result<PrimitiveArray<O>, ArrowError>
 where
     O: ArrowPrimitiveType,
-    F: FnMut(A::Item, B::Item) -> Result<O::Native, ArrowError>,
+    F: Fn(A::Item, B::Item) -> Result<O::Native, ArrowError>,
 {
     let mut buffer = MutableBuffer::new(len * O::get_byte_width());
     for idx in 0..len {

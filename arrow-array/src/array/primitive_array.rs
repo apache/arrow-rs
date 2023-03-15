@@ -491,10 +491,10 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// be preferred if `op` is infallible.
     ///
     /// Note: LLVM is currently unable to effectively vectorize fallible operations
-    pub fn try_unary<F, O, E>(&self, mut op: F) -> Result<PrimitiveArray<O>, E>
+    pub fn try_unary<F, O, E>(&self, op: F) -> Result<PrimitiveArray<O>, E>
     where
         O: ArrowPrimitiveType,
-        F: FnMut(T::Native) -> Result<O::Native, E>,
+        F: Fn(T::Native) -> Result<O::Native, E>,
     {
         let data = self.data();
         let len = self.len();
