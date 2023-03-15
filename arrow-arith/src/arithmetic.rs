@@ -3346,6 +3346,7 @@ mod tests {
         .with_precision_and_scale(38, 18)
         .unwrap();
 
+        // [1.555555555555555555, 11.222222222222222222, 0.000000000000000001]
         let b = Decimal128Array::from(vec![1555555555555555555, 11222222222222222222, 1])
             .with_precision_and_scale(38, 18)
             .unwrap();
