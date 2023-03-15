@@ -27,21 +27,25 @@ use crate::{
     Result as ObjectStoreResult,
 };
 
+#[doc(hidden)]
+#[deprecated(note = "Use PrefixStore")]
+pub type PrefixObjectStore<T> = PrefixStore<T>;
+
 /// Store wrapper that applies a constant prefix to all paths handled by the store.
 #[derive(Debug, Clone)]
-pub struct PrefixObjectStore<T: ObjectStore> {
+pub struct PrefixStore<T: ObjectStore> {
     prefix: Path,
     inner: T,
 }
 
-impl<T: ObjectStore> std::fmt::Display for PrefixObjectStore<T> {
+impl<T: ObjectStore> std::fmt::Display for PrefixStore<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "PrefixObjectStore({})", self.prefix.as_ref())
     }
 }
 
-impl<T: ObjectStore> PrefixObjectStore<T> {
-    /// Create a new instance of [`PrefixObjectStore`]
+impl<T: ObjectStore> PrefixStore<T> {
+    /// Create a new instance of [`PrefixStore`]
     pub fn new(store: T, prefix: impl Into<Path>) -> Self {
         Self {
             prefix: prefix.into(),
@@ -61,7 +65,7 @@ impl<T: ObjectStore> PrefixObjectStore<T> {
 }
 
 #[async_trait::async_trait]
-impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
+impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<()> {
         let full_path = self.full_path(location);
         self.inner.put(&full_path, bytes).await
@@ -219,7 +223,7 @@ mod tests {
     async fn prefix_test() {
         let root = TempDir::new().unwrap();
         let inner = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-        let integration = PrefixObjectStore::new(inner, "prefix");
+        let integration = PrefixStore::new(inner, "prefix");
 
         put_get_delete_list(&integration).await;
         list_uses_directories_correctly(&integration).await;
@@ -240,7 +244,7 @@ mod tests {
 
         local.put(&location, data).await.unwrap();
 
-        let prefix = PrefixObjectStore::new(local, "prefix");
+        let prefix = PrefixStore::new(local, "prefix");
         let location_prefix = Path::from("test_file.json");
 
         let content_list = flatten_list_stream(&prefix, None).await.unwrap();

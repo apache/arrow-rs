@@ -400,13 +400,20 @@ impl ObjectStore for LocalFileSystem {
         let location = location.clone();
 
         maybe_spawn_blocking(move || {
-            let file = open_file(&path)?;
-            let metadata =
-                file.metadata().map_err(|e| Error::UnableToAccessMetadata {
-                    source: e.into(),
-                    path: location.to_string(),
-                })?;
-
+            let metadata = match metadata(&path) {
+                Err(e) => Err(if e.kind() == ErrorKind::NotFound {
+                    Error::NotFound {
+                        path: path.clone(),
+                        source: e,
+                    }
+                } else {
+                    Error::UnableToAccessMetadata {
+                        source: e.into(),
+                        path: location.to_string(),
+                    }
+                }),
+                Ok(m) => Ok(m),
+            }?;
             convert_metadata(metadata, location)
         })
         .await
@@ -1440,5 +1447,31 @@ mod not_wasm_tests {
             .unwrap();
         let expected_data = Bytes::from("arbitrarydatagnzarbitrarydatagnz");
         assert_eq!(&*read_data, expected_data);
+    }
+}
+
+#[cfg(target_family = "unix")]
+#[cfg(test)]
+mod unix_test {
+    use crate::local::LocalFileSystem;
+    use crate::{ObjectStore, Path};
+    use nix::sys::stat;
+    use nix::unistd;
+    use std::time::Duration;
+    use tempfile::TempDir;
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn test_head_fifo() {
+        let filename = "some_file";
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        unistd::mkfifo(&root.path().join(filename), stat::Mode::S_IRWXU).unwrap();
+        let location = Path::from(filename);
+        if (timeout(Duration::from_millis(10), integration.head(&location)).await)
+            .is_err()
+        {
+            panic!("Did not receive value within 10 ms");
+        }
     }
 }

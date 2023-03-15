@@ -89,13 +89,21 @@ impl TimestampParser {
     ///
     /// Returning the end byte offset
     fn time(&self) -> Option<(NaiveTime, usize)> {
+        // Make a NaiveTime handling leap seconds
+        let time = |hour, min, sec, nano| match sec {
+            60 => {
+                let nano = 1_000_000_000 + nano;
+                NaiveTime::from_hms_nano_opt(hour as _, min as _, 59, nano)
+            }
+            _ => NaiveTime::from_hms_nano_opt(hour as _, min as _, sec as _, nano),
+        };
+
         match (self.mask >> 11) & 0b11111111 {
             // 09:26:56
             0b11011011 if self.test(13, b':') && self.test(16, b':') => {
                 let hour = self.digits[11] * 10 + self.digits[12];
                 let minute = self.digits[14] * 10 + self.digits[15];
                 let second = self.digits[17] * 10 + self.digits[18];
-                let time = NaiveTime::from_hms_opt(hour as _, minute as _, second as _)?;
 
                 match self.test(19, b'.') {
                     true => {
@@ -112,9 +120,9 @@ impl TimestampParser {
                             8 => parse_nanos::<8>(&self.digits[20..28]),
                             _ => parse_nanos::<9>(&self.digits[20..29]),
                         };
-                        Some((time.with_nanosecond(nanos)?, 20 + digits as usize))
+                        Some((time(hour, minute, second, nanos)?, 20 + digits as usize))
                     }
-                    false => Some((time, 19)),
+                    false => Some((time(hour, minute, second, 0)?, 19)),
                 }
             }
             // 092656
@@ -122,7 +130,7 @@ impl TimestampParser {
                 let hour = self.digits[11] * 10 + self.digits[12];
                 let minute = self.digits[13] * 10 + self.digits[14];
                 let second = self.digits[15] * 10 + self.digits[16];
-                let time = NaiveTime::from_hms_opt(hour as _, minute as _, second as _)?;
+                let time = time(hour, minute, second, 0)?;
                 Some((time, 17))
             }
             _ => None,
@@ -188,7 +196,7 @@ pub fn string_to_datetime<T: TimeZone>(
         return Ok(DateTime::from_local(date.and_time(time), offset));
     }
 
-    if !parser.test(10, b'T') && !parser.test(10, b' ') {
+    if !parser.test(10, b'T') && !parser.test(10, b't') && !parser.test(10, b' ') {
         return Err(err("invalid timestamp separator"));
     }
 
@@ -1009,6 +1017,14 @@ mod tests {
             "2020-09-08T12:00:12.123456789123+02:00",
             "2020-09-08T12:00:12.12345678912345Z",
             "2020-09-08T12:00:12.1234567891234567+02:00",
+            "2020-09-08T12:00:60Z",
+            "2020-09-08T12:00:60.123Z",
+            "2020-09-08T12:00:60.123456+02:00",
+            "2020-09-08T12:00:60.1234567891234567+02:00",
+            "2020-09-08T12:00:60.999999999+02:00",
+            "2020-09-08t12:00:12.12345678+00:00",
+            "2020-09-08t12:00:12+00:00",
+            "2020-09-08t12:00:12Z",
         ];
 
         for case in cases {
