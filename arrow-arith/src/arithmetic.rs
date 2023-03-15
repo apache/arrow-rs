@@ -1188,7 +1188,7 @@ pub fn multiply_fixed_point_checked(
     let product_scale = left.scale() + right.scale();
 
     if required_scale == product_scale {
-        return multiply_checked(left, right);
+        return multiply_checked(left, right)?.with_precision_and_scale(precision, required_scale);
     }
 
     if required_scale > product_scale {
