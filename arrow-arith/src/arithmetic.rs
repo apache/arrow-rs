@@ -3325,6 +3325,7 @@ mod tests {
 
         // Allow precision loss.
         let result = mul_fixed_point_checked(&a, &b, 28).unwrap();
+        // [1234567890]
         let expected =
             Decimal128Array::from(vec![12345678900000000000000000000000000000])
                 .with_precision_and_scale(38, 28)
