@@ -1180,7 +1180,7 @@ pub fn multiply_dyn_checked(
 /// It is implemented for compatibility with precision loss `multiply` function provided by
 /// other data processing engines. For multiplication with precision loss detection, use
 /// `multiply` or `multiply_checked` instead.
-pub fn mul_fixed_point_checked(
+pub fn multiply_fixed_point_checked(
     left: &PrimitiveArray<Decimal128Type>,
     right: &PrimitiveArray<Decimal128Type>,
     required_scale: i8,
