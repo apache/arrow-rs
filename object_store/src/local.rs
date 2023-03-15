@@ -1468,8 +1468,7 @@ mod unix_test {
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
         unistd::mkfifo(&root.path().join(filename), stat::Mode::S_IRWXU).unwrap();
         let location = Path::from(filename);
-        if let Err(_) =
-            timeout(Duration::from_millis(10), integration.head(&location)).await
+        if (timeout(Duration::from_millis(10), integration.head(&location)).await).is_err()
         {
             panic!("Did not receive value within 10 ms");
         }
