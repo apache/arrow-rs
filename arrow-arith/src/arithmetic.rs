@@ -1210,9 +1210,7 @@ pub fn multiply_fixed_point_checked(
         let b = i256::from_i128(b);
 
         let mut mul = a.wrapping_mul(b);
-        if required_scale < product_scale {
-            mul = divide_and_round::<Decimal256Type>(mul, divisor);
-        }
+        mul = divide_and_round::<Decimal256Type>(mul, divisor);
         mul.to_i128().ok_or_else(|| {
             ArrowError::ComputeError(format!("Overflow happened on: {:?} * {:?}", a, b))
         })
