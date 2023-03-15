@@ -418,6 +418,86 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     }
 }
 
+#[async_trait]
+impl ObjectStore for Box<dyn ObjectStore> {
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+        self.as_ref().put(location, bytes).await
+    }
+
+    async fn put_multipart(
+        &self,
+        location: &Path,
+    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+        self.as_ref().put_multipart(location).await
+    }
+
+    async fn abort_multipart(
+        &self,
+        location: &Path,
+        multipart_id: &MultipartId,
+    ) -> Result<()> {
+        self.as_ref().abort_multipart(location, multipart_id).await
+    }
+
+    async fn append(
+        &self,
+        location: &Path,
+    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+        self.as_ref().append(location).await
+    }
+
+    async fn get(&self, location: &Path) -> Result<GetResult> {
+        self.as_ref().get(location).await
+    }
+
+    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+        self.as_ref().get_range(location, range).await
+    }
+
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<usize>],
+    ) -> Result<Vec<Bytes>> {
+        self.as_ref().get_ranges(location, ranges).await
+    }
+
+    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
+        self.as_ref().head(location).await
+    }
+
+    async fn delete(&self, location: &Path) -> Result<()> {
+        self.as_ref().delete(location).await
+    }
+
+    async fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+        self.as_ref().list(prefix).await
+    }
+
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+        self.as_ref().list_with_delimiter(prefix).await
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+        self.as_ref().copy(from, to).await
+    }
+
+    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+        self.as_ref().rename(from, to).await
+    }
+
+    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        self.as_ref().copy_if_not_exists(from, to).await
+    }
+
+    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        self.as_ref().rename_if_not_exists(from, to).await
+    }
+}
+
 /// Result of a list call that includes objects, prefixes (directories) and a
 /// token for the next set of results. Individual result sets may be limited to
 /// 1,000 objects based on the underlying object storage's limitations.
