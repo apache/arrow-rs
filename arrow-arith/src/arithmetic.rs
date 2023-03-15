@@ -1186,9 +1186,14 @@ pub fn multiply_fixed_point_checked(
     required_scale: i8,
 ) -> Result<PrimitiveArray<Decimal128Type>, ArrowError> {
     let product_scale = left.scale() + right.scale();
+    let precision = min(
+        left.precision() + right.precision() + 1,
+        DECIMAL128_MAX_PRECISION,
+    );
 
     if required_scale == product_scale {
-        return multiply_checked(left, right)?.with_precision_and_scale(precision, required_scale);
+        return multiply_checked(left, right)?
+            .with_precision_and_scale(precision, required_scale);
     }
 
     if required_scale > product_scale {
@@ -1198,10 +1203,6 @@ pub fn multiply_fixed_point_checked(
         )));
     }
 
-    let precision = min(
-        left.precision() + right.precision() + 1,
-        DECIMAL128_MAX_PRECISION,
-    );
     let divisor =
         i256::from_i128(10).pow_wrapping((product_scale - required_scale) as u32);
 
@@ -3324,7 +3325,7 @@ mod tests {
         ));
 
         // Allow precision loss.
-        let result = mul_fixed_point_checked(&a, &b, 28).unwrap();
+        let result = multiply_fixed_point_checked(&a, &b, 28).unwrap();
         // [1234567890]
         let expected =
             Decimal128Array::from(vec![12345678900000000000000000000000000000])
@@ -3338,6 +3339,7 @@ mod tests {
         );
 
         // Rounding case
+        // [0.000000000000000001, 123456789.555555555555555555, 1.555555555555555555]
         let a = Decimal128Array::from(vec![
             1,
             123456789555555555555555555,
@@ -3351,10 +3353,10 @@ mod tests {
             .with_precision_and_scale(38, 18)
             .unwrap();
 
-        let result = mul_fixed_point_checked(&a, &b, 28).unwrap();
+        let result = multiply_fixed_point_checked(&a, &b, 28).unwrap();
         // [
-        //    0.0000000000000000015555555556, 
-        //    1385459527.2345679012071330528765432099, 
+        //    0.0000000000000000015555555556,
+        //    1385459527.2345679012071330528765432099,
         //    0.0000000000000000015555555556
         // ]
         let expected = Decimal128Array::from(vec![
@@ -3384,20 +3386,18 @@ mod tests {
             .unwrap();
 
         // Required scale is same as the product of the input scales. Behavior is same as multiply.
-        let result = mul_fixed_point_checked(&a, &b, 4)
-            .unwrap()
-            .with_precision_and_scale(9, 4)
-            .unwrap();
+        let result = multiply_fixed_point_checked(&a, &b, 4).unwrap();
+        assert_eq!(result.precision(), 9);
+        assert_eq!(result.scale(), 4);
+
         let expected = multiply_checked(&a, &b)
             .unwrap()
             .with_precision_and_scale(9, 4)
             .unwrap();
         assert_eq!(&expected, &result);
-        assert_eq(result.precision(), 9);
-        assert_eq(result.scale(), 4);
 
         // Required scale cannot be larger than the product of the input scales.
-        let result = mul_fixed_point_checked(&a, &b, 5).unwrap_err();
+        let result = multiply_fixed_point_checked(&a, &b, 5).unwrap_err();
         assert!(result
             .to_string()
             .contains("Required scale 5 is greater than product scale 4"));
