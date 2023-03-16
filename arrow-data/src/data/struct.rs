@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::data::types::PhysicalType;
 use crate::{ArrayData, ArrayDataBuilder, Buffers};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_schema::DataType;
@@ -96,18 +97,14 @@ impl StructArrayData {
 }
 
 impl From<ArrayData> for StructArrayData {
-    fn from(data: ArrayData) -> Self {
-        let children = data
-            .child_data
-            .into_iter()
-            .map(|x| x.slice(data.offset, data.len))
-            .collect();
-
+    fn from(mut data: ArrayData) -> Self {
+        assert_eq!(PhysicalType::from(&data.data_type), PhysicalType::Struct);
         Self {
             data_type: data.data_type,
             len: data.len,
             nulls: data.nulls,
-            children,
+            // Don't slice children as assume offset already applied (#1750)
+            children: data.child_data,
         }
     }
 }

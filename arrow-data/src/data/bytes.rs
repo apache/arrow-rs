@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::data::types::{BytesType, OffsetType};
+use crate::data::types::{BytesType, OffsetType, PhysicalType};
 use crate::{ArrayData, ArrayDataBuilder, Buffers};
 use arrow_buffer::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_buffer::{ArrowNativeType, Buffer};
@@ -178,6 +178,10 @@ impl<O: BytesOffset, B: Bytes + ?Sized> BytesArrayData<O, B> {
 
 impl<O: BytesOffset, B: Bytes + ?Sized> From<ArrayData> for BytesArrayData<O, B> {
     fn from(data: ArrayData) -> Self {
+        assert_eq!(
+            PhysicalType::from(&data.data_type),
+            PhysicalType::Bytes(O::TYPE, B::TYPE)
+        );
         let mut iter = data.buffers.into_iter();
         let offsets = iter.next().unwrap();
         let values = iter.next().unwrap();

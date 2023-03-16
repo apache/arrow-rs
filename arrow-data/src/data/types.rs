@@ -76,12 +76,12 @@ pub enum PhysicalType {
     Null,
     Boolean,
     Primitive(PrimitiveType),
-    FixedSizeBinary(usize),
+    FixedSizeBinary,
     Bytes(OffsetType, BytesType),
-    FixedSizeList(usize),
+    FixedSizeList,
     List(OffsetType),
     Struct,
-    Union(UnionMode),
+    Union,
     Dictionary(DictionaryKeyType),
     Run(RunEndType),
 }
@@ -119,16 +119,16 @@ impl From<&DataType> for PhysicalType {
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 Self::Primitive(PrimitiveType::Int128)
             }
-            DataType::FixedSizeBinary(size) => Self::FixedSizeBinary(*size as usize),
+            DataType::FixedSizeBinary(_) => Self::FixedSizeBinary,
             DataType::Binary => Self::Bytes(OffsetType::Int32, BytesType::Binary),
             DataType::LargeBinary => Self::Bytes(OffsetType::Int64, BytesType::Binary),
             DataType::Utf8 => Self::Bytes(OffsetType::Int32, BytesType::Utf8),
             DataType::LargeUtf8 => Self::Bytes(OffsetType::Int64, BytesType::Utf8),
             DataType::List(_) => Self::List(OffsetType::Int32),
-            DataType::FixedSizeList(_, size) => Self::FixedSizeList(*size as usize),
+            DataType::FixedSizeList(_, _) => Self::FixedSizeList,
             DataType::LargeList(_) => Self::List(OffsetType::Int64),
             DataType::Struct(_) => Self::Struct,
-            DataType::Union(_, _, mode) => Self::Union(*mode),
+            DataType::Union(_, _, _) => Self::Union,
             DataType::Dictionary(k, _) => match k.as_ref() {
                 DataType::Int8 => Self::Dictionary(DictionaryKeyType::Int8),
                 DataType::Int16 => Self::Dictionary(DictionaryKeyType::Int16),

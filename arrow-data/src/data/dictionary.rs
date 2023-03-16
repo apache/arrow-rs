@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::data::types::DictionaryKeyType;
+use crate::data::types::{DictionaryKeyType, PhysicalType};
 use crate::{ArrayData, ArrayDataBuilder, Buffers};
 use arrow_buffer::buffer::{NullBuffer, ScalarBuffer};
 use arrow_buffer::ArrowNativeType;
@@ -136,6 +136,10 @@ impl<K: DictionaryKey> DictionaryArrayData<K> {
 
 impl<K: DictionaryKey> From<ArrayData> for DictionaryArrayData<K> {
     fn from(data: ArrayData) -> Self {
+        assert_eq!(
+            PhysicalType::from(&data.data_type),
+            PhysicalType::Dictionary(K::TYPE)
+        );
         let keys = data.buffers.into_iter().next().unwrap();
         let keys = ScalarBuffer::new(keys, data.offset, data.len);
         let values = data.child_data.into_iter().next().unwrap();

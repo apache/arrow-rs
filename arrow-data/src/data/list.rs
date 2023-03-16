@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::data::types::OffsetType;
+use crate::data::types::{OffsetType, PhysicalType};
 use crate::{ArrayData, ArrayDataBuilder, Buffers};
 use arrow_buffer::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_buffer::ArrowNativeType;
@@ -129,6 +129,10 @@ impl<O: ListOffset> ListArrayData<O> {
 
 impl<O: ListOffset> From<ArrayData> for ListArrayData<O> {
     fn from(data: ArrayData) -> Self {
+        assert_eq!(
+            PhysicalType::from(&data.data_type),
+            PhysicalType::List(O::TYPE)
+        );
         let offsets = data.buffers.into_iter().next().unwrap();
         let values = data.child_data.into_iter().next().unwrap();
 

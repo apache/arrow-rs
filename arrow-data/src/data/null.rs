@@ -79,10 +79,11 @@ impl NullArrayData {
 }
 
 impl From<ArrayData> for NullArrayData {
-    fn from(value: ArrayData) -> Self {
+    fn from(data: ArrayData) -> Self {
+        assert_eq!(PhysicalType::from(&data.data_type), PhysicalType::Null);
         Self {
-            data_type: value.data_type,
-            len: value.len + value.offset,
+            data_type: data.data_type,
+            len: data.len + data.offset,
         }
     }
 }

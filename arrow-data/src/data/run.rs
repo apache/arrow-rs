@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::data::primitive::{Primitive, PrimitiveArrayData};
-use crate::data::types::RunEndType;
+use crate::data::types::{PhysicalType, RunEndType};
 use crate::{ArrayData, ArrayDataBuilder, Buffers};
 use arrow_buffer::buffer::{RunEndBuffer, ScalarBuffer};
 use arrow_buffer::ArrowNativeType;
@@ -83,12 +83,6 @@ impl<E: RunEnd> RunArrayData<E> {
         self.run_ends.len()
     }
 
-    /// Returns the offset
-    #[inline]
-    pub fn offset(&self) -> usize {
-        self.run_ends.offset()
-    }
-
     /// Returns true if this array is empty
     #[inline]
     pub fn is_empty(&self) -> bool {
@@ -130,6 +124,10 @@ impl<E: RunEnd> RunArrayData<E> {
 
 impl<E: RunEnd> From<ArrayData> for RunArrayData<E> {
     fn from(data: ArrayData) -> Self {
+        assert_eq!(
+            PhysicalType::from(&data.data_type),
+            PhysicalType::Run(E::TYPE)
+        );
         let mut iter = data.child_data.into_iter();
         let child1 = iter.next().unwrap();
         let child2 = iter.next().unwrap();

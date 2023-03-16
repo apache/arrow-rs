@@ -112,6 +112,7 @@ impl BooleanArrayData {
 
 impl From<ArrayData> for BooleanArrayData {
     fn from(data: ArrayData) -> Self {
+        assert_eq!(PhysicalType::from(&data.data_type), PhysicalType::Boolean);
         let values = data.buffers.into_iter().next().unwrap();
         let values = BooleanBuffer::new(values, data.offset, data.len);
         Self {

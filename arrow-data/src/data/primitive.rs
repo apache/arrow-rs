@@ -144,6 +144,11 @@ impl<T: Primitive> PrimitiveArrayData<T> {
 
 impl<T: Primitive> From<ArrayData> for PrimitiveArrayData<T> {
     fn from(data: ArrayData) -> Self {
+        assert_eq!(
+            PhysicalType::from(&data.data_type),
+            PhysicalType::Primitive(T::TYPE)
+        );
+
         let values = data.buffers.into_iter().next().unwrap();
         let values = ScalarBuffer::new(values, data.offset, data.len);
         Self {
