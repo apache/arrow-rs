@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::aws::checksum::Checksum;
 use crate::aws::credential::{AwsCredential, CredentialExt, CredentialProvider};
 use crate::aws::STRICT_PATH_ENCODE_SET;
 use crate::client::pagination::stream_paginated;
@@ -26,6 +27,8 @@ use crate::{
     BoxStream, ClientOptions, ListResult, MultipartId, ObjectMeta, Path, Result,
     RetryConfig, StreamExt,
 };
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use percent_encoding::{utf8_percent_encode, PercentEncode};
@@ -205,6 +208,7 @@ pub struct S3Config {
     pub retry_config: RetryConfig,
     pub client_options: ClientOptions,
     pub sign_payload: bool,
+    pub checksum: Option<Checksum>,
 }
 
 impl S3Config {
@@ -262,6 +266,7 @@ impl S3Client {
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
+                None,
             )
             .send_retry(&self.config.retry_config)
             .await
@@ -281,10 +286,22 @@ impl S3Client {
     ) -> Result<Response> {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(path);
-
         let mut builder = self.client.request(Method::PUT, url);
+
+        let mut payload_checksum = None;
+
         if let Some(bytes) = bytes {
-            builder = builder.body(bytes)
+            payload_checksum = match self.config().checksum {
+                Some(checksum) => {
+                    let digest = checksum.digest(&bytes);
+                    builder = builder
+                        .header(checksum.header_name(), BASE64_STANDARD.encode(&digest));
+                    Some(digest)
+                }
+                None => None,
+            };
+
+            builder = builder.body(bytes);
         }
 
         if let Some(value) = self.config().client_options.get_content_type(path) {
@@ -298,6 +315,7 @@ impl S3Client {
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
+                payload_checksum,
             )
             .send_retry(&self.config.retry_config)
             .await
@@ -325,6 +343,7 @@ impl S3Client {
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
+                None,
             )
             .send_retry(&self.config.retry_config)
             .await
@@ -349,6 +368,7 @@ impl S3Client {
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
+                None,
             )
             .send_retry(&self.config.retry_config)
             .await
@@ -395,6 +415,7 @@ impl S3Client {
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
+                None,
             )
             .send_retry(&self.config.retry_config)
             .await
@@ -438,6 +459,7 @@ impl S3Client {
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
+                None,
             )
             .send_retry(&self.config.retry_config)
             .await
@@ -482,6 +504,7 @@ impl S3Client {
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
+                None,
             )
             .send_retry(&self.config.retry_config)
             .await
